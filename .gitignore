@@ -52,5 +52,8 @@ Thumbs.db
 # Audit output (generated at runtime)
 runs/
 
+# Local git worktrees
+.worktrees/
+
 # Claude Code
 .claude/
