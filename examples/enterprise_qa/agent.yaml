@@ -1,0 +1,27 @@
+name: enterprise_qa
+purpose: "Answer enterprise knowledge questions only when evidence supports the answer."
+
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+
+knowledge:
+  provider: local
+  path: ./knowledge
+
+model:
+  provider: deterministic
+  name: demo
+
+policy:
+  file: ./policy.yaml
+
+tools:
+  file: ./tools.yaml
+
+memory:
+  provider: session
+
+audit:
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md
