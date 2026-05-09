@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+from enum import Enum
+from pathlib import Path
+
+
+class ErrorCode(str, Enum):
+    PA_CONFIG_001 = "PA_CONFIG_001"
+    PA_CONFIG_002 = "PA_CONFIG_002"
+    PA_SCHEMA_001 = "PA_SCHEMA_001"
+    PA_SCHEMA_002 = "PA_SCHEMA_002"
+    PA_KNOWLEDGE_001 = "PA_KNOWLEDGE_001"
+    PA_KNOWLEDGE_002 = "PA_KNOWLEDGE_002"
+    PA_MODEL_001 = "PA_MODEL_001"
+    PA_POLICY_001 = "PA_POLICY_001"
+    PA_TOOL_001 = "PA_TOOL_001"
+    PA_APPROVAL_001 = "PA_APPROVAL_001"
+    PA_DOCKER_001 = "PA_DOCKER_001"
+    PA_RUNS_001 = "PA_RUNS_001"
+    PA_AUDIT_001 = "PA_AUDIT_001"
+    PA_RECEIPT_001 = "PA_RECEIPT_001"
+    PA_SECRET_001 = "PA_SECRET_001"
+
+
+class ProofAgentError(Exception):
+    def __init__(
+        self,
+        code: ErrorCode | str,
+        message: str,
+        fix: str,
+        *,
+        artifact_path: Path | str | None = None,
+        docs_path: Path | str | None = None,
+    ) -> None:
+        self.code = code.value if isinstance(code, ErrorCode) else code
+        self.message = message
+        self.fix = fix
+        self.artifact_path = Path(artifact_path) if artifact_path is not None else None
+        self.docs_path = Path(docs_path) if docs_path is not None else None
+        super().__init__(str(self))
+
+    def __str__(self) -> str:
+        lines = [f"{self.code}: {self.message}", f"Fix: {self.fix}"]
+        if self.artifact_path is not None:
+            lines.append(f"Artifact: {self.artifact_path}")
+        if self.docs_path is not None:
+            lines.append(f"Docs: {self.docs_path}")
+        return "\n".join(lines)
