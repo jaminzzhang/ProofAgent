@@ -6,7 +6,7 @@
 
 **Architecture:** Implement the public framework contract around `agent.yaml`, typed Pydantic models, a deterministic-first runtime path, a LangGraph-backed workflow adapter hidden behind Proof Agent interfaces, a self-built local Harness RAG provider, a Tool Gateway with one MCP mock tool, session memory, validators, JSONL trace, and a receipt generator. The deterministic demo and full enterprise QA run must share the same policy, evidence, approval, trace, receipt, and workflow contracts.
 
-**Tech Stack:** Python 3.12+, Typer, Pydantic v2, PyYAML, pytest, ruff, mypy, Jinja2, LangGraph, mcp stdio mock tool, sentence-transformers plus ChromaDB for local retrieval after the deterministic path is stable, Docker Compose, GitHub Actions.
+**Tech Stack:** Python 3.12+, `uv`, Typer, Pydantic v2, PyYAML, pytest, ruff, mypy, Jinja2, LangGraph 1.1.x, `mcp[cli]` stdio transport, `langchain-mcp-adapters`, sentence-transformers plus ChromaDB for local retrieval, Docker Compose, GitHub Actions.
 
 ---
 
@@ -36,38 +36,62 @@
 4. v1 quality checks are deterministic validators; LLM-as-judge is outside the release gate.
 5. Existing documentation filenames stay stable until code exists; implementation can add docs without reorganizing the repository.
 6. The deleted working-tree file `docs/superpowers/plans/2026-05-09-proof-agent-v1.md` is treated as user-owned state and is not restored by this plan.
+7. v1 knowledge retrieval follows `docs/Proof Agent 技术选型.md`: self-built lightweight RAG behind a `KnowledgeProvider` interface, with optional future Agentic/remote providers behind the same boundary.
+8. JSONL trace is the audit source of truth. Governance Receipt generation must aggregate trace events, not read workflow-private state.
+9. LangGraph, ChromaDB, and MCP SDK details remain in adapter/runtime modules and must not leak into public config, policy, trace, receipt, or contract models.
 
 ## File Structure Map
 
-Create these implementation files:
+Final implementation shape. Create missing files and modify existing files as noted in each task:
 
 ```text
 pyproject.toml
+uv.lock
+.env.example
+Dockerfile
 proof_agent/__init__.py
 proof_agent/cli.py
 proof_agent/errors.py
-proof_agent/contracts.py
+proof_agent/contracts/__init__.py
+proof_agent/contracts/approval.py
+proof_agent/contracts/evidence.py
+proof_agent/contracts/manifest.py
+proof_agent/contracts/policy.py
+proof_agent/contracts/receipt.py
+proof_agent/contracts/run.py
+proof_agent/contracts/tool.py
+proof_agent/contracts/trace.py
 proof_agent/config/loader.py
-proof_agent/config/schemas.py
+proof_agent/config/manifest.py
+proof_agent/config/validation.py
 proof_agent/policy/engine.py
+proof_agent/policy/loader.py
 proof_agent/policy/rules.py
 proof_agent/validators/evidence.py
+proof_agent/validators/quality.py
 proof_agent/validators/schema.py
 proof_agent/validators/safety.py
 proof_agent/validators/tool_result.py
+proof_agent/knowledge/provider.py
 proof_agent/knowledge/local_provider.py
-proof_agent/knowledge/chunking.py
+proof_agent/knowledge/chunker.py
 proof_agent/knowledge/citations.py
+proof_agent/knowledge/evaluator.py
+proof_agent/knowledge/index.py
 proof_agent/workflow/state.py
+proof_agent/workflow/nodes.py
 proof_agent/workflow/orchestrator.py
+proof_agent/workflow/routing.py
 proof_agent/runtime/langgraph_runner.py
 proof_agent/tools/approval.py
 proof_agent/tools/gateway.py
 proof_agent/tools/mcp_mock.py
+proof_agent/tools/registry.py
 proof_agent/memory/session.py
 proof_agent/audit/trace.py
 proof_agent/audit/redaction.py
 proof_agent/audit/receipt.py
+proof_agent/audit/templates/governance_receipt.md.j2
 proof_agent/demo/deterministic_provider.py
 proof_agent/demo/scenarios.py
 proof_agent/compare/plain_rag.py
@@ -75,9 +99,13 @@ proof_agent/compare/harness_rag.py
 examples/enterprise_qa/agent.yaml
 examples/enterprise_qa/policy.yaml
 examples/enterprise_qa/tools.yaml
-examples/enterprise_qa/knowledge/travel-policy.md
-examples/enterprise_qa/knowledge/customer-policy.md
+examples/enterprise_qa/questions.yaml
+examples/enterprise_qa/README.md
+examples/enterprise_qa/knowledge/customer-support-policy.md
+examples/enterprise_qa/knowledge/discount-policy.md
 examples/enterprise_qa/expected/governance_receipt.md
+examples/enterprise_qa/expected/trace.jsonl
+runs/.gitkeep
 docker-compose.yml
 .github/workflows/ci.yml
 ```
@@ -102,29 +130,30 @@ tests/test_trust_boundaries.py
 
 Responsibilities:
 
-- `contracts.py` owns public enums and immutable Pydantic data models.
+- `contracts/` owns public enums and immutable Pydantic data models. `contracts/__init__.py` re-exports the stable public API used by tests and downstream users.
 - `errors.py` owns stable error codes and user-facing remediation text.
 - `config/` loads and validates `agent.yaml`, `policy.yaml`, and `tools.yaml`.
 - `policy/` evaluates YAML rules at the four enforcement points.
-- `knowledge/` owns local Markdown chunking, retrieval, scores, and citation ids.
+- `knowledge/` owns the `KnowledgeProvider` interface, local Markdown chunking, local indexing, retrieval, evidence scoring, and citation ids.
 - `validators/` owns deterministic schema, evidence, tool result, safety, and quality checks.
 - `workflow/` owns Proof Agent workflow state and orchestration semantics.
 - `runtime/` adapts workflow orchestration to LangGraph without leaking LangGraph types into contracts.
-- `tools/` owns approval state, allowlist/risk checks, parameter guards, and the MCP mock.
+- `tools/` owns approval state, allowlist/risk checks, parameter guards, MCP stdio mock registration, and normalized tool results.
 - `memory/` owns session-only memory and policy-gated writes.
-- `audit/` owns JSONL trace, redaction, and receipt generation.
+- `audit/` owns JSONL trace, redaction, receipt template rendering, and receipt generation from trace events.
 - `demo/` owns API-key-free deterministic scenarios.
 - `compare/` owns Plain RAG vs Harness RAG command behavior.
 
 ## Task 1: Package And CLI Scaffold
 
 **Files:**
-- Create: `pyproject.toml`
-- Create: `proof_agent/__init__.py`
-- Create: `proof_agent/cli.py`
-- Create: `tests/test_cli.py`
+- Modify: `pyproject.toml`
+- Modify: `uv.lock`
+- Modify: `proof_agent/__init__.py`
+- Modify: `proof_agent/cli.py`
+- Modify: `tests/test_cli.py`
 
-- [ ] **Step 1: Write failing CLI smoke tests**
+- [ ] **Step 1: Confirm or adjust CLI smoke tests**
 
 ```python
 # tests/test_cli.py
@@ -148,13 +177,13 @@ def test_doctor_command_exists() -> None:
     assert "Python" in result.output
 ```
 
-- [ ] **Step 2: Run the failing tests**
+- [ ] **Step 2: Run the baseline tests**
 
 Run: `python -m pytest tests/test_cli.py -v`
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'proof_agent'`.
+Expected: PASS on the current scaffold. If running from a clean checkout before install, FAIL with `ModuleNotFoundError: No module named 'proof_agent'` is acceptable and should be resolved by Step 4.
 
-- [ ] **Step 3: Add package metadata and a minimal Typer app**
+- [ ] **Step 3: Update package metadata and keep the minimal Typer app**
 
 ```toml
 # pyproject.toml
@@ -173,12 +202,14 @@ dependencies = [
   "pyyaml>=6.0.1",
   "jinja2>=3.1.0",
   "langgraph>=1.1.0",
+  "langchain-mcp-adapters>=0.1.0",
+  "mcp[cli]>=1.27.0",
+  "sentence-transformers>=3.0.0",
+  "chromadb>=1.5.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "ruff>=0.5.0", "mypy>=1.10.0"]
-rag = ["sentence-transformers>=3.0.0", "chromadb>=0.5.0"]
-mcp = ["mcp[cli]>=1.27.0"]
 
 [project.scripts]
 proof-agent = "proof_agent.cli:main"
@@ -233,27 +264,42 @@ def main() -> None:
     app()
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Generate lockfile and install editable package**
+
+Run: `uv lock && uv pip install -e ".[dev]"`
+
+Expected: `uv.lock` is created and the `proof-agent` console script is available in the active environment.
+
+- [ ] **Step 5: Run tests**
 
 Run: `python -m pytest tests/test_cli.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add pyproject.toml proof_agent/__init__.py proof_agent/cli.py tests/test_cli.py
+git add pyproject.toml uv.lock proof_agent/__init__.py proof_agent/cli.py tests/test_cli.py
 git commit -m "Add package and CLI scaffold"
 ```
 
 ## Task 2: Core Contracts And Error Codes
 
 **Files:**
-- Create: `proof_agent/contracts.py`
-- Create: `proof_agent/errors.py`
-- Create: `tests/test_contracts.py`
+- Move/Replace: `proof_agent/contracts.py`
+- Create: `proof_agent/contracts/__init__.py`
+- Create: `proof_agent/contracts/approval.py`
+- Create: `proof_agent/contracts/evidence.py`
+- Create: `proof_agent/contracts/manifest.py`
+- Create: `proof_agent/contracts/policy.py`
+- Create: `proof_agent/contracts/receipt.py`
+- Create: `proof_agent/contracts/run.py`
+- Create: `proof_agent/contracts/tool.py`
+- Create: `proof_agent/contracts/trace.py`
+- Modify: `proof_agent/errors.py`
+- Modify: `tests/test_contracts.py`
 
-- [ ] **Step 1: Write failing contract tests**
+- [ ] **Step 1: Write or extend contract tests**
 
 ```python
 # tests/test_contracts.py
@@ -284,15 +330,15 @@ def test_error_message_contains_fix() -> None:
     assert "Fix: Add policy.file to agent.yaml" in str(error)
 ```
 
-- [ ] **Step 2: Run failing tests**
+- [ ] **Step 2: Run contract tests before migration**
 
 Run: `python -m pytest tests/test_contracts.py -v`
 
-Expected: FAIL with missing `proof_agent.contracts` and `proof_agent.errors`.
+Expected: current scaffold may PASS. After adding tests for split contract modules or missing models, FAIL until the migration in Step 3 is complete.
 
 - [ ] **Step 3: Implement immutable models and errors**
 
-Use Pydantic models with `ConfigDict(frozen=True)`. Include these enums exactly:
+Replace the existing flat `proof_agent/contracts.py` with focused contract modules using Pydantic models and `ConfigDict(frozen=True)`. Re-export the public contract names from `proof_agent/contracts/__init__.py` so callers can continue importing from `proof_agent.contracts`. Include these enums exactly:
 
 ```python
 class PolicyDecisionType(str, Enum):
@@ -309,7 +355,7 @@ class EnforcementPoint(str, Enum):
     BEFORE_MEMORY_WRITE = "before_memory_write"
 ```
 
-Add `AgentManifest`, `PolicyRule`, `EvidenceChunk`, `ApprovalStatus`, `ApprovalState`, `TraceEvent`, `ReceiptOutcome`, `WorkflowState`, `ToolRequest`, `ValidationResult`, and `RunResult` with fields from `docs/Proof Agent Technical Plan.md`.
+Add `AgentManifest`, `PolicyRule`, `EvidenceChunk`, `ApprovalStatus`, `ApprovalState`, `TraceEvent`, `ReceiptOutcome`, `WorkflowState`, `ToolRequest`, `ValidationResult`, and `RunResult` with fields from `docs/Proof Agent Technical Plan.md`. Keep LangGraph, ChromaDB, and MCP types out of these models.
 
 - [ ] **Step 4: Run tests**
 
@@ -320,7 +366,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add proof_agent/contracts.py proof_agent/errors.py tests/test_contracts.py
+git add proof_agent/contracts proof_agent/errors.py tests/test_contracts.py
 git commit -m "Add core contracts and error codes"
 ```
 
@@ -328,13 +374,15 @@ git commit -m "Add core contracts and error codes"
 
 **Files:**
 - Create: `proof_agent/config/loader.py`
-- Create: `proof_agent/config/schemas.py`
+- Create: `proof_agent/config/manifest.py`
+- Create: `proof_agent/config/validation.py`
 - Create: `tests/test_config_loader.py`
 - Create: `examples/enterprise_qa/agent.yaml`
 - Create: `examples/enterprise_qa/policy.yaml`
 - Create: `examples/enterprise_qa/tools.yaml`
-- Create: `examples/enterprise_qa/knowledge/travel-policy.md`
-- Create: `examples/enterprise_qa/knowledge/customer-policy.md`
+- Create: `examples/enterprise_qa/questions.yaml`
+- Create: `examples/enterprise_qa/knowledge/customer-support-policy.md`
+- Create: `examples/enterprise_qa/knowledge/discount-policy.md`
 
 - [ ] **Step 1: Write failing config tests**
 
@@ -357,6 +405,8 @@ def test_load_valid_enterprise_qa_manifest() -> None:
 
 def test_missing_policy_file_fails_fast(tmp_path: Path) -> None:
     agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
     agent_yaml.write_text(
         """
 name: broken
@@ -375,8 +425,8 @@ tools:
 memory:
   provider: session
 audit:
-  trace: ./runs/latest/trace.jsonl
-  receipt: ./runs/latest/governance_receipt.md
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md
 """,
         encoding="utf-8",
     )
@@ -421,15 +471,15 @@ memory:
   provider: session
 
 audit:
-  trace: ./runs/latest/trace.jsonl
-  receipt: ./runs/latest/governance_receipt.md
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md
 ```
 
 Use `policy.yaml` rules for `answering.require_retrieval`, `tools.customer_lookup.approval`, and `memory.deny_sensitive_fields`. Use `tools.yaml` with one tool named `customer_lookup`, `risk_level: medium`, `requires_approval: true`, and allowed parameters `customer_id` and `policy_id`.
 
 - [ ] **Step 4: Implement loader**
 
-`load_agent_manifest(path: Path) -> AgentManifest` must parse YAML, resolve relative file paths against the manifest directory, validate required fields, reject unsupported runtime/provider/memory values, check knowledge path existence, check audit parent writability, and raise `ProofAgentError` with codes from the technical plan.
+`load_agent_manifest(path: Path) -> AgentManifest` must parse YAML, resolve relative file paths against the manifest directory, validate required fields, reject unsupported runtime/provider/memory values, check knowledge path existence, check audit parent writability, normalize `audit.trace_path` and `audit.receipt_path`, and raise `ProofAgentError` with codes from the technical plan.
 
 - [ ] **Step 5: Run tests**
 
@@ -450,6 +500,7 @@ git commit -m "Add agent config loader and enterprise QA template"
 - Create: `proof_agent/audit/trace.py`
 - Create: `proof_agent/audit/redaction.py`
 - Create: `proof_agent/audit/receipt.py`
+- Create: `proof_agent/audit/templates/governance_receipt.md.j2`
 - Create: `tests/test_trace_writer.py`
 - Create: `tests/test_receipt_generator.py`
 
@@ -515,7 +566,7 @@ Redact payload keys containing `api_key`, `access_token`, `bearer`, `password`, 
 
 - [ ] **Step 4: Implement receipt shell**
 
-`generate_receipt(trace_path: Path, receipt_path: Path) -> None` must read JSONL, preserve trace on receipt errors, and write required sections: run id, timestamp, agent, question, final outcome, policy decisions, evidence, tools, memory, audit artifact paths, and redaction summary.
+`generate_receipt(trace_path: Path, receipt_path: Path) -> None` must read JSONL, preserve trace on receipt errors, and render `audit/templates/governance_receipt.md.j2` with required sections: run id, timestamp, agent, question, final outcome, policy decisions, evidence, tools, memory, audit artifact paths, and redaction summary. The receipt generator must aggregate trace events only; do not pass workflow-private state into it.
 
 - [ ] **Step 5: Run tests**
 
@@ -597,8 +648,11 @@ git commit -m "Add YAML policy engine"
 ## Task 6: Local Knowledge Provider And Evidence Validator
 
 **Files:**
-- Create: `proof_agent/knowledge/chunking.py`
+- Create: `proof_agent/knowledge/provider.py`
+- Create: `proof_agent/knowledge/chunker.py`
+- Create: `proof_agent/knowledge/index.py`
 - Create: `proof_agent/knowledge/local_provider.py`
+- Create: `proof_agent/knowledge/evaluator.py`
 - Create: `proof_agent/knowledge/citations.py`
 - Create: `proof_agent/validators/evidence.py`
 - Create: `tests/test_knowledge_provider.py`
@@ -629,8 +683,8 @@ from proof_agent.validators.evidence import evaluate_evidence
 
 def test_enough_evidence_passes() -> None:
     chunks = [
-        EvidenceChunk(source="travel-policy.md", content="Meals are reimbursed up to 50.", score=0.9, status="accepted"),
-        EvidenceChunk(source="travel-policy.md", content="Receipts are required.", score=0.8, status="accepted"),
+        EvidenceChunk(source="customer-support-policy.md", content="Meals are reimbursed up to 50.", score=0.9, status="accepted"),
+        EvidenceChunk(source="customer-support-policy.md", content="Receipts are required.", score=0.8, status="accepted"),
     ]
     result = evaluate_evidence(chunks, min_count=2, min_score=0.5)
     assert result.status == "passed"
@@ -647,21 +701,25 @@ Run: `python -m pytest tests/test_knowledge_provider.py tests/test_evidence_vali
 
 Expected: FAIL because knowledge and evidence modules do not exist.
 
-- [ ] **Step 3: Implement deterministic local retrieval first**
+- [ ] **Step 3: Define provider boundary and deterministic retrieval**
 
-Implement Markdown loading, heading-aware chunking, lowercase token overlap scoring, source ids, and citation labels. Keep sentence-transformers and ChromaDB optional behind the provider so `proof-agent demo` remains dependency-light.
+Define a `KnowledgeProvider` protocol/interface that returns standardized `EvidenceChunk` objects plus citation metadata. Implement Markdown loading, heading-aware chunking, lowercase token-overlap scoring, source ids, and citation labels as the deterministic fallback so `proof-agent demo` stays stable and offline.
 
-- [ ] **Step 4: Implement evidence validation**
+- [ ] **Step 4: Add embedded local vector path**
+
+Add `LocalKnowledgeIndex` using sentence-transformers `all-MiniLM-L6-v2` and ChromaDB `PersistentClient` when an index path is configured. The provider must keep ChromaDB and embedding details inside `knowledge/` and continue returning only `EvidenceChunk` contract objects.
+
+- [ ] **Step 5: Implement evidence validation**
 
 `evaluate_evidence()` must return a `ValidationResult` named `evidence` with `passed` only when accepted chunks meet `min_count` and `min_score`. Include rejected chunk counts and accepted source ids in metadata.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 6: Run tests**
 
 Run: `python -m pytest tests/test_knowledge_provider.py tests/test_evidence_validator.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add proof_agent/knowledge proof_agent/validators/evidence.py tests/test_knowledge_provider.py tests/test_evidence_validator.py
@@ -733,6 +791,7 @@ git commit -m "Add deterministic demo and RAG comparison"
 - Create: `proof_agent/tools/approval.py`
 - Create: `proof_agent/tools/gateway.py`
 - Create: `proof_agent/tools/mcp_mock.py`
+- Create: `proof_agent/tools/registry.py`
 - Create: `tests/test_tool_gateway.py`
 
 - [ ] **Step 1: Write failing tool approval tests**
@@ -775,9 +834,9 @@ Expected: FAIL because tools modules do not exist.
 
 The gateway must validate allowlist, risk level, required parameters, denied parameters, and approval state. It must never execute the mock tool unless policy and approval allow execution.
 
-- [ ] **Step 4: Implement MCP mock behavior**
+- [ ] **Step 4: Implement MCP stdio mock behavior**
 
-`customer_lookup` returns a normalized result containing `customer_id`, `policy_id`, `status`, and `source: "mcp_mock"`. Sensitive raw payloads must not be returned.
+`customer_lookup` returns a normalized result containing `customer_id`, `policy_id`, `status`, and `source: "mcp_mock"`. Sensitive raw payloads must not be returned. Register the mock through `mcp[cli]` stdio transport and keep `langchain-mcp-adapters` conversion inside `tools/registry.py` or `runtime/langgraph_runner.py`; the Tool Gateway API must not expose MCP SDK objects.
 
 - [ ] **Step 5: Run tests**
 
@@ -858,8 +917,8 @@ tools:
 memory:
   provider: persistent
 audit:
-  trace: ./runs/latest/trace.jsonl
-  receipt: ./runs/latest/governance_receipt.md
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md
 """,
         encoding="utf-8",
     )
@@ -902,7 +961,9 @@ git commit -m "Add memory boundary and validators"
 
 **Files:**
 - Create: `proof_agent/workflow/state.py`
+- Create: `proof_agent/workflow/nodes.py`
 - Create: `proof_agent/workflow/orchestrator.py`
+- Create: `proof_agent/workflow/routing.py`
 - Create: `proof_agent/runtime/langgraph_runner.py`
 - Modify: `proof_agent/cli.py`
 - Create: `tests/test_workflow_enterprise_qa.py`
@@ -952,19 +1013,23 @@ Expected: FAIL because workflow modules do not exist.
 
 - [ ] **Step 5: Add LangGraph adapter behind internal runtime**
 
-`runtime/langgraph_runner.py` may initially wrap the orchestrator in a thin callable graph. LangGraph objects must not appear in config, policy, trace, receipt, or CLI public models.
+`runtime/langgraph_runner.py` must compile Proof Agent workflow nodes into LangGraph `StateGraph` with conditional routing. Tool approval should use LangGraph `interrupt()` and a SQLite checkpointer once the mock approval path is wired. LangGraph objects must not appear in config, policy, trace, receipt, or CLI public models.
 
-- [ ] **Step 6: Wire CLI commands**
+- [ ] **Step 6: Add approval-state workflow tests**
+
+Extend `tests/test_workflow_enterprise_qa.py` with a tool-required scenario that enters `WAITING_FOR_APPROVAL`, persists approval state, resumes when approval is granted, and returns a safe terminal response when approval is denied.
+
+- [ ] **Step 7: Wire CLI commands**
 
 `proof-agent demo` must run the supported, unsupported, and tool-required deterministic scenarios. `proof-agent run examples/enterprise_qa/agent.yaml` must run the enterprise QA path with a default question if no interactive prompt is available.
 
-- [ ] **Step 7: Run tests**
+- [ ] **Step 8: Run tests**
 
 Run: `python -m pytest tests/test_workflow_enterprise_qa.py tests/test_cli.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add proof_agent/workflow proof_agent/runtime proof_agent/cli.py tests/test_workflow_enterprise_qa.py tests/test_cli.py
@@ -976,9 +1041,13 @@ git commit -m "Integrate enterprise QA workflow runtime"
 **Files:**
 - Modify: `proof_agent/cli.py`
 - Create: `docker-compose.yml`
+- Create: `Dockerfile`
+- Create: `.env.example`
+- Create: `runs/.gitkeep`
 - Create: `.github/workflows/ci.yml`
 - Modify: `README.md`
 - Create: `examples/enterprise_qa/expected/governance_receipt.md`
+- Create: `examples/enterprise_qa/expected/trace.jsonl`
 
 - [ ] **Step 1: Extend CLI tests for doctor and inspect**
 
@@ -1002,13 +1071,14 @@ For Markdown receipts, print final outcome and artifact path. For JSONL trace, p
 
 - [ ] **Step 4: Add Docker Compose path**
 
-`docker-compose.yml` runs `proof-agent demo` by default and mounts the repository so `runs/latest` appears on the host.
+`Dockerfile` installs the package with `uv pip install -e ".[dev]"`. `docker-compose.yml` runs `proof-agent demo` by default and mounts the repository so `runs/latest` appears on the host. Add `.env.example` for optional model provider variables; deterministic demo must not require those variables.
 
 - [ ] **Step 5: Add CI**
 
 GitHub Actions must run:
 
 ```bash
+uv pip install -e ".[dev]"
 python -m pytest tests/ -v
 ruff check proof_agent tests
 mypy proof_agent
@@ -1026,6 +1096,7 @@ README must include exact commands for the 2-minute deterministic demo, 30-minut
 Run:
 
 ```bash
+uv pip install -e ".[dev]"
 python -m pytest tests/ -v
 ruff check proof_agent tests
 mypy proof_agent
@@ -1040,7 +1111,7 @@ Expected: all commands succeed; `runs/latest/trace.jsonl` and `runs/latest/gover
 - [ ] **Step 8: Commit**
 
 ```bash
-git add proof_agent/cli.py docker-compose.yml .github/workflows/ci.yml README.md examples/enterprise_qa/expected/governance_receipt.md
+git add proof_agent/cli.py Dockerfile docker-compose.yml .env.example runs/.gitkeep .github/workflows/ci.yml README.md examples/enterprise_qa/expected
 git commit -m "Add release readiness and launch smoke path"
 ```
 
@@ -1052,7 +1123,7 @@ git commit -m "Add release readiness and launch smoke path"
 | Policy decisions at four enforcement points | Tasks 2, 5, 10 |
 | Local knowledge and Harness RAG | Tasks 6, 7, 10 |
 | Plain RAG vs Harness RAG comparison | Task 7 |
-| MCP mock tool approval | Task 8 |
+| MCP mock tool approval | Tasks 8, 10 |
 | Session memory boundary | Task 9 |
 | Validators and deterministic quality checks | Tasks 6, 8, 9, 10 |
 | JSONL trace as audit source of truth | Task 4, 10 |
@@ -1068,6 +1139,7 @@ git commit -m "Add release readiness and launch smoke path"
 The branch is complete only after these commands pass locally:
 
 ```bash
+uv pip install -e ".[dev]"
 python -m pytest tests/ -v
 ruff check proof_agent tests
 mypy proof_agent
