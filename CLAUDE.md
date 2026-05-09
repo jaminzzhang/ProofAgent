@@ -92,7 +92,11 @@ These are normative — implementation must satisfy them:
 
 ## Terminology
 
-Use these terms consistently: `Enterprise Agent Delivery Kit`, `Control Envelope`, `Agent Contract`, `PolicyEngine`, `MCP mock tool approval`, `Trace & Audit`, `Governance Receipt`, `Enterprise QA Template`, `Harness RAG` (controlled), `Plain RAG` (uncontrolled).
+- **Harness Engineering**: the design discipline of inserting typed policy decision points into Agent workflows to achieve controlled execution. This is the mechanism behind the Control Envelope.
+- **Harness RAG**: an Agentic RAG implementation governed by the Harness — mandatory retrieval, evidence evaluation, citation enforcement, refusal on weak evidence, explicit tool approval, and audit trail. Contrasted with Plain RAG (uncontrolled retrieve-and-generate).
+- **Plain RAG**: standard retrieve-and-generate without policy gates or evidence checks.
+
+Use these terms consistently: `Enterprise Agent Delivery Kit`, `Control Envelope`, `Harness Engineering`, `Harness RAG`, `Plain RAG`, `Agent Contract`, `PolicyEngine`, `MCP mock tool approval`, `Trace & Audit`, `Governance Receipt`, `Enterprise QA Template`.
 
 ## Implementation Rules
 

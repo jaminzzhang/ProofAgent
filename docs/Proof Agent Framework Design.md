@@ -14,6 +14,10 @@ The first proof point is an enterprise knowledge Q&A Agent that is directly usab
 
 The kit is powered by a **Control Envelope**: it wraps workflow, knowledge, memory, tools, and model output with policy, evidence, approval, and audit.
 
+The Control Envelope is implemented through **Harness Engineering** — the design discipline of inserting typed policy decision points into the Agent workflow. At each critical step (retrieval, answer generation, tool calls, memory writes), the Harness evaluates enterprise rules and produces a typed decision (`allow`, `deny`, `require_approval`, `escalate`). This makes the Agent flow explicitly controlled, not just orchestrated.
+
+**Harness RAG** is the first application of this approach: an **Agentic RAG** implementation where the retrieval-generation pipeline is governed by Harness policy gates. Unlike Plain RAG (retrieve → generate with no control), Harness RAG enforces mandatory retrieval, evidence quality checks, citation requirements, and refusal on weak evidence — ensuring knowledge is controlled, not just retrieved.
+
 The target user is an enterprise AI Agent owner or AI application platform owner who wants to build strongly controlled AI Agents for scenarios such as insurance digital workers, customer service, and internal knowledge assistants.
 
 ## What Makes This Cool

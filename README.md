@@ -4,6 +4,17 @@ Proof Agent is an **Enterprise Agent Delivery Kit**.
 
 It gives enterprise AI Agent owners a runnable, governed knowledge Q&A Agent that can be delivered, inspected, and reused. The delivery kit is powered by a **Control Envelope**: policy, evidence, approval, memory boundaries, trace, and a human-readable Governance Receipt around the Agent run.
 
+## What is Harness
+
+Proof Agent uses **Harness Engineering** to build the Control Envelope. A Harness is a control layer that wraps around the Agent execution flow, inserting explicit policy decision points at every critical step — retrieval, answer generation, tool calls, and memory writes. This is what makes the Agent flow controlled (受控), not just orchestrated.
+
+**Harness RAG** is an **Agentic RAG** implementation governed by the Harness. Unlike Plain RAG (retrieve → generate), Harness RAG adds policy gates at each step: mandatory retrieval before answering, evidence quality evaluation, citation enforcement, refusal on weak evidence, and explicit tool approval. The result is not just a better answer — it is a governed, auditable answer.
+
+```text
+Plain RAG:      Retrieve → Generate (no control gates)
+Harness RAG:    Retrieve → Policy → Evidence → Policy → Answer/Refuse → Tool Approval → Audit
+```
+
 ## Why This Exists
 
 普通 RAG demo 证明 Agent 能回答问题。Proof Agent 证明 Agent 为什么可以回答、什么时候必须拒答、什么时候必须等人工审批、以及事后如何复盘。
