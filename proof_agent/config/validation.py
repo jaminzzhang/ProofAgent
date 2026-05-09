@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from proof_agent.contracts import AgentManifest
 from proof_agent.errors import ProofAgentError
@@ -141,10 +142,10 @@ def require_writable_parent(path: Path, field_name: str, manifest_path: Path) ->
             f"Create a parent directory for {path}.",
             artifact_path=manifest_path,
         )
-    probe = parent / ".proof_agent_write_probe"
+    probe = parent / f".proof_agent_write_probe_{uuid4().hex}"
     try:
         probe.write_text("ok", encoding="utf-8")
-        probe.unlink()
+        probe.unlink(missing_ok=True)
     except OSError as exc:
         raise ProofAgentError(
             "PA_RUNS_001",

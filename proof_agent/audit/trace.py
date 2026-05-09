@@ -34,7 +34,7 @@ class TraceWriter:
             event_id=f"evt_{self._sequence:04d}",
             sequence=self._sequence,
             timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            event_type=event_type_value,
+            event_type=TraceEventType(event_type_value),
             span_id=span_id or f"span_{event_type_value}",
             parent_span_id=parent_span_id,
             status=status,

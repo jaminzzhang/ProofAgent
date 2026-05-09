@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from proof_agent.contracts import EvidenceChunk, ValidationResult
+from proof_agent.contracts import EvidenceChunk, ValidationResult, ValidationStatus
 
 
 def evaluate_evidence(
@@ -17,7 +17,7 @@ def evaluate_evidence(
     passed = len(accepted) >= min_count
     return ValidationResult(
         validator_name="evidence",
-        status="passed" if passed else "failed",
+        status=ValidationStatus.PASSED if passed else ValidationStatus.FAILED,
         reason="Evidence threshold passed." if passed else "Evidence threshold failed.",
         metadata={
             "accepted_count": len(accepted),

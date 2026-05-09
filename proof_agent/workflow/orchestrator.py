@@ -28,6 +28,8 @@ def run_enterprise_qa(
     runs_dir.mkdir(parents=True, exist_ok=True)
     trace_path = runs_dir / "trace.jsonl"
     receipt_path = runs_dir / "governance_receipt.md"
+    if trace_path.exists():
+        trace_path.unlink()
     run_id = f"run_{uuid4().hex[:8]}"
     trace = TraceWriter(trace_path, run_id=run_id)
 

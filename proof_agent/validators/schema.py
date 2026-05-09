@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from proof_agent.contracts import ValidationResult
+from proof_agent.contracts import ValidationResult, ValidationStatus
 
 
 def validate_final_output_schema(output: Mapping[str, Any]) -> ValidationResult:
@@ -14,13 +14,13 @@ def validate_final_output_schema(output: Mapping[str, Any]) -> ValidationResult:
     if missing or not citations_valid:
         return ValidationResult(
             validator_name="schema",
-            status="failed",
+            status=ValidationStatus.FAILED,
             reason="Final output schema is invalid.",
             metadata={"missing": tuple(missing), "citations_valid": citations_valid},
         )
     return ValidationResult(
         validator_name="schema",
-        status="passed",
+        status=ValidationStatus.PASSED,
         reason="Final output schema is valid.",
         metadata={"fields": tuple(output.keys())},
     )

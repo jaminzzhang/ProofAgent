@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts import ApprovalState, ApprovalStatus
 from proof_agent.errors import ProofAgentError

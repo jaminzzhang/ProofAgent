@@ -34,6 +34,7 @@ The first v1 template is a strongly controlled enterprise knowledge Q&A Agent:
 ## The 2-Minute Demo
 
 ```bash
+uv pip install -e ".[dev]"
 proof-agent demo
 ```
 
@@ -51,6 +52,9 @@ The first demo must run without an LLM API key. It uses bundled sample knowledge
 ```bash
 docker compose up
 proof-agent run examples/enterprise_qa/agent.yaml
+proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
+proof-agent inspect runs/latest/governance_receipt.md
+proof-agent inspect runs/latest/trace.jsonl
 ```
 
 The full local evaluation must show three visible outcomes:
@@ -70,6 +74,12 @@ The output includes a final answer or refusal plus:
 
 - `runs/latest/trace.jsonl`
 - `runs/latest/governance_receipt.md`
+
+Expected deterministic demo questions:
+
+- `What is the reimbursement rule for travel meals?`
+- `What discount should we give this customer next year?`
+- `Look up customer policy status before answering.`
 
 ## Core Model
 

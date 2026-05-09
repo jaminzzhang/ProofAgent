@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
-from proof_agent.contracts import EvidenceChunk
+from proof_agent.contracts import EvidenceChunk, EvidenceStatus
 
 
 class LocalKnowledgeIndex:
@@ -20,9 +21,9 @@ class LocalKnowledgeIndex:
         model = SentenceTransformer("all-MiniLM-L6-v2")
         embedding = model.encode([query])[0].tolist()
         result = collection.query(query_embeddings=[embedding], n_results=top_k)
-        documents = result.get("documents", [[]])[0]
-        metadatas = result.get("metadatas", [[]])[0]
-        distances = result.get("distances", [[]])[0]
+        documents = (result.get("documents") or [[]])[0]
+        metadatas = cast(list[dict[str, Any]], (result.get("metadatas") or [[]])[0])
+        distances = (result.get("distances") or [[]])[0]
         chunks: list[EvidenceChunk] = []
         for document, metadata, distance in zip(documents, metadatas, distances, strict=False):
             score = max(0.0, 1.0 - float(distance))
@@ -32,7 +33,7 @@ class LocalKnowledgeIndex:
                     source=source,
                     content=str(document),
                     score=score,
-                    status="accepted" if score > 0 else "rejected",
+                    status=EvidenceStatus.ACCEPTED if score > 0 else EvidenceStatus.REJECTED,
                 )
             )
         return tuple(chunks)

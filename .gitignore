@@ -50,7 +50,8 @@ Thumbs.db
 .env.*.local
 
 # Audit output (generated at runtime)
-runs/
+runs/*
+!runs/.gitkeep
 
 # Local git worktrees
 .worktrees/

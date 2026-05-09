@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from proof_agent.contracts import ValidationResult
+from proof_agent.contracts import ValidationResult, ValidationStatus
 
 
 SECRET_MARKERS = ("api_key", "access_token", "bearer ", "password", "secret-token")
@@ -12,13 +12,13 @@ def validate_no_secret_strings(text: str) -> ValidationResult:
     if matches:
         return ValidationResult(
             validator_name="safety",
-            status="failed",
+            status=ValidationStatus.FAILED,
             reason="Output contains secret-like strings.",
             metadata={"matches": matches},
         )
     return ValidationResult(
         validator_name="safety",
-        status="passed",
+        status=ValidationStatus.PASSED,
         reason="Output contains no secret-like strings.",
         metadata={},
     )

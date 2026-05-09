@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: uv pip install --system -e ".[dev]"
+      - name: Test
+        run: python -m pytest tests/ -v
+      - name: Lint
+        run: ruff check proof_agent tests
+      - name: Type check
+        run: mypy proof_agent
+      - name: CLI smoke
+        run: |
+          proof-agent demo
+          test -f runs/latest/trace.jsonl
+          test -f runs/latest/governance_receipt.md

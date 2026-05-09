@@ -1,7 +1,13 @@
+import json
+import os
+import sys
+from collections.abc import Iterable
 from pathlib import Path
+from shutil import which
 
 import typer
 
+from proof_agent import __version__
 from proof_agent.compare.harness_rag import run_harness_rag
 from proof_agent.compare.plain_rag import run_plain_rag
 from proof_agent.demo.scenarios import DEMO_SCENARIOS, SUPPORTED_QUESTION
@@ -15,7 +21,7 @@ def demo() -> None:
     typer.echo("Proof Agent demo")
     for scenario in DEMO_SCENARIOS:
         result = run_enterprise_qa(
-            "examples/enterprise_qa/agent.yaml",
+            Path("examples/enterprise_qa/agent.yaml"),
             question=scenario.question,
             runs_dir=Path("runs/latest"),
         )
@@ -31,12 +37,32 @@ def run(agent_yaml: str, question: str = typer.Option(SUPPORTED_QUESTION, "--que
 
 @app.command()
 def doctor() -> None:
-    typer.echo("Python: ok")
+    checks = [
+        ("Python", f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"),
+        ("Proof Agent", __version__),
+        ("runs writable", _writable_status(Path("runs"))),
+        (
+            "agent.yaml",
+            "ok" if Path("examples/enterprise_qa/agent.yaml").exists() else "missing",
+        ),
+        (
+            "sample knowledge",
+            "ok" if Path("examples/enterprise_qa/knowledge").exists() else "missing",
+        ),
+        ("Docker", "available" if which("docker") else "not found"),
+        ("LLM provider env", _optional_env_status(("OPENAI_API_KEY", "AZURE_OPENAI_API_KEY"))),
+    ]
+    for label, value in checks:
+        typer.echo(f"{label}: {value}")
 
 
 @app.command()
 def inspect(path: str) -> None:
-    typer.echo(f"Inspecting {path}")
+    artifact_path = Path(path)
+    if artifact_path.suffix == ".jsonl":
+        _inspect_trace(artifact_path)
+    else:
+        _inspect_receipt(artifact_path)
 
 
 @app.command()
@@ -50,3 +76,54 @@ def compare(agent_yaml: str, question: str = typer.Option(..., "--question")) ->
 
 def main() -> None:
     app()
+
+
+def _writable_status(path: Path) -> str:
+    path.mkdir(parents=True, exist_ok=True)
+    probe = path / ".proof_agent_doctor_probe"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError:
+        return "not writable"
+    return "ok"
+
+
+def _optional_env_status(names: Iterable[str]) -> str:
+    present = [name for name in names if os.environ.get(name)]
+    if present:
+        return ", ".join(present)
+    return "not configured (optional for deterministic demo)"
+
+
+def _inspect_trace(path: Path) -> None:
+    events = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not events:
+        typer.echo("Trace events: 0")
+        typer.echo(f"Artifact: {path}")
+        return
+    redaction_applied = any(event.get("redaction", {}).get("applied") for event in events)
+    typer.echo(f"Trace events: {len(events)}")
+    typer.echo(f"Run ID: {events[0].get('run_id', 'unknown')}")
+    typer.echo(f"First event: {events[0].get('event_type', 'unknown')}")
+    typer.echo(f"Last event: {events[-1].get('event_type', 'unknown')}")
+    typer.echo(f"Redaction applied: {'yes' if redaction_applied else 'no'}")
+    typer.echo(f"Artifact: {path}")
+
+
+def _inspect_receipt(path: Path) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    outcome = "unknown"
+    for index, line in enumerate(lines):
+        if line.strip() == "## Final Outcome":
+            for candidate in lines[index + 1 :]:
+                if candidate.strip():
+                    outcome = candidate.strip()
+                    break
+            break
+    typer.echo(f"Final Outcome: {outcome}")
+    typer.echo(f"Artifact: {path}")
