@@ -32,7 +32,8 @@ class ProofAgentError(Exception):
         artifact_path: Path | str | None = None,
         docs_path: Path | str | None = None,
     ) -> None:
-        self.code = code.value if isinstance(code, ErrorCode) else code
+        error_code = code if isinstance(code, ErrorCode) else ErrorCode(code)
+        self.code = error_code.value
         self.message = message
         self.fix = fix
         self.artifact_path = Path(artifact_path) if artifact_path is not None else None
