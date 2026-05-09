@@ -1,8 +1,10 @@
 # Proof Agent
 
-Proof Agent is an **Enterprise Agent Delivery Kit**.
+Proof Agent is a **Controlled Agent Harness Framework** for building enterprise Agents that are workflow-governed, policy-enforced, tool-gated, memory-bounded, validated, and auditable.
 
-It gives enterprise AI Agent owners a runnable, governed knowledge Q&A Agent that can be delivered, inspected, and reused. The delivery kit is powered by a **Control Envelope**: policy, evidence, approval, memory boundaries, trace, and a human-readable Governance Receipt around the Agent run.
+The long-term vision is an enterprise Agent Control Platform. The v1 release stays intentionally narrow: a local-first, CLI-first framework MVP that proves the platform direction through one runnable enterprise knowledge Q&A reference template.
+
+Proof Agent still ships as an **Enterprise Agent Delivery Kit**, but that is the delivery shape rather than the core identity. The framework provides the Harness; the delivery kit packages it; the enterprise Q&A template proves it.
 
 ## What is Harness
 
@@ -17,9 +19,9 @@ Harness RAG:    Retrieve → Policy → Evidence → Policy → Answer/Refuse �
 
 ## Why This Exists
 
-普通 RAG demo 证明 Agent 能回答问题。Proof Agent 证明 Agent 为什么可以回答、什么时候必须拒答、什么时候必须等人工审批、以及事后如何复盘。
+普通 Agent 或 RAG demo 证明模型能回答问题。Proof Agent 证明 Agent 为什么可以行动、什么时候必须拒答、什么时候必须等待人工审批、哪些记忆可以写入、以及事后如何复盘。
 
-The first v1 demo is a strongly controlled enterprise knowledge Q&A Agent:
+The first v1 template is a strongly controlled enterprise knowledge Q&A Agent:
 
 - mandatory knowledge retrieval before answering
 - evidence-based answer, refusal, or escalation
@@ -72,14 +74,17 @@ The output includes a final answer or refusal plus:
 ## Core Model
 
 ```text
-User Question
+User Goal / Question
      |
      v
 Agent Contract: agent.yaml
      |
      v
 Control Envelope
+  |-- Workflow Orchestrator
   |-- PolicyEngine
+  |-- Tool Gateway
+  |-- Validators / Evaluators
   |-- Evidence checks
   |-- Tool approval
   |-- Memory boundary
@@ -90,10 +95,35 @@ Control Envelope
 Enterprise Agent Response
 ```
 
-Proof Agent does not replace LangGraph, LlamaIndex, MCP, or observability tools. It composes them behind an enterprise control envelope.
+Proof Agent does not replace LangGraph, MCP, vector stores, or observability tools. It composes them behind an enterprise control envelope. In v1, LangGraph is an implementation detail for workflow execution; the public model is Workflow + Policy + Gateway + Validator + Audit.
+
+## Architecture Layers
+
+```text
+User / CLI / API
+  -> Agent Control Layer
+  -> Agent Runtime Layer
+  -> Gateway & Context Layer
+  -> Verification & Governance Layer
+  -> Templates & Examples
+```
+
+v1 implements the narrow local path:
+
+```text
+CLI
+  -> agent.yaml
+  -> Workflow Orchestrator
+  -> Policy Engine + Validator
+  -> Local Knowledge + MCP Mock Tool + Session Memory
+  -> Trace + Governance Receipt
+  -> Enterprise QA Template
+```
 
 ## Documentation
 
+- [Controlled Agent Harness Redesign](docs/superpowers/specs/2026-05-09-controlled-agent-harness-redesign.md)
+- [Controlled Agent Harness Framework](docs/Proof%20Agent%20-%20Controlled%20Agent%20Harness%20Framework.md)
 - [Control Envelope](docs/concepts/control-envelope.md)
 - [Agent Contract](docs/concepts/agent-contract.md)
 - [Policy Engine](docs/concepts/policy-engine.md)
@@ -111,6 +141,6 @@ Proof Agent does not replace LangGraph, LlamaIndex, MCP, or observability tools.
 
 ## v1 Scope
 
-v1 is intentionally narrow: one excellent enterprise Q&A delivery template, one public runtime path using LangGraph, deterministic demo mode, local knowledge, session memory, one MCP mock tool with approval state, JSONL trace, Governance Receipt, CLI, Docker Compose, and CI.
+v1 is intentionally narrow: one excellent enterprise Q&A reference template, one public local CLI path, deterministic demo mode, local knowledge, session memory, one MCP mock tool routed through Tool Gateway approval state, validators, JSONL trace, Governance Receipt, Docker Compose, and CI.
 
 Multi-runtime support, multiple production providers, GUI policy playground, policy packs, and additional industry templates are vNext.

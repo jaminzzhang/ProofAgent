@@ -2,27 +2,29 @@
 
 Status: APPROVED  
 Source: `/plan-devex-review` decisions  
-Product shape: CLI-first Python Enterprise Agent Delivery Kit
+Product shape: CLI-first Python Controlled Agent Harness Framework
 
 ## 1. Technical Goal
 
-Proof Agent v1 delivers a runnable, governed, and auditable enterprise knowledge Q&A Agent.
+Proof Agent v1 delivers a local-first **Controlled Agent Harness Framework** and proves it through a runnable, governed, and auditable enterprise knowledge Q&A reference template.
+
+The long-term vision is an enterprise Agent Control Platform. The v1 implementation remains intentionally narrow: CLI-first, local-first, deterministic-demo capable, and template-verified.
 
 The technical plan optimizes for two developer paths:
 
 - **2-minute deterministic demo:** `proof-agent demo` runs without an LLM key and proves the value of Plain RAG vs Harness RAG, JSONL trace, and Governance Receipt.
 - **30-minute enterprise evaluation:** `proof-agent run examples/enterprise_qa/agent.yaml` runs the full local enterprise Q&A path with policy, knowledge, memory, MCP mock approval, trace, and receipt.
 
-The primary developer is an enterprise AI platform or Agent architect. They need a delivery artifact they can evaluate, test, and explain to security, compliance, and application teams.
+The primary developer is an enterprise AI platform or Agent architect. They need a controlled Agent framework they can evaluate, test, and explain to security, compliance, and application teams before expanding into broader platform use cases.
 
 ## 2. Developer Experience Decisions
 
 | Decision | Accepted direction |
 | --- | --- |
-| Product type | CLI-first Python delivery kit |
+| Product type | CLI-first Python Controlled Agent Harness Framework |
 | Primary persona | Enterprise AI platform / Agent architect |
 | Time to hello world | 2-minute deterministic demo, 30-minute full evaluation |
-| Magical moment | `proof-agent demo` shows Plain RAG vs Harness RAG and writes trace + receipt |
+| Magical moment | `proof-agent demo` shows Harness control decisions, Plain RAG vs Harness RAG, and writes trace + receipt |
 | DX mode | DX EXPANSION |
 
 ## 3. Public CLI Surface
@@ -93,16 +95,26 @@ proof_agent/
   config/
     manifest.py
     validation.py
+  workflow/
+    orchestrator.py
+    state.py
   policy/
     engine.py
     decisions.py
+  validators/
+    schema.py
+    evidence.py
+    tool_result.py
+    safety.py
+    quality.py
   knowledge/
     local_provider.py
     evidence.py
   runtime/
     langgraph_runner.py
-    state.py
   tools/
+    gateway.py
+    registry.py
     mcp_mock.py
     approval.py
   memory/
@@ -201,6 +213,36 @@ RunResult
   receipt_path
 ```
 
+Additional v1 framework contracts:
+
+```text
+WorkflowState
+  run_id
+  workflow_name
+  current_node
+  question
+  evidence
+  policy_decisions
+  tool_requests
+  approval_state
+  memory_writes
+  final_output
+
+ToolRequest
+  tool_name
+  action
+  parameters
+  risk_level
+  requested_by_node
+  requires_approval
+
+ValidationResult
+  validator_name
+  status: passed | failed
+  reason
+  metadata
+```
+
 ## 6. Runtime Flow
 
 The deterministic demo must use the same runtime contracts as the full enterprise evaluation. The deterministic provider replaces only the LLM response source. It must not bypass manifest validation, policy decisions, evidence evaluation, approval state, trace writing, or receipt generation.
@@ -212,7 +254,10 @@ CLI command
 Load and validate agent.yaml
   |
   v
-Build LangGraph workflow
+Build Workflow Orchestrator
+  |
+  v
+Run LangGraph implementation
   |
   v
 PolicyEngine.before_retrieval
@@ -233,7 +278,10 @@ Answer with citations      Refusal / escalation
 Optional tool request
   |
   v
-PolicyEngine.before_tool_call
+Tool Gateway
+  |
+  v
+PolicyEngine.before_tool_call + parameter guard + risk check
   |
   v
 Approval state
