@@ -57,23 +57,34 @@
 
 ## 3. Knowledge / RAG（知识检索与证据评估）
 
-### 决策：自建轻量 RAG（sentence-transformers + ChromaDB）
+### 决策：一期自建轻量 RAG，预留 Agentic / Remote RAG Provider
 
 | 项 | 详情 |
 |---|---|
+| Provider 抽象 | `KnowledgeProvider` 接口，统一返回 `EvidenceChunk` 和 citation metadata |
+| v1 Provider | `LocalKnowledgeProvider`：本地文档 + 本地向量检索 |
 | Embedding | `sentence-transformers` + `all-MiniLM-L6-v2`（本地，无需 API） |
 | 向量存储 | `chromadb`（嵌入式模式，`PersistentClient`，无需服务进程） |
 | 文档解析 | 自建 Markdown chunker（按 heading 分块，保留 source/line 元数据） |
 | 证据评估 | 自建 `EvidenceEvaluator`（基于 similarity score + policy threshold） |
 | 引用追踪 | 自建 citation mapper（chunk metadata → source file + heading） |
+| 后续 Provider | Agentic RAG（如 PageIndex 等）、远程 RAG API、企业知识库检索服务 |
 
 **选型理由：**
 
-- **完全可控**：每个环节都经过 Harness 策略门控，无框架黑箱
+- **一期完全可控**：本地 chunk、index、retrieval、evidence evaluation 每个环节都经过 Harness 策略门控，无框架黑箱
+- **Provider 边界清晰**：workflow 和 policy 只消费标准化 `EvidenceChunk`，不绑定具体 RAG 实现
 - **零网络依赖**：embedding 模型本地下载后缓存，ChromaDB 嵌入式运行
 - **确定性保证**：similarity score 和 evidence threshold 完全确定性，测试稳定
-- **依赖极小**：仅 `sentence-transformers` + `chromadb` 两个核心依赖
+- **依赖极小**：一期仅 `sentence-transformers` + `chromadb` 两个 Knowledge 核心依赖
 - **与 PolicyEngine 天然集成**：evidence score 直接传入 `PolicyEngine.before_answer` 做决策
+
+**后续扩展原则：**
+
+- Agentic RAG、PageIndex 类 provider、远程 RAG provider 必须实现同一个 `KnowledgeProvider` 接口。
+- Provider 可以有自己的检索、重排、查询规划或远程 API 调用逻辑，但输出必须标准化为 `EvidenceChunk`、citation metadata、retrieval trace payload。
+- `PolicyEngine.before_retrieval` 和 `PolicyEngine.before_answer` 仍由 Harness 执行；任何 provider 不得绕过 evidence threshold、citation requirement、refusal/escalation policy。
+- 远程 RAG 的请求、响应、超时、错误、redaction 必须写入 JSONL trace；provider 返回的来源信息必须能映射到 Governance Receipt。
 
 **不选 LlamaIndex 的理由：**
 
@@ -88,7 +99,7 @@
 
 **不选 LangChain RAG 的理由：** 无内置 citation 支持；evaluation 工具（LangSmith）倾向云端；社区反馈 API 不稳定；抽象层过深不适合受控 RAG。
 
-**实现预估：** chunker ~80 行、retriever ~60 行、evidence evaluator ~100 行、citation mapper ~40 行，合计 ~280 行。
+**实现预估：** provider interface ~40 行、chunker ~80 行、retriever ~60 行、evidence evaluator ~100 行、citation mapper ~40 行，合计 ~320 行。
 
 ---
 
@@ -264,12 +275,299 @@ dev = [
 
 ---
 
+## 10. 推荐目录结构
+
+v1 采用 **单 Python package + examples + tests + local runtime assets** 的结构。目录边界围绕 Control Envelope 的核心职责划分，而不是围绕底层框架划分；LangGraph、ChromaDB、MCP 等第三方实现只能出现在各自 adapter/runtime 层，不能污染公共合约模型。
+
+```text
+.
+├── pyproject.toml
+├── uv.lock
+├── README.md
+├── LICENSE
+├── .env.example
+├── .gitignore
+├── docker-compose.yml
+├── Dockerfile
+├── docs/
+│   ├── Proof Agent PRD.md
+│   ├── Proof Agent Framework Design.md
+│   ├── Proof Agent Technical Plan.md
+│   ├── Proof Agent 技术选型.md
+│   ├── concepts/
+│   │   ├── agent-contract.md
+│   │   ├── approval-state-contract.md
+│   │   ├── control-envelope.md
+│   │   ├── governance-receipt-contract.md
+│   │   ├── policy-engine.md
+│   │   ├── trace-event-contract.md
+│   │   └── trust-boundaries.md
+│   └── examples/
+│       ├── enterprise-qa.md
+│       ├── governance-receipt.md
+│       └── launch-script.md
+├── proof_agent/
+│   ├── __init__.py
+│   ├── cli.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── manifest.py
+│   │   ├── loader.py
+│   │   └── validation.py
+│   ├── contracts/
+│   │   ├── __init__.py
+│   │   ├── approval.py
+│   │   ├── evidence.py
+│   │   ├── policy.py
+│   │   ├── receipt.py
+│   │   ├── run.py
+│   │   ├── tool.py
+│   │   └── trace.py
+│   ├── workflow/
+│   │   ├── __init__.py
+│   │   ├── orchestrator.py
+│   │   ├── nodes.py
+│   │   ├── routing.py
+│   │   └── state.py
+│   ├── runtime/
+│   │   ├── __init__.py
+│   │   └── langgraph_runner.py
+│   ├── policy/
+│   │   ├── __init__.py
+│   │   ├── engine.py
+│   │   ├── loader.py
+│   │   └── rules.py
+│   ├── knowledge/
+│   │   ├── __init__.py
+│   │   ├── chunker.py
+│   │   ├── citations.py
+│   │   ├── evaluator.py
+│   │   ├── index.py
+│   │   ├── provider.py
+│   │   └── local_provider.py
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   └── session.py
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── approval.py
+│   │   ├── gateway.py
+│   │   ├── mcp_mock.py
+│   │   └── registry.py
+│   ├── validators/
+│   │   ├── __init__.py
+│   │   ├── evidence.py
+│   │   ├── quality.py
+│   │   ├── safety.py
+│   │   ├── schema.py
+│   │   └── tool_result.py
+│   ├── audit/
+│   │   ├── __init__.py
+│   │   ├── receipt.py
+│   │   ├── redaction.py
+│   │   ├── templates/
+│   │   │   └── governance_receipt.md.j2
+│   │   └── trace.py
+│   ├── demo/
+│   │   ├── __init__.py
+│   │   ├── deterministic_provider.py
+│   │   └── scenarios.py
+│   └── compare/
+│       ├── __init__.py
+│       ├── harness_rag.py
+│       └── plain_rag.py
+├── examples/
+│   └── enterprise_qa/
+│       ├── agent.yaml
+│       ├── policy.yaml
+│       ├── tools.yaml
+│       ├── questions.yaml
+│       ├── knowledge/
+│       │   ├── customer-support-policy.md
+│       │   └── discount-policy.md
+│       ├── expected/
+│       │   ├── governance_receipt.md
+│       │   └── trace.jsonl
+│       └── README.md
+├── runs/
+│   └── .gitkeep
+├── tests/
+│   ├── conftest.py
+│   ├── fixtures/
+│   │   └── enterprise_qa/
+│   ├── unit/
+│   ├── integration/
+│   └── e2e/
+└── .github/
+    └── workflows/
+        └── ci.yml
+```
+
+### 目录结构原则
+
+1. **`contracts/` 是稳定边界**：所有外部可理解的 Pydantic 合约放在这里，包括 `PolicyDecision`、`TraceEvent`、`EvidenceChunk`、`ApprovalState`、`RunResult`。其他模块只能依赖 contracts，不能重新定义同义模型。
+2. **`runtime/` 隔离 LangGraph**：`workflow/` 表达 Proof Agent 自己的流程语义，`runtime/langgraph_runner.py` 负责把这些语义编译到 LangGraph。这样未来换 runtime 时，不需要改 policy、audit、knowledge、tools。
+3. **`knowledge/` 一期自建最小 RAG，接口预留扩展**：`provider.py` 定义统一 `KnowledgeProvider` 边界，`local_provider.py` 实现本地文档 RAG；后续 Agentic RAG、PageIndex 类 provider、远程 RAG 只能作为 provider adapter 接入。
+4. **`audit/` 只依赖 trace 合约**：Governance Receipt 必须从 JSONL trace 聚合生成，不能直接读取 workflow 内部状态，避免审计输出和真实执行记录分叉。
+5. **`examples/enterprise_qa/` 是验收用例**：这个模板不是演示素材堆放处，而是 v1 的端到端 acceptance fixture。CLI、trace、receipt、policy、knowledge、tool approval 都必须能通过它验证。
+6. **`proof_agent/demo/` 只放 demo 命令逻辑**：`proof-agent demo` 的 deterministic provider、固定问题选择、控制台展示逻辑放在 package 内；Enterprise QA 的模板资产仍以 `examples/enterprise_qa/` 为唯一事实源。
+7. **`runs/` 是本地运行产物目录**：默认写入 `runs/latest/trace.jsonl` 和 `runs/latest/governance_receipt.md`，除 `.gitkeep` 外不提交运行产物。
+
+---
+
+## 11. 模块职责与依赖边界
+
+| 模块 | 核心职责 | 可依赖 | 不应依赖 |
+|---|---|---|---|
+| `cli` | Typer 命令入口，参数解析，控制台输出 | `config`、`workflow`、`demo`、`compare`、`audit` | LangGraph 细节、ChromaDB client 细节 |
+| `config` | 加载、校验 `agent.yaml` / `policy.yaml` / `tools.yaml` | `contracts`、`pyyaml`、`pydantic` | runtime、knowledge、tools 的具体实现 |
+| `contracts` | 公共数据合约和枚举 | `pydantic`、标准库 | LangGraph、Typer、ChromaDB、MCP |
+| `workflow` | Control Envelope 流程节点、状态、路由语义 | `contracts`、`policy`、`knowledge`、`memory`、`tools`、`validators`、`audit` | LangGraph 直接 API |
+| `runtime` | 将 workflow 编译并运行到 LangGraph | `workflow`、`contracts`、`langgraph` | CLI 输出逻辑、业务模板内容 |
+| `policy` | enforcement point 决策：检索、回答、工具、记忆 | `contracts`、`config` | LangGraph、MCP SDK、ChromaDB |
+| `knowledge` | KnowledgeProvider 抽象、本地文档索引、检索、证据评分、引用映射 | `contracts`、`sentence-transformers`、`chromadb` | CLI、LangGraph、MCP SDK |
+| `memory` | Session Memory 读写与策略前置数据 | `contracts` | 持久化数据库、用户长期画像 |
+| `tools` | Tool Gateway、工具注册、MCP mock、审批状态转换 | `contracts`、`policy`、`mcp`、`langchain-mcp-adapters` | knowledge 内部实现 |
+| `validators` | schema/evidence/tool/safety/quality 确定性校验 | `contracts` | LLM-as-judge、外部观测平台 |
+| `audit` | JSONL Trace、redaction、Governance Receipt 生成 | `contracts`、`jinja2` | workflow 私有状态、未落 trace 的临时数据 |
+| `demo` | 无 API key 的 deterministic demo 命令逻辑和打包后 fallback assets | `workflow`、`contracts`、`config` | 外部 LLM provider、examples 的私有文件结构 |
+| `compare` | Plain RAG vs Harness RAG 对比 | `knowledge`、`workflow`、`audit` | Tool approval 私有实现 |
+
+### 依赖方向
+
+```text
+cli
+  ↓
+config → contracts
+  ↓
+workflow → policy / knowledge / memory / tools / validators / audit
+  ↓
+runtime/langgraph_runner
+
+examples → CLI 输入，不被 framework 反向依赖
+runs     → CLI 输出，不被 tests 当作唯一事实源
+```
+
+**约束：**
+
+- `contracts` 不能 import Proof Agent 其他业务模块。
+- `policy` 只能返回 typed decision，不能直接执行工具、写 memory、写 trace。
+- `tools` 必须通过 `ToolGateway` 暴露能力，workflow 不能直接调用 MCP mock tool。
+- `audit.receipt` 只能从 trace events 生成 receipt，不能从运行时对象旁路生成。
+- `workflow` 和 `policy` 只能依赖 `KnowledgeProvider` 输出的标准 evidence 合约，不能依赖 ChromaDB、PageIndex、远程 RAG API 等具体 provider 细节。
+- `examples/enterprise_qa/` 是模板资产唯一事实源；`proof_agent/demo/` 可以按 scenario contract 读取它，或在包发布时使用同步生成的 bundled fallback assets，但不能维护另一套语义不同的 demo 数据。
+- `compare.plain_rag` 可以绕过 Control Envelope，但必须只用于对比命令和测试，不能被 `run` 路径引用。
+
+---
+
+## 12. 配置与运行产物布局
+
+### `agent.yaml`
+
+`agent.yaml` 是 v1 的公开入口，负责声明 workflow、knowledge、model、policy、tools、memory 和 audit。推荐字段保持接近概念文档中的 Agent Contract：
+
+```yaml
+name: enterprise-qa
+purpose: Governed enterprise knowledge Q&A
+
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+
+model:
+  provider: deterministic
+  name: proof-agent-demo
+
+knowledge:
+  provider: local
+  path: ./knowledge
+  index_path: ../../runs/indexes/enterprise_qa
+
+policy:
+  file: ./policy.yaml
+
+tools:
+  file: ./tools.yaml
+
+memory:
+  provider: session
+
+audit:
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md
+```
+
+### `policy.yaml`
+
+`policy.yaml` 只表达规则，不嵌入 Python 代码。v1 支持的 enforcement points 固定为：
+
+```text
+before_retrieval
+before_answer
+before_tool_call
+before_memory_write
+```
+
+### `tools.yaml`
+
+`tools.yaml` 声明工具白名单、risk level、approval requirement 和 mock MCP 启动方式。工具是否实际执行由 `ToolGateway` 和 `PolicyEngine.before_tool_call` 共同决定。
+
+### `runs/`
+
+本地运行产物按 run 写入：
+
+```text
+runs/
+├── latest/
+│   ├── trace.jsonl
+│   └── governance_receipt.md
+├── indexes/
+│   └── enterprise_qa/
+└── 2026-05-09T120000Z/
+    ├── trace.jsonl
+    └── governance_receipt.md
+```
+
+`runs/latest` 可以是复制目录或软链接；跨平台优先时使用复制目录，避免 Windows symlink 权限问题。
+
+---
+
+## 13. 首批实现顺序
+
+第一批代码应围绕 `proof-agent demo` 和 `proof-agent run examples/enterprise_qa/agent.yaml` 两条路径展开。
+
+| 顺序 | 目录/文件 | 目标 |
+|---|---|---|
+| 1 | `pyproject.toml`、`proof_agent/cli.py` | 建立 CLI 入口和包安装方式 |
+| 2 | `contracts/` | 固化 `AgentManifest`、`PolicyDecision`、`TraceEvent`、`RunResult` 等公共模型 |
+| 3 | `config/` | 加载并校验 `agent.yaml`、`policy.yaml`、`tools.yaml` |
+| 4 | `audit/trace.py`、`audit/receipt.py` | 先打通 trace JSONL 和 Governance Receipt shell |
+| 5 | `demo/` | 实现无 API key deterministic provider 和固定 demo scenarios |
+| 6 | `policy/`、`validators/` | 实现 retrieval/answer/tool/memory 的确定性决策和校验 |
+| 7 | `knowledge/` | 定义 `KnowledgeProvider` 接口；实现一期 local provider、Markdown chunker、本地索引、检索、evidence evaluator、citation mapper |
+| 8 | `workflow/`、`runtime/langgraph_runner.py` | 将 Control Envelope 流程跑在 LangGraph 上 |
+| 9 | `tools/` | 接入 MCP mock tool、approval state、timeout/denied/granted trace |
+| 10 | `compare/` | 实现 Plain RAG vs Harness RAG 对比命令 |
+| 11 | `examples/enterprise_qa/` | 补齐可运行模板、样例知识、预期 trace/receipt |
+| 12 | `tests/`、`.github/workflows/ci.yml` | 覆盖 CLI smoke、contracts、policy、evidence、trace、receipt、approval |
+
+**开工验收线：**
+
+- `proof-agent demo` 无 API key 可运行，并生成 trace + receipt。
+- `proof-agent run examples/enterprise_qa/agent.yaml` 能走完整 Harness RAG 路径。
+- `proof-agent compare` 能展示 Plain RAG 和 Harness RAG 对证据不足问题的行为差异。
+- `pytest` 覆盖合约校验、policy decisions、evidence threshold、tool approval state、receipt outcome mapping。
+- `ruff check` 通过，CI 至少包含 lint、tests、CLI smoke、artifact existence check。
+
+---
+
 ## 与现有设计文档的对比
 
 | 设计文档中的选型 | 本分析结论 | 变化 | 理由 |
 |---|---|---|---|
 | LangGraph workflow | **保持** LangGraph 1.1.x | 版本明确化 | interrupt() 天然支持 approval state |
 | LlamaIndex RAG | **改为** 自建轻量 RAG | **变化** | LlamaIndex 依赖过重，citation/evidence 自建更可控 |
+| Agentic / 远程 RAG | **预留** Provider adapter | 明确 deferred | v1 local-first，但 provider 边界必须支持后续接入 PageIndex 类 Agentic RAG 和远程企业知识服务 |
 | MCP mock tool | **保持** mcp SDK + stdio | 确认 | stdio transport 零运维，适配器桥接 LangGraph |
 | typer CLI | **保持** typer | 确认 | 类型注解驱动，与 Pydantic 配合好 |
 | pydantic v2 | **保持** pydantic v2 | 确认 | frozen=True 强制不可变 |
