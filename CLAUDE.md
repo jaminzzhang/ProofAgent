@@ -29,16 +29,23 @@ docker compose up                       # full local evaluation
 
 ## Tech Stack
 
-- Python 3.11+, `typer` for CLI, `pydantic` v2 for data contracts
-- `langgraph` for workflow runtime (only public v1 runtime)
-- `pytest` for tests, `ruff` for lint/format
+Full analysis: `docs/Proof Agent 技术选型.md`
+
+- Python 3.12+, `typer` for CLI, `pydantic` v2 for data contracts (frozen=True)
+- `langgraph >= 1.1.0` for workflow runtime (StateGraph + interrupt() for approval)
+- `mcp[cli] >= 1.27.0` + `langchain-mcp-adapters` for MCP mock tool (stdio transport)
+- `sentence-transformers` + `chromadb` for local RAG (self-built, not LlamaIndex)
+- `jinja2` for Governance Receipt Markdown generation
+- `pytest` for tests, `ruff` for lint/format, `mypy` for type checking
 - Local JSONL for audit, Docker Compose for distribution
+
+**Key tech decision:** Knowledge/RAG is self-built (~280 lines) rather than using LlamaIndex. Reason: LlamaIndex's 50+ subpackages and frequent API changes conflict with v1's "controlled" principle. Self-built RAG puts every step through Harness policy gates with zero framework black box.
 
 ## Architecture
 
 ### Core Abstraction: Control Envelope
 
-The Control Envelope wraps every Agent run with enforced policy, evidence, approval, memory, trace, and receipt. It does NOT replace LangGraph, LlamaIndex, or MCP — it composes them behind an enterprise control contract.
+The Control Envelope wraps every Agent run with enforced policy, evidence, approval, memory, trace, and receipt. It does NOT replace LangGraph, MCP, or ChromaDB — it composes them behind an enterprise control contract.
 
 ### Data Flow
 
