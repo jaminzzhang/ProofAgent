@@ -1,0 +1,63 @@
+# Governance Receipt
+
+Run ID: {{ run_id }}
+Timestamp: {{ timestamp }}
+Agent: {{ agent_name }}
+Question: {{ question }}
+
+## Final Outcome
+
+{{ final_outcome }}
+
+## Policy Decisions
+
+{% if policy_events %}
+{% for event in policy_events %}
+- {{ event.payload.policy_rule_id | default("unknown") }}: {{ event.payload.decision | default(event.status) }}
+{% endfor %}
+{% else %}
+- No policy decision events recorded.
+{% endif %}
+
+## Evidence
+
+{% if evidence_events %}
+{% for event in evidence_events %}
+- {{ event.payload.validator_name | default("evidence") }}: {{ event.payload.status | default(event.status) }}
+{% endfor %}
+{% else %}
+- No evidence events recorded.
+{% endif %}
+
+## Tools
+
+{% if tool_events %}
+{% for event in tool_events %}
+- {{ event.event_type }}: {{ event.status }}
+{% endfor %}
+{% else %}
+- No tool events recorded.
+{% endif %}
+
+## Memory
+
+{% if memory_events %}
+{% for event in memory_events %}
+- {{ event.event_type }}: {{ event.status }}
+{% endfor %}
+{% else %}
+- No memory events recorded.
+{% endif %}
+
+## Audit Artifacts
+
+- Trace: {{ trace_path }}
+- Receipt: {{ receipt_path }}
+
+## Redaction
+
+{% if redacted_fields %}
+Applied to: {{ redacted_fields | join(", ") }}
+{% else %}
+No redaction was applied.
+{% endif %}
