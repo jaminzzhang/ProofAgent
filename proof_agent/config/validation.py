@@ -21,6 +21,17 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "audit",
 }
 
+SUPPORTED_MODEL_PROVIDERS = {"deterministic", "openai_compatible", "azure_openai", "anthropic"}
+FORBIDDEN_MODEL_PARAM_PARTS = (
+    "api_key",
+    "authorization",
+    "bearer",
+    "password",
+    "secret",
+    "access_token",
+    "provider_api_key",
+)
+
 
 def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> None:
     """Fail early with actionable messages before Pydantic validation runs."""
@@ -86,13 +97,14 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
             "Use knowledge.provider: local for v1.",
             artifact_path=manifest_path,
         )
-    if manifest.model.provider != "deterministic":
+    if manifest.model.provider not in SUPPORTED_MODEL_PROVIDERS:
         raise ProofAgentError(
             "PA_MODEL_001",
             f"unsupported model provider: {manifest.model.provider}",
-            "Use model.provider: deterministic for the local v1 demo.",
+            f"Supported providers: {', '.join(sorted(SUPPORTED_MODEL_PROVIDERS))}.",
             artifact_path=manifest_path,
         )
+    _reject_secret_model_params(manifest, manifest_path=manifest_path)
     if manifest.memory.provider != "session":
         raise ProofAgentError(
             "PA_CONFIG_002",
@@ -160,3 +172,25 @@ def require_writable_parent(path: Path, field_name: str, manifest_path: Path) ->
             f"Grant write access to {parent} or change {field_name}.",
             artifact_path=manifest_path,
         ) from exc
+
+
+def _reject_secret_model_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    forbidden = sorted(
+        key
+        for key in manifest.model.params
+        if _is_forbidden_model_param(str(key))
+    )
+    if forbidden:
+        raise ProofAgentError(
+            "PA_SECRET_001",
+            f"model.params contains secret-bearing field(s): {', '.join(forbidden)}",
+            "Store secrets in environment variables and reference only *_env names in agent.yaml.",
+            artifact_path=manifest_path,
+        )
+
+
+def _is_forbidden_model_param(key: str) -> bool:
+    normalized = key.lower()
+    if normalized.endswith("_env"):
+        return False
+    return any(part in normalized for part in FORBIDDEN_MODEL_PARAM_PARTS)

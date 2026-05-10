@@ -58,6 +58,8 @@ class PolicyEngine:
             return self._evaluate_before_memory_write(rule, context)
         if rule.enforcement_point == EnforcementPoint.BEFORE_RETRIEVAL:
             return self._evaluate_before_retrieval(rule)
+        if rule.enforcement_point == EnforcementPoint.BEFORE_MODEL_CALL:
+            return self._evaluate_before_model_call(rule, context)
         return None
 
     def _evaluate_before_answer(
@@ -100,6 +102,20 @@ class PolicyEngine:
         if "deny" in rule.decision.values():
             return self._decision_from_rule(rule, "on_match")
         return PolicyDecisionType.ALLOW
+
+    def _evaluate_before_model_call(
+        self, rule: PolicyRule, context: Mapping[str, Any]
+    ) -> PolicyDecisionType | None:
+        condition = rule.condition
+        for key in ("provider", "model", "cost_class", "stream"):
+            if key in condition and condition[key] != context.get(key):
+                return None
+        max_tokens = condition.get("max_estimated_tokens")
+        if max_tokens is not None:
+            estimated = context.get("estimated_tokens")
+            if estimated is None or int(estimated) > int(max_tokens):
+                return self._decision_from_rule(rule, "on_fail")
+        return self._decision_from_rule(rule, "on_match")
 
     def _decision_from_rule(self, rule: PolicyRule, key: str) -> PolicyDecisionType:
         value = rule.decision.get(key, "allow")

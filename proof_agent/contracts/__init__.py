@@ -11,6 +11,13 @@ from proof_agent.contracts.manifest import (
     ToolsConfig,
     WorkflowConfig,
 )
+from proof_agent.contracts.model import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ModelRole,
+    TokenUsage,
+)
 from proof_agent.contracts.policy import (
     EnforcementPoint,
     PolicyDecision,
@@ -35,6 +42,10 @@ __all__ = [
     "KnowledgeConfig",
     "MemoryConfig",
     "ModelConfig",
+    "ModelMessage",
+    "ModelRequest",
+    "ModelResponse",
+    "ModelRole",
     "PolicyConfig",
     "PolicyDecision",
     "PolicyDecisionType",
@@ -45,6 +56,7 @@ __all__ = [
     "ToolsConfig",
     "TraceEvent",
     "TraceEventType",
+    "TokenUsage",
     "ValidationResult",
     "ValidationStatus",
     "WorkflowConfig",

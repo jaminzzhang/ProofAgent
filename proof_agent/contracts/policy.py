@@ -21,6 +21,7 @@ class EnforcementPoint(str, Enum):
     BEFORE_ANSWER = "before_answer"
     BEFORE_TOOL_CALL = "before_tool_call"
     BEFORE_MEMORY_WRITE = "before_memory_write"
+    BEFORE_MODEL_CALL = "before_model_call"
 
 
 class PolicyRule(FrozenModel):

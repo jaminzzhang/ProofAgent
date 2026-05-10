@@ -43,6 +43,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         model=ModelConfig(
             provider=model["provider"],
             name=model["name"],
+            params=model.get("params", {}),
         ),
         policy=PolicyConfig(file=resolve_path(base_dir, policy["file"])),
         tools=ToolsConfig(file=resolve_path(base_dir, tools["file"])),
