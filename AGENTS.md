@@ -28,7 +28,7 @@ Important documentation:
 
 - `docs/Proof Agent PRD.md` defines MVP scope, modules, architecture, and delivery milestones.
 - `docs/Proof Agent 可行性分析报告.md` captures feasibility, audience, stack options, and risks.
-- `docs/Proof Agent 技术选型.md` records technical choices and architecture rationale.
+- `docs/Proof Agent 技术设计方案.md` records technical design, corrected architecture decisions, and provider strategy.
 - `docs/concepts/` explains framework concepts such as Control Envelope, Agent Contract, and Policy Engine.
 - `docs/examples/` documents the enterprise Q&A demo, launch script, and Governance Receipt.
 - `docs/superpowers/plans/` contains implementation plans and execution records.

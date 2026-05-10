@@ -19,7 +19,7 @@
 - `docs/Proof Agent Test Plan.md`
 - `docs/Proof Agent Engineering Review.md`
 - `docs/Proof Agent Framework Design.md`
-- `docs/Proof Agent 技术选型.md`
+- `docs/Proof Agent 技术设计方案.md`
 - `docs/superpowers/specs/2026-05-09-controlled-agent-harness-redesign.md`
 - `docs/concepts/agent-contract.md`
 - `docs/concepts/policy-engine.md`
@@ -36,7 +36,7 @@
 4. v1 quality checks are deterministic validators; LLM-as-judge is outside the release gate.
 5. Existing documentation filenames stay stable until code exists; implementation can add docs without reorganizing the repository.
 6. The deleted working-tree file `docs/superpowers/plans/2026-05-09-proof-agent-v1.md` is treated as user-owned state and is not restored by this plan.
-7. v1 knowledge retrieval follows `docs/Proof Agent 技术选型.md`: self-built lightweight RAG behind a `KnowledgeProvider` interface, with optional future Agentic/remote providers behind the same boundary.
+7. v1 knowledge retrieval follows `docs/Proof Agent 技术设计方案.md`: self-built lightweight RAG behind a `KnowledgeProvider` interface, with optional future Agentic/remote providers behind the same boundary.
 8. JSONL trace is the audit source of truth. Governance Receipt generation must aggregate trace events, not read workflow-private state.
 9. LangGraph, ChromaDB, and MCP SDK details remain in adapter/runtime modules and must not leak into public config, policy, trace, receipt, or contract models.
 

@@ -10,26 +10,29 @@ The target user is an enterprise AI Agent owner or platform architect who needs 
 
 ## Current State
 
-**Documentation-only.** No source code, tests, or build tooling exists yet. The implementation plan is in `docs/superpowers/plans/2026-05-09-proof-agent-v1.md`.
+All 11 implementation plan tasks are complete. The codebase has working Python modules, 13 test files, a deterministic demo, and CI. The deterministic demo produces three outcomes: `ANSWERED_WITH_CITATIONS`, `REFUSED_NO_EVIDENCE`, and `WAITING_FOR_APPROVAL`. Demo artifacts are written to `runs/latest/trace.jsonl` and `runs/latest/governance_receipt.md`.
+
+**Not yet implemented:** LangGraph StateGraph with `interrupt()` for real approval, real LLM providers, MCP stdio transport.
 
 ## Build and Development Commands
 
-Once implementation starts (from the plan):
-
 ```bash
-python -m pytest tests/ -v              # run all tests
-python -m pytest tests/test_cli.py -v   # run single test file
-python -m pytest -k "test_demo" -v      # run tests matching name
-ruff check proof_agent/                 # lint
-ruff format proof_agent/                # format
-proof-agent demo                        # deterministic demo (no LLM key needed)
-proof-agent run examples/enterprise_qa/agent.yaml  # full enterprise run
-docker compose up                       # full local evaluation
+uv run --extra dev python -m pytest tests/ -v              # run all tests
+uv run --extra dev python -m pytest tests/test_cli.py -v   # run single test file
+uv run --extra dev python -m pytest -k "test_demo" -v      # run tests matching name
+uv run --extra dev ruff check proof_agent tests            # lint
+uv run --extra dev ruff format proof_agent tests           # format
+uv run --extra dev mypy proof_agent                        # type check
+uv run --extra dev proof-agent demo                        # deterministic demo (no LLM key needed)
+uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml  # full enterprise run
+uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount?"  # baseline vs governed
+uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md  # inspect receipt
+docker compose up                                         # full local evaluation
 ```
 
 ## Tech Stack
 
-Full analysis: `docs/Proof Agent 技术选型.md`
+Full analysis: `docs/Proof Agent 技术设计方案.md`
 
 - Python 3.12+, `typer` for CLI, `pydantic` v2 for data contracts (frozen=True)
 - `langgraph >= 1.1.0` for workflow runtime (StateGraph + interrupt() for approval)
@@ -57,15 +60,18 @@ CLI command → Load agent.yaml → Build LangGraph workflow
   → PolicyEngine.before_memory_write → JSONL trace → Governance Receipt
 ```
 
-### Key Modules (planned)
+### Key Modules
 
 | Module | Responsibility |
 |--------|---------------|
 | `config/` | Load and validate `agent.yaml` manifest |
+| `contracts/` | Pydantic v2 frozen models for policy decisions, evidence, approval, trace events, receipts, manifests, runs |
 | `policy/` | Typed decisions (`allow`, `deny`, `require_approval`, `escalate`) at 4 enforcement points |
 | `knowledge/` | Local document retrieval and evidence evaluation |
-| `runtime/` | Workflow state and LangGraph execution |
+| `workflow/` | Orchestrator, graph nodes, routing logic, and workflow state |
+| `runtime/` | Runtime execution context and adapter interfaces |
 | `tools/` | MCP mock tool with explicit approval state machine |
+| `validators/` | Evidence, safety, schema, and tool result validation |
 | `memory/` | Session memory only (v1) |
 | `audit/` | JSONL trace writer, redaction, Governance Receipt generator |
 | `demo/` | Deterministic provider (no LLM key needed) and bundled scenarios |
