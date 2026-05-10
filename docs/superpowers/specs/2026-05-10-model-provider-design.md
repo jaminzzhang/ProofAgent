@@ -34,6 +34,8 @@ class ModelResponse(FrozenModel):
 **New file: `proof_agent/providers/protocol.py`**
 
 ```python
+from collections.abc import Iterator
+
 class ModelProvider(Protocol):
     def generate(self, prompt: str, *, system: str = "") -> ModelResponse: ...
     def stream(self, prompt: str, *, system: str = "") -> Iterator[ModelResponse]: ...
@@ -45,9 +47,11 @@ class ModelProvider(Protocol):
 
 - `ModelResponse` inherits `FrozenModel` (immutable, consistent with all other contracts).
 - `TokenUsage` is its own contract so it can appear independently in trace events.
+- `Iterator` imported from `collections.abc`, consistent with `_base.py`.
 - `stream()` yields `ModelResponse` chunks. The final chunk carries `token_usage` and `finish_reason`; intermediate chunks have `token_usage=None`.
 - `refusal_reason` captures provider-side content filtering (distinct from harness policy refusal).
 - `generate()` and `stream()` share the same signature: `prompt` + optional `system` strings. No message array abstraction; that stays inside each provider adapter.
+- Each provider implements a `from_config(cls, model_config: ModelConfig) -> Self` class method that handles its own key resolution and construction. This keeps provider-specific logic inside the provider and avoids hard-coded `if` branching in the factory.
 
 ### 2. Provider Implementations
 
@@ -63,11 +67,11 @@ providers/
 └── anthropic_provider.py    # Anthropic adapter
 ```
 
-**DeterministicModelProvider:** Wraps the existing `demo/deterministic_provider.py`. `generate()` delegates to `DeterministicProvider.answer()`, returns `ModelResponse` with no token usage. `stream()` yields a single chunk (identical to `generate()`). No network, no API key. `demo/deterministic_provider.py` is not modified.
+**DeterministicModelProvider:** Wraps the existing `demo/deterministic_provider.py`. `generate()` delegates to `DeterministicProvider.answer()`, returns `ModelResponse` with no token usage. `stream()` yields a single chunk (identical to `generate()`). No network, no API key. `demo/deterministic_provider.py` is not modified. Implements `from_config(cls, model_config) -> Self` — no key resolution needed, just wraps the config.
 
-**OpenAIModelProvider:** Uses the `openai` SDK. Constructor takes `model_name`, `api_key`, optional `base_url`. `generate()` calls `client.chat.completions.create()`, maps the response to `ModelResponse` with token usage from `response.usage`. `stream()` calls `client.chat.completions.create(stream=True)`, accumulates content chunks, and emits the final chunk with accumulated usage. Catches `openai.APIError`, `openai.AuthenticationError`, `openai.APITimeoutError` and wraps them in `ProofAgentError`.
+**OpenAIModelProvider:** Uses the `openai` SDK. Constructor takes `model_name`, `api_key`, optional `base_url`. `from_config()` reads `OPENAI_API_KEY` from environment, raises `PA_MODEL_003` if missing. `generate()` calls `client.chat.completions.create()`, maps the response to `ModelResponse` with token usage from `response.usage`. `stream()` calls `client.chat.completions.create(stream=True)`, accumulates content chunks, and emits the final chunk with accumulated usage. Catches `openai.APIError`, `openai.AuthenticationError`, `openai.APITimeoutError` and wraps them in `ProofAgentError`.
 
-**AnthropicProvider:** Same structure using the `anthropic` SDK. Constructor takes `model_name`, `api_key`. `generate()` calls `client.messages.create()`, maps content from `response.content[0].text` and usage from `response.usage`. `stream()` uses `client.messages.stream()`. Catches `anthropic.APIError`, `anthropic.AuthenticationError`, `anthropic.APITimeoutError` and wraps them.
+**AnthropicProvider:** Same structure using the `anthropic` SDK. Constructor takes `model_name`, `api_key`. `from_config()` reads `ANTHROPIC_API_KEY` from environment, raises `PA_MODEL_003` if missing. `generate()` calls `client.messages.create()`, maps content from `response.content[0].text` and usage from `response.usage`. `stream()` uses `client.messages.stream()`. Catches `anthropic.APIError`, `anthropic.AuthenticationError`, `anthropic.APITimeoutError` and wraps them.
 
 **Error codes:**
 
@@ -101,20 +105,10 @@ def resolve_provider(model_config: ModelConfig) -> ModelProvider:
     cls = _PROVIDER_MAP.get(model_config.provider)
     if cls is None:
         raise ProofAgentError("PA_MODEL_001", ...)
-    if model_config.provider == "openai":
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            raise ProofAgentError("PA_MODEL_003", "OPENAI_API_KEY not set", ...)
-        return cls(model_name=model_config.name, api_key=api_key)
-    if model_config.provider == "anthropic":
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            raise ProofAgentError("PA_MODEL_003", "ANTHROPIC_API_KEY not set", ...)
-        return cls(model_name=model_config.name, api_key=api_key)
-    return cls(model_config=model_config)
+    return cls.from_config(model_config)
 ```
 
-API key validation happens at resolution time (fail early, before any policy evaluation or trace writing).
+API key validation happens inside each provider's `from_config()` method at resolution time (fail early, before any policy evaluation or trace writing). Provider-specific construction logic (key resolution, client initialization) stays inside each provider class.
 
 **ModelConfig change (`contracts/manifest.py`):**
 
@@ -125,7 +119,7 @@ class ModelConfig(FrozenModel):
     params: FrozenDict | None = None           # provider-specific overrides (temperature, max_tokens)
 ```
 
-`params` is optional and opaque. Each provider reads what it needs. No typed per-provider config schemas in the contract layer.
+`params` is optional and opaque. Each provider reads what it needs. No typed per-provider config schemas in the contract layer. The `params` field is intentionally omitted from `required_nested["model"]` in `config/validation.py` because it is optional.
 
 **Validation change (`config/validation.py`):**
 
@@ -144,9 +138,18 @@ if manifest.model.provider not in supported:
 
 **New enforcement point: `before_model_call`**
 
+Added to the `EnforcementPoint` enum in `contracts/policy.py`:
+
 ```python
-BEFORE_MODEL_CALL = "before_model_call"
+class EnforcementPoint(str, Enum):
+    BEFORE_RETRIEVAL = "before_retrieval"
+    BEFORE_ANSWER = "before_answer"
+    BEFORE_TOOL_CALL = "before_tool_call"
+    BEFORE_MEMORY_WRITE = "before_memory_write"
+    BEFORE_MODEL_CALL = "before_model_call"    # NEW
 ```
+
+The `PolicyEngine._evaluate_rule()` dispatch in `policy/engine.py` gains a corresponding `_evaluate_before_model_call()` method.
 
 This gates the actual LLM invocation. It does not replace `before_answer`:
 
@@ -157,10 +160,16 @@ A policy YAML can deny at `before_model_call` to block expensive model calls eve
 
 **New trace events:**
 
+Added to the `TraceEventType` enum in `contracts/trace.py`:
+
 ```python
-MODEL_REQUEST = "model_request"
-MODEL_RESPONSE = "model_response"
+class TraceEventType(str, Enum):
+    # ... existing 18 members ...
+    MODEL_REQUEST = "model_request"      # NEW
+    MODEL_RESPONSE = "model_response"    # NEW
 ```
+
+This brings the total to 20 v1 event types. The normative Trace Event Contract document (`docs/concepts/trace-event-contract.md`) must be updated accordingly.
 
 `MODEL_REQUEST` payload:
 
@@ -215,6 +224,8 @@ Payloads carry lengths (character counts), not full text. Prompts and responses 
 
 Provider resolution fails fast (step 2) before any trace writing. If API key is missing or provider name is unsupported, the run aborts immediately.
 
+Steps 12-15 (before_model_call, model_request, provider.generate, model_response) are only reached in the standard answer path — not in the tool-required question path, which branches before `before_answer` is evaluated. This matches current behavior where `DeterministicProvider().answer()` is never called for tool-required questions.
+
 **WorkflowState additions (`contracts/run.py`):**
 
 ```python
@@ -224,6 +235,8 @@ class WorkflowState(FrozenModel):
     model_name: str | None = None          # "gpt-4o"
     token_usage: TokenUsage | None = None
 ```
+
+Since `WorkflowState` is a `FrozenModel`, these fields can only be set at construction time. The orchestrator constructs a new `WorkflowState` via `state.model_copy(update={"model_provider": ..., "model_name": ..., "token_usage": ...})` after the model response is received, consistent with the project's immutable update pattern.
 
 **Governance Receipt addition:**
 
@@ -242,6 +255,8 @@ New "Model Usage" section between "Policy Decisions" and "Tool Approvals":
 ```
 
 For deterministic runs: `Provider: deterministic`, `Tokens: N/A`.
+
+The Jinja2 template at `proof_agent/audit/templates/governance_receipt.md.j2` must be updated to render this section. The `_build_context()` function in `receipt.py` must extract `model_request`/`model_response` events from the trace and add model usage data to the template context.
 
 **`agent.yaml` examples:**
 
@@ -267,12 +282,14 @@ model:
 **New dependencies:**
 
 ```toml
-dependencies = [
-    # ... existing ...
-    "openai>=1.30.0",
-    "anthropic>=0.30.0",
-]
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "ruff>=0.5.0", "mypy>=1.10.0"]
+openai = ["openai>=1.30.0"]
+anthropic = ["anthropic>=0.30.0"]
+all = ["proof-agent[openai,anthropic]"]
 ```
+
+Provider SDKs are optional dependencies so the deterministic demo works out of the box without pulling in OpenAI/Anthropic packages. Users install `pip install proof-agent[openai]` or `pip install proof-agent[anthropic]` as needed. The factory validates that the required SDK is installed when resolving a provider and raises `PA_MODEL_001` with an actionable message (e.g., "Install with: pip install proof-agent[openai]") if it is missing.
 
 **Test strategy:**
 
@@ -308,14 +325,19 @@ All real-provider tests use mocked SDK clients (no API key needed in CI). Determ
 | New | `tests/test_policy_before_model_call.py` |
 | New | `tests/test_trace_model_events.py` |
 | New | `tests/test_receipt_model_usage.py` |
+| Modify | `proof_agent/contracts/__init__.py` (export TokenUsage, ModelResponse) |
 | Modify | `proof_agent/contracts/manifest.py` (add `params` to ModelConfig) |
-| Modify | `proof_agent/contracts/trace.py` (add MODEL_REQUEST, MODEL_RESPONSE) |
+| Modify | `proof_agent/contracts/trace.py` (add MODEL_REQUEST, MODEL_RESPONSE to TraceEventType enum) |
 | Modify | `proof_agent/contracts/run.py` (add model fields to WorkflowState) |
-| Modify | `proof_agent/policy/engine.py` (add before_model_call) |
+| Modify | `proof_agent/contracts/policy.py` (add BEFORE_MODEL_CALL to EnforcementPoint enum) |
+| Modify | `proof_agent/policy/engine.py` (add before_model_call dispatch) |
+| Modify | `proof_agent/errors.py` (add PA_MODEL_002, PA_MODEL_003, PA_MODEL_004 to ErrorCode enum) |
 | Modify | `proof_agent/config/validation.py` (generalize provider gate) |
 | Modify | `proof_agent/workflow/orchestrator.py` (inject provider, add gate + trace) |
-| Modify | `proof_agent/audit/receipt.py` (add Model Usage section) |
-| Modify | `pyproject.toml` (add openai, anthropic deps) |
+| Modify | `proof_agent/audit/receipt.py` (extract model events, add to context) |
+| Modify | `proof_agent/audit/templates/governance_receipt.md.j2` (add Model Usage section) |
+| Modify | `docs/concepts/trace-event-contract.md` (add model_request, model_response to event table) |
+| Modify | `pyproject.toml` (add openai, anthropic optional deps) |
 
 ## What Stays Unchanged
 
