@@ -17,6 +17,8 @@ SENSITIVE_KEY_PARTS = (
 
 
 def redact_payload(payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a redacted copy plus metadata describing which fields were masked."""
+
     redacted_fields: list[str] = []
     redacted = _redact_value(payload, redacted_fields, path="")
     return redacted, {"applied": bool(redacted_fields), "fields": redacted_fields}
@@ -28,6 +30,7 @@ def _redact_value(value: Any, redacted_fields: list[str], *, path: str) -> Any:
         for key, item in value.items():
             key_text = str(key)
             field_path = f"{path}.{key_text}" if path else key_text
+            # Redaction is key-based so nested values are masked before persistence.
             if _is_sensitive_key(key_text):
                 result[key_text] = "[REDACTED]"
                 redacted_fields.append(field_path)

@@ -7,6 +7,8 @@ SECRET_MARKERS = ("api_key", "access_token", "bearer ", "password", "secret-toke
 
 
 def validate_no_secret_strings(text: str) -> ValidationResult:
+    """Catch obvious secret markers before final text is emitted or persisted."""
+
     normalized = text.lower()
     matches = tuple(marker for marker in SECRET_MARKERS if marker in normalized)
     if matches:

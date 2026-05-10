@@ -8,6 +8,8 @@ from proof_agent.contracts import EvidenceChunk, ValidationResult, ValidationSta
 def evaluate_evidence(
     chunks: Iterable[EvidenceChunk], *, min_count: int, min_score: float
 ) -> ValidationResult:
+    """Accept only evidence chunks that meet both status and score thresholds."""
+
     chunk_tuple = tuple(chunks)
     accepted = tuple(
         chunk

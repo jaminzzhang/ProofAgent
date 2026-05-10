@@ -13,6 +13,8 @@ from proof_agent.errors import ProofAgentError
 
 
 def load_agent_manifest(path: Path | str) -> AgentManifest:
+    """Load, shape-check, type-check, and validate an agent manifest."""
+
     manifest_path = Path(path).resolve()
     if not manifest_path.exists():
         raise ProofAgentError(
@@ -23,6 +25,7 @@ def load_agent_manifest(path: Path | str) -> AgentManifest:
         )
 
     raw = _load_yaml_mapping(manifest_path)
+    # Shape validation gives users targeted config errors before model construction.
     require_manifest_shape(raw, manifest_path=manifest_path)
     try:
         manifest = manifest_from_mapping(raw, base_dir=manifest_path.parent)
@@ -38,6 +41,8 @@ def load_agent_manifest(path: Path | str) -> AgentManifest:
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Parse YAML and require a top-level mapping for agent.yaml."""
+
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:

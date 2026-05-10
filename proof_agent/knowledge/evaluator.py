@@ -7,6 +7,8 @@ TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 def token_overlap_score(query: str, content: str) -> float:
+    """Simple deterministic relevance score used instead of model embeddings in v1."""
+
     query_tokens = set(TOKEN_RE.findall(query.lower()))
     content_tokens = set(TOKEN_RE.findall(content.lower()))
     if not query_tokens or not content_tokens:

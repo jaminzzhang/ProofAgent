@@ -5,6 +5,8 @@ from typing import Any
 
 
 def customer_lookup(parameters: Mapping[str, Any]) -> dict[str, str]:
+    """Deterministic stand-in for an MCP customer policy lookup tool."""
+
     return {
         "customer_id": str(parameters["customer_id"]),
         "policy_id": str(parameters["policy_id"]),

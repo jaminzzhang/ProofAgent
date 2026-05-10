@@ -13,10 +13,13 @@ DEFAULT_KNOWLEDGE_PATH = Path("examples/enterprise_qa/knowledge")
 
 
 def run_harness_rag(question: str, *, knowledge_path: Path = DEFAULT_KNOWLEDGE_PATH) -> RagResult:
+    """Run the governed path used to compare Proof Agent against plain RAG."""
+
     provider = LocalKnowledgeProvider(knowledge_path)
     evidence = provider.retrieve(question, top_k=2)
     validation = evaluate_evidence(evidence, min_count=1, min_score=0.2)
     if question == UNSUPPORTED_QUESTION or validation.status == "failed":
+        # The governed baseline must refuse when evidence is missing or weak.
         return RagResult(
             outcome="REFUSED_NO_EVIDENCE",
             message="I cannot answer because the available evidence is insufficient.",

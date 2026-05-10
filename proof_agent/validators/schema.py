@@ -7,6 +7,8 @@ from proof_agent.contracts import ValidationResult, ValidationStatus
 
 
 def validate_final_output_schema(output: Mapping[str, Any]) -> ValidationResult:
+    """Validate the minimal final-output shape expected by receipts and tests."""
+
     required = {"outcome", "message"}
     missing = sorted(required.difference(output))
     citations = output.get("citations", ())

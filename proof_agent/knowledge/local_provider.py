@@ -9,11 +9,15 @@ from proof_agent.knowledge.evaluator import token_overlap_score
 
 
 class LocalKnowledgeProvider:
+    """In-memory deterministic retriever for the local Enterprise QA template."""
+
     def __init__(self, knowledge_path: Path) -> None:
         self.knowledge_path = knowledge_path
         self._chunks = load_markdown_chunks(knowledge_path)
 
     def retrieve(self, query: str, *, top_k: int = 3) -> tuple[EvidenceChunk, ...]:
+        """Rank Markdown chunks by simple token overlap for reproducible tests."""
+
         scored = sorted(
             (
                 (token_overlap_score(query, chunk.content), chunk)
@@ -31,6 +35,8 @@ class LocalKnowledgeProvider:
 
 
 def _evidence_from_chunk(chunk: MarkdownChunk, score: float) -> EvidenceChunk:
+    """Attach a source citation directly to the evidence content."""
+
     return EvidenceChunk(
         source=chunk.source,
         content=f"{chunk.content}\n\nCitation: {citation_for_chunk(chunk)}",

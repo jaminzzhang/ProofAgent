@@ -16,6 +16,8 @@ from proof_agent.contracts import (
 
 
 def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManifest:
+    """Convert raw YAML into a typed manifest with paths resolved from agent.yaml."""
+
     workflow = raw["workflow"]
     knowledge = raw["knowledge"]
     model = raw["model"]
@@ -53,6 +55,8 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
 
 
 def resolve_path(base_dir: Path, value: str | Path) -> Path:
+    """Resolve relative manifest paths against the directory containing agent.yaml."""
+
     path = Path(value)
     if path.is_absolute():
         return path

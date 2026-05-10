@@ -24,6 +24,8 @@ def run_enterprise_qa(
     runs_dir: Path,
     approved: bool | None = None,
 ) -> RunResult:
+    """Run the local Enterprise QA harness and write trace/receipt artifacts."""
+
     manifest = load_agent_manifest(agent_yaml)
     runs_dir.mkdir(parents=True, exist_ok=True)
     trace_path = runs_dir / "trace.jsonl"
@@ -36,12 +38,14 @@ def run_enterprise_qa(
     trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
     trace.emit("manifest_loaded", status="ok", payload={"agent_name": manifest.name})
 
+    # Retrieval is still policy-gated even in the deterministic local demo.
     policy = PolicyEngine.from_file(manifest.policy.file)
     retrieval_decision = policy.evaluate("before_retrieval", {"question": question})
     _emit_policy(trace, retrieval_decision)
 
     evidence = LocalKnowledgeProvider(manifest.knowledge.path).retrieve(question, top_k=2)
     if question == UNSUPPORTED_QUESTION:
+        # Force a no-evidence path so refusal behavior is reproducible in tests and demos.
         evidence = ()
     trace.emit(
         "retrieval_result",
@@ -61,6 +65,7 @@ def run_enterprise_qa(
     )
 
     if question == TOOL_REQUIRED_QUESTION:
+        # Tool-required questions leave the normal answer path and exercise approval gating.
         return _handle_tool_question(
             manifest_tools_file=manifest.tools.file,
             trace=trace,
@@ -80,6 +85,7 @@ def run_enterprise_qa(
     _emit_policy(trace, answer_decision)
 
     memory = SessionMemory(deny_fields={"access_token", "customer_phone", "provider_api_key"})
+    # v1 stores only a harmless session summary to demonstrate memory policy checks.
     memory_result = memory.write({"summary": f"Question: {question}"})
     trace.emit(
         "memory_write_decision",
@@ -114,8 +120,11 @@ def _handle_tool_question(
     question: str,
     approved: bool | None,
 ) -> RunResult:
+    """Exercise the mock MCP approval flow for a tool-required question."""
+
     gateway = ToolGateway.from_file(manifest_tools_file)
     if approved is None:
+        # A missing approval is a terminal waiting state; the tool is not executed.
         gateway_result = gateway.request_tool(
             tool_name="customer_lookup",
             parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
@@ -136,6 +145,7 @@ def _handle_tool_question(
             message="Waiting for approval before customer_lookup can execute.",
         )
     if approved is False:
+        # Explicit denial is recorded separately from waiting so receipts are unambiguous.
         denied = create_approval_state(
             run_id=trace.run_id,
             approval_id="appr_customer_lookup",
@@ -177,6 +187,8 @@ def _handle_tool_question(
 
 
 def _emit_policy(trace: TraceWriter, decision: object) -> None:
+    """Record a policy decision in the trace without leaking engine internals."""
+
     trace.emit(
         "policy_decision",
         status="ok" if getattr(decision, "decision") == "allow" else "blocked",
@@ -198,6 +210,8 @@ def _finalize(
     outcome: ReceiptOutcome,
     message: str,
 ) -> RunResult:
+    """Emit the final output, render the receipt, and return CLI-facing metadata."""
+
     trace.emit(
         "final_output",
         status="ok" if outcome == ReceiptOutcome.ANSWERED_WITH_CITATIONS else "blocked",

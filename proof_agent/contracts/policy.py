@@ -24,6 +24,8 @@ class EnforcementPoint(str, Enum):
 
 
 class PolicyRule(FrozenModel):
+    """Declarative rule loaded from policy.yaml before runtime evaluation."""
+
     rule_id: str
     enforcement_point: EnforcementPoint
     condition: Mapping[str, Any]
@@ -37,6 +39,8 @@ class PolicyRule(FrozenModel):
 
 
 class PolicyDecision(FrozenModel):
+    """Auditable policy verdict produced at a named enforcement point."""
+
     decision: PolicyDecisionType
     enforcement_point: EnforcementPoint
     reason: str

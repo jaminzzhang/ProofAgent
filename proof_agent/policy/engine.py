@@ -14,6 +14,8 @@ from proof_agent.policy.rules import load_policy_rules
 
 
 class PolicyEngine:
+    """Small deterministic evaluator for declarative policy.yaml rules."""
+
     def __init__(self, rules: tuple[PolicyRule, ...]) -> None:
         self.rules = rules
 
@@ -34,6 +36,7 @@ class PolicyEngine:
                 continue
             decision = self._evaluate_rule(rule, context)
             if decision is not None:
+                # v1 uses first-match semantics to keep receipts easy to explain.
                 return PolicyDecision(
                     decision=decision,
                     enforcement_point=point,
@@ -60,6 +63,8 @@ class PolicyEngine:
     def _evaluate_before_answer(
         self, rule: PolicyRule, context: Mapping[str, Any]
     ) -> PolicyDecisionType:
+        """Require enough accepted evidence before the agent can answer."""
+
         condition = rule.condition
         min_count = int(condition.get("min_evidence_count", 0))
         require_citations = bool(condition.get("require_citations", False))
@@ -71,6 +76,8 @@ class PolicyEngine:
     def _evaluate_before_tool_call(
         self, rule: PolicyRule, context: Mapping[str, Any]
     ) -> PolicyDecisionType | None:
+        """Only match tool rules for the requested tool and configured risk level."""
+
         condition = rule.condition
         if condition.get("tool_name") != context.get("tool_name"):
             return None
@@ -81,6 +88,8 @@ class PolicyEngine:
     def _evaluate_before_memory_write(
         self, rule: PolicyRule, context: Mapping[str, Any]
     ) -> PolicyDecisionType:
+        """Block memory writes containing fields that policy marks as unsafe."""
+
         deny_fields = set(rule.condition.get("deny_fields", ()))
         write = context.get("write", context)
         if isinstance(write, Mapping) and deny_fields.intersection(write):
@@ -103,6 +112,8 @@ class PolicyEngine:
         *,
         trace_event_id: str,
     ) -> PolicyDecision:
+        """Produce an explicit allow decision when no rule blocks the action."""
+
         return PolicyDecision(
             decision=PolicyDecisionType.ALLOW,
             enforcement_point=enforcement_point,

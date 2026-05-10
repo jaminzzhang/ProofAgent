@@ -15,6 +15,8 @@ from proof_agent.tools.registry import get_tool_callable
 
 @dataclass(frozen=True)
 class ToolConfig:
+    """Static allowlist entry loaded from tools.yaml."""
+
     name: str
     risk_level: str
     requires_approval: bool
@@ -24,12 +26,16 @@ class ToolConfig:
 
 @dataclass(frozen=True)
 class ToolGatewayResult:
+    """Result envelope returned whether a tool executed or is waiting for approval."""
+
     approval_state: ApprovalState
     executed: bool
     result: Mapping[str, Any] | None = None
 
 
 class ToolGateway:
+    """Approval and parameter boundary in front of callable mock tools."""
+
     def __init__(self, tools: Mapping[str, ToolConfig]) -> None:
         self.tools = dict(tools)
 
@@ -57,6 +63,8 @@ class ToolGateway:
         approved: bool,
         run_id: str = "run_test",
     ) -> ToolGatewayResult:
+        """Validate the request, enforce approval, and execute only if permitted."""
+
         config = self._require_tool(tool_name)
         self._validate_parameters(config, parameters)
         approval_state = create_approval_state(
@@ -86,6 +94,7 @@ class ToolGateway:
 
     def _validate_parameters(self, config: ToolConfig, parameters: Mapping[str, Any]) -> None:
         parameter_names = set(parameters)
+        # Denied parameters win even if a future config accidentally allowlists them.
         denied = parameter_names.intersection(config.denied_parameters)
         if denied:
             raise ProofAgentError(

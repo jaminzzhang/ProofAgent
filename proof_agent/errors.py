@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 class ErrorCode(str, Enum):
+    """Stable user-facing error codes grouped by Proof Agent subsystem."""
+
     PA_CONFIG_001 = "PA_CONFIG_001"
     PA_CONFIG_002 = "PA_CONFIG_002"
     PA_SCHEMA_001 = "PA_SCHEMA_001"
@@ -23,6 +25,8 @@ class ErrorCode(str, Enum):
 
 
 class ProofAgentError(Exception):
+    """Exception that carries an actionable fix and optional artifact references."""
+
     def __init__(
         self,
         code: ErrorCode | str,

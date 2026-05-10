@@ -7,11 +7,15 @@ from proof_agent.contracts import ValidationResult, ValidationStatus
 
 
 class SessionMemory:
+    """Ephemeral per-run memory with a denylist for sensitive field names."""
+
     def __init__(self, *, deny_fields: set[str] | frozenset[str]) -> None:
         self.deny_fields = set(deny_fields)
         self._data: dict[str, Any] = {}
 
     def write(self, values: Mapping[str, Any]) -> ValidationResult:
+        """Validate and store only fields that policy allows into session memory."""
+
         denied = sorted(set(values).intersection(self.deny_fields))
         if denied:
             return ValidationResult(
@@ -29,6 +33,8 @@ class SessionMemory:
         )
 
     def read(self) -> dict[str, Any]:
+        """Return a defensive copy so callers cannot mutate stored state directly."""
+
         return dict(self._data)
 
     def clear(self) -> None:

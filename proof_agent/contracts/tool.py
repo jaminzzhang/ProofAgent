@@ -9,6 +9,8 @@ from proof_agent.contracts._base import FrozenModel, freeze_value
 
 
 class ToolRequest(FrozenModel):
+    """Tool call intent before execution, including approval and risk metadata."""
+
     tool_name: str
     action: str
     parameters: Mapping[str, Any]

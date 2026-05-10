@@ -7,6 +7,12 @@ from pydantic import BaseModel, ConfigDict
 
 
 class FrozenDict(Mapping[str, Any]):
+    """Read-only mapping used inside frozen Pydantic contracts.
+
+    Pydantic's `frozen=True` protects model attributes, but nested dicts would
+    still be mutable unless we recursively freeze them at validation time.
+    """
+
     def __init__(self, items: Mapping[str, Any] | None = None) -> None:
         self._data = dict(items or {})
 
@@ -29,6 +35,8 @@ class FrozenDict(Mapping[str, Any]):
 
 
 def freeze_value(value: Any) -> Any:
+    """Recursively convert mutable containers into immutable contract values."""
+
     if isinstance(value, FrozenDict):
         return value
     if isinstance(value, Mapping):
@@ -39,4 +47,6 @@ def freeze_value(value: Any) -> Any:
 
 
 class FrozenModel(BaseModel):
+    """Base model for public contracts crossing policy, audit, and runtime boundaries."""
+
     model_config = ConfigDict(frozen=True)

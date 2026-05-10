@@ -1,34 +1,78 @@
 # Repository Guidelines
 
+## Current Status
+
+This repository is no longer documentation-only. The current `main` branch contains a local-first, CLI-first Python MVP for Proof Agent as a Controlled Agent Harness. It includes typed contracts, policy enforcement, deterministic enterprise Q&A examples, tool approval gating, trace/audit output, comparison utilities, tests, CI, and Docker assets.
+
+The deterministic demo currently reports:
+
+- `supported`: `ANSWERED_WITH_CITATIONS`
+- `unsupported`: `REFUSED_NO_EVIDENCE`
+- `tool_required`: `WAITING_FOR_APPROVAL`
+
+Demo artifacts are written to `runs/latest/trace.jsonl` and `runs/latest/governance_receipt.md`. Generated run output is ignored by git except for `runs/.gitkeep`.
+
 ## Project Structure & Module Organization
 
-This repository is currently documentation-first. Product planning and technical analysis live in `docs/`:
+Primary implementation and planning areas:
+
+- `proof_agent/` contains the runtime package, CLI, contracts, workflow, policy engine, adapters, audit/receipt generation, comparison logic, and deterministic demo runner.
+- `proof_agent/contracts/` owns public Pydantic v2 contract models. Keep framework/provider-specific objects out of this layer.
+- `tests/` contains the pytest suite for config loading, contracts, policy, knowledge retrieval, tool approval, memory, audit output, compare, workflow, and CLI behavior.
+- `examples/enterprise_qa/` contains the runnable Enterprise QA Template, including `agent.yaml`, knowledge fixtures, tools, and prompt templates.
+- `docs/` contains product, architecture, concept, example, and execution-planning documentation.
+- `runs/` is the local audit output directory; only `runs/.gitkeep` should be committed.
+- Operational assets live at the repository root, including `Dockerfile`, `docker-compose.yml`, `pyproject.toml`, `uv.lock`, and `.github/workflows/ci.yml`.
+
+Important documentation:
 
 - `docs/Proof Agent PRD.md` defines MVP scope, modules, architecture, and delivery milestones.
 - `docs/Proof Agent 可行性分析报告.md` captures feasibility, audience, stack options, and risks.
+- `docs/Proof Agent 技术选型.md` records technical choices and architecture rationale.
 - `docs/concepts/` explains framework concepts such as Control Envelope, Agent Contract, and Policy Engine.
 - `docs/examples/` documents the enterprise Q&A demo, launch script, and Governance Receipt.
-
-When implementation starts, keep source code in a dedicated package directory such as `src/` or `proof_agent/`, tests in `tests/`, runnable examples in `examples/`, and operational assets such as Docker or deployment files at the repository root.
+- `docs/superpowers/plans/` contains implementation plans and execution records.
 
 ## Build, Test, and Development Commands
 
-No build or test tooling is committed yet. Until implementation exists, validate documentation changes manually:
+Use `uv` for local development:
 
-- `ls docs` checks the expected documentation set.
-- `sed -n '1,120p' "docs/Proof Agent PRD.md"` previews the PRD without opening an editor.
+- `uv run --extra dev python -m pytest tests/ -v` runs the full test suite.
+- `uv run --extra dev ruff check proof_agent tests` runs lint checks.
+- `uv run --extra dev mypy proof_agent` runs static type checks.
+- `uv run --extra dev proof-agent demo` runs the deterministic three-scenario demo.
+- `uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml` runs the Enterprise QA Template directly.
+- `uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"` compares baseline and governed behavior.
+- `uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md` inspects the latest receipt.
+- `docker compose up` runs the local containerized demo path.
 
-When code is added, document the exact local workflow here, for example `python -m pytest`, `docker compose up`, or `make lint`.
+For documentation-only edits, at minimum run `git diff --check`. For runtime changes, run pytest, Ruff, mypy, and at least one CLI demo path.
 
 ## Coding Style & Naming Conventions
 
 Use clear Markdown headings, short paragraphs, and tables only when they improve scanability. Keep project terminology consistent: `Enterprise Agent Delivery Kit`, `Control Envelope`, `Agent Contract`, `PolicyEngine`, `MCP mock tool approval`, `Trace & Audit`, `Governance Receipt`, and `Enterprise QA Template`.
 
-For future Python code, prefer 4-space indentation, snake_case modules and functions, PascalCase classes, and explicit type hints on public APIs. Keep configuration examples in YAML or JSON with descriptive file names, such as `examples/knowledge_qa.yaml`.
+For Python code, use 4-space indentation, snake_case modules and functions, PascalCase classes, and explicit type hints on public APIs. Prefer small, typed functions and keep side effects behind adapters or CLI entry points.
+
+The runtime uses Python 3.12+, Pydantic v2 frozen contracts, Typer for the CLI, PyYAML for configuration, Jinja2 for receipt rendering, and pytest/Ruff/mypy for verification. Keep LangGraph, Chroma, MCP, and provider-specific details behind adapters; do not leak those types into contracts, config, policy, or audit interfaces.
+
+Configuration examples should stay in YAML or JSON with descriptive file names, such as `examples/enterprise_qa/agent.yaml`.
 
 ## Testing Guidelines
 
-There is no test suite yet. For documentation edits, verify links, headings, tables, and code blocks render correctly. For future implementation, place tests under `tests/` and name files `test_<module>.py`. Cover workflow routing, memory read/write behavior, knowledge retrieval, MCP tool registration, and trace/audit output.
+Tests live under `tests/` and should be named `test_<module>.py`. Keep coverage focused on externally visible behavior and contracts:
+
+- workflow routing and refusal behavior
+- evidence-backed answer generation
+- memory read/write behavior
+- MCP mock tool registration and approval gating
+- policy decisions and redaction
+- trace/audit event output
+- Governance Receipt rendering
+- baseline-vs-governed comparison
+- CLI command behavior
+
+Documentation edits should still verify links, headings, tables, and code blocks render correctly.
 
 ## Commit & Pull Request Guidelines
 
@@ -38,4 +82,6 @@ Pull requests should include a short summary, changed files or sections, validat
 
 ## Security & Configuration Tips
 
-Do not commit API keys, model provider credentials, vector database secrets, or production connection strings. Use `.env.example` for required variables once runtime code is introduced, and keep real secrets in local environment files excluded by `.gitignore`.
+Do not commit API keys, model provider credentials, vector database secrets, or production connection strings. Use `.env.example` for required variables and keep real secrets in local environment files excluded by `.gitignore`.
+
+The deterministic demo path must remain runnable without external API keys. Generated artifacts under `runs/latest/` should not be committed. Current redaction coverage includes API keys, access tokens, bearer tokens, passwords, secrets, connection strings, customer phone values, and provider API keys.

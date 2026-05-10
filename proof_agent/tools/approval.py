@@ -15,6 +15,8 @@ def create_approval_state(
     trace_event_id: str = "",
     timeout_seconds: int = 60,
 ) -> ApprovalState:
+    """Create a timestamped approval contract with a deterministic timeout window."""
+
     requested_at = datetime.now(UTC)
     expires_at = requested_at + timedelta(seconds=timeout_seconds)
     return ApprovalState(

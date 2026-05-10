@@ -18,6 +18,8 @@ app = typer.Typer(no_args_is_help=True)
 
 @app.command()
 def demo() -> None:
+    """Run the deterministic supported, unsupported, and approval-wait scenarios."""
+
     typer.echo("Proof Agent demo")
     for scenario in DEMO_SCENARIOS:
         result = run_enterprise_qa(
@@ -30,6 +32,8 @@ def demo() -> None:
 
 @app.command()
 def run(agent_yaml: str, question: str = typer.Option(SUPPORTED_QUESTION, "--question")) -> None:
+    """Run one Enterprise QA question through the governed harness."""
+
     result = run_enterprise_qa(Path(agent_yaml), question=question, runs_dir=Path("runs/latest"))
     typer.echo(result.final_output)
     typer.echo(f"Outcome: {result.outcome.value}")
@@ -37,6 +41,8 @@ def run(agent_yaml: str, question: str = typer.Option(SUPPORTED_QUESTION, "--que
 
 @app.command()
 def doctor() -> None:
+    """Report local readiness for the deterministic demo path."""
+
     checks = [
         ("Python", f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"),
         ("Proof Agent", __version__),
@@ -58,6 +64,8 @@ def doctor() -> None:
 
 @app.command()
 def inspect(path: str) -> None:
+    """Summarize a trace JSONL file or Governance Receipt markdown artifact."""
+
     artifact_path = Path(path)
     if artifact_path.suffix == ".jsonl":
         _inspect_trace(artifact_path)
@@ -67,6 +75,8 @@ def inspect(path: str) -> None:
 
 @app.command()
 def compare(agent_yaml: str, question: str = typer.Option(..., "--question")) -> None:
+    """Show the behavior gap between plain RAG and the governed harness."""
+
     plain = run_plain_rag(question)
     harness = run_harness_rag(question)
     typer.echo(f"Comparing {agent_yaml}: {question}")

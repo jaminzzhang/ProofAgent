@@ -11,6 +11,8 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
 def generate_receipt(trace_path: Path, receipt_path: Path) -> None:
+    """Render the human-readable Governance Receipt from the machine trace."""
+
     events = _read_trace_events(trace_path)
     context = _build_context(events, trace_path=trace_path, receipt_path=receipt_path)
     environment = Environment(
@@ -35,6 +37,8 @@ def _read_trace_events(trace_path: Path) -> list[dict[str, Any]]:
 def _build_context(
     events: list[dict[str, Any]], *, trace_path: Path, receipt_path: Path
 ) -> dict[str, Any]:
+    """Group raw trace events into the sections expected by the receipt template."""
+
     first = events[0] if events else {}
     final = next((event for event in reversed(events) if event["event_type"] == "final_output"), {})
     final_payload = final.get("payload", {})

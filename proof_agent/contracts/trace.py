@@ -10,6 +10,8 @@ from proof_agent.contracts._base import FrozenModel, freeze_value
 
 
 class TraceEventType(str, Enum):
+    """Closed set of audit event names for trace.v1."""
+
     RUN_STARTED = "run_started"
     MANIFEST_LOADED = "manifest_loaded"
     POLICY_DECISION = "policy_decision"
@@ -32,6 +34,8 @@ class TraceEventType(str, Enum):
 
 
 class TraceEvent(FrozenModel):
+    """Append-only audit event persisted as one JSON object per trace line."""
+
     schema_version: Literal["trace.v1"] = "trace.v1"
     run_id: str
     event_id: str

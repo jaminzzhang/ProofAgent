@@ -23,6 +23,8 @@ REQUIRED_TOP_LEVEL_FIELDS = {
 
 
 def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> None:
+    """Fail early with actionable messages before Pydantic validation runs."""
+
     missing = sorted(REQUIRED_TOP_LEVEL_FIELDS.difference(raw))
     if missing:
         raise ProofAgentError(
@@ -61,6 +63,8 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
 
 
 def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    """Validate the supported v1 runtime envelope and local file dependencies."""
+
     if manifest.workflow.runtime != "langgraph":
         raise ProofAgentError(
             "PA_CONFIG_002",
@@ -132,6 +136,8 @@ def require_directory(path: Path, field_name: str, manifest_path: Path) -> None:
 
 
 def require_writable_parent(path: Path, field_name: str, manifest_path: Path) -> None:
+    """Check writability without requiring the final artifact file to exist yet."""
+
     parent = path.parent
     while not parent.exists() and parent != parent.parent:
         parent = parent.parent
@@ -144,6 +150,7 @@ def require_writable_parent(path: Path, field_name: str, manifest_path: Path) ->
         )
     probe = parent / f".proof_agent_write_probe_{uuid4().hex}"
     try:
+        # Use a throwaway probe because os.access can lie on mounted or sandboxed volumes.
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
     except OSError as exc:

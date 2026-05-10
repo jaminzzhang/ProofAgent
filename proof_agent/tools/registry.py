@@ -15,4 +15,6 @@ TOOL_REGISTRY: dict[str, ToolCallable] = {
 
 
 def get_tool_callable(tool_name: str) -> ToolCallable:
+    """Resolve a configured tool name to the local callable implementation."""
+
     return TOOL_REGISTRY[tool_name]

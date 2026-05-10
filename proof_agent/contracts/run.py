@@ -21,6 +21,8 @@ class ValidationStatus(str, Enum):
 
 
 class ValidationResult(FrozenModel):
+    """Normalized validator output recorded in traces and policy metadata."""
+
     validator_name: str
     status: ValidationStatus
     reason: str
@@ -33,6 +35,12 @@ class ValidationResult(FrozenModel):
 
 
 class WorkflowState(FrozenModel):
+    """Serializable workflow snapshot shared between orchestration nodes.
+
+    This intentionally stores contract objects instead of framework-native state
+    so that LangGraph, plain Python, or future runtimes can use the same schema.
+    """
+
     run_id: str
     workflow_name: str
     current_node: str
@@ -51,6 +59,8 @@ class WorkflowState(FrozenModel):
 
 
 class RunResult(FrozenModel):
+    """Minimal result returned to CLI commands after audit artifacts are written."""
+
     final_output: str
     outcome: ReceiptOutcome
     trace_path: Path

@@ -10,6 +10,8 @@ REQUIRED_CUSTOMER_LOOKUP_KEYS = {"customer_id", "policy_id", "status", "source"}
 
 
 def validate_customer_lookup_result(result: Mapping[str, Any]) -> ValidationResult:
+    """Verify the mock MCP result before treating it as trusted evidence."""
+
     missing = sorted(REQUIRED_CUSTOMER_LOOKUP_KEYS.difference(result))
     source_ok = result.get("source") == "mcp_mock"
     if missing or not source_ok:
