@@ -53,6 +53,9 @@ Every trace line is one JSON object:
 | `retrieval_started` | local knowledge retrieval begins |
 | `retrieval_result` | retrieved chunks and source ids |
 | `evidence_evaluation` | accepted/rejected evidence and thresholds |
+| `model_request` | redacted model invocation metadata before generation |
+| `model_response` | redacted model response metadata and token usage |
+| `model_error` | provider resolution, SDK, auth, timeout, or API failure after trace initialization |
 | `approval_requested` | tool approval entered waiting state |
 | `approval_granted` | approval accepted |
 | `approval_denied` | approval denied |
@@ -72,6 +75,8 @@ Every trace line is one JSON object:
 | Harness event | OpenTelemetry GenAI concept |
 | --- | --- |
 | `retrieval_started`, `retrieval_result` | retrieval span |
+| `model_request`, `model_response` | model generation span |
+| `model_error` | model span/log error with low-cardinality `error.type` |
 | `tool_request`, `tool_result` | execute tool span |
 | `policy_decision` | custom agent/framework event |
 | `final_output` | agent or workflow invocation output |
@@ -82,6 +87,15 @@ v1 does not need to emit OpenTelemetry. It must keep enough structure to build a
 ## Failure Rules
 
 - If trace writing fails before model or tool execution, the run must fail closed.
+- Config shape errors can fail before a trace exists. Provider resolution, missing SDK, missing API key, auth, timeout, and API errors should emit `model_error` once trace initialization has happened.
 - If trace writing fails after a final response exists, the CLI must print `PA_AUDIT_001` and avoid claiming the run is auditable.
 - If receipt generation fails, the preserved trace path must still be printed and the receipt outcome becomes `FAILED_RECEIPT_UNAVAILABLE`.
 - Redacted values must never appear in `payload`; `redaction.fields` names field classes only.
+
+## Model Payload Rules
+
+`model_request` payloads store only audit metadata: provider, model, message count, prompt lengths, estimated tokens, stream intent, and cost class. They must not store raw message content.
+
+`model_response` payloads store provider, model, finish reason, content length, refusal reason, and token usage. They must not store raw generated text.
+
+`model_error` payloads store provider, model, error code, error class, retryability, and a short non-secret message.

@@ -21,6 +21,7 @@ knowledge:
 model:
   provider: deterministic
   name: demo
+  params: {}
 
 policy:
   file: ./policy.yaml
@@ -32,8 +33,8 @@ memory:
   provider: session
 
 audit:
-  trace: ./runs/latest/trace.jsonl
-  receipt: ./runs/latest/governance_receipt.md
+  trace_path: ./runs/latest/trace.jsonl
+  receipt_path: ./runs/latest/governance_receipt.md
 ```
 
 This schema is intentionally small. It should be enough to run the first enterprise Q&A template and prove the control envelope.
@@ -51,7 +52,14 @@ This schema is intentionally small. It should be enough to run the first enterpr
 - what memory scope is allowed
 - where audit artifacts are written
 
-It should not expose every provider option in v1. Advanced provider settings can live behind local defaults until real user demand justifies a larger public contract.
+The supported v1 model providers are:
+
+- `deterministic`: local demo provider, no SDK or API key required.
+- `openai_compatible`: Chat Completions-compatible remote provider.
+- `azure_openai`: configuration contract and validation placeholder only.
+- `anthropic`: configuration contract and validation placeholder only.
+
+Provider settings live under `model.params`. They may name environment variables such as `api_key_env`, `base_url_env`, `organization_env`, or `project_env`, but must not contain raw secret values.
 
 ## Failure Behavior
 
@@ -62,6 +70,7 @@ Examples:
 - missing `policy.file` -> fail fast with config guidance
 - missing knowledge path -> fail fast before model call
 - unsupported model provider -> fail fast; v1 defaults to deterministic demo mode
+- missing remote model SDK or API key -> emit `model_error` after trace initialization when possible
 - unsupported runtime -> fail fast; v1 supports public LangGraph runtime only
 - unwritable audit path -> fail before answering
 

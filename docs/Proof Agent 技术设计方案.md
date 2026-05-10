@@ -88,12 +88,12 @@ workflow/orchestrator
 | --- | --- |
 | CLI | Typer 命令：`demo`、`run`、`doctor`、`inspect`、`compare` |
 | Config | `agent.yaml` 通过 Pydantic contracts 加载和校验 |
-| Policy | 支持 `before_retrieval`、`before_answer`、`before_tool_call`、`before_memory_write` |
+| Policy | 支持 `before_retrieval`、`before_answer`、`before_model_call`、`before_tool_call`、`before_memory_write` |
 | Knowledge | Markdown chunk + deterministic token overlap retrieval |
-| Model | `DeterministicProvider` hard-coded 于 orchestrator 标准回答路径 |
+| Model | `ModelProvider` 抽象已接入标准回答路径；一期实现 `deterministic` 与 `openai_compatible`，`azure_openai`/`anthropic` 为占位契约 |
 | Tool | ToolGateway + mock `customer_lookup` + approval state |
 | Memory | session memory + denylist |
-| Audit | JSONL trace + Jinja2 Governance Receipt + redaction |
+| Audit | JSONL trace + Jinja2 Governance Receipt + redaction + Model Usage |
 | Tests | pytest + Ruff + mypy，当前测试覆盖 contracts、policy、knowledge、tools、memory、trace、receipt、workflow、CLI |
 | Docker/CI | Dockerfile、docker-compose、GitHub Actions 已存在 |
 
