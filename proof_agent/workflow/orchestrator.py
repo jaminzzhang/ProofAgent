@@ -360,6 +360,7 @@ def _build_model_request(
         provider=provider,
         model=model,
         messages=messages,
+        metadata={"question": question},
         evidence_sources=tuple(getattr(chunk, "source") for chunk in evidence),
     )
 

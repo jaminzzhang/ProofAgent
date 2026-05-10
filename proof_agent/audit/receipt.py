@@ -50,6 +50,7 @@ def _build_context(
         if event["event_type"] in {"tool_request", "tool_result", "approval_requested"}
     ]
     memory_events = [event for event in events if event["event_type"].startswith("memory_")]
+    model_usage = _extract_model_usage(events)
     redacted_fields = [
         field
         for event in events
@@ -66,7 +67,58 @@ def _build_context(
         "evidence_events": evidence_events,
         "tool_events": tool_events,
         "memory_events": memory_events,
+        "model_usage": model_usage,
         "trace_path": trace_path,
         "receipt_path": receipt_path,
         "redacted_fields": redacted_fields,
     }
+
+
+def _extract_model_usage(events: list[dict[str, Any]]) -> dict[str, str] | None:
+    """Normalize model trace events into one receipt-friendly audit section."""
+
+    request = _last_event(events, "model_request")
+    response = _last_event(events, "model_response")
+    error = _last_event(events, "model_error")
+    if request is None and response is None and error is None:
+        return None
+
+    request_payload = request.get("payload", {}) if request else {}
+    response_payload = response.get("payload", {}) if response else {}
+    error_payload = error.get("payload", {}) if error else {}
+    token_usage = response_payload.get("token_usage") or {}
+    source_payload = error_payload or response_payload or request_payload
+    status = "error" if error else (response or request or {}).get("status", "unknown")
+
+    return {
+        "provider": _audit_value(source_payload.get("provider")),
+        "model": _audit_value(source_payload.get("model")),
+        "status": _audit_value(status),
+        "message_count": _audit_value(request_payload.get("message_count")),
+        "estimated_tokens": _audit_value(request_payload.get("estimated_tokens")),
+        "stream": _audit_value(request_payload.get("stream")),
+        "cost_class": _audit_value(request_payload.get("cost_class")),
+        "finish_reason": _audit_value(response_payload.get("finish_reason")),
+        "content_length": _audit_value(response_payload.get("content_length")),
+        "input_tokens": _audit_value(token_usage.get("input_tokens")),
+        "output_tokens": _audit_value(token_usage.get("output_tokens")),
+        "total_tokens": _audit_value(token_usage.get("total_tokens")),
+        "error_code": _audit_value(error_payload.get("error_code")),
+        "error_class": _audit_value(error_payload.get("error_class")),
+        "retryable": _audit_value(error_payload.get("retryable")),
+    }
+
+
+def _last_event(events: list[dict[str, Any]], event_type: str) -> dict[str, Any] | None:
+    return next(
+        (event for event in reversed(events) if event.get("event_type") == event_type),
+        None,
+    )
+
+
+def _audit_value(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)

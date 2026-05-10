@@ -19,6 +19,30 @@ Question: {{ question }}
 - No policy decision events recorded.
 {% endif %}
 
+## Model Usage
+
+{% if model_usage %}
+| Field | Value |
+| --- | --- |
+| Provider | {{ model_usage.provider }} |
+| Model | {{ model_usage.model }} |
+| Status | {{ model_usage.status }} |
+| Message Count | {{ model_usage.message_count }} |
+| Estimated Tokens | {{ model_usage.estimated_tokens }} |
+| Stream | {{ model_usage.stream }} |
+| Cost Class | {{ model_usage.cost_class }} |
+| Finish Reason | {{ model_usage.finish_reason }} |
+| Content Length | {{ model_usage.content_length }} |
+| Input Tokens | {{ model_usage.input_tokens }} |
+| Output Tokens | {{ model_usage.output_tokens }} |
+| Total Tokens | {{ model_usage.total_tokens }} |
+| Error Code | {{ model_usage.error_code }} |
+| Error Class | {{ model_usage.error_class }} |
+| Retryable | {{ model_usage.retryable }} |
+{% else %}
+- No model call events recorded.
+{% endif %}
+
 ## Evidence
 
 {% if evidence_events %}

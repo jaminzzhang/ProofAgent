@@ -26,7 +26,7 @@ class DeterministicModelProvider:
         return None
 
     def generate(self, request: ModelRequest) -> ModelResponse:
-        question = _last_user_message(request)
+        question = str(request.metadata.get("question") or _last_user_message(request))
         return ModelResponse(
             content=self._provider.answer(question),
             provider_name=self.provider_name,

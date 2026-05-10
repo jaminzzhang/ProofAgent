@@ -41,7 +41,7 @@ def run(agent_yaml: str, question: str = typer.Option(SUPPORTED_QUESTION, "--que
 
 @app.command()
 def doctor() -> None:
-    """Report local readiness for the deterministic demo path."""
+    """Report local readiness for deterministic and remote model provider paths."""
 
     checks = [
         ("Python", f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"),
@@ -56,7 +56,13 @@ def doctor() -> None:
             "ok" if Path("examples/enterprise_qa/knowledge").exists() else "missing",
         ),
         ("Docker", "available" if which("docker") else "not found"),
-        ("LLM provider env", _optional_env_status(("OPENAI_API_KEY", "AZURE_OPENAI_API_KEY"))),
+        ("deterministic provider", "ready"),
+        ("openai_compatible env", _optional_env_status(("OPENAI_API_KEY", "OPENAI_BASE_URL"))),
+        (
+            "azure_openai placeholder env",
+            _optional_env_status(("AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT")),
+        ),
+        ("anthropic placeholder env", _optional_env_status(("ANTHROPIC_API_KEY",))),
     ]
     for label, value in checks:
         typer.echo(f"{label}: {value}")

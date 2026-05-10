@@ -15,14 +15,20 @@ class OpenAICompatibleModelProvider:
         model_name: str,
         api_key: str,
         base_url: str | None = None,
+        organization: str | None = None,
+        project: str | None = None,
         timeout_seconds: float | None = None,
-        default_params: dict[str, Any] | None = None,
+        default_temperature: float | None = None,
+        default_max_output_tokens: int | None = None,
     ) -> None:
         self._model_name = model_name
         self._api_key = api_key
         self._base_url = base_url
+        self._organization = organization
+        self._project = project
         self._timeout_seconds = timeout_seconds
-        self._default_params = default_params or {}
+        self._default_temperature = default_temperature
+        self._default_max_output_tokens = default_max_output_tokens
 
     @classmethod
     def from_config(cls, model_config: ModelConfig) -> OpenAICompatibleModelProvider:
@@ -31,6 +37,8 @@ class OpenAICompatibleModelProvider:
             "api_key_env",
             "base_url",
             "base_url_env",
+            "organization_env",
+            "project_env",
             "temperature",
             "max_output_tokens",
             "timeout_seconds",
@@ -54,11 +62,8 @@ class OpenAICompatibleModelProvider:
         base_url_env = params.get("base_url_env")
         if base_url_env and not base_url:
             base_url = os.environ.get(str(base_url_env))
-        default_params = {
-            key: params[key]
-            for key in ("temperature", "max_output_tokens")
-            if key in params
-        }
+        organization = _env_value(params.get("organization_env"))
+        project = _env_value(params.get("project_env"))
         timeout_seconds = (
             float(params["timeout_seconds"]) if "timeout_seconds" in params else None
         )
@@ -66,8 +71,15 @@ class OpenAICompatibleModelProvider:
             model_name=model_config.name,
             api_key=api_key,
             base_url=str(base_url) if base_url else None,
+            organization=organization,
+            project=project,
             timeout_seconds=timeout_seconds,
-            default_params=default_params,
+            default_temperature=float(params["temperature"])
+            if "temperature" in params
+            else None,
+            default_max_output_tokens=int(params["max_output_tokens"])
+            if "max_output_tokens" in params
+            else None,
         )
 
     @property
@@ -101,6 +113,8 @@ class OpenAICompatibleModelProvider:
             api_key=self._api_key,
             base_url=self._base_url,
             timeout=self._timeout_seconds,
+            organization=self._organization,
+            project=self._project,
         )
         payload: dict[str, Any] = {
             "model": self.model_name,
@@ -108,12 +122,17 @@ class OpenAICompatibleModelProvider:
                 {"role": message.role.value, "content": message.content}
                 for message in request.messages
             ],
-            **self._default_params,
         }
-        if request.temperature is not None:
-            payload["temperature"] = request.temperature
-        if request.max_output_tokens is not None:
-            payload["max_tokens"] = request.max_output_tokens
+        temperature = request.temperature
+        if temperature is None:
+            temperature = self._default_temperature
+        if temperature is not None:
+            payload["temperature"] = temperature
+        max_tokens = request.max_output_tokens
+        if max_tokens is None:
+            max_tokens = self._default_max_output_tokens
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         try:
             response = client.chat.completions.create(**payload)
         except AuthenticationError as exc:
@@ -152,3 +171,9 @@ class OpenAICompatibleModelProvider:
             finish_reason=choice.finish_reason,
             raw_response_id=getattr(response, "id", None),
         )
+
+
+def _env_value(env_name: Any) -> str | None:
+    if not env_name:
+        return None
+    return os.environ.get(str(env_name))

@@ -11,6 +11,7 @@ def test_supported_question_answers_with_citations(tmp_path: Path) -> None:
         runs_dir=tmp_path,
     )
     assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    assert "Travel meals are reimbursed" in result.final_output
     assert result.trace_path.exists()
     assert result.receipt_path.exists()
 

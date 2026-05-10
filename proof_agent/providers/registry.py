@@ -1,11 +1,9 @@
 from __future__ import annotations
 
+from proof_agent.providers.anthropic import AnthropicPlaceholderProvider
+from proof_agent.providers.azure_openai import AzureOpenAIPlaceholderProvider
 from proof_agent.providers.deterministic import DeterministicModelProvider
 from proof_agent.providers.openai_compatible import OpenAICompatibleModelProvider
-from proof_agent.providers.placeholders import (
-    AnthropicPlaceholderProvider,
-    AzureOpenAIPlaceholderProvider,
-)
 from proof_agent.providers.protocol import ModelProvider
 
 
