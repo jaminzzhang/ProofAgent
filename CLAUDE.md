@@ -14,6 +14,10 @@ All 11 implementation plan tasks are complete. The codebase has working Python m
 
 **Not yet implemented:** LangGraph StateGraph with `interrupt()` for real approval, real LLM providers, MCP stdio transport.
 
+## Development Progress
+
+`docs/development-progress.md` records development status as of its last update date. It is a useful starting reference for understanding module status, test coverage, and roadmap completion, but **it may be stale — always verify its claims against the actual codebase** (run tests, check file contents, review git log) before trusting it.
+
 ## Build and Development Commands
 
 ```bash
@@ -30,9 +34,26 @@ uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md  # insp
 docker compose up                                         # full local evaluation
 ```
 
+## Authoritative Reference
+
+**`docs/Proof Agent 技术设计方案.md`** is the authoritative technical design document for this project. It covers:
+
+- Design principles (harness controls flow, model only generates; local-first baseline; third-party SDK isolation; auditable failures; untrusted remote output; explicit config without secrets)
+- Total architecture and Control Envelope data flow
+- Current implementation baseline per module
+- Module-by-module decisions: Workflow Runtime, Knowledge Provider, Model Provider, Policy Engine, Tool Gateway, Validators, Trace/Receipt/Redaction
+- Contract shapes: `ModelRole`, `ModelMessage`, `TokenUsage`, `ModelRequest`, `ModelResponse`, `ModelConfig`
+- Provider protocol, registry, and factory design
+- Agent contract (`agent.yaml`) schema for deterministic and remote providers
+- Error codes (`PA_MODEL_001` through `PA_MODEL_004`)
+- Directory structure and dependency design
+- Implementation roadmap (13 steps)
+
+**When planning features, writing implementation plans, or writing code, always read this document first and follow its design decisions.**
+
 ## Tech Stack
 
-Full analysis: `docs/Proof Agent 技术设计方案.md`
+See `docs/Proof Agent 技术设计方案.md` for full analysis.
 
 - Python 3.12+, `typer` for CLI, `pydantic` v2 for data contracts (frozen=True)
 - `langgraph >= 1.1.0` for workflow runtime (StateGraph + interrupt() for approval)
