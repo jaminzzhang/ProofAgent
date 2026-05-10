@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from proof_agent.workflow.orchestrator import run_enterprise_qa
 
@@ -12,6 +13,15 @@ def test_supported_question_answers_with_citations(tmp_path: Path) -> None:
     assert result.outcome == "ANSWERED_WITH_CITATIONS"
     assert result.trace_path.exists()
     assert result.receipt_path.exists()
+
+    events = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    event_types = [event["event_type"] for event in events]
+    assert "model_request" in event_types
+    assert "model_response" in event_types
 
 
 def test_unsupported_question_refuses_without_evidence(tmp_path: Path) -> None:

@@ -6,15 +6,28 @@ from uuid import uuid4
 from proof_agent.audit.receipt import generate_receipt
 from proof_agent.audit.trace import TraceWriter
 from proof_agent.config.loader import load_agent_manifest
-from proof_agent.contracts import ApprovalStatus, ReceiptOutcome, RunResult
-from proof_agent.demo.deterministic_provider import DeterministicProvider
+from proof_agent.contracts import (
+    ApprovalStatus,
+    EvidenceChunk,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ModelRole,
+    ReceiptOutcome,
+    RunResult,
+    ValidationResult,
+)
 from proof_agent.demo.scenarios import TOOL_REQUIRED_QUESTION, UNSUPPORTED_QUESTION
 from proof_agent.knowledge.local_provider import LocalKnowledgeProvider
 from proof_agent.memory.session import SessionMemory
 from proof_agent.policy.engine import PolicyEngine
+from proof_agent.providers import resolve_provider
 from proof_agent.tools.approval import create_approval_state
 from proof_agent.tools.gateway import ToolGateway
+from proof_agent.validators.citations import validate_citations_supported_by_evidence
 from proof_agent.validators.evidence import evaluate_evidence
+from proof_agent.validators.safety import validate_no_secret_strings
+from proof_agent.validators.schema import validate_final_output_schema
 
 
 def run_enterprise_qa(
@@ -37,6 +50,22 @@ def run_enterprise_qa(
 
     trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
     trace.emit("manifest_loaded", status="ok", payload={"agent_name": manifest.name})
+    try:
+        model_provider = resolve_provider(manifest.model)
+    except Exception as exc:
+        trace.emit(
+            "model_error",
+            status="error",
+            payload={
+                "provider": manifest.model.provider,
+                "model": manifest.model.name,
+                "error_code": getattr(exc, "code", "PA_MODEL_002"),
+                "error_class": exc.__class__.__name__,
+                "retryable": False,
+                "message": str(exc).splitlines()[0],
+            },
+        )
+        raise
 
     # Retrieval is still policy-gated even in the deterministic local demo.
     policy = PolicyEngine.from_file(manifest.policy.file)
@@ -97,8 +126,86 @@ def run_enterprise_qa(
         outcome = ReceiptOutcome.REFUSED_NO_EVIDENCE
         message = "I cannot answer because the available evidence is insufficient."
     else:
-        outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
-        message = DeterministicProvider().answer(question)
+        model_request = _build_model_request(
+            question=question,
+            evidence=evidence,
+            provider=model_provider.provider_name,
+            model=model_provider.model_name,
+        )
+        estimated_tokens = model_provider.estimate_tokens(model_request)
+        model_decision = policy.evaluate(
+            "before_model_call",
+            {
+                "provider": model_provider.provider_name,
+                "model": model_provider.model_name,
+                "estimated_tokens": estimated_tokens,
+                "stream": model_request.stream,
+                "cost_class": _cost_class(model_provider.provider_name),
+                "question": question,
+                "accepted_evidence_count": evidence_result.metadata["accepted_count"],
+                "citations_present": bool(evidence),
+            },
+        )
+        _emit_policy(trace, model_decision)
+        if model_decision.decision != "allow":
+            outcome = ReceiptOutcome.REFUSED_NO_EVIDENCE
+            message = "I cannot answer because the model call was blocked by policy."
+        else:
+            trace.emit(
+                "model_request",
+                status="ok",
+                payload={
+                    "provider": model_provider.provider_name,
+                    "model": model_provider.model_name,
+                    "message_count": len(model_request.messages),
+                    "prompt_length": sum(len(message.content) for message in model_request.messages),
+                    "system_prompt_length": _system_prompt_length(model_request),
+                    "estimated_tokens": estimated_tokens,
+                    "stream": model_request.stream,
+                    "cost_class": _cost_class(model_provider.provider_name),
+                },
+            )
+            try:
+                model_response = model_provider.generate(model_request)
+            except Exception as exc:
+                trace.emit(
+                    "model_error",
+                    status="error",
+                    payload={
+                        "provider": model_provider.provider_name,
+                        "model": model_provider.model_name,
+                        "error_code": getattr(exc, "code", "PA_MODEL_002"),
+                        "error_class": exc.__class__.__name__,
+                        "retryable": False,
+                        "message": str(exc).splitlines()[0],
+                    },
+                )
+                raise
+            trace.emit(
+                "model_response",
+                status="ok",
+                payload=_model_response_payload(model_response),
+            )
+            outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
+            message = model_response.content
+            validation_results = _validate_model_output(
+                response=model_response,
+                outcome=outcome,
+                evidence=evidence,
+            )
+            for validation in validation_results:
+                trace.emit(
+                    "evidence_evaluation",
+                    status="ok" if validation.status == "passed" else "blocked",
+                    payload={
+                        "validator_name": validation.validator_name,
+                        "status": validation.status.value,
+                        "metadata": dict(validation.metadata),
+                    },
+                )
+            if any(validation.status == "failed" for validation in validation_results):
+                outcome = ReceiptOutcome.REFUSED_NO_EVIDENCE
+                message = "I cannot answer because the model output failed validation."
 
     return _finalize(
         trace=trace,
@@ -228,4 +335,75 @@ def _finalize(
         outcome=outcome,
         trace_path=trace_path,
         receipt_path=receipt_path,
+    )
+
+
+def _build_model_request(
+    *,
+    question: str,
+    evidence: tuple[EvidenceChunk, ...],
+    provider: str,
+    model: str,
+) -> ModelRequest:
+    evidence_text = "\n\n".join(getattr(chunk, "content") for chunk in evidence)
+    messages = (
+        ModelMessage(
+            role=ModelRole.SYSTEM,
+            content="Answer using only accepted evidence. Refuse when evidence is insufficient.",
+        ),
+        ModelMessage(
+            role=ModelRole.USER,
+            content=f"Question: {question}\n\nEvidence:\n{evidence_text}",
+        ),
+    )
+    return ModelRequest(
+        provider=provider,
+        model=model,
+        messages=messages,
+        evidence_sources=tuple(getattr(chunk, "source") for chunk in evidence),
+    )
+
+
+def _cost_class(provider: str) -> str:
+    if provider == "deterministic":
+        return "local"
+    if provider == "azure_openai":
+        return "enterprise"
+    return "remote"
+
+
+def _system_prompt_length(request: ModelRequest) -> int:
+    return sum(len(message.content) for message in request.messages if message.role == ModelRole.SYSTEM)
+
+
+def _model_response_payload(response: ModelResponse) -> dict[str, object]:
+    token_usage = None
+    if response.token_usage is not None:
+        token_usage = {
+            "input_tokens": response.token_usage.input_tokens,
+            "output_tokens": response.token_usage.output_tokens,
+            "total_tokens": response.token_usage.total_tokens,
+        }
+    return {
+        "provider": response.provider_name,
+        "model": response.model_name,
+        "finish_reason": response.finish_reason,
+        "content_length": len(response.content),
+        "refusal_reason": response.refusal_reason,
+        "token_usage": token_usage,
+    }
+
+
+def _validate_model_output(
+    *,
+    response: ModelResponse,
+    outcome: ReceiptOutcome,
+    evidence: tuple[EvidenceChunk, ...],
+) -> tuple[ValidationResult, ...]:
+    return (
+        validate_final_output_schema(
+            {"outcome": outcome.value, "message": response.content, "citations": []}
+        ),
+        validate_no_secret_strings(response.content),
+        validate_citations_supported_by_evidence(response.content, evidence),
     )
