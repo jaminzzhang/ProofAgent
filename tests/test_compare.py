@@ -14,7 +14,7 @@ def test_plain_and_harness_diverge_on_unsupported_question() -> None:
 def test_harness_compare_reuses_enterprise_workflow(monkeypatch, tmp_path) -> None:
     calls = []
 
-    def fake_run_enterprise_qa(agent_yaml, *, question, runs_dir, approved=None):
+    def fake_run_with_langgraph(agent_yaml, *, question, runs_dir, approved=None):
         calls.append((agent_yaml, question, runs_dir, approved))
         return RunResult(
             final_output="Governed answer",
@@ -24,8 +24,8 @@ def test_harness_compare_reuses_enterprise_workflow(monkeypatch, tmp_path) -> No
         )
 
     monkeypatch.setattr(
-        "proof_agent.evaluation.compare.harness_rag.run_enterprise_qa",
-        fake_run_enterprise_qa,
+        "proof_agent.evaluation.compare.harness_rag.run_with_langgraph",
+        fake_run_with_langgraph,
     )
 
     result = run_harness_rag("What is the reimbursement rule for travel meals?")

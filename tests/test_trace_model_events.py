@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from proof_agent.errors import ProofAgentError
-from proof_agent.control.workflow.orchestrator import run_enterprise_qa
+from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) -> None:
-    result = run_enterprise_qa(
+    result = run_with_langgraph(
         Path("examples/enterprise_qa/agent.yaml"),
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path,
@@ -51,7 +51,7 @@ def test_model_error_is_traced_when_provider_resolution_fails(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     with pytest.raises(ProofAgentError):
-        run_enterprise_qa(
+        run_with_langgraph(
             manifest_path,
             question="What is the reimbursement rule for travel meals?",
             runs_dir=tmp_path,

@@ -4,7 +4,8 @@ import pytest
 
 from proof_agent.contracts import ModelResponse
 from proof_agent.capabilities.models.protocol import ModelProvider
-from proof_agent.control.workflow import orchestrator
+from proof_agent.runtime.langgraph_runner import run_with_langgraph
+from proof_agent.runtime import graph
 
 
 class _UnsafeProvider:
@@ -28,9 +29,9 @@ def test_model_output_must_pass_safety_and_citation_validators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider: ModelProvider = _UnsafeProvider()
-    monkeypatch.setattr(orchestrator, "resolve_provider", lambda _config: provider)
+    monkeypatch.setattr(graph, "resolve_provider", lambda _config: provider)
 
-    result = orchestrator.run_enterprise_qa(
+    result = run_with_langgraph(
         Path("examples/enterprise_qa/agent.yaml"),
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path,

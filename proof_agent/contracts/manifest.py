@@ -9,9 +9,15 @@ from pydantic import Field, field_validator
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 
 
+class CheckpointerConfig(FrozenModel):
+    provider: str
+    uri: str | None = None
+
+
 class WorkflowConfig(FrozenModel):
     runtime: str
     template: str
+    checkpointer: CheckpointerConfig | None = None
 
 
 class KnowledgeConfig(FrozenModel):

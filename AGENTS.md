@@ -1,5 +1,19 @@
 # Repository Guidelines
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Standard triage vocabulary (`needs-triage`, `ready-for-agent`, etc.). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout at the repo root. See `docs/agents/domain.md`.
+
 ## Current Status
 
 This repository is no longer documentation-only. The current `main` branch contains a Python MVP for Proof Agent as a Controlled Agent Harness Framework. It includes typed contracts, policy enforcement, deterministic enterprise Q&A examples, remote model provider boundaries, tool approval gating, trace/audit output, comparison utilities, Dashboard API, tests, CI, and Docker assets.

@@ -1,0 +1,306 @@
+from __future__ import annotations
+
+import operator
+from typing import Annotated, Any, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+
+from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.contracts import ApprovalStatus, EvidenceChunk, ReceiptOutcome
+from proof_agent.capabilities.knowledge.local_provider import LocalKnowledgeProvider
+from proof_agent.capabilities.memory.session import SessionMemory
+from proof_agent.capabilities.models import resolve_provider
+from proof_agent.capabilities.tools.approval import create_approval_state
+from proof_agent.capabilities.tools.gateway import ToolGateway
+from proof_agent.control.policy.engine import PolicyEngine
+from proof_agent.control.validators.evidence import evaluate_evidence
+from proof_agent.control.workflow.orchestrator import (
+    _build_model_request,
+    _cost_class,
+    _emit_policy,
+    _model_response_payload,
+    _system_prompt_length,
+    _validate_model_output,
+)
+from proof_agent.evaluation.demo.scenarios import TOOL_REQUIRED_QUESTION, UNSUPPORTED_QUESTION
+from proof_agent.observability.audit.trace import TraceWriter
+
+
+class HarnessGraphState(TypedDict):
+    run_id: str
+    question: str
+    messages: Annotated[list[Any], operator.add]
+    approval_status: str | None
+    governance_refusal: ReceiptOutcome | None
+    governance_message: str | None
+    evidence: list[EvidenceChunk]
+    final_output: str | None
+
+
+def build_enterprise_qa_graph(
+    manifest_path: str,
+    trace: TraceWriter,
+    approved: bool | None = None,
+) -> StateGraph:  # type: ignore[type-arg]
+    manifest = load_agent_manifest(manifest_path)
+    policy = PolicyEngine.from_file(manifest.policy.file)
+    try:
+        model_provider = resolve_provider(manifest.model)
+    except Exception as exc:
+        trace.emit(
+            "model_error",
+            status="error",
+            payload={
+                "provider": manifest.model.provider,
+                "model": manifest.model.name,
+                "error_code": getattr(exc, "code", "PA_MODEL_002"),
+                "error_class": exc.__class__.__name__,
+                "retryable": False,
+                "message": str(exc).splitlines()[0],
+            },
+        )
+        raise
+    knowledge_provider = LocalKnowledgeProvider(manifest.knowledge.path)
+    tool_gateway = ToolGateway.from_file(manifest.tools.file)
+
+    def retrieve_node(state: HarnessGraphState) -> dict[str, Any]:
+        question = state["question"]
+        
+        if question == TOOL_REQUIRED_QUESTION:
+            # Bypass retrieval for tool required question
+            return {}
+
+        retrieval_decision = policy.evaluate("before_retrieval", {"question": question})
+        _emit_policy(trace, retrieval_decision)
+
+        evidence = knowledge_provider.retrieve(question, top_k=2)
+        if question == UNSUPPORTED_QUESTION:
+            evidence = ()
+        trace.emit(
+            "retrieval_result",
+            status="ok",
+            payload={"chunk_count": len(evidence), "sources": [chunk.source for chunk in evidence]},
+        )
+
+        evidence_result = evaluate_evidence(evidence, min_count=1, min_score=0.2)
+        trace.emit(
+            "evidence_evaluation",
+            status="ok" if evidence_result.status == "passed" else "blocked",
+            payload={
+                "validator_name": evidence_result.validator_name,
+                "status": evidence_result.status.value,
+                "metadata": dict(evidence_result.metadata),
+            },
+        )
+
+        answer_decision = policy.evaluate(
+            "before_answer",
+            {
+                "accepted_evidence_count": evidence_result.metadata["accepted_count"],
+                "citations_present": bool(evidence),
+            },
+        )
+        _emit_policy(trace, answer_decision)
+
+        memory = SessionMemory(deny_fields={"access_token", "customer_phone", "provider_api_key"})
+        memory_result = memory.write({"summary": f"Question: {question}"})
+        trace.emit(
+            "memory_write_decision",
+            status="ok" if memory_result.status == "passed" else "blocked",
+            payload={"status": memory_result.status.value, "metadata": dict(memory_result.metadata)},
+        )
+
+        if evidence_result.status == "failed" or answer_decision.decision != "allow":
+            return {
+                "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                "governance_message": "I cannot answer because the available evidence is insufficient.",
+            }
+
+        return {"evidence": list(evidence)}
+
+    def tool_node(state: HarnessGraphState) -> dict[str, Any]:
+        question = state["question"]
+        if question != TOOL_REQUIRED_QUESTION:
+            return {}
+
+        if approved is None:
+            gateway_result = tool_gateway.request_tool(
+                tool_name="customer_lookup",
+                parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
+                approved=False,
+            )
+            trace.emit(
+                "approval_requested",
+                status="waiting",
+                payload={"tool_name": "customer_lookup", "state": gateway_result.approval_state.state},
+            )
+            return {
+                "approval_status": "requested",
+                "governance_refusal": ReceiptOutcome.WAITING_FOR_APPROVAL,
+                "governance_message": "Waiting for approval before customer_lookup can execute.",
+            }
+
+        if approved is False:
+            denied = create_approval_state(
+                run_id=trace.run_id,
+                approval_id="appr_customer_lookup",
+                state=ApprovalStatus.DENIED,
+                tool_name="customer_lookup",
+                reason="Approval denied.",
+            )
+            trace.emit(
+                "approval_denied",
+                status="blocked",
+                payload={"tool_name": denied.tool_name, "state": denied.state},
+            )
+            return {
+                "approval_status": "denied",
+                "governance_refusal": ReceiptOutcome.TOOL_APPROVAL_DENIED,
+                "governance_message": "The customer_lookup tool was not run because approval was denied.",
+            }
+
+        gateway_result = tool_gateway.request_tool(
+            tool_name="customer_lookup",
+            parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
+            approved=True,
+        )
+        trace.emit("approval_granted", status="ok", payload={"tool_name": "customer_lookup"})
+        trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
+        
+        # Tool question is answered by tool result in the demo
+        return {
+            "final_output": "Tool execution successful.",
+            "governance_refusal": ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            "governance_message": "Tool execution successful.",
+        }
+
+    def model_node(state: HarnessGraphState) -> dict[str, Any]:
+        question = state["question"]
+        evidence = tuple(state.get("evidence", []))
+        
+        model_request = _build_model_request(
+            question=question,
+            evidence=evidence,
+            provider=model_provider.provider_name,
+            model=model_provider.model_name,
+        )
+        estimated_tokens = model_provider.estimate_tokens(model_request)
+        model_decision = policy.evaluate(
+            "before_model_call",
+            {
+                "provider": model_provider.provider_name,
+                "model": model_provider.model_name,
+                "estimated_tokens": estimated_tokens,
+                "stream": model_request.stream,
+                "cost_class": _cost_class(model_provider.provider_name),
+                "question": question,
+                "accepted_evidence_count": len(evidence), # Approximation
+                "citations_present": bool(evidence),
+            },
+        )
+        _emit_policy(trace, model_decision)
+        if model_decision.decision != "allow":
+            return {
+                "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                "governance_message": "I cannot answer because the model call was blocked by policy.",
+            }
+
+        trace.emit(
+            "model_request",
+            status="ok",
+            payload={
+                "provider": model_provider.provider_name,
+                "model": model_provider.model_name,
+                "message_count": len(model_request.messages),
+                "prompt_length": sum(len(message.content) for message in model_request.messages),
+                "system_prompt_length": _system_prompt_length(model_request),
+                "estimated_tokens": estimated_tokens,
+                "stream": model_request.stream,
+                "cost_class": _cost_class(model_provider.provider_name),
+            },
+        )
+        try:
+            model_response = model_provider.generate(model_request)
+        except Exception as exc:
+            trace.emit(
+                "model_error",
+                status="error",
+                payload={
+                    "provider": model_provider.provider_name,
+                    "model": model_provider.model_name,
+                    "error_code": getattr(exc, "code", "PA_MODEL_002"),
+                    "error_class": exc.__class__.__name__,
+                    "retryable": False,
+                    "message": str(exc).splitlines()[0],
+                },
+            )
+            raise
+        trace.emit(
+            "model_response",
+            status="ok",
+            payload=_model_response_payload(model_response),
+        )
+
+        outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
+        message = model_response.content
+        validation_results = _validate_model_output(
+            response=model_response,
+            outcome=outcome,
+            evidence=evidence,
+        )
+        for validation in validation_results:
+            trace.emit(
+                "evidence_evaluation",
+                status="ok" if validation.status == "passed" else "blocked",
+                payload={
+                    "validator_name": validation.validator_name,
+                    "status": validation.status.value,
+                    "metadata": dict(validation.metadata),
+                },
+            )
+        if any(validation.status == "failed" for validation in validation_results):
+            return {
+                "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                "governance_message": "I cannot answer because the model output failed validation.",
+            }
+
+        return {
+            "final_output": message,
+            "governance_refusal": outcome,
+            "governance_message": message,
+        }
+
+    def route_after_retrieve(state: HarnessGraphState) -> str:
+        if state.get("governance_refusal"):
+            return "end"
+        if state["question"] == TOOL_REQUIRED_QUESTION:
+            return "tool"
+        return "model"
+
+    builder = StateGraph(HarnessGraphState)
+    builder.add_node("retrieve", retrieve_node)
+    builder.add_node("tool", tool_node)
+    builder.add_node("model", model_node)
+
+    builder.add_edge(START, "retrieve")
+    builder.add_conditional_edges(
+        "retrieve",
+        route_after_retrieve,
+        {
+            "end": END,
+            "tool": "tool",
+            "model": "model",
+        },
+    )
+    
+    def route_after_tool(state: HarnessGraphState) -> str:
+        return END
+
+    builder.add_conditional_edges("tool", route_after_tool)
+    
+    def route_after_model(state: HarnessGraphState) -> str:
+        return END
+
+    builder.add_conditional_edges("model", route_after_model)
+
+    return builder

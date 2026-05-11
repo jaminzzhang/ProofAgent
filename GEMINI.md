@@ -9,6 +9,20 @@ Proof Agent is a **Controlled Agent Harness Framework** designed for enterprise 
 - **Frontend Dashboard:** React 18, Vite, React Router DOM, Tailwind CSS (Vercel-style minimalist aesthetic).
 - **Dependency Management:** `uv` for Python, `npm` for the frontend.
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Standard triage vocabulary (`needs-triage`, `ready-for-agent`, etc.). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout at the repo root. See `docs/agents/domain.md`.
+
 ## Building and Running
 
 ### Python Environment (Core & API)

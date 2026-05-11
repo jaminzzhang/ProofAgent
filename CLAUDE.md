@@ -2,6 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Standard triage vocabulary (`needs-triage`, `ready-for-agent`, etc.). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout at the repo root. See `docs/agents/domain.md`.
+
 ## Project Overview
 
 Proof Agent is a **Controlled Agent Harness Framework**. It wraps Agent execution in a **Control Envelope**: workflow orchestration, policy engine, evidence checks, model provider governance, tool approval, memory boundaries, validators, JSONL trace, Dashboard API, and a human-readable Governance Receipt. The first template is enterprise knowledge Q&A.

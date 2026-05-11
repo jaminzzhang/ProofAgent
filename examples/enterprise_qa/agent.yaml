@@ -4,6 +4,9 @@ purpose: "Answer enterprise knowledge questions only when evidence supports the 
 workflow:
   runtime: langgraph
   template: enterprise_qa
+  checkpointer:
+    provider: sqlite
+    uri: memory
 
 knowledge:
   provider: local

@@ -12,7 +12,7 @@ from proof_agent.evaluation.compare.harness_rag import run_harness_rag
 from proof_agent.evaluation.compare.plain_rag import run_plain_rag
 from proof_agent.evaluation.demo.scenarios import DEMO_SCENARIOS, SUPPORTED_QUESTION
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.control.workflow.orchestrator import run_enterprise_qa
+from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -24,7 +24,7 @@ def demo() -> None:
     typer.echo("Proof Agent demo")
     store = RunStore(Path("runs/history"))
     for scenario in DEMO_SCENARIOS:
-        result = run_enterprise_qa(
+        result = run_with_langgraph(
             Path("examples/enterprise_qa/agent.yaml"),
             question=scenario.question,
             runs_dir=Path("runs/latest"),
@@ -38,7 +38,7 @@ def run(agent_yaml: str, question: str = typer.Option(SUPPORTED_QUESTION, "--que
     """Run one Enterprise QA question through the governed harness."""
 
     store = RunStore(Path("runs/history"))
-    result = run_enterprise_qa(Path(agent_yaml), question=question, runs_dir=Path("runs/latest"), store=store)
+    result = run_with_langgraph(Path(agent_yaml), question=question, runs_dir=Path("runs/latest"), store=store)
     typer.echo(result.final_output)
     typer.echo(f"Outcome: {result.outcome.value}")
 
