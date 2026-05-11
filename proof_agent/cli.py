@@ -90,6 +90,27 @@ def compare(agent_yaml: str, question: str = typer.Option(..., "--question")) ->
     typer.echo(f"Harness RAG: {harness.outcome} - {harness.message}")
 
 
+@app.command()
+def dashboard(
+    port: int = typer.Option(8000, "--port", help="Port to serve the dashboard on"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+    history_dir: str = typer.Option("runs/history", "--history-dir", help="Run history directory"),
+) -> None:
+    """Start the Proof Agent monitoring dashboard."""
+
+    try:
+        import uvicorn
+    except ImportError:
+        typer.echo("Dashboard dependencies not installed. Run: uv pip install proof-agent[dashboard]")
+        raise typer.Exit(code=1) from None
+
+    from proof_agent.api.app import create_app
+
+    app = create_app(history_dir=Path(history_dir))
+    typer.echo(f"Starting Proof Agent dashboard at http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port)
+
+
 def main() -> None:
     app()
 

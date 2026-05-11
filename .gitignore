@@ -58,3 +58,8 @@ runs/*
 
 # Claude Code
 .claude/
+
+# Frontend
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/

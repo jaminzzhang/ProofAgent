@@ -1,0 +1,44 @@
+"""Contract-to-response serialization for the dashboard API.
+
+Converts frozen Pydantic contract models into JSON-friendly dicts
+suitable for FastAPI response models.  Keeps API response shapes
+decoupled from internal contract evolution.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from proof_agent.contracts.dashboard import RunDetail, RunSummary
+
+
+def serialize_run_summary(summary: RunSummary) -> dict[str, Any]:
+    """Convert a RunSummary contract into an API response dict."""
+    return {
+        "run_id": summary.run_id,
+        "question": summary.question,
+        "outcome": summary.outcome.value,
+        "created_at": summary.created_at,
+        "updated_at": summary.updated_at,
+        "approval_status": summary.approval_status.value if summary.approval_status else None,
+        "error_code": summary.error_code,
+    }
+
+
+def serialize_run_detail(detail: RunDetail) -> dict[str, Any]:
+    """Convert a RunDetail contract into an API response dict."""
+    return {
+        "run_id": detail.run_id,
+        "question": detail.question,
+        "outcome": detail.outcome.value,
+        "created_at": detail.created_at,
+        "updated_at": detail.updated_at,
+        "approval_status": detail.approval_status.value if detail.approval_status else None,
+        "error_code": detail.error_code,
+        "trace_events": list(detail.trace_events),
+        "receipt_markdown": detail.receipt_markdown,
+        "evidence_chunks": list(detail.evidence_chunks),
+        "policy_decisions": list(detail.policy_decisions),
+        "model_usage": detail.model_usage,
+        "approval_state": detail.approval_state,
+    }

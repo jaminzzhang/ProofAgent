@@ -24,6 +24,7 @@ from proof_agent.contracts.policy import (
     PolicyDecisionType,
     PolicyRule,
 )
+from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunSummary
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.run import RunResult, ValidationResult, ValidationStatus, WorkflowState
 from proof_agent.contracts.tool import ToolRequest
@@ -51,7 +52,10 @@ __all__ = [
     "PolicyDecisionType",
     "PolicyRule",
     "ReceiptOutcome",
+    "RunDetail",
+    "RunIndex",
     "RunResult",
+    "RunSummary",
     "ToolRequest",
     "ToolsConfig",
     "TraceEvent",

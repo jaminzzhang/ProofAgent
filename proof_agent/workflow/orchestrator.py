@@ -30,14 +30,25 @@ from proof_agent.validators.safety import validate_no_secret_strings
 from proof_agent.validators.schema import validate_final_output_schema
 
 
+from proof_agent.storage.compat import update_latest_symlink
+from proof_agent.storage.run_store import RunStore
+
+
 def run_enterprise_qa(
     agent_yaml: Path,
     *,
     question: str,
     runs_dir: Path,
     approved: bool | None = None,
+    run_id: str | None = None,
+    store: RunStore | None = None,
 ) -> RunResult:
-    """Run the local Enterprise QA harness and write trace/receipt artifacts."""
+    """Run the local Enterprise QA harness and write trace/receipt artifacts.
+
+    When ``store`` is provided, artifacts are also saved to a per-run history
+    directory and the ``runs/latest`` symlink is updated.  When ``store`` is
+    ``None`` (the default), behavior is identical to the original CLI.
+    """
 
     manifest = load_agent_manifest(agent_yaml)
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -45,8 +56,8 @@ def run_enterprise_qa(
     receipt_path = runs_dir / "governance_receipt.md"
     if trace_path.exists():
         trace_path.unlink()
-    run_id = f"run_{uuid4().hex[:8]}"
-    trace = TraceWriter(trace_path, run_id=run_id)
+    actual_run_id = run_id or f"run_{uuid4().hex[:8]}"
+    trace = TraceWriter(trace_path, run_id=actual_run_id)
 
     trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
     trace.emit("manifest_loaded", status="ok", payload={"agent_name": manifest.name})
@@ -102,6 +113,7 @@ def run_enterprise_qa(
             trace_path=trace_path,
             question=question,
             approved=approved,
+            store=store,
         )
 
     answer_decision = policy.evaluate(
@@ -215,6 +227,7 @@ def run_enterprise_qa(
         question=question,
         outcome=outcome,
         message=message,
+        store=store,
     )
 
 
@@ -226,6 +239,7 @@ def _handle_tool_question(
     trace_path: Path,
     question: str,
     approved: bool | None,
+    store: RunStore | None = None,
 ) -> RunResult:
     """Exercise the mock MCP approval flow for a tool-required question."""
 
@@ -250,6 +264,7 @@ def _handle_tool_question(
             question=question,
             outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
             message="Waiting for approval before customer_lookup can execute.",
+            store=store,
         )
     if approved is False:
         # Explicit denial is recorded separately from waiting so receipts are unambiguous.
@@ -273,6 +288,7 @@ def _handle_tool_question(
             question=question,
             outcome=ReceiptOutcome.TOOL_APPROVAL_DENIED,
             message="The customer_lookup tool was not run because approval was denied.",
+            store=store,
         )
 
     gateway_result = gateway.request_tool(
@@ -290,6 +306,7 @@ def _handle_tool_question(
         question=question,
         outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
         message="Customer policy status is active according to the approved mock lookup.",
+        store=store,
     )
 
 
@@ -316,6 +333,7 @@ def _finalize(
     question: str,
     outcome: ReceiptOutcome,
     message: str,
+    store: RunStore | None = None,
 ) -> RunResult:
     """Emit the final output, render the receipt, and return CLI-facing metadata."""
 
@@ -330,12 +348,23 @@ def _finalize(
         },
     )
     generate_receipt(trace_path, receipt_path)
-    return RunResult(
+    result = RunResult(
         final_output=message,
         outcome=outcome,
         trace_path=trace_path,
         receipt_path=receipt_path,
     )
+    if store is not None:
+        store.save_run_artifacts(
+            trace.run_id,
+            trace_source=trace_path,
+            receipt_source=receipt_path,
+            question=question,
+            outcome=outcome,
+        )
+        history_dir = store.history_dir.parent
+        update_latest_symlink(store.history_dir / trace.run_id, history_dir)
+    return result
 
 
 def _build_model_request(
