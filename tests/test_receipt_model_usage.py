@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from proof_agent.audit.receipt import generate_receipt
+from proof_agent.observability.audit.receipt import generate_receipt
 
 
 def test_receipt_renders_successful_model_usage(tmp_path: Path) -> None:

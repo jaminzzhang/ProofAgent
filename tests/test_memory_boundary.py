@@ -1,4 +1,4 @@
-from proof_agent.memory.session import SessionMemory
+from proof_agent.capabilities.memory.session import SessionMemory
 
 
 def test_session_memory_rejects_sensitive_write() -> None:

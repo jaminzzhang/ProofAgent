@@ -6,7 +6,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from proof_agent.api.app import create_app
+from proof_agent.observability.api.app import create_app
 
 
 @pytest.fixture

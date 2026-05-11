@@ -1,5 +1,5 @@
 from proof_agent.contracts import EvidenceChunk
-from proof_agent.validators.evidence import evaluate_evidence
+from proof_agent.control.validators.evidence import evaluate_evidence
 
 
 def test_enough_evidence_passes() -> None:

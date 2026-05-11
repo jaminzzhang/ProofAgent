@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from proof_agent.config.loader import load_agent_manifest
+from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.errors import ProofAgentError
 
 

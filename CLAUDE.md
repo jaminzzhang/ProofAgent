@@ -10,7 +10,7 @@ The target user is an enterprise AI Agent owner or platform architect who needs 
 
 ## Current State
 
-The codebase has working Python modules, 28 test files, a deterministic demo, remote model provider boundaries, Dashboard API, Docker assets, and CI. The deterministic demo produces three outcomes: `ANSWERED_WITH_CITATIONS`, `REFUSED_NO_EVIDENCE`, and `WAITING_FOR_APPROVAL`. Demo artifacts are written to `runs/latest/trace.jsonl` and `runs/latest/governance_receipt.md`.
+The codebase has working Python modules, 28 test files, a deterministic demo, remote model provider boundaries, Dashboard API, Docker assets, and CI. The package is organized by architecture layer: `bootstrap/`, `control/`, `runtime/`, `capabilities/`, `observability/`, `delivery/`, `evaluation/`, and `contracts/`. The deterministic demo produces three outcomes: `ANSWERED_WITH_CITATIONS`, `REFUSED_NO_EVIDENCE`, and `WAITING_FOR_APPROVAL`. Demo artifacts are written to `runs/latest/trace.jsonl` and `runs/latest/governance_receipt.md`.
 
 **Not yet implemented:** production LangGraph StateGraph with `interrupt()` for real approval, real MCP stdio/HTTP transport, Dashboard UI / Approval Console, and real Azure/Anthropic providers.
 
@@ -40,8 +40,9 @@ docker compose up                                         # full local evaluatio
 
 - Design principles (harness controls flow, model only generates; deterministic regression baseline; third-party SDK isolation; auditable failures; untrusted remote output; explicit config without secrets)
 - Total architecture and Control Envelope data flow
+- Developer lifecycle and Agent package workflow
 - Current implementation baseline per module
-- Module-by-module decisions: Workflow Runtime, Knowledge Provider, Model Provider, Policy Engine, Tool Gateway, Validators, Trace/Receipt/Redaction
+- Module-by-module decisions: Bootstrap / Composition, Control Plane, Runtime Plane, Capability Layer, Contracts & Ports, Audit & Observability
 - Contract shapes: `ModelRole`, `ModelMessage`, `TokenUsage`, `ModelRequest`, `ModelResponse`, `ModelConfig`
 - Provider protocol, registry, and factory design
 - Agent contract (`agent.yaml`) schema for deterministic and remote providers
@@ -50,6 +51,8 @@ docker compose up                                         # full local evaluatio
 - Implementation roadmap and adapter expansion strategy
 
 **When planning features, writing implementation plans, or writing code, always read this document first and follow its design decisions.**
+
+For user-facing setup and deployment workflows, also read `docs/developer-guide.md`.
 
 ## Tech Stack
 
@@ -64,7 +67,7 @@ See `docs/Proof Agent 技术设计方案.md` for full analysis.
 - `pytest` for tests, `ruff` for lint/format, `mypy` for type checking
 - Portable JSONL for audit, CLI and Docker Compose for distribution
 
-**Key tech decision:** third-party runtime, model, vector, and MCP SDKs stay behind adapters. Contracts, policy, trace, receipt, config, and Dashboard contracts must not expose SDK-specific objects.
+**Key tech decision:** third-party runtime, model, vector, and MCP SDKs stay behind adapters. Contracts, bootstrap, control, trace, receipt, and Dashboard contracts must not expose SDK-specific objects.
 
 ## Architecture
 
@@ -72,35 +75,51 @@ See `docs/Proof Agent 技术设计方案.md` for full analysis.
 
 The Control Envelope wraps every Agent run with enforced policy, evidence, approval, memory, trace, and receipt. It does NOT replace LangGraph, MCP, or ChromaDB — it composes them behind an enterprise control contract.
 
+### Architecture Layers
+
+```
+Delivery / Entry
+  -> Bootstrap / Composition
+  -> Control Plane
+  -> Runtime Plane
+  -> Capability Layer
+  -> Infrastructure
+
+Contracts & Ports define the shared language.
+Audit & Observability records facts as a side channel.
+```
+
 ### Data Flow
 
 ```
-CLI/Docker command → Load agent.yaml → Run Harness workflow
-  → PolicyEngine.before_retrieval → Knowledge retrieval + evidence evaluation
-  → PolicyEngine.before_answer → (allow: answer with citations | deny: refuse/escalate)
-  → PolicyEngine.before_model_call → ModelProvider.generate → Validators
-  → Optional tool request → PolicyEngine.before_tool_call → Approval state
-  → PolicyEngine.before_memory_write → JSONL trace → Governance Receipt
+CLI/Docker command
+  -> load and validate agent.yaml
+  -> run Enterprise QA Harness workflow
+      -> PolicyEngine.before_retrieval
+      -> Knowledge retrieval + evidence evaluation
+      -> PolicyEngine.before_answer
+      -> PolicyEngine.before_model_call
+      -> ModelProvider.generate
+      -> Validators
+      -> optional ToolGateway approval path
+      -> memory policy/write
+      -> final outcome
+  -> JSONL trace -> RunStore -> Governance Receipt / Dashboard API
 ```
 
 ### Key Modules
 
 | Module | Responsibility |
 |--------|---------------|
-| `config/` | Load and validate `agent.yaml` manifest |
+| `bootstrap/` | Load and validate `agent.yaml`, resolve paths, enforce config boundaries |
 | `contracts/` | Pydantic v2 frozen models for policy decisions, evidence, approval, trace events, receipts, manifests, runs |
-| `policy/` | Typed decisions (`allow`, `deny`, `require_approval`, `escalate`) at 5 enforcement points |
-| `knowledge/` | Local document retrieval and evidence evaluation |
-| `workflow/` | Orchestrator, graph nodes, routing logic, and workflow state |
-| `runtime/` | Runtime execution context and adapter interfaces |
-| `tools/` | ToolGateway, MCP mock, and explicit approval state machine |
-| `providers/` | Deterministic and OpenAI-compatible model providers plus placeholders |
-| `api/` / `storage/` | Dashboard API and run history projections |
-| `validators/` | Evidence, safety, schema, and tool result validation |
-| `memory/` | Session memory only (v1) |
-| `audit/` | JSONL trace writer, redaction, Governance Receipt generator |
-| `demo/` | Deterministic provider (no LLM key needed) and bundled scenarios |
-| `compare/` | Plain RAG vs Harness RAG comparison |
+| `control/` | Workflow orchestration, PolicyEngine, validators, approval semantics, and outcome behavior |
+| `runtime/` | LangGraph/LangChain runtime adapter boundaries |
+| `capabilities/` | Model providers, knowledge/retrieval, memory, ToolGateway/MCP, and future Skill packs |
+| `observability/` | JSONL trace, redaction, Governance Receipt, RunStore, and Dashboard read API |
+| `delivery/` | CLI and future execution entry points |
+| `evaluation/` | Deterministic demo helpers and Plain RAG vs Harness RAG comparison |
+| `proof_agent/cli.py` | Backward-compatible CLI shim; implementation lives in `delivery/cli.py` |
 
 ### Policy Engine
 
@@ -139,7 +158,7 @@ Use these terms consistently: `Controlled Agent Harness Framework`, `Control Env
 
 ## Implementation Rules
 
-- LangGraph types must NOT leak into config, policy, trace, or receipt models
+- LangGraph types must NOT leak into bootstrap, control, trace, receipt, or public contract models
 - Deterministic demo must use the same policy/evidence/approval/trace/receipt code paths as full runs
 - Invalid `agent.yaml` must fail before execution starts with actionable error codes
 - Trace writing failure before model/tool execution = fail closed

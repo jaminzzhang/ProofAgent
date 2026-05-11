@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from proof_agent.audit.trace import TraceWriter
+from proof_agent.observability.audit.trace import TraceWriter
 
 
 def test_trace_writer_emits_ordered_jsonl(tmp_path: Path) -> None:

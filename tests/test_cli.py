@@ -2,7 +2,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from proof_agent.cli import app
+from proof_agent.delivery.cli import app
 
 
 runner = CliRunner()

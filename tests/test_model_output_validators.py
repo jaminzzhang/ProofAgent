@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from proof_agent.contracts import ModelResponse
-from proof_agent.providers.protocol import ModelProvider
-from proof_agent.workflow import orchestrator
+from proof_agent.capabilities.models.protocol import ModelProvider
+from proof_agent.control.workflow import orchestrator
 
 
 class _UnsafeProvider:

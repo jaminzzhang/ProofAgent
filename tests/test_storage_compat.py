@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from proof_agent.storage.compat import update_latest_symlink
+from proof_agent.observability.storage.compat import update_latest_symlink
 
 
 def test_creates_symlink(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@ import pytest
 
 from proof_agent.contracts import ModelConfig, ModelMessage, ModelRequest, ModelRole
 from proof_agent.errors import ProofAgentError
-from proof_agent.providers import resolve_provider
+from proof_agent.capabilities.models import resolve_provider
 
 
 def test_resolve_deterministic_provider_generates_response() -> None:

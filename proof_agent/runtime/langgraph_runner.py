@@ -18,7 +18,7 @@ def run_with_langgraph(
     runtime boundary for future LangGraph node execution without changing CLI code.
     """
 
-    from proof_agent.workflow.orchestrator import run_enterprise_qa
+    from proof_agent.control.workflow.orchestrator import run_enterprise_qa
 
     return run_enterprise_qa(
         agent_yaml,

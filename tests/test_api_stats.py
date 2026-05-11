@@ -6,7 +6,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from proof_agent.api.app import create_app
+from proof_agent.observability.api.app import create_app
 from proof_agent.contracts.dashboard import RunIndex
 from proof_agent.contracts.receipt import ReceiptOutcome
 
@@ -22,7 +22,7 @@ def client(app):
 
 
 def _seed(app, run_id: str, outcome: ReceiptOutcome) -> None:
-    from proof_agent.storage.run_store import RunStore
+    from proof_agent.observability.storage.run_store import RunStore
 
     store: RunStore = app.state.store
     store.write_run_meta(RunIndex(

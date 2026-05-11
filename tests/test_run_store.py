@@ -7,7 +7,7 @@ import pytest
 
 from proof_agent.contracts.dashboard import RunIndex
 from proof_agent.contracts.receipt import ReceiptOutcome
-from proof_agent.storage.run_store import RunStore
+from proof_agent.observability.storage.run_store import RunStore
 
 
 @pytest.fixture

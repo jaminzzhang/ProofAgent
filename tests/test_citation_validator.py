@@ -1,5 +1,5 @@
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus, ValidationStatus
-from proof_agent.validators.citations import validate_citations_supported_by_evidence
+from proof_agent.control.validators.citations import validate_citations_supported_by_evidence
 
 
 def test_citation_validator_accepts_known_evidence_source() -> None:

@@ -6,7 +6,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from proof_agent.api.app import create_app
+from proof_agent.observability.api.app import create_app
 from proof_agent.contracts.dashboard import RunIndex
 from proof_agent.contracts.receipt import ReceiptOutcome
 
@@ -23,7 +23,7 @@ def client(app):
 
 def _seed(client_fixture, app, run_id: str, outcome: ReceiptOutcome, question: str) -> None:
     """Seed a run via the store directly."""
-    from proof_agent.storage.run_store import RunStore
+    from proof_agent.observability.storage.run_store import RunStore
 
     store: RunStore = app.state.store
     index = RunIndex(

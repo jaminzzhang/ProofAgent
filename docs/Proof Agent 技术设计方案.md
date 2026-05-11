@@ -69,113 +69,191 @@ Runtime、model、knowledge、tool、memory、dashboard 都可以替换实现，
 
 ## 3. 总体架构
 
+Proof Agent 的总体架构不是简单的自上而下流水线，而是以 Control Plane 为核心的受控 Agent Harness：
+
+- Delivery / Entry 负责暴露运行入口。
+- Bootstrap / Composition 负责读取配置、校验配置并组装依赖。
+- Control Plane 负责 Harness Engineering 语义和所有治理决策。
+- Runtime Plane 负责 Agent 框架运行时、状态推进、checkpoint、interrupt/resume 和 streaming 等执行机制。
+- Capability Layer 负责模型、知识库、记忆、工具、MCP 和 Skills 等可编排能力。
+- Contracts & Ports 是纵向基础，定义所有层之间的公共语言和可替换端口。
+- Audit & Observability 是旁路事实系统，持续记录执行事实，并提供 Receipt、RunStore 和 Dashboard read model。
+
 ```text
-CLI / Docker / Dashboard API / Template
-        |
-        v
-Agent Contract Layer
-  - agent.yaml
-  - config loader
-  - Pydantic contracts
-        |
-        v
-Control Envelope Layer
-  - Workflow Orchestrator
-  - PolicyEngine
-  - ToolGateway
-  - Memory Boundary
-  - Validators
-        |
-        v
-Adapter Layer
-  - Model Providers
-  - Knowledge / Vector Providers
-  - LangChain / LangGraph Runtime Adapters
-  - MCP / Tool Adapters
-        |
-        v
-Governance Layer
-  - JSONL Trace
-  - RunStore
-  - Governance Receipt
-  - Dashboard API
+                         Delivery / Entry
+             CLI | Docker | Template | future Execution API
+                                  |
+                                  v
+                       Bootstrap / Composition
+          agent.yaml loader | config validation | registry | wiring
+                                  |
+                                  v
++------------------------------------------------------------------+
+|                           Control Plane                          |
+|                                                                  |
+|  Workflow | Orchestrator | Policy Gates | Approval State Machine |
+|  Evidence Evaluation | Validators | Memory Policy | Outcome      |
++------------------------------------------------------------------+
+                                  |
+                                  v
+                           Runtime Plane
+      Plain Python Runner | LangGraph Adapter | LangChain Adapter
+      state execution | checkpoint | interrupt/resume | streaming
+                                  |
+                                  v
+                          Capability Layer
+      Model | Knowledge/Retrieval | Memory | Tool/MCP | Skill Packs
+      provider adapters | local/remote implementations | registries
+                                  |
+                                  v
+                           Infrastructure
+      OpenAI-compatible | Azure | Anthropic | local markdown | vector DB
+      MCP stdio/http | local tools | session/remote memory stores
+
+Contracts & Ports:
+  AgentManifest | ModelRequest/Response | EvidenceChunk | ToolRequest/Result
+  PolicyDecision | ApprovalState | TraceEvent | RunResult | provider protocols
+
+Audit & Observability side channel:
+  Control/Runtime/Capability events -> TraceWriter -> JSONL Trace
+    -> RunStore -> Governance Receipt
+    -> Dashboard API / inspect / stats read projections
 ```
 
-Enterprise QA 当前主链路：
+Enterprise QA 当前主链路（MVP 中部分 Bootstrap / Composition 仍由 orchestrator 内部完成，后续可外提为独立组装入口）：
 
 ```text
-agent.yaml
-  -> load_agent_manifest
+CLI / Docker
   -> run_enterprise_qa
-  -> PolicyEngine(before_retrieval)
-  -> KnowledgeProvider.retrieve
-  -> evaluate_evidence
-  -> PolicyEngine(before_answer)
-  -> build ModelRequest
-  -> PolicyEngine(before_model_call)
-  -> ModelProvider.generate
-  -> validators
-  -> optional ToolGateway approval path
-  -> SessionMemory policy/write
-  -> final_output
-  -> TraceWriter
-  -> RunStore
-  -> Governance Receipt
+      -> load_agent_manifest
+      -> resolve current dependencies from manifest
+      -> emit run_started / manifest_loaded
+      -> PolicyEngine(before_retrieval)
+      -> KnowledgeProvider.retrieve
+      -> evaluate_evidence
+      -> PolicyEngine(before_answer)
+      -> build ModelRequest
+      -> PolicyEngine(before_model_call)
+      -> ModelProvider.generate
+      -> validators
+      -> optional ToolGateway approval path
+      -> SessionMemory policy/write
+      -> final_output
+  -> persist trace and run metadata
+  -> render Governance Receipt
+  -> expose Dashboard API read projections
 ```
+
+Layer boundary rules:
+
+- Control Plane owns decisions. Runtime and Capability layers cannot bypass PolicyEngine、Approval、Validators or Outcome mapping.
+- Runtime Plane owns execution mechanics. LangGraph/LangChain can provide graph execution、checkpoint、interrupt/resume and streaming hooks, but cannot redefine Harness governance semantics.
+- Capability Layer owns concrete abilities. Model、knowledge、memory、tools、MCP and Skills are exposed through Proof Agent ports and contracts.
+- Skills are capability packs. A Skill may include prompt、tool schema、retrieval recipe、policy rule、validator or workflow fragment, but it must be registered into the Control/Runtime/Capability model rather than becoming a separate execution path.
+- Contracts & Ports are not an execution layer. They define stable DTOs, public contracts and provider protocols used across layers.
+- Audit & Observability is side-channel only. Trace is written throughout execution; Receipt and Dashboard API are read projections and must not create a second workflow or tool execution path.
 
 ## 4. 当前实现基线
 
 | Area | Current implementation |
 | --- | --- |
-| CLI | `demo`、`run`、`doctor`、`inspect`、`compare`、`dashboard` |
+| Delivery | `delivery/cli.py` exposes `demo`、`run`、`doctor`、`inspect`、`compare`、`dashboard` |
 | Docker | `Dockerfile`、`docker-compose.yml` 默认运行 demo |
 | Contracts | Pydantic v2 frozen models |
-| Config | YAML loading、path resolution、secret-looking params rejection |
-| Workflow | `workflow/orchestrator.py` 执行 Enterprise QA Harness |
+| Bootstrap | `bootstrap/` owns YAML loading、path resolution、secret-looking params rejection |
+| Workflow | `control/workflow/orchestrator.py` 执行 Enterprise QA Harness |
 | Runtime | `runtime/langgraph_runner.py` 是 adapter boundary，当前委托 orchestrator |
-| Policy | retrieval、answer、tool、memory、model call enforcement points |
-| Knowledge | Markdown deterministic retrieval；vector stack optional |
-| Model | `deterministic`、`openai_compatible`；Azure/Anthropic placeholders |
-| Tools | ToolGateway、mock `customer_lookup`、approval state |
-| Memory | Session memory with denylist |
-| Validators | schema、evidence、safety、citations、tool result |
-| Audit | JSONL trace、redaction、Governance Receipt、Model Usage |
-| Storage/API | RunStore、FastAPI health/runs/stats routes |
+| Policy | `control/policy/` owns retrieval、answer、tool、memory、model call enforcement points |
+| Knowledge | `capabilities/knowledge/` owns Markdown deterministic retrieval；vector stack optional |
+| Model | `capabilities/models/` owns `deterministic`、`openai_compatible`；Azure/Anthropic placeholders |
+| Tools | `capabilities/tools/` owns ToolGateway、mock `customer_lookup`、approval state |
+| Memory | `capabilities/memory/` owns session memory with denylist |
+| Validators | `control/validators/` owns schema、evidence、safety、citations、tool result |
+| Audit | `observability/audit/` owns JSONL trace、redaction、Governance Receipt、Model Usage |
+| Storage/API | `observability/storage/` and `observability/api/` own RunStore、FastAPI health/runs/stats routes |
 | Tests/CI | pytest、Ruff、mypy、GitHub Actions |
 
-## 5. 目录边界
+## 5. Developer Lifecycle
+
+AI Agent 负责人使用 Proof Agent 时，应从 Agent package 开始，而不是从裸 LangGraph/LangChain 代码开始。标准开发部署路径：
+
+```text
+copy or create Agent package
+  -> configure agent.yaml / policy.yaml / tools.yaml / knowledge
+  -> run deterministic local validation
+  -> inspect trace and Governance Receipt
+  -> compare Plain RAG vs Harness RAG on unsupported questions
+  -> optionally switch to remote model provider
+  -> package with Docker or Python runtime
+  -> operate through RunStore, Dashboard API, trace, and receipt
+```
+
+Agent package is the developer-facing unit:
+
+```text
+agent.yaml
+policy.yaml
+tools.yaml
+knowledge/
+questions.yaml      optional evaluation set
+expected/           optional expected trace or receipt examples
+```
+
+This lifecycle is documented for users in `docs/developer-guide.md`. This technical design document defines the architecture and boundaries that make that lifecycle safe: configuration enters through Bootstrap / Composition, decisions stay in Control Plane, execution mechanics stay in Runtime Plane, concrete integrations stay in Capability Layer, and Audit & Observability remains a side channel.
+
+## 6. 目录边界
 
 ```text
 proof_agent/
-  api/          Dashboard API and serializers
-  audit/        trace, redaction, receipt
-  compare/      plain RAG vs harness RAG
-  config/       manifest loading and validation
+  bootstrap/        manifest loading, validation, and future composition
+  capabilities/     concrete model, knowledge, memory, tool, MCP, and Skill adapters
+    knowledge/
+    memory/
+    models/
+    tools/
   contracts/    public frozen contracts
-  demo/         deterministic scenarios
-  knowledge/    retrieval and evidence providers
-  memory/       memory boundary implementations
-  policy/       policy engine and rules
-  providers/    model provider adapters
-  runtime/      LangGraph/LangChain runtime adapters
-  storage/      run history and latest compatibility
-  tools/        ToolGateway, approval, MCP adapters
-  validators/   schema/evidence/safety/citation/tool validators
-  workflow/     Harness workflow semantics
+  control/          workflow, policy, validators, and governed decisions
+    policy/
+    validators/
+    workflow/
+  delivery/         CLI and future execution entry points
+  evaluation/       deterministic demo and Plain RAG vs Harness comparison
+    compare/
+    demo/
+  observability/    trace, receipt, storage, and Dashboard read API
+    api/
+    audit/
+    storage/
+  runtime/          LangGraph/LangChain runtime adapters
+  cli.py            backward-compatible CLI shim
+  errors.py         shared error type
 ```
+
+Architecture layer mapping:
+
+| Architecture layer | Current modules |
+| --- | --- |
+| Delivery / Entry | `delivery/cli.py`, compatibility shim `cli.py`, Docker assets, templates under `examples/` |
+| Bootstrap / Composition | `bootstrap/`, provider registries, current dependency resolution inside `control/workflow/orchestrator.py` |
+| Control Plane | `control/workflow/`, `control/policy/`, `control/validators/`, approval state used by ToolGateway, memory policy checks |
+| Runtime Plane | `runtime/` |
+| Capability Layer | `capabilities/models/`, `capabilities/knowledge/`, `capabilities/memory/`, `capabilities/tools/`, future Skill packs |
+| Contracts & Ports | `contracts/`, provider protocols |
+| Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/` |
+| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, `examples/enterprise_qa/` |
 
 Boundary rules:
 
 - `contracts/` cannot import adapter SDKs.
-- `workflow/` owns Harness order and calls protocols, not SDK clients.
-- `providers/` owns model SDK integration.
-- `knowledge/` returns `EvidenceChunk`; it does not decide final answer.
-- `tools/` is the only tool execution entry.
-- `validators/` decide whether candidate output may proceed.
-- `audit/` records facts and renders receipts; it does not control workflow.
-- `api/` and `storage/` expose read-only observability and must not create a second execution path.
+- `control/workflow/` owns Harness order and calls protocols, not SDK clients.
+- `capabilities/models/` owns model SDK integration.
+- `capabilities/knowledge/` returns `EvidenceChunk`; it does not decide final answer.
+- `capabilities/tools/` is the only tool execution entry.
+- `control/validators/` decide whether candidate output may proceed.
+- `observability/audit/` records facts and renders receipts; it does not control workflow.
+- `observability/api/` and `observability/storage/` expose read-only observability and must not create a second execution path.
 
-## 6. Agent Contract
+## 7. Agent Contract
 
 `agent.yaml` is the public delivery artifact.
 
@@ -230,7 +308,35 @@ Config rules:
 - Unsupported provider fails with `PA_MODEL_001`.
 - Provider runtime errors should emit `model_error` once trace exists.
 
-## 7. Core Contracts
+## 8. Bootstrap / Composition
+
+Bootstrap / Composition turns an Agent package into a runnable harness instance.
+
+Responsibilities:
+
+- load and validate `agent.yaml`
+- resolve relative paths for policy, tools, knowledge, trace, and receipt
+- reject raw secrets or secret-looking configuration
+- select workflow template and runtime adapter
+- resolve model, knowledge, memory, tool, and future Skill registries
+- construct Control Plane dependencies without importing provider SDK types into contracts
+- fail fast before execution when required files, providers, runtime, or writable audit paths are invalid
+
+Current MVP note:
+
+- Some Bootstrap / Composition work still happens inside `control/workflow/orchestrator.py`, including manifest loading and concrete dependency construction.
+- This is acceptable for the MVP but should be externalized as templates and providers multiply.
+- Future work should introduce a thin composition entry point that returns a resolved workflow invocation while preserving deterministic demo behavior.
+
+Rules:
+
+- Bootstrap may read config and instantiate adapters, but it must not make policy decisions.
+- Bootstrap may select a Runtime Plane implementation, but it must not redefine workflow semantics.
+- Bootstrap may register Capability Layer implementations, but all calls still pass through Control Plane and Proof Agent contracts.
+
+## 9. Contracts & Ports
+
+Contracts & Ports are the vertical foundation used by Control, Runtime, Capability, Audit, and public read models. They define the language between layers; they are not an execution layer.
 
 | Contract | Purpose |
 | --- | --- |
@@ -252,19 +358,66 @@ Evolution rules:
 - Never store SDK objects or secrets in contracts.
 - Dashboard contracts are read projections, not workflow state.
 
-## 8. Workflow And Runtime
+## 10. Control Plane
 
-Workflow is the Harness semantic layer. It decides state order and owns failure behavior.
+Control Plane is the Harness semantic layer. It decides what the Agent is allowed to do, when it must stop, and how a final outcome is produced.
 
-Runtime adapter strategy:
+It owns:
 
-- LangGraph StateGraph, checkpoint, and interrupt belong in `runtime/`.
-- LangChain integration can connect ecosystem model/retriever/tool abstractions, but must adapt into Proof Agent contracts.
-- Runtime details must not leak into config, policy, trace, receipt, or dashboard contracts.
+- workflow state order
+- orchestration semantics
+- policy enforcement points
+- approval state transitions
+- evidence evaluation requirements
+- output admission through validators
+- memory write policy
+- outcome mapping and refusal behavior
+
+It does not own:
+
+- SDK clients
+- vector database handles
+- MCP sessions
+- LangGraph internals
+- Dashboard read APIs
+- provider-specific error payloads
+
+Current MVP:
+
+- `control/workflow/orchestrator.py` executes the Enterprise QA Harness and currently contains some Bootstrap / Composition code.
+- `control/policy/` evaluates policy rules.
+- `control/validators/` admit or block candidate outputs and tool results.
+- `capabilities/tools/approval.py` defines approval state, while `capabilities/tools/gateway.py` is the governed tool entry.
 
 Future templates should use a workflow registry or separate workflow modules. Do not keep adding template-specific branches to Enterprise QA orchestrator.
 
-## 9. PolicyEngine
+## 11. Runtime Plane
+
+Runtime Plane owns execution mechanics. It may use Agent frameworks, but it must execute Proof Agent Control Plane semantics rather than replacing them.
+
+Runtime responsibilities:
+
+- graph or node execution
+- state persistence and checkpointing
+- interrupt/resume for approval or human-in-the-loop
+- streaming hooks
+- retry mechanics where policy allows them
+- adapter boundaries for LangGraph or LangChain Agent runtimes
+
+Runtime adapter strategy:
+
+- LangGraph StateGraph, checkpoint, interrupt, and resume belong in `runtime/`.
+- LangChain may be used as a runtime adapter when it drives Agent execution, but must still adapt into Proof Agent contracts.
+- LangChain model, retriever, or tool wrappers belong in Capability Layer when they provide concrete abilities.
+- Runtime details must not leak into config, policy, trace, receipt, dashboard contracts, or public DTOs.
+- Runtime cannot bypass PolicyEngine, ApprovalState, Validators, ToolGateway, or trace emission.
+
+Current MVP:
+
+- `runtime/langgraph_runner.py` is an adapter boundary and currently delegates to the plain Python Enterprise QA orchestrator.
+- This preserves the intended runtime seam while deterministic Harness behavior remains the regression baseline.
+
+## 12. PolicyEngine
 
 Enforcement points:
 
@@ -293,7 +446,29 @@ Rules:
 - `escalate` must appear as a governed outcome.
 - Model policy context includes provider, model, estimated tokens, stream, cost class, evidence count, and question metadata.
 
-## 10. Knowledge And Vector Providers
+## 13. Capability Layer
+
+Capability Layer provides the concrete abilities that an Agent can use. Capabilities are selected by configuration and registries, then invoked through Proof Agent ports under Control Plane governance.
+
+Capability categories:
+
+| Category | Examples | Required boundary |
+| --- | --- | --- |
+| Model | deterministic, OpenAI-compatible, Azure, Anthropic | `ModelRequest` / `ModelResponse` |
+| Knowledge / Retrieval | local Markdown, vector stores, enterprise search | `EvidenceChunk` |
+| Memory | session memory, future persistent memory | memory contract plus `before_memory_write` policy |
+| Tool / MCP | local tools, mock MCP, real MCP stdio/http | `ToolRequest` / `ToolResult` through ToolGateway |
+| Skill Packs | prompt, tool schema, retrieval recipe, policy rule, validator, workflow fragment | registered into Control/Runtime/Capability model |
+
+Rules:
+
+- Capabilities cannot decide final outcome.
+- Capabilities cannot call tools, models, or memory outside Control Plane.
+- Provider SDK objects must stay inside Capability adapters.
+- A Skill is a capability pack, not a second execution path.
+- Capability implementations must emit or allow Control Plane to emit trace-safe facts.
+
+## 14. Knowledge And Vector Providers
 
 Current baseline:
 
@@ -310,7 +485,7 @@ Vector strategy:
 - Milvus、pgvector、remote enterprise search 等实现必须 still return `EvidenceChunk`.
 - Retrieval never decides final answer.
 
-## 11. Model Providers
+## 15. Model Providers
 
 Protocol:
 
@@ -337,7 +512,7 @@ Trace safety:
 - `model_response` stores finish reason/content length/token usage, not raw response.
 - `model_error` stores normalized error class/code/message, not raw provider body or headers.
 
-## 12. Tool Gateway And MCP
+## 16. Tool Gateway And MCP
 
 ToolGateway is the governed tool entry point.
 
@@ -354,7 +529,7 @@ Real MCP strategy:
 - MCP schemas map into Proof Agent tool config and result contracts.
 - LangGraph interrupt may implement pause/resume, but `ApprovalState` and trace remain the facts.
 
-## 13. Memory Boundary
+## 17. Memory Boundary
 
 Current baseline is session memory.
 
@@ -365,7 +540,7 @@ Rules:
 - memory read/write emits trace events.
 - Persistent memory providers require retention, deletion, redaction, and tenant boundary design before adoption.
 
-## 14. Validators
+## 18. Validators
 
 Validators are the admission layer for candidate outputs and tool results.
 
@@ -389,7 +564,7 @@ ModelResponse.content
 
 LLM-as-judge can become a later audited validator. It must not replace deterministic gates.
 
-## 15. Trace, Receipt, RunStore
+## 19. Trace, Receipt, RunStore
 
 Core trace events:
 
@@ -436,7 +611,7 @@ RunStore:
 - writes per-run history under `runs/history/{run_id}`
 - powers Dashboard API read projections
 
-## 16. Dashboard API
+## 20. Dashboard API
 
 Dashboard API is observability, not execution.
 
@@ -458,7 +633,7 @@ Rules:
 - Static SPA may be mounted when built assets exist.
 - Approval Console is a future UI on top of approval state, not a new tool execution path.
 
-## 17. CLI And Docker
+## 21. CLI And Docker
 
 CLI commands:
 
@@ -477,7 +652,7 @@ Docker:
 - Docker path must not require API keys.
 - Remote provider env vars can be passed at runtime.
 
-## 18. Dependencies
+## 22. Dependencies
 
 Core dependencies:
 
@@ -509,7 +684,7 @@ Dependency rules:
 - vector dependencies belong in `[vector]`.
 - dashboard runtime belongs in `[dashboard]`.
 
-## 19. Error Codes
+## 23. Error Codes
 
 | Code | Subsystem | Purpose |
 | --- | --- | --- |
@@ -528,7 +703,7 @@ Dependency rules:
 | `PA_RECEIPT_001` | Receipt | receipt render error |
 | `PA_SECRET_001` | Secret | secret-looking config or content |
 
-## 20. Tests And Verification
+## 24. Tests And Verification
 
 Runtime changes should run:
 
@@ -547,7 +722,7 @@ git diff --check
 
 Remote provider tests must mock SDK clients and never require real API keys.
 
-## 21. Roadmap
+## 25. Roadmap
 
 | Phase | Goal |
 | --- | --- |
@@ -558,7 +733,7 @@ Remote provider tests must mock SDK clients and never require real API keys.
 | 4 | production adapters: LangChain/LangGraph, real MCP, vector stores, Azure/Anthropic, streaming |
 | 5 | Agent Control Platform: Dashboard UI, Approval Console, RBAC, multi-template, external observability |
 
-## 22. Stability Rules
+## 26. Stability Rules
 
 1. New capabilities define contracts before adapters.
 2. New providers cannot break deterministic demo.

@@ -29,7 +29,7 @@ vector = [
 all = ["proof-agent[openai,vector]"]
 
 [project.scripts]
-proof-agent = "proof_agent.cli:main"
+proof-agent = "proof_agent.delivery.cli:main"
 
 [tool.ruff]
 line-length = 100

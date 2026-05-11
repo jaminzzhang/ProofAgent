@@ -5,7 +5,7 @@ import pytest
 
 from proof_agent.contracts import ModelConfig, ModelMessage, ModelRequest, ModelRole
 from proof_agent.errors import ProofAgentError
-from proof_agent.providers.openai_compatible import OpenAICompatibleModelProvider
+from proof_agent.capabilities.models.openai_compatible import OpenAICompatibleModelProvider
 
 
 def test_openai_compatible_provider_maps_request_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:

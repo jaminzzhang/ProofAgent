@@ -6,7 +6,8 @@ This directory is organized for humans and AI agents. Read these documents in or
 
 1. `Proof Agent PRD.md` — product positioning, scope, non-goals, roadmap.
 2. `Proof Agent 技术设计方案.md` — authoritative architecture and implementation boundaries.
-3. `development-progress.md` — current codebase status; useful, but always verify against the code.
+3. `developer-guide.md` — developer workflow for building, configuring, deploying, and managing governed Agents.
+4. `development-progress.md` — current codebase status; useful, but always verify against the code.
 
 The core positioning is:
 
@@ -25,6 +26,12 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | `concepts/trace-event-contract.md` | JSONL trace event contract |
 | `concepts/governance-receipt-contract.md` | Human-readable receipt contract |
 | `concepts/trust-boundaries.md` | Security scope, assumptions, and non-claims |
+
+## Developer Guide
+
+| Document | Purpose |
+| --- | --- |
+| `developer-guide.md` | Quick Start, architecture module overview, configuration, development, deployment, and management steps for AI Agent owners |
 
 ## Examples
 

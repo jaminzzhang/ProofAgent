@@ -34,8 +34,7 @@ The first v1 template is a strongly controlled enterprise knowledge Q&A Agent:
 ## The 2-Minute Demo
 
 ```bash
-uv pip install -e ".[dev]"
-proof-agent demo
+uv run --extra dev proof-agent demo
 ```
 
 The first demo must run without an LLM API key. It uses bundled sample knowledge and a deterministic provider to show:
@@ -51,10 +50,10 @@ The first demo must run without an LLM API key. It uses bundled sample knowledge
 
 ```bash
 docker compose up
-proof-agent run examples/enterprise_qa/agent.yaml
-proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
-proof-agent inspect runs/latest/governance_receipt.md
-proof-agent inspect runs/latest/trace.jsonl
+uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml
+uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
+uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
+uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
 ```
 
 The full local evaluation must show three visible outcomes:
@@ -81,58 +80,66 @@ Expected deterministic demo questions:
 - `What discount should we give this customer next year?`
 - `Look up customer policy status before answering.`
 
-## Core Model
+## Developer Model
+
+Proof Agent is built around an Agent package:
 
 ```text
-User Goal / Question
-     |
-     v
-Agent Contract: agent.yaml
-     |
-     v
-Control Envelope
-  |-- Workflow Orchestrator
-  |-- PolicyEngine
-  |-- Tool Gateway
-  |-- Validators / Evaluators
-  |-- Evidence checks
-  |-- Tool approval
-  |-- Memory boundary
-  |-- JSONL trace
-  `-- Governance Receipt
-     |
-     v
-Enterprise Agent Response
+agent.yaml      # Agent Contract
+policy.yaml     # Control Plane policy
+tools.yaml      # Tool / MCP declaration
+knowledge/      # business knowledge source
+questions.yaml  # optional evaluation set
+expected/       # optional expected trace or receipt examples
 ```
 
-Proof Agent does not replace LangGraph, MCP, vector stores, or observability tools. It composes them behind an enterprise control envelope. In v1, LangGraph is an implementation detail for workflow execution; the public model is Workflow + Policy + Gateway + Validator + Audit.
+Developers configure the Agent package, run deterministic validation, inspect trace and receipt artifacts, then optionally switch to a remote model provider or deploy with Docker.
+
+Proof Agent does not replace LangGraph, MCP, vector stores, or observability tools. It composes them behind an enterprise Control Plane. Runtime frameworks execute mechanics; the Control Plane decides whether retrieval, model calls, tool calls, memory writes, and final answers are allowed.
 
 ## Architecture Layers
 
 ```text
-User / CLI / API
-  -> Agent Control Layer
-  -> Agent Runtime Layer
-  -> Gateway & Context Layer
-  -> Verification & Governance Layer
-  -> Templates & Examples
+Delivery / Entry
+  -> Bootstrap / Composition
+  -> Control Plane
+  -> Runtime Plane
+  -> Capability Layer
+  -> Infrastructure
+
+Contracts & Ports define the shared language.
+Audit & Observability records facts as a side channel.
 ```
 
 v1 implements the narrow local path:
 
 ```text
-CLI
-  -> agent.yaml
-  -> Workflow Orchestrator
-  -> Policy Engine + Validator
-  -> Local Knowledge + MCP Mock Tool + Session Memory
-  -> Trace + Governance Receipt
-  -> Enterprise QA Template
+Delivery CLI / Docker
+  -> Bootstrap: load and validate agent.yaml
+  -> Control: workflow, policy gates, validators, outcome
+  -> Runtime: LangGraph adapter boundary, currently delegated to orchestrator
+  -> Capability: deterministic model, local knowledge, session memory, mock Tool/MCP
+  -> Observability: JSONL trace, RunStore, Governance Receipt, Dashboard API
+```
+
+The package layout mirrors the architecture:
+
+```text
+proof_agent/
+  bootstrap/      # manifest loading, validation, composition boundary
+  control/        # workflow, policy, validators, governed decisions
+  runtime/        # LangGraph/LangChain runtime adapter boundaries
+  capabilities/   # models, knowledge, memory, tools, future Skill packs
+  observability/  # trace, receipt, RunStore, Dashboard read API
+  delivery/       # CLI and future execution entry points
+  evaluation/     # demo and Plain RAG vs Harness RAG comparison
+  contracts/      # provider-neutral public contracts and ports
 ```
 
 ## Documentation
 
 - [Documentation Index](docs/README.md)
+- [Developer Guide](docs/developer-guide.md)
 - [Product Requirements](docs/Proof%20Agent%20PRD.md)
 - [Technical Design](docs/Proof%20Agent%20%E6%8A%80%E6%9C%AF%E8%AE%BE%E8%AE%A1%E6%96%B9%E6%A1%88.md)
 - [Development Progress](docs/development-progress.md)
@@ -149,6 +156,6 @@ CLI
 
 ## v1 Scope
 
-v1 is intentionally narrow: one excellent enterprise Q&A reference template, deterministic demo mode, local knowledge, optional remote model provider path, session memory, one MCP mock tool routed through Tool Gateway approval state, validators, JSONL trace, Governance Receipt, Dashboard API, Docker Compose, and CI.
+v1 is intentionally narrow: one excellent enterprise Q&A reference template, deterministic demo mode, local knowledge, optional OpenAI-compatible remote model provider path, session memory, one MCP mock tool routed through Tool Gateway approval state, validators, JSONL trace, RunStore, Governance Receipt, Dashboard API, Docker Compose, and CI.
 
 Production LangChain/LangGraph adapters, real MCP transport, richer vector providers, Dashboard UI, Approval Console, policy packs, and additional industry templates are vNext.

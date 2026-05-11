@@ -5,7 +5,7 @@ tools:
     command: python
     args:
       - -m
-      - proof_agent.tools.mcp_mock
+      - proof_agent.capabilities.tools.mcp_mock
     risk_level: medium
     requires_approval: true
     allowed_parameters:

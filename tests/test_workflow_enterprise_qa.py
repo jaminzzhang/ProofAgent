@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-from proof_agent.workflow.orchestrator import run_enterprise_qa
+from proof_agent.control.workflow.orchestrator import run_enterprise_qa
 
 
 def test_supported_question_answers_with_citations(tmp_path: Path) -> None:

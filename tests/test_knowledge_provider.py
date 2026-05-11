@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from proof_agent.knowledge.local_provider import LocalKnowledgeProvider
+from proof_agent.capabilities.knowledge.local_provider import LocalKnowledgeProvider
 
 
 def test_retrieval_returns_source_chunks() -> None:

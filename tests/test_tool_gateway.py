@@ -1,5 +1,5 @@
 from proof_agent.contracts import ApprovalStatus
-from proof_agent.tools.gateway import ToolGateway
+from proof_agent.capabilities.tools.gateway import ToolGateway
 
 
 def test_customer_lookup_requires_approval_before_execution() -> None:

@@ -1,5 +1,5 @@
 from proof_agent.contracts import EnforcementPoint, PolicyDecisionType
-from proof_agent.policy.engine import PolicyEngine
+from proof_agent.control.policy.engine import PolicyEngine
 
 
 def test_before_answer_denies_weak_evidence() -> None:

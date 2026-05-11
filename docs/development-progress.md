@@ -16,19 +16,15 @@ Authoritative design doc: `docs/Proof Agent 技术设计方案.md`.
 | Area | Status |
 | --- | --- |
 | Contracts | Pydantic v2 frozen models for manifest, policy, evidence, approval, tools, model, trace, receipt, run, dashboard |
-| CLI | Typer commands: `demo`, `run`, `doctor`, `inspect`, `compare`, `dashboard` |
+| Delivery | `delivery/cli.py` exposes Typer commands: `demo`, `run`, `doctor`, `inspect`, `compare`, `dashboard` |
 | Docker | `Dockerfile` and `docker-compose.yml` run deterministic demo |
-| Config | YAML loader, path resolution, provider validation, secret-looking model param rejection |
-| Workflow | Enterprise QA orchestrator with policy, evidence, model, tool, memory, validators, trace, receipt |
+| Bootstrap | `bootstrap/` owns YAML loader, path resolution, provider validation, secret-looking model param rejection |
+| Control | `control/` owns Enterprise QA workflow, policy, validators, evidence decisions, approval, and outcome behavior |
 | Runtime | `runtime/langgraph_runner.py` is an adapter boundary; current flow delegates to plain Python orchestrator |
-| Policy | Enforcement points include retrieval, answer, tool call, memory write, model call |
-| Knowledge | Deterministic markdown retrieval; vector adapter lives behind optional `[vector]` dependency |
-| Model Providers | `deterministic` and `openai_compatible` implemented; Azure and Anthropic placeholders fail clearly |
-| Tools / MCP | ToolGateway, approval state, mock `customer_lookup`; real MCP transport is adapter work |
-| Memory | Session memory with denylist and policy gate |
-| Validators | schema, evidence, safety, citations, tool result |
-| Audit | JSONL trace, redaction, Governance Receipt, model usage section |
-| Storage / API | RunStore, history/latest compatibility, FastAPI dashboard routes for health/runs/stats |
+| Capability | `capabilities/` owns model providers, knowledge, memory, ToolGateway, mock `customer_lookup`, and future Skill packs |
+| Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, model usage section |
+| Storage / API | `observability/storage/` and `observability/api/` own RunStore, history/latest compatibility, FastAPI dashboard routes for health/runs/stats |
+| Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
 | Tests | 28 test files and 91 statically detected `test_` functions at last scan |
 
 ## 3. Stable Demo Contract
@@ -84,4 +80,4 @@ git diff --check
 1. Start with `docs/README.md` for document routing.
 2. Use `docs/Proof Agent 技术设计方案.md` as the architectural source of truth.
 3. Preserve the deterministic demo while adding remote/provider/platform integrations.
-4. Keep third-party SDK types out of contracts, policy, trace, receipt, config, and dashboard contracts.
+4. Keep third-party SDK types out of contracts, policy, trace, receipt, bootstrap, and dashboard contracts.

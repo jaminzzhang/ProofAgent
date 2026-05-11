@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from proof_agent.errors import ProofAgentError
-from proof_agent.workflow.orchestrator import run_enterprise_qa
+from proof_agent.control.workflow.orchestrator import run_enterprise_qa
 
 
 def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) -> None:
