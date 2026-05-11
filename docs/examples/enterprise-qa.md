@@ -1,8 +1,8 @@
 # Enterprise Q&A Demo
 
-The first v1 template is a strongly controlled enterprise knowledge Q&A Agent.
+The Enterprise QA Template is the first strongly controlled enterprise knowledge Q&A Agent.
 
-This demo exists because knowledge Q&A is broad enough for many enterprises, but strict enough to prove the Harness value: retrieval, evidence, citation, refusal, tool approval, memory boundary, and audit.
+This demo exists because knowledge Q&A is broad enough for many enterprises, but strict enough to prove the Harness value: retrieval, evidence, citation, model governance, refusal, tool approval, memory boundary, and audit.
 
 The public launch contract lives in [Launch Script](launch-script.md). The receipt output must follow [Governance Receipt Contract](../concepts/governance-receipt-contract.md), [Trace Event Contract](../concepts/trace-event-contract.md), and [Approval State Contract](../concepts/approval-state-contract.md).
 
@@ -27,7 +27,13 @@ Evaluate evidence
 PolicyEngine.before_answer
   | allow                  | deny/escalate
   v                        v
-Answer with citations      Refusal / escalation
+ModelProvider.generate     Refusal / escalation
+  |
+  v
+Validators
+  |
+  v
+Answer with citations
   |
   v
 Optional tool request
@@ -51,6 +57,7 @@ The demo must include at least one side-by-side scenario:
 | Supported question | Answers with retrieved text | Answers with citations and trace |
 | Unsupported question | May answer loosely | Refuses or escalates |
 | Tool-required question | May call tool directly | Requires approval state |
+| Remote model question | Trusts provider output | Runs provider output through policy, trace, and validators |
 
 This comparison is the fastest way to show why this project is not just another RAG template.
 
@@ -63,6 +70,7 @@ This comparison is the fastest way to show why this project is not just another 
 ## Acceptance Criteria
 
 - The demo runs from `proof-agent run examples/enterprise_qa/agent.yaml`.
+- The deterministic demo runs without API keys; remote provider paths are optional.
 - Supported answers include citations.
 - Unsupported answers refuse or escalate.
 - Tool calls requiring approval pause before execution.

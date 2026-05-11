@@ -15,7 +15,7 @@ Control Envelope 通过 **Harness Engineering** 实现。Harness 的设计理念
 
 Harness Engineering 是一种将企业控制要求注入 Agent 流程的工程设计方法。它的核心做法是：
 
-1. **在流程节点之间插入策略决策点**：`before_retrieval`、`before_answer`、`before_tool_call`、`before_memory_write`
+1. **在流程节点之间插入策略决策点**：`before_retrieval`、`before_answer`、`before_tool_call`、`before_memory_write`、`before_model_call`
 2. **每个决策产生类型化的结果**：`allow`、`deny`、`require_approval`、`escalate`
 3. **每个决策被写入 Trace 并汇总到 Governance Receipt**
 
@@ -49,13 +49,13 @@ Harness RAG 的受控特性：
   | JSONL trace                                    |
   | Governance Receipt                             |
   +------------------------------------------------+
-         |              |              |
-         v              v              v
-     Workflow       Knowledge        MCP Tools
-    LangGraph       Local RAG        Mock first
+         |              |              |              |
+         v              v              v              v
+     Workflow       Knowledge       Model          MCP Tools
+  LangGraph/LC     Local/Vector    Remote/local    Mock/real
 ```
 
-The envelope does not replace the underlying systems. LangGraph still owns workflow execution. Knowledge libraries still own retrieval. MCP still owns tool protocol. Proof Agent owns the enterprise control contract across them.
+The envelope does not replace the underlying systems. LangGraph can own workflow execution, LangChain can connect ecosystem components, vector stores can own retrieval indexes, model providers can own generation, and MCP can own tool protocol. Proof Agent owns the enterprise control contract across them.
 
 ## v1 Principles
 
@@ -63,18 +63,18 @@ The envelope does not replace the underlying systems. LangGraph still owns workf
 - **Policy before output:** important actions pass through explicit policy decisions.
 - **Evidence over confidence:** missing or weak evidence causes refusal or escalation.
 - **Approval is state:** tool approval is visible, resumable, and traced.
-- **Audit is local first:** JSONL trace is the source of truth; external observability is an adapter.
+- **Audit has a portable fact stream:** JSONL trace is the source of truth; Dashboard and external observability are adapters.
 - **Readable proof:** Governance Receipt turns trace events into a leader-readable summary.
 
 ## What Architects Should Like
 
 The envelope creates stable boundaries without over-abstracting v1:
 
-- runtime is LangGraph-only publicly
-- providers stay local-first
+- runtime and provider implementations stay behind adapters
 - policy decisions are typed
-- trace events are deterministic
-- extension points are introduced only after the enterprise Q&A template proves them
+- trace events are deterministic and portable
+- deterministic demo remains the regression baseline
+- production integrations must preserve the same Harness contract
 
 ## What Agent Owners Should Like
 

@@ -1,0 +1,43 @@
+# Proof Agent Documentation
+
+This directory is organized for humans and AI agents. Read these documents in order unless a task points to a narrower concept page.
+
+## Source Of Truth
+
+1. `Proof Agent PRD.md` — product positioning, scope, non-goals, roadmap.
+2. `Proof Agent 技术设计方案.md` — authoritative architecture and implementation boundaries.
+3. `development-progress.md` — current codebase status; useful, but always verify against the code.
+
+The core positioning is:
+
+> Proof Agent is a Controlled Agent Harness Framework. It uses Harness Engineering to manage the Agent lifecycle across workflow, policy, tools, memory, models, validators, trace, receipt, deployment, and observability.
+
+The project is not positioned as local-first or CLI-first. It keeps a deterministic local demo as a regression baseline, and supports CLI and Docker entry points. Remote models, LangChain/LangGraph, vector stores, real MCP, and Dashboard capabilities are adapter-driven integrations around the same Harness contract.
+
+## Concept Contracts
+
+| Document | Purpose |
+| --- | --- |
+| `concepts/control-envelope.md` | Core Harness / Control Envelope mental model |
+| `concepts/agent-contract.md` | `agent.yaml` public contract |
+| `concepts/policy-engine.md` | Policy enforcement points and decisions |
+| `concepts/approval-state-contract.md` | Tool approval state machine |
+| `concepts/trace-event-contract.md` | JSONL trace event contract |
+| `concepts/governance-receipt-contract.md` | Human-readable receipt contract |
+| `concepts/trust-boundaries.md` | Security scope, assumptions, and non-claims |
+
+## Examples
+
+| Document | Purpose |
+| --- | --- |
+| `examples/launch-script.md` | Demo and evaluation commands |
+| `examples/enterprise-qa.md` | Enterprise QA Template behavior |
+| `examples/governance-receipt.md` | Example receipt rendering |
+
+## Active Documentation Policy
+
+- Keep root-level docs few and authoritative.
+- Put reusable contracts in `concepts/`.
+- Put runnable behavior in `examples/`.
+- Do not keep parallel architecture plans that restate the same roadmap.
+- When a design decision changes, update the PRD, technical design, and affected concept page together.

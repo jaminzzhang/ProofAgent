@@ -6,7 +6,7 @@ It turns enterprise rules into typed decisions at specific enforcement points. E
 
 ## Enforcement Points
 
-v1 uses four enforcement points:
+Proof Agent uses explicit enforcement points:
 
 ```text
 before_retrieval
@@ -20,6 +20,10 @@ before_tool_call
 
 before_memory_write
   Decide whether generated information may be written to session memory.
+
+before_model_call
+  Decide whether a model provider call is allowed for this provider, model,
+  cost class, token estimate, stream setting, and evidence state.
 ```
 
 ## Decisions
@@ -105,6 +109,17 @@ rules:
       on_match: deny
       on_pass: allow
     reason_template: "Session memory cannot store sensitive fields."
+
+  - rule_id: model.remote_budget
+    enforcement_point: before_model_call
+    condition:
+      cost_class: remote
+      max_estimated_tokens: 4000
+      stream: false
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Remote model calls must stay within the configured budget and stream policy."
 ```
 
 Every rule must include:

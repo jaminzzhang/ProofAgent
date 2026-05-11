@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Proof Agent is an **Enterprise Agent Delivery Kit** — a CLI-first Python package that wraps an Agent execution in a **Control Envelope**: policy engine, evidence checks, tool approval, memory boundaries, JSONL trace, and a human-readable Governance Receipt. The first template is enterprise knowledge Q&A.
+Proof Agent is a **Controlled Agent Harness Framework**. It wraps Agent execution in a **Control Envelope**: workflow orchestration, policy engine, evidence checks, model provider governance, tool approval, memory boundaries, validators, JSONL trace, Dashboard API, and a human-readable Governance Receipt. The first template is enterprise knowledge Q&A.
 
 The target user is an enterprise AI Agent owner or platform architect who needs to deliver a governed, auditable Agent — not a generic hobby developer.
 
 ## Current State
 
-All 11 implementation plan tasks are complete. The codebase has working Python modules, 13 test files, a deterministic demo, and CI. The deterministic demo produces three outcomes: `ANSWERED_WITH_CITATIONS`, `REFUSED_NO_EVIDENCE`, and `WAITING_FOR_APPROVAL`. Demo artifacts are written to `runs/latest/trace.jsonl` and `runs/latest/governance_receipt.md`.
+The codebase has working Python modules, 28 test files, a deterministic demo, remote model provider boundaries, Dashboard API, Docker assets, and CI. The deterministic demo produces three outcomes: `ANSWERED_WITH_CITATIONS`, `REFUSED_NO_EVIDENCE`, and `WAITING_FOR_APPROVAL`. Demo artifacts are written to `runs/latest/trace.jsonl` and `runs/latest/governance_receipt.md`.
 
-**Not yet implemented:** LangGraph StateGraph with `interrupt()` for real approval, real LLM providers, MCP stdio transport.
+**Not yet implemented:** production LangGraph StateGraph with `interrupt()` for real approval, real MCP stdio/HTTP transport, Dashboard UI / Approval Console, and real Azure/Anthropic providers.
 
 ## Development Progress
 
@@ -38,7 +38,7 @@ docker compose up                                         # full local evaluatio
 
 **`docs/Proof Agent 技术设计方案.md`** is the authoritative technical design document for this project. It covers:
 
-- Design principles (harness controls flow, model only generates; local-first baseline; third-party SDK isolation; auditable failures; untrusted remote output; explicit config without secrets)
+- Design principles (harness controls flow, model only generates; deterministic regression baseline; third-party SDK isolation; auditable failures; untrusted remote output; explicit config without secrets)
 - Total architecture and Control Envelope data flow
 - Current implementation baseline per module
 - Module-by-module decisions: Workflow Runtime, Knowledge Provider, Model Provider, Policy Engine, Tool Gateway, Validators, Trace/Receipt/Redaction
@@ -47,7 +47,7 @@ docker compose up                                         # full local evaluatio
 - Agent contract (`agent.yaml`) schema for deterministic and remote providers
 - Error codes (`PA_MODEL_001` through `PA_MODEL_004`)
 - Directory structure and dependency design
-- Implementation roadmap (13 steps)
+- Implementation roadmap and adapter expansion strategy
 
 **When planning features, writing implementation plans, or writing code, always read this document first and follow its design decisions.**
 
@@ -56,14 +56,15 @@ docker compose up                                         # full local evaluatio
 See `docs/Proof Agent 技术设计方案.md` for full analysis.
 
 - Python 3.12+, `typer` for CLI, `pydantic` v2 for data contracts (frozen=True)
-- `langgraph >= 1.1.0` for workflow runtime (StateGraph + interrupt() for approval)
-- `mcp[cli] >= 1.27.0` + `langchain-mcp-adapters` for MCP mock tool (stdio transport)
-- `sentence-transformers` + `chromadb` for local RAG (self-built, not LlamaIndex)
+- `langgraph >= 1.1.0` as runtime adapter direction
+- `mcp[cli] >= 1.27.0` + `langchain-mcp-adapters` for MCP adapter direction
+- `sentence-transformers` + `chromadb` behind optional `[vector]`
+- `openai` behind optional `[openai]` for OpenAI-compatible remote providers
 - `jinja2` for Governance Receipt Markdown generation
 - `pytest` for tests, `ruff` for lint/format, `mypy` for type checking
-- Local JSONL for audit, Docker Compose for distribution
+- Portable JSONL for audit, CLI and Docker Compose for distribution
 
-**Key tech decision:** Knowledge/RAG is self-built (~280 lines) rather than using LlamaIndex. Reason: LlamaIndex's 50+ subpackages and frequent API changes conflict with v1's "controlled" principle. Self-built RAG puts every step through Harness policy gates with zero framework black box.
+**Key tech decision:** third-party runtime, model, vector, and MCP SDKs stay behind adapters. Contracts, policy, trace, receipt, config, and Dashboard contracts must not expose SDK-specific objects.
 
 ## Architecture
 
@@ -74,9 +75,10 @@ The Control Envelope wraps every Agent run with enforced policy, evidence, appro
 ### Data Flow
 
 ```
-CLI command → Load agent.yaml → Build LangGraph workflow
+CLI/Docker command → Load agent.yaml → Run Harness workflow
   → PolicyEngine.before_retrieval → Knowledge retrieval + evidence evaluation
   → PolicyEngine.before_answer → (allow: answer with citations | deny: refuse/escalate)
+  → PolicyEngine.before_model_call → ModelProvider.generate → Validators
   → Optional tool request → PolicyEngine.before_tool_call → Approval state
   → PolicyEngine.before_memory_write → JSONL trace → Governance Receipt
 ```
@@ -87,11 +89,13 @@ CLI command → Load agent.yaml → Build LangGraph workflow
 |--------|---------------|
 | `config/` | Load and validate `agent.yaml` manifest |
 | `contracts/` | Pydantic v2 frozen models for policy decisions, evidence, approval, trace events, receipts, manifests, runs |
-| `policy/` | Typed decisions (`allow`, `deny`, `require_approval`, `escalate`) at 4 enforcement points |
+| `policy/` | Typed decisions (`allow`, `deny`, `require_approval`, `escalate`) at 5 enforcement points |
 | `knowledge/` | Local document retrieval and evidence evaluation |
 | `workflow/` | Orchestrator, graph nodes, routing logic, and workflow state |
 | `runtime/` | Runtime execution context and adapter interfaces |
-| `tools/` | MCP mock tool with explicit approval state machine |
+| `tools/` | ToolGateway, MCP mock, and explicit approval state machine |
+| `providers/` | Deterministic and OpenAI-compatible model providers plus placeholders |
+| `api/` / `storage/` | Dashboard API and run history projections |
 | `validators/` | Evidence, safety, schema, and tool result validation |
 | `memory/` | Session memory only (v1) |
 | `audit/` | JSONL trace writer, redaction, Governance Receipt generator |
@@ -100,12 +104,13 @@ CLI command → Load agent.yaml → Build LangGraph workflow
 
 ### Policy Engine
 
-The heart of the Control Envelope. Four enforcement points:
+The heart of the Control Envelope. Five enforcement points:
 
 1. `before_retrieval` — may the Agent retrieve knowledge?
 2. `before_answer` — is evidence sufficient to answer?
 3. `before_tool_call` — is the tool call allowed, denied, or requires approval?
 4. `before_memory_write` — may generated info be written to session memory?
+5. `before_model_call` — may this provider/model/cost/token/stream call proceed?
 
 Every decision is typed, traced, and summarized in the Governance Receipt.
 
@@ -130,7 +135,7 @@ These are normative — implementation must satisfy them:
 - **Harness RAG**: an Agentic RAG implementation governed by the Harness — mandatory retrieval, evidence evaluation, citation enforcement, refusal on weak evidence, explicit tool approval, and audit trail. Contrasted with Plain RAG (uncontrolled retrieve-and-generate).
 - **Plain RAG**: standard retrieve-and-generate without policy gates or evidence checks.
 
-Use these terms consistently: `Enterprise Agent Delivery Kit`, `Control Envelope`, `Harness Engineering`, `Harness RAG`, `Plain RAG`, `Agent Contract`, `PolicyEngine`, `MCP mock tool approval`, `Trace & Audit`, `Governance Receipt`, `Enterprise QA Template`.
+Use these terms consistently: `Controlled Agent Harness Framework`, `Control Envelope`, `Harness Engineering`, `Harness RAG`, `Plain RAG`, `Agent Contract`, `PolicyEngine`, `Tool Gateway`, `MCP approval`, `Trace & Audit`, `Governance Receipt`, `Enterprise QA Template`.
 
 ## Implementation Rules
 
@@ -143,4 +148,4 @@ Use these terms consistently: `Enterprise Agent Delivery Kit`, `Control Envelope
 
 ## v1 Non-Goals
 
-Multi-runtime support, multiple production providers, GUI policy playground, full MCP Gateway, OAuth, multi-tenant auth, hosted compliance, persistent user/task memory, template library beyond enterprise Q&A.
+Production LangGraph interrupt/checkpoint wiring, real MCP transport, Dashboard UI / Approval Console, OAuth, multi-tenant auth, hosted compliance, persistent user/task memory, and template library beyond enterprise Q&A.

@@ -1,70 +1,58 @@
+# Proof Agent 可行性分析报告
 
-# 一、可行性分析报告（Feasibility Analysis）
+## 1. 结论
 
-## 1. 项目概述
+Proof Agent 作为 **Controlled Agent Harness Framework** 技术上可行，且方向清晰：不要再把项目限定为本地 RAG demo 或 CLI 工具，而是把 Harness 生命周期管理作为核心价值，用 adapter 接入远程模型、LangChain/LangGraph、向量库、真实 MCP 和 Dashboard。
 
-**项目名称（建议）：** Enterprise Agent Delivery Kit（简称 Proof Agent）
+短期可行性来自当前代码基线：已有 typed contracts、policy gates、deterministic Enterprise QA Template、remote model provider abstraction、tool approval、memory boundary、trace/receipt、RunStore、Dashboard API、CLI、Docker、tests 和 CI。
 
-**目标：**  
-提供一个开源、可复用、企业级 AI Agent 交付套件，解决企业知识问答 Agent 从 demo 到可评估交付物之间的缺口。
-核心机制是 **“Control Envelope”**：用策略、证据、工具审批、记忆边界和审计收据包裹 LLM/Agent 执行，保证流程可管理、输出可审计、工具可治理。
+## 2. 市场与受众
 
-**核心价值：**
+目标受众：
 
-- **受控执行：** Agent 的任务执行受 Control Envelope 与策略完全管控
-- **Memory + Knowledge：** 提供标准化记忆服务和知识库接口，开箱即用
-- **MCP mock tool 审批：** v1 用一个 mock tool 证明工具审批、拒绝、超时与审计链路
-- **可复用交付模板：** 提供企业知识问答模板、治理收据、3-minute launch path 和对比 demo，降低开发与评审门槛
+- 企业 AI 平台团队：需要统一治理模型、知识、工具、审批和审计。
+- Agent 应用负责人：需要把 demo 变成可评估、可复盘的交付物。
+- 安全、合规、架构评审团队：需要结构化 trace 和可读 receipt。
+- AI 咨询与交付团队：需要可复用的 Harness 模板，而不是每个项目从 prompt 拼装开始。
 
----
+市场信号：
 
-## 2. 市场与受众分析
-
-**潜在受众：**
-
-1. 企业内部 AI 应用开发团队（保险、金融、制造、政企）
-2. AI 工程师、全栈开发者（使用 LangGraph / Dify / CrewAI / LlamaIndex 的用户）
-3. AI 咨询与交付团队
-4. 多 Agent 协作场景开发者
-
-
-**市场规模：**
-
-- 低代码 AI workflow / Agent 平台：GitHub Star 100k+（Dify）
-- Agent 工程化趋势：LangGraph、CrewAI 等已形成关注社区
-- MCP 接入生态需求快速增长，但 v1 只证明 mock tool approval state
-
-
-**受众特点：**
-
-- 对流程控制、合规、可追踪性有明确需求
-- 需要 Memory/RAG 知识管理
-- 希望快速落地企业级场景
-
----
+- LangGraph、LangChain、CrewAI、LlamaIndex 等框架说明 Agent 编排需求成立。
+- MCP 生态说明工具协议正在标准化，但企业仍需要工具审批、权限和审计。
+- 向量库和 RAG 已经普及，差异化不在“能检索”，而在“证据不足时能拒答且可证明”。
+- 企业采用远程模型是常态，因此项目必须支持 OpenAI-compatible、Azure、Anthropic 等 provider adapter。
 
 ## 3. 技术可行性
 
-**核心技术栈：**
+| 方向 | 可行性 | 关键设计 |
+| --- | --- | --- |
+| Harness 生命周期 | 高 | Workflow、PolicyEngine、ToolGateway、Validators、Trace、Receipt 已形成清晰边界 |
+| 远程模型 | 高 | `ModelProvider` protocol、`openai_compatible`、model trace、model validators 已落地 |
+| LangChain/LangGraph | 高 | LangGraph 保持 runtime adapter；LangChain 可作为生态 adapter，不进入 contracts |
+| 向量库 | 高 | `[vector]` extra 和 `EvidenceChunk` contract 让 Chroma/Milvus/pgvector 等实现可替换 |
+| 真实 MCP | 中高 | 当前 mock 证明审批状态；真实 stdio/HTTP MCP 需作为 ToolGateway adapter 接入 |
+| Dashboard | 中高 | 当前已有 FastAPI Dashboard API；完整 UI 和 Approval Console 是后续平台化工作 |
+| Docker 部署 | 高 | Dockerfile、docker-compose 已存在；远程 provider 通过 env vars 启用 |
 
-- **Workflow / Harness:** v1 使用 LangGraph；自研状态机/多 runtime 支持放入后续迭代
-- **Memory:** v1 使用 Session Memory；Redis/Postgres/Zep 等持久化 Memory 放入后续 Provider
-- **Knowledge:** v1 使用本地文档 + 本地向量搜索；LlamaIndex / LangChain RAG pipeline 可作为实现组件
-- **MCP mock tool approval:** v1 使用 MCP mock tool + 显式审批状态；完整 MCP Gateway + Adapter 后续扩展
-- **Trace & Audit:** v1 使用本地 JSONL Trace 作为审计事实源，并生成 Governance Receipt；LangSmith / OpenTelemetry / Langfuse 作为后续适配器
-·
-- **模板与示例:** `agent.yaml` 顶层配置 + Python CLI + 3-minute launch script
+## 4. 关键风险
 
+| 风险 | 影响 | 缓解 |
+| --- | --- | --- |
+| 把 Harness 做成又一个 Agent framework | 高 | 文档和代码都强调 Harness owns control semantics，runtime/provider/tool 是 adapter |
+| 远程模型绕过治理 | 高 | `before_model_call`、model trace、schema/safety/citation validators 必须强制执行 |
+| MCP 工具面膨胀 | 中 | ToolGateway 做 allowlist、risk level、参数校验、审批和结果标准化 |
+| Dashboard 变成第二套执行系统 | 中 | Dashboard API 只读 run artifacts；执行仍通过 Harness workflow |
+| 文档互相冲突 | 中 | 保留少量权威文档，删除早期重复计划和评审稿 |
+| 企业安全期望过高 | 中 | Trust Boundaries 明确当前控制范围和非目标 |
 
-**风险及解决方案：**
+## 5. 推荐落地策略
 
-|风险|影响|缓解措施|
-|---|---|---|
-|Agent 流程不可控|高|Harness 控制层 + 状态机 + Guardrails|
-|Memory/Knowledge 接入复杂|中|v1 限定本地 Knowledge + Session Memory，Provider 插件后续扩展|
-|MCP 工具多样，兼容性问题|中|v1 先用 MCP mock tool 证明审批状态、Trace 与策略边界；完整 Gateway deferred|
-|开源传播慢|低|提供 Demo、模板、企业典型场景|
-|上手门槛高|中|提供 Docker Compose 一键启动 + 示例流程|
+1. **先稳定文档信息架构**：`docs/README.md`、PRD、技术设计、concept docs、examples docs。
+2. **保留 deterministic baseline**：它是测试和演示底线，不再是产品定位边界。
+3. **把生产能力统一纳入 adapter 策略**：remote model、LangChain/LangGraph、vector store、MCP、Dashboard 都遵循 contract-first。
+4. **让 Docker 和 CLI 同等重要**：CLI 适合开发者，Docker 适合企业评估和部署路径。
+5. **逐步平台化**：Dashboard UI、Approval Console、RBAC、多租户和 hosted control plane 必须建立在 trace/receipt/run store 之上。
 
-**结论：**  
-技术上可行，现有开源组件可组合实现。核心难点在于把组件包装成企业负责人能评估的交付物：固定 launch path、可测试 Receipt Contract、Trust Boundaries 和对比 demo。短期 MVP 可通过组合 LangGraph + 本地 Knowledge + Session Memory + MCP mock tool 快速落地。
+## 6. 总结
+
+Proof Agent 的机会不在“再做一个 RAG/Agent demo”，而在提供企业可以理解和治理的 Agent Harness：流程由 Harness 控制，模型只生成候选内容，工具必须审批，证据必须支撑，输出必须验证，所有结果都能审计。

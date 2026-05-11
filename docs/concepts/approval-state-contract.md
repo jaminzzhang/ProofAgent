@@ -2,7 +2,7 @@
 
 Tool approval is a workflow state, not a hidden callback.
 
-v1 uses one MCP mock tool to prove the approval model. The approval contract must be explicit enough to test requested, granted, denied, and timed-out paths.
+The deterministic demo uses one MCP mock tool to prove the approval model. The approval contract must be explicit enough to test requested, granted, denied, and timed-out paths, and it must remain the same when a real MCP adapter is introduced.
 
 ## Approval IDs
 
@@ -40,9 +40,9 @@ requested
 timed_out -> safe terminal response
 ```
 
-## v1 CLI UX
+## CLI UX
 
-v1 uses inline CLI approval by default:
+The CLI uses inline approval by default:
 
 ```text
 Approval required: customer_lookup
@@ -60,7 +60,7 @@ Accepted inputs:
 
 ## Optional Resume Shape
 
-The public v1 path is inline approval. A future resume API can reuse the same ids:
+The current public path is inline approval. A future Dashboard or resume API can reuse the same ids:
 
 ```bash
 proof-agent approve <run_id> <approval_id>

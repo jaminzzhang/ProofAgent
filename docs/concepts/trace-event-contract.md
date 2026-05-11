@@ -1,8 +1,8 @@
 # Trace Event Contract
 
-`trace.jsonl` is the v1 audit source of truth. Every Governance Receipt is generated from this event stream.
+`trace.jsonl` is the audit source of truth. Every Governance Receipt is generated from this event stream.
 
-The v1 trace contract is local-first JSONL, but its event names and fields should stay close to OpenTelemetry GenAI semantics so future adapters can map retrieval, agent workflow, and tool execution cleanly.
+The trace contract uses portable JSONL. Its event names and fields should stay close to OpenTelemetry GenAI semantics so future adapters can map retrieval, agent workflow, model generation, and tool execution cleanly.
 
 ## Required Envelope
 
@@ -60,8 +60,8 @@ Every trace line is one JSON object:
 | `approval_granted` | approval accepted |
 | `approval_denied` | approval denied |
 | `approval_timeout` | approval timed out |
-| `tool_request` | requested MCP mock tool call |
-| `tool_result` | mock tool result or safe skipped result |
+| `tool_request` | requested governed tool call |
+| `tool_result` | tool result or safe skipped result |
 | `memory_read` | session memory read |
 | `memory_write_requested` | requested session memory write |
 | `memory_write_decision` | memory policy decision |

@@ -24,6 +24,7 @@ Final outcome: ANSWERED_WITH_CITATIONS
 | before_answer | allow | Evidence threshold met with 2 cited chunks. |
 | before_tool_call | not_applicable | No tool was needed. |
 | before_memory_write | allow | Session summary contains no sensitive fields. |
+| before_model_call | allow | Deterministic demo provider is allowed for this run. |
 
 ## Evidence
 
@@ -35,6 +36,15 @@ Final outcome: ANSWERED_WITH_CITATIONS
 ## Tools
 
 No MCP tool was called.
+
+## Model Usage
+
+| Field | Value |
+| --- | --- |
+| Provider | deterministic |
+| Model | demo |
+| Cost Class | local |
+| Estimated Tokens | 0 |
 
 ## Audit Artifacts
 
@@ -48,6 +58,7 @@ No MCP tool was called.
 - It must include policy decisions and reasons.
 - It must include evidence status.
 - It must include tool approval status when tools are involved.
+- It must include model usage or model error summary when model calls occur.
 - It must include trace artifact path.
 - It must not print secrets, API keys, raw credentials, or unnecessary personal data.
 - It must follow the required outcome and section contract.

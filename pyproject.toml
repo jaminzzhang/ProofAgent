@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "proof-agent"
 version = "0.1.0"
-description = "Local-first Controlled Agent Harness Framework"
+description = "Controlled Agent Harness Framework"
 requires-python = ">=3.12"
 dependencies = [
   "typer>=0.12.0",

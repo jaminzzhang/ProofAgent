@@ -2,7 +2,7 @@
 
 Proof Agent is a **Controlled Agent Harness Framework** for building enterprise Agents that are workflow-governed, policy-enforced, tool-gated, memory-bounded, validated, and auditable.
 
-The long-term vision is an enterprise Agent Control Platform. The v1 release stays intentionally narrow: a local-first, CLI-first framework MVP that proves the platform direction through one runnable enterprise knowledge Q&A reference template.
+The long-term vision is an enterprise Agent Control Platform. The current release keeps a deterministic local demo as the regression baseline, while supporting CLI and Docker entry points plus adapter-driven remote model, runtime, vector, MCP, and Dashboard API paths.
 
 Proof Agent still ships as an **Enterprise Agent Delivery Kit**, but that is the delivery shape rather than the core identity. The framework provides the Harness; the delivery kit packages it; the enterprise Q&A template proves it.
 
@@ -132,8 +132,10 @@ CLI
 
 ## Documentation
 
-- [Controlled Agent Harness Redesign](docs/superpowers/specs/2026-05-09-controlled-agent-harness-redesign.md)
-- [Controlled Agent Harness Framework](docs/Proof%20Agent%20-%20Controlled%20Agent%20Harness%20Framework.md)
+- [Documentation Index](docs/README.md)
+- [Product Requirements](docs/Proof%20Agent%20PRD.md)
+- [Technical Design](docs/Proof%20Agent%20%E6%8A%80%E6%9C%AF%E8%AE%BE%E8%AE%A1%E6%96%B9%E6%A1%88.md)
+- [Development Progress](docs/development-progress.md)
 - [Control Envelope](docs/concepts/control-envelope.md)
 - [Agent Contract](docs/concepts/agent-contract.md)
 - [Policy Engine](docs/concepts/policy-engine.md)
@@ -142,15 +144,11 @@ CLI
 - [Approval State Contract](docs/concepts/approval-state-contract.md)
 - [Trust Boundaries](docs/concepts/trust-boundaries.md)
 - [Launch Script](docs/examples/launch-script.md)
-- [Technical Plan](docs/Proof%20Agent%20Technical%20Plan.md)
 - [Enterprise Q&A Demo](docs/examples/enterprise-qa.md)
 - [Governance Receipt](docs/examples/governance-receipt.md)
-- [Framework Design](docs/Proof%20Agent%20Framework%20Design.md)
-- [Engineering Review](docs/Proof%20Agent%20Engineering%20Review.md)
-- [Test Plan](docs/Proof%20Agent%20Test%20Plan.md)
 
 ## v1 Scope
 
-v1 is intentionally narrow: one excellent enterprise Q&A reference template, one public local CLI path, deterministic demo mode, local knowledge, session memory, one MCP mock tool routed through Tool Gateway approval state, validators, JSONL trace, Governance Receipt, Docker Compose, and CI.
+v1 is intentionally narrow: one excellent enterprise Q&A reference template, deterministic demo mode, local knowledge, optional remote model provider path, session memory, one MCP mock tool routed through Tool Gateway approval state, validators, JSONL trace, Governance Receipt, Dashboard API, Docker Compose, and CI.
 
-Multi-runtime support, multiple production providers, GUI policy playground, policy packs, and additional industry templates are vNext.
+Production LangChain/LangGraph adapters, real MCP transport, richer vector providers, Dashboard UI, Approval Console, policy packs, and additional industry templates are vNext.

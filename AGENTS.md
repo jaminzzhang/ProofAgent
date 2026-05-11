@@ -2,7 +2,7 @@
 
 ## Current Status
 
-This repository is no longer documentation-only. The current `main` branch contains a local-first, CLI-first Python MVP for Proof Agent as a Controlled Agent Harness. It includes typed contracts, policy enforcement, deterministic enterprise Q&A examples, tool approval gating, trace/audit output, comparison utilities, tests, CI, and Docker assets.
+This repository is no longer documentation-only. The current `main` branch contains a Python MVP for Proof Agent as a Controlled Agent Harness Framework. It includes typed contracts, policy enforcement, deterministic enterprise Q&A examples, remote model provider boundaries, tool approval gating, trace/audit output, comparison utilities, Dashboard API, tests, CI, and Docker assets.
 
 The deterministic demo currently reports:
 
@@ -20,7 +20,7 @@ Primary implementation and planning areas:
 - `proof_agent/contracts/` owns public Pydantic v2 contract models. Keep framework/provider-specific objects out of this layer.
 - `tests/` contains the pytest suite for config loading, contracts, policy, knowledge retrieval, tool approval, memory, audit output, compare, workflow, and CLI behavior.
 - `examples/enterprise_qa/` contains the runnable Enterprise QA Template, including `agent.yaml`, knowledge fixtures, tools, and prompt templates.
-- `docs/` contains product, architecture, concept, example, and execution-planning documentation.
+- `docs/` contains product, architecture, concept, and example documentation.
 - `runs/` is the local audit output directory; only `runs/.gitkeep` should be committed.
 - Operational assets live at the repository root, including `Dockerfile`, `docker-compose.yml`, `pyproject.toml`, `uv.lock`, and `.github/workflows/ci.yml`.
 
@@ -32,7 +32,6 @@ Important documentation:
 - **`docs/development-progress.md` records historical development status — module status, test coverage, and implementation roadmap as of the last update date shown in the file. It is a useful reference but may be stale. Always verify claims against the actual codebase before trusting them.**
 - `docs/concepts/` explains framework concepts such as Control Envelope, Agent Contract, and Policy Engine.
 - `docs/examples/` documents the enterprise Q&A demo, launch script, and Governance Receipt.
-- `docs/superpowers/plans/` contains implementation plans and execution records.
 
 ## Build, Test, and Development Commands
 
@@ -51,7 +50,7 @@ For documentation-only edits, at minimum run `git diff --check`. For runtime cha
 
 ## Coding Style & Naming Conventions
 
-Use clear Markdown headings, short paragraphs, and tables only when they improve scanability. Keep project terminology consistent: `Enterprise Agent Delivery Kit`, `Control Envelope`, `Agent Contract`, `PolicyEngine`, `MCP mock tool approval`, `Trace & Audit`, `Governance Receipt`, and `Enterprise QA Template`.
+Use clear Markdown headings, short paragraphs, and tables only when they improve scanability. Keep project terminology consistent: `Controlled Agent Harness Framework`, `Control Envelope`, `Agent Contract`, `PolicyEngine`, `Tool Gateway`, `MCP approval`, `Trace & Audit`, `Governance Receipt`, and `Enterprise QA Template`.
 
 For Python code, use 4-space indentation, snake_case modules and functions, PascalCase classes, and explicit type hints on public APIs. Prefer small, typed functions and keep side effects behind adapters or CLI entry points.
 

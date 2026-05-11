@@ -1,627 +1,215 @@
 # Proof Agent 技术设计方案
 
-> 基于 PRD、Controlled Agent Harness Framework、可行性分析、Engineering Review、当前代码实现，以及 `docs/superpowers/specs/2026-05-10-model-provider-design.md` 的综合技术设计方案。
+> 权威技术设计文档。Proof Agent 是 Controlled Agent Harness Framework：用 Harness Engineering 管理 Agent 生命周期，并通过 adapter 接入远程模型、LangChain/LangGraph、向量库、真实 MCP、Dashboard、CLI 和 Docker。
 
-## 0. 本次检视结论
+## 1. 核心定位
 
-旧版《Proof Agent 技术选型》整体方向正确，但有几处会误导后续实现的表述。本次更名并修正为《Proof Agent 技术设计方案》，把“选型理由”升级为“可执行架构设计”。
+Proof Agent 的核心不是 RAG demo，也不是某个 Agent runtime 的封装，而是 **Controlled Agent Harness Framework**。
 
-| 原表述 / 隐含假设 | 问题 | 修正 |
-| --- | --- | --- |
-| v1 `LocalKnowledgeProvider` 等同于本地向量检索 | 当前默认实现是 Markdown chunk + token overlap；Chroma/vector adapter 只应是可选路径 | 明确 local deterministic retrieval 是基线，Chroma/vector 放到 adapter/后续增强 |
-| MCP SDK + stdio + LangGraph interrupt 像已完整落地 | 当前实现是 mock tool registry + ToolGateway + approval state；真实 MCP stdio 和 LangGraph interrupt 仍是 adapter 目标 | 区分已实现 mock gateway 与后续 MCP adapter |
-| LangGraph 负责完整工作流执行 | 当前 `runtime/langgraph_runner.py` 只是隔离 adapter，主流程仍是 plain Python orchestrator | 保留 LangGraph 为目标 runtime，但公共边界仍是 Workflow + Policy + Audit |
-| 模型只支持 deterministic | 下一步设计需要远程模型 provider | 增加 `ModelProvider` 层：`deterministic`、`openai_compatible`、`azure_openai`、`anthropic` |
-| 远程模型失败可直接 fail fast | Proof Agent 的价值是可审计失败 | 增加 `model_error` trace，尽量在 trace 初始化后 fail closed |
-| 模型输出可直接作为最终答案 | 这会削弱 Harness 控制力 | 明确远程输出必须经过 schema、safety、citation/evidence validators |
-| 依赖列表把所有能力都当核心依赖 | 远程模型 SDK 不应影响无 key demo | `openai` 作为 optional dependency；Azure/Anthropic SDK 暂不加入一期 |
-
----
-
-## 1. 设计原则
-
-1. **Harness 控制流程，模型只生成内容**  
-   LLM 不能决定检索、工具调用、审批、记忆写入、策略分支或最终接收。
-
-2. **Local-first 基线必须稳定**  
-   `proof-agent demo` 必须继续无网络、无 API key、无远程 SDK 可运行。
-
-3. **第三方 SDK 不泄漏**  
-   LangGraph、Chroma、MCP、OpenAI、Azure、Anthropic 等 SDK 类型只能存在于 adapter 层，不能进入 contracts、policy、trace、receipt、workflow 公共模型。
-
-4. **失败也要尽量可审计**  
-   config shape 错误可以在 trace 前失败；远程模型缺 key、缺 SDK、超时、限流、服务错误应尽量产生 `model_error` trace。
-
-5. **远程输出默认不可信**  
-   ModelProvider 返回内容后，必须再通过 schema、safety、citation/evidence validators，才能进入 final output。
-
-6. **配置显式，但不携带 secret**  
-   `agent.yaml` 可以声明 env var 名称、endpoint、timeout、temperature、token limit；不能写入 raw API key、bearer token、connection string 或 secret。
-
----
-
-## 2. 总体架构
-
-Proof Agent 是一个 local-first、CLI-first 的 Controlled Agent Harness Framework。核心架构是 Control Envelope：
+它把 Agent 执行放入 Control Envelope：
 
 ```text
-agent.yaml
-  -> config loader / contracts
-  -> workflow orchestrator
-  -> policy engine
-  -> knowledge provider
-  -> evidence validators
-  -> model provider
-  -> output validators
-  -> memory boundary
-  -> trace writer
-  -> governance receipt
+Workflow decides.
+Policy permits.
+Tools wait for approval.
+Evidence supports.
+Validators block unsafe output.
+Memory stays bounded.
+Trace records.
+Receipt proves.
 ```
 
-模型能力被放在 Harness 内部的一个受控节点里：
+当前 deterministic demo 是回归基线，不是产品边界。项目必须支持生产集成，但所有集成都要服从同一套 Harness 生命周期。
+
+核心目标：
+
+1. 管理完整 Agent lifecycle：config、workflow、policy、retrieval、model、tool、memory、validation、trace、receipt。
+2. 保留无 API key 的 deterministic demo，证明治理链路可复现。
+3. 支持远程模型、LangChain/LangGraph、向量库、真实 MCP 和 Dashboard adapter。
+4. 提供 CLI 与 Docker 运行入口。
+5. 保持 contract-first，第三方 SDK 类型不能泄漏到公共合约。
+
+当前 demo 验收结果：
 
 ```text
-workflow/orchestrator
-  -> providers.resolve_provider(ModelConfig)
-  -> ModelProvider.generate(ModelRequest)
-  -> ModelResponse
-  -> validators
-  -> final_output
-```
-
-关键边界：
-
-- `contracts/` 定义稳定数据模型。
-- `policy/` 只消费上下文和合约，不知道 SDK。
-- `knowledge/` 只返回标准 `EvidenceChunk`。
-- `providers/` 隔离远程模型 SDK。
-- `audit/` 只从 trace 聚合 receipt，不读 workflow 私有状态。
-- `workflow/` 负责 Control Envelope 顺序，不把控制权交给模型。
-
----
-
-## 3. 当前实现基线
-
-当前代码已经具备以下基线：
-
-| 模块 | 当前状态 |
-| --- | --- |
-| CLI | Typer 命令：`demo`、`run`、`doctor`、`inspect`、`compare` |
-| Config | `agent.yaml` 通过 Pydantic contracts 加载和校验 |
-| Policy | 支持 `before_retrieval`、`before_answer`、`before_model_call`、`before_tool_call`、`before_memory_write` |
-| Knowledge | Markdown chunk + deterministic token overlap retrieval |
-| Model | `ModelProvider` 抽象已接入标准回答路径；一期实现 `deterministic` 与 `openai_compatible`，`azure_openai`/`anthropic` 为占位契约 |
-| Tool | ToolGateway + mock `customer_lookup` + approval state |
-| Memory | session memory + denylist |
-| Audit | JSONL trace + Jinja2 Governance Receipt + redaction + Model Usage |
-| Tests | pytest + Ruff + mypy，当前测试覆盖 contracts、policy、knowledge、tools、memory、trace、receipt、workflow、CLI |
-| Docker/CI | Dockerfile、docker-compose、GitHub Actions 已存在 |
-
-当前 demo 输出：
-
-```text
-Proof Agent demo
 supported: ANSWERED_WITH_CITATIONS
 unsupported: REFUSED_NO_EVIDENCE
 tool_required: WAITING_FOR_APPROVAL
 ```
 
----
+## 2. 设计原则
 
-## 4. 语言、包管理与开发工具
+### 2.1 Harness 控制流程
 
-| 项 | 决策 | 理由 |
-| --- | --- | --- |
-| 语言 | Python 3.12+ | Agent 生态、LangGraph、MCP、Pydantic、Typer、OpenAI SDK 都有成熟 Python 支持 |
-| 包管理 | `uv` + `pyproject.toml` + `uv.lock` | 快速、可复现、适合 CLI/package 项目 |
-| CLI | Typer | 类型注解驱动，易测试，和当前代码一致 |
-| 数据合约 | Pydantic v2 | frozen model、validator、JSON serialization 能支撑 contract-first 设计 |
-| 测试 | pytest | 当前测试框架 |
-| Lint | Ruff | 快速、统一 |
-| 类型检查 | mypy strict | 保持合约边界清晰 |
+LLM 只生成候选内容。是否检索、是否调用工具、是否写记忆、是否调用远程模型、是否接受输出，都由 Workflow、PolicyEngine、ToolGateway 和 Validators 决定。
 
-核心命令：
+### 2.2 Contract-first
 
-```bash
-uv run --extra dev python -m pytest tests/ -v
-uv run --extra dev ruff check proof_agent tests
-uv run --extra dev mypy proof_agent
-uv run --extra dev proof-agent demo
-```
+公共边界由 `proof_agent/contracts/` 定义。LangGraph、LangChain、MCP、Chroma、OpenAI、Azure、Anthropic 等 SDK 类型只能存在于 adapter 层。
 
----
+### 2.3 Deterministic baseline
 
-## 5. Workflow Runtime
+本地 deterministic path 必须始终可运行，用于回归测试和企业评估。它不限制远程模型或平台能力的发展。
 
-### 决策
+### 2.4 远程输出默认不可信
 
-公共心智模型是 **Workflow + Policy + Validator + Gateway + Audit**，不是 LangGraph。
+ModelProvider 返回的是候选输出。候选输出必须经过 schema、safety、citation/evidence validators，才能成为 final output。
 
-LangGraph 保留为 runtime adapter 方向，但当前实现应继续把 LangGraph 细节隔离在 `proof_agent/runtime/langgraph_runner.py`，并允许 plain Python orchestrator 作为可测试基线。
+### 2.5 Trace 是事实源
 
-### 设计约束
+JSONL Trace 是执行事实源。Governance Receipt 是 trace 的可读投影。Receipt 不能反向推断未记录事实。
 
-- `workflow/` 表达 Proof Agent 自己的流程语义。
-- `runtime/` 负责把 workflow 接到 LangGraph 或未来 runtime。
-- LangGraph 类型不得进入 config、contracts、policy、trace、receipt。
-- tool approval 可以未来映射到 LangGraph `interrupt()`，但 ToolGateway/ApprovalState 仍是 Harness 自己的公共合约。
+### 2.6 配置显式，不携带 secret
 
-### 为什么这样设计
+`agent.yaml` 可以声明 env var 名称、provider、model、timeout、temperature、token limit。不得写入 raw API key、bearer token、password、connection string 或 provider secret。
 
-LangGraph 的 conditional edges、interrupt、checkpoint 对企业 Agent 很有价值，但 Proof Agent 的差异化不是“用了 LangGraph”，而是“外部控制系统”。因此 runtime 必须可替换。
+### 2.7 Adapter 可替换
 
----
+Runtime、model、knowledge、tool、memory、dashboard 都可以替换实现，但不能改变 Harness 语义。
 
-## 6. Knowledge Provider
-
-### 决策
-
-一期基线使用 deterministic local retrieval：
-
-- Markdown heading-aware chunking
-- source + line range citation
-- token overlap score
-- `EvidenceChunk` 标准输出
-- evidence threshold validator
-
-ChromaDB + sentence-transformers 可以作为 `LocalKnowledgeIndex` / vector adapter 保留或增强，但不应被描述为 demo 必需路径。
-
-### Provider 边界
-
-```python
-class KnowledgeProvider(Protocol):
-    def retrieve(self, query: str, *, top_k: int = 3) -> tuple[EvidenceChunk, ...]: ...
-```
-
-任何未来 provider 必须遵守：
-
-- 返回 `EvidenceChunk`。
-- 来源信息能映射到 Governance Receipt。
-- 不绕过 `before_retrieval` 和 `before_answer`。
-- 请求、响应、错误、redaction 进入 trace。
-
-### 后续扩展
-
-- Chroma/vector local provider
-- Agentic RAG provider
-- Remote enterprise knowledge API provider
-- PageIndex 类 provider
-
----
-
-## 7. Model Provider
-
-### 决策
-
-新增 `ModelProvider` 抽象，替换 orchestrator 中 hard-coded `DeterministicProvider().answer()`。
-
-支持的 provider 名称：
-
-- `deterministic`
-- `openai_compatible`
-- `azure_openai`
-- `anthropic`
-
-一期实现：
-
-- 实现 `deterministic`
-- 实现 `openai_compatible`
-- `azure_openai` 只落配置契约、校验提示、测试占位，不接真实 SDK
-- `anthropic` 只落配置契约、校验提示、测试占位，不接真实 SDK
-
-### OpenAI-compatible 的取舍
-
-OpenAI 官方文档建议新 OpenAI-native 项目优先使用 Responses API，同时 Chat Completions 仍然被支持。Proof Agent 一期选择 Chat Completions-compatible surface，是为了接入 OpenAI-compatible 生态，包括 OpenAI、DeepSeek、Qwen-compatible gateways、OpenRouter、local OpenAI-compatible servers。
-
-未来如果需要 OpenAI-native Responses 能力，可以新增独立 provider：
+## 3. 总体架构
 
 ```text
-openai_responses
+CLI / Docker / Dashboard API / Template
+        |
+        v
+Agent Contract Layer
+  - agent.yaml
+  - config loader
+  - Pydantic contracts
+        |
+        v
+Control Envelope Layer
+  - Workflow Orchestrator
+  - PolicyEngine
+  - ToolGateway
+  - Memory Boundary
+  - Validators
+        |
+        v
+Adapter Layer
+  - Model Providers
+  - Knowledge / Vector Providers
+  - LangChain / LangGraph Runtime Adapters
+  - MCP / Tool Adapters
+        |
+        v
+Governance Layer
+  - JSONL Trace
+  - RunStore
+  - Governance Receipt
+  - Dashboard API
 ```
 
-而不是污染 `openai_compatible`。
-
-参考：
-
-- OpenAI Chat Completions API Reference: https://platform.openai.com/docs/api-reference/chat/create
-- OpenAI Responses vs Chat Completions: https://platform.openai.com/docs/guides/responses-vs-chat-completions
-- Anthropic Messages API: https://docs.anthropic.com/en/api/messages
-
-### Provider 目录
+Enterprise QA 当前主链路：
 
 ```text
-proof_agent/providers/
-├── __init__.py
-├── protocol.py
-├── registry.py
-├── deterministic.py
-├── openai_compatible.py
-├── azure_openai.py
-└── anthropic.py
-```
-
-### Model contracts
-
-新增 `proof_agent/contracts/model.py`：
-
-```python
-class ModelRole(str, Enum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
-
-class ModelMessage(FrozenModel):
-    role: ModelRole
-    content: str
-    name: str | None = None
-    metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
-
-
-class TokenUsage(FrozenModel):
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int | None = None
-
-
-class ModelRequest(FrozenModel):
-    messages: tuple[ModelMessage, ...]
-    provider: str
-    model: str
-    temperature: float | None = None
-    max_output_tokens: int | None = None
-    timeout_seconds: int | None = None
-    stream: bool = False
-    response_format: Literal["text", "json"] = "text"
-    metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
-    evidence_sources: tuple[str, ...] = Field(default_factory=tuple)
-
-
-class ModelResponse(FrozenModel):
-    content: str
-    provider_name: str
-    model_name: str
-    refusal_reason: str | None = None
-    token_usage: TokenUsage | None = None
-    finish_reason: str | None = None
-    raw_response_id: str | None = None
-```
-
-### Provider protocol
-
-```python
-class ModelProvider(Protocol):
-    @classmethod
-    def from_config(cls, model_config: ModelConfig) -> Self: ...
-
-    @property
-    def provider_name(self) -> str: ...
-
-    @property
-    def model_name(self) -> str: ...
-
-    def estimate_tokens(self, request: ModelRequest) -> int | None: ...
-
-    def generate(self, request: ModelRequest) -> ModelResponse: ...
-```
-
-一期不实现 streaming。`ModelRequest.stream` 只是为 policy context 和 trace 留形状；provider 可以明确拒绝 `stream=True`。
-
-### Config contract
-
-`agent.yaml`:
-
-```yaml
-model:
-  provider: openai_compatible
-  name: gpt-4o-mini
-  params:
-    api_key_env: OPENAI_API_KEY
-    base_url_env: OPENAI_BASE_URL
-    temperature: 0
-    max_output_tokens: 800
-    timeout_seconds: 30
-```
-
-`ModelConfig`:
-
-```python
-class ModelConfig(FrozenModel):
-    provider: str
-    name: str
-    params: Mapping[str, Any] = Field(default_factory=FrozenDict)
-```
-
-`params` 对 contracts 层是 opaque，但 provider 层必须校验允许字段。以下字段名禁止出现在 YAML：
-
-- `api_key`
-- `authorization`
-- `bearer`
-- `password`
-- `secret`
-- `access_token`
-- `provider_api_key`
-
-### Azure placeholder
-
-```yaml
-model:
-  provider: azure_openai
-  name: gpt-4o-mini
-  params:
-    endpoint_env: AZURE_OPENAI_ENDPOINT
-    api_key_env: AZURE_OPENAI_API_KEY
-    api_version: "2025-01-01-preview"
-    deployment: proof-agent-demo
-```
-
-一期 `resolve_provider()` 对 `azure_openai` 返回清晰错误：
-
-```text
-azure_openai provider is defined but not implemented yet.
-```
-
-### Anthropic placeholder
-
-```yaml
-model:
-  provider: anthropic
-  name: claude-sonnet-4-20250514
-  params:
-    api_key_env: ANTHROPIC_API_KEY
-    max_output_tokens: 800
-```
-
-一期 `resolve_provider()` 对 `anthropic` 返回清晰错误：
-
-```text
-anthropic provider is defined but not implemented yet.
-```
-
----
-
-## 8. Policy Engine
-
-### 当前 enforcement points
-
-- `before_retrieval`
-- `before_answer`
-- `before_tool_call`
-- `before_memory_write`
-
-### 新增 enforcement point
-
-- `before_model_call`
-
-区别：
-
-- `before_answer` 判断证据是否足够回答。
-- `before_model_call` 判断是否允许调用指定模型。
-
-`before_model_call` context:
-
-```python
-{
-    "provider": "openai_compatible",
-    "model": "gpt-4o-mini",
-    "estimated_tokens": 612,
-    "stream": False,
-    "cost_class": "remote",
-    "question": question,
-    "accepted_evidence_count": 2,
-    "citations_present": True,
-}
-```
-
-Cost classes:
-
-- `local`: deterministic/local model
-- `remote`: network model provider
-- `enterprise`: Azure or managed enterprise provider
-
-一期规则条件至少支持：
-
-- provider equals
-- model equals
-- cost_class equals
-- estimated_tokens <= threshold
-- stream equals
-
-无规则命中时沿用当前 default allow。
-
----
-
-## 9. Tool Gateway / MCP
-
-### 当前基线
-
-当前实现的稳定基线是：
-
-- `tools.yaml`
-- ToolGateway
-- allowed/denied parameters
-- risk level
-- approval state
-- local mock `customer_lookup`
-
-### 后续 MCP adapter
-
-真实 MCP stdio transport、`mcp[cli]`、`langchain-mcp-adapters` 仍是后续 adapter 方向，不是当前 demo 必需路径。
-
-工具调用原则不变：
-
-- workflow 不能直接调用 tool 实现。
-- 所有工具必须经过 ToolGateway。
-- `before_tool_call` 决定 allow / require approval / deny。
-- 工具请求、审批、结果、错误必须进入 trace。
-
----
-
-## 10. Validators
-
-### 当前 validators
-
-- schema
-- evidence
-- safety
-- tool result
-
-### 远程模型输出后的必经验证链
-
-远程模型输出不能直接进入 final output。标准回答路径应为：
-
-```text
-model_response
-  -> validate_final_output_schema
-  -> validate_no_secret_strings
-  -> validate_citations_supported_by_evidence
+agent.yaml
+  -> load_agent_manifest
+  -> run_enterprise_qa
+  -> PolicyEngine(before_retrieval)
+  -> KnowledgeProvider.retrieve
+  -> evaluate_evidence
+  -> PolicyEngine(before_answer)
+  -> build ModelRequest
+  -> PolicyEngine(before_model_call)
+  -> ModelProvider.generate
+  -> validators
+  -> optional ToolGateway approval path
+  -> SessionMemory policy/write
   -> final_output
+  -> TraceWriter
+  -> RunStore
+  -> Governance Receipt
 ```
 
-新增：
+## 4. 当前实现基线
+
+| Area | Current implementation |
+| --- | --- |
+| CLI | `demo`、`run`、`doctor`、`inspect`、`compare`、`dashboard` |
+| Docker | `Dockerfile`、`docker-compose.yml` 默认运行 demo |
+| Contracts | Pydantic v2 frozen models |
+| Config | YAML loading、path resolution、secret-looking params rejection |
+| Workflow | `workflow/orchestrator.py` 执行 Enterprise QA Harness |
+| Runtime | `runtime/langgraph_runner.py` 是 adapter boundary，当前委托 orchestrator |
+| Policy | retrieval、answer、tool、memory、model call enforcement points |
+| Knowledge | Markdown deterministic retrieval；vector stack optional |
+| Model | `deterministic`、`openai_compatible`；Azure/Anthropic placeholders |
+| Tools | ToolGateway、mock `customer_lookup`、approval state |
+| Memory | Session memory with denylist |
+| Validators | schema、evidence、safety、citations、tool result |
+| Audit | JSONL trace、redaction、Governance Receipt、Model Usage |
+| Storage/API | RunStore、FastAPI health/runs/stats routes |
+| Tests/CI | pytest、Ruff、mypy、GitHub Actions |
+
+## 5. 目录边界
 
 ```text
-proof_agent/validators/citations.py
+proof_agent/
+  api/          Dashboard API and serializers
+  audit/        trace, redaction, receipt
+  compare/      plain RAG vs harness RAG
+  config/       manifest loading and validation
+  contracts/    public frozen contracts
+  demo/         deterministic scenarios
+  knowledge/    retrieval and evidence providers
+  memory/       memory boundary implementations
+  policy/       policy engine and rules
+  providers/    model provider adapters
+  runtime/      LangGraph/LangChain runtime adapters
+  storage/      run history and latest compatibility
+  tools/        ToolGateway, approval, MCP adapters
+  validators/   schema/evidence/safety/citation/tool validators
+  workflow/     Harness workflow semantics
 ```
 
-最小行为：
+Boundary rules:
 
-- final answer 如果包含 citation，citation 必须匹配 accepted evidence source。
-- 如果当前回答路径要求 citations，但没有 accepted evidence，则 fail。
-- 不使用 LLM-as-judge。
+- `contracts/` cannot import adapter SDKs.
+- `workflow/` owns Harness order and calls protocols, not SDK clients.
+- `providers/` owns model SDK integration.
+- `knowledge/` returns `EvidenceChunk`; it does not decide final answer.
+- `tools/` is the only tool execution entry.
+- `validators/` decide whether candidate output may proceed.
+- `audit/` records facts and renders receipts; it does not control workflow.
+- `api/` and `storage/` expose read-only observability and must not create a second execution path.
 
-失败行为：
+## 6. Agent Contract
 
-- emit validator trace event with `status="blocked"`
-- 不把 unsafe model output 写成 final answer
-- final outcome 走 controlled refusal 或 escalation
-- receipt 显示 blocked validator result
-
----
-
-## 11. Trace、Receipt、Redaction
-
-### Trace
-
-JSONL trace 是审计事实源。每一行是一个 `TraceEvent`。
-
-新增 model events：
-
-- `model_request`
-- `model_response`
-- `model_error`
-
-`model_request` 只记录安全元数据：
-
-```python
-{
-    "provider": "openai_compatible",
-    "model": "gpt-4o-mini",
-    "message_count": 2,
-    "prompt_length": 1420,
-    "system_prompt_length": 220,
-    "estimated_tokens": 612,
-    "stream": False,
-    "cost_class": "remote",
-}
-```
-
-`model_response`：
-
-```python
-{
-    "provider": "openai_compatible",
-    "model": "gpt-4o-mini",
-    "finish_reason": "stop",
-    "content_length": 420,
-    "refusal_reason": None,
-    "token_usage": {
-        "input_tokens": 550,
-        "output_tokens": 90,
-        "total_tokens": 640,
-    },
-}
-```
-
-`model_error`：
-
-```python
-{
-    "provider": "openai_compatible",
-    "model": "gpt-4o-mini",
-    "error_code": "PA_MODEL_004",
-    "error_class": "timeout",
-    "retryable": True,
-    "message": "Provider request timed out.",
-    "duration_ms": 30000,
-}
-```
-
-安全规则：
-
-- 不记录 raw prompt。
-- 不记录 raw response。
-- 不记录 raw headers。
-- 不记录 provider error body。
-- redaction 仍对所有 model event payload 生效。
-
-### Governance Receipt
-
-新增 `Model Usage` section：
-
-```markdown
-## Model Usage
-
-| Field | Value |
-|-------|-------|
-| Provider | openai_compatible |
-| Model | gpt-4o-mini |
-| Cost Class | remote |
-| Estimated Tokens | 612 |
-| Input Tokens | 550 |
-| Output Tokens | 90 |
-| Finish Reason | stop |
-```
-
-如果 model resolution 或 generation 失败：
-
-- receipt 显示 provider/model if known
-- receipt 显示 error code 和 normalized error class
-- 不显示 raw provider error body
-
----
-
-## 12. Agent Contract
-
-`agent.yaml` 是公开入口，声明 workflow、knowledge、model、policy、tools、memory、audit。
-
-当前 deterministic 示例：
+`agent.yaml` is the public delivery artifact.
 
 ```yaml
 name: enterprise_qa
-purpose: Answer enterprise policy questions with evidence and governance controls.
+purpose: "Answer enterprise knowledge questions only when evidence supports the answer."
+
 workflow:
   runtime: langgraph
   template: enterprise_qa
+
 knowledge:
   provider: local
-  path: knowledge
+  path: ./knowledge
+
 model:
   provider: deterministic
   name: demo
+
 policy:
-  file: policy.yaml
+  file: ./policy.yaml
+
 tools:
-  file: tools.yaml
+  file: ./tools.yaml
+
 memory:
   provider: session
+
 audit:
   trace_path: ../../runs/latest/trace.jsonl
   receipt_path: ../../runs/latest/governance_receipt.md
 ```
 
-下一阶段 openai-compatible 示例：
+OpenAI-compatible example:
 
 ```yaml
 model:
@@ -635,67 +223,263 @@ model:
     timeout_seconds: 30
 ```
 
----
+Config rules:
 
-## 13. 目录结构
+- Allow env var names such as `api_key_env`, `base_url_env`, `organization_env`, `project_env`.
+- Reject secret-looking fields such as `api_key`, `authorization`, `bearer`, `password`, `secret`, `access_token`.
+- Unsupported provider fails with `PA_MODEL_001`.
+- Provider runtime errors should emit `model_error` once trace exists.
 
-推荐结构：
+## 7. Core Contracts
+
+| Contract | Purpose |
+| --- | --- |
+| `AgentManifest` | Agent config entry point |
+| `PolicyRule` / `PolicyDecision` | rule declaration and decision |
+| `EvidenceChunk` | retrieved evidence and citation source |
+| `ModelRequest` / `ModelResponse` | provider-neutral model call |
+| `ToolRequest` / `ToolResult` | tool request/result semantics |
+| `ApprovalState` | tool approval lifecycle |
+| `TraceEvent` | JSONL event envelope |
+| `ReceiptOutcome` | final outcome enum |
+| `RunResult` | CLI-facing result |
+| `RunSummary` / `RunDetail` | Dashboard-facing read contracts |
+
+Evolution rules:
+
+- Add fields as optional/defaulted when possible.
+- Treat public enum changes as compatibility decisions.
+- Never store SDK objects or secrets in contracts.
+- Dashboard contracts are read projections, not workflow state.
+
+## 8. Workflow And Runtime
+
+Workflow is the Harness semantic layer. It decides state order and owns failure behavior.
+
+Runtime adapter strategy:
+
+- LangGraph StateGraph, checkpoint, and interrupt belong in `runtime/`.
+- LangChain integration can connect ecosystem model/retriever/tool abstractions, but must adapt into Proof Agent contracts.
+- Runtime details must not leak into config, policy, trace, receipt, or dashboard contracts.
+
+Future templates should use a workflow registry or separate workflow modules. Do not keep adding template-specific branches to Enterprise QA orchestrator.
+
+## 9. PolicyEngine
+
+Enforcement points:
 
 ```text
-proof_agent/
-├── audit/
-│   ├── receipt.py
-│   ├── redaction.py
-│   ├── trace.py
-│   └── templates/
-├── compare/
-├── config/
-├── contracts/
-│   ├── approval.py
-│   ├── evidence.py
-│   ├── manifest.py
-│   ├── model.py
-│   ├── policy.py
-│   ├── receipt.py
-│   ├── run.py
-│   ├── tool.py
-│   └── trace.py
-├── demo/
-├── knowledge/
-├── memory/
-├── policy/
-├── providers/
-│   ├── __init__.py
-│   ├── protocol.py
-│   ├── registry.py
-│   ├── deterministic.py
-│   ├── openai_compatible.py
-│   ├── azure_openai.py
-│   └── anthropic.py
-├── runtime/
-├── tools/
-├── validators/
-│   ├── citations.py
-│   ├── evidence.py
-│   ├── safety.py
-│   ├── schema.py
-│   └── tool_result.py
-└── workflow/
+before_retrieval
+before_answer
+before_tool_call
+before_memory_write
+before_model_call
 ```
 
-目录原则：
+Decision types:
 
-- `providers/` 只处理模型调用和 SDK 适配。
-- `workflow/` 调用 provider protocol，不 import OpenAI/Azure/Anthropic SDK。
-- `contracts/model.py` 是 provider-neutral。
-- `validators/` 对远程模型输出进行二次验证。
-- `audit/receipt.py` 只从 trace 聚合 model usage。
+```text
+allow
+deny
+require_approval
+escalate
+```
 
----
+Rules:
 
-## 14. 依赖设计
+- Policy consumes context and contracts only.
+- Every handled enforcement point emits `policy_decision`.
+- `require_approval` is a workflow state, not an exception.
+- `escalate` must appear as a governed outcome.
+- Model policy context includes provider, model, estimated tokens, stream, cost class, evidence count, and question metadata.
 
-核心依赖维持 local-first：
+## 10. Knowledge And Vector Providers
+
+Current baseline:
+
+- Markdown heading-aware chunking.
+- source and line-range citation.
+- token-overlap deterministic retrieval.
+- `EvidenceChunk` output.
+- evidence threshold validation.
+
+Vector strategy:
+
+- Vector stores live behind adapters.
+- `[vector]` optional dependency can include Chroma and sentence-transformers.
+- Milvus、pgvector、remote enterprise search 等实现必须 still return `EvidenceChunk`.
+- Retrieval never decides final answer.
+
+## 11. Model Providers
+
+Protocol:
+
+```python
+class ModelProvider(Protocol):
+    @classmethod
+    def from_config(cls, model_config: ModelConfig) -> Self: ...
+    def estimate_tokens(self, request: ModelRequest) -> int | None: ...
+    def generate(self, request: ModelRequest) -> ModelResponse: ...
+```
+
+Providers:
+
+| Provider | Status |
+| --- | --- |
+| `deterministic` | implemented regression baseline |
+| `openai_compatible` | implemented optional remote provider |
+| `azure_openai` | placeholder with clear failure |
+| `anthropic` | placeholder with clear failure |
+
+Trace safety:
+
+- `model_request` stores provider/model/message counts/prompt lengths/token estimate, not raw prompt.
+- `model_response` stores finish reason/content length/token usage, not raw response.
+- `model_error` stores normalized error class/code/message, not raw provider body or headers.
+
+## 12. Tool Gateway And MCP
+
+ToolGateway is the governed tool entry point.
+
+Current behavior:
+
+- `tools.yaml` declares allowlist and risk level.
+- parameter allowlist/denylist is enforced.
+- high-risk tool calls require approval.
+- mock `customer_lookup` proves requested/granted/denied/timeout paths.
+
+Real MCP strategy:
+
+- MCP stdio/HTTP transport is an adapter behind ToolGateway.
+- MCP schemas map into Proof Agent tool config and result contracts.
+- LangGraph interrupt may implement pause/resume, but `ApprovalState` and trace remain the facts.
+
+## 13. Memory Boundary
+
+Current baseline is session memory.
+
+Rules:
+
+- All writes pass `before_memory_write`.
+- Sensitive fields are denied or redacted.
+- memory read/write emits trace events.
+- Persistent memory providers require retention, deletion, redaction, and tenant boundary design before adoption.
+
+## 14. Validators
+
+Validators are the admission layer for candidate outputs and tool results.
+
+| Validator | Purpose |
+| --- | --- |
+| schema | final output shape |
+| evidence | evidence threshold |
+| safety | secret and unsafe string detection |
+| citations | final citations supported by accepted evidence |
+| tool result | tool output shape |
+
+Standard candidate path:
+
+```text
+ModelResponse.content
+  -> validate_final_output_schema
+  -> validate_no_secret_strings
+  -> validate_citations_supported_by_evidence
+  -> final_output or governed refusal
+```
+
+LLM-as-judge can become a later audited validator. It must not replace deterministic gates.
+
+## 15. Trace, Receipt, RunStore
+
+Core trace events:
+
+```text
+run_started
+manifest_loaded
+policy_decision
+retrieval_started
+retrieval_result
+evidence_evaluation
+model_request
+model_response
+model_error
+approval_requested
+approval_granted
+approval_denied
+approval_timeout
+tool_request
+tool_result
+memory_read
+memory_write_requested
+memory_write_decision
+final_output
+redaction_applied
+artifact_written
+run_failed
+```
+
+Receipt sections:
+
+- final outcome
+- policy decisions
+- evidence summary
+- tool approval status
+- memory status
+- model usage or model error
+- audit artifacts
+- redaction summary
+
+RunStore:
+
+- saves `trace.jsonl`, `governance_receipt.md`, `run_meta.json`
+- maintains `runs/latest`
+- writes per-run history under `runs/history/{run_id}`
+- powers Dashboard API read projections
+
+## 16. Dashboard API
+
+Dashboard API is observability, not execution.
+
+Routes:
+
+| Route | Purpose |
+| --- | --- |
+| `/api/health` | service health |
+| `/api/runs` | run list, filters, pagination |
+| `/api/runs/{run_id}` | run detail |
+| `/api/runs/{run_id}/trace` | trace events |
+| `/api/runs/{run_id}/receipt` | receipt markdown |
+| `/api/stats` | outcome distribution and pending approvals |
+
+Rules:
+
+- API serializers define public response shapes.
+- API cannot bypass CLI/workflow.
+- Static SPA may be mounted when built assets exist.
+- Approval Console is a future UI on top of approval state, not a new tool execution path.
+
+## 17. CLI And Docker
+
+CLI commands:
+
+| Command | Purpose |
+| --- | --- |
+| `proof-agent demo` | deterministic three-scenario demo |
+| `proof-agent run` | run one Enterprise QA question |
+| `proof-agent doctor` | local, Docker, sample, provider readiness |
+| `proof-agent inspect` | summarize trace or receipt |
+| `proof-agent compare` | Plain RAG vs Harness RAG |
+| `proof-agent dashboard` | start Dashboard API / SPA |
+
+Docker:
+
+- `docker compose up` runs deterministic demo by default.
+- Docker path must not require API keys.
+- Remote provider env vars can be passed at runtime.
+
+## 18. Dependencies
+
+Core dependencies:
 
 ```toml
 dependencies = [
@@ -706,105 +490,81 @@ dependencies = [
   "langgraph>=1.1.0",
   "langchain-mcp-adapters>=0.1.0",
   "mcp[cli]>=1.27.0",
-  "sentence-transformers>=3.0.0",
-  "chromadb>=1.5.0",
 ]
 ```
 
-远程模型 SDK 使用 optional dependencies：
+Optional extras:
 
 ```toml
-[project.optional-dependencies]
-dev = ["pytest>=8.0.0", "ruff>=0.5.0", "mypy>=1.10.0"]
-openai = ["openai>=1.30.0"]
-all = ["proof-agent[openai]"]
+dev = ["pytest", "ruff", "mypy", "httpx"]
+dashboard = ["fastapi", "uvicorn"]
+openai = ["openai"]
+vector = ["sentence-transformers", "chromadb"]
 ```
 
-一期不加入 Azure SDK 或 Anthropic SDK。
+Dependency rules:
 
----
+- deterministic demo cannot require optional extras.
+- provider SDKs belong in provider-specific extras.
+- vector dependencies belong in `[vector]`.
+- dashboard runtime belongs in `[dashboard]`.
 
-## 15. 错误码
+## 19. Error Codes
 
-已有：
-
-- `PA_MODEL_001`: unsupported provider / provider not implemented / missing optional SDK
-
-新增：
-
-- `PA_MODEL_002`: provider API error
-- `PA_MODEL_003`: authentication failure or missing API key
-- `PA_MODEL_004`: provider timeout
-
-错误映射：
-
-| 场景 | Code | Trace |
+| Code | Subsystem | Purpose |
 | --- | --- | --- |
-| unsupported provider | `PA_MODEL_001` | config 阶段可 fail before trace |
-| placeholder provider | `PA_MODEL_001` | `model_error` if trace initialized |
-| missing OpenAI SDK | `PA_MODEL_001` | `model_error` |
-| missing API key env | `PA_MODEL_003` | `model_error` |
-| auth invalid | `PA_MODEL_003` | `model_error` |
-| timeout | `PA_MODEL_004` | `model_error` |
-| rate limit/server error | `PA_MODEL_002` | `model_error` |
+| `PA_CONFIG_001` | Config | missing field, invalid shape, missing path |
+| `PA_CONFIG_002` | Config | unsupported runtime/template/memory |
+| `PA_SCHEMA_001/002` | Schema | contract/schema validation |
+| `PA_KNOWLEDGE_001/002` | Knowledge | provider/path/retrieval errors |
+| `PA_MODEL_001` | Model | unsupported provider, placeholder, missing SDK |
+| `PA_MODEL_002` | Model | provider API error |
+| `PA_MODEL_003` | Model | auth failure or missing API key env |
+| `PA_MODEL_004` | Model | provider timeout |
+| `PA_POLICY_001` | Policy | policy file or rule error |
+| `PA_TOOL_001` | Tool | unregistered tool or invalid parameters |
+| `PA_APPROVAL_001` | Approval | invalid approval state |
+| `PA_AUDIT_001` | Audit | trace write/read error |
+| `PA_RECEIPT_001` | Receipt | receipt render error |
+| `PA_SECRET_001` | Secret | secret-looking config or content |
 
----
+## 20. Tests And Verification
 
-## 16. 测试策略
+Runtime changes should run:
 
-新增测试：
+```bash
+uv run --extra dev python -m pytest tests/ -v
+uv run --extra dev ruff check proof_agent tests
+uv run --extra dev mypy proof_agent
+uv run --extra dev proof-agent demo
+```
 
-| Test | 目标 |
+Documentation-only changes should run:
+
+```bash
+git diff --check
+```
+
+Remote provider tests must mock SDK clients and never require real API keys.
+
+## 21. Roadmap
+
+| Phase | Goal |
 | --- | --- |
-| `tests/test_model_contracts.py` | `ModelRequest`、`ModelMessage`、`ModelResponse`、`TokenUsage` immutability |
-| `tests/test_model_provider_registry.py` | provider registry、placeholder provider、unsupported provider |
-| `tests/test_deterministic_model_provider.py` | deterministic wrapper 行为不变 |
-| `tests/test_openai_compatible_provider.py` | mocked OpenAI-compatible client、usage mapping、error wrapping |
-| `tests/test_model_config_validation.py` | secret-looking params 被拒绝 |
-| `tests/test_policy_before_model_call.py` | provider/model/token/stream/cost_class policy context |
-| `tests/test_trace_model_events.py` | `model_request`、`model_response`、`model_error` 安全落 trace |
-| `tests/test_receipt_model_usage.py` | receipt 渲染 Model Usage 和 model error |
-| `tests/test_model_output_validators.py` | schema、safety、citation validation 链路 |
+| 0 | contract and positioning baseline |
+| 1 | deterministic Harness MVP with CLI/Docker |
+| 2 | remote model governance and model trace |
+| 3 | RunStore and Dashboard API |
+| 4 | production adapters: LangChain/LangGraph, real MCP, vector stores, Azure/Anthropic, streaming |
+| 5 | Agent Control Platform: Dashboard UI, Approval Console, RBAC, multi-template, external observability |
 
-所有远程 provider 测试必须 mock SDK client，不依赖真实网络或真实 API key。
+## 22. Stability Rules
 
-回归测试必须继续覆盖：
-
-- `proof-agent demo`
-- supported answer with citations
-- unsupported refusal
-- tool approval wait/deny
-- trace redaction
-- receipt sections
-
----
-
-## 17. 下一步实施顺序
-
-1. 增加 model contracts。
-2. 增加 providers protocol/registry/factory。
-3. 包装 deterministic provider。
-4. 实现 openai-compatible provider，使用 optional `openai` dependency。
-5. 增加 Azure/Anthropic placeholder provider。
-6. 扩展 policy enforcement point：`before_model_call`。
-7. 扩展 trace event：`model_request`、`model_response`、`model_error`。
-8. 构建 `ModelRequest`，接入 orchestrator 标准回答路径。
-9. 增加模型输出 validators，尤其 citation/evidence validator。
-10. 更新 Governance Receipt 的 Model Usage section。
-11. 更新 CLI doctor，显示远程模型配置就绪状态。
-12. 更新 docs/concepts/agent-contract.md 和 trace-event-contract.md。
-13. 运行 full verification。
-
----
-
-## 18. Deferred Work
-
-- Real Azure OpenAI adapter
-- Real Anthropic adapter
-- Streaming responses
-- OpenAI Responses API-native provider
-- Provider-native structured output / JSON schema mode
-- LLM-as-judge quality evaluation
-- 成本金额估算和预算策略
-- 多轮 conversation state
-- post-tool remote generation
+1. New capabilities define contracts before adapters.
+2. New providers cannot break deterministic demo.
+3. New runtime adapters cannot leak SDK types into public contracts.
+4. New tools must go through ToolGateway.
+5. New trace events must define redaction and receipt projection.
+6. New API routes must not create alternate execution semantics.
+7. New memory providers must define retention, deletion, redaction, and tenant boundary.
+8. New evaluators must define the control path for failure.

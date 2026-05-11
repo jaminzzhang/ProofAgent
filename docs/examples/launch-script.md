@@ -1,10 +1,10 @@
 # Launch Script
 
-This page is the public demo and evaluation contract for Proof Agent v1. If these paths do not work, the delivery kit is not ready.
+This page is the public demo and evaluation contract for Proof Agent. If these paths do not work, the Harness framework is not ready.
 
 ## Goal
 
-In two minutes, an enterprise AI Agent owner should see the deterministic demo:
+In two minutes, an enterprise AI Agent owner should see the deterministic Harness demo:
 
 - a runnable enterprise Q&A Agent
 - a supported answer with citations
@@ -27,9 +27,26 @@ The demo must not require an LLM API key. It must use bundled sample knowledge a
 ```bash
 docker compose up
 proof-agent run examples/enterprise_qa/agent.yaml
+proof-agent inspect runs/latest/governance_receipt.md
 ```
 
-The CLI must load `examples/enterprise_qa/agent.yaml` and write artifacts under `runs/latest/`.
+The CLI or Docker path must load `examples/enterprise_qa/agent.yaml` and write artifacts under `runs/latest/`.
+
+Optional Dashboard API path:
+
+```bash
+uv run --extra dashboard proof-agent dashboard --host 127.0.0.1 --port 8000
+```
+
+The Dashboard API reads run artifacts. It must not bypass workflow, policy, validators, trace, or receipt generation.
+
+Optional remote model evaluation after configuring `model.provider: openai_compatible` in `agent.yaml`:
+
+```bash
+OPENAI_API_KEY=... proof-agent run examples/enterprise_qa/agent.yaml --question "What is the reimbursement rule for travel meals?"
+```
+
+Remote provider configuration must use environment variable names in `agent.yaml`; raw secrets must not be committed.
 
 ## Demo Questions
 
@@ -71,6 +88,7 @@ The receipt must summarize policy decisions, evidence status, tool approval stat
 6. Open `runs/latest/governance_receipt.md`.
 7. Show the Plain RAG vs Harness RAG comparison.
 8. Optionally run the full Docker + `proof-agent run examples/enterprise_qa/agent.yaml` evaluation.
+9. Optionally start `proof-agent dashboard` and inspect `/api/health`, `/api/runs`, and `/api/stats`.
 
 ## Smoke Test
 
@@ -88,3 +106,9 @@ The enterprise evaluation path is accepted only if:
 - the command uses `examples/enterprise_qa/agent.yaml`
 - Docker Compose starts the required local services
 - the run writes the same trace and receipt artifacts
+
+The dashboard path is accepted only if:
+
+- it reads existing run history
+- it exposes health, run, trace, receipt, and stats data through `/api`
+- it does not create an alternate execution path
