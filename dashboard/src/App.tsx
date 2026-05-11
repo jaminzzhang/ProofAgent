@@ -1,20 +1,25 @@
 import { BrowserRouter } from 'react-router-dom'
 import { AppRoutes } from './router'
+import { TopNav } from './components/TopNav'
 import { Sidebar } from './components/Sidebar'
-import { TopBar } from './components/TopBar'
+import { ThemeProvider } from './components/ThemeProvider'
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <div className="flex h-screen bg-[var(--bg-base)]">
-        <Sidebar />
-        <div className="flex-1 flex flex-col min-w-0">
-          <TopBar title="Proof Agent Dashboard" />
-          <main className="flex-1 overflow-auto p-6">
-            <AppRoutes />
-          </main>
+    <ThemeProvider>
+      <BrowserRouter>
+        <div className="h-screen bg-[var(--bg-base)] text-[var(--text-primary)] transition-colors duration-200 flex flex-col overflow-hidden">
+          <TopNav />
+          <div className="flex flex-1 overflow-hidden">
+            <Sidebar />
+            <main className="flex-1 w-full overflow-y-auto px-8 py-8 relative">
+              <div className="max-w-6xl mx-auto pb-12">
+                <AppRoutes />
+              </div>
+            </main>
+          </div>
         </div>
-      </div>
-    </BrowserRouter>
+      </BrowserRouter>
+    </ThemeProvider>
   )
 }

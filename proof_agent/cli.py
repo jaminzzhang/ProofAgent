@@ -11,6 +11,7 @@ from proof_agent import __version__
 from proof_agent.compare.harness_rag import run_harness_rag
 from proof_agent.compare.plain_rag import run_plain_rag
 from proof_agent.demo.scenarios import DEMO_SCENARIOS, SUPPORTED_QUESTION
+from proof_agent.storage.run_store import RunStore
 from proof_agent.workflow.orchestrator import run_enterprise_qa
 
 app = typer.Typer(no_args_is_help=True)
@@ -21,11 +22,13 @@ def demo() -> None:
     """Run the deterministic supported, unsupported, and approval-wait scenarios."""
 
     typer.echo("Proof Agent demo")
+    store = RunStore(Path("runs/history"))
     for scenario in DEMO_SCENARIOS:
         result = run_enterprise_qa(
             Path("examples/enterprise_qa/agent.yaml"),
             question=scenario.question,
             runs_dir=Path("runs/latest"),
+            store=store,
         )
         typer.echo(f"{scenario.name}: {result.outcome.value}")
 
@@ -34,7 +37,8 @@ def demo() -> None:
 def run(agent_yaml: str, question: str = typer.Option(SUPPORTED_QUESTION, "--question")) -> None:
     """Run one Enterprise QA question through the governed harness."""
 
-    result = run_enterprise_qa(Path(agent_yaml), question=question, runs_dir=Path("runs/latest"))
+    store = RunStore(Path("runs/history"))
+    result = run_enterprise_qa(Path(agent_yaml), question=question, runs_dir=Path("runs/latest"), store=store)
     typer.echo(result.final_output)
     typer.echo(f"Outcome: {result.outcome.value}")
 

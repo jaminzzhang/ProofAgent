@@ -7,10 +7,11 @@ import type {
 
 const BASE = '/api'
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const resp = await fetch(url)
+async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const resp = await fetch(url, options)
   if (!resp.ok) {
-    throw new Error(`API error: ${resp.status} ${resp.statusText}`)
+    const errText = await resp.text().catch(() => '')
+    throw new Error(`API error: ${resp.status} ${resp.statusText} ${errText}`)
   }
   return resp.json() as Promise<T>
 }
@@ -39,4 +40,16 @@ export function fetchStats(): Promise<StatsResponse> {
 
 export function fetchHealth(): Promise<HealthResponse> {
   return fetchJson<HealthResponse>(`${BASE}/health`)
+}
+
+export function approveRun(runId: string, approvalId: string): Promise<{ status: string }> {
+  return fetchJson<{ status: string }>(`${BASE}/runs/${runId}/approve/${approvalId}`, {
+    method: 'POST'
+  })
+}
+
+export function denyRun(runId: string, approvalId: string): Promise<{ status: string }> {
+  return fetchJson<{ status: string }>(`${BASE}/runs/${runId}/deny/${approvalId}`, {
+    method: 'POST'
+  })
 }

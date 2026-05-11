@@ -1,13 +1,13 @@
 import type { ReceiptOutcome } from '../api/types'
 
-const OUTCOME_STYLES: Record<ReceiptOutcome, { bg: string; text: string; label: string }> = {
-  ANSWERED_WITH_CITATIONS: { bg: 'bg-green-500/15', text: 'text-green-400', label: 'Answered' },
-  REFUSED_NO_EVIDENCE: { bg: 'bg-amber-500/15', text: 'text-amber-400', label: 'Refused' },
-  ESCALATED_WEAK_EVIDENCE: { bg: 'bg-orange-500/15', text: 'text-orange-400', label: 'Escalated' },
-  WAITING_FOR_APPROVAL: { bg: 'bg-blue-500/15', text: 'text-blue-400', label: 'Waiting' },
-  TOOL_APPROVAL_DENIED: { bg: 'bg-red-500/15', text: 'text-red-400', label: 'Denied' },
-  FAILED_WITH_TRACE: { bg: 'bg-red-500/15', text: 'text-red-400', label: 'Failed' },
-  FAILED_RECEIPT_UNAVAILABLE: { bg: 'bg-red-700/15', text: 'text-red-500', label: 'Failed' },
+const OUTCOME_STYLES: Record<ReceiptOutcome, { border: string; bg: string; text: string; label: string, dot: string }> = {
+  ANSWERED_WITH_CITATIONS: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Answered', dot: 'bg-[var(--success)]' },
+  REFUSED_NO_EVIDENCE: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Refused', dot: 'bg-[var(--warning)]' },
+  ESCALATED_WEAK_EVIDENCE: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Escalated', dot: 'bg-[var(--warning)]' },
+  WAITING_FOR_APPROVAL: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Waiting', dot: 'bg-[var(--neutral-badge)]' },
+  TOOL_APPROVAL_DENIED: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Denied', dot: 'bg-[var(--danger)]' },
+  FAILED_WITH_TRACE: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Failed', dot: 'bg-[var(--danger)]' },
+  FAILED_RECEIPT_UNAVAILABLE: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Failed', dot: 'bg-[var(--danger)]' },
 }
 
 interface OutcomeBadgeProps {
@@ -18,11 +18,11 @@ export function OutcomeBadge({ outcome }: OutcomeBadgeProps) {
   const style = OUTCOME_STYLES[outcome]
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium ${style.bg} ${style.text}`}
+      className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-[13px] font-medium transition-colors ${style.border} ${style.bg} ${style.text}`}
       role="status"
       aria-label={outcome}
     >
-      <span className="w-1.5 h-1.5 rounded-full bg-current" />
+      <span className={`w-2 h-2 rounded-full ${style.dot}`} />
       {style.label}
     </span>
   )

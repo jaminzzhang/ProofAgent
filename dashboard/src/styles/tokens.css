@@ -1,19 +1,28 @@
 :root {
-  --bg-base: #0a0a0a;
-  --bg-surface: #141414;
-  --bg-elevated: #1a1a1a;
-  --bg-hover: #222222;
-  --border: #2a2a2a;
+  /* Light Mode (Vercel style default) */
+  --bg-base: #fafafa;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f5f5f5;
+  --border: #eaeaea;
+  --border-hover: #999999;
 
-  --text-primary: #ffffff;
-  --text-secondary: #a0a0a0;
-  --text-muted: #666666;
+  --text-primary: #171717;
+  --text-secondary: #666666;
+  --text-muted: #888888;
 
-  --accent: #3b82f6;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --danger: #ef4444;
-  --info: #6366f1;
+  --accent: #000000;
+  --accent-fg: #ffffff;
+  
+  --success: #0070f3; /* Vercel blue for ready/success */
+  --success-bg: rgba(0, 112, 243, 0.1);
+  --warning: #f5a623;
+  --warning-bg: rgba(245, 166, 35, 0.1);
+  --danger: #e00;
+  --danger-bg: rgba(238, 0, 0, 0.1);
+  --info: #0070f3;
+  --neutral-badge: #666666;
+  --neutral-badge-bg: #f5f5f5;
 
   --space-page: 32px;
   --space-section: 24px;
@@ -21,7 +30,34 @@
   --space-element: 8px;
   --gap-grid: 16px;
 
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+}
+
+.dark {
+  /* Dark Mode (Vercel style) */
+  --bg-base: #000000;
+  --bg-surface: #0a0a0a;
+  --bg-elevated: #111111;
+  --bg-hover: #1a1a1a;
+  --border: #333333;
+  --border-hover: #888888;
+
+  --text-primary: #ededed;
+  --text-secondary: #a1a1aa;
+  --text-muted: #888888;
+
+  --accent: #ffffff;
+  --accent-fg: #000000;
+  
+  --success: #3291ff;
+  --success-bg: rgba(50, 145, 255, 0.1);
+  --warning: #f5a623;
+  --warning-bg: rgba(245, 166, 35, 0.1);
+  --danger: #ff0000;
+  --danger-bg: rgba(255, 0, 0, 0.1);
+  --info: #3291ff;
+  --neutral-badge: #a1a1aa;
+  --neutral-badge-bg: #1a1a1a;
 }

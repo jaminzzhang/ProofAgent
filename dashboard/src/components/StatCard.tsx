@@ -8,17 +8,17 @@ interface StatCardProps {
 export function StatCard({ label, value, subtitle, warning }: StatCardProps) {
   return (
     <div
-      className={`rounded-lg p-4 border ${
+      className={`rounded-lg p-6 border transition-colors duration-200 ${
         warning
-          ? 'border-amber-500/30 bg-amber-500/5'
-          : 'border-[var(--border)] bg-[var(--bg-surface)]'
+          ? 'border-[var(--warning)] bg-[var(--warning-bg)]'
+          : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-hover)]'
       }`}
     >
-      <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide mb-1">{label}</p>
-      <p className={`text-2xl font-semibold ${warning ? 'text-amber-400' : 'text-[var(--text-primary)]'}`}>
+      <p className="text-sm font-medium text-[var(--text-secondary)] mb-2">{label}</p>
+      <p className={`text-3xl font-semibold tracking-tight ${warning ? 'text-[var(--warning)]' : 'text-[var(--text-primary)]'}`}>
         {value}
       </p>
-      {subtitle && <p className="text-xs text-[var(--text-secondary)] mt-1">{subtitle}</p>}
+      {subtitle && <p className="text-sm text-[var(--text-muted)] mt-2 font-medium">{subtitle}</p>}
     </div>
   )
 }

@@ -75,6 +75,32 @@ def get_run_receipt(
     }
 
 
+@router.post("/runs/{run_id}/approve/{approval_id}")
+def approve_tool_call(
+    run_id: str,
+    approval_id: str,
+    store: RunStore = Depends(get_store),
+) -> dict[str, Any]:
+    """Approve a pending tool execution. (Not Implemented in MVP)"""
+    raise HTTPException(
+        status_code=501, 
+        detail="Dashboard execution resumption is not implemented in the current MVP. Use the CLI to approve."
+    )
+
+
+@router.post("/runs/{run_id}/deny/{approval_id}")
+def deny_tool_call(
+    run_id: str,
+    approval_id: str,
+    store: RunStore = Depends(get_store),
+) -> dict[str, Any]:
+    """Deny a pending tool execution. (Not Implemented in MVP)"""
+    raise HTTPException(
+        status_code=501, 
+        detail="Dashboard execution resumption is not implemented in the current MVP. Use the CLI to deny."
+    )
+
+
 def _parse_outcome(value: str | None) -> ReceiptOutcome | None:
     """Convert a query string into a ReceiptOutcome enum, or None."""
     if value is None:
