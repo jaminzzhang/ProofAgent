@@ -22,8 +22,12 @@ class WorkflowConfig(FrozenModel):
 
 class KnowledgeConfig(FrozenModel):
     provider: str
-    path: Path
-    index_path: Path | None = None
+    params: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("params", mode="after")
+    @classmethod
+    def freeze_params(cls, value: Any) -> Any:
+        return freeze_value(value)
 
 
 class ModelConfig(FrozenModel):
@@ -35,6 +39,17 @@ class ModelConfig(FrozenModel):
     @classmethod
     def freeze_params(cls, value: Any) -> Any:
         return freeze_value(value)
+
+
+class RetrievalConfig(FrozenModel):
+    strategy: str
+    top_k: int = 3
+    min_score: float = 0.2
+    max_steps: int | None = None
+    allow_query_rewrite: bool = False
+    allow_rerank: bool = False
+    allow_single_step_fallback: bool = False
+    planner_model: ModelConfig | None = None
 
 
 class PolicyConfig(FrozenModel):
@@ -59,6 +74,7 @@ class AgentManifest(FrozenModel):
     purpose: str
     workflow: WorkflowConfig
     knowledge: KnowledgeConfig
+    retrieval: RetrievalConfig
     model: ModelConfig
     policy: PolicyConfig
     tools: ToolsConfig

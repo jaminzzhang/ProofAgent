@@ -15,8 +15,14 @@ workflow:
   template: enterprise_qa
 
 knowledge:
-  provider: local
-  path: ./knowledge
+  provider: local_markdown
+  params:
+    path: ./knowledge
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
 
 model:
   provider: deterministic
@@ -46,6 +52,7 @@ This schema is intentionally small. It is enough to run the first enterprise Q&A
 - what this Agent is for
 - which workflow template it uses
 - where knowledge comes from
+- how retrieval is orchestrated and thresholded
 - which model provider mode it uses
 - which policy controls it
 - which tools are available
@@ -60,6 +67,8 @@ The supported v1 model providers are:
 - `anthropic`: configuration contract and validation placeholder only.
 
 Provider settings live under `model.params`. They may name environment variables such as `api_key_env`, `base_url_env`, `organization_env`, or `project_env`, but must not contain raw secret values.
+
+Knowledge provider settings live under `knowledge.params`. First-stage provider names are `local_markdown`, `local_vector`, and `remote_search`. Retrieval settings such as `strategy`, `top_k`, and `min_score` live under the required top-level `retrieval` section. First-stage executable runs use `retrieval.strategy: single_step`; `agentic` is a reserved strategy and fails with `PA_RETRIEVAL_001` until planner execution is implemented.
 
 OpenAI-compatible example:
 
@@ -84,7 +93,8 @@ Invalid contracts must fail before execution starts. Errors should name the miss
 Examples:
 
 - missing `policy.file` -> fail fast with config guidance
-- missing knowledge path -> fail fast before model call
+- missing provider-specific knowledge params -> fail fast before model call
+- recognized but unavailable retrieval strategy -> fail fast with `PA_RETRIEVAL_001`
 - unsupported model provider -> fail fast; v1 defaults to deterministic demo mode
 - missing remote model SDK or API key -> emit `model_error` after trace initialization when possible
 - unsupported runtime -> fail fast; the public workflow contract stays stable even when LangGraph/LangChain adapters evolve

@@ -229,13 +229,16 @@ class RunStore:
         if retrieval is None:
             return []
 
-        payload = retrieval.get("payload", {})
-        sources = payload.get("sources", [])
-        chunk_count = payload.get("chunk_count", len(sources))
         eval_meta = {}
         if evaluation:
             eval_meta = evaluation.get("payload", {}).get("metadata", {})
+        evidence_summary = eval_meta.get("evidence")
+        if isinstance(evidence_summary, list | tuple):
+            return [dict(chunk) for chunk in evidence_summary if isinstance(chunk, dict)]
 
+        payload = retrieval.get("payload", {})
+        sources = payload.get("sources", [])
+        chunk_count = payload.get("chunk_count", len(sources))
         chunks: list[dict[str, Any]] = []
         for i, source in enumerate(sources):
             chunks.append({

@@ -12,6 +12,12 @@ Proof Agent uses explicit enforcement points:
 before_retrieval
   Decide whether the Agent may retrieve knowledge.
 
+before_retrieval_plan
+  Decide whether Agentic RAG may create or use a retrieval plan.
+
+before_retrieval_step
+  Decide whether a specific retrieval step may run.
+
 before_answer
   Decide whether evidence is sufficient to answer.
 

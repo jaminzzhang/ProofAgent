@@ -14,3 +14,25 @@ def test_receipt_contains_required_sections(tmp_path: Path) -> None:
     text = receipt_path.read_text(encoding="utf-8")
     assert "# Governance Receipt" in text
     assert "Final Outcome" in text
+
+
+def test_receipt_renders_evidence_summary_without_raw_content(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    receipt_path = tmp_path / "governance_receipt.md"
+    trace_path.write_text(
+        "\n".join(
+            [
+                '{"schema_version":"trace.v1","run_id":"run_test","event_id":"evt_0001","sequence":1,"timestamp":"2026-05-09T00:00:00Z","event_type":"evidence_evaluation","span_id":"span_evidence","parent_span_id":null,"status":"ok","payload":{"validator_name":"evidence","status":"passed","metadata":{"evidence":[{"source":"policy://travel#meals","citation":"travel-policy.md#meals:L10-L18","score":0.84,"status":"accepted"}]}},"redaction":{"applied":false,"fields":[]}}',
+                '{"schema_version":"trace.v1","run_id":"run_test","event_id":"evt_0002","sequence":2,"timestamp":"2026-05-09T00:00:01Z","event_type":"final_output","span_id":"span_final","parent_span_id":null,"status":"ok","payload":{"agent_name":"enterprise_qa","question":"What is the travel meal rule?","outcome":"ANSWERED_WITH_CITATIONS","message":"Travel meals require receipts."},"redaction":{"applied":false,"fields":[]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    generate_receipt(trace_path, receipt_path)
+    text = receipt_path.read_text(encoding="utf-8")
+
+    assert "policy://travel#meals" in text
+    assert "travel-policy.md#meals:L10-L18" in text
+    assert "Travel meals require receipts." not in text

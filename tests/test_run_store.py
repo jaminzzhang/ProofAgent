@@ -182,3 +182,61 @@ def test_get_run_detail_with_trace_events(store: RunStore) -> None:
     assert detail is not None
     assert len(detail.trace_events) == 2
     assert detail.trace_events[0]["event_type"] == "run_started"
+
+
+def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
+    run_dir = store.create_run_dir("run_evidence")
+    _write_trace(
+        run_dir / "trace.jsonl",
+        "run_evidence",
+        [
+            {
+                "event_type": "retrieval_result",
+                "sequence": 1,
+                "timestamp": "2026-05-10T14:32:18Z",
+                "payload": {"sources": ["policy://travel#meals"], "chunk_count": 1},
+            },
+            {
+                "event_type": "evidence_evaluation",
+                "sequence": 2,
+                "timestamp": "2026-05-10T14:32:19Z",
+                "payload": {
+                    "metadata": {
+                        "evidence": [
+                            {
+                                "source": "policy://travel#meals",
+                                "citation": "travel-policy.md#meals:L10-L18",
+                                "score": 0.84,
+                                "status": "accepted",
+                            }
+                        ]
+                    }
+                },
+            },
+            {
+                "event_type": "final_output",
+                "sequence": 3,
+                "timestamp": "2026-05-10T14:32:20Z",
+                "payload": {
+                    "outcome": ReceiptOutcome.ANSWERED_WITH_CITATIONS.value,
+                    "question": "Travel meals?",
+                },
+            },
+        ],
+    )
+    _write_receipt(run_dir / "governance_receipt.md")
+    store.write_run_meta(
+        RunIndex(
+            run_id="run_evidence",
+            question="Travel meals?",
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            created_at="2026-05-10T14:32:18Z",
+            updated_at="2026-05-10T14:32:20Z",
+        )
+    )
+
+    detail = store.get_run_detail("run_evidence")
+
+    assert detail is not None
+    assert detail.evidence_chunks[0]["citation"] == "travel-policy.md#meals:L10-L18"
+    assert "content" not in detail.evidence_chunks[0]

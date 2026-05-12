@@ -119,7 +119,8 @@ CLI / Docker
       -> resolve current dependencies from manifest
       -> emit run_started / manifest_loaded
       -> PolicyEngine(before_retrieval)
-      -> KnowledgeProvider.retrieve
+      -> PolicyEngine(before_retrieval_step)
+      -> retrieval_step through KnowledgeProvider
       -> evaluate_evidence
       -> PolicyEngine(before_answer)
       -> build ModelRequest
@@ -253,8 +254,14 @@ workflow:
   template: enterprise_qa
 
 knowledge:
-  provider: local
-  path: ./knowledge
+  provider: local_markdown
+  params:
+    path: ./knowledge
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
 
 model:
   provider: deterministic
@@ -397,6 +404,8 @@ Current MVP:
 Enforcement points:
 ```text
 before_retrieval
+before_retrieval_plan
+before_retrieval_step
 before_answer
 before_tool_call
 before_memory_write
@@ -427,7 +436,7 @@ Capability categories:
 | Category | Examples | Required boundary |
 | --- | --- | --- |
 | Model | deterministic, OpenAI-compatible, Azure, Anthropic | `ModelRequest` / `ModelResponse` |
-| Knowledge / Retrieval | local Markdown, vector stores, enterprise search | `EvidenceChunk` |
+| Knowledge / Retrieval | local Markdown, local vector, remote search | candidate `EvidenceChunk` |
 | Memory | session memory, future persistent memory | memory contract plus `before_memory_write` policy |
 | Tool / MCP | local tools, mock MCP, real MCP stdio/http | `ToolRequest` / `ToolResult` through ToolGateway |
 | Skill Packs | prompt, tool schema, retrieval recipe, policy rule, validator, workflow fragment | registered into Control/Runtime/Capability model |
@@ -447,6 +456,33 @@ Current baseline:
 - token-overlap deterministic retrieval.
 - `EvidenceChunk` output.
 - evidence threshold validation.
+
+Agent Contract shape:
+```yaml
+knowledge:
+  provider: local_markdown
+  params:
+    path: ./knowledge
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+```
+
+Provider names:
+- `local_markdown` retrieves candidate evidence from local Markdown files.
+- `local_vector` queries an existing local vector index; index build is a separate lifecycle.
+- `remote_search` normalizes remote-search-shaped evidence through a first-stage fixture adapter; production HTTP is future work.
+
+Rules:
+- Knowledge providers return candidate `EvidenceChunk` objects only.
+- Provider-specific config lives under `knowledge.params`.
+- Retrieval orchestration policy lives under the required top-level `retrieval` section.
+- `top_k` and `min_score` belong to `retrieval`, not provider params.
+- Control Plane evidence evaluation creates accepted or rejected evidence.
+- Trace and receipt record evidence summaries by default, not raw evidence content.
+- Agentic RAG is a future `retrieval.strategy`, not a Knowledge Provider and not a workflow template.
 
 Vector strategy:
 - Vector stores live behind adapters.
@@ -533,7 +569,8 @@ Core trace events:
 run_started
 manifest_loaded
 policy_decision
-retrieval_started
+retrieval_plan
+retrieval_step
 retrieval_result
 evidence_evaluation
 model_request
@@ -643,7 +680,8 @@ Dependency rules:
 | `PA_CONFIG_001` | Config | missing field, invalid shape, missing path |
 | `PA_CONFIG_002` | Config | unsupported runtime/template/memory |
 | `PA_SCHEMA_001/002` | Schema | contract/schema validation |
-| `PA_KNOWLEDGE_001/002` | Knowledge | provider/path/retrieval errors |
+| `PA_KNOWLEDGE_001/002` | Knowledge | provider/params/retrieval errors |
+| `PA_RETRIEVAL_001` | Retrieval | recognized retrieval strategy not executable in this build |
 | `PA_MODEL_001` | Model | unsupported provider, placeholder, missing SDK |
 | `PA_MODEL_002` | Model | provider API error |
 | `PA_MODEL_003` | Model | auth failure or missing API key env |

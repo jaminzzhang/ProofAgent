@@ -97,9 +97,10 @@ Core boundaries:
 | Entry | CLI, Docker demo, Dashboard API |
 | Workflow template | `enterprise_qa` |
 | Runtime config | `workflow.runtime: langgraph`; adapter boundary exists, but MVP main flow delegates to plain Python orchestrator |
-| Knowledge | `knowledge.provider: local`, local Markdown retrieval |
+| Knowledge | `knowledge.provider: local_markdown`, local Markdown retrieval |
+| Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
 | Model | `deterministic` and `openai_compatible` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
-| Policy | `before_retrieval`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
+| Policy | `before_retrieval`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
 | Tools / MCP | ToolGateway, mock `customer_lookup`, approval state; real MCP transport is the extension direction |
 | Memory | `memory.provider: session`, with sensitive field denylist |
 | Validators | schema, evidence, safety, citations, tool result |
@@ -120,8 +121,14 @@ workflow:
   template: enterprise_qa
 
 knowledge:
-  provider: local
-  path: ./knowledge
+  provider: local_markdown
+  params:
+    path: ./knowledge
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
 
 model:
   provider: deterministic
@@ -144,10 +151,12 @@ audit:
 Current v1 config constraints:
 - `workflow.runtime` must be `langgraph`.
 - `workflow.template` must be `enterprise_qa`.
-- `knowledge.provider` must be `local`.
+- `knowledge.provider` must be one of `local_markdown`, `local_vector`, or `remote_search`.
+- `retrieval.strategy` must be `single_step` for executable first-stage runs.
+- `retrieval.strategy: agentic` is a reserved contract and fails with `PA_RETRIEVAL_001`.
 - `memory.provider` must be `session`.
 - `model.provider` supports `deterministic`, `openai_compatible`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
-- `policy.file`, `tools.file`, `knowledge.path` must exist.
+- `policy.file`, `tools.file`, and provider-specific paths under `knowledge.params` must exist.
 - The parent directories of `audit.trace_path` and `audit.receipt_path` must be writable.
 
 Remote model configuration must use environment variable names; do not write raw secrets into the YAML:
@@ -255,12 +264,20 @@ When extending a new model provider:
 Current v1 uses a local Markdown knowledge base:
 ```yaml
 knowledge:
-  provider: local
-  path: ./knowledge
+  provider: local_markdown
+  params:
+    path: ./knowledge
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
 ```
 
 When extending vector or enterprise search:
-- Provider must return `EvidenceChunk`.
+- Provider must return candidate `EvidenceChunk`.
+- Provider-specific config belongs under `knowledge.params`.
+- `top_k` and `min_score` belong under `retrieval`.
 - Retrieval cannot determine the final answer.
 - Whether evidence is sufficient is determined by evaluators, PolicyEngine, and validators.
 - Vector database SDK types must not enter contracts.
@@ -323,7 +340,7 @@ When a Skill is imported, it should be registered or compiled into the existing 
 
 Recommended process:
 1. Copy an Agent package from `examples/enterprise_qa/`.
-2. Modify `name`, `purpose`, `knowledge.path`, `model`, `audit` in `agent.yaml`.
+2. Modify `name`, `purpose`, `knowledge.params`, `retrieval`, `model`, `audit` in `agent.yaml`.
 3. Replace the business knowledge Markdown under `knowledge/`.
 4. Modify `policy.yaml` to define answering, tool, memory, and model call policies.
 5. Modify `tools.yaml`, registering only the tools this Agent needs.

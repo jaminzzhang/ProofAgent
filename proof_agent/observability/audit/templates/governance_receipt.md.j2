@@ -45,6 +45,13 @@ Question: {{ question }}
 
 ## Evidence
 
+{% if evidence_summaries %}
+| Source | Citation | Score | Status |
+| --- | --- | --- | --- |
+{% for item in evidence_summaries %}
+| {{ item.source | default("unknown") }} | {{ item.citation | default("n/a") }} | {{ item.score | default("n/a") }} | {{ item.status | default("unknown") }} |
+{% endfor %}
+{% endif %}
 {% if evidence_events %}
 {% for event in evidence_events %}
 - {{ event.payload.validator_name | default("evidence") }}: {{ event.payload.status | default(event.status) }}

@@ -19,8 +19,13 @@ workflow:
   runtime: langgraph
   template: enterprise_qa
 knowledge:
-  provider: local
-  path: ./knowledge
+  provider: local_markdown
+  params:
+    path: ./knowledge
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
 model:
 {model_yaml}
 policy:

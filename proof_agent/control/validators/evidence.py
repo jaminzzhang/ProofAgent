@@ -14,9 +14,10 @@ def evaluate_evidence(
     accepted = tuple(
         chunk
         for chunk in chunk_tuple
-        if chunk.status == "accepted" and chunk.score >= min_score
+        if chunk.status != "rejected" and chunk.score >= min_score
     )
     passed = len(accepted) >= min_count
+    accepted_ids = {id(chunk) for chunk in accepted}
     return ValidationResult(
         validator_name="evidence",
         status=ValidationStatus.PASSED if passed else ValidationStatus.FAILED,
@@ -25,6 +26,16 @@ def evaluate_evidence(
             "accepted_count": len(accepted),
             "rejected_count": len(chunk_tuple) - len(accepted),
             "accepted_sources": tuple(chunk.source for chunk in accepted),
+            "evidence": tuple(
+                {
+                    "source": chunk.source,
+                    "citation": chunk.citation,
+                    "score": chunk.score,
+                    "status": "accepted" if id(chunk) in accepted_ids else "rejected",
+                }
+                for chunk in chunk_tuple
+            ),
+            "scores": tuple(chunk.score for chunk in chunk_tuple),
             "min_count": min_count,
             "min_score": min_score,
         },

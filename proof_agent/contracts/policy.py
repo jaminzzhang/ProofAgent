@@ -18,6 +18,8 @@ class PolicyDecisionType(str, Enum):
 
 class EnforcementPoint(str, Enum):
     BEFORE_RETRIEVAL = "before_retrieval"
+    BEFORE_RETRIEVAL_PLAN = "before_retrieval_plan"
+    BEFORE_RETRIEVAL_STEP = "before_retrieval_step"
     BEFORE_ANSWER = "before_answer"
     BEFORE_TOOL_CALL = "before_tool_call"
     BEFORE_MEMORY_WRITE = "before_memory_write"

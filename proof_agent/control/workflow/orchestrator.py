@@ -18,7 +18,7 @@ from proof_agent.contracts import (
     ValidationResult,
 )
 from proof_agent.evaluation.demo.scenarios import TOOL_REQUIRED_QUESTION, UNSUPPORTED_QUESTION
-from proof_agent.capabilities.knowledge.local_provider import LocalKnowledgeProvider
+from proof_agent.capabilities.knowledge import KnowledgeProvider, resolve_knowledge_provider
 from proof_agent.capabilities.memory.session import SessionMemory
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.capabilities.models import resolve_provider
@@ -28,6 +28,7 @@ from proof_agent.control.validators.citations import validate_citations_supporte
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.validators.safety import validate_no_secret_strings
 from proof_agent.control.validators.schema import validate_final_output_schema
+from proof_agent.errors import ProofAgentError
 
 
 from proof_agent.observability.storage.compat import update_latest_symlink
@@ -80,28 +81,16 @@ def run_enterprise_qa(
 
     # Retrieval is still policy-gated even in the deterministic local demo.
     policy = PolicyEngine.from_file(manifest.policy.file)
-    retrieval_decision = policy.evaluate("before_retrieval", {"question": question})
-    _emit_policy(trace, retrieval_decision)
-
-    evidence = LocalKnowledgeProvider(manifest.knowledge.path).retrieve(question, top_k=2)
-    if question == UNSUPPORTED_QUESTION:
-        # Force a no-evidence path so refusal behavior is reproducible in tests and demos.
-        evidence = ()
-    trace.emit(
-        "retrieval_result",
-        status="ok",
-        payload={"chunk_count": len(evidence), "sources": [chunk.source for chunk in evidence]},
-    )
-
-    evidence_result = evaluate_evidence(evidence, min_count=1, min_score=0.2)
-    trace.emit(
-        "evidence_evaluation",
-        status="ok" if evidence_result.status == "passed" else "blocked",
-        payload={
-            "validator_name": evidence_result.validator_name,
-            "status": evidence_result.status.value,
-            "metadata": dict(evidence_result.metadata),
-        },
+    _ensure_retrieval_strategy_is_executable(manifest.retrieval.strategy)
+    knowledge_provider = resolve_knowledge_provider(manifest.knowledge)
+    evidence, evidence_result = _run_single_step_retrieval(
+        question=question,
+        trace=trace,
+        policy=policy,
+        knowledge_provider=knowledge_provider,
+        top_k=manifest.retrieval.top_k,
+        min_score=manifest.retrieval.min_score,
+        force_empty=question == UNSUPPORTED_QUESTION,
     )
 
     if question == TOOL_REQUIRED_QUESTION:
@@ -322,6 +311,76 @@ def _emit_policy(trace: TraceWriter, decision: object) -> None:
             "reason": getattr(decision, "reason"),
         },
     )
+
+
+def _run_single_step_retrieval(
+    *,
+    question: str,
+    trace: TraceWriter,
+    policy: PolicyEngine,
+    knowledge_provider: KnowledgeProvider,
+    top_k: int,
+    min_score: float,
+    force_empty: bool = False,
+) -> tuple[tuple[EvidenceChunk, ...], ValidationResult]:
+    """Run one governed retrieval step and evaluate candidate evidence."""
+
+    retrieval_decision = policy.evaluate(
+        "before_retrieval",
+        {"question": question, "strategy": "single_step"},
+    )
+    _emit_policy(trace, retrieval_decision)
+    step_context = {
+        "question": question,
+        "step_id": "step_1",
+        "provider": knowledge_provider.provider_name,
+        "top_k": top_k,
+    }
+    step_decision = policy.evaluate("before_retrieval_step", step_context)
+    _emit_policy(trace, step_decision)
+    if retrieval_decision.decision != "allow" or step_decision.decision != "allow":
+        evidence: tuple[EvidenceChunk, ...] = ()
+    else:
+        trace.emit(
+            "retrieval_step",
+            status="ok",
+            payload=step_context,
+        )
+        evidence = knowledge_provider.retrieve(question, top_k=top_k)
+        if force_empty:
+            # Force a no-evidence path so refusal behavior is reproducible in tests and demos.
+            evidence = ()
+    trace.emit(
+        "retrieval_result",
+        status="ok",
+        payload={
+            "step_id": "step_1",
+            "provider": knowledge_provider.provider_name,
+            "candidate_count": len(evidence),
+            "chunk_count": len(evidence),
+            "sources": [chunk.source for chunk in evidence],
+        },
+    )
+    evidence_result = evaluate_evidence(evidence, min_count=1, min_score=min_score)
+    trace.emit(
+        "evidence_evaluation",
+        status="ok" if evidence_result.status == "passed" else "blocked",
+        payload={
+            "validator_name": evidence_result.validator_name,
+            "status": evidence_result.status.value,
+            "metadata": dict(evidence_result.metadata),
+        },
+    )
+    return evidence, evidence_result
+
+
+def _ensure_retrieval_strategy_is_executable(strategy: str) -> None:
+    if strategy == "agentic":
+        raise ProofAgentError(
+            "PA_RETRIEVAL_001",
+            "agentic retrieval strategy is not implemented in this build",
+            "Use retrieval.strategy: single_step for executable first-stage runs.",
+        )
 
 
 def _finalize(

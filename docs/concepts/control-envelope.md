@@ -15,7 +15,7 @@ The Control Envelope is implemented through **Harness Engineering**. The design 
 
 Harness Engineering is an engineering design method to inject enterprise control requirements into the Agent flow. Its core practices are:
 
-1. **Inserting policy enforcement points between flow nodes**: `before_retrieval`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call`
+1. **Inserting policy enforcement points between flow nodes**: `before_retrieval`, `before_retrieval_plan`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call`
 2. **Generating typed results from each decision**: `allow`, `deny`, `require_approval`, `escalate`
 3. **Writing each decision to Trace and summarizing it in the Governance Receipt**
 
@@ -23,12 +23,14 @@ Harness does not replace underlying orchestration engines (LangGraph), knowledge
 
 ### Harness RAG
 
-**Harness RAG** is a governed knowledge retrieval and generation implementation based on **Agentic RAG**. Unlike Plain RAG (Retrieve → Generate), Harness RAG introduces policy gates between retrieval and generation:
+**Harness RAG** is a governed knowledge retrieval and generation implementation that can use single-step retrieval now and Agentic RAG as a future Retrieval Strategy. Unlike Plain RAG (Retrieve → Generate), Harness RAG introduces policy gates between retrieval and generation:
 
 ```text
 Plain RAG:    User Question → Retrieve → Generate Answer
-Harness RAG:  User Question → Policy(before_retrieval) → Retrieve → Evidence Evaluation → Policy(before_answer) → Answer with Citations / Refuse / Escalate
+Harness RAG:  User Question → Policy(before_retrieval) → Policy(before_retrieval_step) → Retrieval Step → Evidence Evaluation → Policy(before_answer) → Answer with Citations / Refuse / Escalate
 ```
+
+Agentic RAG is not a Knowledge Provider and not a workflow template. It is a Retrieval Strategy that may add planning, query rewrite, reranking, or multiple governed retrieval steps while preserving the same Control Envelope.
 
 Governed features of Harness RAG:
 - **Mandatory Retrieval**: Must retrieve from the knowledge base before answering; LLMs are not allowed to generate directly.

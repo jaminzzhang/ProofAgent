@@ -1,6 +1,6 @@
 # Proof Agent Development Progress
 
-> Last updated: 2026-05-11
+> Last updated: 2026-05-12
 > Purpose: Give AI coding agents a short, current map of the implementation. Verify all claims against the code before changing behavior.
 
 ## 1. Current Positioning
@@ -18,10 +18,10 @@ Authoritative design doc: `docs/technical-design.md`.
 | Contracts | Pydantic v2 frozen models for manifest, policy, evidence, approval, tools, model, trace, receipt, run, dashboard |
 | Delivery | `delivery/cli.py` exposes Typer commands: `demo`, `run`, `doctor`, `inspect`, `compare`, `dashboard` |
 | Docker | `Dockerfile` and `docker-compose.yml` run deterministic demo |
-| Bootstrap | `bootstrap/` owns YAML loader, path resolution, provider validation, secret-looking model param rejection |
+| Bootstrap | `bootstrap/` owns YAML loader, path resolution, provider validation, retrieval config validation, secret-looking param rejection |
 | Control | `control/` owns Enterprise QA workflow, policy, validators, evidence decisions, approval, and outcome behavior |
 | Runtime | `runtime/langgraph_runner.py` is an adapter boundary; current flow delegates to plain Python orchestrator |
-| Capability | `capabilities/` owns model providers, knowledge, memory, ToolGateway, mock `customer_lookup`, and future Skill packs |
+| Capability | `capabilities/` owns model providers, knowledge provider registry, memory, ToolGateway, mock `customer_lookup`, and future Skill packs |
 | Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, model usage section |
 | Storage / API | `observability/storage/` and `observability/api/` own RunStore, history/latest compatibility, FastAPI dashboard routes for health/runs/stats |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
@@ -53,7 +53,8 @@ runs/latest/governance_receipt.md
 | LangGraph runtime | Adapter stub delegates to orchestrator | Real StateGraph, checkpoint, interrupt |
 | LangChain integration | Not a public adapter yet | Optional ecosystem adapter that preserves contracts |
 | Real MCP | Mock tool proves approval contract | stdio/HTTP MCP adapter behind ToolGateway |
-| Vector provider | Optional Chroma adapter scaffold | Formal vector provider contract and tests |
+| Vector provider | Local Vector provider queries existing Chroma indexes | Index build lifecycle and broader vector store adapters |
+| Agentic RAG | Contract and fail-fast error reserved | Planner-driven multi-step retrieval strategy |
 | Dashboard UI | FastAPI API exists; SPA mount supported if built assets exist | Dashboard UI and Approval Console |
 | Azure/Anthropic | Placeholder providers | Real provider adapters with mocked tests |
 | Streaming | Not implemented | Trace-safe streaming chunks |

@@ -7,18 +7,19 @@ from langgraph.graph import END, START, StateGraph
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import ApprovalStatus, EvidenceChunk, ReceiptOutcome
-from proof_agent.capabilities.knowledge.local_provider import LocalKnowledgeProvider
+from proof_agent.capabilities.knowledge import resolve_knowledge_provider
 from proof_agent.capabilities.memory.session import SessionMemory
 from proof_agent.capabilities.models import resolve_provider
 from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.capabilities.tools.gateway import ToolGateway
 from proof_agent.control.policy.engine import PolicyEngine
-from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
     _cost_class,
     _emit_policy,
+    _ensure_retrieval_strategy_is_executable,
     _model_response_payload,
+    _run_single_step_retrieval,
     _system_prompt_length,
     _validate_model_output,
 )
@@ -33,7 +34,7 @@ class HarnessGraphState(TypedDict):
     approval_status: str | None
     governance_refusal: ReceiptOutcome | None
     governance_message: str | None
-    evidence: list[EvidenceChunk]
+    evidence: list[dict[str, Any]]
     final_output: str | None
 
 
@@ -60,7 +61,8 @@ def build_enterprise_qa_graph(
             },
         )
         raise
-    knowledge_provider = LocalKnowledgeProvider(manifest.knowledge.path)
+    _ensure_retrieval_strategy_is_executable(manifest.retrieval.strategy)
+    knowledge_provider = resolve_knowledge_provider(manifest.knowledge)
     tool_gateway = ToolGateway.from_file(manifest.tools.file)
 
     def retrieve_node(state: HarnessGraphState) -> dict[str, Any]:
@@ -70,27 +72,14 @@ def build_enterprise_qa_graph(
             # Bypass retrieval for tool required question
             return {}
 
-        retrieval_decision = policy.evaluate("before_retrieval", {"question": question})
-        _emit_policy(trace, retrieval_decision)
-
-        evidence = knowledge_provider.retrieve(question, top_k=2)
-        if question == UNSUPPORTED_QUESTION:
-            evidence = ()
-        trace.emit(
-            "retrieval_result",
-            status="ok",
-            payload={"chunk_count": len(evidence), "sources": [chunk.source for chunk in evidence]},
-        )
-
-        evidence_result = evaluate_evidence(evidence, min_count=1, min_score=0.2)
-        trace.emit(
-            "evidence_evaluation",
-            status="ok" if evidence_result.status == "passed" else "blocked",
-            payload={
-                "validator_name": evidence_result.validator_name,
-                "status": evidence_result.status.value,
-                "metadata": dict(evidence_result.metadata),
-            },
+        evidence, evidence_result = _run_single_step_retrieval(
+            question=question,
+            trace=trace,
+            policy=policy,
+            knowledge_provider=knowledge_provider,
+            top_k=manifest.retrieval.top_k,
+            min_score=manifest.retrieval.min_score,
+            force_empty=question == UNSUPPORTED_QUESTION,
         )
 
         answer_decision = policy.evaluate(
@@ -116,7 +105,7 @@ def build_enterprise_qa_graph(
                 "governance_message": "I cannot answer because the available evidence is insufficient.",
             }
 
-        return {"evidence": list(evidence)}
+        return {"evidence": [_evidence_state_dict(chunk) for chunk in evidence]}
 
     def tool_node(state: HarnessGraphState) -> dict[str, Any]:
         question = state["question"]
@@ -176,7 +165,7 @@ def build_enterprise_qa_graph(
 
     def model_node(state: HarnessGraphState) -> dict[str, Any]:
         question = state["question"]
-        evidence = tuple(state.get("evidence", []))
+        evidence = tuple(EvidenceChunk.model_validate(chunk) for chunk in state.get("evidence", []))
         
         model_request = _build_model_request(
             question=question,
@@ -304,3 +293,16 @@ def build_enterprise_qa_graph(
     builder.add_conditional_edges("model", route_after_model)
 
     return builder
+
+
+def _evidence_state_dict(chunk: EvidenceChunk) -> dict[str, Any]:
+    """Convert evidence to JSON-safe graph state."""
+
+    return {
+        "source": chunk.source,
+        "content": chunk.content,
+        "score": chunk.score,
+        "status": chunk.status.value,
+        "citation": chunk.citation,
+        "metadata": dict(chunk.metadata),
+    }

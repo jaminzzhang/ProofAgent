@@ -44,6 +44,11 @@ def _build_context(
     final_payload = final.get("payload", {})
     policy_events = [event for event in events if event["event_type"] == "policy_decision"]
     evidence_events = [event for event in events if event["event_type"] == "evidence_evaluation"]
+    retrieval_events = [
+        event
+        for event in events
+        if event["event_type"] in {"retrieval_plan", "retrieval_step", "retrieval_result"}
+    ]
     tool_events = [
         event
         for event in events
@@ -65,6 +70,8 @@ def _build_context(
         "final_outcome": final_payload.get("outcome", "unknown"),
         "policy_events": policy_events,
         "evidence_events": evidence_events,
+        "evidence_summaries": _extract_evidence_summaries(evidence_events),
+        "retrieval_events": retrieval_events,
         "tool_events": tool_events,
         "memory_events": memory_events,
         "model_usage": model_usage,
@@ -107,6 +114,14 @@ def _extract_model_usage(events: list[dict[str, Any]]) -> dict[str, str] | None:
         "error_class": _audit_value(error_payload.get("error_class")),
         "retryable": _audit_value(error_payload.get("retryable")),
     }
+
+
+def _extract_evidence_summaries(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for event in reversed(events):
+        evidence = event.get("payload", {}).get("metadata", {}).get("evidence")
+        if isinstance(evidence, list | tuple):
+            return [dict(item) for item in evidence if isinstance(item, dict)]
+    return []
 
 
 def _last_event(events: list[dict[str, Any]], event_type: str) -> dict[str, Any] | None:

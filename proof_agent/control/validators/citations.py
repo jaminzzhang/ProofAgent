@@ -12,11 +12,13 @@ CITATION_RE = re.compile(r"\b([A-Za-z0-9_.-]+\.md)#")
 def validate_citations_supported_by_evidence(
     text: str, evidence: Iterable[EvidenceChunk]
 ) -> ValidationResult:
-    supported_sources = {
-        chunk.source
-        for chunk in evidence
-        if chunk.status == "accepted"
-    }
+    supported_sources = set[str]()
+    for chunk in evidence:
+        if chunk.status == "rejected":
+            continue
+        supported_sources.add(chunk.source)
+        if chunk.citation:
+            supported_sources.update(CITATION_RE.findall(chunk.citation))
     cited_sources = tuple(CITATION_RE.findall(text))
     unsupported = tuple(
         source for source in cited_sources if source not in supported_sources

@@ -39,7 +39,7 @@ Every receipt must include:
 | Receipt section | Trace event source |
 | --- | --- |
 | Policy Decisions | `policy_decision` events |
-| Evidence | `retrieval_result` and `evidence_evaluation` events |
+| Evidence | `retrieval_step`, `retrieval_result`, and `evidence_evaluation` events |
 | Tools | `tool_request`, `approval_requested`, `approval_granted`, `approval_denied`, `approval_timeout`, `tool_result` events |
 | Memory | `memory_read`, `memory_write_requested`, `memory_write_decision` events |
 | Model Usage | `model_request`, `model_response`, `model_error` events |
@@ -60,6 +60,7 @@ The receipt must not include:
 - unnecessary personal data
 - raw tool payload fields marked sensitive by policy
 - raw prompts, raw model responses, provider headers, or provider error bodies
+- raw evidence content by default; receipts should render evidence source, citation, score, and admission status summaries
 
 When redaction occurs, the receipt should name the field class, not the secret value:
 

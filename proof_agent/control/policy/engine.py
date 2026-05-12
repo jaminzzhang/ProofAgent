@@ -58,6 +58,11 @@ class PolicyEngine:
             return self._evaluate_before_memory_write(rule, context)
         if rule.enforcement_point == EnforcementPoint.BEFORE_RETRIEVAL:
             return self._evaluate_before_retrieval(rule)
+        if rule.enforcement_point in {
+            EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+            EnforcementPoint.BEFORE_RETRIEVAL_STEP,
+        }:
+            return self._evaluate_before_retrieval(rule)
         if rule.enforcement_point == EnforcementPoint.BEFORE_MODEL_CALL:
             return self._evaluate_before_model_call(rule, context)
         return None

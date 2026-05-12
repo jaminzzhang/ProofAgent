@@ -50,8 +50,9 @@ Every trace line is one JSON object:
 | `run_started` | run metadata and manifest path |
 | `manifest_loaded` | resolved `agent.yaml` config |
 | `policy_decision` | typed policy decision at an enforcement point |
-| `retrieval_started` | local knowledge retrieval begins |
-| `retrieval_result` | retrieved chunks and source ids |
+| `retrieval_plan` | audit-safe Agentic RAG plan summary |
+| `retrieval_step` | governed retrieval attempt begins |
+| `retrieval_result` | retrieved evidence summary and source ids |
 | `evidence_evaluation` | accepted/rejected evidence and thresholds |
 | `model_request` | redacted model invocation metadata before generation |
 | `model_response` | redacted model response metadata and token usage |
@@ -74,7 +75,7 @@ Every trace line is one JSON object:
 
 | Harness event | OpenTelemetry GenAI concept |
 | --- | --- |
-| `retrieval_started`, `retrieval_result` | retrieval span |
+| `retrieval_plan`, `retrieval_step`, `retrieval_result` | retrieval span |
 | `model_request`, `model_response` | model generation span |
 | `model_error` | model span/log error with low-cardinality `error.type` |
 | `tool_request`, `tool_result` | execute tool span |

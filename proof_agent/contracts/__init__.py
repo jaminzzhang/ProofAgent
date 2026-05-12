@@ -8,6 +8,7 @@ from proof_agent.contracts.manifest import (
     MemoryConfig,
     ModelConfig,
     PolicyConfig,
+    RetrievalConfig,
     ToolsConfig,
     WorkflowConfig,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "PolicyDecisionType",
     "PolicyRule",
     "ReceiptOutcome",
+    "RetrievalConfig",
     "RunDetail",
     "RunIndex",
     "RunResult",

@@ -16,6 +16,8 @@ class TraceEventType(str, Enum):
     MANIFEST_LOADED = "manifest_loaded"
     POLICY_DECISION = "policy_decision"
     RETRIEVAL_STARTED = "retrieval_started"
+    RETRIEVAL_PLAN = "retrieval_plan"
+    RETRIEVAL_STEP = "retrieval_step"
     RETRIEVAL_RESULT = "retrieval_result"
     EVIDENCE_EVALUATION = "evidence_evaluation"
     APPROVAL_REQUESTED = "approval_requested"
