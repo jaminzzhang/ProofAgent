@@ -17,9 +17,8 @@ from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
     _cost_class,
     _emit_policy,
-    _ensure_retrieval_strategy_is_executable,
     _model_response_payload,
-    _run_single_step_retrieval,
+    _run_retrieval,
     _system_prompt_length,
     _validate_model_output,
 )
@@ -61,7 +60,6 @@ def build_enterprise_qa_graph(
             },
         )
         raise
-    _ensure_retrieval_strategy_is_executable(manifest.retrieval.strategy)
     knowledge_provider = resolve_knowledge_provider(manifest.knowledge)
     tool_gateway = ToolGateway.from_file(manifest.tools.file)
 
@@ -72,13 +70,15 @@ def build_enterprise_qa_graph(
             # Bypass retrieval for tool required question
             return {}
 
-        evidence, evidence_result = _run_single_step_retrieval(
+        evidence, evidence_result = _run_retrieval(
             question=question,
             trace=trace,
             policy=policy,
             knowledge_provider=knowledge_provider,
+            strategy=manifest.retrieval.strategy,
             top_k=manifest.retrieval.top_k,
             min_score=manifest.retrieval.min_score,
+            max_steps=manifest.retrieval.max_steps,
             force_empty=question == UNSUPPORTED_QUESTION,
         )
 

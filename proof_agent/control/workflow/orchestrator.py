@@ -81,15 +81,16 @@ def run_enterprise_qa(
 
     # Retrieval is still policy-gated even in the deterministic local demo.
     policy = PolicyEngine.from_file(manifest.policy.file)
-    _ensure_retrieval_strategy_is_executable(manifest.retrieval.strategy)
     knowledge_provider = resolve_knowledge_provider(manifest.knowledge)
-    evidence, evidence_result = _run_single_step_retrieval(
+    evidence, evidence_result = _run_retrieval(
         question=question,
         trace=trace,
         policy=policy,
         knowledge_provider=knowledge_provider,
+        strategy=manifest.retrieval.strategy,
         top_k=manifest.retrieval.top_k,
         min_score=manifest.retrieval.min_score,
+        max_steps=manifest.retrieval.max_steps,
         force_empty=question == UNSUPPORTED_QUESTION,
     )
 
@@ -374,12 +375,135 @@ def _run_single_step_retrieval(
     return evidence, evidence_result
 
 
-def _ensure_retrieval_strategy_is_executable(strategy: str) -> None:
+def _run_retrieval(
+    *,
+    question: str,
+    trace: TraceWriter,
+    policy: PolicyEngine,
+    knowledge_provider: KnowledgeProvider,
+    strategy: str,
+    top_k: int,
+    min_score: float,
+    max_steps: int | None = None,
+    force_empty: bool = False,
+) -> tuple[tuple[EvidenceChunk, ...], ValidationResult]:
+    if strategy == "single_step":
+        return _run_single_step_retrieval(
+            question=question,
+            trace=trace,
+            policy=policy,
+            knowledge_provider=knowledge_provider,
+            top_k=top_k,
+            min_score=min_score,
+            force_empty=force_empty,
+        )
     if strategy == "agentic":
+        return _run_agentic_retrieval(
+            question=question,
+            trace=trace,
+            policy=policy,
+            knowledge_provider=knowledge_provider,
+            top_k=top_k,
+            min_score=min_score,
+            max_steps=max_steps,
+            force_empty=force_empty,
+        )
+    _ensure_retrieval_strategy_is_executable(strategy)
+    raise AssertionError("unreachable")
+
+
+def _run_agentic_retrieval(
+    *,
+    question: str,
+    trace: TraceWriter,
+    policy: PolicyEngine,
+    knowledge_provider: KnowledgeProvider,
+    top_k: int,
+    min_score: float,
+    max_steps: int | None,
+    force_empty: bool = False,
+) -> tuple[tuple[EvidenceChunk, ...], ValidationResult]:
+    """Run a governed provider-agentic retrieval plan and evaluate evidence."""
+
+    retrieval_decision = policy.evaluate(
+        "before_retrieval",
+        {
+            "question": question,
+            "strategy": "agentic",
+            "provider": knowledge_provider.provider_name,
+        },
+    )
+    _emit_policy(trace, retrieval_decision)
+    plan_context = {
+        "question": question,
+        "strategy": "agentic",
+        "provider": knowledge_provider.provider_name,
+        "top_k": top_k,
+        "max_steps": max_steps,
+        "execution_mode": "provider_agentic_retrieval",
+        "steps": [
+            {
+                "step_id": "step_1",
+                "provider": knowledge_provider.provider_name,
+                "top_k": top_k,
+            }
+        ],
+    }
+    plan_decision = policy.evaluate("before_retrieval_plan", plan_context)
+    _emit_policy(trace, plan_decision)
+    if retrieval_decision.decision == "allow" and plan_decision.decision == "allow":
+        trace.emit("retrieval_plan", status="ok", payload=plan_context)
+
+    step_context = {
+        "question": question,
+        "step_id": "step_1",
+        "provider": knowledge_provider.provider_name,
+        "top_k": top_k,
+        "strategy": "agentic",
+    }
+    step_decision = policy.evaluate("before_retrieval_step", step_context)
+    _emit_policy(trace, step_decision)
+    if (
+        retrieval_decision.decision != "allow"
+        or plan_decision.decision != "allow"
+        or step_decision.decision != "allow"
+    ):
+        evidence: tuple[EvidenceChunk, ...] = ()
+    else:
+        trace.emit("retrieval_step", status="ok", payload=step_context)
+        evidence = knowledge_provider.retrieve(question, top_k=top_k)
+        if force_empty:
+            evidence = ()
+    trace.emit(
+        "retrieval_result",
+        status="ok",
+        payload={
+            "step_id": "step_1",
+            "provider": knowledge_provider.provider_name,
+            "candidate_count": len(evidence),
+            "chunk_count": len(evidence),
+            "sources": [chunk.source for chunk in evidence],
+        },
+    )
+    evidence_result = evaluate_evidence(evidence, min_count=1, min_score=min_score)
+    trace.emit(
+        "evidence_evaluation",
+        status="ok" if evidence_result.status == "passed" else "blocked",
+        payload={
+            "validator_name": evidence_result.validator_name,
+            "status": evidence_result.status.value,
+            "metadata": dict(evidence_result.metadata),
+        },
+    )
+    return evidence, evidence_result
+
+
+def _ensure_retrieval_strategy_is_executable(strategy: str) -> None:
+    if strategy not in {"single_step", "agentic"}:
         raise ProofAgentError(
             "PA_RETRIEVAL_001",
-            "agentic retrieval strategy is not implemented in this build",
-            "Use retrieval.strategy: single_step for executable first-stage runs.",
+            f"retrieval strategy is not executable: {strategy}",
+            "Use retrieval.strategy: single_step or agentic.",
         )
 
 
