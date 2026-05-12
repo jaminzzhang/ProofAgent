@@ -474,6 +474,7 @@ Provider names:
 - `local_markdown` retrieves candidate evidence from local Markdown files.
 - `local_vector` queries an existing local vector index; index build is a separate lifecycle.
 - `remote_search` normalizes remote-search-shaped evidence through a first-stage fixture adapter; production HTTP is future work.
+- `pageindex` calls a self-hosted PageIndex retrieval endpoint and normalizes `retrieved_nodes` into candidate evidence.
 
 Rules:
 - Knowledge providers return candidate `EvidenceChunk` objects only.
@@ -482,7 +483,7 @@ Rules:
 - `top_k` and `min_score` belong to `retrieval`, not provider params.
 - Control Plane evidence evaluation creates accepted or rejected evidence.
 - Trace and receipt record evidence summaries by default, not raw evidence content.
-- Agentic RAG is a future `retrieval.strategy`, not a Knowledge Provider and not a workflow template.
+- Agentic RAG is a `retrieval.strategy`, not a Knowledge Provider and not a workflow template. With PageIndex, Proof Agent emits a governed retrieval plan and delegates the remote reasoning-based retrieval step to the PageIndex provider while keeping final answer governance local.
 
 Vector strategy:
 - Vector stores live behind adapters.

@@ -68,7 +68,7 @@ The supported v1 model providers are:
 
 Provider settings live under `model.params`. They may name environment variables such as `api_key_env`, `base_url_env`, `organization_env`, or `project_env`, but must not contain raw secret values.
 
-Knowledge provider settings live under `knowledge.params`. First-stage provider names are `local_markdown`, `local_vector`, and `remote_search`. Retrieval settings such as `strategy`, `top_k`, and `min_score` live under the required top-level `retrieval` section. First-stage executable runs use `retrieval.strategy: single_step`; `agentic` is a reserved strategy and fails with `PA_RETRIEVAL_001` until planner execution is implemented.
+Knowledge provider settings live under `knowledge.params`. Supported provider names are `local_markdown`, `local_vector`, `remote_search`, and `pageindex`. Retrieval settings such as `strategy`, `top_k`, `min_score`, and `max_steps` live under the required top-level `retrieval` section. Executable runs use `retrieval.strategy: single_step` for one governed provider call or `retrieval.strategy: agentic` for a governed retrieval plan. The `pageindex` provider uses a remote PageIndex deployment for the retrieval step and still returns candidate evidence only.
 
 OpenAI-compatible example:
 
@@ -94,7 +94,7 @@ Examples:
 
 - missing `policy.file` -> fail fast with config guidance
 - missing provider-specific knowledge params -> fail fast before model call
-- recognized but unavailable retrieval strategy -> fail fast with `PA_RETRIEVAL_001`
+- retrieval strategy recognized by the contract but unavailable in the current runtime -> fail fast with `PA_RETRIEVAL_001`
 - unsupported model provider -> fail fast; v1 defaults to deterministic demo mode
 - missing remote model SDK or API key -> emit `model_error` after trace initialization when possible
 - unsupported runtime -> fail fast; the public workflow contract stays stable even when LangGraph/LangChain adapters evolve

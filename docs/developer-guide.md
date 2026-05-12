@@ -151,9 +151,8 @@ audit:
 Current v1 config constraints:
 - `workflow.runtime` must be `langgraph`.
 - `workflow.template` must be `enterprise_qa`.
-- `knowledge.provider` must be one of `local_markdown`, `local_vector`, or `remote_search`.
-- `retrieval.strategy` must be `single_step` for executable first-stage runs.
-- `retrieval.strategy: agentic` is a reserved contract and fails with `PA_RETRIEVAL_001`.
+- `knowledge.provider` must be one of `local_markdown`, `local_vector`, `remote_search`, or `pageindex`.
+- `retrieval.strategy` supports `single_step` and `agentic`.
 - `memory.provider` must be `session`.
 - `model.provider` supports `deterministic`, `openai_compatible`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
 - `policy.file`, `tools.file`, and provider-specific paths under `knowledge.params` must exist.
@@ -176,6 +175,26 @@ Run example:
 ```bash
 OPENAI_API_KEY=... uv run --extra openai proof-agent run examples/enterprise_qa/agent.yaml --question "What is the reimbursement rule for travel meals?"
 ```
+
+PageIndex self-hosted retrieval can be used as a remote agentic evidence source while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation:
+
+```yaml
+knowledge:
+  provider: pageindex
+  params:
+    endpoint_env: PAGEINDEX_BASE_URL
+    document_id: doc_enterprise_policy
+    thinking: true
+    timeout_seconds: 10
+
+retrieval:
+  strategy: agentic
+  top_k: 5
+  min_score: 0.2
+  max_steps: 3
+```
+
+For a default local PageIndex deployment, set `PAGEINDEX_BASE_URL=http://127.0.0.1:8000`. If the deployment requires auth, add `api_key_env: PAGEINDEX_API_KEY` under `knowledge.params` and set that environment variable.
 
 ## 6. Configuring the Control Plane
 
