@@ -48,9 +48,11 @@ uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md  # insp
 docker compose up                                         # full local evaluation
 ```
 
-## Authoritative Reference
+## Documentation
 
-**`docs/Proof Agent 技术设计方案.md`** is the authoritative technical design document for this project. It covers:
+Documentation is bilingual: English (default) under `docs/`, Chinese translations under `docs/zh/` with the same directory structure. **Only update English docs during development; Chinese translations are synced at release time. Always reference English docs as the source of truth.**
+
+**`docs/technical-design.md`** is the authoritative technical design document for this project. It covers:
 
 - Design principles (harness controls flow, model only generates; deterministic regression baseline; third-party SDK isolation; auditable failures; untrusted remote output; explicit config without secrets)
 - Total architecture and Control Envelope data flow
@@ -66,11 +68,18 @@ docker compose up                                         # full local evaluatio
 
 **When planning features, writing implementation plans, or writing code, always read this document first and follow its design decisions.**
 
-For user-facing setup and deployment workflows, also read `docs/developer-guide.md`.
+Other key docs:
+
+- `docs/prd.md` — MVP scope, modules, architecture, and delivery milestones.
+- `docs/feasibility-analysis.md` — feasibility, audience, stack options, and risks.
+- `docs/developer-guide.md` — user-facing setup and deployment workflows.
+- `docs/development-progress.md` — historical module status and roadmap (may be stale; verify against codebase).
+- `docs/concepts/` — framework concept references: Control Envelope, Agent Contract, Policy Engine, Trace Events, Approval State, Governance Receipt, Trust Boundaries.
+- `docs/examples/` — enterprise Q&A demo, launch script, and Governance Receipt examples.
 
 ## Tech Stack
 
-See `docs/Proof Agent 技术设计方案.md` for full analysis.
+See `docs/technical-design.md` for full analysis.
 
 - Python 3.12+, `typer` for CLI, `pydantic` v2 for data contracts (frozen=True)
 - `langgraph >= 1.1.0` as runtime adapter direction

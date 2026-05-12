@@ -140,8 +140,9 @@ proof_agent/
 
 - [Documentation Index](docs/README.md)
 - [Developer Guide](docs/developer-guide.md)
-- [Product Requirements](docs/Proof%20Agent%20PRD.md)
-- [Technical Design](docs/Proof%20Agent%20%E6%8A%80%E6%9C%AF%E8%AE%BE%E8%AE%A1%E6%96%B9%E6%A1%88.md)
+- [Product Requirements](docs/prd.md)
+- [Technical Design](docs/technical-design.md)
+- [Feasibility Analysis](docs/feasibility-analysis.md)
 - [Development Progress](docs/development-progress.md)
 - [Control Envelope](docs/concepts/control-envelope.md)
 - [Agent Contract](docs/concepts/agent-contract.md)
@@ -153,6 +154,8 @@ proof_agent/
 - [Launch Script](docs/examples/launch-script.md)
 - [Enterprise Q&A Demo](docs/examples/enterprise-qa.md)
 - [Governance Receipt](docs/examples/governance-receipt.md)
+
+Docs are bilingual: English (default) under `docs/`, Chinese translations under `docs/zh/`.
 
 ## v1 Scope
 

@@ -1,41 +1,41 @@
 # Control Envelope
 
-Proof Agent 的核心抽象是 **Control Envelope**：一个包裹 Agent 执行过程的企业控制外壳。
+The core abstraction of Proof Agent is the **Control Envelope**: an enterprise control shell that wraps the Agent execution process.
 
-Control Envelope 通过 **Harness Engineering** 实现。Harness 的设计理念是在 Agent 执行流程的关键节点插入显式的策略决策点（Policy Enforcement Points），使 Agent 的每一步行为都受到策略、证据、审批和审计的约束。普通 Agent 框架关注”怎么编排”和”怎么调用工具”，而 Harness 关注企业负责人真正关心的问题：
+The Control Envelope is implemented through **Harness Engineering**. The design philosophy of Harness is to insert explicit Policy Enforcement Points into key nodes of the Agent execution flow, ensuring every step of the Agent is constrained by policies, evidence, approvals, and audits. While normal Agent frameworks focus on "how to orchestrate" and "how to call tools," Harness focuses on the questions enterprise leaders actually care about:
 
-- 这个 Agent 是否必须先查知识库？
-- 证据不足时是否会拒答？
-- 调用工具前是否需要审批？
-- Memory 写入是否有边界？
-- 出问题后能不能复盘完整链路？
-- 业务负责人能否看懂本次执行为什么被允许？
+- Must this Agent search the knowledge base first?
+- Will it refuse to answer if evidence is insufficient?
+- Is approval required before calling a tool?
+- Are there boundaries on writing to Memory?
+- If something goes wrong, can the entire chain be reviewed?
+- Can business leaders understand why this execution was allowed?
 
 ## Harness Engineering
 
-Harness Engineering 是一种将企业控制要求注入 Agent 流程的工程设计方法。它的核心做法是：
+Harness Engineering is an engineering design method to inject enterprise control requirements into the Agent flow. Its core practices are:
 
-1. **在流程节点之间插入策略决策点**：`before_retrieval`、`before_answer`、`before_tool_call`、`before_memory_write`、`before_model_call`
-2. **每个决策产生类型化的结果**：`allow`、`deny`、`require_approval`、`escalate`
-3. **每个决策被写入 Trace 并汇总到 Governance Receipt**
+1. **Inserting policy enforcement points between flow nodes**: `before_retrieval`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call`
+2. **Generating typed results from each decision**: `allow`, `deny`, `require_approval`, `escalate`
+3. **Writing each decision to Trace and summarizing it in the Governance Receipt**
 
-Harness 不替代底层的编排引擎（LangGraph）、知识库（RAG）或工具协议（MCP）。它在这些组件之上建立统一的控制合约。
+Harness does not replace underlying orchestration engines (LangGraph), knowledge bases (RAG), or tool protocols (MCP). It establishes a unified control contract over these components.
 
 ### Harness RAG
 
-**Harness RAG** 是基于 **Agentic RAG** 的受控知识检索与生成实现。与 Plain RAG（检索 → 生成）不同，Harness RAG 在检索和生成之间加入了策略门控：
+**Harness RAG** is a governed knowledge retrieval and generation implementation based on **Agentic RAG**. Unlike Plain RAG (Retrieve → Generate), Harness RAG introduces policy gates between retrieval and generation:
 
 ```text
 Plain RAG:    User Question → Retrieve → Generate Answer
 Harness RAG:  User Question → Policy(before_retrieval) → Retrieve → Evidence Evaluation → Policy(before_answer) → Answer with Citations / Refuse / Escalate
 ```
 
-Harness RAG 的受控特性：
-- **强制检索**：回答前必须检索知识库，不允许 LLM 直接生成
-- **证据评估**：检索结果必须通过证据质量检查，弱证据触发拒答或升级
-- **引用要求**：支持回答必须附带引用来源
-- **工具审批**：需要调用工具时必须经过显式审批状态
-- **审计追踪**：每个步骤产生 JSONL Trace，最终生成 Governance Receipt
+Governed features of Harness RAG:
+- **Mandatory Retrieval**: Must retrieve from the knowledge base before answering; LLMs are not allowed to generate directly.
+- **Evidence Evaluation**: Retrieval results must pass evidence quality checks; weak evidence triggers a refusal or escalation.
+- **Citation Requirement**: Answers must include source citations.
+- **Tool Approvals**: Tool calls must go through an explicit approval state.
+- **Audit Tracking**: Every step produces a JSONL Trace, ultimately generating a Governance Receipt.
 
 ## Boundary
 

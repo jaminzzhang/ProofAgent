@@ -1,19 +1,18 @@
 # Proof Agent Documentation
 
-This directory is organized for humans and AI agents. Read these documents in order unless a task points to a narrower concept page.
+Proof Agent is a Controlled Agent Harness Framework. It uses Harness Engineering to manage the Agent lifecycle across workflow, policy, tools, memory, models, validators, trace, receipt, deployment, and observability.
+
+The project is not positioned as local-first or CLI-first. It keeps a deterministic local demo as a regression baseline, and supports CLI and Docker entry points. Remote models, LangChain/LangGraph, vector stores, real MCP, and Dashboard capabilities are adapter-driven integrations around the same Harness contract.
 
 ## Source Of Truth
 
-1. `Proof Agent PRD.md` — product positioning, scope, non-goals, roadmap.
-2. `Proof Agent 技术设计方案.md` — authoritative architecture and implementation boundaries.
-3. `developer-guide.md` — developer workflow for building, configuring, deploying, and managing governed Agents.
-4. `development-progress.md` — current codebase status; useful, but always verify against the code.
+1. `prd.md` — product positioning, scope, non-goals, roadmap.
+2. `technical-design.md` — authoritative architecture and implementation boundaries.
+3. `feasibility-analysis.md` — feasibility, audience, stack options, and risks.
+4. `developer-guide.md` — developer workflow for building, configuring, deploying, and managing governed Agents.
+5. `development-progress.md` — current codebase status; useful, but always verify against the code.
 
-The core positioning is:
 
-> Proof Agent is a Controlled Agent Harness Framework. It uses Harness Engineering to manage the Agent lifecycle across workflow, policy, tools, memory, models, validators, trace, receipt, deployment, and observability.
-
-The project is not positioned as local-first or CLI-first. It keeps a deterministic local demo as a regression baseline, and supports CLI and Docker entry points. Remote models, LangChain/LangGraph, vector stores, real MCP, and Dashboard capabilities are adapter-driven integrations around the same Harness contract.
 
 ## Concept Contracts
 
@@ -40,6 +39,10 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | `examples/launch-script.md` | Demo and evaluation commands |
 | `examples/enterprise-qa.md` | Enterprise QA Template behavior |
 | `examples/governance-receipt.md` | Example receipt rendering |
+
+## Bilingual Structure
+
+Docs are bilingual: English (default) under `docs/`, Chinese translations under `docs/zh/` with the same directory structure. Only update English docs during development; Chinese translations are synced at release time.
 
 ## Active Documentation Policy
 

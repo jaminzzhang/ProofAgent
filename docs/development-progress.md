@@ -9,7 +9,7 @@ Proof Agent is a **Controlled Agent Harness Framework**. The core product is the
 
 The project is no longer positioned as local-first or CLI-first. It keeps a deterministic local demo as the regression baseline, and supports CLI plus Docker entry points. Remote models, LangChain/LangGraph, vector stores, real MCP, and Dashboard capabilities are adapter-driven extensions around the same Harness contract.
 
-Authoritative design doc: `docs/Proof Agent 技术设计方案.md`.
+Authoritative design doc: `docs/technical-design.md`.
 
 ## 2. Implementation Snapshot
 
@@ -78,6 +78,6 @@ git diff --check
 ## 6. AI Session Guidance
 
 1. Start with `docs/README.md` for document routing.
-2. Use `docs/Proof Agent 技术设计方案.md` as the architectural source of truth.
+2. Use `docs/technical-design.md` as the architectural source of truth.
 3. Preserve the deterministic demo while adding remote/provider/platform integrations.
 4. Keep third-party SDK types out of contracts, policy, trace, receipt, bootstrap, and dashboard contracts.

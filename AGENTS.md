@@ -45,15 +45,17 @@ Primary implementation and planning areas:
 - `runs/` is the local audit output directory; only `runs/.gitkeep` should be committed.
 - Operational assets live at the repository root, including `Dockerfile`, `docker-compose.yml`, `pyproject.toml`, `uv.lock`, and `.github/workflows/ci.yml`.
 
-Important documentation:
+Important documentation (English, under `docs/`):
 
-- `docs/Proof Agent PRD.md` defines MVP scope, modules, architecture, and delivery milestones.
-- `docs/Proof Agent 可行性分析报告.md` captures feasibility, audience, stack options, and risks.
-- **`docs/Proof Agent 技术设计方案.md` is the authoritative technical design document. It defines design principles, architecture decisions, module boundaries, contract shapes, provider strategy, error codes, trace events, and the implementation roadmap. When writing implementation plans, designing features, or writing code, always read and follow this document first.**
+- `docs/prd.md` defines MVP scope, modules, architecture, and delivery milestones.
+- `docs/feasibility-analysis.md` captures feasibility, audience, stack options, and risks.
+- **`docs/technical-design.md` is the authoritative technical design document. It defines design principles, architecture decisions, module boundaries, contract shapes, provider strategy, error codes, trace events, and the implementation roadmap. When writing implementation plans, designing features, or writing code, always read and follow this document first.**
 - **`docs/developer-guide.md` explains the AI Agent owner workflow: Quick Start, Agent package structure, configuration, development, deployment, and operations. Use it when changing user-facing setup or developer experience.**
 - **`docs/development-progress.md` records historical development status — module status, test coverage, and implementation roadmap as of the last update date shown in the file. It is a useful reference but may be stale. Always verify claims against the actual codebase before trusting them.**
 - `docs/concepts/` explains framework concepts such as Control Envelope, Agent Contract, and Policy Engine.
 - `docs/examples/` documents the enterprise Q&A demo, launch script, and Governance Receipt.
+
+Chinese translations live under `docs/zh/` with the same structure. **Only update English docs during development; Chinese translations are synced at release time.**
 
 ## Build, Test, and Development Commands
 

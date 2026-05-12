@@ -448,9 +448,9 @@ Rules:
 
 ## 13. Capability Layer
 
-Capability Layer provides the concrete abilities that an Agent can use. Capabilities are selected by configuration and registries, then invoked through Proof Agent ports under Control Plane governance.
+Capability Layer 提供 Agent 可调用能力。Capabilities 经由配置和 registry 选出，然后通过 Proof Agent port 在 Control Plane 的治理下被调用。
 
-Capability categories:
+Capability 类别:
 
 | Category | Examples | Required boundary |
 | --- | --- | --- |
@@ -462,11 +462,11 @@ Capability categories:
 
 Rules:
 
-- Capabilities cannot decide final outcome.
-- Capabilities cannot call tools, models, or memory outside Control Plane.
-- Provider SDK objects must stay inside Capability adapters.
-- A Skill is a capability pack, not a second execution path.
-- Capability implementations must emit or allow Control Plane to emit trace-safe facts.
+- Capabilities 不能决定最终结果。
+- Capabilities 不能在 Control Plane 外调用 tool、model 或 memory。
+- Provider SDK 对象必须留在 Capability adapter 内部。
+- Skill 是一个能力包，不是第二条执行路径。
+- Capability 实现必须产生（或允许 Control Plane 产生）可以安全进入 trace 的事件。
 
 ## 14. Knowledge And Vector Providers
 
@@ -480,10 +480,10 @@ Current baseline:
 
 Vector strategy:
 
-- Vector stores live behind adapters.
-- `[vector]` optional dependency can include Chroma and sentence-transformers.
+- Vector stores 位于 adapter 之后。
+- `[vector]` 可选依赖可包含 Chroma 和 sentence-transformers。
 - Milvus、pgvector、remote enterprise search 等实现必须 still return `EvidenceChunk`.
-- Retrieval never decides final answer.
+- Retrieval 永远不能决定最终答案。
 
 ## 15. Model Providers
 
@@ -508,26 +508,26 @@ Providers:
 
 Trace safety:
 
-- `model_request` stores provider/model/message counts/prompt lengths/token estimate, not raw prompt.
-- `model_response` stores finish reason/content length/token usage, not raw response.
-- `model_error` stores normalized error class/code/message, not raw provider body or headers.
+- `model_request` 记录 provider/model/message counts/prompt lengths/token estimate，而非 raw prompt。
+- `model_response` 记录 finish reason/content length/token usage，而非 raw response。
+- `model_error` 记录 normalized error class/code/message，而非 raw provider body 或 header。
 
 ## 16. Tool Gateway And MCP
 
-ToolGateway is the governed tool entry point.
+ToolGateway 是受控的工具入口。
 
 Current behavior:
 
-- `tools.yaml` declares allowlist and risk level.
-- parameter allowlist/denylist is enforced.
-- high-risk tool calls require approval.
-- mock `customer_lookup` proves requested/granted/denied/timeout paths.
+- `tools.yaml` 声明 allowlist 和 risk level。
+- parameter allowlist/denylist 会被执行。
+- high-risk tool calls 必须请求 approval。
+- mock `customer_lookup` 证明了 requested/granted/denied/timeout 等状态。
 
 Real MCP strategy:
 
-- MCP stdio/HTTP transport is an adapter behind ToolGateway.
-- MCP schemas map into Proof Agent tool config and result contracts.
-- LangGraph interrupt may implement pause/resume, but `ApprovalState` and trace remain the facts.
+- MCP stdio/HTTP transport 是位于 ToolGateway 后的 adapter。
+- MCP schemas 映射进 Proof Agent tool config 和 result contracts。
+- LangGraph interrupt 可以实现 pause/resume，但 `ApprovalState` 和 trace 仍然是事实来源。
 
 ## 17. Memory Boundary
 
@@ -535,14 +535,14 @@ Current baseline is session memory.
 
 Rules:
 
-- All writes pass `before_memory_write`.
-- Sensitive fields are denied or redacted.
-- memory read/write emits trace events.
-- Persistent memory providers require retention, deletion, redaction, and tenant boundary design before adoption.
+- 所有写入必须通过 `before_memory_write`。
+- 敏感字段被拒绝或脱敏 (redacted)。
+- memory read/write 会发出 trace events。
+- Persistent memory providers 需要在采用前设计 retention、deletion、redaction 和 tenant boundary。
 
 ## 18. Validators
 
-Validators are the admission layer for candidate outputs and tool results.
+Validators 是候选输出和工具结果的准入层。
 
 | Validator | Purpose |
 | --- | --- |
@@ -562,7 +562,7 @@ ModelResponse.content
   -> final_output or governed refusal
 ```
 
-LLM-as-judge can become a later audited validator. It must not replace deterministic gates.
+LLM-as-judge 可以成为后期的 audited validator。它不能取代 deterministic gates。
 
 ## 19. Trace, Receipt, RunStore
 
@@ -606,14 +606,14 @@ Receipt sections:
 
 RunStore:
 
-- saves `trace.jsonl`, `governance_receipt.md`, `run_meta.json`
-- maintains `runs/latest`
-- writes per-run history under `runs/history/{run_id}`
-- powers Dashboard API read projections
+- 保存 `trace.jsonl`、`governance_receipt.md`、`run_meta.json`
+- 维护 `runs/latest`
+- 在 `runs/history/{run_id}` 下写入每次执行历史
+- 为 Dashboard API 的 read projections 提供数据
 
 ## 20. Dashboard API
 
-Dashboard API is observability, not execution.
+Dashboard API 是观测工具，不是执行工具。
 
 Routes:
 
@@ -628,10 +628,10 @@ Routes:
 
 Rules:
 
-- API serializers define public response shapes.
-- API cannot bypass CLI/workflow.
-- Static SPA may be mounted when built assets exist.
-- Approval Console is a future UI on top of approval state, not a new tool execution path.
+- API serializers 决定了公共的响应结构。
+- API 不能绕过 CLI/workflow。
+- 如果构建了前端静态资源，可以挂载静态 SPA。
+- Approval Console 是基于 approval state 的一个未来 UI，而不是一个新的 tool 执行路径。
 
 ## 21. CLI And Docker
 
@@ -648,9 +648,9 @@ CLI commands:
 
 Docker:
 
-- `docker compose up` runs deterministic demo by default.
-- Docker path must not require API keys.
-- Remote provider env vars can be passed at runtime.
+- `docker compose up` 默认运行 deterministic demo。
+- Docker 路径不得要求 API key。
+- 可以在运行时通过环境变量传入远程 provider 的配置。
 
 ## 22. Dependencies
 
@@ -679,10 +679,10 @@ vector = ["sentence-transformers", "chromadb"]
 
 Dependency rules:
 
-- deterministic demo cannot require optional extras.
-- provider SDKs belong in provider-specific extras.
-- vector dependencies belong in `[vector]`.
-- dashboard runtime belongs in `[dashboard]`.
+- deterministic demo 不得依赖 optional extras。
+- provider SDKs 属于 provider-specific extras。
+- vector 依赖属于 `[vector]`。
+- dashboard 运行环境属于 `[dashboard]`。
 
 ## 23. Error Codes
 
@@ -720,7 +720,7 @@ Documentation-only changes should run:
 git diff --check
 ```
 
-Remote provider tests must mock SDK clients and never require real API keys.
+Remote provider 测试必须 mock SDK clients 且永远不要需要真实的 API key。
 
 ## 25. Roadmap
 
@@ -735,11 +735,11 @@ Remote provider tests must mock SDK clients and never require real API keys.
 
 ## 26. Stability Rules
 
-1. New capabilities define contracts before adapters.
-2. New providers cannot break deterministic demo.
-3. New runtime adapters cannot leak SDK types into public contracts.
-4. New tools must go through ToolGateway.
-5. New trace events must define redaction and receipt projection.
-6. New API routes must not create alternate execution semantics.
-7. New memory providers must define retention, deletion, redaction, and tenant boundary.
-8. New evaluators must define the control path for failure.
+1. New capabilities 定义 contracts 先于 adapters。
+2. New providers 不能破坏 deterministic demo。
+3. New runtime adapters 不能将 SDK types 泄露进 public contracts。
+4. New tools 必须经过 ToolGateway。
+5. New trace events 必须定义 redaction 和 receipt projection。
+6. New API routes 不能创建替代的 execution semantics。
+7. New memory providers 必须定义 retention, deletion, redaction, and tenant boundary。
+8. New evaluators 必须定义 failure 的控制路径。

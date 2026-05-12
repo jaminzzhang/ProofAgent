@@ -80,7 +80,7 @@ tool_required: WAITING_FOR_APPROVAL
 - 远程模型 path 不能绕过 policy、evidence、validator、trace 和 receipt。
 - Tool Gateway 能证明真实 MCP 接入前后的工具治理语义一致。
 - Dashboard API 能基于 run artifacts 查询执行历史，而不是另起一套执行语义。
-- 文档体系清晰：AI 先读 `docs/README.md`，架构先读 `docs/Proof Agent 技术设计方案.md`。
+- 文档体系清晰：AI 先读 `docs/README.md`，架构先读 `docs/technical-design.md`。
 
 ## 7. 演进路线
 
