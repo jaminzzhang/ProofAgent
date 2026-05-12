@@ -4,7 +4,6 @@ import shutil
 
 import pytest
 
-from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
@@ -61,30 +60,78 @@ def test_tool_question_handles_denied_approval(tmp_path: Path) -> None:
     assert result.outcome == "TOOL_APPROVAL_DENIED"
 
 
-def test_agentic_retrieval_strategy_fails_fast(tmp_path: Path) -> None:
+def test_agentic_retrieval_strategy_executes_with_pageindex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_post_json(
+        url: str,
+        *,
+        body: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return {
+            "retrieved_nodes": [
+                {
+                    "id": "travel-policy-node-1",
+                    "content": "Travel meals are reimbursed up to 50 USD per day with receipts.",
+                    "relevance_score": 0.95,
+                    "file_name": "travel-policy.pdf",
+                    "page_number": 3,
+                }
+            ],
+            "thinking": "remote retrieval reasoning is intentionally not traced",
+        }
+
+    monkeypatch.setenv("PAGEINDEX_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr("proof_agent.capabilities.knowledge.pageindex._post_json", fake_post_json)
     example_dir = tmp_path / "enterprise_qa"
     shutil.copytree(Path("examples/enterprise_qa"), example_dir)
     manifest_path = example_dir / "agent.yaml"
     manifest_path.write_text(
-        manifest_path.read_text(encoding="utf-8").replace(
+        manifest_path.read_text(encoding="utf-8")
+        .replace(
+            """knowledge:
+  provider: local_markdown
+  params:
+    path: ./knowledge""",
+            """knowledge:
+  provider: pageindex
+  params:
+    endpoint_env: PAGEINDEX_BASE_URL
+    document_id: doc_enterprise_policy
+    thinking: true""",
+        )
+        .replace(
             """retrieval:
   strategy: single_step
   top_k: 2
   min_score: 0.2""",
             """retrieval:
   strategy: agentic
-  top_k: 2
+  top_k: 1
   min_score: 0.2
   max_steps: 3""",
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ProofAgentError) as exc:
-        run_with_langgraph(
-            manifest_path,
-            question="What is the reimbursement rule for travel meals?",
-            runs_dir=tmp_path,
-        )
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+    )
 
-    assert exc.value.code == "PA_RETRIEVAL_001"
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    event_types = [event["event_type"] for event in events]
+    assert event_types.index("retrieval_plan") < event_types.index("retrieval_step")
+    retrieval_plan = next(event for event in events if event["event_type"] == "retrieval_plan")
+    assert retrieval_plan["payload"]["strategy"] == "agentic"
+    assert retrieval_plan["payload"]["provider"] == "pageindex"
+    retrieval_result = next(event for event in events if event["event_type"] == "retrieval_result")
+    assert retrieval_result["payload"]["sources"] == ["travel-policy.pdf"]
