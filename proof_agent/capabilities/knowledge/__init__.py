@@ -3,6 +3,7 @@ from proof_agent.capabilities.knowledge.local_provider import (
     LocalKnowledgeProvider,
     LocalMarkdownProvider,
 )
+from proof_agent.capabilities.knowledge.pageindex import PageIndexProvider
 from proof_agent.capabilities.knowledge.provider import KnowledgeProvider
 from proof_agent.capabilities.knowledge.registry import resolve_knowledge_provider
 from proof_agent.capabilities.knowledge.remote_search import RemoteSearchProvider
@@ -13,6 +14,7 @@ __all__ = [
     "LocalKnowledgeProvider",
     "LocalMarkdownProvider",
     "LocalVectorProvider",
+    "PageIndexProvider",
     "RemoteSearchProvider",
     "resolve_knowledge_provider",
 ]
