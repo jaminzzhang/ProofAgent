@@ -38,6 +38,7 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | --- | --- |
 | `examples/launch-script.md` | Demo and evaluation commands |
 | `examples/enterprise-qa.md` | Enterprise QA Template behavior |
+| `examples/insurance-service-qa.md` | Insurance Service QA Reference Agent behavior |
 | `examples/governance-receipt.md` | Example receipt rendering |
 
 ## Bilingual Structure

@@ -372,6 +372,7 @@ Recommended process:
 Suggested validation commands:
 ```bash
 uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "What is the reimbursement rule for travel meals?"
+uv run --extra dev proof-agent run examples/insurance_service_qa/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
 uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "Look up customer policy status before answering."
 uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
@@ -399,7 +400,7 @@ Run Execution API path:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/chat/runs \
   -H "Content-Type: application/json" \
-  -d '{"agent_id":"enterprise_qa","question":"What is the reimbursement rule for travel meals?"}'
+  -d '{"agent_id":"insurance_service_qa","question":"What documents are required for inpatient claim reimbursement?"}'
 ```
 
 The Run Execution API starts a configured Published Agent by `agent_id`; it does

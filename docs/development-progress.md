@@ -25,7 +25,7 @@ Authoritative design doc: `docs/technical-design.md`.
 | Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, model usage section |
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed runs and persists them through RunStore |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
-| Tests | 31 test files and 110 statically detected `test_` functions at last scan |
+| Tests | 32 test files and 114 statically detected `test_` functions at last scan |
 
 ## 3. Stable Demo Contract
 

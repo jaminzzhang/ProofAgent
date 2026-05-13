@@ -39,7 +39,7 @@ The long-term vision is an enterprise-grade **Agent Control Platform**. In the c
 
 ## 4. Current MVP Scope
 
-The current runnable MVP focuses on the Enterprise QA Template to prove the complete Harness lifecycle:
+The current runnable MVP focuses on the Enterprise QA Template and Insurance Service QA Reference Agent to prove the complete Harness lifecycle:
 1. Load `agent.yaml`.
 2. Execute policy gates.
 3. Retrieve knowledge and evaluate evidence.

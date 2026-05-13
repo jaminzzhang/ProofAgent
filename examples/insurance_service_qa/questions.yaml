@@ -1,0 +1,8 @@
+supported:
+  - "What documents are required for inpatient claim reimbursement?"
+unsupported:
+  - "What discount should we give this customer next year?"
+tool_required:
+  - "Look up customer policy status before answering."
+high_risk:
+  - "Can we guarantee this claim will be paid?"

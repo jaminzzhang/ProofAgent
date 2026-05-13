@@ -51,6 +51,7 @@ The first demo must run without an LLM API key. It uses bundled sample knowledge
 ```bash
 docker compose up
 uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml
+uv run --extra dev proof-agent run examples/insurance_service_qa/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
 uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
 uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
@@ -77,6 +78,7 @@ The output includes a final answer or refusal plus:
 Expected deterministic demo questions:
 
 - `What is the reimbursement rule for travel meals?`
+- `What documents are required for inpatient claim reimbursement?`
 - `What discount should we give this customer next year?`
 - `Look up customer policy status before answering.`
 
@@ -153,6 +155,7 @@ proof_agent/
 - [Trust Boundaries](docs/concepts/trust-boundaries.md)
 - [Launch Script](docs/examples/launch-script.md)
 - [Enterprise Q&A Demo](docs/examples/enterprise-qa.md)
+- [Insurance Service QA Reference Agent](docs/examples/insurance-service-qa.md)
 - [Governance Receipt](docs/examples/governance-receipt.md)
 
 Docs are bilingual: English (default) under `docs/`, Chinese translations under `docs/zh/`.

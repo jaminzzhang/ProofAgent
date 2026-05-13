@@ -9,6 +9,12 @@ from proof_agent.evaluation.demo.scenarios import (
 
 class DeterministicProvider:
     def answer(self, question: str) -> str:
+        if question == "What documents are required for inpatient claim reimbursement?":
+            return (
+                "Inpatient claim reimbursement requires the discharge summary, "
+                "itemized hospital invoice, medical expense receipts, diagnosis certificate, "
+                "and policyholder identity document."
+            )
         if question == SUPPORTED_QUESTION:
             return "Travel meals are reimbursed up to 50 USD per day with receipts."
         if question == TOOL_REQUIRED_QUESTION:
