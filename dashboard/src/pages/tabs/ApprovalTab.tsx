@@ -38,7 +38,7 @@ export function ApprovalTab({ state, runId }: ApprovalTabProps) {
       <div className="bg-[var(--bg-elevated)] border border-[var(--border)] rounded-lg p-6">
         <div className="flex items-center gap-3 mb-6">
           <div className="p-2 bg-[var(--bg-hover)] rounded-md border border-[var(--border)]">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinelinejoin="round" className="text-[var(--accent)]"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--accent)]"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           </div>
           <div>
             <h3 className="text-base font-semibold text-[var(--text-primary)]">Tool Execution Approval</h3>

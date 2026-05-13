@@ -106,3 +106,55 @@ export interface HealthResponse {
   history_dir: string
   total_runs: number
 }
+
+export interface ContextAdmission {
+  admitted: boolean
+  turn_count: number
+  included_turn_ids: string[]
+  summary: string
+  char_count: number
+  max_turns: number
+}
+
+export interface ConversationTurn {
+  turn_id: string
+  run_id: string
+  agent_id: string
+  question: string
+  final_output: string
+  outcome: ReceiptOutcome
+  created_at: string
+  context_admission: ContextAdmission
+  evidence: any[]
+  approval_state: ApprovalState | null
+  links: {
+    run_detail: string
+    trace: string
+    receipt: string
+  }
+}
+
+export interface ConversationRecord {
+  conversation_id: string
+  agent_id: string
+  created_at: string
+  updated_at: string
+  turns: ConversationTurn[]
+}
+
+export interface ChatRunResponse {
+  agent_id: string
+  run_id: string
+  outcome: ReceiptOutcome
+  final_output: string
+  evidence: any[]
+  approval_state: ApprovalState | null
+  links: {
+    run_detail: string
+    trace: string
+    receipt: string
+  }
+  conversation_id?: string
+  turn_id?: string
+  context_admission?: ContextAdmission
+}

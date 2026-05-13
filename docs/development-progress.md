@@ -56,7 +56,7 @@ runs/latest/governance_receipt.md
 | Vector provider | Local Vector provider queries existing Chroma indexes | Index build lifecycle and broader vector store adapters |
 | Agentic RAG | PageIndex provider path emits governed retrieval plan/step events and evaluates evidence locally | Planner-driven multi-step retrieval strategy beyond provider-agentic retrieval |
 | Dashboard UI | FastAPI API exists; SPA mount supported if built assets exist | Dashboard UI and Approval Console |
-| Assisted Chat UI | Backend conversation API and Controlled Conversation Context exist | Operator-facing chat page |
+| Assisted Chat UI | Implemented (ChatPage, Conversation API integration) | Polish and multi-agent selection |
 | Azure/Anthropic | Placeholder providers | Real provider adapters with mocked tests |
 | Streaming | Not implemented | Trace-safe streaming chunks |
 

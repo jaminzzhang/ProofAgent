@@ -1,5 +1,5 @@
 interface StatusDotProps {
-  status: 'ok' | 'blocked' | 'waiting' | 'error'
+  status: 'ok' | 'blocked' | 'waiting' | 'error' | 'connected'
   pulse?: boolean
 }
 
@@ -8,6 +8,7 @@ const DOT_STYLES = {
   blocked: 'bg-red-400',
   waiting: 'bg-blue-400',
   error: 'bg-red-500',
+  connected: 'bg-emerald-400',
 }
 
 export function StatusDot({ status, pulse }: StatusDotProps) {
