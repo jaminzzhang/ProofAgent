@@ -6,9 +6,10 @@ from uuid import uuid4
 
 from langgraph.checkpoint.memory import MemorySaver
 
+from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import ReceiptOutcome, RunResult
-from proof_agent.control.workflow.orchestrator import _finalize
+from proof_agent.control.workflow.orchestrator import _emit_model_error, _finalize, _is_model_error
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime.graph import build_enterprise_qa_graph
@@ -37,9 +38,15 @@ def run_with_langgraph(
 
     trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
     trace.emit("manifest_loaded", status="ok", payload={"agent_name": manifest.name})
+    try:
+        invocation = compose_harness_invocation(agent_yaml, manifest=manifest)
+    except Exception as exc:
+        if _is_model_error(exc):
+            _emit_model_error(trace, manifest.model.provider, manifest.model.name, exc)
+        raise
 
     builder = build_enterprise_qa_graph(
-        manifest_path=str(agent_yaml),
+        invocation=invocation,
         trace=trace,
         approved=approved,
     )

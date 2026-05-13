@@ -5,17 +5,13 @@ from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.contracts import ApprovalStatus, EvidenceChunk, ReceiptOutcome
-from proof_agent.capabilities.knowledge import resolve_knowledge_provider
-from proof_agent.capabilities.memory.session import SessionMemory
-from proof_agent.capabilities.models import resolve_provider
 from proof_agent.capabilities.tools.approval import create_approval_state
-from proof_agent.capabilities.tools.gateway import ToolGateway
-from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
     _cost_class,
+    _emit_model_error,
     _emit_policy,
     _model_response_payload,
     _run_retrieval,
@@ -38,30 +34,11 @@ class HarnessGraphState(TypedDict):
 
 
 def build_enterprise_qa_graph(
-    manifest_path: str,
+    invocation: HarnessInvocation,
     trace: TraceWriter,
     approved: bool | None = None,
 ) -> StateGraph:  # type: ignore[type-arg]
-    manifest = load_agent_manifest(manifest_path)
-    policy = PolicyEngine.from_file(manifest.policy.file)
-    try:
-        model_provider = resolve_provider(manifest.model)
-    except Exception as exc:
-        trace.emit(
-            "model_error",
-            status="error",
-            payload={
-                "provider": manifest.model.provider,
-                "model": manifest.model.name,
-                "error_code": getattr(exc, "code", "PA_MODEL_002"),
-                "error_class": exc.__class__.__name__,
-                "retryable": False,
-                "message": str(exc).splitlines()[0],
-            },
-        )
-        raise
-    knowledge_provider = resolve_knowledge_provider(manifest.knowledge)
-    tool_gateway = ToolGateway.from_file(manifest.tools.file)
+    manifest = invocation.manifest
 
     def retrieve_node(state: HarnessGraphState) -> dict[str, Any]:
         question = state["question"]
@@ -73,8 +50,8 @@ def build_enterprise_qa_graph(
         evidence, evidence_result = _run_retrieval(
             question=question,
             trace=trace,
-            policy=policy,
-            knowledge_provider=knowledge_provider,
+            policy=invocation.policy,
+            knowledge_provider=invocation.knowledge_provider,
             strategy=manifest.retrieval.strategy,
             top_k=manifest.retrieval.top_k,
             min_score=manifest.retrieval.min_score,
@@ -82,7 +59,7 @@ def build_enterprise_qa_graph(
             force_empty=question == UNSUPPORTED_QUESTION,
         )
 
-        answer_decision = policy.evaluate(
+        answer_decision = invocation.policy.evaluate(
             "before_answer",
             {
                 "accepted_evidence_count": evidence_result.metadata["accepted_count"],
@@ -91,7 +68,7 @@ def build_enterprise_qa_graph(
         )
         _emit_policy(trace, answer_decision)
 
-        memory = SessionMemory(deny_fields={"access_token", "customer_phone", "provider_api_key"})
+        memory = invocation.create_memory()
         memory_result = memory.write({"summary": f"Question: {question}"})
         trace.emit(
             "memory_write_decision",
@@ -113,7 +90,7 @@ def build_enterprise_qa_graph(
             return {}
 
         if approved is None:
-            gateway_result = tool_gateway.request_tool(
+            gateway_result = invocation.tool_gateway.request_tool(
                 tool_name="customer_lookup",
                 parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
                 approved=False,
@@ -148,7 +125,7 @@ def build_enterprise_qa_graph(
                 "governance_message": "The customer_lookup tool was not run because approval was denied.",
             }
 
-        gateway_result = tool_gateway.request_tool(
+        gateway_result = invocation.tool_gateway.request_tool(
             tool_name="customer_lookup",
             parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
             approved=True,
@@ -170,18 +147,18 @@ def build_enterprise_qa_graph(
         model_request = _build_model_request(
             question=question,
             evidence=evidence,
-            provider=model_provider.provider_name,
-            model=model_provider.model_name,
+            provider=invocation.model_provider.provider_name,
+            model=invocation.model_provider.model_name,
         )
-        estimated_tokens = model_provider.estimate_tokens(model_request)
-        model_decision = policy.evaluate(
+        estimated_tokens = invocation.model_provider.estimate_tokens(model_request)
+        model_decision = invocation.policy.evaluate(
             "before_model_call",
             {
-                "provider": model_provider.provider_name,
-                "model": model_provider.model_name,
+                "provider": invocation.model_provider.provider_name,
+                "model": invocation.model_provider.model_name,
                 "estimated_tokens": estimated_tokens,
                 "stream": model_request.stream,
-                "cost_class": _cost_class(model_provider.provider_name),
+                "cost_class": _cost_class(invocation.model_provider.provider_name),
                 "question": question,
                 "accepted_evidence_count": len(evidence), # Approximation
                 "citations_present": bool(evidence),
@@ -198,30 +175,24 @@ def build_enterprise_qa_graph(
             "model_request",
             status="ok",
             payload={
-                "provider": model_provider.provider_name,
-                "model": model_provider.model_name,
+                "provider": invocation.model_provider.provider_name,
+                "model": invocation.model_provider.model_name,
                 "message_count": len(model_request.messages),
                 "prompt_length": sum(len(message.content) for message in model_request.messages),
                 "system_prompt_length": _system_prompt_length(model_request),
                 "estimated_tokens": estimated_tokens,
                 "stream": model_request.stream,
-                "cost_class": _cost_class(model_provider.provider_name),
+                "cost_class": _cost_class(invocation.model_provider.provider_name),
             },
         )
         try:
-            model_response = model_provider.generate(model_request)
+            model_response = invocation.model_provider.generate(model_request)
         except Exception as exc:
-            trace.emit(
-                "model_error",
-                status="error",
-                payload={
-                    "provider": model_provider.provider_name,
-                    "model": model_provider.model_name,
-                    "error_code": getattr(exc, "code", "PA_MODEL_002"),
-                    "error_class": exc.__class__.__name__,
-                    "retryable": False,
-                    "message": str(exc).splitlines()[0],
-                },
+            _emit_model_error(
+                trace,
+                invocation.model_provider.provider_name,
+                invocation.model_provider.model_name,
+                exc,
             )
             raise
         trace.emit(

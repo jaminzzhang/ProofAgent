@@ -243,7 +243,7 @@ workflow:
   template: enterprise_qa
 ```
 
-In the current MVP, `runtime/langgraph_runner.py` is the LangGraph adapter boundary, but the main flow is still executed by the Enterprise QA orchestrator. Future real LangGraph runtimes should assume responsibility for StateGraph, checkpoint, interrupt/resume, and streaming hooks, but MUST NOT alter the Control Plane's governance semantics.
+In the current MVP, `bootstrap/composition.py` resolves a `HarnessInvocation`, and `runtime/langgraph_runner.py` executes the Enterprise QA LangGraph `StateGraph` with those composed dependencies. Future runtime work should extend checkpoint, interrupt/resume, and streaming hooks, but MUST NOT alter the Control Plane's governance semantics.
 
 Development principles:
 - Runtime can advance state, but cannot skip PolicyEngine.

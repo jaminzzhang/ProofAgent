@@ -150,9 +150,9 @@ Layer boundary rules:
 | Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `dashboard` |
 | Docker | `Dockerfile`, `docker-compose.yml` runs demo by default |
 | Contracts | Pydantic v2 frozen models |
-| Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection |
-| Workflow | `control/workflow/orchestrator.py` executes Enterprise QA Harness |
-| Runtime | `runtime/langgraph_runner.py` is the adapter boundary, currently delegates to orchestrator |
+| Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, and `HarnessInvocation` composition |
+| Workflow | `control/workflow/` owns the Enterprise QA Harness and the workflow template registry |
+| Runtime | `runtime/langgraph_runner.py` executes the Enterprise QA `StateGraph` through resolved Harness dependencies |
 | Policy | `control/policy/` owns retrieval, answer, tool, memory, model call enforcement points |
 | Knowledge | `capabilities/knowledge/` owns Markdown deterministic retrieval; vector stack optional |
 | Model | `capabilities/models/` owns `deterministic`, `openai_compatible`; Azure/Anthropic placeholders |
@@ -314,9 +314,9 @@ Responsibilities:
 - fail fast before execution when required files, providers, runtime, or writable audit paths are invalid
 
 Current MVP note:
-- Some Bootstrap / Composition work still happens inside `control/workflow/orchestrator.py`, including manifest loading and concrete dependency construction.
-- This is acceptable for the MVP but should be externalized as templates and providers multiply.
-- Future work should introduce a thin composition entry point that returns a resolved workflow invocation while preserving deterministic demo behavior.
+- `bootstrap/composition.py` exposes `HarnessInvocation`, the thin composition entry point that resolves the Agent Contract into template metadata and governed capabilities.
+- The Enterprise QA orchestrator and LangGraph runner consume the resolved invocation rather than independently constructing provider dependencies.
+- Future templates should extend the workflow template registry and composition boundary instead of adding template-specific dependency assembly to the Enterprise QA orchestrator.
 
 Rules:
 - Bootstrap may read config and instantiate adapters, but it must not make policy decisions.
@@ -369,7 +369,8 @@ It does not own:
 - provider-specific error payloads
 
 Current MVP:
-- `control/workflow/orchestrator.py` executes the Enterprise QA Harness and currently contains some Bootstrap / Composition code.
+- `control/workflow/orchestrator.py` preserves the plain Python Enterprise QA Harness behavior.
+- `control/workflow/templates.py` registers the supported workflow templates.
 - `control/policy/` evaluates policy rules.
 - `control/validators/` admit or block candidate outputs and tool results.
 - `capabilities/tools/approval.py` defines approval state, while `capabilities/tools/gateway.py` is the governed tool entry.
@@ -396,8 +397,8 @@ Runtime adapter strategy:
 - Runtime cannot bypass PolicyEngine, ApprovalState, Validators, ToolGateway, or trace emission.
 
 Current MVP:
-- `runtime/langgraph_runner.py` is an adapter boundary and currently delegates to the plain Python Enterprise QA orchestrator.
-- This preserves the intended runtime seam while deterministic Harness behavior remains the regression baseline.
+- `runtime/langgraph_runner.py` executes the Enterprise QA LangGraph `StateGraph` with a composed `HarnessInvocation`.
+- This keeps runtime mechanics in the Runtime Plane while deterministic Harness behavior remains the regression baseline.
 
 ## 12. PolicyEngine
 

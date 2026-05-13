@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from proof_agent.observability.audit.receipt import generate_receipt
 from proof_agent.observability.audit.trace import TraceWriter
+from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import (
     ApprovalStatus,
@@ -18,10 +19,8 @@ from proof_agent.contracts import (
     ValidationResult,
 )
 from proof_agent.evaluation.demo.scenarios import TOOL_REQUIRED_QUESTION, UNSUPPORTED_QUESTION
-from proof_agent.capabilities.knowledge import KnowledgeProvider, resolve_knowledge_provider
-from proof_agent.capabilities.memory.session import SessionMemory
+from proof_agent.capabilities.knowledge import KnowledgeProvider
 from proof_agent.control.policy.engine import PolicyEngine
-from proof_agent.capabilities.models import resolve_provider
 from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.capabilities.tools.gateway import ToolGateway
 from proof_agent.control.validators.citations import validate_citations_supported_by_evidence
@@ -63,30 +62,18 @@ def run_enterprise_qa(
     trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
     trace.emit("manifest_loaded", status="ok", payload={"agent_name": manifest.name})
     try:
-        model_provider = resolve_provider(manifest.model)
+        invocation = compose_harness_invocation(agent_yaml, manifest=manifest)
     except Exception as exc:
-        trace.emit(
-            "model_error",
-            status="error",
-            payload={
-                "provider": manifest.model.provider,
-                "model": manifest.model.name,
-                "error_code": getattr(exc, "code", "PA_MODEL_002"),
-                "error_class": exc.__class__.__name__,
-                "retryable": False,
-                "message": str(exc).splitlines()[0],
-            },
-        )
+        if _is_model_error(exc):
+            _emit_model_error(trace, manifest.model.provider, manifest.model.name, exc)
         raise
 
     # Retrieval is still policy-gated even in the deterministic local demo.
-    policy = PolicyEngine.from_file(manifest.policy.file)
-    knowledge_provider = resolve_knowledge_provider(manifest.knowledge)
     evidence, evidence_result = _run_retrieval(
         question=question,
         trace=trace,
-        policy=policy,
-        knowledge_provider=knowledge_provider,
+        policy=invocation.policy,
+        knowledge_provider=invocation.knowledge_provider,
         strategy=manifest.retrieval.strategy,
         top_k=manifest.retrieval.top_k,
         min_score=manifest.retrieval.min_score,
@@ -97,16 +84,17 @@ def run_enterprise_qa(
     if question == TOOL_REQUIRED_QUESTION:
         # Tool-required questions leave the normal answer path and exercise approval gating.
         return _handle_tool_question(
-            manifest_tools_file=manifest.tools.file,
+            tool_gateway=invocation.tool_gateway,
             trace=trace,
             receipt_path=receipt_path,
             trace_path=trace_path,
+            agent_name=invocation.manifest.name,
             question=question,
             approved=approved,
             store=store,
         )
 
-    answer_decision = policy.evaluate(
+    answer_decision = invocation.policy.evaluate(
         "before_answer",
         {
             "accepted_evidence_count": evidence_result.metadata["accepted_count"],
@@ -115,7 +103,7 @@ def run_enterprise_qa(
     )
     _emit_policy(trace, answer_decision)
 
-    memory = SessionMemory(deny_fields={"access_token", "customer_phone", "provider_api_key"})
+    memory = invocation.create_memory()
     # v1 stores only a harmless session summary to demonstrate memory policy checks.
     memory_result = memory.write({"summary": f"Question: {question}"})
     trace.emit(
@@ -131,18 +119,18 @@ def run_enterprise_qa(
         model_request = _build_model_request(
             question=question,
             evidence=evidence,
-            provider=model_provider.provider_name,
-            model=model_provider.model_name,
+            provider=invocation.model_provider.provider_name,
+            model=invocation.model_provider.model_name,
         )
-        estimated_tokens = model_provider.estimate_tokens(model_request)
-        model_decision = policy.evaluate(
+        estimated_tokens = invocation.model_provider.estimate_tokens(model_request)
+        model_decision = invocation.policy.evaluate(
             "before_model_call",
             {
-                "provider": model_provider.provider_name,
-                "model": model_provider.model_name,
+                "provider": invocation.model_provider.provider_name,
+                "model": invocation.model_provider.model_name,
                 "estimated_tokens": estimated_tokens,
                 "stream": model_request.stream,
-                "cost_class": _cost_class(model_provider.provider_name),
+                "cost_class": _cost_class(invocation.model_provider.provider_name),
                 "question": question,
                 "accepted_evidence_count": evidence_result.metadata["accepted_count"],
                 "citations_present": bool(evidence),
@@ -157,25 +145,25 @@ def run_enterprise_qa(
                 "model_request",
                 status="ok",
                 payload={
-                    "provider": model_provider.provider_name,
-                    "model": model_provider.model_name,
+                    "provider": invocation.model_provider.provider_name,
+                    "model": invocation.model_provider.model_name,
                     "message_count": len(model_request.messages),
                     "prompt_length": sum(len(message.content) for message in model_request.messages),
                     "system_prompt_length": _system_prompt_length(model_request),
                     "estimated_tokens": estimated_tokens,
                     "stream": model_request.stream,
-                    "cost_class": _cost_class(model_provider.provider_name),
+                    "cost_class": _cost_class(invocation.model_provider.provider_name),
                 },
             )
             try:
-                model_response = model_provider.generate(model_request)
+                model_response = invocation.model_provider.generate(model_request)
             except Exception as exc:
                 trace.emit(
                     "model_error",
                     status="error",
                     payload={
-                        "provider": model_provider.provider_name,
-                        "model": model_provider.model_name,
+                        "provider": invocation.model_provider.provider_name,
+                        "model": invocation.model_provider.model_name,
                         "error_code": getattr(exc, "code", "PA_MODEL_002"),
                         "error_class": exc.__class__.__name__,
                         "retryable": False,
@@ -213,7 +201,7 @@ def run_enterprise_qa(
         trace=trace,
         receipt_path=receipt_path,
         trace_path=trace_path,
-        agent_name="enterprise_qa",
+        agent_name=invocation.manifest.name,
         question=question,
         outcome=outcome,
         message=message,
@@ -223,20 +211,20 @@ def run_enterprise_qa(
 
 def _handle_tool_question(
     *,
-    manifest_tools_file: Path,
+    tool_gateway: ToolGateway,
     trace: TraceWriter,
     receipt_path: Path,
     trace_path: Path,
+    agent_name: str,
     question: str,
     approved: bool | None,
     store: RunStore | None = None,
 ) -> RunResult:
     """Exercise the mock MCP approval flow for a tool-required question."""
 
-    gateway = ToolGateway.from_file(manifest_tools_file)
     if approved is None:
         # A missing approval is a terminal waiting state; the tool is not executed.
-        gateway_result = gateway.request_tool(
+        gateway_result = tool_gateway.request_tool(
             tool_name="customer_lookup",
             parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
             approved=False,
@@ -250,7 +238,7 @@ def _handle_tool_question(
             trace=trace,
             receipt_path=receipt_path,
             trace_path=trace_path,
-            agent_name="enterprise_qa",
+            agent_name=agent_name,
             question=question,
             outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
             message="Waiting for approval before customer_lookup can execute.",
@@ -274,14 +262,14 @@ def _handle_tool_question(
             trace=trace,
             receipt_path=receipt_path,
             trace_path=trace_path,
-            agent_name="enterprise_qa",
+            agent_name=agent_name,
             question=question,
             outcome=ReceiptOutcome.TOOL_APPROVAL_DENIED,
             message="The customer_lookup tool was not run because approval was denied.",
             store=store,
         )
 
-    gateway_result = gateway.request_tool(
+    gateway_result = tool_gateway.request_tool(
         tool_name="customer_lookup",
         parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
         approved=True,
@@ -292,7 +280,7 @@ def _handle_tool_question(
         trace=trace,
         receipt_path=receipt_path,
         trace_path=trace_path,
-        agent_name="enterprise_qa",
+        agent_name=agent_name,
         question=question,
         outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
         message="Customer policy status is active according to the approved mock lookup.",
@@ -310,6 +298,31 @@ def _emit_policy(trace: TraceWriter, decision: object) -> None:
             "decision": getattr(decision, "decision").value,
             "policy_rule_id": getattr(decision, "policy_rule_id"),
             "reason": getattr(decision, "reason"),
+        },
+    )
+
+
+def _is_model_error(exc: BaseException) -> bool:
+    """Return true when a composition error came from model provider resolution."""
+
+    return str(getattr(exc, "code", "")).startswith("PA_MODEL")
+
+
+def _emit_model_error(
+    trace: TraceWriter, provider: str, model: str, exc: BaseException
+) -> None:
+    """Record a normalized model error without provider payloads."""
+
+    trace.emit(
+        "model_error",
+        status="error",
+        payload={
+            "provider": provider,
+            "model": model,
+            "error_code": getattr(exc, "code", "PA_MODEL_002"),
+            "error_class": exc.__class__.__name__,
+            "retryable": False,
+            "message": str(exc).splitlines()[0],
         },
     )
 

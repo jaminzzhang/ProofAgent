@@ -1,0 +1,5 @@
+# Run Execution API And Observability API Boundary
+
+Proof Agent will expose operator-facing chat execution through a distinct Run Execution API, while the Dashboard API remains a read-only observability projection over run artifacts. We chose this split because the Assisted QA Chat Frontend must start governed Harness runs to approximate real staff use, but Dashboard routes must not become a second execution path that bypasses Delivery, Workflow Template selection, PolicyEngine, ToolGateway, Validators, Trace, Receipt, or RunStore semantics.
+
+The first Assisted QA Chat Frontend will submit questions to the Run Execution API and render the resulting outcome, evidence summary, approval state, and audit links from persisted run artifacts. If a run reaches `WAITING_FOR_APPROVAL`, the first-stage approval flow creates an explicit Approval Continuation Run with the approval decision instead of claiming durable checkpoint resume. Durable LangGraph interrupt/resume, Approval Console behavior, and RBAC are future Runtime Plane and Control Platform work, not Dashboard read API behavior.

@@ -5,7 +5,7 @@ import pytest
 from proof_agent.contracts import ModelResponse
 from proof_agent.capabilities.models.protocol import ModelProvider
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
-from proof_agent.runtime import graph
+from proof_agent.bootstrap import composition
 
 
 class _UnsafeProvider:
@@ -29,7 +29,7 @@ def test_model_output_must_pass_safety_and_citation_validators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider: ModelProvider = _UnsafeProvider()
-    monkeypatch.setattr(graph, "resolve_provider", lambda _config: provider)
+    monkeypatch.setattr(composition, "resolve_provider", lambda _config: provider)
 
     result = run_with_langgraph(
         Path("examples/enterprise_qa/agent.yaml"),
