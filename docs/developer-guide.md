@@ -395,12 +395,25 @@ Dashboard API path:
 uv run --extra dashboard proof-agent dashboard --host 127.0.0.1 --port 8000
 ```
 
+Run Execution API path:
+```bash
+curl -X POST http://127.0.0.1:8000/api/chat/runs \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"enterprise_qa","question":"What is the reimbursement rule for travel meals?"}'
+```
+
+The Run Execution API starts a configured Published Agent by `agent_id`; it does
+not accept arbitrary manifest paths from application clients. The Dashboard API
+continues to read run history, trace, receipt, evidence, model usage, and
+approval state from persisted run artifacts.
+
 When deploying, deliver:
 ```text
 Agent package
 Docker image or Python runtime
 environment variable configuration
 runs/ storage volume
+Published Agent configuration for execution surfaces
 Dashboard API if observability is required
 ```
 

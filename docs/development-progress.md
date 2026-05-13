@@ -16,16 +16,16 @@ Authoritative design doc: `docs/technical-design.md`.
 | Area | Status |
 | --- | --- |
 | Contracts | Pydantic v2 frozen models for manifest, policy, evidence, approval, tools, model, trace, receipt, run, dashboard |
-| Delivery | `delivery/cli.py` exposes Typer commands: `demo`, `run`, `doctor`, `inspect`, `compare`, `dashboard` |
+| Delivery | `delivery/cli.py` exposes Typer commands; `delivery/api.py` exposes the Run Execution API; `delivery/published_agents.py` maps Published Agent ids to approved manifests |
 | Docker | `Dockerfile` and `docker-compose.yml` run deterministic demo |
 | Bootstrap | `bootstrap/` owns YAML loader, path resolution, provider validation, retrieval config validation, secret-looking param rejection, and `HarnessInvocation` composition |
 | Control | `control/` owns Enterprise QA workflow, policy, validators, evidence decisions, approval, and outcome behavior |
 | Runtime | `runtime/langgraph_runner.py` executes the Enterprise QA LangGraph `StateGraph` with composed Harness dependencies |
 | Capability | `capabilities/` owns model providers, knowledge provider registry, memory, ToolGateway, mock `customer_lookup`, and future Skill packs |
 | Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, model usage section |
-| Storage / API | `observability/storage/` and `observability/api/` own RunStore, history/latest compatibility, FastAPI dashboard routes for health/runs/stats |
+| Storage / API | `observability/storage/` owns RunStore; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed runs and persists them through RunStore |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
-| Tests | 29 test files and 104 statically detected `test_` functions at last scan |
+| Tests | 30 test files and 108 statically detected `test_` functions at last scan |
 
 ## 3. Stable Demo Contract
 

@@ -609,11 +609,25 @@ RunStore:
 - writes per-run history under `runs/history/{run_id}`
 - powers Dashboard API read projections
 
-## 20. Dashboard API
+## 20. Execution API And Dashboard API
+
+Run Execution API is Delivery behavior. It starts governed Harness runs for
+application surfaces such as the Assisted QA Chat Frontend.
+
+Execution routes:
+| Route | Purpose |
+| --- | --- |
+| `POST /api/chat/runs` | start a Published Agent run from a chat surface |
+
+Rules:
+- Application surfaces call Published Agents by stable `agent_id`.
+- The request body must not accept arbitrary `agent.yaml` paths.
+- Execution still goes through Bootstrap / Composition, Runtime Plane, PolicyEngine, ToolGateway, Validators, Trace, Receipt, and RunStore.
+- The first approval continuation shape carries an explicit approval decision into a follow-up run; durable checkpoint resume is future Runtime Plane work.
 
 Dashboard API is observability, not execution.
 
-Routes:
+Dashboard routes:
 | Route | Purpose |
 | --- | --- |
 | `/api/health` | service health |
@@ -625,7 +639,7 @@ Routes:
 
 Rules:
 - API serializers define public response shapes.
-- API cannot bypass CLI/workflow.
+- Dashboard API cannot start runs or bypass CLI/workflow.
 - Static SPA may be mounted when built assets exist.
 - Approval Console is a future UI on top of approval state, not a new tool execution path.
 

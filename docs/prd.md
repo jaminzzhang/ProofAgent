@@ -32,6 +32,7 @@ The long-term vision is an enterprise-grade **Agent Control Platform**. In the c
 | Memory Boundary | Memory read/write has policy, redaction, retention, and tenant boundary designs |
 | Validators | Admission control for schema, evidence, citation, safety, tool result, etc. |
 | Trace & Receipt | JSONL Trace is the source of truth; Governance Receipt is the human-readable proof |
+| Run Execution API | Application surfaces start governed runs through Published Agent ids, not arbitrary manifest paths |
 | Dashboard | Dashboard API queries runs, traces, receipts, stats; UI/Approval Console for future platform evolution |
 | Deployment | Both CLI and Docker can run the deterministic demo; remote capabilities are enabled via environment variables and optional extras |
 
