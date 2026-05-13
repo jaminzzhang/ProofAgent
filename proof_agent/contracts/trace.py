@@ -20,6 +20,7 @@ class TraceEventType(str, Enum):
     RETRIEVAL_STEP = "retrieval_step"
     RETRIEVAL_RESULT = "retrieval_result"
     EVIDENCE_EVALUATION = "evidence_evaluation"
+    CONTEXT_ADMISSION = "context_admission"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_GRANTED = "approval_granted"
     APPROVAL_DENIED = "approval_denied"

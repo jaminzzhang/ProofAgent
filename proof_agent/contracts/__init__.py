@@ -1,5 +1,10 @@
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.approval import ApprovalState, ApprovalStatus
+from proof_agent.contracts.conversation import (
+    ContextAdmission,
+    ConversationRecord,
+    ConversationTurn,
+)
 from proof_agent.contracts.evidence import EvidenceChunk, EvidenceStatus
 from proof_agent.contracts.manifest import (
     AgentManifest,
@@ -36,6 +41,9 @@ __all__ = [
     "ApprovalState",
     "ApprovalStatus",
     "AuditConfig",
+    "ContextAdmission",
+    "ConversationRecord",
+    "ConversationTurn",
     "EnforcementPoint",
     "EvidenceChunk",
     "EvidenceStatus",

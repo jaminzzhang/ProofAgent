@@ -575,6 +575,7 @@ retrieval_plan
 retrieval_step
 retrieval_result
 evidence_evaluation
+context_admission
 model_request
 model_response
 model_error
@@ -618,12 +619,16 @@ Execution routes:
 | Route | Purpose |
 | --- | --- |
 | `POST /api/chat/runs` | start a Published Agent run from a chat surface |
+| `POST /api/chat/conversations` | create an assisted chat conversation for a Published Agent |
+| `GET /api/chat/conversations/{conversation_id}` | read a conversation timeline |
+| `POST /api/chat/conversations/{conversation_id}/runs` | start a run with Controlled Conversation Context |
 
 Rules:
 - Application surfaces call Published Agents by stable `agent_id`.
 - The request body must not accept arbitrary `agent.yaml` paths.
 - Execution still goes through Bootstrap / Composition, Runtime Plane, PolicyEngine, ToolGateway, Validators, Trace, Receipt, and RunStore.
 - The first approval continuation shape carries an explicit approval decision into a follow-up run; durable checkpoint resume is future Runtime Plane work.
+- Conversation runs admit a trace-safe summary of recent turns as Controlled Conversation Context; prior turns can resolve follow-ups but cannot replace current-turn evidence retrieval.
 
 Dashboard API is observability, not execution.
 

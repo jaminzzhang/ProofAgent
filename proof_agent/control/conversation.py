@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+import re
+
+from proof_agent.contracts import ContextAdmission, ConversationRecord
+
+
+def admit_conversation_context(
+    conversation: ConversationRecord,
+    *,
+    max_turns: int = 3,
+    max_chars: int = 1200,
+) -> ContextAdmission:
+    """Admit a trace-safe summary of recent conversation turns."""
+
+    turns = conversation.turns[-max_turns:]
+    if not turns:
+        return ContextAdmission(
+            admitted=False,
+            turn_count=0,
+            included_turn_ids=(),
+            summary="No prior turns admitted.",
+            char_count=0,
+            max_turns=max_turns,
+        )
+
+    parts = []
+    for index, turn in enumerate(turns, start=1):
+        question = _truncate(_normalize_space(turn.question), 160)
+        answer = _truncate(_normalize_space(turn.final_output), 220)
+        parts.append(
+            f"prior turn {index}: question={question}; "
+            f"outcome={turn.outcome.value}; answer_summary={answer}"
+        )
+    summary = _truncate(" | ".join(parts), max_chars)
+    return ContextAdmission(
+        admitted=True,
+        turn_count=len(turns),
+        included_turn_ids=tuple(turn.turn_id for turn in turns),
+        summary=summary,
+        char_count=len(summary),
+        max_turns=max_turns,
+    )
+
+
+def _normalize_space(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _truncate(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[: max(0, limit - 3)]}..."

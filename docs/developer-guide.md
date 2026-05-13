@@ -94,9 +94,9 @@ Core boundaries:
 
 | Area | v1 status |
 | --- | --- |
-| Entry | CLI, Docker demo, Dashboard API |
+| Entry | CLI, Docker demo, Run Execution API, Dashboard API |
 | Workflow template | `enterprise_qa` |
-| Runtime config | `workflow.runtime: langgraph`; adapter boundary exists, but MVP main flow delegates to plain Python orchestrator |
+| Runtime config | `workflow.runtime: langgraph`; Enterprise QA runs through a LangGraph `StateGraph` using composed Harness dependencies |
 | Knowledge | `knowledge.provider: local_markdown`, local Markdown retrieval |
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
 | Model | `deterministic` and `openai_compatible` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
@@ -104,7 +104,7 @@ Core boundaries:
 | Tools / MCP | ToolGateway, mock `customer_lookup`, approval state; real MCP transport is the extension direction |
 | Memory | `memory.provider: session`, with sensitive field denylist |
 | Validators | schema, evidence, safety, citations, tool result |
-| Audit | JSONL trace, Governance Receipt, RunStore, Dashboard read API |
+| Audit | JSONL trace, Governance Receipt, RunStore, ConversationStore, Dashboard read API |
 
 The v1 deterministic path must always operate without requiring API keys, network models, or external services.
 
@@ -406,6 +406,22 @@ The Run Execution API starts a configured Published Agent by `agent_id`; it does
 not accept arbitrary manifest paths from application clients. The Dashboard API
 continues to read run history, trace, receipt, evidence, model usage, and
 approval state from persisted run artifacts.
+
+Conversation API path:
+```bash
+curl -X POST http://127.0.0.1:8000/api/chat/conversations \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"enterprise_qa"}'
+
+curl -X POST http://127.0.0.1:8000/api/chat/conversations/{conversation_id}/runs \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What about travel meals again?"}'
+```
+
+Conversation runs automatically admit Controlled Conversation Context from
+recent turns. The admitted context is a bounded, trace-safe summary used for
+follow-up resolution; each turn still performs its own retrieval, evidence
+evaluation, validation, trace, and receipt.
 
 When deploying, deliver:
 ```text

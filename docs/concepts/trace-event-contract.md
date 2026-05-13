@@ -54,6 +54,7 @@ Every trace line is one JSON object:
 | `retrieval_step` | governed retrieval attempt begins |
 | `retrieval_result` | retrieved evidence summary and source ids |
 | `evidence_evaluation` | accepted/rejected evidence and thresholds |
+| `context_admission` | trace-safe summary of admitted conversation context |
 | `model_request` | redacted model invocation metadata before generation |
 | `model_response` | redacted model response metadata and token usage |
 | `model_error` | provider resolution, SDK, auth, timeout, or API failure after trace initialization |
@@ -76,6 +77,7 @@ Every trace line is one JSON object:
 | Harness event | OpenTelemetry GenAI concept |
 | --- | --- |
 | `retrieval_plan`, `retrieval_step`, `retrieval_result` | retrieval span |
+| `context_admission` | custom agent/framework event |
 | `model_request`, `model_response` | model generation span |
 | `model_error` | model span/log error with low-cardinality `error.type` |
 | `tool_request`, `tool_result` | execute tool span |
@@ -100,3 +102,7 @@ v1 does not need to emit OpenTelemetry. It must keep enough structure to build a
 `model_response` payloads store provider, model, finish reason, content length, refusal reason, and token usage. They must not store raw generated text.
 
 `model_error` payloads store provider, model, error code, error class, retryability, and a short non-secret message.
+
+## Conversation Context Rules
+
+`context_admission` payloads store only trace-safe admission facts: whether context was admitted, prior turn count, included turn ids, summary length, and a bounded summary. They must not store raw transcripts or allow prior answers to replace current-turn evidence retrieval.

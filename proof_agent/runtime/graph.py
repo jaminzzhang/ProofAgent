@@ -6,7 +6,7 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from proof_agent.bootstrap.composition import HarnessInvocation
-from proof_agent.contracts import ApprovalStatus, EvidenceChunk, ReceiptOutcome
+from proof_agent.contracts import ApprovalStatus, ContextAdmission, EvidenceChunk, ReceiptOutcome
 from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
@@ -37,6 +37,7 @@ def build_enterprise_qa_graph(
     invocation: HarnessInvocation,
     trace: TraceWriter,
     approved: bool | None = None,
+    conversation_context: ContextAdmission | None = None,
 ) -> StateGraph:  # type: ignore[type-arg]
     manifest = invocation.manifest
 
@@ -149,6 +150,7 @@ def build_enterprise_qa_graph(
             evidence=evidence,
             provider=invocation.model_provider.provider_name,
             model=invocation.model_provider.model_name,
+            conversation_context=conversation_context,
         )
         estimated_tokens = invocation.model_provider.estimate_tokens(model_request)
         model_decision = invocation.policy.evaluate(

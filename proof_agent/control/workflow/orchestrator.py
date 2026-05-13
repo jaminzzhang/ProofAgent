@@ -9,6 +9,7 @@ from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import (
     ApprovalStatus,
+    ContextAdmission,
     EvidenceChunk,
     ModelMessage,
     ModelRequest,
@@ -40,6 +41,7 @@ def run_enterprise_qa(
     question: str,
     runs_dir: Path,
     approved: bool | None = None,
+    conversation_context: ContextAdmission | None = None,
     run_id: str | None = None,
     store: RunStore | None = None,
 ) -> RunResult:
@@ -121,6 +123,7 @@ def run_enterprise_qa(
             evidence=evidence,
             provider=invocation.model_provider.provider_name,
             model=invocation.model_provider.model_name,
+            conversation_context=conversation_context,
         )
         estimated_tokens = invocation.model_provider.estimate_tokens(model_request)
         model_decision = invocation.policy.evaluate(
@@ -569,8 +572,16 @@ def _build_model_request(
     evidence: tuple[EvidenceChunk, ...],
     provider: str,
     model: str,
+    conversation_context: ContextAdmission | None = None,
 ) -> ModelRequest:
     evidence_text = "\n\n".join(getattr(chunk, "content") for chunk in evidence)
+    context_text = ""
+    if conversation_context is not None and conversation_context.admitted:
+        context_text = (
+            "Conversation context admitted for follow-up resolution only. "
+            "Do not treat it as evidence:\n"
+            f"{conversation_context.summary}\n\n"
+        )
     messages = (
         ModelMessage(
             role=ModelRole.SYSTEM,
@@ -578,14 +589,19 @@ def _build_model_request(
         ),
         ModelMessage(
             role=ModelRole.USER,
-            content=f"Question: {question}\n\nEvidence:\n{evidence_text}",
+            content=f"{context_text}Question: {question}\n\nEvidence:\n{evidence_text}",
         ),
     )
     return ModelRequest(
         provider=provider,
         model=model,
         messages=messages,
-        metadata={"question": question},
+        metadata={
+            "question": question,
+            "conversation_context_admitted": bool(
+                conversation_context and conversation_context.admitted
+            ),
+        },
         evidence_sources=tuple(getattr(chunk, "source") for chunk in evidence),
     )
 

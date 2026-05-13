@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.observability.api.routers import health, runs, stats
+from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.run_store import RunStore
 
 
@@ -18,6 +19,7 @@ def create_app(
     *,
     history_dir: Path = Path("runs/history"),
     runs_dir: Path = Path("runs/latest"),
+    conversations_dir: Path = Path("runs/conversations"),
     published_agents: dict[str, Path] | None = None,
     static_dir: Path | None = None,
 ) -> FastAPI:
@@ -29,6 +31,8 @@ def create_app(
         Root directory for per-run artifact storage.
     runs_dir:
         Compatibility directory used for the latest trace and receipt files.
+    conversations_dir:
+        Local conversation timeline directory for assisted chat surfaces.
     published_agents:
         Optional mapping of application-facing Agent ids to approved Agent manifests.
     static_dir:
@@ -54,6 +58,7 @@ def create_app(
     store = RunStore(history_dir)
     application.state.store = store
     application.state.runs_dir = runs_dir
+    application.state.conversation_store = ConversationStore(conversations_dir)
     application.state.published_agents = PublishedAgentRegistry(published_agents)
 
     application.include_router(execution_router, prefix="/api")

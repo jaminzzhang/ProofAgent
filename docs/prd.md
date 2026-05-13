@@ -33,6 +33,7 @@ The long-term vision is an enterprise-grade **Agent Control Platform**. In the c
 | Validators | Admission control for schema, evidence, citation, safety, tool result, etc. |
 | Trace & Receipt | JSONL Trace is the source of truth; Governance Receipt is the human-readable proof |
 | Run Execution API | Application surfaces start governed runs through Published Agent ids, not arbitrary manifest paths |
+| Controlled Conversation Context | Assisted chat can use prior turns through bounded, trace-safe context admission while preserving per-turn evidence retrieval |
 | Dashboard | Dashboard API queries runs, traces, receipts, stats; UI/Approval Console for future platform evolution |
 | Deployment | Both CLI and Docker can run the deterministic demo; remote capabilities are enabled via environment variables and optional extras |
 
