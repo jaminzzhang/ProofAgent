@@ -112,6 +112,23 @@ def test_loads_react_enterprise_qa_contract(tmp_path: Path) -> None:
     assert manifest.response.include_review_results is False
 
 
+def test_loads_react_enterprise_qa_example_manifest() -> None:
+    manifest = load_agent_manifest(Path("examples/react_enterprise_qa/agent.yaml"))
+
+    assert manifest.workflow.template == "react_enterprise_qa"
+    assert manifest.react is not None
+    assert manifest.react.max_steps == 5
+    assert manifest.react.max_tool_calls == 1
+    assert manifest.react.planner.provider == "deterministic"
+    assert manifest.review is not None
+    assert manifest.review.mode == "auto"
+    assert manifest.review.subagent is not None
+    assert manifest.review.subagent.provider == "deterministic"
+    assert manifest.response is not None
+    assert manifest.response.include_reasoning_summary is False
+    assert manifest.response.include_review_results is False
+
+
 def test_react_template_requires_react_config(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(tmp_path, react_section="")
 

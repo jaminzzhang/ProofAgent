@@ -1,0 +1,17 @@
+tools:
+  - name: customer_lookup
+    description: "Mock customer policy status lookup."
+    transport: stdio
+    command: python
+    args:
+      - -m
+      - proof_agent.capabilities.tools.mcp_mock
+    risk_level: medium
+    requires_approval: true
+    allowed_parameters:
+      - customer_id
+      - policy_id
+    denied_parameters:
+      - access_token
+      - customer_phone
+      - provider_api_key

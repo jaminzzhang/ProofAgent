@@ -83,6 +83,26 @@ def test_chat_run_execution_rejects_arbitrary_manifest_path(tmp_path: Path) -> N
     assert response.status_code == 422
 
 
+def test_chat_run_execution_registers_react_enterprise_qa_fail_closed(
+    tmp_path: Path,
+) -> None:
+    app = create_app(history_dir=tmp_path / "history", runs_dir=tmp_path / "latest")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["code"] == "PA_CONFIG_002"
+    assert "not executable yet" in detail["message"]
+
+
 def test_chat_run_execution_returns_approval_state_for_tool_question(tmp_path: Path) -> None:
     app = create_app(
         history_dir=tmp_path / "history",
