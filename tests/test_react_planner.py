@@ -55,3 +55,4 @@ def test_unsupported_react_planner_provider_raises_actionable_error() -> None:
         resolve_react_planner(config)
 
     assert exc.value.code == "PA_REACT_001"
+    assert str(exc.value).startswith("PA_REACT_001:")

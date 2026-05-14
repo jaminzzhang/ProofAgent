@@ -93,10 +93,8 @@ def resolve_react_planner(config: ReActPlannerConfig) -> ReActPlanner:
     if config.provider == "deterministic":
         return DeterministicReActPlanner()
 
-    error = ProofAgentError(
-        "PA_MODEL_001",
+    raise ProofAgentError(
+        "PA_REACT_001",
         f"Unsupported ReAct planner provider: {config.provider}",
         "Set react.planner.provider to 'deterministic' or install a supported ReAct planner provider.",
     )
-    error.code = "PA_REACT_001"
-    raise error
