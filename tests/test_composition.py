@@ -15,6 +15,8 @@ def test_compose_harness_invocation_resolves_enterprise_qa_dependencies() -> Non
     assert invocation.model_provider.provider_name == "deterministic"
     assert invocation.knowledge_provider.provider_name == "local_markdown"
     assert "customer_lookup" in invocation.tool_gateway.tools
+    assert invocation.react_planner is None
+    assert invocation.review_subagent is None
 
     memory = invocation.create_memory()
     memory_result = memory.write({"summary": "Question: sample"})
@@ -32,3 +34,13 @@ def test_react_workflow_template_resolves_from_registry() -> None:
     template = resolve_workflow_template("react_enterprise_qa")
 
     assert template.name == "react_enterprise_qa"
+
+
+def test_compose_harness_invocation_resolves_react_dependencies() -> None:
+    invocation = compose_harness_invocation(
+        Path("examples/react_enterprise_qa/agent.yaml")
+    )
+
+    assert invocation.template.name == "react_enterprise_qa"
+    assert invocation.react_planner is not None
+    assert invocation.review_subagent is not None
