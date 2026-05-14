@@ -45,6 +45,12 @@ def test_supported_travel_meal_question_answers_with_react_review_trace(
     ):
         assert event_type in event_types
     assert event_types.index("review_decision") < event_types.index("policy_decision")
+    review_points = {
+        event["payload"]["enforcement_point"]
+        for event in events
+        if event["event_type"] == "review_requested"
+    }
+    assert "before_retrieval_step" in review_points
     assert "model_request" in event_types
     assert "model_response" in event_types
 

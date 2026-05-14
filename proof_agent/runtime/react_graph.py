@@ -134,6 +134,32 @@ def build_react_enterprise_qa_graph(
     def retrieval_node(state: ReActGraphState) -> dict[str, Any]:
         proposal = _proposal_from_state(state)
         retrieval_query = str(proposal.parameters.get("query") or state["question"])
+        step_proposal = _retrieval_step_action_proposal(retrieval_query)
+        step_context = {
+            "question": state["question"],
+            "query": retrieval_query,
+            "step_id": "step_1",
+            "provider": invocation.knowledge_provider.provider_name,
+            "top_k": manifest.retrieval.top_k,
+            "strategy": manifest.retrieval.strategy,
+            "review_fallback_decision": PolicyDecisionType.DENY.value,
+        }
+        step_decision, step_review_event = review_action(
+            trace=trace,
+            policy=invocation.policy,
+            enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL_STEP,
+            context=step_context,
+            proposal=step_proposal,
+            auto_review_enabled=auto_review_enabled,
+            review_subagent=invocation.review_subagent,
+        )
+        if step_decision.decision != PolicyDecisionType.ALLOW:
+            return {
+                "review_results": [step_review_event],
+                "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                "governance_message": "I cannot answer because the retrieval step was blocked by policy.",
+            }
+
         evidence, evidence_result = _run_retrieval(
             question=retrieval_query,
             trace=trace,
@@ -165,10 +191,14 @@ def build_react_enterprise_qa_graph(
 
         if evidence_result.status == "failed" or answer_decision.decision != PolicyDecisionType.ALLOW:
             return {
+                "review_results": [step_review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot answer because the available evidence is insufficient.",
             }
-        return {"evidence": [_evidence_state_dict(chunk) for chunk in evidence]}
+        return {
+            "review_results": [step_review_event],
+            "evidence": [_evidence_state_dict(chunk) for chunk in evidence],
+        }
 
     def model_node(state: ReActGraphState) -> dict[str, Any]:
         evidence = tuple(EvidenceChunk.model_validate(chunk) for chunk in state.get("evidence", []))
@@ -432,6 +462,24 @@ def _model_action_proposal(question: str) -> ReActActionProposal:
             required_evidence=("accepted evidence",),
         ),
         parameters={"question": question},
+        risk_level="low",
+    )
+
+
+def _retrieval_step_action_proposal(query: str) -> ReActActionProposal:
+    return ReActActionProposal(
+        action_id="act_retrieval_step_1",
+        action_type=ReActActionType.RUN_RETRIEVAL_STEP,
+        reasoning_summary=ReasoningSummary(
+            goal="Run one governed retrieval step.",
+            observations=("The retrieval plan has been approved for evidence lookup.",),
+            candidate_actions=(ReActActionType.RUN_RETRIEVAL_STEP,),
+            selected_action=ReActActionType.RUN_RETRIEVAL_STEP,
+            rationale_summary="The approved query can be submitted to the configured knowledge provider.",
+            risk_flags=(),
+            required_evidence=("policy evidence",),
+        ),
+        parameters={"query": query, "step_id": "step_1"},
         risk_level="low",
     )
 
