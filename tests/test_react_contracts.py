@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from proof_agent.contracts import (
     EnforcementPoint,
     PolicyDecisionType,
@@ -44,3 +47,17 @@ def test_review_decision_is_advisory_policy_shape() -> None:
 
     assert decision.suggested_decision == PolicyDecisionType.ALLOW
     assert decision.subject_action_id == "act_1"
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1, float("nan")])
+def test_review_decision_rejects_invalid_confidence(confidence: float) -> None:
+    with pytest.raises(ValidationError):
+        ReviewDecision(
+            review_id="rev_1",
+            enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+            suggested_decision=PolicyDecisionType.ALLOW,
+            reason="The plan stays inside the enterprise QA scope.",
+            confidence=confidence,
+            risk_flags=(),
+            subject_action_id="act_1",
+        )

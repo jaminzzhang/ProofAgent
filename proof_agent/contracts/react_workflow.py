@@ -55,7 +55,7 @@ class ReviewDecision(FrozenModel):
     enforcement_point: EnforcementPoint
     suggested_decision: PolicyDecisionType
     reason: str
-    confidence: float
+    confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     risk_flags: tuple[str, ...]
     subject_action_id: str
     metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
