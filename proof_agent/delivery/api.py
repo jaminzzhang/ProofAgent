@@ -44,6 +44,15 @@ class ConversationCreateRequest(BaseModel):
     agent_id: str = Field(min_length=1)
 
 
+class ConversationUpdateRequest(BaseModel):
+    """Request body for updating conversation metadata (title, pin state)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    pinned: bool | None = None
+
+
 class ConversationRunRequest(BaseModel):
     """Request body for adding one governed run to a conversation."""
 
@@ -97,12 +106,47 @@ def create_conversation(
     return conversation_record_payload(record)
 
 
+@router.get("/chat/conversations")
+def list_conversations(app_request: Request) -> list[dict[str, Any]]:
+    """Return a list of all assisted chat conversations."""
+    records = _get_conversation_store(app_request).list_conversations()
+    return [conversation_record_payload(r) for r in records]
+
+
 @router.get("/chat/conversations/{conversation_id}")
 def get_conversation(conversation_id: str, app_request: Request) -> dict[str, Any]:
     """Return the operator-facing conversation timeline."""
 
     record = _require_conversation(app_request, conversation_id)
     return conversation_record_payload(record)
+
+
+@router.patch("/chat/conversations/{conversation_id}")
+def update_conversation(
+    conversation_id: str,
+    request: ConversationUpdateRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Update conversation title and/or pin state."""
+
+    store = _get_conversation_store(app_request)
+    updated = store.update_conversation(
+        conversation_id,
+        title=request.title,
+        pinned=request.pinned,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
+    return conversation_record_payload(updated)
+
+
+@router.delete("/chat/conversations/{conversation_id}", status_code=204)
+def delete_conversation(conversation_id: str, app_request: Request) -> None:
+    """Delete a conversation and all its data."""
+
+    store = _get_conversation_store(app_request)
+    if not store.delete_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
 
 
 @router.post("/chat/conversations/{conversation_id}/runs")

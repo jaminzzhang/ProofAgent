@@ -137,6 +137,8 @@ export interface ConversationTurn {
 export interface ConversationRecord {
   conversation_id: string
   agent_id: string
+  title: string | null
+  pinned: boolean
   created_at: string
   updated_at: string
   turns: ConversationTurn[]

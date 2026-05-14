@@ -52,6 +52,8 @@ class ConversationRecord(FrozenModel):
 
     conversation_id: str
     agent_id: str
+    title: str | None = None
+    pinned: bool = False
     created_at: str
     updated_at: str
     turns: tuple[ConversationTurn, ...] = Field(default_factory=tuple)
@@ -76,6 +78,8 @@ def conversation_record_payload(record: ConversationRecord) -> dict[str, Any]:
     return {
         "conversation_id": record.conversation_id,
         "agent_id": record.agent_id,
+        "title": record.title,
+        "pinned": record.pinned,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "turns": [_turn_payload(turn) for turn in record.turns],

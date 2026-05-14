@@ -1,40 +1,53 @@
 import { useState, useEffect, useRef } from 'react'
-import { createConversation, fetchConversation, createConversationRun } from '../api/client'
-import type { ConversationRecord, ConversationTurn } from '../api/types'
+import { fetchConversation, createConversationRun, createConversation } from '../api/client'
+import type { ConversationRecord } from '../api/types'
 import { OutcomeBadge } from '../components/OutcomeBadge'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
+import { useParams, useLocation, useNavigate } from 'react-router-dom'
 
-export function ChatPage() {
+const SYNTHETIC_NEW_CHAT: ConversationRecord = {
+  conversation_id: '',
+  agent_id: 'enterprise_qa',
+  title: null,
+  pinned: false,
+  created_at: '',
+  updated_at: '',
+  turns: [],
+}
+
+export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
+  const { conversationId } = useParams<{ conversationId: string }>()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const isNewChat = location.pathname === '/new'
   const [conversation, setConversation] = useState<ConversationRecord | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const createNewConversation = () => {
-    setLoading(true)
-    createConversation('enterprise_qa')
-      .then((data) => {
-        setConversation(data)
-        localStorage.setItem('proof_agent_conversation_id', data.conversation_id)
-      })
-      .catch((err) => console.error('Failed to create conversation', err))
-      .finally(() => setLoading(false))
-  }
-
+  // Load backend conversation when conversationId changes
   useEffect(() => {
-    const conversationId = localStorage.getItem('proof_agent_conversation_id')
     if (conversationId) {
+      setLoading(true)
+      setError(null)
+      setConversation(null)
       fetchConversation(conversationId)
         .then(setConversation)
         .catch(() => {
-          createNewConversation()
+          setError('Failed to load conversation. It may have been deleted or the server is unavailable.')
         })
         .finally(() => setLoading(false))
+    } else if (isNewChat) {
+      setConversation(SYNTHETIC_NEW_CHAT)
+      setLoading(false)
+      setError(null)
     } else {
-      createNewConversation()
+      setLoading(false)
+      setConversation(null)
     }
-  }, [])
+  }, [conversationId, isNewChat])
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -44,16 +57,61 @@ export function ChatPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.trim() || !conversation) return
+    if (!input.trim()) return
+    if (!conversation && !isNewChat) return
 
     const q = input
     setInput('')
     setSending(true)
 
     try {
-      await createConversationRun(conversation.conversation_id, q)
-      const updated = await fetchConversation(conversation.conversation_id)
-      setConversation(updated)
+      // Lazy creation: create backend conversation on first send
+      let activeConversationId = conversation?.conversation_id
+      if (isNewChat && !activeConversationId) {
+        const newConv = await createConversation('enterprise_qa')
+        activeConversationId = newConv.conversation_id
+      }
+
+      const result = await createConversationRun(activeConversationId!, q)
+      onUpdate?.()
+
+      // If this was a new chat, navigate to the real conversation
+      if (isNewChat) {
+        navigate(`/c/${activeConversationId}`, { replace: true })
+        return
+      }
+
+      // Optimistically append the new turn
+      setConversation((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          updated_at: new Date().toISOString(),
+          turns: [
+            ...prev.turns,
+            {
+              turn_id: result.turn_id || '',
+              run_id: result.run_id,
+              agent_id: result.agent_id,
+              question: q,
+              final_output: result.final_output,
+              outcome: result.outcome,
+              created_at: new Date().toISOString(),
+              context_admission: result.context_admission || {
+                admitted: false,
+                turn_count: 0,
+                included_turn_ids: [],
+                summary: '',
+                char_count: 0,
+                max_turns: 3,
+              },
+              evidence: result.evidence || [],
+              approval_state: result.approval_state || null,
+              links: result.links,
+            },
+          ],
+        }
+      })
     } catch (err) {
       console.error('Failed to send message', err)
     } finally {
@@ -61,12 +119,66 @@ export function ChatPage() {
     }
   }
 
-  if (loading && !conversation) {
+  // No conversationId and not new chat: show landing state
+  if (!conversationId && !isNewChat) {
+    return (
+      <div className="flex flex-col h-[calc(100vh-160px)] max-w-4xl mx-auto px-4">
+        <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
+          <div className="w-12 h-12 rounded-full bg-[var(--bg-hover)] flex items-center justify-center text-2xl">
+            💬
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-[var(--text-primary)]">Assisted Chat</h2>
+            <p className="text-sm text-[var(--text-muted)] mt-1 max-w-[280px]">
+              Select a conversation from the sidebar or start a new one.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (loading) {
     return (
       <div className="py-12 flex justify-center">
         <LoadingSpinner />
       </div>
     )
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col h-[calc(100vh-160px)] max-w-4xl mx-auto px-4">
+        <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
+          <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center text-2xl">
+            ⚠️
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-[var(--text-primary)]">Unable to Load Conversation</h2>
+            <p className="text-sm text-[var(--text-muted)] mt-1 max-w-[320px]">{error}</p>
+          </div>
+          <button
+            onClick={() => {
+              setError(null)
+              setLoading(true)
+              fetchConversation(conversationId!)
+                .then(setConversation)
+                .catch(() => {
+                  setError('Failed to load conversation. It may have been deleted or the server is unavailable.')
+                })
+                .finally(() => setLoading(false))
+            }}
+            className="px-4 py-2 bg-[var(--accent)] text-white text-sm font-medium rounded-lg hover:opacity-90 transition-all"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (!conversation) {
+    return null
   }
 
   return (
@@ -76,19 +188,13 @@ export function ChatPage() {
           <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Assisted Chat</h2>
           <p className="text-sm text-[var(--text-muted)] mt-1">Operator-facing governed question answering.</p>
         </div>
-        <button
-          onClick={createNewConversation}
-          className="text-xs font-medium text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors border border-[var(--border)] px-3 py-1.5 rounded-md hover:bg-[var(--bg-hover)]"
-        >
-          New Chat
-        </button>
       </div>
 
       <div
         className="flex-1 overflow-y-auto p-6 space-y-8 bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl shadow-sm custom-scrollbar"
         ref={scrollRef}
       >
-        {conversation?.turns.length === 0 && !sending && (
+        {conversation.turns.length === 0 && !sending && (
           <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
             <div className="w-12 h-12 rounded-full bg-[var(--bg-hover)] flex items-center justify-center text-2xl">
               👋
@@ -102,7 +208,7 @@ export function ChatPage() {
           </div>
         )}
 
-        {conversation?.turns.map((turn) => (
+        {conversation.turns.map((turn) => (
           <div key={turn.turn_id} className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
             {/* User Question */}
             <div className="flex justify-end">

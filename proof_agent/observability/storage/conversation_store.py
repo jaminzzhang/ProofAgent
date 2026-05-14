@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import shutil
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import Enum
@@ -11,6 +13,15 @@ from typing import Any
 from uuid import uuid4
 
 from proof_agent.contracts import ConversationRecord, ConversationTurn
+
+logger = logging.getLogger(__name__)
+
+
+class _Unchanged:
+    """Sentinel to distinguish "no change" from "set to None/False"."""
+
+
+_UNCHANGED = _Unchanged()
 
 
 class ConversationStore:
@@ -59,6 +70,59 @@ class ConversationStore:
         )
         self._write(updated)
         return updated
+
+    def update_conversation(
+        self,
+        conversation_id: str,
+        *,
+        title: str | None | _Unchanged = _UNCHANGED,
+        pinned: bool | None | _Unchanged = _UNCHANGED,
+    ) -> ConversationRecord | None:
+        record = self.get_conversation(conversation_id)
+        if record is None:
+            return None
+
+        resolved_title = record.title
+        if not isinstance(title, _Unchanged):
+            resolved_title = title if title else None
+
+        updated = ConversationRecord(
+            conversation_id=record.conversation_id,
+            agent_id=record.agent_id,
+            title=resolved_title,
+            pinned=record.pinned if isinstance(pinned, _Unchanged) else bool(pinned),
+            created_at=record.created_at,
+            updated_at=_now(),
+            turns=record.turns,
+        )
+        self._write(updated)
+        return updated
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        conv_dir = self._conversations_dir / conversation_id
+        if not conv_dir.is_dir():
+            return False
+        shutil.rmtree(conv_dir)
+        return True
+
+    def list_conversations(self) -> list[ConversationRecord]:
+        """Return all non-empty conversations, sorted pinned-first then by update time."""
+        records = []
+        if not self._conversations_dir.exists():
+            return []
+
+        for conv_dir in self._conversations_dir.iterdir():
+            if not conv_dir.is_dir():
+                continue
+            record = self.get_conversation(conv_dir.name)
+            if record and record.turns:
+                records.append(record)
+            elif record:
+                logger.debug("Skipping empty conversation: %s", conv_dir.name)
+            else:
+                logger.warning("Skipping unreadable conversation directory: %s", conv_dir.name)
+
+        return sorted(records, key=lambda r: (r.pinned, r.updated_at), reverse=True)
 
     def _conversation_path(self, conversation_id: str) -> Path:
         return self._conversations_dir / conversation_id / "conversation.json"
