@@ -20,6 +20,106 @@ _Avoid_: Internal config, runtime config
 A reusable governed flow shape for a class of Agents, such as enterprise question answering.
 _Avoid_: One-off orchestrator branch, runtime graph
 
+**Controlled ReAct Workflow**:
+A Workflow Template where a model proposes reasoning steps and action proposals, while the Control Envelope governs whether each step may execute.
+_Avoid_: Autonomous ReAct agent, direct model executor
+
+**React Enterprise QA Template**:
+The V1 Controlled ReAct Workflow Template for enterprise question answering.
+_Avoid_: Replacing Enterprise QA Template, generic autonomous agent template
+
+**Deterministic ReAct Demo**:
+A no-API-key acceptance path for the React Enterprise QA Template using deterministic planner and review providers.
+_Avoid_: Remote-only ReAct demo, provider-dependent MVP
+
+**ReAct Planner**:
+The planning capability that turns user input, system prompt, and admitted context into Reasoning Summary and ReAct Action Proposal values.
+_Avoid_: Final answer model, Harness Review Subagent
+
+**ReAct Planner Config**:
+The Agent Contract section that configures the ReAct Planner independently from the final answer model and Harness Review Subagent.
+_Avoid_: Hidden planner defaults, overloaded answer model config
+
+**ReAct Action Proposal**:
+A model-proposed next action that is not executable until admitted by Harness policy.
+_Avoid_: Tool call, approved action, model decision
+
+**ReAct Action Set**:
+The fixed V1 set of allowed ReAct action types: ask clarification, plan retrieval, run retrieval step, propose tool call, generate final answer, escalate, or stop.
+_Avoid_: Free-form action name, arbitrary model command
+
+**Auto Review Mode**:
+A Harness operating mode where configured rules and, when enabled, a Harness Review Subagent review control nodes without human approval unless a decision requires it.
+_Avoid_: Unconstrained autonomous mode
+
+**Harness Review Subagent**:
+An LLM-backed subagent inside the Control Plane that reviews Harness control nodes in Auto Review Mode and returns a typed review result.
+_Avoid_: Business Agent, final answer agent, uncontrolled self-approval
+
+**Review Subagent Config**:
+The Agent Contract section that configures the Harness Review Subagent independently from the final answer model.
+_Avoid_: Reusing answer model config, hidden reviewer defaults
+
+**Review Decision**:
+A typed suggestion from the Harness Review Subagent that must be validated by PolicyEngine before it becomes a PolicyDecision.
+_Avoid_: Final policy decision, direct approval
+
+**Review Failure Policy**:
+The fail-closed behavior used when the Harness Review Subagent times out, errors, emits invalid output, or conflicts with deterministic policy.
+_Avoid_: Silent allow, best-effort continuation
+
+**Auto Review Scope**:
+The set of Harness control nodes that the Harness Review Subagent may review in V1.
+_Avoid_: All workflow nodes, unrestricted review surface
+
+**Reasoning Summary**:
+An audit-safe structured summary of ReAct planning intent, observations, candidate actions, selected action, rationale, risk flags, and required evidence.
+_Avoid_: Raw chain-of-thought, hidden reasoning transcript
+
+**Action Proposal Event**:
+A trace event that records an audit-safe ReAct Action Proposal before Harness review.
+_Avoid_: Tool execution event, final policy decision
+
+**Review Decision Event**:
+A trace event that records the Harness Review Subagent's Review Decision before PolicyEngine validation.
+_Avoid_: Final policy decision event
+
+**Review Override Event**:
+A trace event that records PolicyEngine overriding or rejecting a Review Decision.
+_Avoid_: Silent rule conflict
+
+**Clarification Requested Event**:
+A trace event that records a Clarification Request and the missing information categories.
+_Avoid_: Approval event, refusal event
+
+**Governance Detail Projection**:
+A response/API projection that may include Reasoning Summary and review results for operator inspection without changing trace completeness.
+_Avoid_: Trace storage toggle, raw debugging dump
+
+**Response Detail Policy**:
+The Agent Contract policy that sets the maximum governance detail a backend response may expose.
+_Avoid_: Frontend-only visibility flag, unrestricted API projection
+
+**ReAct Step Budget**:
+The configured upper bound on ReAct planning, retrieval, tool, and answer steps for one governed run.
+_Avoid_: Unlimited loop, best-effort loop
+
+**Evidence-First ReAct**:
+A Controlled ReAct Workflow policy where the default first executable action is retrieval unless the question requires clarification or a governed tool proposal.
+_Avoid_: Direct answer first, tool first by default
+
+**Clarification Request**:
+A governed response asking the user for missing information required before retrieval, tool use, or answer generation can proceed.
+_Avoid_: Refusal, approval request, model fallback answer
+
+**Waiting For User Clarification**:
+The run outcome used when a Clarification Request is needed before the Agent can continue.
+_Avoid_: Refused no evidence, waiting for approval
+
+**Clarification Continuation Run**:
+A follow-up Harness run that carries user-provided clarification through Controlled Conversation Context after an earlier run requested clarification.
+_Avoid_: Checkpoint resume, same-run continuation
+
 **Harness Invocation**:
 A resolved execution request that combines an Agent Contract, selected Workflow Template, and governed capabilities for one run.
 _Avoid_: Raw manifest, SDK runtime state
@@ -180,6 +280,32 @@ _Avoid_: Evidence content dump
 
 - Proof Agent is a **Controlled Agent Harness Framework**.
 - An **Agent Contract** selects a **Workflow Template** for a run.
+- A **Controlled ReAct Workflow** is a **Workflow Template**.
+- The **React Enterprise QA Template** is separate from the existing **Enterprise QA Template** so deterministic Enterprise QA remains the regression baseline.
+- The **React Enterprise QA Template** must include a **Deterministic ReAct Demo** before remote model paths are required.
+- The **React Enterprise QA Template** uses a **ReAct Planner** configured by **ReAct Planner Config**.
+- The **ReAct Planner**, **Harness Review Subagent**, and final answer model are separate roles even when a deterministic demo implementation shares local code.
+- A model may produce a **ReAct Action Proposal**, but only **Auto Review Mode** or another Harness review path can admit it for execution.
+- Every **ReAct Action Proposal** must use the fixed **ReAct Action Set**; non-enumerated actions are denied and traced.
+- **Auto Review Mode** may use a **Harness Review Subagent** as a Control Plane component.
+- A **Harness Review Subagent** reviews Harness control nodes; it does not generate the final user answer.
+- A **Harness Review Subagent** is configured by **Review Subagent Config**, not by the final answer model config.
+- A **Harness Review Subagent** produces a **Review Decision**.
+- A **Review Decision** becomes effective only after `PolicyEngine` validates it against deterministic rules and emits the final `PolicyDecision`.
+- A **Review Failure Policy** must fail closed: tool review falls back to `require_approval`, model call review falls back to `deny` or `escalate`, and retrieval review may use explicit single-step fallback only when configured.
+- Invalid or conflicting **Review Decision** output is traced as review error or override and cannot silently allow execution.
+- V1 **Auto Review Scope** covers `before_retrieval_plan`, `before_retrieval_step`, `before_tool_call`, and `before_model_call`.
+- `before_answer` remains governed primarily by deterministic evidence and citation rules; a **Harness Review Subagent** may advise but cannot replace evidence validation.
+- A **Controlled ReAct Workflow** records **Reasoning Summary**, not raw chain-of-thought.
+- A **Controlled ReAct Workflow** records **Action Proposal Event**, **Review Decision Event**, **Review Override Event**, and **Clarification Requested Event** where applicable.
+- `policy_decision` remains the final governance trace event after `PolicyEngine` validation.
+- Backend response settings may expose or hide **Governance Detail Projection**, but trace still records the full audit-safe facts.
+- **Response Detail Policy** sets the maximum **Governance Detail Projection** allowed for an Agent; API requests may request less detail but cannot exceed it.
+- V1 **Controlled ReAct Workflow** allows multi-step planning and retrieval, at most one governed tool call, and one final answer generation within a **ReAct Step Budget**.
+- V1 **React Enterprise QA Template** uses **Evidence-First ReAct**: retrieval is the default first executable action, clarification is allowed for underspecified questions, and tool proposals are allowed only when policy permits.
+- A **Controlled ReAct Workflow** cannot produce a direct final answer before evidence admission.
+- A **Clarification Request** ends the current run with **Waiting For User Clarification** rather than refusal or approval waiting.
+- A **Clarification Continuation Run** is a new governed run linked through the conversation timeline, not a durable checkpoint resume.
 - A **Harness Invocation** is assembled before execution and then governed by the **Control Envelope**.
 - An **Assisted QA Chat Frontend** submits questions through the **Run Execution API**.
 - A **Run Execution API** starts a **Published Agent** by agent identifier, not by arbitrary manifest path supplied by the frontend.
@@ -227,6 +353,24 @@ _Avoid_: Evidence content dump
 
 - "Harness Agent framework" could mean the framework itself or an Agent built with it. Resolved: use **Controlled Agent Harness Framework** for the framework category.
 - "Workflow" could mean business flow, runtime graph mechanics, or a hard-coded orchestrator branch. Resolved: use **Workflow Template** for the governed flow shape, and keep runtime mechanics separate.
+- "ReAct framework" could mean an autonomous model-driven agent loop or a governed flow shape. Resolved: use **Controlled ReAct Workflow** for the governed Proof Agent version.
+- "`enterprise_qa` with flags" could blur the deterministic baseline with ReAct behavior. Resolved: V1 adds **React Enterprise QA Template** instead of changing the existing template.
+- "ReAct MVP" could mean requiring a remote LLM. Resolved: V1 requires a **Deterministic ReAct Demo**.
+- "ReAct planner" could mean the final answer model or a separate planning role. Resolved: use **ReAct Planner** and configure it through **ReAct Planner Config**.
+- "ReAct action" could mean arbitrary model output or a bounded action enum. Resolved: V1 uses a fixed **ReAct Action Set**.
+- "LLM automatic decision" could mean model self-approval, rule-based Harness review, or a Control Plane review subagent. Resolved: use **Harness Review Subagent** for the LLM-backed control component that runs only in **Auto Review Mode**.
+- "Review model" could mean the final answer model or a separate control-plane reviewer. Resolved: **Review Subagent Config** is independent from final answer `model`.
+- "Subagent decision" could mean a final policy decision or a typed suggestion. Resolved: a **Review Decision** is only advisory until `PolicyEngine` validates it.
+- "Reviewer failure" could mean proceed optimistically or stop safely. Resolved: **Review Failure Policy** fails closed and records the reason.
+- "Review every node" could include answer admission and final output validation. Resolved: V1 **Auto Review Scope** excludes deterministic answer admission as an authority boundary.
+- "ReAct reasoning" could mean raw chain-of-thought or trace-safe planning facts. Resolved: record **Reasoning Summary** only.
+- "Review trace" could mean final policy or reviewer suggestion. Resolved: **Review Decision Event** records the suggestion; `policy_decision` records the final governance decision.
+- "Show planning" could mean trace recording or user-visible response projection. Resolved: **Governance Detail Projection** controls API/UI exposure, not trace completeness.
+- "Response visibility flag" could mean an unrestricted frontend request. Resolved: **Response Detail Policy** caps what API responses can expose.
+- "ReAct loop" could mean unlimited autonomous tool use or a bounded governed loop. Resolved: V1 uses a **ReAct Step Budget** and permits at most one governed tool call.
+- "ReAct first action" could mean answer, tool call, retrieval, or clarification. Resolved: V1 uses **Evidence-First ReAct**.
+- "Needs more user input" could mean refusal or approval. Resolved: use **Clarification Request** and **Waiting For User Clarification**.
+- "Continue after clarification" could mean resuming the same runtime checkpoint or starting another governed run. Resolved: V1 uses a **Clarification Continuation Run** with **Controlled Conversation Context**.
 - "Loaded manifest" could mean raw configuration or a ready-to-run execution object. Resolved: use **Harness Invocation** for the resolved run input assembled from contract and capabilities.
 - "Chat API" could mean a raw model chat endpoint or a governed execution endpoint. Resolved: use **Run Execution API** for starting Harness runs from chat surfaces.
 - "Agent selection" could mean a user-provided manifest path or a configured Agent identity. Resolved: application surfaces call a **Published Agent** by stable agent identifier.
