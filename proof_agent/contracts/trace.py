@@ -14,6 +14,13 @@ class TraceEventType(str, Enum):
 
     RUN_STARTED = "run_started"
     MANIFEST_LOADED = "manifest_loaded"
+    REASONING_SUMMARY = "reasoning_summary"
+    ACTION_PROPOSAL = "action_proposal"
+    REVIEW_REQUESTED = "review_requested"
+    REVIEW_DECISION = "review_decision"
+    REVIEW_ERROR = "review_error"
+    REVIEW_OVERRIDDEN = "review_overridden"
+    CLARIFICATION_REQUESTED = "clarification_requested"
     POLICY_DECISION = "policy_decision"
     RETRIEVAL_STARTED = "retrieval_started"
     RETRIEVAL_PLAN = "retrieval_plan"

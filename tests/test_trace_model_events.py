@@ -6,6 +6,18 @@ import pytest
 
 from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
+from proof_agent.contracts import TraceEventType
+
+
+def test_trace_event_types_include_react_review_events() -> None:
+    values = {event.value for event in TraceEventType}
+    assert "reasoning_summary" in values
+    assert "action_proposal" in values
+    assert "review_requested" in values
+    assert "review_decision" in values
+    assert "review_error" in values
+    assert "review_overridden" in values
+    assert "clarification_requested" in values
 
 
 def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) -> None:
