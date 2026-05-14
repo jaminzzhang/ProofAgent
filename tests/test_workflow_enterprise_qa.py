@@ -4,6 +4,7 @@ import shutil
 
 import pytest
 
+from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
@@ -135,3 +136,45 @@ def test_agentic_retrieval_strategy_executes_with_pageindex(
     assert retrieval_plan["payload"]["provider"] == "pageindex"
     retrieval_result = next(event for event in events if event["event_type"] == "retrieval_result")
     assert retrieval_result["payload"]["sources"] == ["travel-policy.pdf"]
+
+
+def test_react_template_fails_closed_until_runtime_adapter_exists(tmp_path: Path) -> None:
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(Path("examples/enterprise_qa"), example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "template: enterprise_qa",
+            "template: react_enterprise_qa",
+        )
+        + """
+
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  planner:
+    provider: deterministic
+    name: react-planner
+
+review:
+  mode: auto
+  subagent:
+    provider: deterministic
+    name: review-subagent
+
+response:
+  include_reasoning_summary: false
+  include_review_results: false
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        run_with_langgraph(
+            manifest_path,
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "runs",
+        )
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "not executable yet" in exc.value.message

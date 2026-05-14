@@ -11,6 +11,7 @@ from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import ContextAdmission, ReceiptOutcome, RunResult
 from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.control.workflow.orchestrator import _emit_model_error, _finalize, _is_model_error
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime.graph import build_enterprise_qa_graph
@@ -28,8 +29,15 @@ def run_with_langgraph(
     checkpointer: Any | None = None,
 ) -> RunResult:
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
-    
+
     manifest = load_agent_manifest(agent_yaml)
+    if manifest.workflow.template != "enterprise_qa":
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"workflow template is not executable yet: {manifest.workflow.template}",
+            "Use workflow.template: enterprise_qa until the selected template has a runtime adapter.",
+            artifact_path=agent_yaml,
+        )
     runs_dir.mkdir(parents=True, exist_ok=True)
     trace_path = runs_dir / "trace.jsonl"
     receipt_path = runs_dir / "governance_receipt.md"
