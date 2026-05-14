@@ -1,4 +1,4 @@
-from proof_agent.contracts import EnforcementPoint, PolicyDecisionType
+from proof_agent.contracts import EnforcementPoint, PolicyDecisionType, ReviewDecision
 from proof_agent.control.policy.engine import PolicyEngine
 
 
@@ -60,3 +60,54 @@ rules:
     )
 
     assert decision.decision == PolicyDecisionType.DENY
+
+
+def test_policy_overrides_review_allow_for_medium_customer_lookup() -> None:
+    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    review_decision = ReviewDecision(
+        review_id="review.act_tool_1.before_tool_call",
+        enforcement_point=EnforcementPoint.BEFORE_TOOL_CALL,
+        suggested_decision=PolicyDecisionType.ALLOW,
+        reason="The proposed lookup has business justification.",
+        confidence=0.8,
+        risk_flags=(),
+        subject_action_id="act_tool_1",
+    )
+
+    decision, event = engine.evaluate_with_review(
+        EnforcementPoint.BEFORE_TOOL_CALL,
+        {"tool_name": "customer_lookup", "risk_level": "medium"},
+        review_decision=review_decision,
+    )
+
+    assert decision.decision == PolicyDecisionType.REQUIRE_APPROVAL
+    assert decision.policy_rule_id == "tools.customer_lookup.approval"
+    assert event["used_review"] is True
+    assert event["review_id"] == "review.act_tool_1.before_tool_call"
+    assert event["suggested_decision"] == "allow"
+    assert event["final_decision"] == "require_approval"
+    assert event["overridden"] is True
+
+
+def test_invalid_model_call_review_fails_closed_to_deny() -> None:
+    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    review_decision = ReviewDecision(
+        review_id="review.act_model_1.before_model_call",
+        enforcement_point=EnforcementPoint.BEFORE_MODEL_CALL,
+        suggested_decision=PolicyDecisionType.REQUIRE_APPROVAL,
+        reason="Ask a human before invoking the model.",
+        confidence=0.7,
+        risk_flags=("model_call",),
+        subject_action_id="act_model_1",
+    )
+
+    decision, event = engine.evaluate_with_review(
+        EnforcementPoint.BEFORE_MODEL_CALL,
+        {"accepted_evidence_count": 1},
+        review_decision=review_decision,
+    )
+
+    assert decision.decision == PolicyDecisionType.DENY
+    assert event["used_review"] is True
+    assert event["error_code"] == "invalid_review_decision"
+    assert event["final_decision"] == "deny"

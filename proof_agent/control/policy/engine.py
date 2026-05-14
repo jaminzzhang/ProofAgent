@@ -9,6 +9,13 @@ from proof_agent.contracts import (
     PolicyDecision,
     PolicyDecisionType,
     PolicyRule,
+    ReviewDecision,
+)
+from proof_agent.control.policy.review import (
+    fail_closed_policy_decision,
+    is_review_decision_allowed,
+    is_stricter_than,
+    review_event_metadata,
 )
 from proof_agent.control.policy.rules import load_policy_rules
 
@@ -46,6 +53,86 @@ class PolicyEngine:
                     trace_event_id=trace_event_id,
                 )
         return self._allow(point, context, trace_event_id=trace_event_id)
+
+    def evaluate_with_review(
+        self,
+        enforcement_point: EnforcementPoint | str,
+        context: Mapping[str, Any],
+        *,
+        review_decision: ReviewDecision | None,
+        trace_event_id: str = "",
+    ) -> tuple[PolicyDecision, dict[str, Any]]:
+        point = EnforcementPoint(enforcement_point)
+        deterministic_decision = self.evaluate(
+            point,
+            context,
+            trace_event_id=trace_event_id,
+        )
+        if review_decision is None:
+            return deterministic_decision, {"used_review": False}
+
+        if review_decision.enforcement_point != point:
+            final_decision = fail_closed_policy_decision(
+                point,
+                context,
+                trace_event_id=trace_event_id,
+                error_code="review_enforcement_point_mismatch",
+            )
+            return final_decision, review_event_metadata(
+                review_decision=review_decision,
+                final_decision=final_decision,
+                used_review=True,
+                error_code="review_enforcement_point_mismatch",
+            )
+
+        if not is_review_decision_allowed(point, review_decision.suggested_decision):
+            final_decision = fail_closed_policy_decision(
+                point,
+                context,
+                trace_event_id=trace_event_id,
+                error_code="invalid_review_decision",
+            )
+            return final_decision, review_event_metadata(
+                review_decision=review_decision,
+                final_decision=final_decision,
+                used_review=True,
+                error_code="invalid_review_decision",
+            )
+
+        if is_stricter_than(
+            deterministic_decision.decision,
+            review_decision.suggested_decision,
+        ):
+            return deterministic_decision, review_event_metadata(
+                review_decision=review_decision,
+                final_decision=deterministic_decision,
+                used_review=True,
+                overridden=True,
+            )
+
+        if is_stricter_than(
+            review_decision.suggested_decision,
+            deterministic_decision.decision,
+        ):
+            final_decision = PolicyDecision(
+                decision=review_decision.suggested_decision,
+                enforcement_point=point,
+                reason=review_decision.reason,
+                policy_rule_id=f"auto_review.{point.value}",
+                metadata=dict(context),
+                trace_event_id=trace_event_id,
+            )
+            return final_decision, review_event_metadata(
+                review_decision=review_decision,
+                final_decision=final_decision,
+                used_review=True,
+            )
+
+        return deterministic_decision, review_event_metadata(
+            review_decision=review_decision,
+            final_decision=deterministic_decision,
+            used_review=True,
+        )
 
     def _evaluate_rule(
         self, rule: PolicyRule, context: Mapping[str, Any]
