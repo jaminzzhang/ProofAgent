@@ -4,7 +4,6 @@ import shutil
 
 import pytest
 
-from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
@@ -138,7 +137,7 @@ def test_agentic_retrieval_strategy_executes_with_pageindex(
     assert retrieval_result["payload"]["sources"] == ["travel-policy.pdf"]
 
 
-def test_react_template_fails_closed_until_runtime_adapter_exists(tmp_path: Path) -> None:
+def test_react_template_executes_when_manifest_uses_react_runtime(tmp_path: Path) -> None:
     example_dir = tmp_path / "react_enterprise_qa"
     shutil.copytree(Path("examples/enterprise_qa"), example_dir)
     manifest_path = example_dir / "agent.yaml"
@@ -169,12 +168,10 @@ response:
         encoding="utf-8",
     )
 
-    with pytest.raises(ProofAgentError) as exc:
-        run_with_langgraph(
-            manifest_path,
-            question="What is the reimbursement rule for travel meals?",
-            runs_dir=tmp_path / "runs",
-        )
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
 
-    assert exc.value.code == "PA_CONFIG_002"
-    assert "not executable yet" in exc.value.message
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"

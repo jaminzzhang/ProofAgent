@@ -15,6 +15,7 @@ from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime.graph import build_enterprise_qa_graph
+from proof_agent.runtime.react_graph import build_react_enterprise_qa_graph
 
 
 def run_with_langgraph(
@@ -31,11 +32,11 @@ def run_with_langgraph(
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
     manifest = load_agent_manifest(agent_yaml)
-    if manifest.workflow.template != "enterprise_qa":
+    if manifest.workflow.template not in {"enterprise_qa", "react_enterprise_qa"}:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"workflow template is not executable yet: {manifest.workflow.template}",
-            "Use workflow.template: enterprise_qa until the selected template has a runtime adapter.",
+            "Use workflow.template: enterprise_qa or react_enterprise_qa.",
             artifact_path=agent_yaml,
         )
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -61,12 +62,20 @@ def run_with_langgraph(
             _emit_model_error(trace, manifest.model.provider, manifest.model.name, exc)
         raise
 
-    builder = build_enterprise_qa_graph(
-        invocation=invocation,
-        trace=trace,
-        approved=approved,
-        conversation_context=conversation_context,
-    )
+    if manifest.workflow.template == "enterprise_qa":
+        builder = build_enterprise_qa_graph(
+            invocation=invocation,
+            trace=trace,
+            approved=approved,
+            conversation_context=conversation_context,
+        )
+    else:
+        builder = build_react_enterprise_qa_graph(
+            invocation=invocation,
+            trace=trace,
+            approved=approved,
+            conversation_context=conversation_context,
+        )
     
     if checkpointer is None:
         if manifest.workflow.checkpointer and manifest.workflow.checkpointer.provider == "sqlite":
@@ -86,6 +95,9 @@ def run_with_langgraph(
         "run_id": actual_run_id,
         "question": question,
         "messages": [],
+        "step_count": 0,
+        "tool_call_count": 0,
+        "review_results": [],
     }
     config = {"configurable": {"thread_id": actual_run_id}}
 
@@ -102,7 +114,7 @@ def run_with_langgraph(
         trace=trace,
         receipt_path=receipt_path,
         trace_path=trace_path,
-        agent_name="enterprise_qa",
+        agent_name=invocation.manifest.name,
         question=question,
         outcome=outcome,
         message=message,
