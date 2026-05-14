@@ -78,7 +78,10 @@ def fail_closed_decision_type(
     }:
         fallback = context.get("review_fallback_decision")
         if fallback is not None:
-            fallback_decision = PolicyDecisionType(fallback)
+            try:
+                fallback_decision = PolicyDecisionType(fallback)
+            except ValueError:
+                return PolicyDecisionType.DENY
             if is_review_decision_allowed(enforcement_point, fallback_decision):
                 return fallback_decision
         return PolicyDecisionType.DENY

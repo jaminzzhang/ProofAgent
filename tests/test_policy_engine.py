@@ -111,3 +111,27 @@ def test_invalid_model_call_review_fails_closed_to_deny() -> None:
     assert event["used_review"] is True
     assert event["error_code"] == "invalid_review_decision"
     assert event["final_decision"] == "deny"
+
+
+def test_malformed_retrieval_review_fallback_fails_closed_to_deny() -> None:
+    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    review_decision = ReviewDecision(
+        review_id="review.act_retrieve_1.before_tool_call",
+        enforcement_point=EnforcementPoint.BEFORE_TOOL_CALL,
+        suggested_decision=PolicyDecisionType.ALLOW,
+        reason="Wrong enforcement point for retrieval planning.",
+        confidence=0.7,
+        risk_flags=(),
+        subject_action_id="act_retrieve_1",
+    )
+
+    decision, event = engine.evaluate_with_review(
+        EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+        {"review_fallback_decision": "not_a_decision"},
+        review_decision=review_decision,
+    )
+
+    assert decision.decision == PolicyDecisionType.DENY
+    assert event["used_review"] is True
+    assert event["error_code"] == "review_enforcement_point_mismatch"
+    assert event["final_decision"] == "deny"
