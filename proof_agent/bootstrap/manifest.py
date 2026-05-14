@@ -19,6 +19,7 @@ from proof_agent.contracts import (
     ToolsConfig,
     WorkflowConfig,
 )
+from proof_agent.contracts.manifest import CheckpointerConfig
 
 
 PATH_PARAM_KEYS = {"path", "index_path", "mock_results_path"}
@@ -42,6 +43,9 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         workflow=WorkflowConfig(
             runtime=workflow["runtime"],
             template=workflow["template"],
+            checkpointer=_checkpointer_config_from_mapping(
+                workflow.get("checkpointer")
+            ),
         ),
         knowledge=KnowledgeConfig(
             provider=knowledge["provider"],
@@ -105,6 +109,17 @@ def _model_config_from_mapping(raw: Any) -> ModelConfig | None:
         provider=raw["provider"],
         name=raw["name"],
         params=raw.get("params", {}),
+    )
+
+
+def _checkpointer_config_from_mapping(raw: Any) -> CheckpointerConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("workflow.checkpointer must be a mapping")
+    return CheckpointerConfig(
+        provider=raw["provider"],
+        uri=raw.get("uri"),
     )
 
 

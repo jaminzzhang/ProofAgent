@@ -10,6 +10,9 @@ def test_load_valid_enterprise_qa_manifest() -> None:
     manifest = load_agent_manifest(Path("examples/enterprise_qa/agent.yaml"))
     assert manifest.name == "enterprise_qa"
     assert manifest.workflow.runtime == "langgraph"
+    assert manifest.workflow.checkpointer is not None
+    assert manifest.workflow.checkpointer.provider == "sqlite"
+    assert manifest.workflow.checkpointer.uri == "memory"
     assert manifest.knowledge.provider == "local_markdown"
     assert manifest.knowledge.params["path"].name == "knowledge"
     assert manifest.retrieval.strategy == "single_step"
@@ -116,6 +119,9 @@ def test_loads_react_enterprise_qa_example_manifest() -> None:
     manifest = load_agent_manifest(Path("examples/react_enterprise_qa/agent.yaml"))
 
     assert manifest.workflow.template == "react_enterprise_qa"
+    assert manifest.workflow.checkpointer is not None
+    assert manifest.workflow.checkpointer.provider == "sqlite"
+    assert manifest.workflow.checkpointer.uri == "memory"
     assert manifest.react is not None
     assert manifest.react.max_steps == 5
     assert manifest.react.max_tool_calls == 1
