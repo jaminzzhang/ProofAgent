@@ -49,7 +49,7 @@ uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
 
 Start the Dashboard API:
 ```bash
-uv run --extra dashboard proof-agent dashboard --host 127.0.0.1 --port 8000
+uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
 ```
 
 The Dashboard API reads the existing run history. It is not a secondary execution path for the Agent.
@@ -393,7 +393,7 @@ docker compose up
 
 Dashboard API path:
 ```bash
-uv run --extra dashboard proof-agent dashboard --host 127.0.0.1 --port 8000
+uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
 ```
 
 Run Execution API path:

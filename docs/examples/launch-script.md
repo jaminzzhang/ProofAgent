@@ -35,7 +35,7 @@ The CLI or Docker path must load `examples/enterprise_qa/agent.yaml` and write a
 Optional Dashboard API path:
 
 ```bash
-uv run --extra dashboard proof-agent dashboard --host 127.0.0.1 --port 8000
+uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
 ```
 
 The Dashboard API reads run artifacts. It must not bypass workflow, policy, validators, trace, or receipt generation.
@@ -88,7 +88,7 @@ The receipt must summarize policy decisions, evidence status, tool approval stat
 6. Open `runs/latest/governance_receipt.md`.
 7. Show the Plain RAG vs Harness RAG comparison.
 8. Optionally run the full Docker + `proof-agent run examples/enterprise_qa/agent.yaml` evaluation.
-9. Optionally start `proof-agent dashboard` and inspect `/api/health`, `/api/runs`, and `/api/stats`.
+9. Optionally start `proof-agent server` and inspect `/api/health`, `/api/runs`, and `/api/stats`.
 
 ## Smoke Test
 
