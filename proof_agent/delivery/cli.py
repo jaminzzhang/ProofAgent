@@ -95,12 +95,12 @@ def compare(agent_yaml: str, question: str = typer.Option(..., "--question")) ->
 
 
 @app.command()
-def dashboard(
-    port: int = typer.Option(8000, "--port", help="Port to serve the dashboard on"),
+def server(
+    port: int = typer.Option(8000, "--port", help="Port to serve the API on"),
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     history_dir: str = typer.Option("runs/history", "--history-dir", help="Run history directory"),
 ) -> None:
-    """Start the Proof Agent monitoring dashboard."""
+    """Start the Proof Agent API server."""
 
     try:
         import uvicorn
@@ -111,7 +111,10 @@ def dashboard(
     from proof_agent.observability.api.app import create_app
 
     app = create_app(history_dir=Path(history_dir))
-    typer.echo(f"Starting Proof Agent dashboard at http://{host}:{port}")
+    typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
+    typer.echo("To start the frontends in development mode, run:")
+    typer.echo("  Dashboard: cd dashboard && npm run dev (port 5173)")
+    typer.echo("  Chat Console: cd chat && npm run dev (port 5174)")
     uvicorn.run(app, host=host, port=port)
 
 

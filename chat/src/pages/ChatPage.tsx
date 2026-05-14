@@ -3,7 +3,6 @@ import { createConversation, fetchConversation, createConversationRun } from '..
 import type { ConversationRecord, ConversationTurn } from '../api/types'
 import { OutcomeBadge } from '../components/OutcomeBadge'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
-import { Link } from 'react-router-dom'
 
 export function ChatPage() {
   const [conversation, setConversation] = useState<ConversationRecord | null>(null)
@@ -57,20 +56,6 @@ export function ChatPage() {
       setConversation(updated)
     } catch (err) {
       console.error('Failed to send message', err)
-    } finally {
-      setSending(false)
-    }
-  }
-
-  const handleApproval = async (turn: ConversationTurn, approved: boolean) => {
-    if (!conversation) return
-    setSending(true)
-    try {
-      await createConversationRun(conversation.conversation_id, turn.question, approved)
-      const updated = await fetchConversation(conversation.conversation_id)
-      setConversation(updated)
-    } catch (err) {
-      console.error('Failed to send approval', err)
     } finally {
       setSending(false)
     }
@@ -141,12 +126,14 @@ export function ChatPage() {
                     </span>
                   )}
                   <div className="flex gap-3 ml-auto">
-                    <Link
-                      to={`/runs/${turn.run_id}`}
+                    <a
+                      href={`http://localhost:5173/runs/${turn.run_id}`}
+                      target="_blank"
+                      rel="noreferrer"
                       className="text-[11px] font-bold uppercase tracking-tight text-[var(--accent)] hover:underline"
                     >
                       Audit Trace
-                    </Link>
+                    </a>
                     <a
                       href={turn.links.receipt}
                       target="_blank"
@@ -160,20 +147,14 @@ export function ChatPage() {
 
                 {turn.outcome === 'WAITING_FOR_APPROVAL' && (
                   <div className="flex gap-2 pt-1">
-                    <button
-                      onClick={() => handleApproval(turn, true)}
-                      disabled={sending}
-                      className="px-4 py-1.5 bg-emerald-600 text-white text-[11px] font-bold uppercase tracking-wider rounded-md hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                    <a
+                      href={`http://localhost:5173/runs/${turn.run_id}#approval`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-1.5 bg-blue-600 text-white text-[11px] font-bold uppercase tracking-wider rounded-md hover:bg-blue-700 transition-colors inline-block"
                     >
-                      Approve Execution
-                    </button>
-                    <button
-                      onClick={() => handleApproval(turn, false)}
-                      disabled={sending}
-                      className="px-4 py-1.5 bg-red-600 text-white text-[11px] font-bold uppercase tracking-wider rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors"
-                    >
-                      Deny
-                    </button>
+                      Review Approval Request
+                    </a>
                   </div>
                 )}
               </div>

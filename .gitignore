@@ -60,6 +60,7 @@ runs/*
 .claude/
 
 # Frontend
-dashboard/node_modules/
-dashboard/dist/
-dashboard/.vite/
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo

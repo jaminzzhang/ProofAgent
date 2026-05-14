@@ -30,7 +30,7 @@ The project uses `uv` for fast dependency management.
 *   **Install dependencies:** `uv pip install -e ".[dev,dashboard,openai,vector]"`
 *   **Run Deterministic Demo:** `uv run --extra dev proof-agent demo` (Runs without API keys, generates traces in `runs/latest/`).
 *   **Run a specific Agent:** `uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml`
-*   **Start Dashboard API (Backend):** `uv run --extra dashboard proof-agent dashboard --host 127.0.0.1 --port 8000`
+*   **Start API Server (Backend):** `uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000`
 *   **Run with Docker:** `docker compose up`
 
 ### Testing and Validation
@@ -39,9 +39,15 @@ Always run the following commands to validate code changes:
 *   **Linting (Ruff):** `uv run --extra dev ruff check proof_agent tests`
 *   **Type Checking (Mypy):** `uv run --extra dev mypy proof_agent`
 
-### Frontend Dashboard
-*   **Install dependencies:** `cd dashboard && npm install`
-*   **Start Dev Server:** `cd dashboard && npm run dev` (Connects to backend on port 8000).
+### Frontend Applications
+The project contains two separate frontend applications: the observability **Dashboard** and the execution **Chat** console.
+
+*   **Install dependencies:** 
+    *   `cd dashboard && npm install`
+    *   `cd chat && npm install`
+*   **Start Dev Servers:** 
+    *   **Dashboard:** `cd dashboard && npm run dev` (Runs on port 5173, connects to backend on 8000)
+    *   **Chat Console:** `cd chat && npm run dev` (Runs on port 5174, connects to backend on 8000)
 
 ## Development Conventions & Architecture Rules
 

@@ -53,27 +53,3 @@ export function denyRun(runId: string, approvalId: string): Promise<{ status: st
     method: 'POST'
   })
 }
-
-export function createConversation(agentId: string): Promise<import('./types').ConversationRecord> {
-  return fetchJson<import('./types').ConversationRecord>(`${BASE}/chat/conversations`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agent_id: agentId })
-  })
-}
-
-export function fetchConversation(conversationId: string): Promise<import('./types').ConversationRecord> {
-  return fetchJson<import('./types').ConversationRecord>(`${BASE}/chat/conversations/${conversationId}`)
-}
-
-export function createConversationRun(
-  conversationId: string,
-  question: string,
-  approved?: boolean
-): Promise<import('./types').ChatRunResponse> {
-  return fetchJson<import('./types').ChatRunResponse>(`${BASE}/chat/conversations/${conversationId}/runs`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, approved })
-  })
-}
