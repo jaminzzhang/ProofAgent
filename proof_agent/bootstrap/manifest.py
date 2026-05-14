@@ -10,7 +10,12 @@ from proof_agent.contracts import (
     MemoryConfig,
     ModelConfig,
     PolicyConfig,
+    ReActConfig,
+    ReActPlannerConfig,
+    ResponseConfig,
     RetrievalConfig,
+    ReviewConfig,
+    ReviewSubagentConfig,
     ToolsConfig,
     WorkflowConfig,
 )
@@ -64,6 +69,9 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             trace_path=resolve_path(base_dir, audit["trace_path"]),
             receipt_path=resolve_path(base_dir, audit["receipt_path"]),
         ),
+        react=_react_config_from_mapping(raw.get("react")),
+        review=_review_config_from_mapping(raw.get("review")),
+        response=_response_config_from_mapping(raw.get("response")),
     )
 
 
@@ -97,4 +105,61 @@ def _model_config_from_mapping(raw: Any) -> ModelConfig | None:
         provider=raw["provider"],
         name=raw["name"],
         params=raw.get("params", {}),
+    )
+
+
+def _react_config_from_mapping(raw: Any) -> ReActConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("react must be a mapping")
+    planner = raw["planner"]
+    if not isinstance(planner, dict):
+        raise TypeError("react.planner must be a mapping")
+    return ReActConfig(
+        max_steps=raw["max_steps"],
+        max_tool_calls=raw.get("max_tool_calls", 1),
+        record_reasoning_summary=raw.get("record_reasoning_summary", True),
+        planner=ReActPlannerConfig(
+            provider=planner["provider"],
+            name=planner["name"],
+            params=planner.get("params", {}),
+        ),
+    )
+
+
+def _review_config_from_mapping(raw: Any) -> ReviewConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("review must be a mapping")
+    return ReviewConfig(
+        mode=raw.get("mode", "rules_only"),
+        subagent=_review_subagent_config_from_mapping(raw.get("subagent")),
+    )
+
+
+def _review_subagent_config_from_mapping(raw: Any) -> ReviewSubagentConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("review.subagent must be a mapping")
+    return ReviewSubagentConfig(
+        provider=raw["provider"],
+        name=raw["name"],
+        timeout_seconds=raw.get("timeout_seconds", 5.0),
+        max_output_tokens=raw.get("max_output_tokens", 500),
+        fail_closed=raw.get("fail_closed", True),
+        params=raw.get("params", {}),
+    )
+
+
+def _response_config_from_mapping(raw: Any) -> ResponseConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("response must be a mapping")
+    return ResponseConfig(
+        include_reasoning_summary=raw.get("include_reasoning_summary", False),
+        include_review_results=raw.get("include_review_results", False),
     )

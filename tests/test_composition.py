@@ -26,3 +26,9 @@ def test_unknown_workflow_template_fails_from_registry() -> None:
         resolve_workflow_template("unknown_template")
 
     assert exc.value.code == "PA_CONFIG_002"
+
+
+def test_react_workflow_template_resolves_from_registry() -> None:
+    template = resolve_workflow_template("react_enterprise_qa")
+
+    assert template.name == "react_enterprise_qa"

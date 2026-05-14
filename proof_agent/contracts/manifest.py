@@ -41,6 +41,48 @@ class ModelConfig(FrozenModel):
         return freeze_value(value)
 
 
+class ReActPlannerConfig(FrozenModel):
+    provider: str
+    name: str
+    params: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("params", mode="after")
+    @classmethod
+    def freeze_params(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class ReActConfig(FrozenModel):
+    max_steps: int
+    max_tool_calls: int = 1
+    record_reasoning_summary: bool = True
+    planner: ReActPlannerConfig
+
+
+class ReviewSubagentConfig(FrozenModel):
+    provider: str
+    name: str
+    timeout_seconds: float = 5.0
+    max_output_tokens: int = 500
+    fail_closed: bool = True
+    params: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("params", mode="after")
+    @classmethod
+    def freeze_params(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class ReviewConfig(FrozenModel):
+    mode: str = "rules_only"
+    subagent: ReviewSubagentConfig | None = None
+
+
+class ResponseConfig(FrozenModel):
+    include_reasoning_summary: bool = False
+    include_review_results: bool = False
+
+
 class RetrievalConfig(FrozenModel):
     strategy: str
     top_k: int = 3
@@ -80,3 +122,6 @@ class AgentManifest(FrozenModel):
     tools: ToolsConfig
     memory: MemoryConfig
     audit: AuditConfig
+    react: ReActConfig | None = None
+    review: ReviewConfig | None = None
+    response: ResponseConfig | None = None

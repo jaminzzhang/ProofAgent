@@ -43,6 +43,7 @@ FORBIDDEN_MODEL_PARAM_PARTS = (
     "access_token",
     "provider_api_key",
 )
+SUPPORTED_WORKFLOW_TEMPLATES = {"enterprise_qa", "react_enterprise_qa"}
 
 
 def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> None:
@@ -96,13 +97,15 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
             "Use workflow.runtime: langgraph for v1.",
             artifact_path=manifest_path,
         )
-    if manifest.workflow.template != "enterprise_qa":
+    if manifest.workflow.template not in SUPPORTED_WORKFLOW_TEMPLATES:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"unsupported workflow template: {manifest.workflow.template}",
-            "Use workflow.template: enterprise_qa for v1.",
+            f"Supported workflow templates: {', '.join(sorted(SUPPORTED_WORKFLOW_TEMPLATES))}.",
             artifact_path=manifest_path,
         )
+    _validate_react_config(manifest, manifest_path=manifest_path)
+    _validate_review_config(manifest, manifest_path=manifest_path)
     if manifest.knowledge.provider not in SUPPORTED_KNOWLEDGE_PROVIDERS:
         raise ProofAgentError(
             "PA_KNOWLEDGE_001",
@@ -199,6 +202,115 @@ def _reject_secret_model_params(manifest: AgentManifest, *, manifest_path: Path)
         raise ProofAgentError(
             "PA_SECRET_001",
             f"model.params contains secret-bearing field(s): {', '.join(forbidden)}",
+            "Store secrets in environment variables and reference only *_env names in agent.yaml.",
+            artifact_path=manifest_path,
+        )
+
+
+def _validate_react_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    react = manifest.react
+    if react is None:
+        if manifest.workflow.template != "react_enterprise_qa":
+            return
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "react config is required for react_enterprise_qa",
+            "Add a top-level react section to agent.yaml.",
+            artifact_path=manifest_path,
+        )
+    if react.max_steps <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "react.max_steps must be greater than 0",
+            "Set react.max_steps to a positive integer.",
+            artifact_path=manifest_path,
+        )
+    if react.max_tool_calls not in {0, 1}:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "react.max_tool_calls must be 0 or 1 for v1",
+            "Set react.max_tool_calls to 0 or 1.",
+            artifact_path=manifest_path,
+        )
+    if react.planner.provider not in SUPPORTED_MODEL_PROVIDERS:
+        raise ProofAgentError(
+            "PA_MODEL_001",
+            f"unsupported react.planner.provider: {react.planner.provider}",
+            f"Supported providers: {', '.join(sorted(SUPPORTED_MODEL_PROVIDERS))}.",
+            artifact_path=manifest_path,
+        )
+    forbidden = sorted(
+        key
+        for key in react.planner.params
+        if _is_forbidden_model_param(str(key))
+    )
+    if forbidden:
+        raise ProofAgentError(
+            "PA_SECRET_001",
+            f"react.planner.params contains secret-bearing field(s): {', '.join(forbidden)}",
+            "Store secrets in environment variables and reference only *_env names in agent.yaml.",
+            artifact_path=manifest_path,
+        )
+
+
+def _validate_review_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    review = manifest.review
+    if review is None:
+        return
+    if review.mode not in {"rules_only", "auto"}:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"unsupported review.mode: {review.mode}",
+            "Use review.mode: rules_only or review.mode: auto.",
+            artifact_path=manifest_path,
+        )
+    if review.mode == "auto" and review.subagent is None:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "review.subagent is required when review.mode is auto",
+            "Add review.subagent provider and name fields to agent.yaml.",
+            artifact_path=manifest_path,
+        )
+    if review.subagent is None:
+        return
+    subagent = review.subagent
+    if subagent.provider not in SUPPORTED_MODEL_PROVIDERS:
+        raise ProofAgentError(
+            "PA_MODEL_001",
+            f"unsupported review.subagent.provider: {subagent.provider}",
+            f"Supported providers: {', '.join(sorted(SUPPORTED_MODEL_PROVIDERS))}.",
+            artifact_path=manifest_path,
+        )
+    if subagent.timeout_seconds <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "review.subagent.timeout_seconds must be greater than 0",
+            "Set review.subagent.timeout_seconds to a positive number.",
+            artifact_path=manifest_path,
+        )
+    if subagent.max_output_tokens <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "review.subagent.max_output_tokens must be greater than 0",
+            "Set review.subagent.max_output_tokens to a positive integer.",
+            artifact_path=manifest_path,
+        )
+    if not subagent.fail_closed:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "review.subagent.fail_closed must be true for v1",
+            "Set review.subagent.fail_closed to true.",
+            artifact_path=manifest_path,
+        )
+    forbidden = sorted(
+        key
+        for key in subagent.params
+        if _is_forbidden_model_param(str(key))
+    )
+    if forbidden:
+        raise ProofAgentError(
+            "PA_SECRET_001",
+            f"review.subagent.params contains secret-bearing field(s): {', '.join(forbidden)}",
             "Store secrets in environment variables and reference only *_env names in agent.yaml.",
             artifact_path=manifest_path,
         )

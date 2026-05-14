@@ -91,3 +91,134 @@ audit:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_001"
+
+
+def test_loads_react_enterprise_qa_contract(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(tmp_path)
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.workflow.template == "react_enterprise_qa"
+    assert manifest.react is not None
+    assert manifest.react.max_steps == 5
+    assert manifest.react.max_tool_calls == 1
+    assert manifest.react.planner.provider == "deterministic"
+    assert manifest.review is not None
+    assert manifest.review.mode == "auto"
+    assert manifest.review.subagent is not None
+    assert manifest.review.subagent.provider == "deterministic"
+    assert manifest.response is not None
+    assert manifest.response.include_reasoning_summary is False
+    assert manifest.response.include_review_results is False
+
+
+def test_react_template_requires_react_config(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(tmp_path, react_section="")
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "react config is required" in exc.value.message
+
+
+def test_auto_review_requires_subagent_config(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        review_section="""
+review:
+  mode: auto
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "review.subagent is required" in exc.value.message
+
+
+def test_react_planner_params_reject_raw_secrets(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        react_section="""
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  planner:
+    provider: deterministic
+    name: react-planner
+    params:
+      api_key: raw-secret
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_SECRET_001"
+
+
+def _write_react_manifest(
+    tmp_path: Path,
+    *,
+    react_section: str = """
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  planner:
+    provider: deterministic
+    name: react-planner
+""",
+    review_section: str = """
+review:
+  mode: auto
+  subagent:
+    provider: deterministic
+    name: review-subagent
+""",
+    response_section: str = """
+response:
+  include_reasoning_summary: false
+  include_review_results: false
+""",
+) -> Path:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml.write_text(
+        f"""
+name: react_enterprise_qa
+purpose: "Controlled ReAct enterprise QA."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+knowledge:
+  provider: local_markdown
+  params:
+    path: ./knowledge
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+{react_section}
+{review_section}
+{response_section}
+""",
+        encoding="utf-8",
+    )
+    return agent_yaml

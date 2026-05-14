@@ -18,6 +18,10 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
         name="enterprise_qa",
         description="Evidence-backed enterprise question answering.",
     ),
+    "react_enterprise_qa": WorkflowTemplate(
+        name="react_enterprise_qa",
+        description="Controlled ReAct enterprise question answering.",
+    ),
 }
 
 
