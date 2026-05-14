@@ -135,6 +135,23 @@ def test_loads_react_enterprise_qa_example_manifest() -> None:
     assert manifest.response.include_review_results is False
 
 
+def test_unsupported_workflow_checkpointer_provider_is_rejected(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(tmp_path)
+    agent_yaml.write_text(
+        agent_yaml.read_text(encoding="utf-8").replace(
+            "  template: react_enterprise_qa\n",
+            "  template: react_enterprise_qa\n  checkpointer:\n    provider: sqltie\n    uri: memory\n",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "unsupported workflow checkpointer provider" in exc.value.message
+
+
 def test_react_template_requires_react_config(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(tmp_path, react_section="")
 

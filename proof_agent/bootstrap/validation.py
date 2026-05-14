@@ -25,6 +25,7 @@ REQUIRED_TOP_LEVEL_FIELDS = {
 SUPPORTED_KNOWLEDGE_PROVIDERS = {"local_markdown", "local_vector", "pageindex", "remote_search"}
 SUPPORTED_RETRIEVAL_STRATEGIES = {"single_step", "agentic"}
 SUPPORTED_MODEL_PROVIDERS = {"deterministic", "openai_compatible", "azure_openai", "anthropic"}
+SUPPORTED_CHECKPOINTER_PROVIDERS = {"sqlite"}
 FORBIDDEN_KNOWLEDGE_PARAM_PARTS = (
     "api_key",
     "authorization",
@@ -104,6 +105,7 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
             f"Supported workflow templates: {', '.join(sorted(SUPPORTED_WORKFLOW_TEMPLATES))}.",
             artifact_path=manifest_path,
         )
+    _validate_checkpointer_config(manifest, manifest_path=manifest_path)
     _validate_react_config(manifest, manifest_path=manifest_path)
     _validate_review_config(manifest, manifest_path=manifest_path)
     if manifest.knowledge.provider not in SUPPORTED_KNOWLEDGE_PROVIDERS:
@@ -190,6 +192,19 @@ def require_writable_parent(path: Path, field_name: str, manifest_path: Path) ->
             f"Grant write access to {parent} or change {field_name}.",
             artifact_path=manifest_path,
         ) from exc
+
+
+def _validate_checkpointer_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    checkpointer = manifest.workflow.checkpointer
+    if checkpointer is None:
+        return
+    if checkpointer.provider not in SUPPORTED_CHECKPOINTER_PROVIDERS:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"unsupported workflow checkpointer provider: {checkpointer.provider}",
+            f"Supported workflow checkpointer providers: {', '.join(sorted(SUPPORTED_CHECKPOINTER_PROVIDERS))}.",
+            artifact_path=manifest_path,
+        )
 
 
 def _reject_secret_model_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
