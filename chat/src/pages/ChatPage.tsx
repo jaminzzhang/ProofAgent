@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { fetchConversation, createConversationRun, createConversation } from '../api/client'
-import type { ConversationRecord } from '../api/types'
+import type { ConversationRecord, GovernanceDetails } from '../api/types'
 import { OutcomeBadge } from '../components/OutcomeBadge'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
@@ -13,6 +13,10 @@ const SYNTHETIC_NEW_CHAT: ConversationRecord = {
   created_at: '',
   updated_at: '',
   turns: [],
+}
+
+function hasGovernanceDetails(details?: GovernanceDetails | null): boolean {
+  return Boolean(details?.reasoning_summary) || Boolean(details?.review_results?.length)
 }
 
 export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
@@ -266,7 +270,7 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
                   </div>
                 )}
 
-                {turn.governance_details && (
+                {hasGovernanceDetails(turn.governance_details) && (
                   <details className="pt-2 border-t border-[var(--border)]">
                     <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
                       ReAct Governance

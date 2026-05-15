@@ -31,7 +31,7 @@ export function RunDetailPage() {
     tabs.push({ key: 'approval', label: 'Approval State' })
   }
 
-  if (detail.governance_details) {
+  if (hasGovernanceDetails(detail.governance_details)) {
     tabs.push({ key: 'governance', label: 'ReAct Governance' })
   }
 
@@ -92,10 +92,16 @@ export function RunDetailPage() {
   )
 }
 
-function GovernanceTab({ details }: { details?: GovernanceDetails }) {
-  if (!details) {
+function hasGovernanceDetails(details?: GovernanceDetails | null): boolean {
+  return Boolean(details?.reasoning_summary) || Boolean(details?.review_results?.length)
+}
+
+function GovernanceTab({ details }: { details?: GovernanceDetails | null }) {
+  if (!hasGovernanceDetails(details)) {
     return <div className="text-sm text-[var(--text-muted)]">No ReAct governance details.</div>
   }
+
+  const visibleDetails: GovernanceDetails = details ?? {}
 
   return (
     <div className="space-y-4">
@@ -104,7 +110,7 @@ function GovernanceTab({ details }: { details?: GovernanceDetails }) {
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Reasoning Summary</h3>
         </div>
         <pre className="max-h-72 overflow-auto bg-[var(--bg-base)] p-4 text-xs leading-relaxed text-[var(--text-secondary)] font-mono whitespace-pre-wrap">
-          {JSON.stringify(details.reasoning_summary ?? {}, null, 2)}
+          {JSON.stringify(visibleDetails.reasoning_summary ?? {}, null, 2)}
         </pre>
       </section>
 
@@ -113,7 +119,7 @@ function GovernanceTab({ details }: { details?: GovernanceDetails }) {
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Auto Review</h3>
         </div>
         <pre className="max-h-72 overflow-auto bg-[var(--bg-base)] p-4 text-xs leading-relaxed text-[var(--text-secondary)] font-mono whitespace-pre-wrap">
-          {JSON.stringify(details.review_results ?? [], null, 2)}
+          {JSON.stringify(visibleDetails.review_results ?? [], null, 2)}
         </pre>
       </section>
     </div>
