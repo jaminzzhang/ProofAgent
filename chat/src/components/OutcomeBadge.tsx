@@ -4,6 +4,7 @@ const OUTCOME_STYLES: Record<ReceiptOutcome, { border: string; bg: string; text:
   ANSWERED_WITH_CITATIONS: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Answered', dot: 'bg-[var(--success)]' },
   REFUSED_NO_EVIDENCE: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Refused', dot: 'bg-[var(--warning)]' },
   ESCALATED_WEAK_EVIDENCE: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Escalated', dot: 'bg-[var(--warning)]' },
+  WAITING_FOR_USER_CLARIFICATION: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Clarify', dot: 'bg-[var(--neutral-badge)]' },
   WAITING_FOR_APPROVAL: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Waiting', dot: 'bg-[var(--neutral-badge)]' },
   TOOL_APPROVAL_DENIED: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Denied', dot: 'bg-[var(--danger)]' },
   FAILED_WITH_TRACE: { border: 'border-[var(--border)]', bg: 'bg-[var(--bg-surface)]', text: 'text-[var(--text-primary)]', label: 'Failed', dot: 'bg-[var(--danger)]' },

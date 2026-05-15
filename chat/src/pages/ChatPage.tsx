@@ -25,6 +25,7 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [input, setInput] = useState('')
+  const [includeGovernanceDetails, setIncludeGovernanceDetails] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Load backend conversation when conversationId changes
@@ -72,7 +73,7 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
         activeConversationId = newConv.conversation_id
       }
 
-      const result = await createConversationRun(activeConversationId!, q)
+      const result = await createConversationRun(activeConversationId!, q, undefined, includeGovernanceDetails)
       onUpdate?.()
 
       // If this was a new chat, navigate to the real conversation
@@ -107,6 +108,7 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
               },
               evidence: result.evidence || [],
               approval_state: result.approval_state || null,
+              governance_details: result.governance_details,
               links: result.links,
             },
           ],
@@ -263,6 +265,17 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
                     </a>
                   </div>
                 )}
+
+                {turn.governance_details && (
+                  <details className="pt-2 border-t border-[var(--border)]">
+                    <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+                      ReAct Governance
+                    </summary>
+                    <pre className="mt-3 max-h-56 overflow-auto rounded-lg bg-[var(--bg-base)] border border-[var(--border)] p-3 text-[11px] leading-relaxed text-[var(--text-secondary)] font-mono whitespace-pre-wrap">
+                      {JSON.stringify(turn.governance_details, null, 2)}
+                    </pre>
+                  </details>
+                )}
               </div>
             </div>
           </div>
@@ -281,22 +294,34 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="mt-6 flex gap-3">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Type your question for the Assistant..."
-          disabled={sending || loading}
-          className="flex-1 bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-50 shadow-sm transition-all"
-        />
-        <button
-          type="submit"
-          disabled={sending || loading || !input.trim()}
-          className="bg-[var(--accent)] text-white px-8 py-3 rounded-xl text-sm font-bold uppercase tracking-wider hover:opacity-90 disabled:opacity-50 transition-all shadow-md active:scale-95"
-        >
-          Ask
-        </button>
+      <form onSubmit={handleSubmit} className="mt-6 space-y-3">
+        <div className="flex gap-3">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Type your question for the Assistant..."
+            disabled={sending || loading}
+            className="flex-1 bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-50 shadow-sm transition-all"
+          />
+          <button
+            type="submit"
+            disabled={sending || loading || !input.trim()}
+            className="bg-[var(--accent)] text-white px-8 py-3 rounded-xl text-sm font-bold uppercase tracking-wider hover:opacity-90 disabled:opacity-50 transition-all shadow-md active:scale-95"
+          >
+            Ask
+          </button>
+        </div>
+        <label className="inline-flex items-center gap-2 text-xs font-medium text-[var(--text-muted)]">
+          <input
+            type="checkbox"
+            checked={includeGovernanceDetails}
+            onChange={(e) => setIncludeGovernanceDetails(e.target.checked)}
+            disabled={sending || loading}
+            className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]"
+          />
+          Show governance details
+        </label>
       </form>
     </div>
   )

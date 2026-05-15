@@ -8,8 +8,9 @@ import { ModelUsageTab } from './tabs/ModelUsageTab'
 import { ReceiptTab } from './tabs/ReceiptTab'
 import { ApprovalTab } from './tabs/ApprovalTab'
 import { useState } from 'react'
+import type { GovernanceDetails } from '../api/types'
 
-type Tab = 'receipt' | 'approval' | 'timeline' | 'evidence' | 'model'
+type Tab = 'receipt' | 'approval' | 'timeline' | 'evidence' | 'model' | 'governance'
 
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>()
@@ -28,6 +29,10 @@ export function RunDetailPage() {
 
   if (needsApproval) {
     tabs.push({ key: 'approval', label: 'Approval State' })
+  }
+
+  if (detail.governance_details) {
+    tabs.push({ key: 'governance', label: 'ReAct Governance' })
   }
 
   tabs.push(
@@ -78,10 +83,39 @@ export function RunDetailPage() {
       <div className="py-2">
         {activeTab === 'receipt' && <ReceiptTab markdown={detail.receipt_markdown} />}
         {activeTab === 'approval' && <ApprovalTab state={detail.approval_state} runId={detail.run_id} />}
+        {activeTab === 'governance' && <GovernanceTab details={detail.governance_details} />}
         {activeTab === 'evidence' && <EvidenceTab chunks={detail.evidence_chunks} />}
         {activeTab === 'model' && <ModelUsageTab usage={detail.model_usage} />}
         {activeTab === 'timeline' && <TimelineTab events={detail.trace_events} />}
       </div>
+    </div>
+  )
+}
+
+function GovernanceTab({ details }: { details?: GovernanceDetails }) {
+  if (!details) {
+    return <div className="text-sm text-[var(--text-muted)]">No ReAct governance details.</div>
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="border border-[var(--border)] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-surface)]">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Reasoning Summary</h3>
+        </div>
+        <pre className="max-h-72 overflow-auto bg-[var(--bg-base)] p-4 text-xs leading-relaxed text-[var(--text-secondary)] font-mono whitespace-pre-wrap">
+          {JSON.stringify(details.reasoning_summary ?? {}, null, 2)}
+        </pre>
+      </section>
+
+      <section className="border border-[var(--border)] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-surface)]">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Auto Review</h3>
+        </div>
+        <pre className="max-h-72 overflow-auto bg-[var(--bg-base)] p-4 text-xs leading-relaxed text-[var(--text-secondary)] font-mono whitespace-pre-wrap">
+          {JSON.stringify(details.review_results ?? [], null, 2)}
+        </pre>
+      </section>
     </div>
   )
 }

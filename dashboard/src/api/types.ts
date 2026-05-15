@@ -2,10 +2,16 @@ export type ReceiptOutcome =
   | 'ANSWERED_WITH_CITATIONS'
   | 'REFUSED_NO_EVIDENCE'
   | 'ESCALATED_WEAK_EVIDENCE'
+  | 'WAITING_FOR_USER_CLARIFICATION'
   | 'WAITING_FOR_APPROVAL'
   | 'TOOL_APPROVAL_DENIED'
   | 'FAILED_WITH_TRACE'
   | 'FAILED_RECEIPT_UNAVAILABLE'
+
+export interface GovernanceDetails {
+  reasoning_summary?: Record<string, unknown> | null
+  review_results?: Record<string, unknown>[]
+}
 
 export type ApprovalStatus = 'requested' | 'granted' | 'denied' | 'timed_out'
 
@@ -33,6 +39,7 @@ export interface RunDetail {
   policy_decisions: PolicyDecision[]
   model_usage: ModelUsage
   approval_state: ApprovalState | null
+  governance_details?: GovernanceDetails
 }
 
 export interface TraceEvent {
@@ -127,6 +134,7 @@ export interface ConversationTurn {
   context_admission: ContextAdmission
   evidence: any[]
   approval_state: ApprovalState | null
+  governance_details?: GovernanceDetails
   links: {
     run_detail: string
     trace: string
@@ -149,6 +157,7 @@ export interface ChatRunResponse {
   final_output: string
   evidence: any[]
   approval_state: ApprovalState | null
+  governance_details?: GovernanceDetails
   links: {
     run_detail: string
     trace: string

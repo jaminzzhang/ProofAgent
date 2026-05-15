@@ -52,11 +52,12 @@ export async function deleteConversation(conversationId: string): Promise<void> 
 export function createConversationRun(
   conversationId: string,
   question: string,
-  approved?: boolean
+  approved?: boolean,
+  includeGovernanceDetails = false
 ): Promise<import('./types').ChatRunResponse> {
   return fetchJson<import('./types').ChatRunResponse>(`${BASE}/chat/conversations/${conversationId}/runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, approved })
+    body: JSON.stringify({ question, approved, include_governance_details: includeGovernanceDetails })
   })
 }
