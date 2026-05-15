@@ -25,7 +25,7 @@ Authoritative design doc: `docs/technical-design.md`.
 | Audit | `observability/audit/` owns JSONL trace, ReAct review/reasoning projections, redaction, Governance Receipt, model usage section |
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed runs and persists them through RunStore |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
-| Tests | 32 test files and 114 statically detected `test_` functions at last scan |
+| Tests | 36 test files and 164 statically detected `test_` functions at last scan |
 
 ## 3. Stable Demo Contract
 
@@ -65,8 +65,8 @@ runs/latest/governance_receipt.md
 | Real MCP | Mock tool proves approval contract | stdio/HTTP MCP adapter behind ToolGateway |
 | Vector provider | Local Vector provider queries existing Chroma indexes | Index build lifecycle and broader vector store adapters |
 | Agentic RAG | PageIndex provider path emits governed retrieval plan/step events and evaluates evidence locally | Planner-driven multi-step retrieval strategy beyond provider-agentic retrieval |
-| Dashboard UI | FastAPI API exists; SPA mount supported if built assets exist | Dashboard UI and Approval Console |
-| Assisted Chat UI | Implemented (ChatPage, Conversation API integration) | Polish and multi-agent selection |
+| Dashboard UI | Implemented for overview, runs, run detail, evidence, receipt, model usage, approvals, timeline, and governed ReAct details; SPA mount supported if built assets exist | Approval Console actions and richer filtering |
+| Assisted Chat UI | Implemented (ChatPage, Conversation API integration, clarification and governed ReAct detail display) | Polish and multi-agent selection |
 | Azure/Anthropic | Placeholder providers | Real provider adapters with mocked tests |
 | Streaming | Not implemented | Trace-safe streaming chunks |
 
