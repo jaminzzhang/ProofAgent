@@ -14,6 +14,16 @@ def test_demo_command_exists() -> None:
     assert "Proof Agent demo" in result.output
 
 
+def test_react_demo_command_runs_no_key_scenarios() -> None:
+    result = runner.invoke(app, ["react-demo"])
+    assert result.exit_code == 0
+    assert "Proof Agent ReAct demo" in result.output
+    assert "supported: ANSWERED_WITH_CITATIONS" in result.output
+    assert "unsupported: REFUSED_NO_EVIDENCE" in result.output
+    assert "clarify: WAITING_FOR_USER_CLARIFICATION" in result.output
+    assert "tool_required: WAITING_FOR_APPROVAL" in result.output
+
+
 def test_doctor_command_exists() -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0

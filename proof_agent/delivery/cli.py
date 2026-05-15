@@ -10,7 +10,11 @@ import typer
 from proof_agent import __version__
 from proof_agent.evaluation.compare.harness_rag import run_harness_rag
 from proof_agent.evaluation.compare.plain_rag import run_plain_rag
-from proof_agent.evaluation.demo.scenarios import DEMO_SCENARIOS, SUPPORTED_QUESTION
+from proof_agent.evaluation.demo.scenarios import (
+    DEMO_SCENARIOS,
+    REACT_DEMO_SCENARIOS,
+    SUPPORTED_QUESTION,
+)
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
@@ -26,6 +30,22 @@ def demo() -> None:
     for scenario in DEMO_SCENARIOS:
         result = run_with_langgraph(
             Path("examples/enterprise_qa/agent.yaml"),
+            question=scenario.question,
+            runs_dir=Path("runs/latest"),
+            store=store,
+        )
+        typer.echo(f"{scenario.name}: {result.outcome.value}")
+
+
+@app.command("react-demo")
+def react_demo() -> None:
+    """Run deterministic Controlled ReAct Enterprise QA scenarios."""
+
+    typer.echo("Proof Agent ReAct demo")
+    store = RunStore(Path("runs/history"))
+    for scenario in REACT_DEMO_SCENARIOS:
+        result = run_with_langgraph(
+            Path("examples/react_enterprise_qa/agent.yaml"),
             question=scenario.question,
             runs_dir=Path("runs/latest"),
             store=store,
