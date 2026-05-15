@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
-from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts._base import FrozenModel, freeze_value
 from proof_agent.contracts.receipt import ReceiptOutcome
 
 
@@ -33,6 +33,7 @@ class ConversationTurn(FrozenModel):
     context_admission: ContextAdmission
     evidence: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
     approval_state: Mapping[str, Any] | None = None
+    governance_details: Mapping[str, Any] | None = None
 
     @field_validator("evidence", mode="after")
     @classmethod
@@ -42,6 +43,13 @@ class ConversationTurn(FrozenModel):
     @field_validator("approval_state", mode="after")
     @classmethod
     def freeze_approval_state(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        return freeze_value(value)
+
+    @field_validator("governance_details", mode="after")
+    @classmethod
+    def freeze_governance_details(cls, value: Any) -> Any:
         if value is None:
             return None
         return freeze_value(value)
@@ -87,7 +95,7 @@ def conversation_record_payload(record: ConversationRecord) -> dict[str, Any]:
 
 
 def _turn_payload(turn: ConversationTurn) -> dict[str, Any]:
-    return {
+    payload = {
         "turn_id": turn.turn_id,
         "run_id": turn.run_id,
         "agent_id": turn.agent_id,
@@ -96,11 +104,24 @@ def _turn_payload(turn: ConversationTurn) -> dict[str, Any]:
         "outcome": turn.outcome.value,
         "created_at": turn.created_at,
         "context_admission": context_admission_payload(turn.context_admission),
-        "evidence": [dict(chunk) if isinstance(chunk, FrozenDict) else dict(chunk) for chunk in turn.evidence],
-        "approval_state": dict(turn.approval_state) if turn.approval_state is not None else None,
+        "evidence": [_plain_payload(chunk) for chunk in turn.evidence],
+        "approval_state": _plain_payload(turn.approval_state)
+        if turn.approval_state is not None
+        else None,
         "links": {
             "run_detail": f"/api/runs/{turn.run_id}",
             "trace": f"/api/runs/{turn.run_id}/trace",
             "receipt": f"/api/runs/{turn.run_id}/receipt",
         },
     }
+    if turn.governance_details is not None:
+        payload["governance_details"] = _plain_payload(turn.governance_details)
+    return payload
+
+
+def _plain_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _plain_payload(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_plain_payload(item) for item in value]
+    return value

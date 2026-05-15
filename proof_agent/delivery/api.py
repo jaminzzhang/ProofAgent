@@ -10,7 +10,8 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from proof_agent.contracts import ContextAdmission, ConversationRecord, ConversationTurn
+from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.contracts import AgentManifest, ContextAdmission, ConversationRecord, ConversationTurn
 from proof_agent.contracts.conversation import (
     context_admission_payload,
     conversation_record_payload,
@@ -34,6 +35,7 @@ class ChatRunRequest(BaseModel):
     agent_id: str = Field(min_length=1)
     question: str = Field(min_length=1)
     approved: bool | None = None
+    include_governance_details: bool = False
 
 
 class ConversationCreateRequest(BaseModel):
@@ -60,6 +62,7 @@ class ConversationRunRequest(BaseModel):
 
     question: str = Field(min_length=1)
     approved: bool | None = None
+    include_governance_details: bool = False
 
 
 @router.post("/chat/runs")
@@ -77,14 +80,19 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
             },
         )
 
-    _, detail = _execute_published_agent_run(
+    _, detail, manifest = _execute_published_agent_run(
         app_request=app_request,
         manifest_path=published_agent.manifest_path,
         question=request.question,
         approved=request.approved,
     )
 
-    return _run_response(agent_id=published_agent.agent_id, detail=detail)
+    return _run_response(
+        agent_id=published_agent.agent_id,
+        detail=detail,
+        manifest=manifest,
+        include_governance_details=request.include_governance_details,
+    )
 
 
 @router.post("/chat/conversations")
@@ -170,12 +178,17 @@ def create_conversation_run(
         )
 
     context_admission = admit_conversation_context(conversation)
-    result, detail = _execute_published_agent_run(
+    result, detail, manifest = _execute_published_agent_run(
         app_request=app_request,
         manifest_path=published_agent.manifest_path,
         question=request.question,
         approved=request.approved,
         conversation_context=context_admission,
+    )
+    governance_details = _governance_projection(
+        detail,
+        manifest,
+        request.include_governance_details,
     )
     turn = ConversationTurn(
         turn_id=f"turn_{uuid4().hex[:8]}",
@@ -188,6 +201,7 @@ def create_conversation_run(
         context_admission=context_admission,
         evidence=tuple(detail.evidence_chunks),
         approval_state=detail.approval_state,
+        governance_details=governance_details,
     )
     updated = _get_conversation_store(app_request).append_turn(
         conversation_id=conversation.conversation_id,
@@ -199,10 +213,12 @@ def create_conversation_run(
     return _run_response(
         agent_id=conversation.agent_id,
         detail=detail,
+        manifest=manifest,
         final_output=result.final_output,
         conversation_id=conversation.conversation_id,
         turn_id=turn.turn_id,
         context_admission=context_admission,
+        include_governance_details=request.include_governance_details,
     )
 
 
@@ -213,10 +229,11 @@ def _execute_published_agent_run(
     question: str,
     approved: bool | None,
     conversation_context: ContextAdmission | None = None,
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, AgentManifest]:
     store = _get_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
     try:
+        manifest = load_agent_manifest(manifest_path)
         result = run_with_langgraph(
             manifest_path,
             question=question,
@@ -235,17 +252,19 @@ def _execute_published_agent_run(
     detail = store.get_run_detail(run_id)
     if detail is None:
         raise HTTPException(status_code=500, detail="Run artifacts were not persisted.")
-    return result, detail
+    return result, detail, manifest
 
 
 def _run_response(
     *,
     agent_id: str,
     detail: Any,
+    manifest: AgentManifest,
     final_output: str | None = None,
     conversation_id: str | None = None,
     turn_id: str | None = None,
     context_admission: ContextAdmission | None = None,
+    include_governance_details: bool = False,
 ) -> dict[str, Any]:
     response = {
         "agent_id": agent_id,
@@ -266,7 +285,31 @@ def _run_response(
         response["turn_id"] = turn_id
     if context_admission is not None:
         response["context_admission"] = context_admission_payload(context_admission)
+    governance_details = _governance_projection(
+        detail,
+        manifest,
+        include_governance_details,
+    )
+    if governance_details is not None:
+        response["governance_details"] = governance_details
     return response
+
+
+def _governance_projection(
+    detail: Any,
+    manifest: AgentManifest,
+    requested: bool,
+) -> dict[str, Any] | None:
+    if not requested or manifest.response is None:
+        return None
+
+    allowed: dict[str, Any] = {}
+    details = detail.governance_details or {}
+    if manifest.response.include_reasoning_summary:
+        allowed["reasoning_summary"] = details.get("reasoning_summary")
+    if manifest.response.include_review_results:
+        allowed["review_results"] = details.get("review_results", [])
+    return allowed or None
 
 
 def _final_output_from_trace(detail: Any) -> str:

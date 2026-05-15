@@ -1,20 +1,39 @@
 from pathlib import Path
+import shutil
 
 from fastapi.testclient import TestClient
 
 from proof_agent.observability.api.app import create_app
 
 
-def _client(tmp_path: Path) -> TestClient:
+def _client(
+    tmp_path: Path, *, published_agents: dict[str, Path] | None = None
+) -> TestClient:
     app = create_app(
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
         conversations_dir=tmp_path / "conversations",
-        published_agents={
+        published_agents=published_agents
+        or {
             "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
         },
     )
     return TestClient(app)
+
+
+def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
+    agent_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(Path("examples/react_enterprise_qa"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    manifest_path.write_text(
+        manifest_text.replace(
+            "  include_reasoning_summary: false\n  include_review_results: false",
+            "  include_reasoning_summary: true\n  include_review_results: true",
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
 
 
 def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
@@ -55,6 +74,52 @@ def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
     assert len(timeline["turns"]) == 2
     assert timeline["turns"][0]["run_id"] == first_body["run_id"]
     assert timeline["turns"][1]["run_id"] == second_body["run_id"]
+
+
+def test_conversation_run_omits_governance_details_by_default(tmp_path: Path) -> None:
+    manifest_path = _copy_react_agent_with_response_details(tmp_path)
+    client = _client(tmp_path, published_agents={"react_details": manifest_path})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_details"})
+    assert created.status_code == 200
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "What is the reimbursement rule for travel meals?"},
+    )
+
+    assert response.status_code == 200
+    assert "governance_details" not in response.json()
+
+    timeline = client.get(f"/api/chat/conversations/{conversation_id}").json()
+    assert "governance_details" not in timeline["turns"][0]
+
+
+def test_conversation_run_returns_and_stores_governance_details_when_policy_allows(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _copy_react_agent_with_response_details(tmp_path)
+    client = _client(tmp_path, published_agents={"react_details": manifest_path})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_details"})
+    assert created.status_code == 200
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={
+            "question": "What is the reimbursement rule for travel meals?",
+            "include_governance_details": True,
+        },
+    )
+
+    assert response.status_code == 200
+    details = response.json()["governance_details"]
+    assert details["reasoning_summary"]
+    assert details["review_results"]
+
+    timeline = client.get(f"/api/chat/conversations/{conversation_id}").json()
+    stored_details = timeline["turns"][0]["governance_details"]
+    assert stored_details == details
 
 
 def test_conversation_run_rejects_wrong_agent_id(tmp_path: Path) -> None:
