@@ -6,6 +6,8 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from proof_agent.bootstrap.composition import HarnessInvocation
+from proof_agent.capabilities.knowledge import KnowledgeProvider
+from proof_agent.capabilities.tools.gateway import ToolGatewayResult
 from proof_agent.contracts import (
     ApprovalStatus,
     ContextAdmission,
@@ -16,15 +18,16 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
+    ValidationResult,
 )
 from proof_agent.capabilities.tools.approval import create_approval_state
+from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
     _cost_class,
     _emit_model_error,
     _emit_policy,
     _model_response_payload,
-    _run_retrieval,
     _system_prompt_length,
     _validate_model_output,
 )
@@ -36,6 +39,7 @@ from proof_agent.control.workflow.react_enterprise_qa import (
     should_stop_for_step_budget,
 )
 from proof_agent.evaluation.demo.scenarios import UNSUPPORTED_QUESTION
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 
 
@@ -160,12 +164,10 @@ def build_react_enterprise_qa_graph(
                 "governance_message": "I cannot answer because the retrieval step was blocked by policy.",
             }
 
-        evidence, evidence_result = _run_retrieval(
+        evidence, evidence_result = _run_react_retrieval(
             question=retrieval_query,
             trace=trace,
-            policy=invocation.policy,
             knowledge_provider=invocation.knowledge_provider,
-            strategy=manifest.retrieval.strategy,
             top_k=manifest.retrieval.top_k,
             min_score=manifest.retrieval.min_score,
             max_steps=manifest.retrieval.max_steps,
@@ -334,12 +336,16 @@ def build_react_enterprise_qa_graph(
         )
 
         if tool_policy_decision == PolicyDecisionType.REQUIRE_APPROVAL and approved is None:
-            gateway_result = invocation.tool_gateway.request_tool(
+            gateway_result = _request_tool_or_refuse(
+                invocation=invocation,
+                trace=trace,
+                proposal=proposal,
                 tool_name=tool_name,
                 parameters=parameters,
                 approved=False,
-                run_id=trace.run_id,
             )
+            if isinstance(gateway_result, dict):
+                return gateway_result
             trace.emit(
                 "approval_requested",
                 status="waiting",
@@ -367,12 +373,16 @@ def build_react_enterprise_qa_graph(
                 "governance_message": f"The {tool_name} tool was not run because approval was denied.",
             }
 
-        gateway_result = invocation.tool_gateway.request_tool(
+        gateway_result = _request_tool_or_refuse(
+            invocation=invocation,
+            trace=trace,
+            proposal=proposal,
             tool_name=tool_name,
             parameters=parameters,
             approved=True,
-            run_id=trace.run_id,
         )
+        if isinstance(gateway_result, dict):
+            return gateway_result
         trace.emit("approval_granted", status="ok", payload={"tool_name": tool_name})
         trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
         message = "Customer policy status is active according to the approved mock lookup."
@@ -482,6 +492,100 @@ def _retrieval_step_action_proposal(query: str) -> ReActActionProposal:
         parameters={"query": query, "step_id": "step_1"},
         risk_level="low",
     )
+
+
+def _run_react_retrieval(
+    *,
+    question: str,
+    trace: TraceWriter,
+    knowledge_provider: KnowledgeProvider,
+    top_k: int,
+    min_score: float,
+    max_steps: int | None,
+    force_empty: bool = False,
+) -> tuple[tuple[EvidenceChunk, ...], ValidationResult]:
+    step_context = {
+        "question": question,
+        "step_id": "step_1",
+        "provider": knowledge_provider.provider_name,
+        "top_k": top_k,
+        "max_steps": max_steps,
+        "execution_mode": "react_reviewed_retrieval",
+    }
+    trace.emit("retrieval_step", status="ok", payload=step_context)
+    evidence = knowledge_provider.retrieve(question, top_k=top_k)
+    if force_empty:
+        evidence = ()
+    trace.emit(
+        "retrieval_result",
+        status="ok",
+        payload={
+            "step_id": "step_1",
+            "provider": knowledge_provider.provider_name,
+            "candidate_count": len(evidence),
+            "chunk_count": len(evidence),
+            "sources": [chunk.source for chunk in evidence],
+        },
+    )
+    evidence_result = evaluate_evidence(evidence, min_count=1, min_score=min_score)
+    trace.emit(
+        "evidence_evaluation",
+        status="ok" if evidence_result.status == "passed" else "blocked",
+        payload={
+            "validator_name": evidence_result.validator_name,
+            "status": evidence_result.status.value,
+            "metadata": dict(evidence_result.metadata),
+        },
+    )
+    return evidence, evidence_result
+
+
+def _request_tool_or_refuse(
+    *,
+    invocation: HarnessInvocation,
+    trace: TraceWriter,
+    proposal: ReActActionProposal,
+    tool_name: str,
+    parameters: dict[str, Any],
+    approved: bool,
+) -> ToolGatewayResult | dict[str, Any]:
+    try:
+        return invocation.tool_gateway.request_tool(
+            tool_name=tool_name,
+            parameters=parameters,
+            approved=approved,
+            run_id=trace.run_id,
+        )
+    except ProofAgentError as exc:
+        return _tool_refusal(trace, proposal, tool_name, exc)
+    except Exception as exc:
+        return _tool_refusal(trace, proposal, tool_name, exc)
+
+
+def _tool_refusal(
+    trace: TraceWriter,
+    proposal: ReActActionProposal,
+    tool_name: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    error_code = getattr(exc, "code", "PA_TOOL_001")
+    message = "The tool request was rejected by the governance boundary."
+    trace.emit(
+        "tool_request",
+        status="blocked",
+        payload={
+            "action_id": proposal.action_id,
+            "tool_name": tool_name,
+            "error_code": error_code,
+            "error_class": exc.__class__.__name__,
+            "message": str(exc).splitlines()[0],
+        },
+    )
+    return {
+        "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+        "governance_message": message,
+        "final_output": message,
+    }
 
 
 def _evidence_state_dict(chunk: EvidenceChunk) -> dict[str, Any]:

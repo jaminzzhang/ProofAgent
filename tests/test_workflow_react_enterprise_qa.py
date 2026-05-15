@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from proof_agent.contracts import ReActActionProposal, ReActActionType, ReasoningSummary
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
@@ -51,6 +52,7 @@ def test_supported_travel_meal_question_answers_with_react_review_trace(
         if event["event_type"] == "review_requested"
     }
     assert "before_retrieval_step" in review_points
+    assert event_types.count("policy_decision") == 4
     assert "model_request" in event_types
     assert "model_response" in event_types
 
@@ -88,3 +90,45 @@ def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
 
     assert result.outcome == "WAITING_FOR_APPROVAL"
     assert "approval_requested" in _event_types(_trace_events(result.trace_path))
+
+
+def test_unknown_tool_proposal_fails_closed_without_raising(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    def propose_unknown_tool(self: object, **kwargs: object) -> ReActActionProposal:
+        return ReActActionProposal(
+            action_id="act_tool_unknown",
+            action_type=ReActActionType.PROPOSE_TOOL_CALL,
+            reasoning_summary=ReasoningSummary(
+                goal="Attempt an unsafe tool proposal.",
+                observations=("The planner proposed a tool outside the manifest allowlist.",),
+                candidate_actions=(ReActActionType.PROPOSE_TOOL_CALL,),
+                selected_action=ReActActionType.PROPOSE_TOOL_CALL,
+                rationale_summary="The runtime must validate and fail closed before tool execution.",
+                risk_flags=("tool_allowlist_violation",),
+                required_evidence=(),
+            ),
+            parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
+            target_tool_name="missing_tool",
+            risk_level="medium",
+        )
+
+    monkeypatch.setattr(
+        "proof_agent.capabilities.react.planner.DeterministicReActPlanner.plan",
+        propose_unknown_tool,
+    )
+
+    result = run_with_langgraph(
+        REACT_AGENT,
+        question="Look up customer policy status before answering.",
+        runs_dir=tmp_path,
+    )
+
+    assert result.outcome == "REFUSED_NO_EVIDENCE"
+    assert "tool request was rejected" in result.final_output
+    events = _trace_events(result.trace_path)
+    event_types = _event_types(events)
+    assert "tool_request" in event_types
+    assert "approval_requested" not in event_types
+    assert "tool_result" not in event_types
