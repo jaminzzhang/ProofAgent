@@ -49,6 +49,13 @@ Every trace line is one JSON object:
 | --- | --- |
 | `run_started` | run metadata and manifest path |
 | `manifest_loaded` | resolved `agent.yaml` config |
+| `reasoning_summary` | audit-safe ReAct Reasoning Summary; never raw chain-of-thought |
+| `action_proposal` | planner-proposed governed ReAct action |
+| `review_requested` | Harness Review Subagent request metadata |
+| `review_decision` | advisory review result and final policy decision summary |
+| `review_error` | review failure handled by fail-closed policy |
+| `review_overridden` | deterministic policy overrode advisory review |
+| `clarification_requested` | ReAct run paused to request missing user details |
 | `policy_decision` | typed policy decision at an enforcement point |
 | `retrieval_plan` | audit-safe Agentic RAG plan summary |
 | `retrieval_step` | governed retrieval attempt begins |
@@ -76,6 +83,9 @@ Every trace line is one JSON object:
 
 | Harness event | OpenTelemetry GenAI concept |
 | --- | --- |
+| `reasoning_summary`, `action_proposal` | custom agent/framework event |
+| `review_requested`, `review_decision`, `review_error`, `review_overridden` | custom agent/framework governance event |
+| `clarification_requested` | custom agent/framework wait event |
 | `retrieval_plan`, `retrieval_step`, `retrieval_result` | retrieval span |
 | `context_admission` | custom agent/framework event |
 | `model_request`, `model_response` | model generation span |
@@ -102,6 +112,26 @@ v1 does not need to emit OpenTelemetry. It must keep enough structure to build a
 `model_response` payloads store provider, model, finish reason, content length, refusal reason, and token usage. They must not store raw generated text.
 
 `model_error` payloads store provider, model, error code, error class, retryability, and a short non-secret message.
+
+## ReAct Payload Rules
+
+`reasoning_summary` payloads store only audit-safe fields such as action id, goal, observations, candidate actions, selected action, rationale summary, risk flags, and required evidence. They must not store raw chain-of-thought.
+
+`action_proposal` payloads store action id, action type, parameters after redaction, target tool name when present, and risk level. The action type must be one of:
+
+```text
+ask_clarification
+plan_retrieval
+run_retrieval_step
+propose_tool_call
+generate_final_answer
+escalate
+stop
+```
+
+`review_requested`, `review_decision`, `review_error`, and `review_overridden` payloads record review availability, advisory decision metadata, fail-closed errors, override state, and the final decision summary. The review subagent is not final authority; PolicyEngine and the Harness are.
+
+`clarification_requested` records that the run reached `WAITING_FOR_USER_CLARIFICATION` and includes only the safe prompt for missing details.
 
 ## Conversation Context Rules
 

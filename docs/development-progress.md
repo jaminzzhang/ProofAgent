@@ -1,6 +1,6 @@
 # Proof Agent Development Progress
 
-> Last updated: 2026-05-12
+> Last updated: 2026-05-15
 > Purpose: Give AI coding agents a short, current map of the implementation. Verify all claims against the code before changing behavior.
 
 ## 1. Current Positioning
@@ -15,14 +15,14 @@ Authoritative design doc: `docs/technical-design.md`.
 
 | Area | Status |
 | --- | --- |
-| Contracts | Pydantic v2 frozen models for manifest, policy, evidence, approval, tools, model, trace, receipt, run, dashboard |
+| Contracts | Pydantic v2 frozen models for manifest, policy, ReAct action/review, evidence, approval, tools, model, trace, receipt, run, dashboard |
 | Delivery | `delivery/cli.py` exposes Typer commands; `delivery/api.py` exposes Run Execution and Conversation APIs; `delivery/published_agents.py` maps Published Agent ids to approved manifests |
 | Docker | `Dockerfile` and `docker-compose.yml` run deterministic demo |
 | Bootstrap | `bootstrap/` owns YAML loader, path resolution, provider validation, retrieval config validation, secret-looking param rejection, and `HarnessInvocation` composition |
-| Control | `control/` owns Enterprise QA workflow, policy, validators, evidence decisions, approval, and outcome behavior |
-| Runtime | `runtime/langgraph_runner.py` executes the Enterprise QA LangGraph `StateGraph` with composed Harness dependencies |
-| Capability | `capabilities/` owns model providers, knowledge provider registry, memory, ToolGateway, mock `customer_lookup`, and future Skill packs |
-| Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, model usage section |
+| Control | `control/` owns Enterprise QA and Controlled ReAct Enterprise QA workflow, policy, review fail-closed behavior, validators, evidence decisions, approval, and outcome behavior |
+| Runtime | `runtime/langgraph_runner.py` executes supported LangGraph `StateGraph` templates with composed Harness dependencies |
+| Capability | `capabilities/` owns model providers, ReAct planner, review subagent, knowledge provider registry, memory, ToolGateway, mock `customer_lookup`, and future Skill packs |
+| Audit | `observability/audit/` owns JSONL trace, ReAct review/reasoning projections, redaction, Governance Receipt, model usage section |
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed runs and persists them through RunStore |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
 | Tests | 32 test files and 114 statically detected `test_` functions at last scan |
@@ -39,6 +39,15 @@ unsupported: REFUSED_NO_EVIDENCE
 tool_required: WAITING_FOR_APPROVAL
 ```
 
+ReAct demo expected outcomes:
+
+```text
+supported: ANSWERED_WITH_CITATIONS
+unsupported: REFUSED_NO_EVIDENCE
+clarify: WAITING_FOR_USER_CLARIFICATION
+tool_required: WAITING_FOR_APPROVAL
+```
+
 Artifacts:
 
 ```text
@@ -51,6 +60,7 @@ runs/latest/governance_receipt.md
 | Gap | Current State | Intended Direction |
 | --- | --- | --- |
 | LangGraph runtime | Enterprise QA `StateGraph` runs through composed Harness dependencies | Checkpoint interrupt/resume and streaming hooks |
+| Controlled ReAct | `react_enterprise_qa` runs deterministic planner/review scenarios with fixed action set, advisory review, clarification wait, approval wait, trace, and receipt output | Production-grade checkpoint resume, streaming, and remote planner/review adapters |
 | LangChain integration | Not a public adapter yet | Optional ecosystem adapter that preserves contracts |
 | Real MCP | Mock tool proves approval contract | stdio/HTTP MCP adapter behind ToolGateway |
 | Vector provider | Local Vector provider queries existing Chroma indexes | Index build lifecycle and broader vector store adapters |
@@ -69,6 +79,7 @@ uv run --extra dev python -m pytest tests/ -v
 uv run --extra dev ruff check proof_agent tests
 uv run --extra dev mypy proof_agent
 uv run --extra dev proof-agent demo
+uv run --extra dev --extra dashboard proof-agent react-demo
 ```
 
 For documentation-only edits:

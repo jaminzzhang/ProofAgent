@@ -13,10 +13,13 @@ ANSWERED_WITH_CITATIONS
 REFUSED_NO_EVIDENCE
 ESCALATED_WEAK_EVIDENCE
 WAITING_FOR_APPROVAL
+WAITING_FOR_USER_CLARIFICATION
 TOOL_APPROVAL_DENIED
 FAILED_WITH_TRACE
 FAILED_RECEIPT_UNAVAILABLE
 ```
+
+`WAITING_FOR_USER_CLARIFICATION` means the run paused safely to ask for missing details. A follow-up user turn must resume through the normal run or conversation entry point and cannot bypass policy, retrieval, validation, trace, or receipt behavior.
 
 ## Required Sections
 
@@ -31,6 +34,7 @@ Every receipt must include:
 - tool approval status
 - memory read/write status
 - model provider, model name, token usage, or model error summary when a model call occurs
+- ReAct Reasoning Summary and review result summaries when present in trace
 - audit artifact paths
 - redaction summary
 
@@ -39,6 +43,8 @@ Every receipt must include:
 | Receipt section | Trace event source |
 | --- | --- |
 | Policy Decisions | `policy_decision` events |
+| ReAct Reasoning Summary | `reasoning_summary` events |
+| ReAct Review | `review_requested`, `review_decision`, `review_error`, `review_overridden` events |
 | Evidence | `retrieval_step`, `retrieval_result`, and `evidence_evaluation` events |
 | Tools | `tool_request`, `approval_requested`, `approval_granted`, `approval_denied`, `approval_timeout`, `tool_result` events |
 | Memory | `memory_read`, `memory_write_requested`, `memory_write_decision` events |
@@ -60,6 +66,7 @@ The receipt must not include:
 - unnecessary personal data
 - raw tool payload fields marked sensitive by policy
 - raw prompts, raw model responses, provider headers, or provider error bodies
+- raw chain-of-thought; receipts may render only audit-safe Reasoning Summary fields
 - raw evidence content by default; receipts should render evidence source, citation, score, and admission status summaries
 
 When redaction occurs, the receipt should name the field class, not the secret value:
@@ -78,4 +85,7 @@ Receipt tests must cover:
 - answered, refused, escalated, approval-pending, and failed runs
 - trace path presence
 - model usage or model error rendering
+- ReAct Reasoning Summary and advisory review summaries when those events are present
+- `WAITING_FOR_USER_CLARIFICATION` receipt output
 - no raw secrets in receipt output
+- no raw chain-of-thought in receipt output

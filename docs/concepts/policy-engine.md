@@ -13,13 +13,13 @@ before_retrieval
   Decide whether the Agent may retrieve knowledge.
 
 before_retrieval_plan
-  Decide whether Agentic RAG may create or use a retrieval plan.
+  Decide whether Agentic RAG or Controlled ReAct may create or use a retrieval plan.
 
 before_retrieval_step
   Decide whether a specific retrieval step may run.
 
 before_answer
-  Decide whether evidence is sufficient to answer.
+  Decide deterministically whether evidence and citations are sufficient to answer.
 
 before_tool_call
   Decide whether a tool call is allowed, denied, or requires approval.
@@ -31,6 +31,17 @@ before_model_call
   Decide whether a model provider call is allowed for this provider, model,
   cost class, token estimate, stream setting, and evidence state.
 ```
+
+Auto Review Scope for Controlled ReAct covers:
+
+```text
+before_retrieval_plan
+before_retrieval_step
+before_tool_call
+before_model_call
+```
+
+`before_answer` stays outside Auto Review Scope. It remains deterministic evidence and citation governance so answer admission can be reproduced from accepted evidence, citation presence, and policy rules.
 
 ## Decisions
 
@@ -56,6 +67,37 @@ Every decision includes:
 - policy rule id
 - relevant evidence or tool metadata
 - trace event id
+
+## Harness Review Subagent Boundary
+
+The Harness Review Subagent is advisory. It can suggest:
+
+```text
+allow
+deny
+require_approval
+escalate
+```
+
+PolicyEngine and the Harness make the final decision. A review suggestion is accepted only when it is valid for the enforcement point and at least as strict as deterministic policy. If deterministic policy is stricter, the Harness overrides the review and emits `review_overridden`.
+
+Allowed advisory decisions by reviewed point:
+
+| Enforcement point | Allowed review suggestions |
+| --- | --- |
+| `before_retrieval_plan` | `allow`, `deny`, `escalate` |
+| `before_retrieval_step` | `allow`, `deny`, `escalate` |
+| `before_tool_call` | `allow`, `deny`, `require_approval`, `escalate` |
+| `before_model_call` | `allow`, `deny`, `escalate` |
+
+Invalid, mismatched, or failing review output fails closed:
+
+| Enforcement point | Failure decision |
+| --- | --- |
+| `before_tool_call` | `require_approval` |
+| `before_model_call` | `deny` |
+| `before_retrieval_plan` | `deny`, unless the context declares an explicit allowed fallback |
+| `before_retrieval_step` | `deny`, unless the context declares an explicit allowed fallback |
 
 ## Example Rule Intent
 

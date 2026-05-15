@@ -4,6 +4,8 @@ The Enterprise QA Template is the first strongly controlled enterprise knowledge
 
 This demo exists because knowledge Q&A is broad enough for many enterprises, but strict enough to prove the Harness value: retrieval, evidence, citation, model governance, refusal, tool approval, memory boundary, and audit.
 
+For planner-driven action loops, see the sister [Controlled ReAct Enterprise QA](react-enterprise-qa.md) example. It keeps the same evidence, approval, trace, and receipt requirements while adding ReAct action proposals, advisory review, and clarification continuation behavior.
+
 The public launch contract lives in [Launch Script](launch-script.md). The receipt output must follow [Governance Receipt Contract](../concepts/governance-receipt-contract.md), [Trace Event Contract](../concepts/trace-event-contract.md), and [Approval State Contract](../concepts/approval-state-contract.md).
 
 ## Demo Flow
@@ -66,6 +68,10 @@ This comparison is the fastest way to show why this project is not just another 
 - Supported: "What is the reimbursement rule for this internal policy?"
 - Unsupported: "What discount should we give this customer next year?"
 - Tool-required: "Look up customer policy status before answering."
+
+The ReAct version also includes a clarification scenario:
+
+- Clarify: "Can this customer claim it?" -> `WAITING_FOR_USER_CLARIFICATION`
 
 ## Acceptance Criteria
 

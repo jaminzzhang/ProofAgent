@@ -43,7 +43,51 @@ audit:
   receipt_path: ./runs/latest/governance_receipt.md
 ```
 
-This schema is intentionally small. It is enough to run the first enterprise Q&A template while leaving room for remote model, vector store, MCP, and dashboard integrations through adapter-specific params.
+The base schema is intentionally small. It is enough to run the Enterprise QA template while leaving room for ReAct planning, review, remote model, vector store, MCP, and dashboard integrations through explicit sections and adapter-specific params.
+
+## ReAct Shape
+
+The `react_enterprise_qa` template adds `react`, `review`, and `response` sections. These sections are part of the Agent Contract, not hidden runtime knobs.
+
+```yaml
+name: react_enterprise_qa
+purpose: "Answer enterprise knowledge questions through a governed ReAct workflow."
+
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    provider: sqlite
+    uri: memory
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  record_reasoning_summary: true
+  planner:
+    provider: deterministic
+    name: react-planner-demo
+
+review:
+  mode: auto
+  subagent:
+    provider: deterministic
+    name: harness-review-demo
+    timeout_seconds: 5
+    max_output_tokens: 500
+    fail_closed: true
+
+response:
+  include_reasoning_summary: false
+  include_review_results: false
+```
+
+`workflow.template: react_enterprise_qa` requires a `react` section. `review.mode: auto` requires `review.subagent`. `response` controls what governance details may be returned to API callers; it does not change what the trace records.
 
 ## Responsibilities
 
@@ -58,6 +102,7 @@ This schema is intentionally small. It is enough to run the first enterprise Q&A
 - which tools are available
 - what memory scope is allowed
 - where audit artifacts are written
+- for ReAct templates, which planner, review, and response disclosure settings apply
 
 The supported v1 model providers are:
 
@@ -69,6 +114,75 @@ The supported v1 model providers are:
 Provider settings live under `model.params`. They may name environment variables such as `api_key_env`, `base_url_env`, `organization_env`, or `project_env`, but must not contain raw secret values.
 
 Knowledge provider settings live under `knowledge.params`. Supported provider names are `local_markdown`, `local_vector`, `remote_search`, and `pageindex`. Retrieval settings such as `strategy`, `top_k`, `min_score`, and `max_steps` live under the required top-level `retrieval` section. Executable runs use `retrieval.strategy: single_step` for one governed provider call or `retrieval.strategy: agentic` for a governed retrieval plan. The `pageindex` provider uses a remote PageIndex deployment for the retrieval step and still returns candidate evidence only.
+
+## ReAct Section
+
+`react` configures planner behavior for the governed ReAct workflow.
+
+| Field | Purpose |
+| --- | --- |
+| `max_steps` | Maximum planner/action loop count before the Harness stops. |
+| `max_tool_calls` | Maximum governed tool proposals allowed in the run. |
+| `record_reasoning_summary` | Whether to emit audit-safe `reasoning_summary` trace events. This must never mean storing raw chain-of-thought. |
+| `planner.provider` / `planner.name` | Planner adapter selection. The deterministic provider supports local demos and tests. |
+| `planner.params` | Provider-specific planner settings. Secret-looking fields are rejected like model params. |
+
+The fixed ReAct Action Set is:
+
+```text
+ASK_CLARIFICATION
+PLAN_RETRIEVAL
+RUN_RETRIEVAL_STEP
+PROPOSE_TOOL_CALL
+GENERATE_FINAL_ANSWER
+ESCALATE
+STOP
+```
+
+Planner implementations propose actions from this closed set. They do not directly retrieve, call tools, call models, write memory, or finalize output outside the Harness.
+
+## Review Section
+
+`review` configures the Harness Review Subagent. The subagent is advisory. It may suggest:
+
+```text
+allow
+deny
+require_approval
+escalate
+```
+
+PolicyEngine and the Harness make the final policy decision. Deterministic rules can override a less strict review suggestion, invalid review output fails closed, and every handled review path is recorded in trace.
+
+Auto Review Scope covers:
+
+```text
+before_retrieval_plan
+before_retrieval_step
+before_tool_call
+before_model_call
+```
+
+`before_answer` remains deterministic evidence and citation governance. The review subagent does not decide whether unsupported evidence can become an answer.
+
+Review failure policy is fail closed:
+
+- tool call review failure -> `require_approval`
+- model call review failure -> `deny`
+- retrieval plan or retrieval step review failure -> `deny` unless the context declares an explicit allowed fallback
+
+## Response Section
+
+`response` caps optional governance details returned by Run Execution and Conversation API responses.
+
+| Field | Behavior |
+| --- | --- |
+| `include_reasoning_summary` | Allows API response details to include the audit-safe ReAct Reasoning Summary when the caller also requests governance details. |
+| `include_review_results` | Allows API response details to include review decision summaries when the caller also requests governance details. |
+
+API callers request details with `include_governance_details`, but the response is capped by this Agent Contract. If a caller asks for governance details and both response flags are false, the response omits `governance_details`.
+
+Trace and receipt behavior is separate: trace records governed events, receipts summarize trace events, and API response disclosure follows the `response` section.
 
 OpenAI-compatible example:
 
@@ -98,6 +212,8 @@ Examples:
 - unsupported model provider -> fail fast; v1 defaults to deterministic demo mode
 - missing remote model SDK or API key -> emit `model_error` after trace initialization when possible
 - unsupported runtime -> fail fast; the public workflow contract stays stable even when LangGraph/LangChain adapters evolve
+- `react_enterprise_qa` without `react` config -> fail fast with config guidance
+- `review.mode: auto` without `review.subagent` -> fail fast with config guidance
 - unwritable audit path -> fail before answering
 
 The contract is part of trust. If configuration is ambiguous, the Agent should not run.

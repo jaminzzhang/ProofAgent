@@ -21,6 +21,26 @@ Harness Engineering is an engineering design method to inject enterprise control
 
 Harness does not replace underlying orchestration engines (LangGraph), knowledge bases (RAG), or tool protocols (MCP). It establishes a unified control contract over these components.
 
+### Controlled ReAct
+
+Controlled ReAct applies the same envelope to planner-driven action loops. The planner may propose only actions from the fixed ReAct Action Set:
+
+```text
+ASK_CLARIFICATION
+PLAN_RETRIEVAL
+RUN_RETRIEVAL_STEP
+PROPOSE_TOOL_CALL
+GENERATE_FINAL_ANSWER
+ESCALATE
+STOP
+```
+
+The planner does not execute those actions directly. The Harness records an audit-safe `reasoning_summary`, emits an `action_proposal`, runs any configured advisory review, evaluates policy, and then decides whether the action may proceed.
+
+Auto Review Scope covers `before_retrieval_plan`, `before_retrieval_step`, `before_tool_call`, and `before_model_call`. `before_answer` remains deterministic evidence and citation governance, because answer admission must be explainable from accepted evidence and citations.
+
+`ASK_CLARIFICATION` produces `WAITING_FOR_USER_CLARIFICATION`. That is a controlled conversation continuation state: the current run pauses with a trace event and final output asking for missing details, and any follow-up turn must re-enter the same Control Envelope.
+
 ### Harness RAG
 
 **Harness RAG** is a governed knowledge retrieval and generation implementation that can use single-step retrieval now and Agentic RAG as a future Retrieval Strategy. Unlike Plain RAG (Retrieve → Generate), Harness RAG introduces policy gates between retrieval and generation:
@@ -67,6 +87,7 @@ The envelope does not replace the underlying systems. LangGraph can own workflow
 - **Approval is state:** tool approval is visible, resumable, and traced.
 - **Audit has a portable fact stream:** JSONL trace is the source of truth; Dashboard and external observability are adapters.
 - **Readable proof:** Governance Receipt turns trace events into a leader-readable summary.
+- **No hidden reasoning logs:** ReAct stores only audit-safe Reasoning Summary fields. Raw chain-of-thought must not be recorded, stored, or exposed.
 
 ## What Architects Should Like
 

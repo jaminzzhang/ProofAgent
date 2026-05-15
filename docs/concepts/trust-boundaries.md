@@ -12,6 +12,8 @@ The current framework protects the integrity and reviewability of:
 - policy rules
 - local knowledge files
 - remote model provider configuration metadata
+- ReAct action proposals and audit-safe Reasoning Summaries
+- Harness Review Subagent advisory decisions
 - session memory
 - MCP tool requests and approval state
 - JSONL trace events
@@ -23,6 +25,8 @@ The current framework protects the integrity and reviewability of:
 The framework must provide:
 
 - policy decisions before retrieval, answer generation, model calls, tool calls, and memory writes
+- Controlled ReAct action governance for clarification, retrieval planning, retrieval steps, tool proposals, final answer proposals, escalation, and stop actions
+- advisory review at `before_retrieval_plan`, `before_retrieval_step`, `before_tool_call`, and `before_model_call`, with final authority retained by PolicyEngine and the Harness
 - evidence-based answer, refusal, or escalation
 - explicit approval state before governed tools run
 - session memory boundaries
@@ -30,6 +34,7 @@ The framework must provide:
 - Governance Receipt generated from trace events
 - redaction of secrets and unnecessary personal data in trace and receipt output
 - Dashboard API views that do not expose raw secrets or create a second execution path
+- no raw chain-of-thought storage or exposure; only audit-safe Reasoning Summary fields may be recorded
 
 ## Out of Scope
 
@@ -40,6 +45,8 @@ The current framework does not claim to provide:
 - network isolation for arbitrary tools
 - enterprise DLP coverage
 - prompt injection prevention for all external content
+- review subagents as final policy authority
+- raw chain-of-thought auditing or replay
 - tamper-proof audit storage
 - multi-tenant authorization
 - hosted compliance reporting
@@ -86,3 +93,11 @@ Persistent user memory, task memory, cross-session memory, and external memory p
 `trace.jsonl` is the source of truth. Governance Receipt is a readable summary.
 
 If trace writing fails, the run must fail closed or emit a local fallback error. If receipt generation fails, the preserved trace path must be shown to the user.
+
+## ReAct And Review Boundary
+
+Controlled ReAct does not make planner output trusted. Planner proposals, review suggestions, and model outputs are all untrusted inputs to the Harness.
+
+The Harness Review Subagent may suggest `allow`, `deny`, `require_approval`, or `escalate`, but PolicyEngine and the Harness make the final policy decision. Review failures fail closed: tool calls require approval, model calls are denied, and retrieval plan or step proposals are denied unless an explicit fallback is configured.
+
+ReAct trace and receipt output must store only an audit-safe Reasoning Summary. Raw chain-of-thought must not be recorded, stored, or exposed in trace, receipt, RunStore, Dashboard API, Conversation API, or response governance details.

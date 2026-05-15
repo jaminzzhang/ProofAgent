@@ -18,7 +18,7 @@ questions.yaml      # Optional: Evaluation question set
 expected/           # Optional: Expected trace / receipt examples
 ```
 
-The current runnable reference implementation is the [Enterprise QA Template](examples/enterprise-qa.md), corresponding to the `examples/enterprise_qa/` directory.
+The current runnable reference implementations are the [Enterprise QA Template](examples/enterprise-qa.md), corresponding to `examples/enterprise_qa/`, and the [Controlled ReAct Enterprise QA Template](examples/react-enterprise-qa.md), corresponding to `examples/react_enterprise_qa/`.
 
 ## 2. Quick Start
 
@@ -30,6 +30,16 @@ uv run --extra dev proof-agent demo
 Run the Enterprise QA Template:
 ```bash
 uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml
+```
+
+Run the deterministic Controlled ReAct Enterprise QA demo:
+```bash
+uv run --extra dev --extra dashboard proof-agent react-demo
+```
+
+If Proof Agent is already installed with the required extras, use:
+```bash
+proof-agent react-demo
 ```
 
 Compare Plain RAG vs Controlled Harness RAG:
@@ -95,18 +105,27 @@ Core boundaries:
 | Area | v1 status |
 | --- | --- |
 | Entry | CLI, Docker demo, Run Execution API, Dashboard API |
-| Workflow template | `enterprise_qa` |
-| Runtime config | `workflow.runtime: langgraph`; Enterprise QA runs through a LangGraph `StateGraph` using composed Harness dependencies |
+| Workflow template | `enterprise_qa`, `react_enterprise_qa` |
+| Runtime config | `workflow.runtime: langgraph`; Enterprise QA and Controlled ReAct Enterprise QA run through LangGraph `StateGraph` templates using composed Harness dependencies |
 | Knowledge | `knowledge.provider: local_markdown`, local Markdown retrieval |
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
 | Model | `deterministic` and `openai_compatible` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
-| Policy | `before_retrieval`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
+| Policy | `before_retrieval`, `before_retrieval_plan`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
 | Tools / MCP | ToolGateway, mock `customer_lookup`, approval state; real MCP transport is the extension direction |
 | Memory | `memory.provider: session`, with sensitive field denylist |
 | Validators | schema, evidence, safety, citations, tool result |
 | Audit | JSONL trace, Governance Receipt, RunStore, ConversationStore, Dashboard read API |
 
 The v1 deterministic path must always operate without requiring API keys, network models, or external services.
+
+The ReAct deterministic demo adds these expected outcomes:
+
+```text
+supported: ANSWERED_WITH_CITATIONS
+unsupported: REFUSED_NO_EVIDENCE
+clarify: WAITING_FOR_USER_CLARIFICATION
+tool_required: WAITING_FOR_APPROVAL
+```
 
 ## 5. Configuring the Agent Contract
 
@@ -150,13 +169,61 @@ audit:
 
 Current v1 config constraints:
 - `workflow.runtime` must be `langgraph`.
-- `workflow.template` must be `enterprise_qa`.
+- `workflow.template` must be `enterprise_qa` or `react_enterprise_qa`.
 - `knowledge.provider` must be one of `local_markdown`, `local_vector`, `remote_search`, or `pageindex`.
 - `retrieval.strategy` supports `single_step` and `agentic`.
 - `memory.provider` must be `session`.
 - `model.provider` supports `deterministic`, `openai_compatible`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
 - `policy.file`, `tools.file`, and provider-specific paths under `knowledge.params` must exist.
 - The parent directories of `audit.trace_path` and `audit.receipt_path` must be writable.
+
+Controlled ReAct adds these sections to `agent.yaml`:
+
+```yaml
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    provider: sqlite
+    uri: memory
+
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  record_reasoning_summary: true
+  planner:
+    provider: deterministic
+    name: react-planner-demo
+
+review:
+  mode: auto
+  subagent:
+    provider: deterministic
+    name: harness-review-demo
+    timeout_seconds: 5
+    max_output_tokens: 500
+    fail_closed: true
+
+response:
+  include_reasoning_summary: false
+  include_review_results: false
+```
+
+`react_enterprise_qa` requires `react`. `review.mode: auto` requires `review.subagent`. `response` controls optional governance details returned by Run Execution and Conversation APIs; the caller can request `include_governance_details`, but the Agent Contract caps the response through `response.include_reasoning_summary` and `response.include_review_results`.
+
+The fixed ReAct Action Set is:
+
+```text
+ASK_CLARIFICATION
+PLAN_RETRIEVAL
+RUN_RETRIEVAL_STEP
+PROPOSE_TOOL_CALL
+GENERATE_FINAL_ANSWER
+ESCALATE
+STOP
+```
+
+The planner proposes actions from this set. The Harness still owns execution, policy, approval, validation, trace, and receipt behavior. Store only audit-safe Reasoning Summary fields; raw chain-of-thought must not be recorded, stored, or exposed.
 
 Remote model configuration must use environment variable names; do not write raw secrets into the YAML:
 ```yaml
@@ -231,6 +298,19 @@ Control Plane development steps:
 4. Identify which fields cannot be written to memory.
 5. Identify provider, token, cost, or risk policies before model calls.
 6. Verify with trace and receipt that every policy gate was recorded.
+
+For Controlled ReAct, Auto Review Scope covers:
+
+```text
+before_retrieval_plan
+before_retrieval_step
+before_tool_call
+before_model_call
+```
+
+`before_answer` remains deterministic evidence and citation governance.
+
+The Harness Review Subagent is advisory. It may suggest `allow`, `deny`, `require_approval`, or `escalate`, but PolicyEngine and the Harness make the final policy decision. Review failures fail closed: tool call review failures require approval, model call review failures deny the call, and retrieval plan or step failures deny unless an explicit fallback exists.
 
 ## 7. Configuring the Runtime Plane
 
@@ -372,6 +452,7 @@ Recommended process:
 Suggested validation commands:
 ```bash
 uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "What is the reimbursement rule for travel meals?"
+uv run --extra dev --extra dashboard proof-agent react-demo
 uv run --extra dev proof-agent run examples/insurance_service_qa/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
 uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "Look up customer policy status before answering."
@@ -423,6 +504,10 @@ Conversation runs automatically admit Controlled Conversation Context from
 recent turns. The admitted context is a bounded, trace-safe summary used for
 follow-up resolution; each turn still performs its own retrieval, evidence
 evaluation, validation, trace, and receipt.
+
+For ReAct conversations, `WAITING_FOR_USER_CLARIFICATION` is a controlled continuation state. The current run records `clarification_requested`, returns the missing-details prompt, and waits for the user to submit a follow-up turn. The follow-up still starts through the Conversation API and the same Control Envelope; no hidden continuation state may bypass policy or evidence checks.
+
+Governance details can be requested from Run Execution and Conversation APIs with `include_governance_details`. The API returns details only when the request asks for them and the published Agent Contract allows them through `response.include_reasoning_summary` or `response.include_review_results`.
 
 When deploying, deliver:
 ```text
@@ -494,5 +579,6 @@ Before launching, verify at least:
 - Memory does not persist sensitive fields.
 - Remote model output passes through validators.
 - Traces record key policy, retrieval, model, tool, memory, and final output events.
+- ReAct traces record `reasoning_summary`, `action_proposal`, review events, and `clarification_requested` when applicable.
 - Governance Receipt can explain the final outcome.
 - Dashboard API only reads run history, not creating a new execution path.

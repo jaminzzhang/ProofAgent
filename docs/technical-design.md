@@ -34,6 +34,14 @@ unsupported: REFUSED_NO_EVIDENCE
 tool_required: WAITING_FOR_APPROVAL
 ```
 
+Current ReAct demo acceptance results:
+```text
+supported: ANSWERED_WITH_CITATIONS
+unsupported: REFUSED_NO_EVIDENCE
+clarify: WAITING_FOR_USER_CLARIFICATION
+tool_required: WAITING_FOR_APPROVAL
+```
+
 ## 2. Design Principles
 
 ### 2.1 Harness Control Flow
@@ -135,6 +143,23 @@ CLI / Docker
   -> expose Dashboard API read projections
 ```
 
+Controlled ReAct Enterprise QA adds a planner loop around the same Control Plane:
+
+```text
+CLI / API / Conversation turn
+  -> load react_enterprise_qa Agent Contract
+  -> ReAct planner proposes a fixed action
+  -> emit reasoning_summary and action_proposal
+  -> Harness Review Subagent suggests a decision for reviewed points
+  -> PolicyEngine/Harness makes the final decision
+  -> execute allowed retrieval/model/tool/clarification behavior
+  -> deterministic before_answer evidence and citation gate
+  -> final_output with answer, refusal, approval wait, clarification wait, or escalation
+  -> persist trace and Governance Receipt
+```
+
+The planner and review subagent are inputs to governance, not governance authorities.
+
 Layer boundary rules:
 - Control Plane owns decisions. Runtime and Capability layers cannot bypass PolicyEngine, Approval, Validators, or Outcome mapping.
 - Runtime Plane owns execution mechanics. LangGraph/LangChain can provide graph execution, checkpoint, interrupt/resume, and streaming hooks, but cannot redefine Harness governance semantics.
@@ -151,9 +176,9 @@ Layer boundary rules:
 | Docker | `Dockerfile`, `docker-compose.yml` runs demo by default |
 | Contracts | Pydantic v2 frozen models |
 | Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, and `HarnessInvocation` composition |
-| Workflow | `control/workflow/` owns the Enterprise QA Harness and the workflow template registry |
-| Runtime | `runtime/langgraph_runner.py` executes the Enterprise QA `StateGraph` through resolved Harness dependencies |
-| Policy | `control/policy/` owns retrieval, answer, tool, memory, model call enforcement points |
+| Workflow | `control/workflow/` owns Enterprise QA and Controlled ReAct Enterprise QA Harness behavior plus the workflow template registry |
+| Runtime | `runtime/langgraph_runner.py` executes supported `StateGraph` templates through resolved Harness dependencies |
+| Policy | `control/policy/` owns retrieval, ReAct review, answer, tool, memory, and model call enforcement points |
 | Knowledge | `capabilities/knowledge/` owns Markdown deterministic retrieval; vector stack optional |
 | Model | `capabilities/models/` owns `deterministic`, `openai_compatible`; Azure/Anthropic placeholders |
 | Tools | `capabilities/tools/` owns ToolGateway, mock `customer_lookup`, approval state |
@@ -229,7 +254,7 @@ Architecture layer mapping:
 | Capability Layer | `capabilities/models/`, `capabilities/knowledge/`, `capabilities/memory/`, `capabilities/tools/`, future Skill packs |
 | Contracts & Ports | `contracts/`, provider protocols |
 | Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/` |
-| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, `examples/enterprise_qa/` |
+| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, `examples/enterprise_qa/`, `examples/react_enterprise_qa/` |
 
 Boundary rules:
 - `contracts/` cannot import adapter SDKs.
@@ -281,6 +306,62 @@ audit:
   receipt_path: ../../runs/latest/governance_receipt.md
 ```
 
+Controlled ReAct example:
+
+```yaml
+name: react_enterprise_qa
+purpose: "Answer enterprise knowledge questions through a governed ReAct workflow."
+
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    provider: sqlite
+    uri: memory
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  record_reasoning_summary: true
+  planner:
+    provider: deterministic
+    name: react-planner-demo
+
+review:
+  mode: auto
+  subagent:
+    provider: deterministic
+    name: harness-review-demo
+    timeout_seconds: 5
+    max_output_tokens: 500
+    fail_closed: true
+
+response:
+  include_reasoning_summary: false
+  include_review_results: false
+```
+
+`react` defines planner limits and adapter selection. `review` defines the advisory Harness Review Subagent. `response` caps optional governance details returned by execution APIs; callers may request `include_governance_details`, but the response only includes details allowed by `response.include_reasoning_summary` and `response.include_review_results`.
+
+The fixed ReAct Action Set is:
+
+```text
+ASK_CLARIFICATION
+PLAN_RETRIEVAL
+RUN_RETRIEVAL_STEP
+PROPOSE_TOOL_CALL
+GENERATE_FINAL_ANSWER
+ESCALATE
+STOP
+```
+
+Planner output is a proposed action from this closed set. The planner cannot execute retrieval, tools, models, memory writes, or final answers directly.
+
 OpenAI-compatible example:
 ```yaml
 model:
@@ -299,6 +380,9 @@ Config rules:
 - Reject secret-looking fields such as `api_key`, `authorization`, `bearer`, `password`, `secret`, `access_token`.
 - Unsupported provider fails with `PA_MODEL_001`.
 - Provider runtime errors should emit `model_error` once trace exists.
+- `react_enterprise_qa` requires the `react` section.
+- `review.mode: auto` requires `review.subagent`.
+- Raw chain-of-thought must not be recorded, stored, or exposed; only audit-safe Reasoning Summary fields may enter trace, receipt, RunStore, Dashboard API, Conversation API, or response governance details.
 
 ## 8. Bootstrap / Composition
 
@@ -331,6 +415,8 @@ Contracts & Ports are the vertical foundation used by Control, Runtime, Capabili
 | --- | --- |
 | `AgentManifest` | Agent config entry point |
 | `PolicyRule` / `PolicyDecision` | rule declaration and decision |
+| `ReActActionProposal` / `ReasoningSummary` | governed ReAct action proposal and audit-safe reasoning summary |
+| `ReviewDecision` | advisory review result; final authority remains with PolicyEngine/Harness |
 | `EvidenceChunk` | retrieved evidence and citation source |
 | `ModelRequest` / `ModelResponse` | provider-neutral model call |
 | `ToolRequest` / `ToolResult` | tool request/result semantics |
@@ -427,6 +513,27 @@ Rules:
 - `require_approval` is a workflow state, not an exception.
 - `escalate` must appear as a governed outcome.
 - Model policy context includes provider, model, estimated tokens, stream, cost class, evidence count, and question metadata.
+
+Auto Review Scope for Controlled ReAct:
+```text
+before_retrieval_plan
+before_retrieval_step
+before_tool_call
+before_model_call
+```
+
+`before_answer` remains deterministic evidence and citation governance.
+
+Harness Review Subagent boundary:
+- The subagent suggests `allow`, `deny`, `require_approval`, or `escalate`.
+- PolicyEngine and the Harness make the final policy decision.
+- Invalid review output fails closed.
+- Deterministic policy overrides less strict review suggestions and emits `review_overridden`.
+
+Review failure policy:
+- tool call -> `require_approval`
+- model call -> `deny`
+- retrieval plan/step -> `deny` unless explicit fallback exists
 
 ## 13. Capability Layer
 
@@ -570,6 +677,13 @@ Core trace events:
 ```text
 run_started
 manifest_loaded
+reasoning_summary
+action_proposal
+review_requested
+review_decision
+review_error
+review_overridden
+clarification_requested
 policy_decision
 retrieval_plan
 retrieval_step
@@ -593,6 +707,13 @@ redaction_applied
 artifact_written
 run_failed
 ```
+
+ReAct trace safety:
+- `reasoning_summary` stores audit-safe goal, observations, candidate actions, selected action, rationale summary, risk flags, and required evidence.
+- `action_proposal` stores action metadata, redacted parameters, target tool name, and risk level.
+- review events store request, suggestion, fail-closed error, override, and final-decision metadata.
+- `clarification_requested` records the safe missing-details prompt for `WAITING_FOR_USER_CLARIFICATION`.
+- No event may store raw chain-of-thought.
 
 Receipt sections:
 - final outcome
@@ -654,6 +775,7 @@ CLI commands:
 | Command | Purpose |
 | --- | --- |
 | `proof-agent demo` | deterministic three-scenario demo |
+| `proof-agent react-demo` | deterministic Controlled ReAct Enterprise QA scenarios |
 | `proof-agent run` | run one Enterprise QA question |
 | `proof-agent doctor` | local, Docker, sample, provider readiness |
 | `proof-agent inspect` | summarize trace or receipt |
@@ -664,6 +786,13 @@ Docker:
 - `docker compose up` runs deterministic demo by default.
 - Docker path must not require API keys.
 - Remote provider env vars can be passed at runtime.
+
+Deterministic ReAct demo:
+```bash
+uv run --extra dev --extra dashboard proof-agent react-demo
+```
+
+When the package is already installed with required extras, `proof-agent react-demo` is equivalent.
 
 ## 22. Dependencies
 
