@@ -2,8 +2,10 @@ from pathlib import Path
 import shutil
 
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 
 from proof_agent.observability.api.app import create_app
+from proof_agent.runtime import langgraph_runner
 
 
 def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
@@ -178,6 +180,36 @@ def test_chat_run_returns_governance_details_when_agent_policy_allows(
     details = response.json()["governance_details"]
     assert details["reasoning_summary"]
     assert details["review_results"]
+
+
+def test_chat_run_executes_with_same_manifest_used_for_projection(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    manifest_path = _copy_react_agent_with_response_details(tmp_path)
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        published_agents={"react_details": manifest_path},
+    )
+    client = TestClient(app)
+
+    def fail_on_runtime_reload(path: Path | str) -> None:
+        raise AssertionError(f"runtime reloaded manifest: {path}")
+
+    monkeypatch.setattr(langgraph_runner, "load_agent_manifest", fail_on_runtime_reload)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_details",
+            "question": "What is the reimbursement rule for travel meals?",
+            "include_governance_details": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["governance_details"]["reasoning_summary"]
 
 
 def test_chat_run_execution_returns_approval_state_for_tool_question(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.contracts import ContextAdmission, ReceiptOutcome, RunResult
+from proof_agent.contracts import AgentManifest, ContextAdmission, ReceiptOutcome, RunResult
 from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.control.workflow.orchestrator import _emit_model_error, _finalize, _is_model_error
 from proof_agent.errors import ProofAgentError
@@ -28,14 +28,15 @@ def run_with_langgraph(
     run_id: str | None = None,
     store: RunStore | None = None,
     checkpointer: Any | None = None,
+    manifest: AgentManifest | None = None,
 ) -> RunResult:
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
-    manifest = load_agent_manifest(agent_yaml)
-    if manifest.workflow.template not in {"enterprise_qa", "react_enterprise_qa"}:
+    resolved_manifest = manifest or load_agent_manifest(agent_yaml)
+    if resolved_manifest.workflow.template not in {"enterprise_qa", "react_enterprise_qa"}:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            f"workflow template is not executable yet: {manifest.workflow.template}",
+            f"workflow template is not executable yet: {resolved_manifest.workflow.template}",
             "Use workflow.template: enterprise_qa or react_enterprise_qa.",
             artifact_path=agent_yaml,
         )
@@ -48,7 +49,7 @@ def run_with_langgraph(
     trace = TraceWriter(trace_path, run_id=actual_run_id)
 
     trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
-    trace.emit("manifest_loaded", status="ok", payload={"agent_name": manifest.name})
+    trace.emit("manifest_loaded", status="ok", payload={"agent_name": resolved_manifest.name})
     if conversation_context is not None:
         trace.emit(
             "context_admission",
@@ -56,13 +57,18 @@ def run_with_langgraph(
             payload=context_admission_payload(conversation_context),
         )
     try:
-        invocation = compose_harness_invocation(agent_yaml, manifest=manifest)
+        invocation = compose_harness_invocation(agent_yaml, manifest=resolved_manifest)
     except Exception as exc:
         if _is_model_error(exc):
-            _emit_model_error(trace, manifest.model.provider, manifest.model.name, exc)
+            _emit_model_error(
+                trace,
+                resolved_manifest.model.provider,
+                resolved_manifest.model.name,
+                exc,
+            )
         raise
 
-    if manifest.workflow.template == "enterprise_qa":
+    if resolved_manifest.workflow.template == "enterprise_qa":
         builder = build_enterprise_qa_graph(
             invocation=invocation,
             trace=trace,
@@ -78,13 +84,18 @@ def run_with_langgraph(
         )
     
     if checkpointer is None:
-        if manifest.workflow.checkpointer and manifest.workflow.checkpointer.provider == "sqlite":
-            if manifest.workflow.checkpointer.uri == "memory":
+        if (
+            resolved_manifest.workflow.checkpointer
+            and resolved_manifest.workflow.checkpointer.provider == "sqlite"
+        ):
+            if resolved_manifest.workflow.checkpointer.uri == "memory":
                 checkpointer = MemorySaver()
             else:
                 from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore[import-not-found]
                 import sqlite3
-                conn = sqlite3.connect((manifest.workflow.checkpointer.uri or "").replace("sqlite:///", ""))
+                conn = sqlite3.connect(
+                    (resolved_manifest.workflow.checkpointer.uri or "").replace("sqlite:///", "")
+                )
                 checkpointer = SqliteSaver(conn)
         else:
             checkpointer = MemorySaver()

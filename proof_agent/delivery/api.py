@@ -242,6 +242,7 @@ def _execute_published_agent_run(
             conversation_context=conversation_context,
             run_id=run_id,
             store=store,
+            manifest=manifest,
         )
     except ProofAgentError as exc:
         raise HTTPException(
