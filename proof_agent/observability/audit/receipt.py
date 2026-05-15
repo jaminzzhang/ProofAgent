@@ -55,6 +55,13 @@ def _build_context(
         if event["event_type"] in {"tool_request", "tool_result", "approval_requested"}
     ]
     memory_events = [event for event in events if event["event_type"].startswith("memory_")]
+    reasoning_summary_events = _events_by_type(events, {"reasoning_summary"})
+    action_proposal_events = _events_by_type(events, {"action_proposal"})
+    review_events = _events_by_type(
+        events,
+        {"review_requested", "review_decision", "review_error", "review_overridden"},
+    )
+    clarification_events = _events_by_type(events, {"clarification_requested"})
     model_usage = _extract_model_usage(events)
     redacted_fields = [
         field
@@ -74,6 +81,10 @@ def _build_context(
         "retrieval_events": retrieval_events,
         "tool_events": tool_events,
         "memory_events": memory_events,
+        "reasoning_summary_events": reasoning_summary_events,
+        "action_proposal_events": action_proposal_events,
+        "review_events": review_events,
+        "clarification_events": clarification_events,
         "model_usage": model_usage,
         "trace_path": trace_path,
         "receipt_path": receipt_path,
@@ -129,6 +140,13 @@ def _last_event(events: list[dict[str, Any]], event_type: str) -> dict[str, Any]
         (event for event in reversed(events) if event.get("event_type") == event_type),
         None,
     )
+
+
+def _events_by_type(
+    events: list[dict[str, Any]],
+    event_types: set[str],
+) -> list[dict[str, Any]]:
+    return [event for event in events if event.get("event_type") in event_types]
 
 
 def _audit_value(value: Any) -> str:

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from proof_agent.observability.audit.receipt import generate_receipt
+from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 def test_receipt_contains_required_sections(tmp_path: Path) -> None:
@@ -36,3 +37,17 @@ def test_receipt_renders_evidence_summary_without_raw_content(tmp_path: Path) ->
     assert "policy://travel#meals" in text
     assert "travel-policy.md#meals:L10-L18" in text
     assert "Travel meals require receipts." not in text
+
+
+def test_receipt_renders_react_review_sections(tmp_path: Path) -> None:
+    result = run_with_langgraph(
+        Path("examples/react_enterprise_qa/agent.yaml"),
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+    )
+
+    receipt = result.receipt_path.read_text(encoding="utf-8")
+
+    assert "## ReAct Reasoning Summary" in receipt
+    assert "## Auto Review" in receipt
+    assert "raw chain-of-thought" not in receipt.lower()

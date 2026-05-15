@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from proof_agent.contracts import ReceiptOutcome, RunDetail, RunIndex, RunSummary
+from proof_agent.observability.api.serializers import serialize_run_detail
 
 
 def test_run_summary_construction() -> None:
@@ -63,6 +64,39 @@ def test_run_detail_construction() -> None:
     assert len(detail.trace_events) == 1
     assert detail.receipt_markdown.startswith("# Receipt")
     assert detail.approval_state is None
+    assert detail.governance_details == {}
+
+
+def test_run_detail_accepts_governance_details() -> None:
+    detail = RunDetail(
+        run_id="run_abc123",
+        question="What is the travel meal rule?",
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        created_at="2026-05-10T14:32:18Z",
+        updated_at="2026-05-10T14:32:19Z",
+        governance_details={
+            "reasoning_summary": {"selected_action": "plan_retrieval"},
+            "review_results": [{"final_decision": "allow"}],
+        },
+    )
+
+    assert detail.governance_details["reasoning_summary"]
+    assert detail.governance_details["review_results"]
+
+
+def test_serialize_run_detail_includes_governance_details() -> None:
+    detail = RunDetail(
+        run_id="run_abc123",
+        question="What is the travel meal rule?",
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        created_at="2026-05-10T14:32:18Z",
+        updated_at="2026-05-10T14:32:19Z",
+        governance_details={"reasoning_summary": {"selected_action": "plan_retrieval"}},
+    )
+
+    serialized = serialize_run_detail(detail)
+
+    assert serialized["governance_details"] == detail.governance_details
 
 
 def test_run_detail_is_frozen() -> None:

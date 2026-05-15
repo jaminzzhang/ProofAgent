@@ -96,6 +96,7 @@ class RunStore:
         policy_decisions = self._extract_policy_decisions(trace_events)
         model_usage = self._extract_model_usage(trace_events)
         approval_state = self._extract_approval_state(trace_events)
+        governance_details = self._extract_governance_details(trace_events)
 
         return RunDetail(
             run_id=meta.run_id,
@@ -111,6 +112,7 @@ class RunStore:
             policy_decisions=tuple(policy_decisions),
             model_usage=model_usage,
             approval_state=approval_state,
+            governance_details=governance_details,
         )
 
     def list_runs(
@@ -324,3 +326,61 @@ class RunStore:
             "event_id": last.get("event_id"),
             "timestamp": last.get("timestamp"),
         }
+
+    def _extract_reasoning_summary(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        event = next(
+            (e for e in reversed(events) if e.get("event_type") == "reasoning_summary"),
+            None,
+        )
+        if event is None:
+            return None
+        payload = event.get("payload", {})
+        return dict(payload) if isinstance(payload, dict) else None
+
+    def _extract_review_results(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        review_event_types = {"review_decision", "review_error", "review_overridden"}
+        results: list[dict[str, Any]] = []
+        for event in events:
+            if event.get("event_type") not in review_event_types:
+                continue
+            payload = event.get("payload", {})
+            if isinstance(payload, dict):
+                results.append(dict(payload))
+        return results
+
+    def _extract_clarification_request(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        event = next(
+            (
+                e
+                for e in reversed(events)
+                if e.get("event_type") == "clarification_requested"
+            ),
+            None,
+        )
+        if event is None:
+            return None
+        payload = event.get("payload", {})
+        return dict(payload) if isinstance(payload, dict) else None
+
+    def _extract_governance_details(self, events: list[dict[str, Any]]) -> dict[str, Any]:
+        details: dict[str, Any] = {}
+
+        reasoning_summary = self._extract_reasoning_summary(events)
+        if reasoning_summary:
+            details["reasoning_summary"] = reasoning_summary
+
+        review_results = self._extract_review_results(events)
+        if review_results:
+            details["review_results"] = review_results
+
+        clarification_request = self._extract_clarification_request(events)
+        if clarification_request:
+            details["clarification_request"] = clarification_request
+
+        return details

@@ -9,6 +9,53 @@ Question: {{ question }}
 
 {{ final_outcome }}
 
+{% if reasoning_summary_events %}
+## ReAct Reasoning Summary
+
+{% for event in reasoning_summary_events %}
+| Field | Value |
+| --- | --- |
+| Action ID | {{ event.payload.action_id | default("unknown") }} |
+| Goal | {{ event.payload.goal | default("n/a") }} |
+| Observations | {{ event.payload.observations | default([]) | join("; ") }} |
+| Candidate Actions | {{ event.payload.candidate_actions | default([]) | join(", ") }} |
+| Selected Action | {{ event.payload.selected_action | default("n/a") }} |
+| Rationale Summary | {{ event.payload.rationale_summary | default("n/a") }} |
+| Risk Flags | {{ event.payload.risk_flags | default([]) | join(", ") }} |
+| Required Evidence | {{ event.payload.required_evidence | default([]) | join(", ") }} |
+
+{% endfor %}
+{% if action_proposal_events %}
+{% for event in action_proposal_events %}
+- Proposed action {{ event.payload.action_id | default("unknown") }}: {{ event.payload.action_type | default("unknown") }} (risk: {{ event.payload.risk_level | default("unknown") }})
+{% endfor %}
+{% endif %}
+{% endif %}
+
+{% if review_events %}
+## Auto Review
+
+{% for event in review_events %}
+{% if event.event_type == "review_requested" %}
+- Requested {{ event.payload.enforcement_point | default("unknown") }} for {{ event.payload.action_type | default("unknown") }}; reviewer available: {{ event.payload.reviewer_available | default("unknown") }}
+{% elif event.event_type == "review_decision" %}
+- {{ event.payload.review_enforcement_point | default("review") }}: {{ event.payload.final_decision | default("unknown") }} (used review: {{ event.payload.used_review | default("unknown") }}, overridden: {{ event.payload.overridden | default("unknown") }})
+{% elif event.event_type == "review_error" %}
+- Review error for {{ event.payload.subject_action_id | default("unknown") }}: {{ event.payload.error_code | default("unknown") }}
+{% elif event.event_type == "review_overridden" %}
+- Review overridden for {{ event.payload.subject_action_id | default("unknown") }}: {{ event.payload.final_decision | default("unknown") }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if clarification_events %}
+## Clarification
+
+{% for event in clarification_events %}
+- {{ event.payload.message | default(event.status) }}
+{% endfor %}
+{% endif %}
+
 ## Policy Decisions
 
 {% if policy_events %}

@@ -48,6 +48,7 @@ class RunDetail(FrozenModel):
     policy_decisions: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
     model_usage: dict[str, Any] = Field(default_factory=dict)
     approval_state: dict[str, Any] | None = None
+    governance_details: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunIndex(FrozenModel):

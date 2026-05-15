@@ -8,6 +8,7 @@ import pytest
 from proof_agent.contracts.dashboard import RunIndex
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.observability.storage.run_store import RunStore
+from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 @pytest.fixture
@@ -240,3 +241,21 @@ def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
     assert detail is not None
     assert detail.evidence_chunks[0]["citation"] == "travel-policy.md#meals:L10-L18"
     assert "content" not in detail.evidence_chunks[0]
+
+
+def test_run_store_extracts_governance_details_for_react_run(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "history")
+    run_with_langgraph(
+        Path("examples/react_enterprise_qa/agent.yaml"),
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "latest",
+        store=store,
+    )
+
+    runs, total = store.list_runs()
+    assert total == 1
+    detail = store.get_run_detail(runs[0].run_id)
+
+    assert detail is not None
+    assert detail.governance_details["reasoning_summary"]
+    assert detail.governance_details["review_results"]
