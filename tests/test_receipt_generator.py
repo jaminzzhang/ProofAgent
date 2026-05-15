@@ -51,3 +51,24 @@ def test_receipt_renders_react_review_sections(tmp_path: Path) -> None:
     assert "## ReAct Reasoning Summary" in receipt
     assert "## Auto Review" in receipt
     assert "raw chain-of-thought" not in receipt.lower()
+
+
+def test_receipt_renders_actionable_react_clarification(tmp_path: Path) -> None:
+    result = run_with_langgraph(
+        Path("examples/react_enterprise_qa/agent.yaml"),
+        question="Can this customer claim it?",
+        runs_dir=tmp_path,
+    )
+
+    receipt = result.receipt_path.read_text(encoding="utf-8")
+    clarification_section = receipt.split("## Clarification", maxsplit=1)[1].split(
+        "\n## ",
+        maxsplit=1,
+    )[0].strip()
+
+    assert "## Clarification" in receipt
+    assert any(
+        detail in receipt
+        for detail in ("customer_id", "policy_id", "claim_type", "Please provide")
+    )
+    assert clarification_section != "- waiting"

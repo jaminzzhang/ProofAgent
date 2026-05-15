@@ -52,7 +52,13 @@ Question: {{ question }}
 ## Clarification
 
 {% for event in clarification_events %}
-- {{ event.payload.message | default(event.status) }}
+{% if event.payload.message %}
+- {{ event.payload.message }}
+{% elif event.payload.missing_fields %}
+- Please provide: {{ event.payload.missing_fields | join(", ") }}.
+{% else %}
+- Clarification requested for {{ event.payload.action_id | default("unknown action") }}.
+{% endif %}
 {% endfor %}
 {% endif %}
 
