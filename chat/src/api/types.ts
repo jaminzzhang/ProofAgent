@@ -11,6 +11,7 @@ export type ReceiptOutcome =
 export interface GovernanceDetails {
   reasoning_summary?: Record<string, unknown> | null
   review_results?: Record<string, unknown>[]
+  clarification_request?: Record<string, unknown> | null
 }
 
 export type ApprovalStatus = 'requested' | 'granted' | 'denied' | 'timed_out'

@@ -16,7 +16,11 @@ const SYNTHETIC_NEW_CHAT: ConversationRecord = {
 }
 
 function hasGovernanceDetails(details?: GovernanceDetails | null): boolean {
-  return Boolean(details?.reasoning_summary) || Boolean(details?.review_results?.length)
+  return (
+    Boolean(details?.reasoning_summary) ||
+    Boolean(details?.review_results?.length) ||
+    Boolean(details?.clarification_request)
+  )
 }
 
 export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
