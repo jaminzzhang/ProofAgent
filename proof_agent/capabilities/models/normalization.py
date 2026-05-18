@@ -28,7 +28,6 @@ class ModelOutputNormalizationError(ValueError):
 
 
 def parse_model_contract(
-    *,
     content: str,
     contract_type: type[ContractT],
     role: str,
@@ -47,14 +46,11 @@ def parse_model_contract(
 
 def _extract_single_json_object(content: str, *, role: str) -> dict[str, object]:
     stripped = content.strip()
-    candidates = [stripped]
-    fenced = _FENCED_JSON_RE.findall(content)
-    candidates.extend(fenced)
-    for candidate in candidates:
-        try:
-            value = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    else:
         if isinstance(value, dict):
             return value
         raise ModelOutputNormalizationError(
@@ -63,6 +59,29 @@ def _extract_single_json_object(content: str, *, role: str) -> dict[str, object]
             message="Model output JSON must be a single object.",
             raw_content_length=len(content),
         )
+
+    fenced = _FENCED_JSON_RE.findall(content)
+    if len(fenced) > 1:
+        raise ModelOutputNormalizationError(
+            role=role,
+            error_code="model_output_json_parse_failed",
+            message="Model output did not contain a valid JSON object.",
+            raw_content_length=len(content),
+        )
+    if len(fenced) == 1:
+        try:
+            value = json.loads(fenced[0])
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(value, dict):
+                return value
+            raise ModelOutputNormalizationError(
+                role=role,
+                error_code="model_output_json_not_object",
+                message="Model output JSON must be a single object.",
+                raw_content_length=len(content),
+            )
     raise ModelOutputNormalizationError(
         role=role,
         error_code="model_output_json_parse_failed",

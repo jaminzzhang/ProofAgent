@@ -40,6 +40,16 @@ def test_parse_model_contract_accepts_full_json_object() -> None:
     assert proposal.parameters["query"] == "travel meal reimbursement rule"
 
 
+def test_parse_model_contract_accepts_positional_arguments() -> None:
+    proposal = parse_model_contract(
+        VALID_PROPOSAL_JSON,
+        ReActActionProposal,
+        "react_planner",
+    )
+
+    assert proposal.action_id == "act_1"
+
+
 def test_parse_model_contract_accepts_fenced_json_object() -> None:
     proposal = parse_model_contract(
         content=f"```json\n{VALID_PROPOSAL_JSON}\n```",
@@ -48,6 +58,21 @@ def test_parse_model_contract_accepts_fenced_json_object() -> None:
     )
 
     assert proposal.action_id == "act_1"
+
+
+def test_parse_model_contract_rejects_multiple_fenced_json_objects() -> None:
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        parse_model_contract(
+            content=(
+                f"```json\n{VALID_PROPOSAL_JSON}\n```\n"
+                f"```json\n{VALID_PROPOSAL_JSON}\n```"
+            ),
+            contract_type=ReActActionProposal,
+            role="react_planner",
+        )
+
+    assert exc.value.role == "react_planner"
+    assert exc.value.error_code == "model_output_json_parse_failed"
 
 
 def test_parse_model_contract_rejects_natural_language() -> None:
