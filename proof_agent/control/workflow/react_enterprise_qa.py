@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.capabilities.review import HarnessReviewSubagent
 from proof_agent.contracts import (
     EnforcementPoint,
@@ -86,6 +87,36 @@ def review_action(
                 action=proposal,
                 context=context,
             )
+        except ModelOutputNormalizationError as exc:
+            final_decision = fail_closed_policy_decision(
+                point,
+                context,
+                trace_event_id=trace_event_id,
+                error_code=exc.error_code,
+            )
+            review_event = {
+                "used_review": False,
+                "final_decision": final_decision.decision.value,
+                "overridden": False,
+                "error_code": exc.error_code,
+                "error_class": exc.__class__.__name__,
+                "subject_action_id": proposal.action_id,
+            }
+            trace.emit(
+                "model_output_normalization_failed",
+                status="blocked",
+                payload={
+                    "role": exc.role,
+                    "error_code": exc.error_code,
+                    "message": str(exc),
+                    "raw_content_length": exc.raw_content_length,
+                    "subject_action_id": proposal.action_id,
+                    "enforcement_point": point.value,
+                },
+            )
+            trace.emit("review_error", status="error", payload=review_event)
+            _emit_policy(trace, final_decision)
+            return final_decision, review_event
         except Exception as exc:
             final_decision = fail_closed_policy_decision(
                 point,

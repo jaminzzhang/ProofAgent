@@ -172,3 +172,49 @@ def test_llm_planner_invalid_output_fails_closed_with_trace(
     )
     assert failure["payload"]["role"] == "react_planner"
     assert failure["payload"]["error_code"] == "model_output_json_parse_failed"
+
+
+def test_review_normalization_failure_fails_closed_with_trace(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    def invalid_review(self: object, **kwargs: object) -> None:
+        from proof_agent.capabilities.models.normalization import (
+            ModelOutputNormalizationError,
+        )
+
+        raise ModelOutputNormalizationError(
+            role="harness_review",
+            error_code="model_output_json_parse_failed",
+            message="Model output did not contain a valid JSON object.",
+            raw_content_length=29,
+        )
+
+    monkeypatch.setattr(
+        "proof_agent.capabilities.review.subagent.DeterministicHarnessReviewSubagent.review",
+        invalid_review,
+    )
+
+    result = run_with_langgraph(
+        REACT_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+    )
+
+    assert result.outcome == "REFUSED_NO_EVIDENCE"
+
+    events = _trace_events(result.trace_path)
+    failure = next(
+        event
+        for event in events
+        if event["event_type"] == "model_output_normalization_failed"
+    )
+    assert failure["payload"]["role"] == "harness_review"
+    assert failure["payload"]["error_code"] == "model_output_json_parse_failed"
+    policy = next(
+        event
+        for event in events
+        if event["event_type"] == "policy_decision"
+        and event["payload"]["policy_rule_id"].endswith(".fail_closed")
+    )
+    assert policy["payload"]["decision"] in {"deny", "require_approval"}
