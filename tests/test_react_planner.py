@@ -11,6 +11,7 @@ from proof_agent.capabilities.react import (
 from proof_agent.contracts import (
     ModelRequest,
     ModelResponse,
+    ReActActionProposal,
     ReActActionType,
     ReActPlannerConfig,
 )
@@ -93,6 +94,13 @@ def _planner_output(
     )
 
 
+def _proposal_json(proposal: ReActActionProposal) -> str:
+    return json.dumps(
+        proposal.model_dump(mode="json", warnings=False, fallback=str),
+        sort_keys=True,
+    )
+
+
 def test_deterministic_planner_plans_retrieval_for_travel_meals() -> None:
     planner = DeterministicReActPlanner()
 
@@ -167,6 +175,148 @@ def test_llm_react_planner_uses_model_provider_and_json_contract() -> None:
     assert proposal.parameters["query"] == "travel meal reimbursement rule"
     assert provider.requests[0].response_format == "json"
     assert provider.requests[0].stream is False
+
+
+def test_llm_react_planner_canonicalizes_retrieval_output_before_returning() -> None:
+    sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "action_id": "act_llm_1",
+                "action_type": "plan_retrieval",
+                "reasoning_summary": {
+                    "goal": sentinel,
+                    "observations": [sentinel],
+                    "candidate_actions": ["ask_clarification", "plan_retrieval"],
+                    "selected_action": "plan_retrieval",
+                    "rationale_summary": sentinel,
+                    "risk_flags": [sentinel],
+                    "required_evidence": [sentinel],
+                },
+                "parameters": {
+                    "query": "  travel meal reimbursement rule  ",
+                    "raw_output": sentinel,
+                },
+                "target_tool_name": None,
+                "risk_level": "low",
+            }
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    proposal = planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+    )
+
+    assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
+    assert dict(proposal.parameters) == {"query": "travel meal reimbursement rule"}
+    assert proposal.reasoning_summary.candidate_actions == (
+        ReActActionType.PLAN_RETRIEVAL,
+    )
+    assert proposal.reasoning_summary.selected_action == ReActActionType.PLAN_RETRIEVAL
+    assert proposal.risk_level == "low"
+    assert sentinel not in _proposal_json(proposal)
+
+
+def test_llm_react_planner_canonicalizes_clarification_output_before_returning() -> None:
+    sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "action_id": "act_llm_1",
+                "action_type": "ask_clarification",
+                "reasoning_summary": {
+                    "goal": sentinel,
+                    "observations": [sentinel],
+                    "candidate_actions": ["ask_clarification"],
+                    "selected_action": "ask_clarification",
+                    "rationale_summary": sentinel,
+                    "risk_flags": [sentinel],
+                    "required_evidence": [sentinel],
+                },
+                "parameters": {
+                    "missing_fields": [" customer_id ", " policy_id "],
+                    "notes": sentinel,
+                },
+                "target_tool_name": None,
+                "risk_level": "low",
+            }
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    proposal = planner.plan(
+        question="Can this customer claim it?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+    )
+
+    assert proposal.action_type == ReActActionType.ASK_CLARIFICATION
+    assert dict(proposal.parameters) == {
+        "missing_fields": ("customer_id", "policy_id")
+    }
+    assert proposal.reasoning_summary.candidate_actions == (
+        ReActActionType.ASK_CLARIFICATION,
+    )
+    assert proposal.reasoning_summary.risk_flags == ()
+    assert sentinel not in _proposal_json(proposal)
+
+
+def test_llm_react_planner_allowlists_tool_parameters_and_strips_tool_name() -> None:
+    sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "action_id": "act_llm_1",
+                "action_type": "propose_tool_call",
+                "reasoning_summary": {
+                    "goal": sentinel,
+                    "observations": [sentinel],
+                    "candidate_actions": ["propose_tool_call"],
+                    "selected_action": "propose_tool_call",
+                    "rationale_summary": sentinel,
+                    "risk_flags": [sentinel],
+                    "required_evidence": [sentinel],
+                },
+                "parameters": {
+                    "customer_id": " CUST-001 ",
+                    "policy_id": " POL-001 ",
+                    "notes": sentinel,
+                    "raw_output": {"content": sentinel},
+                },
+                "target_tool_name": " customer_lookup ",
+                "risk_level": "high",
+            }
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    proposal = planner.plan(
+        question="Please look up customer policy status.",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+    )
+
+    assert proposal.action_type == ReActActionType.PROPOSE_TOOL_CALL
+    assert proposal.target_tool_name == "customer_lookup"
+    assert dict(proposal.parameters) == {
+        "customer_id": "CUST-001",
+        "policy_id": "POL-001",
+    }
+    assert proposal.reasoning_summary.risk_flags == ("customer_data_access",)
+    assert proposal.risk_level == "medium"
+    assert sentinel not in _proposal_json(proposal)
 
 
 def test_llm_react_planner_advertises_only_routeable_initial_actions() -> None:

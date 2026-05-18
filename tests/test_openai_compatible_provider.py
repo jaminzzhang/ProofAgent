@@ -155,6 +155,66 @@ def test_openai_compatible_provider_requests_json_response_format(
     assert calls["payload"]["response_format"] == {"type": "json_object"}
 
 
+def test_openai_compatible_provider_prefers_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            calls["client"] = kwargs
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create),
+            )
+
+        def _create(self, **payload: object) -> object:
+            calls["payload"] = payload
+            return SimpleNamespace(
+                id="chatcmpl_timeout",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="answer"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            APIError=RuntimeError,
+            APITimeoutError=TimeoutError,
+            AuthenticationError=PermissionError,
+            OpenAI=FakeOpenAI,
+        ),
+    )
+    monkeypatch.setenv("PROOF_AGENT_OPENAI_KEY", "test-key")
+
+    provider = OpenAICompatibleModelProvider.from_config(
+        ModelConfig(
+            provider="openai_compatible",
+            name="gpt-test",
+            params={
+                "api_key_env": "PROOF_AGENT_OPENAI_KEY",
+                "timeout_seconds": 20,
+            },
+        )
+    )
+
+    provider.generate(
+        ModelRequest(
+            provider="openai_compatible",
+            model="gpt-test",
+            messages=(ModelMessage(role=ModelRole.USER, content="user"),),
+            timeout_seconds=3,
+        )
+    )
+
+    assert calls["client"]["timeout"] == 3
+
+
 def test_openai_compatible_provider_requires_api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MISSING_OPENAI_KEY", raising=False)
 

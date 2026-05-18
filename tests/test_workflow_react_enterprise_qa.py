@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
-from proof_agent.contracts import ReActActionProposal, ReActActionType, ReasoningSummary
+import yaml
+
+from proof_agent.contracts import (
+    ModelConfig,
+    ModelRequest,
+    ModelResponse,
+    ReActActionProposal,
+    ReActActionType,
+    ReasoningSummary,
+)
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
@@ -90,6 +100,74 @@ def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
 
     assert result.outcome == "WAITING_FOR_APPROVAL"
     assert "approval_requested" in _event_types(_trace_events(result.trace_path))
+
+
+def test_llm_planner_and_reviewer_calls_emit_safe_model_events(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["react"]["planner"]["provider"] = "openai_compatible"
+    manifest["react"]["planner"]["name"] = "planner-test"
+    manifest["review"]["subagent"]["provider"] = "openai_compatible"
+    manifest["review"]["subagent"]["name"] = "reviewer-test"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    provider = FakeControlPlaneProvider(sentinel)
+
+    monkeypatch.setattr(
+        "proof_agent.capabilities.react.planner.resolve_provider",
+        lambda config: provider,
+    )
+    monkeypatch.setattr(
+        "proof_agent.capabilities.review.subagent.resolve_provider",
+        lambda config: provider,
+    )
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    payloads = [event["payload"] for event in events]
+    assert sentinel not in json.dumps(payloads, sort_keys=True)
+
+    request_roles = [
+        event["payload"]["role"]
+        for event in events
+        if event["event_type"] == "model_request"
+    ]
+    response_roles = [
+        event["payload"].get("role")
+        for event in events
+        if event["event_type"] == "model_response"
+    ]
+    assert "react_planner" in request_roles
+    assert "harness_review" in request_roles
+    assert "react_planner" in response_roles
+    assert "harness_review" in response_roles
+    for event in events:
+        if (
+            event["event_type"] == "model_request"
+            and event["payload"]["role"] in {"react_planner", "harness_review"}
+        ):
+            assert "messages" not in event["payload"]
+            assert "content" not in event["payload"]
+        if (
+            event["event_type"] == "model_response"
+            and event["payload"].get("role") in {"react_planner", "harness_review"}
+        ):
+            assert "messages" not in event["payload"]
+            assert "content" not in event["payload"]
 
 
 def test_unknown_tool_proposal_fails_closed_without_raising(
@@ -233,3 +311,69 @@ def test_review_normalization_failure_fails_closed_with_trace(
         and event["payload"]["policy_rule_id"].endswith(".fail_closed")
     )
     assert policy["payload"]["decision"] == "deny"
+
+
+class FakeControlPlaneProvider:
+    provider_name = "openai_compatible"
+    model_name = "control-plane-test"
+
+    def __init__(self, sentinel: str) -> None:
+        self.sentinel = sentinel
+        self.requests: list[ModelRequest] = []
+
+    @classmethod
+    def from_config(cls, model_config: ModelConfig) -> "FakeControlPlaneProvider":
+        _ = model_config
+        return cls("RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE")
+
+    def estimate_tokens(self, request: ModelRequest) -> int:
+        return max(1, sum(len(message.content) for message in request.messages) // 4)
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        role = request.metadata["role"]
+        if role == "react_planner":
+            content = json.dumps(
+                {
+                    "action_id": "act_llm_1",
+                    "action_type": "plan_retrieval",
+                    "reasoning_summary": {
+                        "goal": self.sentinel,
+                        "observations": [self.sentinel],
+                        "candidate_actions": ["plan_retrieval"],
+                        "selected_action": "plan_retrieval",
+                        "rationale_summary": self.sentinel,
+                        "risk_flags": [self.sentinel],
+                        "required_evidence": [self.sentinel],
+                    },
+                    "parameters": {
+                        "query": " travel meal reimbursement rule ",
+                        "raw_output": self.sentinel,
+                    },
+                    "target_tool_name": None,
+                    "risk_level": "low",
+                }
+            )
+        elif role == "harness_review":
+            point = str(request.metadata["enforcement_point"])
+            action_id = str(request.metadata["subject_action_id"])
+            content = json.dumps(
+                {
+                    "review_id": f"review.{action_id}.{point}",
+                    "enforcement_point": point,
+                    "suggested_decision": "allow",
+                    "reason": self.sentinel,
+                    "confidence": 0.8,
+                    "risk_flags": [self.sentinel],
+                    "subject_action_id": action_id,
+                    "metadata": {"raw_output": self.sentinel},
+                }
+            )
+        else:
+            raise AssertionError(f"unexpected role: {role}")
+        return ModelResponse(
+            content=content,
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+        )

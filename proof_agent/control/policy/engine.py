@@ -117,7 +117,7 @@ class PolicyEngine:
             final_decision = PolicyDecision(
                 decision=review_decision.suggested_decision,
                 enforcement_point=point,
-                reason=review_decision.reason,
+                reason=f"Auto review suggested a stricter decision at {point.value}.",
                 policy_rule_id=f"auto_review.{point.value}",
                 metadata=dict(context),
                 trace_event_id=trace_event_id,

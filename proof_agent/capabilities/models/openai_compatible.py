@@ -112,7 +112,9 @@ class OpenAICompatibleModelProvider:
         client = OpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
-            timeout=self._timeout_seconds,
+            timeout=request.timeout_seconds
+            if request.timeout_seconds is not None
+            else self._timeout_seconds,
             organization=self._organization,
             project=self._project,
         )

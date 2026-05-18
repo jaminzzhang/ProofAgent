@@ -25,6 +25,10 @@ _INITIAL_PLANNER_ACTION_TYPES = (
     ReActActionType.PROPOSE_TOOL_CALL,
 )
 _INITIAL_PLANNER_ACTION_TYPE_SET = frozenset(_INITIAL_PLANNER_ACTION_TYPES)
+_MAX_CANONICAL_STRING_LENGTH = 512
+_V1_TOOL_PARAMETER_ALLOWLIST = {
+    "customer_lookup": frozenset({"customer_id", "policy_id"}),
+}
 
 
 class ReActPlanner(Protocol):
@@ -226,7 +230,139 @@ def _validate_planner_proposal(
             raw_content_length=raw_content_length,
         )
 
-    return proposal
+    return _canonicalize_planner_proposal(
+        proposal,
+        raw_content_length=raw_content_length,
+    )
+
+
+def _canonicalize_planner_proposal(
+    proposal: ReActActionProposal,
+    *,
+    raw_content_length: int,
+) -> ReActActionProposal:
+    action_type = proposal.action_type
+    if action_type == ReActActionType.PLAN_RETRIEVAL:
+        return ReActActionProposal(
+            action_id="act_llm_retrieval_1",
+            action_type=action_type,
+            reasoning_summary=_safe_reasoning_summary(action_type),
+            parameters={
+                "query": _canonical_string(
+                    proposal.parameters["query"],
+                    field_name="parameters.query",
+                    raw_content_length=raw_content_length,
+                )
+            },
+            risk_level="low",
+        )
+    if action_type == ReActActionType.ASK_CLARIFICATION:
+        missing_fields = tuple(
+            _canonical_string(
+                field,
+                field_name="parameters.missing_fields",
+                raw_content_length=raw_content_length,
+            )
+            for field in proposal.parameters["missing_fields"]
+        )
+        return ReActActionProposal(
+            action_id="act_llm_clarification_1",
+            action_type=action_type,
+            reasoning_summary=_safe_reasoning_summary(action_type),
+            parameters={"missing_fields": missing_fields},
+            risk_level="low",
+        )
+
+    target_tool_name = _canonical_string(
+        proposal.target_tool_name,
+        field_name="target_tool_name",
+        raw_content_length=raw_content_length,
+    )
+    allowed_parameters = _V1_TOOL_PARAMETER_ALLOWLIST.get(target_tool_name)
+    if allowed_parameters is None:
+        raise _planner_semantic_error(
+            "propose_tool_call target_tool_name is not supported.",
+            raw_content_length=raw_content_length,
+        )
+    tool_parameters: dict[str, str] = {
+        key: _canonical_string(
+            proposal.parameters[key],
+            field_name=f"parameters.{key}",
+            raw_content_length=raw_content_length,
+        )
+        for key in sorted(allowed_parameters)
+        if key in proposal.parameters
+    }
+    if not tool_parameters:
+        raise _planner_semantic_error(
+            "propose_tool_call requires supported tool parameters.",
+            raw_content_length=raw_content_length,
+        )
+    return ReActActionProposal(
+        action_id="act_llm_tool_1",
+        action_type=action_type,
+        reasoning_summary=_safe_reasoning_summary(action_type),
+        parameters=tool_parameters,
+        target_tool_name=target_tool_name,
+        risk_level="medium",
+    )
+
+
+def _canonical_string(
+    value: object,
+    *,
+    field_name: str,
+    raw_content_length: int,
+) -> str:
+    if not isinstance(value, str):
+        raise _planner_semantic_error(
+            f"{field_name} must be a string.",
+            raw_content_length=raw_content_length,
+        )
+    canonical = value.strip()
+    if not canonical:
+        raise _planner_semantic_error(
+            f"{field_name} must not be empty.",
+            raw_content_length=raw_content_length,
+        )
+    if len(canonical) > _MAX_CANONICAL_STRING_LENGTH:
+        raise _planner_semantic_error(
+            f"{field_name} exceeded the safe string length limit.",
+            raw_content_length=raw_content_length,
+        )
+    return canonical
+
+
+def _safe_reasoning_summary(action_type: ReActActionType) -> ReasoningSummary:
+    if action_type == ReActActionType.PLAN_RETRIEVAL:
+        return ReasoningSummary(
+            goal="Plan a governed retrieval step before answering.",
+            observations=("The request needs policy evidence before a final answer.",),
+            candidate_actions=(action_type,),
+            selected_action=action_type,
+            rationale_summary="Retrieve evidence through the configured knowledge provider.",
+            risk_flags=(),
+            required_evidence=("policy evidence",),
+        )
+    if action_type == ReActActionType.ASK_CLARIFICATION:
+        return ReasoningSummary(
+            goal="Request missing details before continuing.",
+            observations=("Required fields are missing from the request.",),
+            candidate_actions=(action_type,),
+            selected_action=action_type,
+            rationale_summary="Ask for the missing fields before any governed action.",
+            risk_flags=(),
+            required_evidence=(),
+        )
+    return ReasoningSummary(
+        goal="Propose a governed tool call for policy review.",
+        observations=("The request may need a manifest-declared tool.",),
+        candidate_actions=(action_type,),
+        selected_action=action_type,
+        rationale_summary="The tool proposal must pass policy and approval checks before execution.",
+        risk_flags=("customer_data_access",),
+        required_evidence=(),
+    )
 
 
 def _is_non_empty_string(value: object) -> bool:

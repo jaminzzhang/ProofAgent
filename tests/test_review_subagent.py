@@ -103,6 +103,20 @@ MISMATCHED_ENFORCEMENT_POINT_REVIEW_OUTPUT = """
 """
 
 
+INVALID_MODEL_CALL_DECISION_OUTPUT = """
+{
+  "review_id": "review.act_retrieve_1.before_model_call",
+  "enforcement_point": "before_model_call",
+  "suggested_decision": "require_approval",
+  "reason": "Ask a human before invoking the model.",
+  "confidence": 0.82,
+  "risk_flags": [],
+  "subject_action_id": "act_retrieve_1",
+  "metadata": {"provider": "openai_compatible"}
+}
+"""
+
+
 @pytest.fixture
 def sample_action_proposal() -> ReActActionProposal:
     summary = ReasoningSummary(
@@ -273,6 +287,30 @@ def test_llm_review_rejects_mismatched_enforcement_point(
 
     assert exc.value.role == "harness_review"
     assert exc.value.error_code == "model_output_contract_validation_failed"
+
+
+def test_llm_review_rejects_decision_outside_enforcement_point_allowlist(
+    sample_action_proposal: ReActActionProposal,
+) -> None:
+    provider = FakeReviewProvider(INVALID_MODEL_CALL_DECISION_OUTPUT)
+    reviewer = LLMHarnessReviewSubagent(
+        config=ReviewSubagentConfig(
+            provider="openai_compatible",
+            name="reviewer-test",
+        ),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        reviewer.review(
+            enforcement_point=EnforcementPoint.BEFORE_MODEL_CALL,
+            action=sample_action_proposal,
+            context={"accepted_evidence_count": 1},
+        )
+
+    assert exc.value.role == "harness_review"
+    assert exc.value.error_code == "model_output_contract_validation_failed"
+    assert "suggested_decision is not allowed" in str(exc.value)
 
 
 def test_resolve_review_subagent_uses_llm_adapter_for_registered_model_provider(

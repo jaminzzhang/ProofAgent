@@ -195,6 +195,16 @@ class LLMHarnessReviewSubagent:
                 message="Model review output was not bound to the current review request.",
                 raw_content_length=len(response.content),
             )
+        if decision.suggested_decision not in allowed_decisions:
+            raise ModelOutputNormalizationError(
+                role="harness_review",
+                error_code="model_output_contract_validation_failed",
+                message=(
+                    "suggested_decision is not allowed for the current "
+                    "enforcement point."
+                ),
+                raw_content_length=len(response.content),
+            )
         return decision
 
 

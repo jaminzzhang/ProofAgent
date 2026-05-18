@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from proof_agent.capabilities.models.normalization import (
+    MAX_JSON_DEPTH,
+    MAX_MODEL_OUTPUT_CHARS,
     ModelOutputNormalizationError,
     parse_model_contract,
 )
@@ -124,3 +126,35 @@ def test_parse_model_contract_rejects_invalid_contract_shape() -> None:
         )
 
     assert exc.value.error_code == "model_output_contract_validation_failed"
+
+
+def test_parse_model_contract_rejects_over_limit_content_before_parsing() -> None:
+    content = "x" * (MAX_MODEL_OUTPUT_CHARS + 1)
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        parse_model_contract(
+            content=content,
+            contract_type=ReActActionProposal,
+            role="react_planner",
+        )
+
+    assert exc.value.role == "react_planner"
+    assert exc.value.error_code == "model_output_too_large"
+    assert exc.value.raw_content_length == len(content)
+    assert "too large" in str(exc.value)
+
+
+def test_parse_model_contract_rejects_over_depth_json() -> None:
+    nested = '"leaf"'
+    for _ in range(MAX_JSON_DEPTH + 1):
+        nested = f'{{"nested": {nested}}}'
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        parse_model_contract(
+            content=nested,
+            contract_type=ReActActionProposal,
+            role="react_planner",
+        )
+
+    assert exc.value.role == "react_planner"
+    assert exc.value.error_code == "model_output_too_deep"

@@ -135,3 +135,31 @@ def test_malformed_retrieval_review_fallback_fails_closed_to_deny() -> None:
     assert event["used_review"] is True
     assert event["error_code"] == "review_enforcement_point_mismatch"
     assert event["final_decision"] == "deny"
+
+
+def test_stricter_review_reason_is_not_copied_to_policy_decision() -> None:
+    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
+    review_decision = ReviewDecision(
+        review_id="review.act_retrieve_1.before_retrieval_plan",
+        enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+        suggested_decision=PolicyDecisionType.DENY,
+        reason=sentinel,
+        confidence=0.7,
+        risk_flags=(),
+        subject_action_id="act_retrieve_1",
+    )
+
+    decision, event = engine.evaluate_with_review(
+        EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+        {"query": "travel meal reimbursement rule"},
+        review_decision=review_decision,
+    )
+
+    assert decision.decision == PolicyDecisionType.DENY
+    assert decision.reason == (
+        "Auto review suggested a stricter decision at before_retrieval_plan."
+    )
+    assert sentinel not in decision.reason
+    assert event["used_review"] is True
+    assert event["final_decision"] == "deny"

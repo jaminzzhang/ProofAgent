@@ -9,6 +9,8 @@ from pydantic import BaseModel, ValidationError
 
 ContractT = TypeVar("ContractT", bound=BaseModel)
 
+MAX_MODEL_OUTPUT_CHARS = 20_000
+MAX_JSON_DEPTH = 20
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
@@ -32,7 +34,15 @@ def parse_model_contract(
     contract_type: type[ContractT],
     role: str,
 ) -> ContractT:
+    if len(content) > MAX_MODEL_OUTPUT_CHARS:
+        raise ModelOutputNormalizationError(
+            role=role,
+            error_code="model_output_too_large",
+            message="Model output was too large to normalize.",
+            raw_content_length=len(content),
+        )
     raw = _extract_single_json_object(content, role=role)
+    _assert_json_depth(raw, role=role, raw_content_length=len(content))
     try:
         return contract_type.model_validate(raw)
     except ValidationError as exc:
@@ -88,3 +98,30 @@ def _extract_single_json_object(content: str, *, role: str) -> dict[str, object]
         message="Model output did not contain a valid JSON object.",
         raw_content_length=len(content),
     )
+
+
+def _assert_json_depth(
+    value: object,
+    *,
+    role: str,
+    raw_content_length: int,
+) -> None:
+    if _json_depth(value) > MAX_JSON_DEPTH:
+        raise ModelOutputNormalizationError(
+            role=role,
+            error_code="model_output_too_deep",
+            message="Model output JSON nesting exceeded the safe depth limit.",
+            raw_content_length=raw_content_length,
+        )
+
+
+def _json_depth(value: object) -> int:
+    if isinstance(value, dict):
+        if not value:
+            return 1
+        return 1 + max(_json_depth(item) for item in value.values())
+    if isinstance(value, list):
+        if not value:
+            return 1
+        return 1 + max(_json_depth(item) for item in value)
+    return 0

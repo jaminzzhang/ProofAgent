@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.capabilities.knowledge import KnowledgeProvider
+from proof_agent.capabilities.models.protocol import ModelProvider
 from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.capabilities.tools.gateway import ToolGatewayResult
@@ -16,6 +17,8 @@ from proof_agent.contracts import (
     EnforcementPoint,
     EvidenceChunk,
     ModelCallRole,
+    ModelRequest,
+    ModelResponse,
     PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
@@ -72,6 +75,7 @@ def build_react_enterprise_qa_graph(
     max_steps = react.max_steps if react is not None else 0
     max_tool_calls = react.max_tool_calls if react is not None else 0
     auto_review_enabled = bool(manifest.review and manifest.review.mode == "auto")
+    _wrap_control_plane_model_providers(invocation, trace)
 
     def plan_node(state: ReActGraphState) -> dict[str, Any]:
         step_count = int(state.get("step_count", 0))
@@ -472,6 +476,136 @@ def build_react_enterprise_qa_graph(
 
 def _proposal_from_state(state: ReActGraphState) -> ReActActionProposal:
     return ReActActionProposal.model_validate(state["action"])
+
+
+class _TracingModelProvider:
+    def __init__(
+        self,
+        *,
+        provider: ModelProvider,
+        trace: TraceWriter,
+        role: ModelCallRole,
+    ) -> None:
+        self._provider = provider
+        self._trace = trace
+        self._role = role
+
+    @property
+    def inner_provider(self) -> ModelProvider:
+        return self._provider
+
+    @property
+    def role(self) -> ModelCallRole:
+        return self._role
+
+    def bind_trace(self, trace: TraceWriter) -> None:
+        self._trace = trace
+
+    @property
+    def provider_name(self) -> str:
+        return self._provider.provider_name
+
+    @property
+    def model_name(self) -> str:
+        return self._provider.model_name
+
+    def estimate_tokens(self, request: ModelRequest) -> int | None:
+        return self._provider.estimate_tokens(request)
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        estimated_tokens = self._provider.estimate_tokens(request)
+        self._trace.emit(
+            "model_request",
+            status="ok",
+            payload={
+                "provider": self.provider_name,
+                "model": self.model_name,
+                "role": self._role.value,
+                "response_format": request.response_format,
+                "message_count": len(request.messages),
+                "prompt_length": sum(len(message.content) for message in request.messages),
+                "system_prompt_length": _system_prompt_length(request),
+                "estimated_tokens": estimated_tokens,
+                "stream": request.stream,
+                "cost_class": _cost_class(self.provider_name),
+            },
+        )
+        try:
+            response = self._provider.generate(request)
+        except Exception as exc:
+            _emit_control_plane_model_error(
+                self._trace,
+                role=self._role,
+                provider=self.provider_name,
+                model=self.model_name,
+                exc=exc,
+            )
+            raise
+        payload = _model_response_payload(response)
+        payload["role"] = self._role.value
+        self._trace.emit("model_response", status="ok", payload=payload)
+        return response
+
+
+def _wrap_control_plane_model_providers(
+    invocation: HarnessInvocation,
+    trace: TraceWriter,
+) -> None:
+    _wrap_model_provider_attribute(
+        invocation.react_planner,
+        trace=trace,
+        role=ModelCallRole.REACT_PLANNER,
+    )
+    _wrap_model_provider_attribute(
+        invocation.review_subagent,
+        trace=trace,
+        role=ModelCallRole.HARNESS_REVIEW,
+    )
+
+
+def _wrap_model_provider_attribute(
+    owner: object | None,
+    *,
+    trace: TraceWriter,
+    role: ModelCallRole,
+) -> None:
+    if owner is None or not hasattr(owner, "model_provider"):
+        return
+    provider = getattr(owner, "model_provider")
+    if provider is None:
+        return
+    if isinstance(provider, _TracingModelProvider):
+        if provider.role == role:
+            provider.bind_trace(trace)
+            return
+        provider = provider.inner_provider
+    setattr(
+        owner,
+        "model_provider",
+        _TracingModelProvider(provider=provider, trace=trace, role=role),
+    )
+
+
+def _emit_control_plane_model_error(
+    trace: TraceWriter,
+    *,
+    role: ModelCallRole,
+    provider: str,
+    model: str,
+    exc: BaseException,
+) -> None:
+    trace.emit(
+        "model_error",
+        status="error",
+        payload={
+            "role": role.value,
+            "provider": provider,
+            "model": model,
+            "error_code": getattr(exc, "code", "PA_MODEL_002"),
+            "error_class": exc.__class__.__name__,
+            "retryable": bool(getattr(exc, "retryable", False)),
+        },
+    )
 
 
 def _model_action_proposal(question: str) -> ReActActionProposal:
