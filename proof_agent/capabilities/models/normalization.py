@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 ContractT = TypeVar("ContractT", bound=BaseModel)
 
-_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
 class ModelOutputNormalizationError(ValueError):

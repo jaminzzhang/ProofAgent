@@ -60,6 +60,34 @@ def test_parse_model_contract_accepts_fenced_json_object() -> None:
     assert proposal.action_id == "act_1"
 
 
+def test_parse_model_contract_rejects_full_non_object_json() -> None:
+    content = "[1, 2]"
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        parse_model_contract(
+            content=content,
+            contract_type=ReActActionProposal,
+            role="react_planner",
+        )
+
+    assert exc.value.error_code == "model_output_json_not_object"
+    assert exc.value.raw_content_length == len(content)
+
+
+def test_parse_model_contract_rejects_fenced_non_object_json() -> None:
+    content = "```json\n[1, 2]\n```"
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        parse_model_contract(
+            content=content,
+            contract_type=ReActActionProposal,
+            role="react_planner",
+        )
+
+    assert exc.value.error_code == "model_output_json_not_object"
+    assert exc.value.raw_content_length == len(content)
+
+
 def test_parse_model_contract_rejects_multiple_fenced_json_objects() -> None:
     with pytest.raises(ModelOutputNormalizationError) as exc:
         parse_model_contract(
