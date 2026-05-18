@@ -23,6 +23,7 @@ from proof_agent.contracts.manifest import (
     WorkflowConfig,
 )
 from proof_agent.contracts.model import (
+    ModelCallRole,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -65,6 +66,7 @@ __all__ = [
     "KnowledgeConfig",
     "MemoryConfig",
     "ModelConfig",
+    "ModelCallRole",
     "ModelMessage",
     "ModelRequest",
     "ModelResponse",

@@ -1,6 +1,14 @@
 import pytest
 
-from proof_agent.contracts import ModelMessage, ModelRequest, ModelResponse, ModelRole, TokenUsage
+from proof_agent.contracts import (
+    ModelCallRole,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ModelRole,
+    TokenUsage,
+    TraceEventType,
+)
 
 
 def test_model_request_metadata_is_immutable() -> None:
@@ -44,3 +52,16 @@ def test_model_response_carries_provider_neutral_usage() -> None:
 
     assert response.token_usage is not None
     assert response.token_usage.total_tokens == 21
+
+
+def test_model_call_roles_are_stable_trace_values() -> None:
+    assert ModelCallRole.FINAL_ANSWER.value == "final_answer"
+    assert ModelCallRole.REACT_PLANNER.value == "react_planner"
+    assert ModelCallRole.HARNESS_REVIEW.value == "harness_review"
+
+
+def test_trace_event_type_includes_model_output_normalization_failure() -> None:
+    assert (
+        TraceEventType.MODEL_OUTPUT_NORMALIZATION_FAILED.value
+        == "model_output_normalization_failed"
+    )

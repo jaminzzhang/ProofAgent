@@ -16,6 +16,12 @@ class ModelRole(str, Enum):
     TOOL = "tool"
 
 
+class ModelCallRole(str, Enum):
+    FINAL_ANSWER = "final_answer"
+    REACT_PLANNER = "react_planner"
+    HARNESS_REVIEW = "harness_review"
+
+
 class ModelMessage(FrozenModel):
     role: ModelRole
     content: str
