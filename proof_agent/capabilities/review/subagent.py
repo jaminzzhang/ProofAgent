@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from proof_agent.capabilities.models import ModelProvider, resolve_provider
+from proof_agent.capabilities.models.normalization import parse_model_contract
 from proof_agent.contracts import (
     EnforcementPoint,
+    ModelMessage,
+    ModelRequest,
+    ModelRole,
     PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
     ReviewDecision,
     ReviewSubagentConfig,
 )
-from proof_agent.errors import ProofAgentError
+from proof_agent.contracts.manifest import ModelConfig
 
 
 class HarnessReviewSubagent(Protocol):
@@ -107,11 +113,96 @@ class DeterministicHarnessReviewSubagent:
         return 0.85
 
 
+class LLMHarnessReviewSubagent:
+    def __init__(
+        self,
+        *,
+        config: ReviewSubagentConfig,
+        model_provider: ModelProvider | None = None,
+    ) -> None:
+        self.config = config
+        self.model_provider = model_provider or resolve_provider(
+            ModelConfig(
+                provider=config.provider,
+                name=config.name,
+                params=config.params,
+            )
+        )
+
+    def review(
+        self,
+        *,
+        enforcement_point: EnforcementPoint,
+        action: ReActActionProposal,
+        context: Mapping[str, Any],
+    ) -> ReviewDecision:
+        request = ModelRequest(
+            provider=self.model_provider.provider_name,
+            model=self.model_provider.model_name,
+            messages=(
+                ModelMessage(role=ModelRole.SYSTEM, content=_review_control_prompt()),
+                ModelMessage(
+                    role=ModelRole.USER,
+                    content=json.dumps(
+                        {
+                            "enforcement_point": EnforcementPoint(
+                                enforcement_point
+                            ).value,
+                            "action": action.model_dump(
+                                mode="json",
+                                warnings=False,
+                                fallback=_json_contract_fallback,
+                            ),
+                            "context": dict(context),
+                            "allowed_decisions": [
+                                decision.value for decision in PolicyDecisionType
+                            ],
+                        },
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    ),
+                ),
+            ),
+            max_output_tokens=self.config.max_output_tokens,
+            timeout_seconds=int(self.config.timeout_seconds),
+            response_format="json",
+            stream=False,
+            metadata={
+                "role": "harness_review",
+                "enforcement_point": EnforcementPoint(enforcement_point).value,
+                "subject_action_id": action.action_id,
+            },
+        )
+        response = self.model_provider.generate(request)
+        return parse_model_contract(
+            content=response.content,
+            contract_type=ReviewDecision,
+            role="harness_review",
+        )
+
+
+def _json_contract_fallback(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _json_contract_fallback(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list | tuple):
+        return [_json_contract_fallback(item) for item in value]
+    return value
+
+
+def _review_control_prompt() -> str:
+    return (
+        "You are the Proof Agent LLM Harness Review Subagent. "
+        "Return exactly one JSON object matching ReviewDecision. "
+        "Your decision is advisory only; PolicyEngine remains the final authority. "
+        "Do not generate final user answers, chain-of-thought, markdown commentary, or tool results. "
+        "Use fail-closed reasoning when the action or context is unsafe or underspecified."
+    )
+
+
 def resolve_review_subagent(config: ReviewSubagentConfig) -> HarnessReviewSubagent:
     if config.provider == "deterministic":
         return DeterministicHarnessReviewSubagent()
-    raise ProofAgentError(
-        "PA_MODEL_001",
-        f"Unsupported review subagent provider '{config.provider}'.",
-        "Set review.subagent.provider to 'deterministic' or add a registered review provider.",
-    )
+    return LLMHarnessReviewSubagent(config=config)

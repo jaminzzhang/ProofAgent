@@ -1,8 +1,12 @@
 import pytest
 
-from proof_agent.capabilities.review import resolve_review_subagent
+from proof_agent.capabilities.review import (
+    LLMHarnessReviewSubagent,
+    resolve_review_subagent,
+)
 from proof_agent.contracts import (
     EnforcementPoint,
+    ModelResponse,
     PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
@@ -10,6 +14,41 @@ from proof_agent.contracts import (
     ReviewSubagentConfig,
 )
 from proof_agent.errors import ProofAgentError
+
+
+class FakeReviewProvider:
+    provider_name = "openai_compatible"
+    model_name = "reviewer-test"
+
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.requests = []
+
+    def estimate_tokens(self, request):
+        return 21
+
+    def generate(self, request):
+        self.requests.append(request)
+        return ModelResponse(
+            content=self.content,
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+        )
+
+
+VALID_REVIEW_OUTPUT = """
+{
+  "review_id": "review.act_retrieve_1.before_retrieval_plan",
+  "enforcement_point": "before_retrieval_plan",
+  "suggested_decision": "allow",
+  "reason": "The action proposes a low-risk retrieval plan.",
+  "confidence": 0.86,
+  "risk_flags": [],
+  "subject_action_id": "act_retrieve_1",
+  "metadata": {"provider": "openai_compatible"}
+}
+"""
 
 
 @pytest.fixture
@@ -77,12 +116,53 @@ def test_deterministic_reviewer_requires_approval_for_medium_risk_customer_looku
     assert "medium" in decision.reason
 
 
+def test_llm_harness_review_subagent_uses_json_contract(
+    sample_action_proposal: ReActActionProposal,
+) -> None:
+    provider = FakeReviewProvider(VALID_REVIEW_OUTPUT)
+    reviewer = LLMHarnessReviewSubagent(
+        config=ReviewSubagentConfig(
+            provider="openai_compatible",
+            name="reviewer-test",
+            timeout_seconds=5,
+            max_output_tokens=500,
+            fail_closed=True,
+        ),
+        model_provider=provider,
+    )
+
+    decision = reviewer.review(
+        enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+        action=sample_action_proposal,
+        context={"accepted_evidence_count": 0},
+    )
+
+    assert decision.suggested_decision == PolicyDecisionType.ALLOW
+    assert provider.requests[0].response_format == "json"
+    assert provider.requests[0].stream is False
+
+
+def test_resolve_review_subagent_uses_llm_adapter_for_registered_model_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeReviewProvider(VALID_REVIEW_OUTPUT)
+    monkeypatch.setattr(
+        "proof_agent.capabilities.review.subagent.resolve_provider",
+        lambda config: provider,
+    )
+
+    reviewer = resolve_review_subagent(
+        ReviewSubagentConfig(provider="openai_compatible", name="reviewer-test")
+    )
+
+    assert isinstance(reviewer, LLMHarnessReviewSubagent)
+
+
 def test_unsupported_review_provider_raises_coherent_error() -> None:
     with pytest.raises(ProofAgentError) as exc:
         resolve_review_subagent(
-            ReviewSubagentConfig(provider="openai", name="remote-reviewer")
+            ReviewSubagentConfig(provider="missing_provider", name="remote-reviewer")
         )
 
     assert exc.value.code == "PA_MODEL_001"
-    assert "Unsupported review subagent provider" in exc.value.message
-    assert "deterministic" in exc.value.fix
+    assert "unsupported model provider" in exc.value.message
