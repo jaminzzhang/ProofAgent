@@ -1,11 +1,20 @@
+import json
+
 import pytest
 
+from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.capabilities.react import (
     DeterministicReActPlanner,
     LLMReActPlanner,
     resolve_react_planner,
 )
-from proof_agent.contracts import ModelResponse, ReActActionType, ReActPlannerConfig
+from proof_agent.contracts import (
+    ModelRequest,
+    ModelResponse,
+    ReActActionType,
+    ReActPlannerConfig,
+)
+from proof_agent.contracts.manifest import ModelConfig
 from proof_agent.errors import ProofAgentError
 
 
@@ -15,12 +24,18 @@ class FakePlannerProvider:
 
     def __init__(self, content: str) -> None:
         self.content = content
-        self.requests = []
+        self.requests: list[ModelRequest] = []
 
-    def estimate_tokens(self, request):
+    @classmethod
+    def from_config(cls, model_config: ModelConfig) -> "FakePlannerProvider":
+        _ = model_config
+        return cls(VALID_PLANNER_OUTPUT)
+
+    def estimate_tokens(self, request: ModelRequest) -> int:
+        _ = request
         return 42
 
-    def generate(self, request):
+    def generate(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
         return ModelResponse(
             content=self.content,
@@ -48,6 +63,34 @@ VALID_PLANNER_OUTPUT = """
   "risk_level": "low"
 }
 """
+
+
+def _planner_output(
+    *,
+    action_type: str,
+    candidate_actions: list[str] | None = None,
+    selected_action: str | None = None,
+    parameters: dict[str, object] | None = None,
+    target_tool_name: str | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "action_id": "act_llm_1",
+            "action_type": action_type,
+            "reasoning_summary": {
+                "goal": "Find the next governed action.",
+                "observations": ["The request needs governed planning."],
+                "candidate_actions": candidate_actions or [action_type],
+                "selected_action": selected_action or action_type,
+                "rationale_summary": "The selected action is the next governed step.",
+                "risk_flags": [],
+                "required_evidence": [],
+            },
+            "parameters": parameters or {},
+            "target_tool_name": target_tool_name,
+            "risk_level": "low",
+        }
+    )
 
 
 def test_deterministic_planner_plans_retrieval_for_travel_meals() -> None:
@@ -126,6 +169,27 @@ def test_llm_react_planner_uses_model_provider_and_json_contract() -> None:
     assert provider.requests[0].stream is False
 
 
+def test_llm_react_planner_advertises_only_routeable_initial_actions() -> None:
+    provider = FakePlannerProvider(VALID_PLANNER_OUTPUT)
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+    )
+
+    user_payload = json.loads(provider.requests[0].messages[1].content)
+    assert user_payload["allowed_actions"] == [
+        "ask_clarification",
+        "plan_retrieval",
+        "propose_tool_call",
+    ]
+
+
 def test_resolve_react_planner_uses_llm_adapter_for_registered_model_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -157,3 +221,66 @@ def test_llm_react_planner_rejects_invalid_model_output() -> None:
         )
 
     assert "Model output did not contain a valid JSON object" in str(exc.value)
+
+
+@pytest.mark.parametrize("action_type", ["stop", "generate_final_answer"])
+def test_llm_react_planner_rejects_unrouteable_initial_actions(
+    action_type: str,
+) -> None:
+    provider = FakePlannerProvider(_planner_output(action_type=action_type))
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        planner.plan(
+            question="What is the reimbursement rule for travel meals?",
+            system_prompt="Use governed ReAct planning.",
+            context_summary="No prior context.",
+        )
+
+    assert exc.value.error_code == "model_output_contract_validation_failed"
+    assert "unsupported initial planner action" in str(exc.value)
+
+
+def test_llm_react_planner_rejects_mismatched_selected_action() -> None:
+    provider = FakePlannerProvider(
+        _planner_output(
+            action_type="plan_retrieval",
+            selected_action="ask_clarification",
+            parameters={"query": "travel meal reimbursement rule"},
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        planner.plan(
+            question="What is the reimbursement rule for travel meals?",
+            system_prompt="Use governed ReAct planning.",
+            context_summary="No prior context.",
+        )
+
+    assert exc.value.error_code == "model_output_contract_validation_failed"
+    assert "selected_action must match action_type" in str(exc.value)
+
+
+def test_llm_react_planner_rejects_retrieval_action_without_query() -> None:
+    provider = FakePlannerProvider(_planner_output(action_type="plan_retrieval"))
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        planner.plan(
+            question="What is the reimbursement rule for travel meals?",
+            system_prompt="Use governed ReAct planning.",
+            context_summary="No prior context.",
+        )
+
+    assert exc.value.error_code == "model_output_contract_validation_failed"
+    assert "plan_retrieval requires parameters.query" in str(exc.value)

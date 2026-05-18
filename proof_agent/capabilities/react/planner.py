@@ -4,7 +4,10 @@ import json
 from typing import Protocol
 
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
-from proof_agent.capabilities.models.normalization import parse_model_contract
+from proof_agent.capabilities.models.normalization import (
+    ModelOutputNormalizationError,
+    parse_model_contract,
+)
 from proof_agent.contracts import (
     ModelMessage,
     ModelRequest,
@@ -14,6 +17,14 @@ from proof_agent.contracts import (
     ReasoningSummary,
 )
 from proof_agent.contracts.manifest import ModelConfig, ReActPlannerConfig
+
+
+_INITIAL_PLANNER_ACTION_TYPES = (
+    ReActActionType.ASK_CLARIFICATION,
+    ReActActionType.PLAN_RETRIEVAL,
+    ReActActionType.PROPOSE_TOOL_CALL,
+)
+_INITIAL_PLANNER_ACTION_TYPE_SET = frozenset(_INITIAL_PLANNER_ACTION_TYPES)
 
 
 class ReActPlanner(Protocol):
@@ -128,7 +139,8 @@ class LLMReActPlanner:
                             "system_prompt_summary": system_prompt,
                             "context_summary": context_summary,
                             "allowed_actions": [
-                                action.value for action in ReActActionType
+                                action.value
+                                for action in _INITIAL_PLANNER_ACTION_TYPES
                             ],
                         },
                         ensure_ascii=True,
@@ -141,11 +153,12 @@ class LLMReActPlanner:
             metadata={"role": "react_planner", "question": question},
         )
         response = self.model_provider.generate(request)
-        return parse_model_contract(
+        proposal = parse_model_contract(
             content=response.content,
             contract_type=ReActActionProposal,
             role="react_planner",
         )
+        return _validate_planner_proposal(proposal)
 
 
 def _planner_control_prompt() -> str:
@@ -155,6 +168,56 @@ def _planner_control_prompt() -> str:
         "Use only allowed action_type values supplied in the user message. "
         "Do not return chain-of-thought, markdown commentary, tool results, or natural language. "
         "A proposed action is not approved and cannot execute until Harness policy admits it."
+    )
+
+
+def _validate_planner_proposal(
+    proposal: ReActActionProposal,
+) -> ReActActionProposal:
+    if proposal.action_type not in _INITIAL_PLANNER_ACTION_TYPE_SET:
+        raise _planner_semantic_error(
+            f"unsupported initial planner action: {proposal.action_type.value}."
+        )
+
+    if proposal.reasoning_summary.selected_action != proposal.action_type:
+        raise _planner_semantic_error(
+            "selected_action must match action_type."
+        )
+
+    if proposal.action_type not in proposal.reasoning_summary.candidate_actions:
+        raise _planner_semantic_error(
+            "action_type must appear in candidate_actions."
+        )
+
+    if (
+        proposal.action_type == ReActActionType.PLAN_RETRIEVAL
+        and not proposal.parameters.get("query")
+    ):
+        raise _planner_semantic_error("plan_retrieval requires parameters.query.")
+
+    if (
+        proposal.action_type == ReActActionType.PROPOSE_TOOL_CALL
+        and not proposal.target_tool_name
+    ):
+        raise _planner_semantic_error("propose_tool_call requires target_tool_name.")
+
+    if (
+        proposal.action_type == ReActActionType.ASK_CLARIFICATION
+        and not proposal.parameters.get("missing_fields")
+    ):
+        raise _planner_semantic_error(
+            "ask_clarification requires parameters.missing_fields."
+        )
+
+    return proposal
+
+
+def _planner_semantic_error(message: str) -> ModelOutputNormalizationError:
+    return ModelOutputNormalizationError(
+        role="react_planner",
+        error_code="model_output_contract_validation_failed",
+        message=message,
+        raw_content_length=0,
     )
 
 
