@@ -71,7 +71,7 @@ def _planner_output(
     candidate_actions: list[str] | None = None,
     selected_action: str | None = None,
     parameters: dict[str, object] | None = None,
-    target_tool_name: str | None = None,
+    target_tool_name: object | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -284,3 +284,95 @@ def test_llm_react_planner_rejects_retrieval_action_without_query() -> None:
 
     assert exc.value.error_code == "model_output_contract_validation_failed"
     assert "plan_retrieval requires parameters.query" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "   ",
+        ["travel"],
+        {"query": "travel meal reimbursement rule"},
+    ],
+)
+def test_llm_react_planner_rejects_malformed_retrieval_query(
+    query: object,
+) -> None:
+    content = _planner_output(
+        action_type="plan_retrieval",
+        parameters={"query": query},
+    )
+    provider = FakePlannerProvider(content)
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        planner.plan(
+            question="What is the reimbursement rule for travel meals?",
+            system_prompt="Use governed ReAct planning.",
+            context_summary="No prior context.",
+        )
+
+    assert exc.value.error_code == "model_output_contract_validation_failed"
+    assert exc.value.raw_content_length == len(content)
+    assert "plan_retrieval requires parameters.query" in str(exc.value)
+
+
+@pytest.mark.parametrize("target_tool_name", ["   ", 123])
+def test_llm_react_planner_rejects_malformed_tool_name(
+    target_tool_name: object,
+) -> None:
+    content = _planner_output(
+        action_type="propose_tool_call",
+        target_tool_name=target_tool_name,
+    )
+    provider = FakePlannerProvider(content)
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        planner.plan(
+            question="Please look up customer policy status.",
+            system_prompt="Use governed ReAct planning.",
+            context_summary="No prior context.",
+        )
+
+    assert exc.value.error_code == "model_output_contract_validation_failed"
+    assert exc.value.raw_content_length == len(content)
+
+
+@pytest.mark.parametrize(
+    "missing_fields",
+    [
+        "customer_id",
+        {"field": "customer_id"},
+        ["customer_id", ""],
+        ["customer_id", 123],
+    ],
+)
+def test_llm_react_planner_rejects_malformed_clarification_missing_fields(
+    missing_fields: object,
+) -> None:
+    provider = FakePlannerProvider(
+        _planner_output(
+            action_type="ask_clarification",
+            parameters={"missing_fields": missing_fields},
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        planner.plan(
+            question="Can this customer claim it?",
+            system_prompt="Use governed ReAct planning.",
+            context_summary="No prior context.",
+        )
+
+    assert exc.value.error_code == "model_output_contract_validation_failed"
+    assert "ask_clarification requires parameters.missing_fields" in str(exc.value)

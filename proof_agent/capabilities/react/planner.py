@@ -158,7 +158,10 @@ class LLMReActPlanner:
             contract_type=ReActActionProposal,
             role="react_planner",
         )
-        return _validate_planner_proposal(proposal)
+        return _validate_planner_proposal(
+            proposal,
+            raw_content_length=len(response.content),
+        )
 
 
 def _planner_control_prompt() -> str:
@@ -173,51 +176,81 @@ def _planner_control_prompt() -> str:
 
 def _validate_planner_proposal(
     proposal: ReActActionProposal,
+    *,
+    raw_content_length: int,
 ) -> ReActActionProposal:
     if proposal.action_type not in _INITIAL_PLANNER_ACTION_TYPE_SET:
         raise _planner_semantic_error(
-            f"unsupported initial planner action: {proposal.action_type.value}."
+            f"unsupported initial planner action: {proposal.action_type.value}.",
+            raw_content_length=raw_content_length,
         )
 
     if proposal.reasoning_summary.selected_action != proposal.action_type:
         raise _planner_semantic_error(
-            "selected_action must match action_type."
+            "selected_action must match action_type.",
+            raw_content_length=raw_content_length,
         )
 
     if proposal.action_type not in proposal.reasoning_summary.candidate_actions:
         raise _planner_semantic_error(
-            "action_type must appear in candidate_actions."
+            "action_type must appear in candidate_actions.",
+            raw_content_length=raw_content_length,
         )
 
     if (
         proposal.action_type == ReActActionType.PLAN_RETRIEVAL
-        and not proposal.parameters.get("query")
+        and not _is_non_empty_string(proposal.parameters.get("query"))
     ):
-        raise _planner_semantic_error("plan_retrieval requires parameters.query.")
+        raise _planner_semantic_error(
+            "plan_retrieval requires parameters.query.",
+            raw_content_length=raw_content_length,
+        )
 
     if (
         proposal.action_type == ReActActionType.PROPOSE_TOOL_CALL
-        and not proposal.target_tool_name
+        and not _is_non_empty_string(proposal.target_tool_name)
     ):
-        raise _planner_semantic_error("propose_tool_call requires target_tool_name.")
+        raise _planner_semantic_error(
+            "propose_tool_call requires target_tool_name.",
+            raw_content_length=raw_content_length,
+        )
 
     if (
         proposal.action_type == ReActActionType.ASK_CLARIFICATION
-        and not proposal.parameters.get("missing_fields")
+        and not _is_non_empty_string_sequence(
+            proposal.parameters.get("missing_fields")
+        )
     ):
         raise _planner_semantic_error(
-            "ask_clarification requires parameters.missing_fields."
+            "ask_clarification requires parameters.missing_fields.",
+            raw_content_length=raw_content_length,
         )
 
     return proposal
 
 
-def _planner_semantic_error(message: str) -> ModelOutputNormalizationError:
+def _is_non_empty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_non_empty_string_sequence(value: object) -> bool:
+    return (
+        isinstance(value, list | tuple)
+        and bool(value)
+        and all(_is_non_empty_string(item) for item in value)
+    )
+
+
+def _planner_semantic_error(
+    message: str,
+    *,
+    raw_content_length: int,
+) -> ModelOutputNormalizationError:
     return ModelOutputNormalizationError(
         role="react_planner",
         error_code="model_output_contract_validation_failed",
         message=message,
-        raw_content_length=0,
+        raw_content_length=raw_content_length,
     )
 
 
