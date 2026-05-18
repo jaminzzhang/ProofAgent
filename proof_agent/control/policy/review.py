@@ -4,43 +4,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from proof_agent.contracts import (
+    ALLOWED_REVIEW_DECISIONS as ALLOWED_REVIEW_DECISIONS,
     EnforcementPoint,
     PolicyDecision,
     PolicyDecisionType,
     ReviewDecision,
+    allowed_review_decisions_for,
 )
-
-ALLOWED_REVIEW_DECISIONS: dict[EnforcementPoint, frozenset[PolicyDecisionType]] = {
-    EnforcementPoint.BEFORE_RETRIEVAL_PLAN: frozenset(
-        {
-            PolicyDecisionType.ALLOW,
-            PolicyDecisionType.DENY,
-            PolicyDecisionType.ESCALATE,
-        }
-    ),
-    EnforcementPoint.BEFORE_RETRIEVAL_STEP: frozenset(
-        {
-            PolicyDecisionType.ALLOW,
-            PolicyDecisionType.DENY,
-            PolicyDecisionType.ESCALATE,
-        }
-    ),
-    EnforcementPoint.BEFORE_TOOL_CALL: frozenset(
-        {
-            PolicyDecisionType.ALLOW,
-            PolicyDecisionType.DENY,
-            PolicyDecisionType.REQUIRE_APPROVAL,
-            PolicyDecisionType.ESCALATE,
-        }
-    ),
-    EnforcementPoint.BEFORE_MODEL_CALL: frozenset(
-        {
-            PolicyDecisionType.ALLOW,
-            PolicyDecisionType.DENY,
-            PolicyDecisionType.ESCALATE,
-        }
-    ),
-}
 
 _STRICTNESS: dict[PolicyDecisionType, int] = {
     PolicyDecisionType.ALLOW: 0,
@@ -54,7 +24,7 @@ def is_review_decision_allowed(
     enforcement_point: EnforcementPoint,
     decision: PolicyDecisionType,
 ) -> bool:
-    return decision in ALLOWED_REVIEW_DECISIONS.get(enforcement_point, frozenset())
+    return decision in allowed_review_decisions_for(enforcement_point)
 
 
 def is_stricter_than(

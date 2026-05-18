@@ -26,6 +26,46 @@ class EnforcementPoint(str, Enum):
     BEFORE_MODEL_CALL = "before_model_call"
 
 
+ALLOWED_REVIEW_DECISIONS: dict[EnforcementPoint, frozenset[PolicyDecisionType]] = {
+    EnforcementPoint.BEFORE_RETRIEVAL_PLAN: frozenset(
+        {
+            PolicyDecisionType.ALLOW,
+            PolicyDecisionType.DENY,
+            PolicyDecisionType.ESCALATE,
+        }
+    ),
+    EnforcementPoint.BEFORE_RETRIEVAL_STEP: frozenset(
+        {
+            PolicyDecisionType.ALLOW,
+            PolicyDecisionType.DENY,
+            PolicyDecisionType.ESCALATE,
+        }
+    ),
+    EnforcementPoint.BEFORE_TOOL_CALL: frozenset(
+        {
+            PolicyDecisionType.ALLOW,
+            PolicyDecisionType.DENY,
+            PolicyDecisionType.REQUIRE_APPROVAL,
+            PolicyDecisionType.ESCALATE,
+        }
+    ),
+    EnforcementPoint.BEFORE_MODEL_CALL: frozenset(
+        {
+            PolicyDecisionType.ALLOW,
+            PolicyDecisionType.DENY,
+            PolicyDecisionType.ESCALATE,
+        }
+    ),
+}
+
+
+def allowed_review_decisions_for(
+    enforcement_point: EnforcementPoint | str,
+) -> frozenset[PolicyDecisionType]:
+    point = EnforcementPoint(enforcement_point)
+    return ALLOWED_REVIEW_DECISIONS.get(point, frozenset())
+
+
 class PolicyRule(FrozenModel):
     """Declarative rule loaded from policy.yaml before runtime evaluation."""
 

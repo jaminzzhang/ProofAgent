@@ -1,11 +1,17 @@
+import json
+from typing import Self
+
 import pytest
 
 from proof_agent.capabilities.review import (
     LLMHarnessReviewSubagent,
     resolve_review_subagent,
 )
+from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.contracts import (
     EnforcementPoint,
+    ModelConfig,
+    ModelRequest,
     ModelResponse,
     PolicyDecisionType,
     ReActActionProposal,
@@ -22,12 +28,16 @@ class FakeReviewProvider:
 
     def __init__(self, content: str) -> None:
         self.content = content
-        self.requests = []
+        self.requests: list[ModelRequest] = []
 
-    def estimate_tokens(self, request):
+    @classmethod
+    def from_config(cls, model_config: ModelConfig) -> Self:
+        return cls(VALID_REVIEW_OUTPUT)
+
+    def estimate_tokens(self, request: ModelRequest) -> int:
         return 21
 
-    def generate(self, request):
+    def generate(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
         return ModelResponse(
             content=self.content,
@@ -41,6 +51,48 @@ VALID_REVIEW_OUTPUT = """
 {
   "review_id": "review.act_retrieve_1.before_retrieval_plan",
   "enforcement_point": "before_retrieval_plan",
+  "suggested_decision": "allow",
+  "reason": "The action proposes a low-risk retrieval plan.",
+  "confidence": 0.86,
+  "risk_flags": [],
+  "subject_action_id": "act_retrieve_1",
+  "metadata": {"provider": "openai_compatible"}
+}
+"""
+
+
+VALID_MODEL_CALL_REVIEW_OUTPUT = """
+{
+  "review_id": "review.act_retrieve_1.before_model_call",
+  "enforcement_point": "before_model_call",
+  "suggested_decision": "allow",
+  "reason": "Accepted evidence is available for final answer generation.",
+  "confidence": 0.82,
+  "risk_flags": [],
+  "subject_action_id": "act_retrieve_1",
+  "metadata": {"provider": "openai_compatible"}
+}
+"""
+
+
+MISMATCHED_ACTION_REVIEW_OUTPUT = """
+{
+  "review_id": "review.other_action.before_retrieval_plan",
+  "enforcement_point": "before_retrieval_plan",
+  "suggested_decision": "allow",
+  "reason": "The action proposes a low-risk retrieval plan.",
+  "confidence": 0.86,
+  "risk_flags": [],
+  "subject_action_id": "other_action",
+  "metadata": {"provider": "openai_compatible"}
+}
+"""
+
+
+MISMATCHED_ENFORCEMENT_POINT_REVIEW_OUTPUT = """
+{
+  "review_id": "review.act_retrieve_1.before_tool_call",
+  "enforcement_point": "before_tool_call",
   "suggested_decision": "allow",
   "reason": "The action proposes a low-risk retrieval plan.",
   "confidence": 0.86,
@@ -138,8 +190,89 @@ def test_llm_harness_review_subagent_uses_json_contract(
     )
 
     assert decision.suggested_decision == PolicyDecisionType.ALLOW
-    assert provider.requests[0].response_format == "json"
-    assert provider.requests[0].stream is False
+    request = provider.requests[0]
+    assert request.metadata["role"] == "harness_review"
+    assert request.metadata["enforcement_point"] == "before_retrieval_plan"
+    assert request.metadata["subject_action_id"] == "act_retrieve_1"
+    assert request.max_output_tokens == 500
+    assert request.timeout_seconds == 5
+    assert request.response_format == "json"
+    assert request.stream is False
+    user_payload = json.loads(request.messages[1].content)
+    assert user_payload["enforcement_point"] == "before_retrieval_plan"
+    assert user_payload["action"]["action_id"] == "act_retrieve_1"
+    assert user_payload["action"]["action_type"] == "plan_retrieval"
+    assert user_payload["context"] == {"accepted_evidence_count": 0}
+    assert user_payload["allowed_decisions"] == ["allow", "deny", "escalate"]
+
+
+def test_llm_review_prompt_uses_enforcement_point_allowed_decisions(
+    sample_action_proposal: ReActActionProposal,
+) -> None:
+    provider = FakeReviewProvider(VALID_MODEL_CALL_REVIEW_OUTPUT)
+    reviewer = LLMHarnessReviewSubagent(
+        config=ReviewSubagentConfig(
+            provider="openai_compatible",
+            name="reviewer-test",
+        ),
+        model_provider=provider,
+    )
+
+    reviewer.review(
+        enforcement_point=EnforcementPoint.BEFORE_MODEL_CALL,
+        action=sample_action_proposal,
+        context={"accepted_evidence_count": 1},
+    )
+
+    user_payload = json.loads(provider.requests[0].messages[1].content)
+    assert user_payload["allowed_decisions"] == ["allow", "deny", "escalate"]
+    assert "require_approval" not in user_payload["allowed_decisions"]
+
+
+def test_llm_review_rejects_mismatched_subject_action_id(
+    sample_action_proposal: ReActActionProposal,
+) -> None:
+    provider = FakeReviewProvider(MISMATCHED_ACTION_REVIEW_OUTPUT)
+    reviewer = LLMHarnessReviewSubagent(
+        config=ReviewSubagentConfig(
+            provider="openai_compatible",
+            name="reviewer-test",
+        ),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        reviewer.review(
+            enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+            action=sample_action_proposal,
+            context={"accepted_evidence_count": 0},
+        )
+
+    assert exc.value.role == "harness_review"
+    assert exc.value.error_code == "model_output_contract_validation_failed"
+
+
+def test_llm_review_rejects_mismatched_enforcement_point(
+    sample_action_proposal: ReActActionProposal,
+) -> None:
+    provider = FakeReviewProvider(MISMATCHED_ENFORCEMENT_POINT_REVIEW_OUTPUT)
+    reviewer = LLMHarnessReviewSubagent(
+        config=ReviewSubagentConfig(
+            provider="openai_compatible",
+            name="reviewer-test",
+        ),
+        model_provider=provider,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        reviewer.review(
+            enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+            action=sample_action_proposal,
+            context={"accepted_evidence_count": 0},
+        )
+
+    assert exc.value.role == "harness_review"
+    assert exc.value.error_code == "model_output_contract_validation_failed"
 
 
 def test_resolve_review_subagent_uses_llm_adapter_for_registered_model_provider(

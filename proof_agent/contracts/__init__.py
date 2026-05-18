@@ -31,10 +31,12 @@ from proof_agent.contracts.model import (
     TokenUsage,
 )
 from proof_agent.contracts.policy import (
+    ALLOWED_REVIEW_DECISIONS,
     EnforcementPoint,
     PolicyDecision,
     PolicyDecisionType,
     PolicyRule,
+    allowed_review_decisions_for,
 )
 from proof_agent.contracts.react_workflow import (
     GovernanceDetails,
@@ -51,6 +53,7 @@ from proof_agent.contracts.trace import TraceEvent, TraceEventType
 
 __all__ = [
     "AgentManifest",
+    "ALLOWED_REVIEW_DECISIONS",
     "ApprovalState",
     "ApprovalStatus",
     "AuditConfig",
@@ -99,5 +102,6 @@ __all__ = [
     "ValidationStatus",
     "WorkflowConfig",
     "WorkflowState",
+    "allowed_review_decisions_for",
     "freeze_value",
 ]

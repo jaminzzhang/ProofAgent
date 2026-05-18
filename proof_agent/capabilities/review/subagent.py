@@ -5,7 +5,10 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
-from proof_agent.capabilities.models.normalization import parse_model_contract
+from proof_agent.capabilities.models.normalization import (
+    ModelOutputNormalizationError,
+    parse_model_contract,
+)
 from proof_agent.contracts import (
     EnforcementPoint,
     ModelMessage,
@@ -16,6 +19,7 @@ from proof_agent.contracts import (
     ReActActionType,
     ReviewDecision,
     ReviewSubagentConfig,
+    allowed_review_decisions_for,
 )
 from proof_agent.contracts.manifest import ModelConfig
 
@@ -136,6 +140,8 @@ class LLMHarnessReviewSubagent:
         action: ReActActionProposal,
         context: Mapping[str, Any],
     ) -> ReviewDecision:
+        point = EnforcementPoint(enforcement_point)
+        allowed_decisions = allowed_review_decisions_for(point)
         request = ModelRequest(
             provider=self.model_provider.provider_name,
             model=self.model_provider.model_name,
@@ -145,9 +151,7 @@ class LLMHarnessReviewSubagent:
                     role=ModelRole.USER,
                     content=json.dumps(
                         {
-                            "enforcement_point": EnforcementPoint(
-                                enforcement_point
-                            ).value,
+                            "enforcement_point": point.value,
                             "action": action.model_dump(
                                 mode="json",
                                 warnings=False,
@@ -155,7 +159,9 @@ class LLMHarnessReviewSubagent:
                             ),
                             "context": dict(context),
                             "allowed_decisions": [
-                                decision.value for decision in PolicyDecisionType
+                                decision.value
+                                for decision in PolicyDecisionType
+                                if decision in allowed_decisions
                             ],
                         },
                         ensure_ascii=True,
@@ -169,16 +175,27 @@ class LLMHarnessReviewSubagent:
             stream=False,
             metadata={
                 "role": "harness_review",
-                "enforcement_point": EnforcementPoint(enforcement_point).value,
+                "enforcement_point": point.value,
                 "subject_action_id": action.action_id,
             },
         )
         response = self.model_provider.generate(request)
-        return parse_model_contract(
+        decision = parse_model_contract(
             content=response.content,
             contract_type=ReviewDecision,
             role="harness_review",
         )
+        if (
+            decision.enforcement_point != point
+            or decision.subject_action_id != action.action_id
+        ):
+            raise ModelOutputNormalizationError(
+                role="harness_review",
+                error_code="model_output_contract_validation_failed",
+                message="Model review output was not bound to the current review request.",
+                raw_content_length=len(response.content),
+            )
+        return decision
 
 
 def _json_contract_fallback(value: Any) -> Any:
