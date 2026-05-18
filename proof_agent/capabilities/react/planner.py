@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import json
 from typing import Protocol
 
-from proof_agent.contracts import ReActActionProposal, ReActActionType, ReasoningSummary
-from proof_agent.contracts.manifest import ReActPlannerConfig
-from proof_agent.errors import ProofAgentError
+from proof_agent.capabilities.models import ModelProvider, resolve_provider
+from proof_agent.capabilities.models.normalization import parse_model_contract
+from proof_agent.contracts import (
+    ModelMessage,
+    ModelRequest,
+    ModelRole,
+    ReActActionProposal,
+    ReActActionType,
+    ReasoningSummary,
+)
+from proof_agent.contracts.manifest import ModelConfig, ReActPlannerConfig
 
 
 class ReActPlanner(Protocol):
@@ -83,6 +92,72 @@ class DeterministicReActPlanner:
         )
 
 
+class LLMReActPlanner:
+    def __init__(
+        self,
+        *,
+        config: ReActPlannerConfig,
+        model_provider: ModelProvider | None = None,
+    ) -> None:
+        self.config = config
+        self.model_provider = model_provider or resolve_provider(
+            ModelConfig(
+                provider=config.provider,
+                name=config.name,
+                params=config.params,
+            )
+        )
+
+    def plan(
+        self,
+        *,
+        question: str,
+        system_prompt: str,
+        context_summary: str,
+    ) -> ReActActionProposal:
+        request = ModelRequest(
+            provider=self.model_provider.provider_name,
+            model=self.model_provider.model_name,
+            messages=(
+                ModelMessage(role=ModelRole.SYSTEM, content=_planner_control_prompt()),
+                ModelMessage(
+                    role=ModelRole.USER,
+                    content=json.dumps(
+                        {
+                            "question": question,
+                            "system_prompt_summary": system_prompt,
+                            "context_summary": context_summary,
+                            "allowed_actions": [
+                                action.value for action in ReActActionType
+                            ],
+                        },
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    ),
+                ),
+            ),
+            response_format="json",
+            stream=False,
+            metadata={"role": "react_planner", "question": question},
+        )
+        response = self.model_provider.generate(request)
+        return parse_model_contract(
+            content=response.content,
+            contract_type=ReActActionProposal,
+            role="react_planner",
+        )
+
+
+def _planner_control_prompt() -> str:
+    return (
+        "You are the Proof Agent LLM ReAct Planner. "
+        "Return exactly one JSON object matching ReActActionProposal. "
+        "Use only allowed action_type values supplied in the user message. "
+        "Do not return chain-of-thought, markdown commentary, tool results, or natural language. "
+        "A proposed action is not approved and cannot execute until Harness policy admits it."
+    )
+
+
 def _deterministic_query(question: str) -> str:
     if question == "What is the reimbursement rule for travel meals?":
         return "travel meals reimbursement rule"
@@ -92,9 +167,4 @@ def _deterministic_query(question: str) -> str:
 def resolve_react_planner(config: ReActPlannerConfig) -> ReActPlanner:
     if config.provider == "deterministic":
         return DeterministicReActPlanner()
-
-    raise ProofAgentError(
-        "PA_REACT_001",
-        f"Unsupported ReAct planner provider: {config.provider}",
-        "Set react.planner.provider to 'deterministic' or install a supported ReAct planner provider.",
-    )
+    return LLMReActPlanner(config=config)
