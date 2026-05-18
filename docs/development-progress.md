@@ -1,6 +1,6 @@
 # Proof Agent Development Progress
 
-> Last updated: 2026-05-15
+> Last updated: 2026-05-18
 > Purpose: Give AI coding agents a short, current map of the implementation. Verify all claims against the code before changing behavior.
 
 ## 1. Current Positioning

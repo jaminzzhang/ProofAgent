@@ -273,9 +273,13 @@ review:
 
 Planner and reviewer prompts are Harness Control Prompts maintained by Proof Agent. Agent Contracts configure provider channel, model name, and provider parameters, but do not replace the control prompts in V1.
 
+See `examples/react_enterprise_qa/agent.llm.yaml` for a runnable Agent Contract that configures final answer, planner, and reviewer roles with an OpenAI-compatible model provider. Planner and reviewer outputs are parsed as Harness JSON contracts before they affect routing, policy, tool, or answer behavior; provider-native tool calls are not executed in V1.
+
 Run example:
 ```bash
-OPENAI_API_KEY=... uv run --extra openai proof-agent run examples/enterprise_qa/agent.yaml --question "What is the reimbursement rule for travel meals?"
+OPENAI_COMPATIBLE_API_KEY=... \
+OPENAI_COMPATIBLE_BASE_URL=... \
+uv run --extra openai proof-agent run examples/react_enterprise_qa/agent.llm.yaml --question "What is the reimbursement rule for travel meals?"
 ```
 
 PageIndex self-hosted retrieval can be used as a remote agentic evidence source while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation:

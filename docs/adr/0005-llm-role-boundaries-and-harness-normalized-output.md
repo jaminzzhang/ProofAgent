@@ -1,0 +1,3 @@
+# LLM Role Boundaries And Harness-Normalized Output
+
+Proof Agent will integrate real LLM behavior through three separate roles: the final answer model, the LLM ReAct Planner, and the LLM Harness Review Subagent. These roles may share the Model Provider Registry, but they remain separately configured instances with separate prompts, parameters, trace identity, and fail-closed behavior. Any model output that can affect workflow, review, tool, or answer behavior must first be normalized into Proof Agent contracts; provider-native tool call payloads must not execute tools directly and may only be supported later through an adapter that converts them into Harness-governed action proposals.

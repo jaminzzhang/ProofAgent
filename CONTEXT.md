@@ -36,9 +36,53 @@ _Avoid_: Remote-only ReAct demo, provider-dependent MVP
 The planning capability that turns user input, system prompt, and admitted context into Reasoning Summary and ReAct Action Proposal values.
 _Avoid_: Final answer model, Harness Review Subagent
 
+**LLM ReAct Planner**:
+A ReAct Planner implementation that uses a configured Model Provider to produce Harness-normalized ReAct Action Proposal values.
+_Avoid_: Deterministic ReAct Planner, provider-native tool executor
+
 **ReAct Planner Config**:
 The Agent Contract section that configures the ReAct Planner independently from the final answer model and Harness Review Subagent.
 _Avoid_: Hidden planner defaults, overloaded answer model config
+
+**Business Agent AI Core**:
+The business-facing AI capability that plans actions or generates final answer content inside a governed Agent run.
+_Avoid_: Harness decision maker, uncontrolled AI core
+
+**Harness Decision Assistance**:
+The control-facing AI capability that advises Harness review decisions without becoming the final policy authority.
+_Avoid_: Business Agent AI Core, model self-approval
+
+**Model Provider Registry**:
+The shared capability registry that resolves model providers for final answers, planning, and Harness review roles.
+_Avoid_: Role-specific provider registry
+
+**Harness-Normalized Model Output**:
+Model output parsed into Proof Agent contracts before it can affect workflow, review, tool, or answer behavior.
+_Avoid_: Native provider command, raw model action
+
+**Model Output JSON Contract**:
+The requirement that planner and reviewer model outputs be valid JSON objects representing Proof Agent contracts.
+_Avoid_: Natural-language control output, inferred JSON
+
+**Model Call Role**:
+The trace-safe label that distinguishes why a model provider was called during a governed run.
+_Avoid_: Role-specific trace event type
+
+**Harness Control Prompt**:
+A Proof Agent-maintained prompt that defines control-plane output rules for planner or reviewer model calls.
+_Avoid_: Agent-authored control prompt, business instruction
+
+**Structured Control Context**:
+Harness-constructed, redacted, policy-relevant context admitted into a planner or reviewer model call.
+_Avoid_: Raw transcript, raw evidence dump, arbitrary business prompt injection
+
+**Model Output Normalization Failure**:
+A fail-closed condition where model output cannot be parsed or validated as the required Proof Agent contract.
+_Avoid_: Best-effort repair, silent fallback
+
+**Native Tool Call Adapter**:
+A future adapter that converts provider-native tool call payloads into Harness-governed action proposals.
+_Avoid_: Direct provider tool execution, provider-controlled Tool Gateway
 
 **ReAct Action Proposal**:
 A model-proposed next action that is not executable until admitted by Harness policy.
@@ -55,6 +99,10 @@ _Avoid_: Unconstrained autonomous mode
 **Harness Review Subagent**:
 An LLM-backed subagent inside the Control Plane that reviews Harness control nodes in Auto Review Mode and returns a typed review result.
 _Avoid_: Business Agent, final answer agent, uncontrolled self-approval
+
+**LLM Harness Review Subagent**:
+A Harness Review Subagent implementation that uses a configured Model Provider to produce Harness-normalized Review Decision values.
+_Avoid_: Deterministic Harness Review Subagent, final answer model
 
 **Review Subagent Config**:
 The Agent Contract section that configures the Harness Review Subagent independently from the final answer model.
@@ -284,7 +332,33 @@ _Avoid_: Evidence content dump
 - The **React Enterprise QA Template** is separate from the existing **Enterprise QA Template** so deterministic Enterprise QA remains the regression baseline.
 - The **React Enterprise QA Template** must include a **Deterministic ReAct Demo** before remote model paths are required.
 - The **React Enterprise QA Template** uses a **ReAct Planner** configured by **ReAct Planner Config**.
+- A **LLM ReAct Planner** is a separate ReAct Planner implementation and must not replace the **Deterministic ReAct Demo** path.
+- A **LLM ReAct Planner** is the first LLM-backed implementation priority for **Business Agent AI Core**.
 - The **ReAct Planner**, **Harness Review Subagent**, and final answer model are separate roles even when a deterministic demo implementation shares local code.
+- **Business Agent AI Core** includes final answer generation and **ReAct Planner** behavior.
+- **Harness Decision Assistance** includes **Harness Review Subagent** behavior.
+- A **LLM Harness Review Subagent** is a separate Harness Review Subagent implementation and must not replace deterministic review behavior used by tests and demos.
+- A **LLM Harness Review Subagent** follows the **LLM ReAct Planner** implementation pattern for model calls, output normalization, validation, and fail-closed tracing.
+- **Business Agent AI Core** and **Harness Decision Assistance** may use the same **Model Provider Registry** while remaining separately configured instances.
+- **Business Agent AI Core** is configured through existing final answer `model` and **ReAct Planner Config** fields, not through a new top-level `ai_core` field.
+- **Harness Decision Assistance** is configured through **Review Subagent Config**, not through a new top-level `ai_core` field.
+- **Model Provider Registry** provider names describe external model channels, not Proof Agent role names.
+- Final answer generation, **LLM ReAct Planner**, and **LLM Harness Review Subagent** choose their role through their Agent Contract section, not through role-specific provider names.
+- V1 LLM integration uses **Harness-Normalized Model Output** for final answers, **ReAct Action Proposal** values, and **Review Decision** values.
+- Planner and reviewer paths use a **Model Output JSON Contract** and should request JSON output from the selected **Model Provider Registry** entry when supported.
+- A **Model Output JSON Contract** may be parsed from a full JSON response or a single fenced JSON object, but must not be inferred from natural language.
+- V1 planner, reviewer, and final answer model calls are non-streaming so validation and audit can complete before output is treated as valid.
+- A **Model Output Normalization Failure** must stop or constrain the current control path rather than guessing the intended model behavior.
+- A **Model Output Normalization Failure** from a **LLM ReAct Planner** fails the planning path closed and is traced with the parse or validation reason.
+- A **Model Output Normalization Failure** from a **LLM Harness Review Subagent** follows **Review Failure Policy**.
+- A **Model Output Normalization Failure** from final answer generation is handled as output validation failure and must not be shown as a valid answer.
+- Provider-native tool call payloads must not execute tools directly; a future **Native Tool Call Adapter** must convert them into Harness-governed proposals first.
+- Final answer generation, **LLM ReAct Planner**, and **LLM Harness Review Subagent** all emit model call trace events with a **Model Call Role**.
+- A **Model Call Role** distinguishes model calls such as `final_answer`, `react_planner`, and `harness_review` while preserving shared model usage accounting.
+- A **LLM ReAct Planner** and **LLM Harness Review Subagent** use **Harness Control Prompt** templates maintained by Proof Agent.
+- An **Agent Contract** may configure model provider, model name, and provider parameters for planner and reviewer roles, but must not replace the **Harness Control Prompt** in V1.
+- **Harness Control Prompt** inputs come from **Structured Control Context**, not raw user transcripts, raw evidence content, secrets, or arbitrary Agent-authored prompt overrides.
+- **Structured Control Context** may include user question, Agent purpose, step budget, allowed actions, tool risk summary, evidence state, conversation summary, enforcement point, and policy-relevant metadata.
 - A model may produce a **ReAct Action Proposal**, but only **Auto Review Mode** or another Harness review path can admit it for execution.
 - Every **ReAct Action Proposal** must use the fixed **ReAct Action Set**; non-enumerated actions are denied and traced.
 - **Auto Review Mode** may use a **Harness Review Subagent** as a Control Plane component.
@@ -296,6 +370,7 @@ _Avoid_: Evidence content dump
 - Invalid or conflicting **Review Decision** output is traced as review error or override and cannot silently allow execution.
 - V1 **Auto Review Scope** covers `before_retrieval_plan`, `before_retrieval_step`, `before_tool_call`, and `before_model_call`.
 - `before_answer` remains governed primarily by deterministic evidence and citation rules; a **Harness Review Subagent** may advise but cannot replace evidence validation.
+- **Harness Decision Assistance** may advise on `before_answer`, but cannot override failed evidence admission, citation validation, or final output validation.
 - A **Controlled ReAct Workflow** records **Reasoning Summary**, not raw chain-of-thought.
 - A **Controlled ReAct Workflow** records **Action Proposal Event**, **Review Decision Event**, **Review Override Event**, and **Clarification Requested Event** where applicable.
 - `policy_decision` remains the final governance trace event after `PolicyEngine` validation.
@@ -357,9 +432,22 @@ _Avoid_: Evidence content dump
 - "`enterprise_qa` with flags" could blur the deterministic baseline with ReAct behavior. Resolved: V1 adds **React Enterprise QA Template** instead of changing the existing template.
 - "ReAct MVP" could mean requiring a remote LLM. Resolved: V1 requires a **Deterministic ReAct Demo**.
 - "ReAct planner" could mean the final answer model or a separate planning role. Resolved: use **ReAct Planner** and configure it through **ReAct Planner Config**.
+- "LLM planner" could mean replacing deterministic acceptance behavior or adding a second planner implementation. Resolved: use **LLM ReAct Planner** as an additional implementation.
 - "ReAct action" could mean arbitrary model output or a bounded action enum. Resolved: V1 uses a fixed **ReAct Action Set**.
 - "LLM automatic decision" could mean model self-approval, rule-based Harness review, or a Control Plane review subagent. Resolved: use **Harness Review Subagent** for the LLM-backed control component that runs only in **Auto Review Mode**.
+- "LLM reviewer" could mean replacing deterministic review behavior or adding a provider-backed reviewer implementation. Resolved: use **LLM Harness Review Subagent** as an additional implementation.
 - "Review model" could mean the final answer model or a separate control-plane reviewer. Resolved: **Review Subagent Config** is independent from final answer `model`.
+- "AI core capability" could mean business answer generation, ReAct planning, or Harness review. Resolved: use **Business Agent AI Core** for business-facing AI and **Harness Decision Assistance** for control-facing AI.
+- "Separate model provider" could mean separate provider registries or separate configured instances. Resolved: **Business Agent AI Core** and **Harness Decision Assistance** share the **Model Provider Registry** but remain separate configured instances.
+- "`ai_core` configuration" could mean a new top-level Agent Contract field or the existing role-specific model fields. Resolved: keep role-specific `model`, `react.planner`, and `review.subagent` fields.
+- "Planner provider" or "review provider" could mean role-specific provider names. Resolved: provider names identify external model channels; role semantics come from the Agent Contract section.
+- "LLM output" could mean raw provider text, provider-native tool calls, or a typed Harness contract. Resolved: V1 uses **Harness-Normalized Model Output** before any output affects control behavior.
+- "JSON output" could mean strict JSON mode, JSON inside text, or natural-language field inference. Resolved: use **Model Output JSON Contract** with bounded extraction only.
+- "Planner trace event" or "review trace event" could mean new role-specific model event names. Resolved: use shared model request and response events with **Model Call Role**.
+- "Planner prompt" or "review prompt" could mean Agent-authored business instructions or Harness-maintained control instructions. Resolved: use **Harness Control Prompt** for V1 control-plane prompts.
+- "Control context" could mean raw runtime state or a curated Harness input. Resolved: use **Structured Control Context** for planner and reviewer model calls.
+- "Invalid model output" could mean guessing a safer action, asking clarification, or failing closed. Resolved: use **Model Output Normalization Failure** and trace the precise parse or validation reason.
+- "Native tool calling" could mean provider-controlled tool execution or a payload normalization mechanism. Resolved: native tool calling is future **Native Tool Call Adapter** work and cannot bypass Harness governance.
 - "Subagent decision" could mean a final policy decision or a typed suggestion. Resolved: a **Review Decision** is only advisory until `PolicyEngine` validates it.
 - "Reviewer failure" could mean proceed optimistically or stop safely. Resolved: **Review Failure Policy** fails closed and records the reason.
 - "Review every node" could include answer admission and final output validation. Resolved: V1 **Auto Review Scope** excludes deterministic answer admission as an authority boundary.
