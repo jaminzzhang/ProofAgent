@@ -93,7 +93,6 @@ def build_react_enterprise_qa_graph(
                 payload={
                     "role": exc.role,
                     "error_code": exc.error_code,
-                    "message": str(exc),
                     "raw_content_length": exc.raw_content_length,
                 },
             )

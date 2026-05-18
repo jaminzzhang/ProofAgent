@@ -108,7 +108,6 @@ def review_action(
                 payload={
                     "role": exc.role,
                     "error_code": exc.error_code,
-                    "message": str(exc),
                     "raw_content_length": exc.raw_content_length,
                     "subject_action_id": proposal.action_id,
                     "enforcement_point": point.value,

@@ -138,6 +138,8 @@ def test_llm_planner_invalid_output_fails_closed_with_trace(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
+    sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
+
     def invalid_plan(self: object, **kwargs: object) -> ReActActionProposal:
         from proof_agent.capabilities.models.normalization import (
             ModelOutputNormalizationError,
@@ -146,7 +148,7 @@ def test_llm_planner_invalid_output_fails_closed_with_trace(
         raise ModelOutputNormalizationError(
             role="react_planner",
             error_code="model_output_json_parse_failed",
-            message="Model output did not contain a valid JSON object.",
+            message=f"Model output did not contain a valid JSON object: {sentinel}",
             raw_content_length=31,
         )
 
@@ -165,6 +167,10 @@ def test_llm_planner_invalid_output_fails_closed_with_trace(
     assert "planner output failed validation" in result.final_output.lower()
 
     events = _trace_events(result.trace_path)
+    assert sentinel not in json.dumps(
+        [event["payload"] for event in events],
+        sort_keys=True,
+    )
     failure = next(
         event
         for event in events
@@ -178,6 +184,8 @@ def test_review_normalization_failure_fails_closed_with_trace(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
+    sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
+
     def invalid_review(self: object, **kwargs: object) -> None:
         from proof_agent.capabilities.models.normalization import (
             ModelOutputNormalizationError,
@@ -186,7 +194,7 @@ def test_review_normalization_failure_fails_closed_with_trace(
         raise ModelOutputNormalizationError(
             role="harness_review",
             error_code="model_output_json_parse_failed",
-            message="Model output did not contain a valid JSON object.",
+            message=f"Model output did not contain a valid JSON object: {sentinel}",
             raw_content_length=29,
         )
 
@@ -204,6 +212,10 @@ def test_review_normalization_failure_fails_closed_with_trace(
     assert result.outcome == "REFUSED_NO_EVIDENCE"
 
     events = _trace_events(result.trace_path)
+    assert sentinel not in json.dumps(
+        [event["payload"] for event in events],
+        sort_keys=True,
+    )
     failure = next(
         event
         for event in events
@@ -211,10 +223,13 @@ def test_review_normalization_failure_fails_closed_with_trace(
     )
     assert failure["payload"]["role"] == "harness_review"
     assert failure["payload"]["error_code"] == "model_output_json_parse_failed"
+    assert failure["payload"]["enforcement_point"] == "before_retrieval_plan"
+    review_error = next(event for event in events if event["event_type"] == "review_error")
+    assert review_error["payload"]["error_code"] == "model_output_json_parse_failed"
     policy = next(
         event
         for event in events
         if event["event_type"] == "policy_decision"
         and event["payload"]["policy_rule_id"].endswith(".fail_closed")
     )
-    assert policy["payload"]["decision"] in {"deny", "require_approval"}
+    assert policy["payload"]["decision"] == "deny"
