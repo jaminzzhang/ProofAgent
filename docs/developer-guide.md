@@ -238,6 +238,41 @@ model:
     timeout_seconds: 30
 ```
 
+### Configuring LLM-Backed Planning And Review
+
+Use the existing provider names to configure each model role. Provider names describe the external model channel; role semantics come from the Agent Contract section.
+
+```yaml
+model:
+  provider: openai_compatible
+  name: qwen-plus
+  params:
+    api_key_env: OPENAI_COMPATIBLE_API_KEY
+    base_url_env: OPENAI_COMPATIBLE_BASE_URL
+
+react:
+  planner:
+    provider: openai_compatible
+    name: qwen-plus
+    params:
+      api_key_env: OPENAI_COMPATIBLE_API_KEY
+      base_url_env: OPENAI_COMPATIBLE_BASE_URL
+      temperature: 0
+
+review:
+  mode: auto
+  subagent:
+    provider: openai_compatible
+    name: qwen-plus
+    fail_closed: true
+    params:
+      api_key_env: OPENAI_COMPATIBLE_API_KEY
+      base_url_env: OPENAI_COMPATIBLE_BASE_URL
+      temperature: 0
+```
+
+Planner and reviewer prompts are Harness Control Prompts maintained by Proof Agent. Agent Contracts configure provider channel, model name, and provider parameters, but do not replace the control prompts in V1.
+
 Run example:
 ```bash
 OPENAI_API_KEY=... uv run --extra openai proof-agent run examples/enterprise_qa/agent.yaml --question "What is the reimbursement rule for travel meals?"

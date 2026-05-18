@@ -362,6 +362,12 @@ STOP
 
 Planner output is a proposed action from this closed set. The planner cannot execute retrieval, tools, models, memory writes, or final answers directly.
 
+### LLM Role Boundaries
+
+Proof Agent integrates real LLM behavior through role-specific model calls rather than a single autonomous model loop. The final answer model, LLM ReAct Planner, and LLM Harness Review Subagent all resolve providers through the shared Model Provider Registry, but each role is configured independently in `model`, `react.planner`, or `review.subagent`.
+
+Planner and reviewer outputs must satisfy the Model Output JSON Contract. The Harness parses model output into `ReActActionProposal` or `ReviewDecision` before any output can affect workflow routing, policy review, tool execution, or final answer behavior. Provider-native tool calls are not executable control actions in V1; future provider-native payloads must first be converted into Harness-governed action proposals.
+
 OpenAI-compatible example:
 ```yaml
 model:

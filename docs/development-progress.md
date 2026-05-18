@@ -11,6 +11,8 @@ The project is no longer positioned as local-first or CLI-first. It keeps a dete
 
 Authoritative design doc: `docs/technical-design.md`.
 
+- LLM-backed ReAct planning and Harness review now use the shared Model Provider Registry with role-specific configuration, bounded JSON normalization, role-aware trace events, and fail-closed behavior for invalid model output.
+
 ## 2. Implementation Snapshot
 
 | Area | Status |
