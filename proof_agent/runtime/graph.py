@@ -6,7 +6,13 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from proof_agent.bootstrap.composition import HarnessInvocation
-from proof_agent.contracts import ApprovalStatus, ContextAdmission, EvidenceChunk, ReceiptOutcome
+from proof_agent.contracts import (
+    ApprovalStatus,
+    ContextAdmission,
+    EvidenceChunk,
+    ModelCallRole,
+    ReceiptOutcome,
+)
 from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
@@ -179,6 +185,8 @@ def build_enterprise_qa_graph(
             payload={
                 "provider": invocation.model_provider.provider_name,
                 "model": invocation.model_provider.model_name,
+                "role": ModelCallRole.FINAL_ANSWER.value,
+                "response_format": model_request.response_format,
                 "message_count": len(model_request.messages),
                 "prompt_length": sum(len(message.content) for message in model_request.messages),
                 "system_prompt_length": _system_prompt_length(model_request),

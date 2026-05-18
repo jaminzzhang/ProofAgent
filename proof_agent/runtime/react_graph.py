@@ -7,12 +7,15 @@ from langgraph.graph import END, START, StateGraph
 
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.capabilities.knowledge import KnowledgeProvider
+from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
+from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.capabilities.tools.gateway import ToolGatewayResult
 from proof_agent.contracts import (
     ApprovalStatus,
     ContextAdmission,
     EnforcementPoint,
     EvidenceChunk,
+    ModelCallRole,
     PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
@@ -20,7 +23,6 @@ from proof_agent.contracts import (
     ReceiptOutcome,
     ValidationResult,
 )
-from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
@@ -78,11 +80,24 @@ def build_react_enterprise_qa_graph(
         if should_stop_for_step_budget(step_count, max_steps):
             return _refusal("The ReAct step budget was exhausted before an answer could be produced.")
 
-        proposal = invocation.react_planner.plan(
-            question=state["question"],
-            system_prompt="Use governed ReAct planning without raw chain-of-thought.",
-            context_summary="",
-        )
+        try:
+            proposal = invocation.react_planner.plan(
+                question=state["question"],
+                system_prompt="Use governed ReAct planning without raw chain-of-thought.",
+                context_summary="",
+            )
+        except ModelOutputNormalizationError as exc:
+            trace.emit(
+                "model_output_normalization_failed",
+                status="blocked",
+                payload={
+                    "role": exc.role,
+                    "error_code": exc.error_code,
+                    "message": str(exc),
+                    "raw_content_length": exc.raw_content_length,
+                },
+            )
+            return _refusal("The planner output failed validation and the run was stopped.")
         emit_reasoning_summary(trace, proposal)
         emit_action_proposal(trace, proposal)
         return {
@@ -245,6 +260,8 @@ def build_react_enterprise_qa_graph(
             payload={
                 "provider": invocation.model_provider.provider_name,
                 "model": invocation.model_provider.model_name,
+                "role": ModelCallRole.FINAL_ANSWER.value,
+                "response_format": model_request.response_format,
                 "message_count": len(model_request.messages),
                 "prompt_length": sum(len(message.content) for message in model_request.messages),
                 "system_prompt_length": _system_prompt_length(model_request),

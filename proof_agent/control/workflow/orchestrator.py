@@ -11,6 +11,7 @@ from proof_agent.contracts import (
     ApprovalStatus,
     ContextAdmission,
     EvidenceChunk,
+    ModelCallRole,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -150,6 +151,8 @@ def run_enterprise_qa(
                 payload={
                     "provider": invocation.model_provider.provider_name,
                     "model": invocation.model_provider.model_name,
+                    "role": ModelCallRole.FINAL_ANSWER.value,
+                    "response_format": model_request.response_format,
                     "message_count": len(model_request.messages),
                     "prompt_length": sum(len(message.content) for message in model_request.messages),
                     "system_prompt_length": _system_prompt_length(model_request),

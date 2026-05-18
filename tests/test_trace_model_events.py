@@ -38,12 +38,28 @@ def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) 
         "model",
         "prompt_length",
         "provider",
+        "response_format",
+        "role",
         "stream",
         "system_prompt_length",
     }
     assert "content" not in model_response["payload"]
     assert "messages" not in model_request["payload"]
     assert model_response["payload"]["content_length"] > 0
+
+
+def test_final_answer_model_trace_includes_role_and_response_format(tmp_path: Path) -> None:
+    result = run_with_langgraph(
+        Path("examples/enterprise_qa/agent.yaml"),
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+    )
+
+    events = _read_events(result.trace_path)
+    model_request = next(event for event in events if event["event_type"] == "model_request")
+
+    assert model_request["payload"]["role"] == "final_answer"
+    assert model_request["payload"]["response_format"] == "text"
 
 
 def test_model_error_is_traced_when_provider_resolution_fails(

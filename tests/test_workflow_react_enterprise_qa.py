@@ -132,3 +132,43 @@ def test_unknown_tool_proposal_fails_closed_without_raising(
     assert "tool_request" in event_types
     assert "approval_requested" not in event_types
     assert "tool_result" not in event_types
+
+
+def test_llm_planner_invalid_output_fails_closed_with_trace(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    def invalid_plan(self: object, **kwargs: object) -> ReActActionProposal:
+        from proof_agent.capabilities.models.normalization import (
+            ModelOutputNormalizationError,
+        )
+
+        raise ModelOutputNormalizationError(
+            role="react_planner",
+            error_code="model_output_json_parse_failed",
+            message="Model output did not contain a valid JSON object.",
+            raw_content_length=31,
+        )
+
+    monkeypatch.setattr(
+        "proof_agent.capabilities.react.planner.DeterministicReActPlanner.plan",
+        invalid_plan,
+    )
+
+    result = run_with_langgraph(
+        REACT_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+    )
+
+    assert result.outcome == "REFUSED_NO_EVIDENCE"
+    assert "planner output failed validation" in result.final_output.lower()
+
+    events = _trace_events(result.trace_path)
+    failure = next(
+        event
+        for event in events
+        if event["event_type"] == "model_output_normalization_failed"
+    )
+    assert failure["payload"]["role"] == "react_planner"
+    assert failure["payload"]["error_code"] == "model_output_json_parse_failed"
