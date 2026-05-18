@@ -123,6 +123,8 @@ class OpenAICompatibleModelProvider:
                 for message in request.messages
             ],
         }
+        if request.response_format == "json":
+            payload["response_format"] = {"type": "json_object"}
         temperature = request.temperature
         if temperature is None:
             temperature = self._default_temperature
