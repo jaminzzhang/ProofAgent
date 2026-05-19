@@ -117,6 +117,20 @@ INVALID_MODEL_CALL_DECISION_OUTPUT = """
 """
 
 
+RAW_REVIEW_ID_OUTPUT = """
+{
+  "review_id": "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE",
+  "enforcement_point": "before_retrieval_plan",
+  "suggested_decision": "allow",
+  "reason": "The action proposes a low-risk retrieval plan.",
+  "confidence": 0.86,
+  "risk_flags": [],
+  "subject_action_id": "act_retrieve_1",
+  "metadata": {"provider": "openai_compatible"}
+}
+"""
+
+
 @pytest.fixture
 def sample_action_proposal() -> ReActActionProposal:
     summary = ReasoningSummary(
@@ -218,6 +232,28 @@ def test_llm_harness_review_subagent_uses_json_contract(
     assert user_payload["action"]["action_type"] == "plan_retrieval"
     assert user_payload["context"] == {"accepted_evidence_count": 0}
     assert user_payload["allowed_decisions"] == ["allow", "deny", "escalate"]
+
+
+def test_llm_review_canonicalizes_review_id_before_returning(
+    sample_action_proposal: ReActActionProposal,
+) -> None:
+    provider = FakeReviewProvider(RAW_REVIEW_ID_OUTPUT)
+    reviewer = LLMHarnessReviewSubagent(
+        config=ReviewSubagentConfig(
+            provider="openai_compatible",
+            name="reviewer-test",
+        ),
+        model_provider=provider,
+    )
+
+    decision = reviewer.review(
+        enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+        action=sample_action_proposal,
+        context={"accepted_evidence_count": 0},
+    )
+
+    assert decision.review_id == "review.act_retrieve_1.before_retrieval_plan"
+    assert "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE" not in decision.review_id
 
 
 def test_llm_review_prompt_uses_enforcement_point_allowed_decisions(

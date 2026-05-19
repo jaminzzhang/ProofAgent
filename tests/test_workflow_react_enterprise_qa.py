@@ -359,7 +359,7 @@ class FakeControlPlaneProvider:
             action_id = str(request.metadata["subject_action_id"])
             content = json.dumps(
                 {
-                    "review_id": f"review.{action_id}.{point}",
+                    "review_id": self.sentinel,
                     "enforcement_point": point,
                     "suggested_decision": "allow",
                     "reason": self.sentinel,

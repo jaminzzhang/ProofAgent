@@ -158,3 +158,21 @@ def test_parse_model_contract_rejects_over_depth_json() -> None:
 
     assert exc.value.role == "react_planner"
     assert exc.value.error_code == "model_output_too_deep"
+
+
+def test_parse_model_contract_wraps_decoder_recursion_as_depth_error() -> None:
+    nested = '"leaf"'
+    for _ in range(1_500):
+        nested = f'{{"nested": {nested}}}'
+    assert len(nested) < MAX_MODEL_OUTPUT_CHARS
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        parse_model_contract(
+            content=nested,
+            contract_type=ReActActionProposal,
+            role="react_planner",
+        )
+
+    assert exc.value.role == "react_planner"
+    assert exc.value.error_code == "model_output_too_deep"
+    assert exc.value.raw_content_length == len(nested)

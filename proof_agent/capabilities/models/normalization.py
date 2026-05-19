@@ -60,6 +60,8 @@ def _extract_single_json_object(content: str, *, role: str) -> dict[str, object]
         value = json.loads(stripped)
     except json.JSONDecodeError:
         pass
+    except RecursionError as exc:
+        raise _too_deep_error(role=role, raw_content_length=len(content)) from exc
     else:
         if isinstance(value, dict):
             return value
@@ -83,6 +85,8 @@ def _extract_single_json_object(content: str, *, role: str) -> dict[str, object]
             value = json.loads(fenced[0])
         except json.JSONDecodeError:
             pass
+        except RecursionError as exc:
+            raise _too_deep_error(role=role, raw_content_length=len(content)) from exc
         else:
             if isinstance(value, dict):
                 return value
@@ -106,22 +110,25 @@ def _assert_json_depth(
     role: str,
     raw_content_length: int,
 ) -> None:
-    if _json_depth(value) > MAX_JSON_DEPTH:
-        raise ModelOutputNormalizationError(
-            role=role,
-            error_code="model_output_too_deep",
-            message="Model output JSON nesting exceeded the safe depth limit.",
-            raw_content_length=raw_content_length,
-        )
+    stack: list[tuple[object, int]] = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > MAX_JSON_DEPTH:
+            raise _too_deep_error(role=role, raw_content_length=raw_content_length)
+        if isinstance(current, dict):
+            stack.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            stack.extend((item, depth + 1) for item in current)
 
 
-def _json_depth(value: object) -> int:
-    if isinstance(value, dict):
-        if not value:
-            return 1
-        return 1 + max(_json_depth(item) for item in value.values())
-    if isinstance(value, list):
-        if not value:
-            return 1
-        return 1 + max(_json_depth(item) for item in value)
-    return 0
+def _too_deep_error(
+    *,
+    role: str,
+    raw_content_length: int,
+) -> ModelOutputNormalizationError:
+    return ModelOutputNormalizationError(
+        role=role,
+        error_code="model_output_too_deep",
+        message="Model output JSON nesting exceeded the safe depth limit.",
+        raw_content_length=raw_content_length,
+    )

@@ -205,7 +205,9 @@ class LLMHarnessReviewSubagent:
                 ),
                 raw_content_length=len(response.content),
             )
-        return decision
+        return decision.model_copy(
+            update={"review_id": f"review.{action.action_id}.{point.value}"}
+        )
 
 
 def _json_contract_fallback(value: Any) -> Any:
