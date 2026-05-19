@@ -31,6 +31,7 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
   const [conversation, setConversation] = useState<ConversationRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [input, setInput] = useState('')
   const [includeGovernanceDetails, setIncludeGovernanceDetails] = useState(false)
@@ -70,7 +71,7 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
     if (!conversation && !isNewChat) return
 
     const q = input
-    setInput('')
+    setSendError(null)
     setSending(true)
 
     try {
@@ -82,6 +83,7 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
       }
 
       const result = await createConversationRun(activeConversationId!, q, undefined, includeGovernanceDetails)
+      setInput('')
       onUpdate?.()
 
       // If this was a new chat, navigate to the real conversation
@@ -124,6 +126,9 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
       })
     } catch (err) {
       console.error('Failed to send message', err)
+      setSendError(
+        'Unable to send message. Check that the Proof Agent API server is running at http://127.0.0.1:8000, then try again.'
+      )
     } finally {
       setSending(false)
     }
@@ -307,7 +312,10 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
           <input
             type="text"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value)
+              if (sendError) setSendError(null)
+            }}
             placeholder="Type your question for the Assistant..."
             disabled={sending || loading}
             className="flex-1 bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-50 shadow-sm transition-all"
@@ -320,6 +328,11 @@ export function ChatPage({ onUpdate }: { onUpdate?: () => void }) {
             Ask
           </button>
         </div>
+        {sendError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            {sendError}
+          </div>
+        )}
         <label className="inline-flex items-center gap-2 text-xs font-medium text-[var(--text-muted)]">
           <input
             type="checkbox"

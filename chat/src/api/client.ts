@@ -55,9 +55,49 @@ export function createConversationRun(
   approved?: boolean,
   includeGovernanceDetails = false
 ): Promise<import('./types').ChatRunResponse> {
-  return fetchJson<import('./types').ChatRunResponse>(`${BASE}/chat/conversations/${conversationId}/runs`, {
+  const url = `${BASE}/chat/conversations/${conversationId}/runs`
+  const body: {
+    question: string
+    approved?: boolean
+    include_governance_details?: boolean
+  } = { question }
+  if (approved !== undefined) {
+    body.approved = approved
+  }
+  if (includeGovernanceDetails) {
+    body.include_governance_details = true
+  }
+
+  const options = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, approved, include_governance_details: includeGovernanceDetails })
+    body: JSON.stringify(body)
+  }
+
+  return fetchJson<import('./types').ChatRunResponse>(url, options).catch((err: unknown) => {
+    if (!includeGovernanceDetails || !isUnsupportedGovernanceDetailsRequest(err)) {
+      throw err
+    }
+    const fallbackBody: {
+      question: string
+      approved?: boolean
+    } = { question }
+    if (approved !== undefined) {
+      fallbackBody.approved = approved
+    }
+    return fetchJson<import('./types').ChatRunResponse>(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fallbackBody),
+    })
   })
+}
+
+function isUnsupportedGovernanceDetailsRequest(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes('422') &&
+    err.message.includes('extra_forbidden') &&
+    err.message.includes('include_governance_details')
+  )
 }
