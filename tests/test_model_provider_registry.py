@@ -3,6 +3,7 @@ import pytest
 from proof_agent.contracts import ModelConfig, ModelMessage, ModelRequest, ModelRole
 from proof_agent.errors import ProofAgentError
 from proof_agent.capabilities.models import resolve_provider
+from proof_agent.capabilities.models.openai_compatible import OpenAICompatibleModelProvider
 
 
 def test_resolve_deterministic_provider_generates_response() -> None:
@@ -39,3 +40,25 @@ def test_unsupported_provider_raises_model_error() -> None:
         resolve_provider(ModelConfig(provider="unknown", name="demo"))
 
     assert exc.value.code == "PA_MODEL_001"
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "model_name", "api_key_env"),
+    [
+        ("openai", "gpt-4.1-mini", "OPENAI_API_KEY"),
+        ("deepseek", "deepseek-v4-flash", "DEEPSEEK_API_KEY"),
+    ],
+)
+def test_named_openai_compatible_providers_resolve_through_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+    model_name: str,
+    api_key_env: str,
+) -> None:
+    monkeypatch.setenv(api_key_env, "test-key")
+
+    provider = resolve_provider(ModelConfig(provider=provider_name, name=model_name))
+
+    assert isinstance(provider, OpenAICompatibleModelProvider)
+    assert provider.provider_name == provider_name
+    assert provider.model_name == model_name

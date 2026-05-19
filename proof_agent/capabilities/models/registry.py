@@ -12,4 +12,6 @@ PROVIDER_MAP: dict[str, type[ModelProvider]] = {
     "openai_compatible": OpenAICompatibleModelProvider,
     "azure_openai": AzureOpenAIPlaceholderProvider,
     "anthropic": AnthropicPlaceholderProvider,
+    "openai": OpenAICompatibleModelProvider,
+    "deepseek": OpenAICompatibleModelProvider,
 }

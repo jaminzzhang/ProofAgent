@@ -8,10 +8,22 @@ from proof_agent.contracts.manifest import ModelConfig
 from proof_agent.errors import ProofAgentError
 
 
+_DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
+_PROVIDER_DEFAULTS: dict[str, dict[str, str | None]] = {
+    "openai_compatible": {"api_key_env": _DEFAULT_API_KEY_ENV, "base_url": None},
+    "openai": {"api_key_env": _DEFAULT_API_KEY_ENV, "base_url": None},
+    "deepseek": {
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com",
+    },
+}
+
+
 class OpenAICompatibleModelProvider:
     def __init__(
         self,
         *,
+        provider_name: str = "openai_compatible",
         model_name: str,
         api_key: str,
         base_url: str | None = None,
@@ -21,6 +33,7 @@ class OpenAICompatibleModelProvider:
         default_temperature: float | None = None,
         default_max_output_tokens: int | None = None,
     ) -> None:
+        self._provider_name = provider_name
         self._model_name = model_name
         self._api_key = api_key
         self._base_url = base_url
@@ -50,7 +63,11 @@ class OpenAICompatibleModelProvider:
                 f"unsupported openai_compatible param(s): {', '.join(unsupported)}",
                 "Use only documented model.params keys for openai_compatible.",
             )
-        api_key_env = str(params.get("api_key_env", "OPENAI_API_KEY"))
+        provider_defaults = _PROVIDER_DEFAULTS.get(
+            model_config.provider,
+            _PROVIDER_DEFAULTS["openai_compatible"],
+        )
+        api_key_env = str(params.get("api_key_env", provider_defaults["api_key_env"]))
         api_key = os.environ.get(api_key_env)
         if not api_key:
             raise ProofAgentError(
@@ -58,16 +75,14 @@ class OpenAICompatibleModelProvider:
                 f"missing API key environment variable: {api_key_env}",
                 f"Set {api_key_env} or switch model.provider to deterministic.",
             )
-        base_url = params.get("base_url")
-        base_url_env = params.get("base_url_env")
-        if base_url_env and not base_url:
-            base_url = os.environ.get(str(base_url_env))
+        base_url = _base_url_from_params(params, provider_defaults["base_url"])
         organization = _env_value(params.get("organization_env"))
         project = _env_value(params.get("project_env"))
         timeout_seconds = (
             float(params["timeout_seconds"]) if "timeout_seconds" in params else None
         )
         return cls(
+            provider_name=model_config.provider,
             model_name=model_config.name,
             api_key=api_key,
             base_url=str(base_url) if base_url else None,
@@ -84,7 +99,7 @@ class OpenAICompatibleModelProvider:
 
     @property
     def provider_name(self) -> str:
-        return "openai_compatible"
+        return self._provider_name
 
     @property
     def model_name(self) -> str:
@@ -181,3 +196,14 @@ def _env_value(env_name: Any) -> str | None:
     if not env_name:
         return None
     return os.environ.get(str(env_name))
+
+
+def _base_url_from_params(
+    params: dict[str, Any],
+    default_base_url: str | None,
+) -> str | None:
+    if "base_url" in params:
+        return str(params["base_url"]) if params["base_url"] else None
+    if "base_url_env" in params:
+        return os.environ.get(str(params["base_url_env"]))
+    return default_base_url

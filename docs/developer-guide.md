@@ -109,7 +109,7 @@ Core boundaries:
 | Runtime config | `workflow.runtime: langgraph`; Enterprise QA and Controlled ReAct Enterprise QA run through LangGraph `StateGraph` templates using composed Harness dependencies |
 | Knowledge | `knowledge.provider: local_markdown`, local Markdown retrieval |
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
-| Model | `deterministic` and `openai_compatible` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
+| Model | `deterministic`, `openai_compatible`, `openai`, and `deepseek` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
 | Policy | `before_retrieval`, `before_retrieval_plan`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
 | Tools / MCP | ToolGateway, mock `customer_lookup`, approval state; real MCP transport is the extension direction |
 | Memory | `memory.provider: session`, with sensitive field denylist |
@@ -173,7 +173,7 @@ Current v1 config constraints:
 - `knowledge.provider` must be one of `local_markdown`, `local_vector`, `remote_search`, or `pageindex`.
 - `retrieval.strategy` supports `single_step` and `agentic`.
 - `memory.provider` must be `session`.
-- `model.provider` supports `deterministic`, `openai_compatible`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
+- `model.provider` supports `deterministic`, `openai_compatible`, `openai`, `deepseek`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
 - `policy.file`, `tools.file`, and provider-specific paths under `knowledge.params` must exist.
 - The parent directories of `audit.trace_path` and `audit.receipt_path` must be writable.
 
@@ -237,6 +237,20 @@ model:
     max_output_tokens: 800
     timeout_seconds: 30
 ```
+
+OpenAI-compatible named providers reuse the same adapter with provider-specific defaults:
+
+```yaml
+model:
+  provider: deepseek
+  name: deepseek-v4-flash
+  params:
+    api_key_env: DEEPSEEK_API_KEY
+    temperature: 0
+    max_output_tokens: 800
+```
+
+`deepseek` defaults to `DEEPSEEK_API_KEY` and `https://api.deepseek.com`; set `base_url` or `base_url_env` only when routing through a compatible proxy.
 
 ### Configuring LLM-Backed Planning And Review
 

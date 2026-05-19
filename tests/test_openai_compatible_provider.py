@@ -229,3 +229,148 @@ def test_openai_compatible_provider_requires_api_key_env(monkeypatch: pytest.Mon
 
     assert exc.value.code == "PA_MODEL_003"
     assert "MISSING_OPENAI_KEY" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "model_name", "api_key_env", "base_url"),
+    [
+        ("openai", "gpt-4.1-mini", "OPENAI_API_KEY", None),
+        ("deepseek", "deepseek-v4-flash", "DEEPSEEK_API_KEY", "https://api.deepseek.com"),
+    ],
+)
+def test_openai_compatible_named_provider_aliases_use_provider_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+    model_name: str,
+    api_key_env: str,
+    base_url: str | None,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            calls["client"] = kwargs
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create),
+            )
+
+        def _create(self, **payload: object) -> object:
+            calls["payload"] = payload
+            return SimpleNamespace(
+                id="chatcmpl_alias",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="answer"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            APIError=RuntimeError,
+            APITimeoutError=TimeoutError,
+            AuthenticationError=PermissionError,
+            OpenAI=FakeOpenAI,
+        ),
+    )
+    monkeypatch.setenv(api_key_env, "test-key")
+
+    provider = OpenAICompatibleModelProvider.from_config(
+        ModelConfig(provider=provider_name, name=model_name)
+    )
+    response = provider.generate(
+        ModelRequest(
+            provider=provider_name,
+            model=model_name,
+            messages=(ModelMessage(role=ModelRole.USER, content="user"),),
+        )
+    )
+
+    assert provider.provider_name == provider_name
+    assert provider.model_name == model_name
+    assert response.provider_name == provider_name
+    assert calls["client"]["api_key"] == "test-key"
+    assert calls["client"]["base_url"] == base_url
+
+
+def test_deepseek_provider_alias_allows_base_url_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            calls["client"] = kwargs
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create),
+            )
+
+        def _create(self, **payload: object) -> object:
+            return SimpleNamespace(
+                id="chatcmpl_alias",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="answer"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            APIError=RuntimeError,
+            APITimeoutError=TimeoutError,
+            AuthenticationError=PermissionError,
+            OpenAI=FakeOpenAI,
+        ),
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://deepseek-proxy.example/v1")
+
+    provider = OpenAICompatibleModelProvider.from_config(
+        ModelConfig(
+            provider="deepseek",
+            name="deepseek-v4-pro",
+            params={"base_url_env": "DEEPSEEK_BASE_URL"},
+        )
+    )
+    provider.generate(
+        ModelRequest(
+            provider="deepseek",
+            model="deepseek-v4-pro",
+            messages=(ModelMessage(role=ModelRole.USER, content="user"),),
+        )
+    )
+
+    assert calls["client"]["base_url"] == "https://deepseek-proxy.example/v1"
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "model_name", "api_key_env"),
+    [
+        ("openai", "gpt-4.1-mini", "OPENAI_API_KEY"),
+        ("deepseek", "deepseek-v4-flash", "DEEPSEEK_API_KEY"),
+    ],
+)
+def test_named_provider_aliases_require_their_default_api_key_env(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+    model_name: str,
+    api_key_env: str,
+) -> None:
+    monkeypatch.delenv(api_key_env, raising=False)
+
+    with pytest.raises(ProofAgentError) as exc:
+        OpenAICompatibleModelProvider.from_config(
+            ModelConfig(provider=provider_name, name=model_name)
+        )
+
+    assert exc.value.code == "PA_MODEL_003"
+    assert api_key_env in exc.value.message

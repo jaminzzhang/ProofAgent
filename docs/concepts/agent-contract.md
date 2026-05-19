@@ -108,6 +108,8 @@ The supported v1 model providers are:
 
 - `deterministic`: local demo provider, no SDK or API key required.
 - `openai_compatible`: Chat Completions-compatible remote provider.
+- `openai`: OpenAI-compatible named provider with `OPENAI_API_KEY` default.
+- `deepseek`: OpenAI-compatible named provider with `DEEPSEEK_API_KEY` and `https://api.deepseek.com` defaults.
 - `azure_openai`: configuration contract and validation placeholder only.
 - `anthropic`: configuration contract and validation placeholder only.
 

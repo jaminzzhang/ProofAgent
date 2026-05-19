@@ -82,6 +82,7 @@ def doctor() -> None:
         ("Docker", "available" if which("docker") else "not found"),
         ("deterministic provider", "ready"),
         ("openai_compatible env", _optional_env_status(("OPENAI_API_KEY", "OPENAI_BASE_URL"))),
+        ("deepseek env", _optional_env_status(("DEEPSEEK_API_KEY",))),
         (
             "azure_openai placeholder env",
             _optional_env_status(("AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT")),

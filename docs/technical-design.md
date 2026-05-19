@@ -180,7 +180,7 @@ Layer boundary rules:
 | Runtime | `runtime/langgraph_runner.py` executes supported `StateGraph` templates through resolved Harness dependencies |
 | Policy | `control/policy/` owns retrieval, ReAct review, answer, tool, memory, and model call enforcement points |
 | Knowledge | `capabilities/knowledge/` owns Markdown deterministic retrieval; vector stack optional |
-| Model | `capabilities/models/` owns `deterministic`, `openai_compatible`; Azure/Anthropic placeholders |
+| Model | `capabilities/models/` owns `deterministic`, `openai_compatible`, `openai`, `deepseek`; Azure/Anthropic placeholders |
 | Tools | `capabilities/tools/` owns ToolGateway, mock `customer_lookup`, approval state |
 | Memory | `capabilities/memory/` owns session memory with denylist |
 | Validators | `control/validators/` owns schema, evidence, safety, citations, tool result |
@@ -621,6 +621,8 @@ Providers:
 | --- | --- |
 | `deterministic` | implemented regression baseline |
 | `openai_compatible` | implemented optional remote provider |
+| `openai` | implemented OpenAI-compatible named alias with `OPENAI_API_KEY` default |
+| `deepseek` | implemented OpenAI-compatible named alias with `DEEPSEEK_API_KEY` and `https://api.deepseek.com` defaults |
 | `azure_openai` | placeholder with clear failure |
 | `anthropic` | placeholder with clear failure |
 
