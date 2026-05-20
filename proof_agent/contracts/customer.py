@@ -52,7 +52,7 @@ class CustomerSafeSource(FrozenModel):
 class CustomerSafeResponse(FrozenModel):
     """Customer-facing response projection returned by Customer Run API."""
 
-    progress_state: CustomerRunProgressState
+    progress_state: CustomerRunProgressState = CustomerRunProgressState.COMPLETED
     message: str
     safe_sources: tuple[str | CustomerSafeSource, ...] = Field(default_factory=tuple)
     suggested_next_steps: tuple[str, ...] = Field(default_factory=tuple)

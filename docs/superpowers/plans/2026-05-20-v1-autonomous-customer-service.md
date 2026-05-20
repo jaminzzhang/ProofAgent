@@ -698,7 +698,7 @@ git commit -m "feat: add insurance read tools"
 - Create: `proof_agent/control/validators/customer_response.py`
 - Test: `tests/test_customer_response_validator.py`
 
-- [ ] **Step 1: Write failing validator tests**
+- [x] **Step 1: Write failing validator tests**
 
 Create `tests/test_customer_response_validator.py`:
 
@@ -729,7 +729,7 @@ def test_customer_response_accepts_safe_source_names() -> None:
     assert result.status == "passed"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -739,7 +739,7 @@ uv run --extra dev python -m pytest tests/test_customer_response_validator.py -v
 
 Expected: FAIL because validator does not exist.
 
-- [ ] **Step 3: Implement conservative validator**
+- [x] **Step 3: Implement conservative validator**
 
 Create `proof_agent/control/validators/customer_response.py`:
 
@@ -777,7 +777,7 @@ def validate_customer_safe_response(response: CustomerSafeResponse) -> Validatio
     )
 ```
 
-- [ ] **Step 4: Run validator tests**
+- [x] **Step 4: Run validator tests**
 
 Run:
 
@@ -787,7 +787,7 @@ uv run --extra dev python -m pytest tests/test_customer_response_validator.py -v
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add proof_agent/control/validators/customer_response.py tests/test_customer_response_validator.py
