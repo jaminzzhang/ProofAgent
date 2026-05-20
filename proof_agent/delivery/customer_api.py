@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
@@ -20,6 +21,7 @@ from proof_agent.contracts import (
     CustomerResponseSnapshot,
     CustomerSafeResponse,
     CustomerSessionType,
+    HandoffReason,
     ValidationStatus,
 )
 from proof_agent.contracts.dashboard import RunDetail
@@ -29,6 +31,7 @@ from proof_agent.control.customer import (
     extract_policy_id,
     is_claim_status_question,
     is_policy_status_question,
+    is_transactional_customer_action,
     load_mock_customer_context,
     require_claim_access,
     require_policy_access,
@@ -37,6 +40,7 @@ from proof_agent.control.validators.customer_response import validate_customer_s
 from proof_agent.delivery.api import _execute_published_agent_run
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.observability.storage.customer_store import CustomerStore
+from proof_agent.observability.storage.run_store import RunStore
 
 
 router = APIRouter(tags=["customer"])
@@ -125,6 +129,35 @@ def create_customer_run(
         )
 
     manifest_path = published_agent.manifest_path
+    if is_transactional_customer_action(request.question):
+        result, detail, _ = _execute_published_agent_run(
+            app_request=app_request,
+            manifest_path=manifest_path,
+            question=request.question,
+            approved=None,
+        )
+        _append_customer_handoff_event(
+            app_request=app_request,
+            detail=cast(RunDetail, detail),
+            conversation=conversation,
+            reason=HandoffReason.TRANSACTIONAL_ACTION_REQUESTED,
+            question=request.question,
+        )
+        safe_response = CustomerSafeResponse(
+            message=(
+                "I can help with read-only policy and claim questions here, "
+                "but I can't make account changes in this chat."
+            ),
+        )
+        return _store_customer_response(
+            app_request=app_request,
+            conversation=conversation,
+            safe_response=safe_response,
+            run_id=str(detail.run_id),
+            created_at=str(detail.updated_at),
+            question=request.question,
+        )
+
     safe_preflight_response = _customer_resource_response(
         manifest_path=manifest_path,
         question=request.question,
@@ -314,6 +347,55 @@ def _store_customer_response(
     return payload
 
 
+def _append_customer_handoff_event(
+    *,
+    app_request: Request,
+    detail: RunDetail,
+    conversation: CustomerConversationRecord,
+    reason: HandoffReason,
+    question: str,
+) -> None:
+    trace_path = _get_run_store(app_request).history_dir / detail.run_id / "trace.jsonl"
+    if not trace_path.exists():
+        return
+    event = {
+        "schema_version": "trace.v1",
+        "run_id": detail.run_id,
+        "event_id": f"evt_handoff_{uuid4().hex[:8]}",
+        "sequence": _next_trace_sequence(trace_path),
+        "timestamp": _now(),
+        "event_type": "customer_handoff_created",
+        "span_id": "span_customer_handoff",
+        "status": "ok",
+        "payload": {
+            "handoff_id": f"handoff_{uuid4().hex[:8]}",
+            "conversation_id": conversation.conversation_id,
+            "reason": reason.value,
+            "question_summary": question,
+            "summary": "Customer requested an account-changing action in read-only chat.",
+            "customer_ref": conversation.customer_ref,
+        },
+        "redaction": {"applied": False, "fields": []},
+    }
+    with trace_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True))
+        handle.write("\n")
+
+
+def _next_trace_sequence(trace_path: Path) -> int:
+    sequence = 0
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            sequence = max(sequence, int(value.get("sequence") or 0))
+    return sequence + 1
+
+
 @router.post("/customer/conversations/{conversation_id}/turns/{turn_id}/feedback")
 def record_customer_feedback(
     conversation_id: str,
@@ -391,6 +473,10 @@ def _require_customer_conversation(
 
 def _get_customer_store(request: Request) -> CustomerStore:
     return cast(CustomerStore, request.app.state.customer_store)
+
+
+def _get_run_store(request: Request) -> RunStore:
+    return cast(RunStore, request.app.state.store)
 
 
 def _get_published_agents(request: Request) -> PublishedAgentRegistry:

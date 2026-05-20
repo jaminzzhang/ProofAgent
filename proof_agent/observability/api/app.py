@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.customer_api import router as customer_router
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
-from proof_agent.observability.api.routers import health, runs, stats
+from proof_agent.observability.api.routers import handoffs, health, runs, stats
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.customer_store import CustomerStore
 from proof_agent.observability.storage.run_store import RunStore
@@ -70,6 +70,7 @@ def create_app(
     application.include_router(customer_router, prefix="/api")
     application.include_router(runs.router, prefix="/api")
     application.include_router(stats.router, prefix="/api")
+    application.include_router(handoffs.router, prefix="/api")
     application.include_router(health.router, prefix="/api")
 
     # Mount the built frontend SPA as a catch-all fallback.

@@ -82,6 +82,22 @@ def is_claim_status_question(question: str) -> bool:
     )
 
 
+def is_transactional_customer_action(question: str) -> bool:
+    """Detect V1 account-changing requests that require internal follow-up only."""
+
+    normalized = question.lower()
+    transactional_terms = (
+        "cancel my policy",
+        "cancel policy",
+        "change my policy",
+        "update my policy",
+        "submit a claim",
+        "submit claim",
+        "approve my claim",
+    )
+    return any(term in normalized for term in transactional_terms)
+
+
 def extract_policy_id(question: str) -> str | None:
     match = _POLICY_ID_RE.search(question)
     return match.group(0).upper() if match else None

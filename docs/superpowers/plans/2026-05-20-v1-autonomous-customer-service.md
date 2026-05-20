@@ -1406,7 +1406,7 @@ git commit -m "feat: store customer response snapshots"
 - Modify: `proof_agent/observability/api/app.py`
 - Test: `tests/test_customer_handoff_projection.py`
 
-- [ ] **Step 1: Add failing API test**
+- [x] **Step 1: Add failing API test**
 
 Add to `tests/test_customer_handoff_projection.py`:
 
@@ -1439,7 +1439,7 @@ def test_handoff_api_lists_handoffs(tmp_path):
     assert response.json()["data"]
 ```
 
-- [ ] **Step 2: Run test and verify failure**
+- [x] **Step 2: Run test and verify failure**
 
 Run:
 
@@ -1449,7 +1449,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_handof
 
 Expected: FAIL because `/api/handoffs` does not exist.
 
-- [ ] **Step 3: Implement router**
+- [x] **Step 3: Implement router**
 
 Create `proof_agent/observability/api/routers/handoffs.py`:
 
@@ -1477,7 +1477,7 @@ def list_handoffs(request: Request) -> dict[str, object]:
 
 Mount in `observability/api/app.py`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -1487,7 +1487,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_handof
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add proof_agent/observability/api/routers/handoffs.py proof_agent/observability/api/app.py tests/test_customer_handoff_projection.py
