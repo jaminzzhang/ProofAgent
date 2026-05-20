@@ -1881,7 +1881,7 @@ git commit -m "docs: document autonomous customer service v1"
 **Files:**
 - No new source files unless fixing verification failures.
 
-- [ ] **Step 1: Run Python tests**
+- [x] **Step 1: Run Python tests**
 
 Run:
 
@@ -1891,7 +1891,7 @@ uv run --extra dev python -m pytest tests/ -v
 
 Expected: PASS.
 
-- [ ] **Step 2: Run Ruff**
+- [x] **Step 2: Run Ruff**
 
 Run:
 
@@ -1901,7 +1901,7 @@ uv run --extra dev ruff check proof_agent tests
 
 Expected: PASS.
 
-- [ ] **Step 3: Run mypy**
+- [x] **Step 3: Run mypy**
 
 Run:
 
@@ -1911,7 +1911,7 @@ uv run --extra dev mypy proof_agent
 
 Expected: PASS.
 
-- [ ] **Step 4: Run deterministic demos**
+- [x] **Step 4: Run deterministic demos**
 
 Run:
 
@@ -1922,7 +1922,7 @@ uv run --extra dev --extra dashboard proof-agent react-demo
 
 Expected: existing deterministic outcomes remain stable.
 
-- [ ] **Step 5: Build frontends**
+- [x] **Step 5: Build frontends**
 
 Run:
 
@@ -1933,7 +1933,7 @@ cd ../customer && npm run build
 
 Expected: PASS.
 
-- [ ] **Step 6: Run customer journey suite**
+- [x] **Step 6: Run customer journey suite**
 
 Run:
 
@@ -1943,7 +1943,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_journe
 
 Expected: PASS.
 
-- [ ] **Step 7: Final diff review**
+- [x] **Step 7: Final diff review**
 
 Run:
 
@@ -1955,7 +1955,7 @@ git diff --check
 
 Expected: only intentional files changed, no whitespace errors.
 
-- [ ] **Step 8: Commit final fixes if needed**
+- [x] **Step 8: Commit final fixes if needed**
 
 ```bash
 git add <changed-files>
