@@ -801,7 +801,7 @@ git commit -m "feat: validate customer safe responses"
 - Modify: `proof_agent/contracts/trace.py` if trace constants are centralized.
 - Test: `tests/test_customer_handoff_projection.py`
 
-- [ ] **Step 1: Write failing projection tests**
+- [x] **Step 1: Write failing projection tests**
 
 Create `tests/test_customer_handoff_projection.py`:
 
@@ -830,7 +830,7 @@ def test_extract_handoff_projection_from_trace_events() -> None:
     assert handoffs[0].reason.value == "insufficient_evidence"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -840,7 +840,7 @@ uv run --extra dev python -m pytest tests/test_customer_handoff_projection.py -v
 
 Expected: FAIL because projection module does not exist.
 
-- [ ] **Step 3: Implement projection extractor**
+- [x] **Step 3: Implement projection extractor**
 
 Create `proof_agent/observability/storage/handoff_projection.py`:
 
@@ -875,7 +875,7 @@ def extract_handoffs(events: Sequence[Mapping[str, Any]]) -> tuple[HandoffProjec
     return tuple(projections)
 ```
 
-- [ ] **Step 4: Run projection tests**
+- [x] **Step 4: Run projection tests**
 
 Run:
 
@@ -885,7 +885,7 @@ uv run --extra dev python -m pytest tests/test_customer_handoff_projection.py -v
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add proof_agent/observability/storage/handoff_projection.py tests/test_customer_handoff_projection.py

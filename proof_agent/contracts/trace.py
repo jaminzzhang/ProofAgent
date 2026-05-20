@@ -32,6 +32,7 @@ class TraceEventType(str, Enum):
     APPROVAL_GRANTED = "approval_granted"
     APPROVAL_DENIED = "approval_denied"
     APPROVAL_TIMEOUT = "approval_timeout"
+    CUSTOMER_HANDOFF_CREATED = "customer_handoff_created"
     TOOL_REQUEST = "tool_request"
     TOOL_RESULT = "tool_result"
     MEMORY_READ = "memory_read"

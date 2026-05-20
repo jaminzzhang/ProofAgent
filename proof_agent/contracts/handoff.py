@@ -13,7 +13,13 @@ class HandoffReason(str, Enum):
     """Stable internal reasons for customer-service follow-up."""
 
     TRANSACTIONAL_ACTION_REQUESTED = "transactional_action_requested"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     CROSS_CUSTOMER_ACCESS_ATTEMPT = "cross_customer_access_attempt"
+    AUTHORIZATION_REQUIRED = "authorization_required"
+    TOOL_FAILURE = "tool_failure"
+    RETRIEVAL_FAILURE = "retrieval_failure"
+    MODEL_OUTPUT_VALIDATION_FAILED = "model_output_validation_failed"
+    HIGH_RISK_COMMITMENT_REQUESTED = "high_risk_commitment_requested"
     LOW_CONFIDENCE = "low_confidence"
     POLICY_GAP = "policy_gap"
     CUSTOMER_REQUESTED_FOLLOW_UP = "customer_requested_follow_up"
@@ -50,6 +56,7 @@ class HandoffProjection(FrozenModel):
     turn_id: str
     reason: HandoffReason
     created_at: str
-    summary: str
+    question_summary: str = ""
+    summary: str = ""
     customer_ref: str | None = None
     status: Literal["open", "reviewing", "closed"] = "open"
