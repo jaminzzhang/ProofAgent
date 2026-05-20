@@ -1086,7 +1086,7 @@ git commit -m "feat: add insurance customer service agent"
 - Create or modify: `proof_agent/observability/storage/customer_store.py`
 - Test: `tests/test_customer_run_api.py`
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
 Create `tests/test_customer_run_api.py`:
 
@@ -1141,7 +1141,7 @@ def test_customer_conversation_rejects_unknown_agent(tmp_path):
     assert response.status_code == 404
 ```
 
-- [ ] **Step 2: Run test to verify route is missing**
+- [x] **Step 2: Run test to verify route is missing**
 
 Run:
 
@@ -1151,7 +1151,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_run_ap
 
 Expected: FAIL with 404 for `/api/customer/conversations`.
 
-- [ ] **Step 3: Implement customer API skeleton**
+- [x] **Step 3: Implement customer API skeleton**
 
 Create `proof_agent/delivery/customer_api.py` with FastAPI router. Reuse `PublishedAgentRegistry`, `RunStore`, and `ConversationStore` where possible. The first implementation may call `run_with_langgraph` similarly to `delivery/api.py`, then convert `RunDetail` into `CustomerSafeResponse`.
 
@@ -1169,7 +1169,7 @@ Minimum response shape:
 
 Do not include internal links or governance details.
 
-- [ ] **Step 4: Mount router**
+- [x] **Step 4: Mount router**
 
 Modify `proof_agent/observability/api/app.py`:
 
@@ -1179,7 +1179,7 @@ from proof_agent.delivery.customer_api import router as customer_router
 application.include_router(customer_router, prefix="/api")
 ```
 
-- [ ] **Step 5: Run API tests**
+- [x] **Step 5: Run API tests**
 
 Run:
 
@@ -1189,7 +1189,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_run_ap
 
 Expected: PASS.
 
-- [ ] **Step 6: Run existing execution API regression tests**
+- [x] **Step 6: Run existing execution API regression tests**
 
 Run:
 
@@ -1199,7 +1199,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_run_execution_a
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add proof_agent/delivery/customer_api.py proof_agent/observability/api/app.py proof_agent/observability/storage/customer_store.py tests/test_customer_run_api.py

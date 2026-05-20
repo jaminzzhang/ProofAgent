@@ -9,9 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from proof_agent.delivery.api import router as execution_router
+from proof_agent.delivery.customer_api import router as customer_router
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.observability.api.routers import health, runs, stats
 from proof_agent.observability.storage.conversation_store import ConversationStore
+from proof_agent.observability.storage.customer_store import CustomerStore
 from proof_agent.observability.storage.run_store import RunStore
 
 
@@ -59,9 +61,13 @@ def create_app(
     application.state.store = store
     application.state.runs_dir = runs_dir
     application.state.conversation_store = ConversationStore(conversations_dir)
+    application.state.customer_store = CustomerStore(
+        conversations_dir.with_name(f"{conversations_dir.name}_customer")
+    )
     application.state.published_agents = PublishedAgentRegistry(published_agents)
 
     application.include_router(execution_router, prefix="/api")
+    application.include_router(customer_router, prefix="/api")
     application.include_router(runs.router, prefix="/api")
     application.include_router(stats.router, prefix="/api")
     application.include_router(health.router, prefix="/api")

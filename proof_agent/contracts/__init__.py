@@ -7,6 +7,7 @@ from proof_agent.contracts.conversation import (
 )
 from proof_agent.contracts.customer import (
     CustomerAuthorizationContext,
+    CustomerConversationRecord,
     CustomerFeedbackSignal,
     CustomerResponseSnapshot,
     CustomerRunProgressState,
@@ -71,6 +72,7 @@ __all__ = [
     "ConversationRecord",
     "ConversationTurn",
     "CustomerAuthorizationContext",
+    "CustomerConversationRecord",
     "CustomerFeedbackSignal",
     "CustomerHandoff",
     "CustomerResponseSnapshot",

@@ -71,6 +71,17 @@ class CustomerResponseSnapshot(FrozenModel):
     customer_ref: str | None = None
 
 
+class CustomerConversationRecord(FrozenModel):
+    """Customer-facing conversation metadata and safe response snapshots."""
+
+    conversation_id: str
+    agent_id: str
+    created_at: str
+    updated_at: str
+    customer_ref: str | None = None
+    snapshots: tuple[CustomerResponseSnapshot, ...] = Field(default_factory=tuple)
+
+
 class CustomerFeedbackSignal(FrozenModel):
     """Observation-only feedback from the customer Web Chat surface."""
 
