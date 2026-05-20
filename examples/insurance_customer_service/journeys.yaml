@@ -1,19 +1,50 @@
 journeys:
-  - journey_id: inpatient_claim_documents
-    customer_id: CUST-001
+  - id: anonymous_generic_claim_documents
+    customer_id: null
     question: "What documents are required for inpatient claim reimbursement?"
     expected:
-      outcome: ANSWERED_WITH_CITATIONS
-      safe_sources:
-        - claim-reimbursement-policy.md
-  - journey_id: own_policy_status
+      customer_safe: true
+      requires_authentication: false
+      has_safe_sources: true
+  - id: anonymous_policy_status_requires_auth
+    customer_id: null
+    question: "What is my policy status?"
+    expected:
+      customer_safe: true
+      requires_authentication: true
+  - id: authenticated_policy_status
     customer_id: CUST-001
     question: "What is the status of policy POL-001?"
     expected:
+      customer_safe: true
       tool: policy_status_lookup
-      policy_id: POL-001
-  - journey_id: cross_customer_policy_blocked
+  - id: cross_customer_policy_blocked
     customer_id: CUST-001
     question: "What is the status of policy POL-002?"
     expected:
+      customer_safe: true
       handoff_reason: cross_customer_access_attempt
+  - id: authenticated_claim_status
+    customer_id: CUST-001
+    question: "What is the status of claim CLM-001?"
+    expected:
+      customer_safe: true
+      tool: claim_status_lookup
+  - id: transactional_action_handoff
+    customer_id: CUST-001
+    question: "Cancel my policy now."
+    expected:
+      customer_safe: true
+      handoff_reason: transactional_action_requested
+  - id: chinese_happy_path
+    customer_id: null
+    question: "住院理赔需要哪些材料？"
+    expected:
+      customer_safe: true
+      language: zh
+  - id: english_happy_path
+    customer_id: null
+    question: "What documents are required for inpatient claim reimbursement?"
+    expected:
+      customer_safe: true
+      language: en

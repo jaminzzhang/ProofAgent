@@ -1500,7 +1500,7 @@ git commit -m "feat: expose internal handoff monitor api"
 - Create: `examples/insurance_customer_service/journeys.yaml`
 - Create: `tests/test_customer_journeys.py`
 
-- [ ] **Step 1: Create journey fixture**
+- [x] **Step 1: Create journey fixture**
 
 Create `examples/insurance_customer_service/journeys.yaml`:
 
@@ -1564,7 +1564,7 @@ journeys:
       language: en
 ```
 
-- [ ] **Step 2: Write journey runner test**
+- [x] **Step 2: Write journey runner test**
 
 Create `tests/test_customer_journeys.py`:
 
@@ -1611,7 +1611,7 @@ def test_customer_journey_acceptance_suite(tmp_path):
         assert "governance_details" not in body
 ```
 
-- [ ] **Step 3: Run journey tests**
+- [x] **Step 3: Run journey tests**
 
 Run:
 
@@ -1621,7 +1621,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_journe
 
 Expected: PASS after prior tasks are complete.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add examples/insurance_customer_service/journeys.yaml tests/test_customer_journeys.py

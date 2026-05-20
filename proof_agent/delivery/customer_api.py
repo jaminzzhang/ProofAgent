@@ -44,6 +44,7 @@ from proof_agent.observability.storage.run_store import RunStore
 
 
 router = APIRouter(tags=["customer"])
+CustomerResourceResponse = tuple[CustomerSafeResponse, HandoffReason | None]
 
 
 class CustomerConversationCreateRequest(BaseModel):
@@ -130,7 +131,7 @@ def create_customer_run(
 
     manifest_path = published_agent.manifest_path
     if is_transactional_customer_action(request.question):
-        result, detail, _ = _execute_published_agent_run(
+        _result, detail, _manifest = _execute_published_agent_run(
             app_request=app_request,
             manifest_path=manifest_path,
             question=request.question,
@@ -158,18 +159,37 @@ def create_customer_run(
             question=request.question,
         )
 
-    safe_preflight_response = _customer_resource_response(
+    resource_response = _customer_resource_response(
         manifest_path=manifest_path,
         question=request.question,
         conversation=conversation,
     )
-    if safe_preflight_response is not None:
+    if resource_response is not None:
+        safe_preflight_response, handoff_reason = resource_response
+        run_id = ""
+        created_at = _now()
+        if handoff_reason is not None:
+            _result, detail, _manifest = _execute_published_agent_run(
+                app_request=app_request,
+                manifest_path=manifest_path,
+                question=request.question,
+                approved=None,
+            )
+            _append_customer_handoff_event(
+                app_request=app_request,
+                detail=cast(RunDetail, detail),
+                conversation=conversation,
+                reason=handoff_reason,
+                question=request.question,
+            )
+            run_id = str(detail.run_id)
+            created_at = str(detail.updated_at)
         return _store_customer_response(
             app_request=app_request,
             conversation=conversation,
             safe_response=safe_preflight_response,
-            run_id="",
-            created_at=_now(),
+            run_id=run_id,
+            created_at=created_at,
             question=request.question,
         )
 
@@ -198,7 +218,7 @@ def _customer_resource_response(
     manifest_path: Path,
     question: str,
     conversation: CustomerConversationRecord,
-) -> CustomerSafeResponse | None:
+) -> CustomerResourceResponse | None:
     manifest = _load_manifest(manifest_path)
     if is_policy_status_question(question):
         context = _load_customer_context(manifest_path, conversation.customer_ref)
@@ -213,25 +233,34 @@ def _policy_status_response(
     manifest: AgentManifest,
     context: CustomerAuthorizationContext,
     question: str,
-) -> CustomerSafeResponse:
+) -> CustomerResourceResponse:
     if context.session_type != CustomerSessionType.AUTHENTICATED or context.customer_ref is None:
-        return CustomerSafeResponse(
-            message="Please sign in to view policy status for your account.",
+        return (
+            CustomerSafeResponse(
+                message="Please sign in to view policy status for your account.",
+            ),
+            None,
         )
 
     policy_id = extract_policy_id(question) or _single_resource_id(context.allowed_policy_ids)
     if policy_id is None:
-        return CustomerSafeResponse(
-            message="Please provide the policy number you want me to check.",
+        return (
+            CustomerSafeResponse(
+                message="Please provide the policy number you want me to check.",
+            ),
+            None,
         )
     try:
         require_policy_access(context, policy_id)
     except CustomerAccessError:
-        return CustomerSafeResponse(
-            message=(
-                "I can't access that policy from this signed-in session. "
-                "I can help with policy status for a policy on your account."
+        return (
+            CustomerSafeResponse(
+                message=(
+                    "I can't access that policy from this signed-in session. "
+                    "I can help with policy status for a policy on your account."
+                ),
             ),
+            HandoffReason.CROSS_CUSTOMER_ACCESS_ATTEMPT,
         )
 
     result = ToolGateway.from_file(manifest.tools.file).request_tool(
@@ -240,9 +269,12 @@ def _policy_status_response(
         approved=False,
     )
     status = str((result.result or {}).get("status") or "unknown")
-    return CustomerSafeResponse(
-        message=f"Your policy status is {status}.",
-        safe_sources=("policy_status_lookup",),
+    return (
+        CustomerSafeResponse(
+            message=f"Your policy status is {status}.",
+            safe_sources=("policy_status_lookup",),
+        ),
+        None,
     )
 
 
@@ -250,25 +282,34 @@ def _claim_status_response(
     manifest: AgentManifest,
     context: CustomerAuthorizationContext,
     question: str,
-) -> CustomerSafeResponse:
+) -> CustomerResourceResponse:
     if context.session_type != CustomerSessionType.AUTHENTICATED or context.customer_ref is None:
-        return CustomerSafeResponse(
-            message="Please sign in to view claim status for your account.",
+        return (
+            CustomerSafeResponse(
+                message="Please sign in to view claim status for your account.",
+            ),
+            None,
         )
 
     claim_id = extract_claim_id(question) or _single_resource_id(context.allowed_claim_ids)
     if claim_id is None:
-        return CustomerSafeResponse(
-            message="Please provide the claim number you want me to check.",
+        return (
+            CustomerSafeResponse(
+                message="Please provide the claim number you want me to check.",
+            ),
+            None,
         )
     try:
         require_claim_access(context, claim_id)
     except CustomerAccessError:
-        return CustomerSafeResponse(
-            message=(
-                "I can't access that claim from this signed-in session. "
-                "I can help with claim status for a claim on your account."
+        return (
+            CustomerSafeResponse(
+                message=(
+                    "I can't access that claim from this signed-in session. "
+                    "I can help with claim status for a claim on your account."
+                ),
             ),
+            HandoffReason.CROSS_CUSTOMER_ACCESS_ATTEMPT,
         )
 
     result = ToolGateway.from_file(manifest.tools.file).request_tool(
@@ -277,9 +318,12 @@ def _claim_status_response(
         approved=False,
     )
     status = str((result.result or {}).get("status") or "unknown")
-    return CustomerSafeResponse(
-        message=f"Your claim status is {status}.",
-        safe_sources=("claim_status_lookup",),
+    return (
+        CustomerSafeResponse(
+            message=f"Your claim status is {status}.",
+            safe_sources=("claim_status_lookup",),
+        ),
+        None,
     )
 
 
