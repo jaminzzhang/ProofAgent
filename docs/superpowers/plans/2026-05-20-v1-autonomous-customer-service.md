@@ -350,7 +350,7 @@ uv run --extra dev python -m pytest tests/test_contracts.py tests/test_dashboard
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add proof_agent/contracts/customer.py proof_agent/contracts/handoff.py proof_agent/contracts/__init__.py tests/test_customer_contracts.py
@@ -364,7 +364,7 @@ git commit -m "feat: add customer service contracts"
 - Create: `examples/insurance_customer_service/customers.yaml`
 - Test: `tests/test_customer_authorization.py`
 
-- [ ] **Step 1: Write failing authorization tests**
+- [x] **Step 1: Write failing authorization tests**
 
 Create `tests/test_customer_authorization.py`:
 
@@ -407,7 +407,7 @@ def test_cross_customer_claim_access_is_rejected() -> None:
         require_claim_access(context, "CLM-002")
 ```
 
-- [ ] **Step 2: Create customer fixture before running**
+- [x] **Step 2: Create customer fixture before running**
 
 Create `examples/insurance_customer_service/customers.yaml`:
 
@@ -427,7 +427,7 @@ customers:
       - CLM-002
 ```
 
-- [ ] **Step 3: Run test to verify helper import fails**
+- [x] **Step 3: Run test to verify helper import fails**
 
 Run:
 
@@ -437,7 +437,7 @@ uv run --extra dev python -m pytest tests/test_customer_authorization.py -v
 
 Expected: FAIL because `proof_agent.control.customer` does not exist.
 
-- [ ] **Step 4: Implement minimal authorization helpers**
+- [x] **Step 4: Implement minimal authorization helpers**
 
 Create `proof_agent/control/customer.py`:
 
@@ -496,7 +496,7 @@ def _require_authenticated(context: CustomerAuthorizationContext) -> None:
         raise CustomerAccessError("authenticated customer session is required.")
 ```
 
-- [ ] **Step 5: Run authorization tests**
+- [x] **Step 5: Run authorization tests**
 
 Run:
 
@@ -506,7 +506,7 @@ uv run --extra dev python -m pytest tests/test_customer_authorization.py -v
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add proof_agent/control/customer.py examples/insurance_customer_service/customers.yaml tests/test_customer_authorization.py
