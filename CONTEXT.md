@@ -8,6 +8,10 @@ Proof Agent is a Controlled Agent Harness Framework for enterprise Agent deliver
 The product category for Proof Agent: a framework that governs Agent execution through an explicit Control Envelope.
 _Avoid_: Harness Agent framework, Agent wrapper
 
+**Agent Framework Deliverable**:
+The reusable Proof Agent framework surface shipped alongside reference Agents, including contracts, Workflow Templates, policy, tools, memory, trace, receipt, APIs, examples, and documentation.
+_Avoid_: Single chatbot app, one-off customer-service implementation
+
 **Control Envelope**:
 The enterprise control shell around an Agent run.
 _Avoid_: Wrapper, guardrail layer
@@ -148,6 +152,42 @@ _Avoid_: Trace storage toggle, raw debugging dump
 The Agent Contract policy that sets the maximum governance detail a backend response may expose.
 _Avoid_: Frontend-only visibility flag, unrestricted API projection
 
+**Customer-Safe Response Projection**:
+A customer-facing response shape that exposes only the governed reply, safe source references, clarification needs, or safe follow-up acknowledgement while hiding internal trace, receipt, policy, review, tool, and handoff details.
+_Avoid_: Governance Detail Projection, raw Run Detail, internal audit response
+
+**Customer-Facing Business Claim**:
+Any customer-visible statement about policy rules, coverage, status, timing, amount, eligibility, required action, or service next steps.
+_Avoid_: Greeting, clarification prompt, escalation notice
+
+**Safe Conversational Text**:
+Customer-facing text that contains no business claim, such as greetings, acknowledgements, clarification prompts, refusals, or escalation notices.
+_Avoid_: Unsupported policy explanation, unsupported service commitment
+
+**Customer Response Language Policy**:
+The customer-facing language rule that limits V1 replies to Chinese or English while preserving evidence and tool support requirements.
+_Avoid_: Unbounded multilingual support, free translation layer
+
+**Customer Journey Acceptance Suite**:
+A fixed set of customer-facing scenarios used to validate V1 autonomous service behavior across anonymous access, authenticated lookup, refusal, clarification, internal handoff, retrieval failure, and supported languages.
+_Avoid_: Single-question demo, ad hoc manual testing
+
+**Customer Feedback Signal**:
+A customer-provided thumbs up/down rating and optional comment attached to a conversation turn for internal observation only.
+_Avoid_: Training signal, automatic policy update, online learning input
+
+**Customer Response Snapshot**:
+The exact customer-visible response projection stored with a conversation turn and linked to the governed run that produced it.
+_Avoid_: Recomputed response, internal run detail, raw trace replay
+
+**Private Pilot Customer Service Bot**:
+The V1 release posture for autonomous customer service: a controlled enterprise pilot with limited users, fixed Published Agents, bounded knowledge, internal audit, and non-public-scale operations.
+_Avoid_: Public internet production bot, full contact-center platform
+
+**Customer Run Progress State**:
+A customer-safe execution status that describes the current governed stage without streaming unvalidated model content.
+_Avoid_: Token streaming, raw trace event stream, provider stream
+
 **ReAct Step Budget**:
 The configured upper bound on ReAct planning, retrieval, tool, and answer steps for one governed run.
 _Avoid_: Unlimited loop, best-effort loop
@@ -176,6 +216,10 @@ _Avoid_: Raw manifest, SDK runtime state
 A Delivery entry point that starts a governed Harness run from an application surface such as the Assisted QA Chat Frontend.
 _Avoid_: Dashboard read API, direct model endpoint
 
+**Customer Run API**:
+A customer-facing Delivery entry point that starts governed customer-service runs and returns Customer-Safe Response Projection values.
+_Avoid_: Internal Chat API, Dashboard read API, raw run execution response
+
 **Published Agent**:
 An approved Agent package exposed to application surfaces through a stable agent identifier.
 _Avoid_: Arbitrary manifest path, uploaded config
@@ -188,24 +232,136 @@ _Avoid_: Checkpoint resume, silent retry
 The first production-shaped Agent built with Proof Agent to validate governed enterprise question answering.
 _Avoid_: The framework, generic chatbot
 
+**Insurance Customer Service Agent**:
+The V1 customer-facing Published Agent for read-only insurance service automation.
+_Avoid_: Assisted insurance QA example, generic enterprise QA, direct claims decisioning
+
 **Assisted Service Mode**:
 An operating mode where the Agent produces governed answer suggestions for human staff rather than directly replying to end customers.
 _Avoid_: Fully autonomous customer service, direct customer chatbot
 
+**Autonomous Customer Service Mode**:
+An operating mode where the Agent sends governed replies directly to end customers through a customer-facing surface.
+_Avoid_: Assisted service mode, staff-only answer suggestion
+
 **Assisted QA Chat Frontend**:
 An operator-facing chat surface for submitting enterprise QA questions and reviewing governed answer suggestions, evidence, approval state, and audit links.
 _Avoid_: Direct customer chatbot, observability dashboard
+
+**Customer Service Chat Frontend**:
+A customer-facing chat surface that submits customer messages to a Published Agent and returns governed replies, refusals, clarification requests, or safe follow-up acknowledgements.
+_Avoid_: Assisted QA Chat Frontend, observability dashboard
+
+**Customer Service Web Chat**:
+The V1 Customer Service Chat Frontend delivered as a browser-based customer chat surface.
+_Avoid_: Omnichannel customer service, channel adapter
+
+**Text-Only Customer Intake**:
+The V1 customer-service input boundary where customers submit text messages but not files, images, audio, or other attachments.
+_Avoid_: Attachment analysis, customer document upload, OCR intake
+
+**Anonymous Customer Session**:
+A customer-facing conversation that is not bound to a verified customer identity and may only receive generic evidence-backed policy answers.
+_Avoid_: Authenticated customer session, staff conversation
+
+**Authenticated Customer Session**:
+A customer-facing conversation bound to a verified customer identity and an explicit authorization scope.
+_Avoid_: Anonymous customer session, raw login token
+
+**Customer Authorization Context**:
+The trace-safe customer identity and permission summary admitted into a customer-facing Harness run.
+_Avoid_: Raw identity token, customer profile dump, tool credential
+
+**Mock Authenticated Customer Session**:
+A deterministic V1 authentication stand-in that supplies a verified customer identity and authorization scope without integrating a production identity provider.
+_Avoid_: Production OAuth session, anonymous customer session, raw bearer token
+
+**Mock Customer Persona**:
+A deterministic customer identity and owned-resource fixture used to prove customer authorization behavior in V1.
+_Avoid_: Single hard-coded customer, production customer record
+
+**Cross-Customer Access Attempt**:
+A customer-facing request that tries to read another customer's account, policy, claim, or service data.
+_Avoid_: Valid customer lookup, generic policy question
+
+**Customer Identity Adapter**:
+A future adapter boundary that converts production identity-provider assertions into Customer Authorization Context.
+_Avoid_: Harness-owned OAuth flow, raw identity provider token
+
+**Read-Only Customer Service**:
+A customer-service scope where the Agent may answer questions and retrieve customer-specific facts but cannot change business state.
+_Avoid_: Transactional customer service, self-service operations
+
+**Customer-Specific Read Tool**:
+A governed tool that retrieves facts about the authenticated customer's own account, policy, claim, or service status without changing business state.
+_Avoid_: Write tool, transaction tool, generic knowledge retrieval
+
+**Policy-Authorized Read Tool**:
+A Customer-Specific Read Tool that PolicyEngine may allow automatically when customer identity, authorization scope, tool risk, and parameters satisfy V1 read-only rules.
+_Avoid_: Human-approved customer lookup, ungoverned tool call
+
+**Policy Status Lookup Tool**:
+A Policy-Authorized Read Tool that retrieves the authenticated customer's policy status without changing business state.
+_Avoid_: Generic customer lookup, policy modification tool
+
+**Claim Status Lookup Tool**:
+A Policy-Authorized Read Tool that retrieves the authenticated customer's claim status without changing business state or deciding claim outcome.
+_Avoid_: Claim submission tool, claim approval tool, payment commitment
+
+**Transactional Customer Action**:
+A customer-service action that changes business state, creates obligations, submits requests, modifies records, or makes payment or coverage commitments.
+_Avoid_: Read-only lookup, policy explanation
+
+**Customer Escalation Handoff**:
+An internal traceable follow-up record created when the Agent cannot safely complete a customer-facing run autonomously.
+_Avoid_: Customer-visible escalated-to-human outcome, real ticket creation, silent failure
+
+**Handoff-Safe Customer Wording**:
+Customer-facing text used when an internal handoff is created, phrased as a safe service acknowledgement or limitation without exposing internal escalation status.
+_Avoid_: Escalated to human, agent failed, internal queue status
+
+**Customer Handoff Event**:
+A trace event that records creation of an internal Customer Escalation Handoff without changing the customer-visible final outcome.
+_Avoid_: Final outcome, customer-visible escalation status, ticket event
+
+**Handoff Reason**:
+A fixed reason code explaining why a Customer Escalation Handoff was created.
+_Avoid_: Free-form handoff note, customer-visible explanation
+
+**Handoff Projection**:
+An internal Dashboard/RunStore read projection that shows Customer Escalation Handoff records for monitoring and run-detail drilldown.
+_Avoid_: Customer-Safe Response Projection, ticket workflow state
 
 **Controlled Conversation Context**:
 Conversation history admitted into a new Harness run only after policy, redaction, length, and relevance checks.
 _Avoid_: Raw transcript injection, unrestricted chat memory
 
 **Conversation Store**:
-The local conversation timeline store that links assisted chat turns to governed run artifacts.
+The local conversation timeline store that links chat turns to governed run artifacts.
 _Avoid_: RunStore, persistent enterprise memory
 
+**Customer Conversation Retention Policy**:
+The rule that limits how long customer-facing conversation text is kept for user experience and follow-up resolution.
+_Avoid_: Permanent customer transcript storage, audit retention policy
+
+**Audit Retention Boundary**:
+The separation between short-lived customer conversation text and longer-lived trace-safe run audit facts.
+_Avoid_: Raw transcript archive, unrestricted audit log
+
+**Internal Governance Dashboard**:
+The internal observability surface for inspecting governed runs, traces, receipts, stats, and escalation handoff records.
+_Avoid_: Customer Service Chat Frontend, customer response UI, full admin console
+
+**Internal Handoff Monitor**:
+The V1 dashboard projection for reviewing Customer Escalation Handoff records and drilling into their governed run details.
+_Avoid_: Ticket workflow, SLA queue, assignment console
+
+**Agent Control Platform Console**:
+A future administrative console for RBAC, tenant management, multi-Agent configuration, approval operations, and platform governance.
+_Avoid_: Internal Governance Dashboard, Customer Service Web Chat
+
 **Insurance Service QA Domain**:
-The first acceptance domain for the Enterprise QA Reference Agent, covering policy/process questions and governed customer policy-status lookup.
+The first customer-service domain for the Enterprise QA Reference Agent, covering insurance policy questions and authenticated read-only service lookups.
 _Avoid_: Generic enterprise QA, direct claims decisioning
 
 **Harness RAG**:
@@ -327,13 +483,18 @@ _Avoid_: Evidence content dump
 ## Relationships
 
 - Proof Agent is a **Controlled Agent Harness Framework**.
+- V1 ships both an **Agent Framework Deliverable** and the **Insurance Customer Service Agent** reference implementation.
+- The **Insurance Customer Service Agent** must validate the **Agent Framework Deliverable** without becoming the whole product.
 - An **Agent Contract** selects a **Workflow Template** for a run.
 - A **Controlled ReAct Workflow** is a **Workflow Template**.
 - The **React Enterprise QA Template** is separate from the existing **Enterprise QA Template** so deterministic Enterprise QA remains the regression baseline.
 - The **React Enterprise QA Template** must include a **Deterministic ReAct Demo** before remote model paths are required.
+- V1 **Autonomous Customer Service Mode** uses the **React Enterprise QA Template** as its primary customer-facing Workflow Template.
+- The existing **Enterprise QA Template** remains the deterministic regression baseline and compatibility path.
 - The **React Enterprise QA Template** uses a **ReAct Planner** configured by **ReAct Planner Config**.
 - A **LLM ReAct Planner** is a separate ReAct Planner implementation and must not replace the **Deterministic ReAct Demo** path.
 - A **LLM ReAct Planner** is the first LLM-backed implementation priority for **Business Agent AI Core**.
+- V1 **Autonomous Customer Service Mode** is real-LLM capable through configured model roles while the deterministic model, planner, and reviewer remain the release gate.
 - The **ReAct Planner**, **Harness Review Subagent**, and final answer model are separate roles even when a deterministic demo implementation shares local code.
 - **Business Agent AI Core** includes final answer generation and **ReAct Planner** behavior.
 - **Harness Decision Assistance** includes **Harness Review Subagent** behavior.
@@ -376,6 +537,16 @@ _Avoid_: Evidence content dump
 - `policy_decision` remains the final governance trace event after `PolicyEngine` validation.
 - Backend response settings may expose or hide **Governance Detail Projection**, but trace still records the full audit-safe facts.
 - **Response Detail Policy** sets the maximum **Governance Detail Projection** allowed for an Agent; API requests may request less detail but cannot exceed it.
+- A **Customer-Safe Response Projection** is required for **Customer Service Chat Frontend** responses and must not expose **Governance Detail Projection**, trace links, receipt links, internal policy decisions, review results, or raw tool parameters.
+- A **Customer-Safe Response Projection** must not expose **Customer Escalation Handoff** as an `ESCALATED_TO_HUMAN` customer-visible outcome.
+- Every **Customer-Facing Business Claim** must be supported by **Accepted Evidence** or an authorized read-only tool result.
+- **Safe Conversational Text** may appear without evidence only when it does not add business facts or commitments.
+- V1 uses a **Customer Response Language Policy** that supports Chinese and English customer replies only; other languages are future localization work.
+- V1 is accepted through a **Customer Journey Acceptance Suite**, not only through isolated single-question outcomes.
+- V1 may collect **Customer Feedback Signal** values for internal observation, but feedback must not automatically update models, policies, retrieval indexes, or future answers.
+- Each customer-facing turn stores a **Customer Response Snapshot** linked to the RunStore `run_id` for audit replay and complaint investigation.
+- V1 is released as a **Private Pilot Customer Service Bot**, not as a public internet production bot or full contact-center platform.
+- V1 customer-facing execution may expose **Customer Run Progress State** values but does not stream unvalidated model tokens.
 - V1 **Controlled ReAct Workflow** allows multi-step planning and retrieval, at most one governed tool call, and one final answer generation within a **ReAct Step Budget**.
 - V1 **React Enterprise QA Template** uses **Evidence-First ReAct**: retrieval is the default first executable action, clarification is allowed for underspecified questions, and tool proposals are allowed only when policy permits.
 - A **Controlled ReAct Workflow** cannot produce a direct final answer before evidence admission.
@@ -385,14 +556,42 @@ _Avoid_: Evidence content dump
 - An **Assisted QA Chat Frontend** submits questions through the **Run Execution API**.
 - A **Run Execution API** starts a **Published Agent** by agent identifier, not by arbitrary manifest path supplied by the frontend.
 - A **Run Execution API** starts Harness runs; Dashboard and receipt views remain read projections over run artifacts.
+- A **Customer Service Chat Frontend** submits customer messages through the **Customer Run API**, not through the internal chat execution response shape.
+- A **Customer Run API** starts governed Harness runs for a **Published Agent** while returning only **Customer-Safe Response Projection** values.
 - The first **Assisted QA Chat Frontend** uses an **Approval Continuation Run** after approval decisions rather than claiming durable checkpoint resume.
 - The first framework boundary pass should make **Harness Invocation** and **Workflow Template** reusable while preserving **Enterprise QA Reference Agent** behavior.
 - The **Enterprise QA Reference Agent** is built on the **Controlled Agent Harness Framework**.
-- The first **Enterprise QA Reference Agent** operates in **Assisted Service Mode**.
-- The first **Enterprise QA Reference Agent** includes an **Assisted QA Chat Frontend** to approximate real operator use.
+- The V1 **Enterprise QA Reference Agent** operates in **Autonomous Customer Service Mode**.
+- The V1 **Enterprise QA Reference Agent** includes a **Customer Service Chat Frontend** for direct end-customer use.
+- V1 delivers **Customer Service Web Chat** before adding channel adapters for messaging apps, email, mobile SDKs, or contact-center platforms.
+- V1 uses **Text-Only Customer Intake** and does not analyze customer-uploaded files or attachments.
+- **Assisted Service Mode** remains a supported product direction but is no longer the V1 default target.
+- An **Anonymous Customer Session** may ask generic policy questions but cannot access customer-specific tools, account facts, policy status, claim status, or personalized commitments.
+- An **Authenticated Customer Session** is required before any customer-specific answer or tool call can proceed.
+- **Customer Authorization Context** is admitted separately from **Controlled Conversation Context** and must not expose raw credentials to model prompts, trace, receipt, or tool parameters.
+- V1 may use a **Mock Authenticated Customer Session** to prove the authentication and authorization boundary without integrating production OAuth, OIDC, IAM, or SSO.
+- V1 requires at least two **Mock Customer Persona** fixtures so authorization isolation can be tested.
+- A **Cross-Customer Access Attempt** must be refused or escalated before a customer-specific read tool executes.
+- A **Customer Identity Adapter** is the future integration point for production identity providers.
+- V1 **Autonomous Customer Service Mode** is **Read-Only Customer Service**.
+- A **Customer-Specific Read Tool** requires an **Authenticated Customer Session** and **Customer Authorization Context**.
+- A **Policy-Authorized Read Tool** does not require human approval in V1 when PolicyEngine confirms it is authenticated, authorized, read-only, and parameter-bounded.
+- V1 customer-specific read scope includes **Policy Status Lookup Tool** and **Claim Status Lookup Tool**.
+- A **Transactional Customer Action** is out of V1 scope and must produce a governed refusal, clarification, or internal handoff rather than execution.
+- V1 records a **Customer Escalation Handoff** for internal follow-up monitoring instead of creating a ticket in a real CRM, helpdesk, or contact-center system.
+- A **Customer Escalation Handoff** is an internal operational fact, not a customer-visible final outcome.
+- Customer-visible responses for internal handoff cases use **Handoff-Safe Customer Wording**.
+- A **Customer Escalation Handoff** is recorded through a **Customer Handoff Event** and exposed internally through a **Handoff Projection**, not through the final outcome enum.
+- Each **Customer Handoff Event** uses a fixed **Handoff Reason** for trace, RunStore, Dashboard filtering, and acceptance tests.
 - The **Assisted QA Chat Frontend** uses **Controlled Conversation Context** for automatic multi-turn context injection.
 - A **Conversation Store** preserves chat timelines while each turn remains linked to a governed run in RunStore.
-- The first **Enterprise QA Reference Agent** targets the **Insurance Service QA Domain**.
+- V1 uses a **Customer Conversation Retention Policy** for short-lived customer chat text and an **Audit Retention Boundary** for longer-lived trace-safe run facts.
+- **RunStore** preserves governed run artifacts separately from the customer conversation timeline.
+- V1 keeps the existing dashboard role as an **Internal Governance Dashboard** and does not deliver an **Agent Control Platform Console**.
+- V1 includes an **Internal Handoff Monitor** for handoff visibility and run-detail drilldown, but not assignment, SLA, notification, or ticket workflow.
+- The **Insurance Customer Service Agent** is the V1 customer-facing Published Agent for the **Insurance Service QA Domain**.
+- The existing insurance service QA example remains a baseline and compatibility package rather than the V1 customer-facing Agent package.
+- The V1 **Enterprise QA Reference Agent** targets the **Insurance Service QA Domain** before broader industry templates.
 - Near-term delivery uses the **Enterprise QA Reference Agent** as the acceptance path while preserving framework-level boundaries.
 - A **Knowledge Provider** returns zero or more **Candidate Evidence** chunks.
 - A **Knowledge Provider Registry** resolves the selected **Knowledge Provider** before retrieval.
@@ -404,6 +603,7 @@ _Avoid_: Evidence content dump
 - An **Evidence Threshold** belongs to the **Retrieval Strategy**, not to a **Knowledge Provider**.
 - A **Local Markdown Provider**, a **Local Vector Provider**, and a **Remote Search Provider** are kinds of **Knowledge Provider**.
 - The **PageIndex Provider** is the first production-directed knowledge integration for the **Insurance Service QA Domain**.
+- V1 **Autonomous Customer Service Mode** keeps the **Local Markdown Provider** as the deterministic regression baseline and uses the **PageIndex Provider** as the production-directed customer-service knowledge path.
 - A **Remote Search Fixture Adapter** proves the Remote Search contract before production network integration.
 - A **Local Vector Provider** queries an existing index; **Vector Index Build** is a separate future lifecycle.
 - **Knowledge First Stage** delivers executable single-step retrieval and reserves **Agentic RAG** as a governed future workflow.
@@ -427,12 +627,15 @@ _Avoid_: Evidence content dump
 ## Flagged ambiguities
 
 - "Harness Agent framework" could mean the framework itself or an Agent built with it. Resolved: use **Controlled Agent Harness Framework** for the framework category.
+- "V1 deliverable" could mean only the customer-service bot or the reusable Agent framework plus reference Agent. Resolved: V1 includes an **Agent Framework Deliverable** and the **Insurance Customer Service Agent**.
 - "Workflow" could mean business flow, runtime graph mechanics, or a hard-coded orchestrator branch. Resolved: use **Workflow Template** for the governed flow shape, and keep runtime mechanics separate.
 - "ReAct framework" could mean an autonomous model-driven agent loop or a governed flow shape. Resolved: use **Controlled ReAct Workflow** for the governed Proof Agent version.
 - "`enterprise_qa` with flags" could blur the deterministic baseline with ReAct behavior. Resolved: V1 adds **React Enterprise QA Template** instead of changing the existing template.
+- "Customer service workflow" could mean the existing linear Enterprise QA path or the ReAct path. Resolved: V1 customer-facing automation uses **React Enterprise QA Template**; **Enterprise QA Template** remains the baseline path.
 - "ReAct MVP" could mean requiring a remote LLM. Resolved: V1 requires a **Deterministic ReAct Demo**.
 - "ReAct planner" could mean the final answer model or a separate planning role. Resolved: use **ReAct Planner** and configure it through **ReAct Planner Config**.
 - "LLM planner" could mean replacing deterministic acceptance behavior or adding a second planner implementation. Resolved: use **LLM ReAct Planner** as an additional implementation.
+- "V1 LLM support" could mean deterministic-only demo or unbounded model support. Resolved: V1 is real-LLM capable through the supported **Model Provider Registry** paths while deterministic planner, reviewer, and model behavior remain the release gate.
 - "ReAct action" could mean arbitrary model output or a bounded action enum. Resolved: V1 uses a fixed **ReAct Action Set**.
 - "LLM automatic decision" could mean model self-approval, rule-based Harness review, or a Control Plane review subagent. Resolved: use **Harness Review Subagent** for the LLM-backed control component that runs only in **Auto Review Mode**.
 - "LLM reviewer" could mean replacing deterministic review behavior or adding a provider-backed reviewer implementation. Resolved: use **LLM Harness Review Subagent** as an additional implementation.
@@ -455,22 +658,50 @@ _Avoid_: Evidence content dump
 - "Review trace" could mean final policy or reviewer suggestion. Resolved: **Review Decision Event** records the suggestion; `policy_decision` records the final governance decision.
 - "Show planning" could mean trace recording or user-visible response projection. Resolved: **Governance Detail Projection** controls API/UI exposure, not trace completeness.
 - "Response visibility flag" could mean an unrestricted frontend request. Resolved: **Response Detail Policy** caps what API responses can expose.
+- "Customer response" could mean the full internal run response or a customer-safe shape. Resolved: customer-facing surfaces use **Customer-Safe Response Projection** and internal operator/developer surfaces use governed audit projections.
+- "Friendly wording" could mean harmless conversational text or unsupported business advice. Resolved: **Safe Conversational Text** may be unaudited for evidence, but every **Customer-Facing Business Claim** requires accepted evidence or an authorized read-only tool result.
+- "Multilingual customer service" could mean Chinese/English support or arbitrary language coverage. Resolved: V1 uses **Customer Response Language Policy** for Chinese and English only.
+- "V1 acceptance" could mean isolated demo questions or complete customer journeys. Resolved: V1 uses a **Customer Journey Acceptance Suite** covering anonymous, authenticated, refusal, clarification, internal handoff, retrieval failure, and bilingual paths.
+- "Customer feedback" could mean an observation signal or online learning. Resolved: V1 uses **Customer Feedback Signal** for observation only and does not automatically train or update behavior.
+- "Customer-visible answer history" could mean recomputing from trace or storing what the customer actually saw. Resolved: V1 stores a **Customer Response Snapshot** linked to the governed run.
+- "V1 release" could mean private enterprise pilot or public internet production. Resolved: V1 is a **Private Pilot Customer Service Bot**; public-scale operations are future platform work.
+- "Streaming" could mean customer-safe stage progress or raw model tokens. Resolved: V1 exposes **Customer Run Progress State** only; token streaming is future verified streaming work.
 - "ReAct loop" could mean unlimited autonomous tool use or a bounded governed loop. Resolved: V1 uses a **ReAct Step Budget** and permits at most one governed tool call.
 - "ReAct first action" could mean answer, tool call, retrieval, or clarification. Resolved: V1 uses **Evidence-First ReAct**.
 - "Needs more user input" could mean refusal or approval. Resolved: use **Clarification Request** and **Waiting For User Clarification**.
 - "Continue after clarification" could mean resuming the same runtime checkpoint or starting another governed run. Resolved: V1 uses a **Clarification Continuation Run** with **Controlled Conversation Context**.
 - "Loaded manifest" could mean raw configuration or a ready-to-run execution object. Resolved: use **Harness Invocation** for the resolved run input assembled from contract and capabilities.
 - "Chat API" could mean a raw model chat endpoint or a governed execution endpoint. Resolved: use **Run Execution API** for starting Harness runs from chat surfaces.
+- "Customer chat API" could mean reusing the internal Chat API or adding a customer-safe endpoint. Resolved: V1 uses **Customer Run API** for customer-facing runs and keeps internal Chat API responses for operator/developer surfaces.
 - "Agent selection" could mean a user-provided manifest path or a configured Agent identity. Resolved: application surfaces call a **Published Agent** by stable agent identifier.
 - "Dashboard API" could mean read-only observability or execution. Resolved: Dashboard and receipt views remain read projections; **Run Execution API** owns run creation.
+- "Management console" could mean internal run observability or a full platform administration product. Resolved: V1 keeps an **Internal Governance Dashboard** only; **Agent Control Platform Console** work is future scope.
+- "Handoff monitoring" could mean a dashboard projection or a full ticket workflow. Resolved: V1 provides **Internal Handoff Monitor** only; assignment, SLA, notification, and ticket status workflows are future scope.
 - "Approve and continue" could mean durable checkpoint resume or a new governed follow-up run. Resolved: first-stage chat uses an **Approval Continuation Run** and must not present it as checkpoint resume.
 - "Enterprise QA intelligent customer service" could mean the whole product or the first Agent built with it. Resolved: use **Enterprise QA Reference Agent** for the first Agent and keep Proof Agent as the framework.
-- "Intelligent customer service" could mean direct customer-facing automation or staff assistance. Resolved: first-stage delivery is **Assisted Service Mode**, not fully autonomous customer replies.
-- "Chat frontend" could mean a customer-facing chatbot or a staff workbench. Resolved: first-stage chat is an **Assisted QA Chat Frontend** for operators.
+- "Insurance customer service Agent" could mean the existing insurance QA example or the V1 customer-facing Agent. Resolved: use **Insurance Customer Service Agent** for the V1 Published Agent and keep the existing insurance QA example as a baseline package.
+- "Intelligent customer service" could mean direct customer-facing automation or staff assistance. Resolved: V1 delivery is **Autonomous Customer Service Mode**; **Assisted Service Mode** is a separate staff-assistance mode.
+- "Chat frontend" could mean a customer-facing chatbot or a staff workbench. Resolved: V1 chat is a **Customer Service Chat Frontend**; **Assisted QA Chat Frontend** is the operator-facing surface.
+- "Customer channel" could mean Web chat, messaging apps, email, mobile SDK, or contact-center integration. Resolved: V1 ships **Customer Service Web Chat**; other channels are future adapters.
+- "Customer intake" could mean text questions or uploaded customer documents. Resolved: V1 uses **Text-Only Customer Intake**; attachment analysis is future work.
+- "Customer chat session" could mean anonymous policy browsing or authenticated account service. Resolved: use **Anonymous Customer Session** for generic-only access and **Authenticated Customer Session** for customer-specific service.
+- "Customer context" could mean conversation history, identity, authorization, or raw credentials. Resolved: use **Controlled Conversation Context** for prior turns and **Customer Authorization Context** for verified customer scope; raw credentials never enter the Harness run context.
+- "Customer authentication" could mean proving the Harness authorization boundary or integrating a production identity provider. Resolved: V1 uses **Mock Authenticated Customer Session** and reserves production OAuth/OIDC/IAM for **Customer Identity Adapter** work.
+- "Mock customer" could mean a single demo identity or multiple authorization fixtures. Resolved: V1 uses at least two **Mock Customer Persona** fixtures and tests **Cross-Customer Access Attempt** behavior.
+- "Customer service automation" could mean read-only answers or business-state changes. Resolved: V1 is **Read-Only Customer Service**; state-changing work is a **Transactional Customer Action** and is out of scope.
+- "Customer lookup" could mean generic retrieval, authenticated account lookup, or a transaction. Resolved: use **Customer-Specific Read Tool** for authenticated read-only account facts.
+- "Customer status lookup" could mean policy status, claim status, or a generic customer profile dump. Resolved: V1 exposes **Policy Status Lookup Tool** and **Claim Status Lookup Tool** only.
+- "Approval for customer lookup" could mean human approval or policy authorization. Resolved: V1 customer-facing read lookups are **Policy-Authorized Read Tool** calls; human approval is reserved for assisted or higher-risk flows.
+- "Escalation" could mean a customer-visible outcome, an internal follow-up fact, or a real helpdesk ticket. Resolved: V1 creates an internal **Customer Escalation Handoff** for monitoring and returns only a **Customer-Safe Response Projection**; real ticket-system integration is future adapter work.
+- "Handoff wording" could mean telling customers they were escalated to a human or giving a safe service acknowledgement. Resolved: V1 uses **Handoff-Safe Customer Wording** and hides internal handoff state from customers.
+- "Handoff state" could mean a run outcome, a trace event, or a dashboard row. Resolved: V1 uses **Customer Handoff Event** plus **Handoff Projection**; final outcomes remain customer-service result semantics.
+- "Handoff reason" could mean free-form notes or stable operational categories. Resolved: V1 uses fixed **Handoff Reason** codes.
 - "Multi-turn context" could mean raw transcript injection or governed context admission. Resolved: automatic context uses **Controlled Conversation Context** and must not replace per-turn evidence retrieval.
-- "Conversation storage" could mean audit run storage or persistent enterprise memory. Resolved: **Conversation Store** owns chat timelines; RunStore remains the run artifact store.
+- "Conversation storage" could mean customer UX history, audit run storage, or persistent enterprise memory. Resolved: **Conversation Store** owns short-lived chat timelines, **RunStore** owns run artifacts, and persistent enterprise memory is a separate future capability.
+- "Retention" could mean customer chat transcript retention or audit retention. Resolved: V1 separates **Customer Conversation Retention Policy** from the **Audit Retention Boundary**.
 - "Enterprise QA" could mean a generic knowledge demo or a concrete first domain. Resolved: first-stage acceptance uses the **Insurance Service QA Domain** while keeping framework boundaries generic.
 - "Production knowledge integration" could mean building local vector indexing first or using a remote retrieval service first. Resolved: first-stage production-directed integration uses the **PageIndex Provider**, while **Local Markdown Provider** remains the deterministic baseline.
+- "V1 knowledge source" could mean replacing local fixtures with PageIndex or keeping only Markdown. Resolved: V1 uses **Local Markdown Provider** for deterministic regression and **PageIndex Provider** for the production-directed customer-service path.
 - "Agentic RAG" could mean either a provider or a workflow. Resolved: **Agentic RAG** is a controlled retrieval workflow, not a **Knowledge Provider**.
 - "`knowledge.path`" could mean a universal knowledge field or a local-provider parameter. Resolved: provider-specific knowledge configuration belongs under the selected **Knowledge Provider** parameters.
 - "`local`" could mean Markdown files, local vector indexes, or any local source. Resolved: use **Local Markdown Provider** and **Local Vector Provider** as distinct provider concepts.

@@ -5,7 +5,17 @@ from proof_agent.contracts.conversation import (
     ConversationRecord,
     ConversationTurn,
 )
+from proof_agent.contracts.customer import (
+    CustomerAuthorizationContext,
+    CustomerFeedbackSignal,
+    CustomerResponseSnapshot,
+    CustomerRunProgressState,
+    CustomerSafeResponse,
+    CustomerSafeSource,
+    CustomerSessionType,
+)
 from proof_agent.contracts.evidence import EvidenceChunk, EvidenceStatus
+from proof_agent.contracts.handoff import CustomerHandoff, HandoffProjection, HandoffReason
 from proof_agent.contracts.manifest import (
     AgentManifest,
     AuditConfig,
@@ -60,12 +70,22 @@ __all__ = [
     "ContextAdmission",
     "ConversationRecord",
     "ConversationTurn",
+    "CustomerAuthorizationContext",
+    "CustomerFeedbackSignal",
+    "CustomerHandoff",
+    "CustomerResponseSnapshot",
+    "CustomerRunProgressState",
+    "CustomerSafeResponse",
+    "CustomerSafeSource",
+    "CustomerSessionType",
     "EnforcementPoint",
     "EvidenceChunk",
     "EvidenceStatus",
     "FrozenDict",
     "FrozenModel",
     "GovernanceDetails",
+    "HandoffProjection",
+    "HandoffReason",
     "KnowledgeConfig",
     "MemoryConfig",
     "ModelConfig",
