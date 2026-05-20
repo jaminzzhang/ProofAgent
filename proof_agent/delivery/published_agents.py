@@ -6,6 +6,7 @@ from pathlib import Path
 
 DEFAULT_PUBLISHED_AGENTS: dict[str, Path] = {
     "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
+    "insurance_customer_service": Path("examples/insurance_customer_service/agent.yaml"),
     "insurance_service_qa": Path("examples/insurance_service_qa/agent.yaml"),
     "react_enterprise_qa": Path("examples/react_enterprise_qa/agent.yaml"),
 }

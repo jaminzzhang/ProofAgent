@@ -904,7 +904,7 @@ git commit -m "feat: project customer handoffs"
 - Modify: `proof_agent/delivery/published_agents.py`
 - Test: `tests/test_insurance_customer_service_example.py`
 
-- [ ] **Step 1: Write failing package registration test**
+- [x] **Step 1: Write failing package registration test**
 
 Add to `tests/test_insurance_customer_service_example.py`:
 
@@ -928,7 +928,7 @@ def test_insurance_customer_service_is_published() -> None:
     assert registry.resolve("insurance_customer_service") is not None
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -938,7 +938,7 @@ uv run --extra dev python -m pytest tests/test_insurance_customer_service_exampl
 
 Expected: FAIL because package does not exist and registry is missing the ID.
 
-- [ ] **Step 3: Create manifest and policy files**
+- [x] **Step 3: Create manifest and policy files**
 
 Create `examples/insurance_customer_service/agent.yaml`:
 
@@ -1048,7 +1048,7 @@ retrieval:
 
 Create concise knowledge files by copying relevant content from `examples/insurance_service_qa/knowledge/` and adding customer-service boundaries.
 
-- [ ] **Step 4: Register Published Agent**
+- [x] **Step 4: Register Published Agent**
 
 Modify `proof_agent/delivery/published_agents.py`:
 
@@ -1061,7 +1061,7 @@ DEFAULT_PUBLISHED_AGENTS: dict[str, Path] = {
 }
 ```
 
-- [ ] **Step 5: Run manifest tests**
+- [x] **Step 5: Run manifest tests**
 
 Run:
 
@@ -1071,7 +1071,7 @@ uv run --extra dev python -m pytest tests/test_insurance_customer_service_exampl
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add examples/insurance_customer_service proof_agent/delivery/published_agents.py tests/test_insurance_customer_service_example.py

@@ -1,0 +1,33 @@
+rules:
+  - rule_id: answering.require_retrieval
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+      min_evidence_count: 1
+      require_citations: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Customer-facing answers require accepted evidence and citations."
+
+  - rule_id: tools.read_only_customer_status.allow
+    enforcement_point: before_tool_call
+    condition:
+      read_only: true
+      authenticated_customer_required: true
+    decision:
+      on_match: allow
+      on_fail: deny
+    reason_template: "Read-only customer lookups require authenticated customer scope."
+
+  - rule_id: memory.deny_sensitive_fields
+    enforcement_point: before_memory_write
+    condition:
+      deny_fields:
+        - access_token
+        - customer_phone
+        - provider_api_key
+    decision:
+      on_match: deny
+      on_pass: allow
+    reason_template: "Customer sessions must not store sensitive fields."
