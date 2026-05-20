@@ -1646,11 +1646,11 @@ git commit -m "test: add customer journey acceptance suite"
 - Create: `customer/src/styles/tokens.css`
 - Create: `customer/src/styles/global.css`
 
-- [ ] **Step 1: Scaffold app by following existing frontend patterns**
+- [x] **Step 1: Scaffold app by following existing frontend patterns**
 
 Use the `chat/` app as a structural reference, but do not reuse internal response types or internal audit links.
 
-- [ ] **Step 2: Define customer API types**
+- [x] **Step 2: Define customer API types**
 
 Create `customer/src/api/types.ts`:
 
@@ -1690,7 +1690,7 @@ export interface CustomerRunResponse {
 }
 ```
 
-- [ ] **Step 3: Implement API client**
+- [x] **Step 3: Implement API client**
 
 Create `customer/src/api/client.ts` with functions:
 
@@ -1699,7 +1699,7 @@ Create `customer/src/api/client.ts` with functions:
 - `createRun(conversationId: string, question: string)`
 - `submitFeedback(conversationId: string, turnId: string, rating: 'up' | 'down', comment?: string)`
 
-- [ ] **Step 4: Build customer chat page**
+- [x] **Step 4: Build customer chat page**
 
 The page must show:
 
@@ -1719,7 +1719,7 @@ It must not show:
 - approval state
 - tool parameters
 
-- [ ] **Step 5: Run frontend checks**
+- [x] **Step 5: Run frontend checks**
 
 Run:
 
@@ -1733,7 +1733,7 @@ Expected: PASS.
 
 If `npm install` fails due restricted network, rerun with escalation following sandbox instructions.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add customer
