@@ -1,0 +1,27 @@
+tools:
+  - name: policy_status_lookup
+    description: "Read-only policy status lookup for the authenticated customer."
+    transport: local
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters:
+      - customer_id
+      - policy_id
+    denied_parameters:
+      - access_token
+      - customer_phone
+      - provider_api_key
+  - name: claim_status_lookup
+    description: "Read-only claim status lookup for the authenticated customer."
+    transport: local
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters:
+      - customer_id
+      - claim_id
+    denied_parameters:
+      - access_token
+      - customer_phone
+      - provider_api_key

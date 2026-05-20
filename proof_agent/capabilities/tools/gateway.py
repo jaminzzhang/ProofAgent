@@ -20,6 +20,7 @@ class ToolConfig:
     name: str
     risk_level: str
     requires_approval: bool
+    read_only: bool
     allowed_parameters: frozenset[str]
     denied_parameters: frozenset[str]
 
@@ -49,6 +50,7 @@ class ToolGateway:
                 name=tool["name"],
                 risk_level=tool["risk_level"],
                 requires_approval=bool(tool.get("requires_approval", False)),
+                read_only=bool(tool.get("read_only", False)),
                 allowed_parameters=frozenset(tool.get("allowed_parameters", [])),
                 denied_parameters=frozenset(tool.get("denied_parameters", [])),
             )
@@ -67,12 +69,15 @@ class ToolGateway:
 
         config = self._require_tool(tool_name)
         self._validate_parameters(config, parameters)
+        approval_status = ApprovalStatus.GRANTED
+        if config.requires_approval and not approved:
+            approval_status = ApprovalStatus.REQUESTED
         approval_state = create_approval_state(
             run_id=run_id,
             approval_id=f"appr_{tool_name}",
-            state=ApprovalStatus.GRANTED if approved else ApprovalStatus.REQUESTED,
+            state=approval_status,
             tool_name=tool_name,
-            reason="Human approval required." if config.requires_approval else "Tool allowed.",
+            reason=_approval_reason(config),
         )
         if config.requires_approval and not approved:
             return ToolGatewayResult(approval_state=approval_state, executed=False)
@@ -109,3 +114,11 @@ class ToolGateway:
                 f"tool request includes unsupported parameter(s): {', '.join(sorted(unsupported))}",
                 "Use only parameters declared in tools.yaml.",
             )
+
+
+def _approval_reason(config: ToolConfig) -> str:
+    if config.requires_approval:
+        return "Human approval required."
+    if config.read_only:
+        return "Policy-authorized read-only tool allowed."
+    return "Tool allowed."

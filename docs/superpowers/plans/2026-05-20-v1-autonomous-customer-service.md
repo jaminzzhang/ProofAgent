@@ -523,7 +523,7 @@ git commit -m "feat: add mock customer authorization"
 - Test: `tests/test_insurance_read_tools.py`
 - Test: `tests/test_tool_gateway.py`
 
-- [ ] **Step 1: Write failing tool tests**
+- [x] **Step 1: Write failing tool tests**
 
 Create `tests/test_insurance_read_tools.py`:
 
@@ -550,7 +550,7 @@ def test_claim_status_lookup_reads_fixture() -> None:
     assert result["read_only"] is True
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -560,7 +560,7 @@ uv run --extra dev python -m pytest tests/test_insurance_read_tools.py -v
 
 Expected: FAIL because `insurance_read.py` does not exist.
 
-- [ ] **Step 3: Implement deterministic read tools**
+- [x] **Step 3: Implement deterministic read tools**
 
 Create `proof_agent/capabilities/tools/insurance_read.py`:
 
@@ -610,7 +610,7 @@ def claim_status_lookup(parameters: Mapping[str, Any]) -> dict[str, object]:
 
 Modify `proof_agent/capabilities/tools/registry.py` to register `policy_status_lookup` and `claim_status_lookup`.
 
-- [ ] **Step 4: Add tool config**
+- [x] **Step 4: Add tool config**
 
 Create `examples/insurance_customer_service/tools.yaml`:
 
@@ -644,7 +644,7 @@ tools:
       - provider_api_key
 ```
 
-- [ ] **Step 5: Extend ToolGateway tests for read-only metadata**
+- [x] **Step 5: Extend ToolGateway tests for read-only metadata**
 
 Add to `tests/test_tool_gateway.py`:
 
@@ -675,7 +675,7 @@ tools:
     assert result.result["status"] == "active"
 ```
 
-- [ ] **Step 6: Run tool tests**
+- [x] **Step 6: Run tool tests**
 
 Run:
 
@@ -685,7 +685,7 @@ uv run --extra dev python -m pytest tests/test_insurance_read_tools.py tests/tes
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add proof_agent/capabilities/tools/insurance_read.py proof_agent/capabilities/tools/registry.py proof_agent/capabilities/tools/gateway.py examples/insurance_customer_service/tools.yaml tests/test_insurance_read_tools.py tests/test_tool_gateway.py
