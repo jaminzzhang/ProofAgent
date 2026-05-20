@@ -1215,7 +1215,7 @@ git commit -m "feat: add customer run api"
 - Test: `tests/test_customer_run_api.py`
 - Test: `tests/test_customer_authorization.py`
 
-- [ ] **Step 1: Add failing anonymous/authenticated tests**
+- [x] **Step 1: Add failing anonymous/authenticated tests**
 
 Add to `tests/test_customer_run_api.py`:
 
@@ -1262,7 +1262,7 @@ def test_cross_customer_policy_status_does_not_execute_tool(tmp_path):
     assert "POL-002" not in response.json()["message"]
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -1272,7 +1272,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_run_ap
 
 Expected: FAIL because customer-specific routing is not implemented.
 
-- [ ] **Step 3: Implement conservative V1 customer intent handling**
+- [x] **Step 3: Implement conservative V1 customer intent handling**
 
 In the first pass, do not rely on free-form LLM intent for authorization. Add deterministic guards in `customer_api.py` or `control/customer.py`:
 
@@ -1283,7 +1283,7 @@ In the first pass, do not rely on free-form LLM intent for authorization. Add de
 
 Keep this as a Harness/customer boundary before tool execution. Future planner improvements can propose tool calls, but cannot bypass these checks.
 
-- [ ] **Step 4: Run customer auth API tests**
+- [x] **Step 4: Run customer auth API tests**
 
 Run:
 
@@ -1293,7 +1293,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_run_ap
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add proof_agent/delivery/customer_api.py proof_agent/control/customer.py proof_agent/runtime/react_graph.py tests/test_customer_run_api.py tests/test_customer_authorization.py

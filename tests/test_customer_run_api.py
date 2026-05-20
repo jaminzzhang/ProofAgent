@@ -48,3 +48,79 @@ def test_customer_conversation_rejects_unknown_agent(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_anonymous_customer_policy_status_requires_authentication(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            history_dir=tmp_path / "history",
+            runs_dir=tmp_path / "latest",
+            conversations_dir=tmp_path / "conversations",
+        )
+    )
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What is my policy status?"},
+    )
+
+    assert response.status_code == 200
+    message = response.json()["message"].lower()
+    assert "sign in" in message or "authenticate" in message
+
+
+def test_authenticated_customer_policy_status_uses_authorized_read_tool(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(
+            history_dir=tmp_path / "history",
+            runs_dir=tmp_path / "latest",
+            conversations_dir=tmp_path / "conversations",
+        )
+    )
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What is the status of policy POL-001?"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "active" in body["message"].lower()
+    assert "approval_state" not in body
+
+
+def test_cross_customer_policy_status_does_not_execute_tool(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            history_dir=tmp_path / "history",
+            runs_dir=tmp_path / "latest",
+            conversations_dir=tmp_path / "conversations",
+        )
+    )
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What is the status of policy POL-002?"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "POL-002" not in body["message"]
+    assert "can't access" in body["message"].lower()

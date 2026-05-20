@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -9,8 +10,28 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from proof_agent.contracts import CustomerResponseSnapshot, CustomerSafeResponse
+from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.capabilities.tools.gateway import ToolGateway
+from proof_agent.contracts import (
+    AgentManifest,
+    CustomerAuthorizationContext,
+    CustomerConversationRecord,
+    CustomerResponseSnapshot,
+    CustomerSafeResponse,
+    CustomerSessionType,
+    ValidationStatus,
+)
 from proof_agent.contracts.dashboard import RunDetail
+from proof_agent.control.customer import (
+    CustomerAccessError,
+    extract_claim_id,
+    extract_policy_id,
+    is_claim_status_question,
+    is_policy_status_question,
+    load_mock_customer_context,
+    require_claim_access,
+    require_policy_access,
+)
 from proof_agent.control.validators.customer_response import validate_customer_safe_response
 from proof_agent.delivery.api import _execute_published_agent_run
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
@@ -93,9 +114,24 @@ def create_customer_run(
             },
         )
 
+    manifest_path = published_agent.manifest_path
+    safe_preflight_response = _customer_resource_response(
+        manifest_path=manifest_path,
+        question=request.question,
+        conversation=conversation,
+    )
+    if safe_preflight_response is not None:
+        return _store_customer_response(
+            app_request=app_request,
+            conversation=conversation,
+            safe_response=safe_preflight_response,
+            run_id="",
+            created_at=_now(),
+        )
+
     result, detail, _ = _execute_published_agent_run(
         app_request=app_request,
-        manifest_path=published_agent.manifest_path,
+        manifest_path=manifest_path,
         question=request.question,
         approved=None,
     )
@@ -103,8 +139,132 @@ def create_customer_run(
         message=str(result.final_output),
         safe_sources=_safe_sources(cast(RunDetail, detail)),
     )
+    return _store_customer_response(
+        app_request=app_request,
+        conversation=conversation,
+        safe_response=safe_response,
+        run_id=str(detail.run_id),
+        created_at=str(detail.updated_at),
+    )
+
+
+def _customer_resource_response(
+    *,
+    manifest_path: Path,
+    question: str,
+    conversation: CustomerConversationRecord,
+) -> CustomerSafeResponse | None:
+    manifest = _load_manifest(manifest_path)
+    if is_policy_status_question(question):
+        context = _load_customer_context(manifest_path, conversation.customer_ref)
+        return _policy_status_response(manifest, context, question)
+    if is_claim_status_question(question):
+        context = _load_customer_context(manifest_path, conversation.customer_ref)
+        return _claim_status_response(manifest, context, question)
+    return None
+
+
+def _policy_status_response(
+    manifest: AgentManifest,
+    context: CustomerAuthorizationContext,
+    question: str,
+) -> CustomerSafeResponse:
+    if context.session_type != CustomerSessionType.AUTHENTICATED or context.customer_ref is None:
+        return CustomerSafeResponse(
+            message="Please sign in to view policy status for your account.",
+        )
+
+    policy_id = extract_policy_id(question) or _single_resource_id(context.allowed_policy_ids)
+    if policy_id is None:
+        return CustomerSafeResponse(
+            message="Please provide the policy number you want me to check.",
+        )
+    try:
+        require_policy_access(context, policy_id)
+    except CustomerAccessError:
+        return CustomerSafeResponse(
+            message=(
+                "I can't access that policy from this signed-in session. "
+                "I can help with policy status for a policy on your account."
+            ),
+        )
+
+    result = ToolGateway.from_file(manifest.tools.file).request_tool(
+        tool_name="policy_status_lookup",
+        parameters={"customer_id": context.customer_ref, "policy_id": policy_id},
+        approved=False,
+    )
+    status = str((result.result or {}).get("status") or "unknown")
+    return CustomerSafeResponse(
+        message=f"Your policy status is {status}.",
+        safe_sources=("policy_status_lookup",),
+    )
+
+
+def _claim_status_response(
+    manifest: AgentManifest,
+    context: CustomerAuthorizationContext,
+    question: str,
+) -> CustomerSafeResponse:
+    if context.session_type != CustomerSessionType.AUTHENTICATED or context.customer_ref is None:
+        return CustomerSafeResponse(
+            message="Please sign in to view claim status for your account.",
+        )
+
+    claim_id = extract_claim_id(question) or _single_resource_id(context.allowed_claim_ids)
+    if claim_id is None:
+        return CustomerSafeResponse(
+            message="Please provide the claim number you want me to check.",
+        )
+    try:
+        require_claim_access(context, claim_id)
+    except CustomerAccessError:
+        return CustomerSafeResponse(
+            message=(
+                "I can't access that claim from this signed-in session. "
+                "I can help with claim status for a claim on your account."
+            ),
+        )
+
+    result = ToolGateway.from_file(manifest.tools.file).request_tool(
+        tool_name="claim_status_lookup",
+        parameters={"customer_id": context.customer_ref, "claim_id": claim_id},
+        approved=False,
+    )
+    status = str((result.result or {}).get("status") or "unknown")
+    return CustomerSafeResponse(
+        message=f"Your claim status is {status}.",
+        safe_sources=("claim_status_lookup",),
+    )
+
+
+def _load_manifest(manifest_path: Path) -> AgentManifest:
+    return load_agent_manifest(manifest_path)
+
+
+def _load_customer_context(
+    manifest_path: Path,
+    customer_ref: str | None,
+) -> CustomerAuthorizationContext:
+    try:
+        return load_mock_customer_context(
+            manifest_path.parent / "customers.yaml",
+            customer_id=customer_ref,
+        )
+    except CustomerAccessError:
+        return CustomerAuthorizationContext(session_type=CustomerSessionType.ANONYMOUS)
+
+
+def _store_customer_response(
+    *,
+    app_request: Request,
+    conversation: CustomerConversationRecord,
+    safe_response: CustomerSafeResponse,
+    run_id: str,
+    created_at: str,
+) -> dict[str, Any]:
     validation = validate_customer_safe_response(safe_response)
-    if validation.status == "failed":
+    if validation.status == ValidationStatus.FAILED:
         raise HTTPException(
             status_code=500,
             detail={
@@ -118,8 +278,8 @@ def create_customer_run(
         snapshot_id=f"snap_{uuid4().hex[:8]}",
         conversation_id=conversation.conversation_id,
         turn_id=turn_id,
-        run_id=str(detail.run_id),
-        created_at=str(detail.updated_at),
+        run_id=run_id,
+        created_at=created_at,
         customer_ref=conversation.customer_ref,
         response=safe_response,
     )
@@ -128,7 +288,10 @@ def create_customer_run(
         snapshot=snapshot,
     )
     if updated is None:
-        raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Conversation not found: {conversation.conversation_id}",
+        )
 
     payload = safe_response.model_dump(mode="json")
     payload["conversation_id"] = conversation.conversation_id
@@ -148,10 +311,18 @@ def _safe_sources(detail: RunDetail) -> tuple[str, ...]:
     return tuple(labels)
 
 
+def _single_resource_id(values: tuple[str, ...]) -> str | None:
+    return values[0] if len(values) == 1 else None
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
 def _require_customer_conversation(
     request: Request,
     conversation_id: str,
-) -> Any:
+) -> CustomerConversationRecord:
     record = _get_customer_store(request).get_conversation(conversation_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")

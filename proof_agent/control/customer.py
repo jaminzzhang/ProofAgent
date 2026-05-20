@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts import CustomerAuthorizationContext, CustomerSessionType
 from proof_agent.errors import ProofAgentError
+
+
+_POLICY_ID_RE = re.compile(r"\bPOL-\d+\b", re.IGNORECASE)
+_CLAIM_ID_RE = re.compile(r"\bCLM-\d+\b", re.IGNORECASE)
 
 
 class CustomerAccessError(ProofAgentError):
@@ -57,6 +62,34 @@ def require_claim_access(context: CustomerAuthorizationContext, claim_id: str) -
     _require_authenticated(context)
     if claim_id not in context.allowed_claim_ids:
         raise CustomerAccessError("customer is not authorized for the requested claim.")
+
+
+def is_policy_status_question(question: str) -> bool:
+    """Detect deterministic V1 policy-status intents before tool execution."""
+
+    normalized = question.lower()
+    return "policy status" in normalized or (
+        "status" in normalized and extract_policy_id(question) is not None
+    )
+
+
+def is_claim_status_question(question: str) -> bool:
+    """Detect deterministic V1 claim-status intents before tool execution."""
+
+    normalized = question.lower()
+    return "claim status" in normalized or (
+        "status" in normalized and extract_claim_id(question) is not None
+    )
+
+
+def extract_policy_id(question: str) -> str | None:
+    match = _POLICY_ID_RE.search(question)
+    return match.group(0).upper() if match else None
+
+
+def extract_claim_id(question: str) -> str | None:
+    match = _CLAIM_ID_RE.search(question)
+    return match.group(0).upper() if match else None
 
 
 def _require_authenticated(context: CustomerAuthorizationContext) -> None:
