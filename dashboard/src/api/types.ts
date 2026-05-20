@@ -115,6 +115,23 @@ export interface HealthResponse {
   total_runs: number
 }
 
+export interface HandoffProjection {
+  handoff_id: string
+  run_id: string
+  conversation_id: string
+  turn_id: string
+  reason: string
+  question_summary: string
+  summary: string
+  created_at: string
+  customer_ref: string | null
+  status: string
+}
+
+export interface HandoffsResponse {
+  data: HandoffProjection[]
+}
+
 export interface ContextAdmission {
   admitted: boolean
   turn_count: number

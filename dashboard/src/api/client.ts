@@ -1,4 +1,5 @@
 import type {
+  HandoffsResponse,
   HealthResponse,
   RunDetail,
   RunsListResponse,
@@ -40,6 +41,10 @@ export function fetchStats(): Promise<StatsResponse> {
 
 export function fetchHealth(): Promise<HealthResponse> {
   return fetchJson<HealthResponse>(`${BASE}/health`)
+}
+
+export function fetchHandoffs(): Promise<HandoffsResponse> {
+  return fetchJson<HandoffsResponse>(`${BASE}/handoffs`)
 }
 
 export function approveRun(runId: string, approvalId: string): Promise<{ status: string }> {

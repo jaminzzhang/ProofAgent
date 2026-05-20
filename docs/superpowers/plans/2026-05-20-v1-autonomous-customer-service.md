@@ -1749,7 +1749,7 @@ git commit -m "feat: add customer web chat"
 - Modify: `dashboard/src/router.tsx`
 - Modify: `dashboard/src/components/TopNav.tsx` or `dashboard/src/components/Sidebar.tsx`
 
-- [ ] **Step 1: Add handoff API types**
+- [x] **Step 1: Add handoff API types**
 
 Add to `dashboard/src/api/types.ts`:
 
@@ -1767,7 +1767,7 @@ export interface HandoffsResponse {
 }
 ```
 
-- [ ] **Step 2: Add API client**
+- [x] **Step 2: Add API client**
 
 Add to `dashboard/src/api/client.ts`:
 
@@ -1777,7 +1777,7 @@ export function fetchHandoffs(): Promise<import('./types').HandoffsResponse> {
 }
 ```
 
-- [ ] **Step 3: Create Handoffs page**
+- [x] **Step 3: Create Handoffs page**
 
 Create a dense operational table with:
 
@@ -1789,7 +1789,7 @@ Create a dense operational table with:
 
 Do not add assignment, status flow, SLA, or ticket actions.
 
-- [ ] **Step 4: Run dashboard checks**
+- [x] **Step 4: Run dashboard checks**
 
 Run:
 
@@ -1801,7 +1801,7 @@ npm test
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dashboard/src/api/types.ts dashboard/src/api/client.ts dashboard/src/pages/HandoffsPage.tsx dashboard/src/router.tsx dashboard/src/components
