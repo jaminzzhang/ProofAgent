@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from proof_agent.contracts import CustomerConversationRecord, CustomerResponseSnapshot
+from proof_agent.contracts import (
+    CustomerConversationRecord,
+    CustomerFeedbackSignal,
+    CustomerResponseSnapshot,
+)
 
 
 class CustomerStore:
@@ -71,6 +75,30 @@ class CustomerStore:
         )
         self._write(updated)
         return updated
+
+    def record_feedback(
+        self,
+        *,
+        conversation_id: str,
+        turn_id: str,
+        feedback: CustomerFeedbackSignal,
+    ) -> CustomerFeedbackSignal | None:
+        record = self.get_conversation(conversation_id)
+        if record is None:
+            return None
+        if all(snapshot.turn_id != turn_id for snapshot in record.snapshots):
+            return None
+        path = self._conversation_path(conversation_id).parent / "feedback" / f"{turn_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                _jsonable(feedback.model_dump(mode="python", warnings=False)),
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return feedback
 
     def _conversation_path(self, conversation_id: str) -> Path:
         return self._conversations_dir / conversation_id / "conversation.json"

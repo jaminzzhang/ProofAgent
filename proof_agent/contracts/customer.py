@@ -68,6 +68,7 @@ class CustomerResponseSnapshot(FrozenModel):
     run_id: str
     created_at: str
     response: CustomerSafeResponse
+    question: str = ""
     customer_ref: str | None = None
 
 

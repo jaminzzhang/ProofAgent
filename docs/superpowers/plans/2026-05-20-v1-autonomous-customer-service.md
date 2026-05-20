@@ -1307,7 +1307,7 @@ git commit -m "feat: enforce customer read authorization"
 - Modify: `proof_agent/delivery/customer_api.py`
 - Test: `tests/test_customer_run_api.py`
 
-- [ ] **Step 1: Add failing snapshot and feedback tests**
+- [x] **Step 1: Add failing snapshot and feedback tests**
 
 Add to `tests/test_customer_run_api.py`:
 
@@ -1361,7 +1361,7 @@ def test_customer_feedback_is_observation_only(tmp_path):
     assert feedback.json()["feedback"]["applies_to_training"] is False
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -1371,7 +1371,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_run_ap
 
 Expected: FAIL because snapshots/feedback are not persisted.
 
-- [ ] **Step 3: Implement customer snapshot persistence**
+- [x] **Step 3: Implement customer snapshot persistence**
 
 Either extend `ConversationStore` with customer-specific optional fields or implement `CustomerStore`. Keep stored turn data JSON-serializable and include:
 
@@ -1382,7 +1382,7 @@ Either extend `ConversationStore` with customer-specific optional fields or impl
 - `feedback`
 - `created_at`
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -1392,7 +1392,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_customer_run_ap
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add proof_agent/observability/storage/customer_store.py proof_agent/delivery/customer_api.py tests/test_customer_run_api.py

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,6 +16,7 @@ from proof_agent.contracts import (
     AgentManifest,
     CustomerAuthorizationContext,
     CustomerConversationRecord,
+    CustomerFeedbackSignal,
     CustomerResponseSnapshot,
     CustomerSafeResponse,
     CustomerSessionType,
@@ -58,6 +59,15 @@ class CustomerRunRequest(BaseModel):
     question: str = Field(min_length=1)
 
 
+class CustomerFeedbackRequest(BaseModel):
+    """Request body for customer feedback on a safe response turn."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rating: Literal["up", "down"]
+    comment: str | None = Field(default=None, max_length=1000)
+
+
 @router.post("/customer/conversations")
 def create_customer_conversation(
     request: CustomerConversationCreateRequest,
@@ -91,7 +101,7 @@ def get_customer_conversation(conversation_id: str, app_request: Request) -> dic
     """Return customer-safe conversation metadata and snapshots."""
 
     record = _require_customer_conversation(app_request, conversation_id)
-    return record.model_dump(mode="json")
+    return _customer_conversation_payload(record)
 
 
 @router.post("/customer/conversations/{conversation_id}/runs")
@@ -127,6 +137,7 @@ def create_customer_run(
             safe_response=safe_preflight_response,
             run_id="",
             created_at=_now(),
+            question=request.question,
         )
 
     result, detail, _ = _execute_published_agent_run(
@@ -145,6 +156,7 @@ def create_customer_run(
         safe_response=safe_response,
         run_id=str(detail.run_id),
         created_at=str(detail.updated_at),
+        question=request.question,
     )
 
 
@@ -262,6 +274,7 @@ def _store_customer_response(
     safe_response: CustomerSafeResponse,
     run_id: str,
     created_at: str,
+    question: str,
 ) -> dict[str, Any]:
     validation = validate_customer_safe_response(safe_response)
     if validation.status == ValidationStatus.FAILED:
@@ -280,6 +293,7 @@ def _store_customer_response(
         turn_id=turn_id,
         run_id=run_id,
         created_at=created_at,
+        question=question,
         customer_ref=conversation.customer_ref,
         response=safe_response,
     )
@@ -296,7 +310,53 @@ def _store_customer_response(
     payload = safe_response.model_dump(mode="json")
     payload["conversation_id"] = conversation.conversation_id
     payload["turn_id"] = turn_id
+    payload["run_id"] = run_id
     return payload
+
+
+@router.post("/customer/conversations/{conversation_id}/turns/{turn_id}/feedback")
+def record_customer_feedback(
+    conversation_id: str,
+    turn_id: str,
+    request: CustomerFeedbackRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Store observation-only customer feedback for a safe response turn."""
+
+    _require_customer_conversation(app_request, conversation_id)
+    feedback = CustomerFeedbackSignal(rating=request.rating, comment=request.comment)
+    recorded = _get_customer_store(app_request).record_feedback(
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        feedback=feedback,
+    )
+    if recorded is None:
+        raise HTTPException(status_code=404, detail=f"Turn not found: {turn_id}")
+    return {
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "feedback": recorded.model_dump(mode="json"),
+    }
+
+
+def _customer_conversation_payload(record: CustomerConversationRecord) -> dict[str, Any]:
+    return {
+        "conversation_id": record.conversation_id,
+        "agent_id": record.agent_id,
+        "customer_id": record.customer_ref,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "turns": [
+            {
+                "turn_id": snapshot.turn_id,
+                "run_id": snapshot.run_id,
+                "question": snapshot.question,
+                "created_at": snapshot.created_at,
+                "response_snapshot": snapshot.response.model_dump(mode="json"),
+            }
+            for snapshot in record.snapshots
+        ],
+    }
 
 
 def _safe_sources(detail: RunDetail) -> tuple[str, ...]:

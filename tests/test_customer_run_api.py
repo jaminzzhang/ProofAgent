@@ -124,3 +124,52 @@ def test_cross_customer_policy_status_does_not_execute_tool(tmp_path: Path) -> N
     body = response.json()
     assert "POL-002" not in body["message"]
     assert "can't access" in body["message"].lower()
+
+
+def test_customer_response_snapshot_is_stored(tmp_path: Path) -> None:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+    run = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are required for inpatient claim reimbursement?"},
+    ).json()
+
+    conversation = client.get(f"/api/customer/conversations/{conversation_id}").json()
+
+    assert conversation["turns"][0]["response_snapshot"]["message"] == run["message"]
+    assert conversation["turns"][0]["run_id"] == run["run_id"]
+
+
+def test_customer_feedback_is_observation_only(tmp_path: Path) -> None:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+    run = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are required for inpatient claim reimbursement?"},
+    ).json()
+
+    feedback = client.post(
+        f"/api/customer/conversations/{conversation_id}/turns/{run['turn_id']}/feedback",
+        json={"rating": "down", "comment": "Need more detail."},
+    )
+
+    assert feedback.status_code == 200
+    assert feedback.json()["feedback"]["applies_to_training"] is False
