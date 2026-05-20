@@ -1824,7 +1824,7 @@ git commit -m "feat: add handoff monitor"
 - Modify: `docs/concepts/trust-boundaries.md`
 - Create: `docs/examples/insurance-customer-service.md`
 
-- [ ] **Step 1: Update PRD and technical design**
+- [x] **Step 1: Update PRD and technical design**
 
 Add V1 scope as:
 
@@ -1835,7 +1835,7 @@ Add V1 scope as:
 - Customer-Safe Response Projection
 - internal handoff monitor
 
-- [ ] **Step 2: Update developer guide**
+- [x] **Step 2: Update developer guide**
 
 Document:
 
@@ -1845,11 +1845,11 @@ Document:
 - how to configure PageIndex variant
 - how to inspect internal handoffs
 
-- [ ] **Step 3: Update concept docs**
+- [x] **Step 3: Update concept docs**
 
 Add customer-service boundaries to relevant concept docs without duplicating all of `CONTEXT.md`.
 
-- [ ] **Step 4: Add example doc**
+- [x] **Step 4: Add example doc**
 
 Create `docs/examples/insurance-customer-service.md` with:
 
@@ -1859,7 +1859,7 @@ Create `docs/examples/insurance-customer-service.md` with:
 - handoff monitor behavior
 - local Markdown and PageIndex variants
 
-- [ ] **Step 5: Run docs sanity check**
+- [x] **Step 5: Run docs sanity check**
 
 Run:
 
@@ -1869,7 +1869,7 @@ git diff --check
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add docs/prd.md docs/technical-design.md docs/developer-guide.md docs/development-progress.md docs/README.md docs/concepts docs/examples/insurance-customer-service.md

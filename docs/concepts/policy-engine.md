@@ -183,3 +183,15 @@ Policy evaluation must emit a `policy_decision` trace event for every enforcemen
 ## Design Rule
 
 Do not scatter enterprise governance across workflow nodes. Workflow nodes ask the policy engine. The policy engine decides. Trace records the decision.
+
+## Customer Read Policy
+
+Customer-service V1 adds a pre-tool customer authorization boundary. Generic knowledge questions can run anonymously, but policy or claim status reads require an authenticated `CustomerAuthorizationContext`.
+
+Read-only tools may run without human approval only when:
+
+- the tool is declared `read_only: true`
+- request parameters pass the Tool Gateway allowlist and denylist
+- the requested policy or claim id is in the customer's allowed resource scope
+
+Cross-customer access attempts must be blocked before tool execution and recorded as internal handoff events.

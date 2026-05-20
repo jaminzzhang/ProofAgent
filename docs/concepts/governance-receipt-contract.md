@@ -89,3 +89,7 @@ Receipt tests must cover:
 - `WAITING_FOR_USER_CLARIFICATION` receipt output
 - no raw secrets in receipt output
 - no raw chain-of-thought in receipt output
+
+## Customer Response Boundary
+
+Governance Receipt remains an internal artifact. Customer-facing responses are generated from `CustomerSafeResponse` and must not include receipt links or receipt excerpts. Operators may use receipt and trace artifacts to investigate customer runs and handoffs, but the terminal customer sees only the safe projection.

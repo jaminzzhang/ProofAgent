@@ -18,7 +18,7 @@ questions.yaml      # Optional: Evaluation question set
 expected/           # Optional: Expected trace / receipt examples
 ```
 
-The current runnable reference implementations are the [Enterprise QA Template](examples/enterprise-qa.md), corresponding to `examples/enterprise_qa/`, and the [Controlled ReAct Enterprise QA Template](examples/react-enterprise-qa.md), corresponding to `examples/react_enterprise_qa/`.
+The current runnable reference implementations are the [Enterprise QA Template](examples/enterprise-qa.md), corresponding to `examples/enterprise_qa/`, the [Controlled ReAct Enterprise QA Template](examples/react-enterprise-qa.md), corresponding to `examples/react_enterprise_qa/`, and the [Insurance Customer Service Agent](examples/insurance-customer-service.md), corresponding to `examples/insurance_customer_service/`.
 
 ## 2. Quick Start
 
@@ -63,6 +63,22 @@ uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
 ```
 
 The Dashboard API reads the existing run history. It is not a secondary execution path for the Agent.
+
+Run the customer journey acceptance suite:
+
+```bash
+uv run --extra dashboard --extra dev python -m pytest tests/test_customer_journeys.py -v
+```
+
+Run the customer Web Chat during local development:
+
+```bash
+cd customer
+npm install
+npm run dev
+```
+
+The customer app defaults to port `5175` and expects the API server on `127.0.0.1:8000`.
 
 ## 3. Architecture Mental Model
 
@@ -115,8 +131,21 @@ Core boundaries:
 | Memory | `memory.provider: session`, with sensitive field denylist |
 | Validators | schema, evidence, safety, citations, tool result |
 | Audit | JSONL trace, Governance Receipt, RunStore, ConversationStore, Dashboard read API |
+| Customer Service | Customer Run API, mock customer sessions, read-only insurance status tools, customer snapshots, internal handoff monitor |
 
 The v1 deterministic path must always operate without requiring API keys, network models, or external services.
+
+### Customer Service V1
+
+`examples/insurance_customer_service/` is a direct-to-customer private-pilot Agent package. It keeps the framework generic while proving:
+
+- mock authenticated customer sessions through `customers.yaml`
+- read-only account status tools through `policy_status_lookup` and `claim_status_lookup`
+- customer-safe responses through `/api/customer/...`
+- internal handoffs through `/api/handoffs`
+- PageIndex configuration through `agent.pageindex.yaml`
+
+Customer-specific policy and claim status require `customer_id` on conversation creation. Anonymous sessions can ask generic policy questions but receive sign-in wording for account data.
 
 The ReAct deterministic demo adds these expected outcomes:
 

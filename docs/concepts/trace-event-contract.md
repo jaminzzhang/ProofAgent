@@ -136,3 +136,9 @@ stop
 ## Conversation Context Rules
 
 `context_admission` payloads store only trace-safe admission facts: whether context was admitted, prior turn count, included turn ids, summary length, and a bounded summary. They must not store raw transcripts or allow prior answers to replace current-turn evidence retrieval.
+
+## Customer Handoff Events
+
+Customer-service handoffs are internal trace facts. `customer_handoff_created` records a reason, question summary, optional customer reference, conversation id, and handoff id. It must not expose tokens, raw customer identity claims, or tool secrets.
+
+These events feed the internal handoff monitor. They are not customer-visible outcomes and must not be returned through Customer Run API responses.

@@ -1,6 +1,6 @@
 # Proof Agent Development Progress
 
-> Last updated: 2026-05-18
+> Last updated: 2026-05-20
 > Purpose: Give AI coding agents a short, current map of the implementation. Verify all claims against the code before changing behavior.
 
 ## 1. Current Positioning
@@ -12,6 +12,7 @@ The project is no longer positioned as local-first or CLI-first. It keeps a dete
 Authoritative design doc: `docs/technical-design.md`.
 
 - LLM-backed ReAct planning and Harness review now use the shared Model Provider Registry with role-specific configuration, bounded JSON normalization, role-aware trace events, and fail-closed behavior for invalid model output.
+- V1 Autonomous Customer Service Mode now adds customer contracts, Customer Run API, customer-safe response snapshots, read-only customer status tools, internal handoff events, handoff monitor API/UI, and the `insurance_customer_service` reference Agent.
 
 ## 2. Implementation Snapshot
 
@@ -26,6 +27,7 @@ Authoritative design doc: `docs/technical-design.md`.
 | Capability | `capabilities/` owns model providers, ReAct planner, review subagent, knowledge provider registry, memory, ToolGateway, mock `customer_lookup`, and future Skill packs |
 | Audit | `observability/audit/` owns JSONL trace, ReAct review/reasoning projections, redaction, Governance Receipt, model usage section |
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed runs and persists them through RunStore |
+| Customer Service | `delivery/customer_api.py`, `observability/storage/customer_store.py`, `observability/api/routers/handoffs.py`, `customer/`, and `examples/insurance_customer_service/` implement V1 customer-facing automatic replies with internal handoff monitoring |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
 | Tests | 36 test files and 164 statically detected `test_` functions at last scan |
 
@@ -68,7 +70,9 @@ runs/latest/governance_receipt.md
 | Vector provider | Local Vector provider queries existing Chroma indexes | Index build lifecycle and broader vector store adapters |
 | Agentic RAG | PageIndex provider path emits governed retrieval plan/step events and evaluates evidence locally | Planner-driven multi-step retrieval strategy beyond provider-agentic retrieval |
 | Dashboard UI | Implemented for overview, runs, run detail, evidence, receipt, model usage, approvals, timeline, and governed ReAct details; SPA mount supported if built assets exist | Approval Console actions and richer filtering |
+| Handoff Monitor | Implemented as read-only internal projection of customer handoff trace events | Filtering and richer run correlation |
 | Assisted Chat UI | Implemented (ChatPage, Conversation API integration, clarification and governed ReAct detail display) | Polish and multi-agent selection |
+| Customer Web Chat | Implemented under `customer/` for customer-safe API responses | Production auth and deployment packaging |
 | Azure/Anthropic | Placeholder providers | Real provider adapters with mocked tests |
 | Streaming | Not implemented | Trace-safe streaming chunks |
 

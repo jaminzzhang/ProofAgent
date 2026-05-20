@@ -219,3 +219,14 @@ Examples:
 - unwritable audit path -> fail before answering
 
 The contract is part of trust. If configuration is ambiguous, the Agent should not run.
+
+## Customer Service Agent Contract
+
+`insurance_customer_service` uses the same `agent.yaml` contract as other Published Agents. Customer-specific behavior lives beside the contract in package fixtures:
+
+- `customers.yaml` for V1 mock authenticated sessions
+- `tools.yaml` for policy-authorized read-only status tools
+- `journeys.yaml` for customer journey acceptance
+- `agent.pageindex.yaml` for the PageIndex knowledge variant
+
+Customer API callers still reference a Published Agent id. They must not submit arbitrary manifest paths.

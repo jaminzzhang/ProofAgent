@@ -40,6 +40,7 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | `examples/enterprise-qa.md` | Enterprise QA Template behavior |
 | `examples/react-enterprise-qa.md` | Controlled ReAct Enterprise QA workflow behavior |
 | `examples/insurance-service-qa.md` | Insurance Service QA Reference Agent behavior |
+| `examples/insurance-customer-service.md` | Customer-facing Insurance Customer Service Agent behavior |
 | `examples/governance-receipt.md` | Example receipt rendering |
 
 ## Bilingual Structure

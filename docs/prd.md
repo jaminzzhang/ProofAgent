@@ -12,6 +12,11 @@ Core product judgments:
 
 The long-term vision is an enterprise-grade **Agent Control Platform**. In the current phase, the goal is to solidify the framework's control semantics, contracts, adapter boundaries, and the runnable Enterprise QA Template.
 
+V1 also introduces an **Autonomous Customer Service Mode** private pilot. This mode keeps Proof Agent positioned as the reusable Controlled Agent Harness Framework while delivering a concrete Insurance Customer Service Agent for direct end-customer automatic replies. The V1 product has two deliverables:
+
+- **Agent Framework Deliverable:** customer contracts, Customer Run API, Customer-Safe Response Projection, read-only authorization boundaries, internal handoff events, and handoff monitor projections.
+- **Insurance Customer Service Agent:** `examples/insurance_customer_service/`, customer Web Chat, deterministic journey suite, local Markdown knowledge, and PageIndex-ready manifest.
+
 ## 2. Target Audience
 
 - Enterprise AI platform teams: Need unified governance over remote models, tools, knowledge bases, and approvals.
@@ -33,13 +38,15 @@ The long-term vision is an enterprise-grade **Agent Control Platform**. In the c
 | Validators | Admission control for schema, evidence, citation, safety, tool result, etc. |
 | Trace & Receipt | JSONL Trace is the source of truth; Governance Receipt is the human-readable proof |
 | Run Execution API | Application surfaces start governed runs through Published Agent ids, not arbitrary manifest paths |
+| Customer Run API | Customer-facing conversations return only customer-safe response projections |
+| Customer Handoff Monitor | Internal handoff events are visible to operators without exposing escalation state to customers |
 | Controlled Conversation Context | Assisted chat can use prior turns through bounded, trace-safe context admission while preserving per-turn evidence retrieval |
 | Dashboard | Dashboard API queries runs, traces, receipts, stats; UI/Approval Console for future platform evolution |
 | Deployment | Both CLI and Docker can run the deterministic demo; remote capabilities are enabled via environment variables and optional extras |
 
 ## 4. Current MVP Scope
 
-The current runnable MVP focuses on the Enterprise QA Template and Insurance Service QA Reference Agent to prove the complete Harness lifecycle:
+The current runnable MVP focuses on the Enterprise QA Template, Insurance Service QA Reference Agent, and Insurance Customer Service Agent to prove the complete Harness lifecycle:
 1. Load `agent.yaml`.
 2. Execute policy gates.
 3. Retrieve knowledge and evaluate evidence.
@@ -58,11 +65,21 @@ tool_required: WAITING_FOR_APPROVAL
 ```
 > Note: Enumeration values in code should be considered authoritative; examples in documentation must be checked synchronously during validation.
 
+Customer service V1 acceptance adds:
+
+- anonymous customers may ask generic policy/claim questions but must sign in for customer-specific status
+- authenticated mock customer sessions may read only their own policy and claim status
+- customer responses must not expose trace links, receipt links, policy decisions, review results, approval state, tool parameters, or internal handoff state
+- account-changing requests and cross-customer access attempts create internal handoff events for monitoring
+
 ## 5. Non-Goals
 
 For the current phase, we do not commit to:
 - A fully hosted multi-tenant console.
 - Production-grade RBAC / IAM / OAuth / DLP.
+- Production OAuth/OIDC/IAM for customer sessions.
+- Customer-visible human escalation states.
+- Transactional insurance actions such as canceling policies, submitting claims, or approving payments.
 - Compatibility with all MCP servers.
 - Complete immunity against arbitrary prompt injections.
 - LLM-as-judge replacing deterministic validators.
@@ -88,4 +105,5 @@ These are directions for platform evolution but must be added gradually after th
 | 2 | Model Provider Governance | remote model provider, model trace, model validators |
 | 3 | Observability & Dashboard API | RunStore, runs/history, health/runs/stats API |
 | 4 | Production Adapters | LangChain/LangGraph, real MCP, vector store, Azure/Anthropic, streaming |
-| 5 | Agent Control Platform | Dashboard UI, Approval Console, RBAC, multi-template, multi-Agent, external observability export |
+| 5 | Customer Service V1 | Customer Run API, Customer Web Chat, internal handoff monitor, Insurance Customer Service Agent |
+| 6 | Agent Control Platform | Dashboard UI, Approval Console, RBAC, multi-template, multi-Agent, external observability export |

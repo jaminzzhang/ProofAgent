@@ -101,3 +101,9 @@ Controlled ReAct does not make planner output trusted. Planner proposals, review
 The Harness Review Subagent may suggest `allow`, `deny`, `require_approval`, or `escalate`, but PolicyEngine and the Harness make the final policy decision. Review failures fail closed: tool calls require approval, model calls are denied, and retrieval plan or step proposals are denied unless an explicit fallback is configured.
 
 ReAct trace and receipt output must store only an audit-safe Reasoning Summary. Raw chain-of-thought must not be recorded, stored, or exposed in trace, receipt, RunStore, Dashboard API, Conversation API, or response governance details.
+
+## Customer Service Boundary
+
+Autonomous Customer Service Mode is a private-pilot direct customer channel, not production IAM. V1 uses mock authenticated customer sessions. It does not provide OAuth/OIDC, account takeover protection, DLP, ticketing, SLA tracking, or transactional account changes.
+
+Customer-facing API responses must exclude trace links, receipt links, policy decisions, review results, approval state, raw tool parameters, internal handoff status, and raw identity claims. Internal handoffs are available only through operator-facing Dashboard/API projections.

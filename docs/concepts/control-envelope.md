@@ -109,3 +109,9 @@ The envelope makes an Agent demo feel like a delivery artifact:
 - readable audit output
 - one-command demo path
 - a story they can explain to security, compliance, and business stakeholders
+
+## Customer Service Envelope
+
+Autonomous Customer Service Mode uses the same Control Envelope with an additional customer-safe projection boundary. Customer Run API may start governed runs and policy-authorized read-only tools, but the terminal customer receives only `CustomerSafeResponse` fields. Trace, receipt, policy decisions, approval state, tool parameters, review results, and internal handoff state remain internal.
+
+Internal customer handoffs are trace events and Dashboard projections. They do not create a customer-visible escalation outcome.

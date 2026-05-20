@@ -160,6 +160,23 @@ CLI / API / Conversation turn
 
 The planner and review subagent are inputs to governance, not governance authorities.
 
+Autonomous Customer Service Mode adds a customer-facing delivery path around the same Harness:
+
+```text
+Customer Web Chat
+  -> Customer Run API
+  -> mock customer session context
+  -> customer authorization guard for account data
+  -> optional policy-authorized read-only tool
+  -> governed Harness run for evidence-backed answers
+  -> Customer-Safe Response Projection
+  -> Customer Response Snapshot
+  -> optional internal customer_handoff_created trace event
+  -> Internal Handoff Monitor projection
+```
+
+The customer path is deliberately separate from the operator-facing Chat API. Customer responses must not contain trace links, receipt links, policy decisions, review results, approval state, raw tool parameters, or internal handoff state. Handoff remains an internal trace/projection concept, not a customer-visible `ESCALATED_TO_HUMAN` outcome.
+
 Layer boundary rules:
 - Control Plane owns decisions. Runtime and Capability layers cannot bypass PolicyEngine, Approval, Validators, or Outcome mapping.
 - Runtime Plane owns execution mechanics. LangGraph/LangChain can provide graph execution, checkpoint, interrupt/resume, and streaming hooks, but cannot redefine Harness governance semantics.
@@ -186,6 +203,7 @@ Layer boundary rules:
 | Validators | `control/validators/` owns schema, evidence, safety, citations, tool result |
 | Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, Model Usage |
 | Storage/API | `observability/storage/` and `observability/api/` own RunStore, FastAPI health/runs/stats routes |
+| Customer Service | `delivery/customer_api.py`, `observability/storage/customer_store.py`, `contracts/customer.py`, and `contracts/handoff.py` own customer-safe projections and internal handoff monitoring |
 | Tests/CI | pytest, Ruff, mypy, GitHub Actions |
 
 ## 5. Developer Lifecycle
