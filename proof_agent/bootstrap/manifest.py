@@ -8,6 +8,8 @@ from proof_agent.contracts import (
     AuditConfig,
     KnowledgeConfig,
     MemoryConfig,
+    MemoryScopeConfig,
+    MemoryScopesConfig,
     ModelConfig,
     PolicyConfig,
     ReActConfig,
@@ -43,9 +45,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         workflow=WorkflowConfig(
             runtime=workflow["runtime"],
             template=workflow["template"],
-            checkpointer=_checkpointer_config_from_mapping(
-                workflow.get("checkpointer")
-            ),
+            checkpointer=_checkpointer_config_from_mapping(workflow.get("checkpointer")),
         ),
         knowledge=KnowledgeConfig(
             provider=knowledge["provider"],
@@ -68,7 +68,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         ),
         policy=PolicyConfig(file=resolve_path(base_dir, policy["file"])),
         tools=ToolsConfig(file=resolve_path(base_dir, tools["file"])),
-        memory=MemoryConfig(provider=memory["provider"]),
+        memory=_memory_config_from_mapping(memory),
         audit=AuditConfig(
             trace_path=resolve_path(base_dir, audit["trace_path"]),
             receipt_path=resolve_path(base_dir, audit["receipt_path"]),
@@ -109,6 +109,31 @@ def _model_config_from_mapping(raw: Any) -> ModelConfig | None:
         provider=raw["provider"],
         name=raw["name"],
         params=raw.get("params", {}),
+    )
+
+
+def _memory_config_from_mapping(raw: dict[str, Any]) -> MemoryConfig:
+    scopes = raw.get("scopes") or {}
+    return MemoryConfig(
+        provider=raw["provider"],
+        scopes=MemoryScopesConfig(
+            case=_memory_scope_config_from_mapping(scopes.get("case")),
+            user=_memory_scope_config_from_mapping(scopes.get("user")),
+            shared=_memory_scope_config_from_mapping(scopes.get("shared")),
+        ),
+    )
+
+
+def _memory_scope_config_from_mapping(raw: Any) -> MemoryScopeConfig:
+    if raw is None:
+        return MemoryScopeConfig()
+    if not isinstance(raw, dict):
+        raise TypeError("memory.scopes entries must be mappings")
+    return MemoryScopeConfig(
+        enabled=raw.get("enabled", False),
+        retention_days=raw.get("retention_days", 30),
+        max_records=raw.get("max_records", 5),
+        allow_restricted=raw.get("allow_restricted", False),
     )
 
 

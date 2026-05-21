@@ -135,6 +135,57 @@ def test_loads_react_enterprise_qa_example_manifest() -> None:
     assert manifest.response.include_review_results is False
 
 
+def test_loads_local_case_memory_contract(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        memory_section="""
+memory:
+  provider: local
+  scopes:
+    case:
+      enabled: true
+      retention_days: 30
+      max_records: 5
+      allow_restricted: false
+    user:
+      enabled: false
+    shared:
+      enabled: false
+""",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.memory.provider == "local"
+    assert manifest.memory.scopes.case.enabled is True
+    assert manifest.memory.scopes.case.retention_days == 30
+    assert manifest.memory.scopes.user.enabled is False
+    assert manifest.memory.scopes.shared.enabled is False
+
+
+def test_user_memory_enabled_is_rejected_for_stage_one(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        memory_section="""
+memory:
+  provider: local
+  scopes:
+    case:
+      enabled: true
+    user:
+      enabled: true
+    shared:
+      enabled: false
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "memory.scopes.user.enabled is not supported yet" in exc.value.message
+
+
 def test_unsupported_workflow_checkpointer_provider_is_rejected(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(tmp_path)
     agent_yaml.write_text(
@@ -202,6 +253,10 @@ react:
 def _write_react_manifest(
     tmp_path: Path,
     *,
+    memory_section: str = """
+memory:
+  provider: session
+""",
     react_section: str = """
 react:
   max_steps: 5
@@ -250,8 +305,7 @@ policy:
   file: ./policy.yaml
 tools:
   file: ./tools.yaml
-memory:
-  provider: session
+{memory_section}
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md

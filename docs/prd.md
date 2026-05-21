@@ -106,4 +106,5 @@ These are directions for platform evolution but must be added gradually after th
 | 3 | Observability & Dashboard API | RunStore, runs/history, health/runs/stats API |
 | 4 | Production Adapters | LangChain/LangGraph, real MCP, vector store, Azure/Anthropic, streaming |
 | 5 | Customer Service V1 | Customer Run API, Customer Web Chat, internal handoff monitor, Insurance Customer Service Agent |
-| 6 | Agent Control Platform | Dashboard UI, Approval Console, RBAC, multi-template, multi-Agent, external observability export |
+| 6 | Controlled Agent Memory | Local Case Memory, Memory Admission, Mem0 adapter, User Memory, Shared Memory |
+| 7 | Agent Control Platform | Dashboard UI, Approval Console, RBAC, multi-template, multi-Agent, external observability export |

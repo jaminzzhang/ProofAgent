@@ -12,9 +12,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.tools.gateway import ToolGateway
 from proof_agent.contracts import (
     AgentManifest,
+    ContextAdmission,
     CustomerAuthorizationContext,
     CustomerConversationRecord,
     CustomerFeedbackSignal,
@@ -22,6 +24,9 @@ from proof_agent.contracts import (
     CustomerSafeResponse,
     CustomerSessionType,
     HandoffReason,
+    MemoryAdmission,
+    MemoryQuery,
+    MemoryScope,
     ValidationStatus,
 )
 from proof_agent.contracts.dashboard import RunDetail
@@ -36,6 +41,9 @@ from proof_agent.control.customer import (
     require_claim_access,
     require_policy_access,
 )
+from proof_agent.control.memory.admission import admit_memory
+from proof_agent.control.memory.extractor import candidate_from_customer_turn
+from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.validators.customer_response import validate_customer_safe_response
 from proof_agent.delivery.api import _execute_published_agent_run
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
@@ -193,17 +201,32 @@ def create_customer_run(
             question=request.question,
         )
 
+    manifest = _load_manifest(manifest_path)
+    memory_enabled = _case_memory_enabled(manifest)
+    memory_admission = (
+        _admit_customer_case_memory(app_request, conversation, manifest)
+        if memory_enabled
+        else MemoryAdmission(admitted=False)
+    )
     result, detail, _ = _execute_published_agent_run(
         app_request=app_request,
         manifest_path=manifest_path,
         question=request.question,
         approved=None,
+        conversation_context=_memory_context(memory_admission),
     )
+    if memory_enabled:
+        _append_memory_admission_event(
+            app_request=app_request,
+            detail=cast(RunDetail, detail),
+            admission=memory_admission,
+            conversation=conversation,
+        )
     safe_response = CustomerSafeResponse(
         message=str(result.final_output),
         safe_sources=_safe_sources(cast(RunDetail, detail)),
     )
-    return _store_customer_response(
+    payload = _store_customer_response(
         app_request=app_request,
         conversation=conversation,
         safe_response=safe_response,
@@ -211,6 +234,17 @@ def create_customer_run(
         created_at=str(detail.updated_at),
         question=request.question,
     )
+    if memory_enabled:
+        _write_case_memory(
+            app_request=app_request,
+            conversation=conversation,
+            safe_response=safe_response,
+            question=request.question,
+            run_id=str(detail.run_id),
+            turn_id=str(payload["turn_id"]),
+            manifest=manifest,
+        )
+    return payload
 
 
 def _customer_resource_response(
@@ -391,6 +425,180 @@ def _store_customer_response(
     return payload
 
 
+def _admit_customer_case_memory(
+    app_request: Request,
+    conversation: CustomerConversationRecord,
+    manifest: AgentManifest,
+) -> MemoryAdmission:
+    case_config = manifest.memory.scopes.case
+    query = MemoryQuery(
+        scope=MemoryScope.CASE,
+        case_id=conversation.conversation_id,
+        agent_id=conversation.agent_id,
+        max_records=case_config.max_records,
+        allow_restricted=case_config.allow_restricted,
+    )
+    records = _get_memory_store(app_request).read(query)
+    return admit_memory(records, query=query)
+
+
+def _memory_context(admission: MemoryAdmission) -> ContextAdmission | None:
+    if not admission.admitted:
+        return None
+    return ContextAdmission(
+        admitted=True,
+        turn_count=len(admission.included_memory_ids),
+        included_turn_ids=admission.included_memory_ids,
+        summary=f"Admitted Case Memory: {admission.summary}",
+        char_count=len(admission.summary),
+        max_turns=5,
+    )
+
+
+def _write_case_memory(
+    *,
+    app_request: Request,
+    conversation: CustomerConversationRecord,
+    safe_response: CustomerSafeResponse,
+    question: str,
+    run_id: str,
+    turn_id: str,
+    manifest: AgentManifest,
+) -> None:
+    candidate = candidate_from_customer_turn(
+        case_id=conversation.conversation_id,
+        agent_id=conversation.agent_id,
+        question=question,
+        safe_response=safe_response,
+        source_run_id=run_id,
+        source_turn_id=turn_id,
+        retention_days=manifest.memory.scopes.case.retention_days,
+    )
+    if candidate is None:
+        return
+    _append_run_trace_event(
+        app_request=app_request,
+        run_id=run_id,
+        event_type="memory_candidate_generated",
+        status="ok",
+        payload={
+            "scope": candidate.scope.value,
+            "case_id": candidate.case_id,
+            "agent_id": candidate.agent_id,
+            "source_run_id": candidate.source_run_id,
+            "source_turn_id": candidate.source_turn_id,
+            "summary": candidate.summary,
+        },
+    )
+
+    _append_run_trace_event(
+        app_request=app_request,
+        run_id=run_id,
+        event_type="memory_write_requested",
+        status="ok",
+        payload={
+            "scope": candidate.scope.value,
+            "case_id": candidate.case_id,
+            "field_names": sorted(candidate.facts.keys()),
+            "sensitivity": candidate.sensitivity.value,
+            "expires_at": candidate.expires_at,
+        },
+    )
+    policy_decision = PolicyEngine.from_file(manifest.policy.file).evaluate(
+        "before_memory_write",
+        {"write": {"summary": candidate.summary, **dict(candidate.facts)}},
+    )
+    if policy_decision.decision.value != "allow":
+        _append_run_trace_event(
+            app_request=app_request,
+            run_id=run_id,
+            event_type="memory_write_decision",
+            status="blocked",
+            payload={
+                "decision": policy_decision.decision.value,
+                "policy_rule_id": policy_decision.policy_rule_id,
+                "reason": policy_decision.reason,
+                "scope": candidate.scope.value,
+                "case_id": candidate.case_id,
+            },
+        )
+        return
+
+    record = _get_memory_store(app_request).append(candidate)
+    _append_run_trace_event(
+        app_request=app_request,
+        run_id=run_id,
+        event_type="memory_write_decision",
+        status="ok",
+        payload={
+            "decision": "allow",
+            "policy_rule_id": policy_decision.policy_rule_id,
+            "memory_id": record.memory_id,
+            "scope": record.scope.value,
+            "case_id": record.case_id,
+        },
+    )
+
+
+def _case_memory_enabled(manifest: AgentManifest) -> bool:
+    return manifest.memory.provider == "local" and manifest.memory.scopes.case.enabled
+
+
+def _append_memory_admission_event(
+    *,
+    app_request: Request,
+    detail: RunDetail,
+    admission: MemoryAdmission,
+    conversation: CustomerConversationRecord,
+) -> None:
+    _append_run_trace_event(
+        app_request=app_request,
+        run_id=detail.run_id,
+        event_type="memory_admission",
+        status="ok" if admission.admitted else "blocked",
+        payload={
+            "admitted": admission.admitted,
+            "case_id": conversation.conversation_id,
+            "agent_id": conversation.agent_id,
+            "included_memory_ids": list(admission.included_memory_ids),
+            "summary": admission.summary,
+            "facts": dict(admission.facts),
+            "rejected_memory_ids": list(admission.rejected_memory_ids),
+            "rejection_reasons": dict(admission.rejection_reasons),
+        },
+    )
+
+
+def _append_run_trace_event(
+    *,
+    app_request: Request,
+    run_id: str,
+    event_type: str,
+    status: Literal["ok", "blocked", "waiting", "error"],
+    payload: dict[str, Any],
+) -> None:
+    if not run_id:
+        return
+    trace_path = _get_run_store(app_request).history_dir / run_id / "trace.jsonl"
+    if not trace_path.exists():
+        return
+    event = {
+        "schema_version": "trace.v1",
+        "run_id": run_id,
+        "event_id": f"evt_{event_type}_{uuid4().hex[:8]}",
+        "sequence": _next_trace_sequence(trace_path),
+        "timestamp": _now(),
+        "event_type": event_type,
+        "span_id": f"span_{event_type}",
+        "status": status,
+        "payload": payload,
+        "redaction": {"applied": False, "fields": []},
+    }
+    with trace_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True))
+        handle.write("\n")
+
+
 def _append_customer_handoff_event(
     *,
     app_request: Request,
@@ -517,6 +725,10 @@ def _require_customer_conversation(
 
 def _get_customer_store(request: Request) -> CustomerStore:
     return cast(CustomerStore, request.app.state.customer_store)
+
+
+def _get_memory_store(request: Request) -> LocalMemoryStore:
+    return cast(LocalMemoryStore, request.app.state.memory_store)
 
 
 def _get_run_store(request: Request) -> RunStore:

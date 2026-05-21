@@ -470,12 +470,38 @@ memory:
   provider: session
 ```
 
+Planned long-term memory uses three Proof Agent scopes:
+- Case Memory
+- User Memory
+- Shared Memory
+
+These scopes are independent from provider frameworks. A provider such as Mem0 may back one or more scopes through a Memory Provider Adapter, but Proof Agent still owns write policy, retrieval policy, Memory Admission, redaction, trace, and retention behavior.
+
+The planned Case Memory contract shape is:
+```yaml
+memory:
+  provider: local
+  scopes:
+    case:
+      enabled: true
+      retention_days: 30
+      max_records: 5
+      allow_restricted: false
+    user:
+      enabled: false
+    shared:
+      enabled: false
+```
+
+The first implementation stage should reject enabled User Memory or Shared Memory while allowing them to be explicitly disabled.
+
 Before extending persistent memory, you must define:
 - retention policy
 - deletion behavior
 - redaction behavior
 - tenant boundary
 - `before_memory_write` policy
+- Memory Admission policy
 
 ### Tools / MCP
 Tools are registered via `tools.yaml`:

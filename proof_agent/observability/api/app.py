@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.customer_api import router as customer_router
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
+from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.observability.api.routers import handoffs, health, runs, stats
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.customer_store import CustomerStore
@@ -64,6 +65,9 @@ def create_app(
     application.state.customer_store = CustomerStore(
         conversations_dir.with_name(f"{conversations_dir.name}_customer")
     )
+    application.state.memory_store = LocalMemoryStore(
+        conversations_dir.with_name(f"{conversations_dir.name}_memory")
+    )
     application.state.published_agents = PublishedAgentRegistry(published_agents)
 
     application.include_router(execution_router, prefix="/api")
@@ -74,7 +78,9 @@ def create_app(
     application.include_router(health.router, prefix="/api")
 
     # Mount the built frontend SPA as a catch-all fallback.
-    resolved_static = static_dir or Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist"
+    resolved_static = (
+        static_dir or Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist"
+    )
     if resolved_static.is_dir():
         application.mount(
             "/",

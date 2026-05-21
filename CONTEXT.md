@@ -344,6 +344,38 @@ _Avoid_: Raw transcript injection, unrestricted chat memory
 The local conversation timeline store that links chat turns to governed run artifacts.
 _Avoid_: RunStore, persistent enterprise memory
 
+**Controlled Agent Memory**:
+The governed memory capability set that lets an Agent retain, retrieve, and admit prior information only through explicit Control Envelope checks.
+_Avoid_: Unrestricted agent memory, raw chat history, automatic self-learning
+
+**Hybrid Memory Framework**:
+A Controlled Agent Memory design that can use multiple memory provider adapters without binding product memory layers to any provider's native taxonomy.
+_Avoid_: Vendor-owned memory taxonomy, hidden prompt cache, framework-defined governance
+
+**Memory Provider Adapter**:
+A Capability Layer adapter that connects an external or internal memory engine to Proof Agent memory contracts without giving that engine authority over Harness decisions.
+_Avoid_: Direct memory backend, model-owned memory, uncontrolled memory plugin
+
+**Case Memory**:
+Memory scoped to one case, task, customer issue, or conversation journey.
+_Avoid_: Persistent user profile, audit log, raw conversation transcript
+
+**Case Focus**:
+The current case's active topics, requested report views, filters, or unresolved areas of interest used for follow-up understanding inside Case Memory.
+_Avoid_: Persistent user interest profile, marketing preference, cross-session behavioral profile
+
+**Persistent User Memory**:
+Long-lived memory about a user or customer that may be reused across conversations only when consent, retention, deletion, redaction, tenant boundary, and policy admission rules are defined.
+_Avoid_: Case Memory, customer transcript archive, automatic behavioral profile
+
+**Shared Memory**:
+Long-lived organizational memory shared across users or Agents after governance admission.
+_Avoid_: Knowledge Provider, uncontrolled internal notes, model fine-tuning data
+
+**Memory Admission**:
+The Control Plane decision that determines whether retrieved memory may enter the Structured Control Context or model request for a governed run.
+_Avoid_: Automatic memory injection, raw memory recall
+
 **Customer Conversation Retention Policy**:
 The rule that limits how long customer-facing conversation text is kept for user experience and follow-up resolution.
 _Avoid_: Permanent customer transcript storage, audit retention policy
@@ -593,6 +625,14 @@ _Avoid_: Evidence content dump
 - Each **Customer Handoff Event** uses a fixed **Handoff Reason** for trace, RunStore, Dashboard filtering, and acceptance tests.
 - The **Assisted QA Chat Frontend** uses **Controlled Conversation Context** for automatic multi-turn context injection.
 - A **Conversation Store** preserves chat timelines while each turn remains linked to a governed run in RunStore.
+- **Controlled Agent Memory** extends memory beyond per-run session state while remaining inside the **Control Envelope**.
+- A **Hybrid Memory Framework** may use one or more **Memory Provider Adapter** implementations, but **Memory Admission** remains a Control Plane decision.
+- Memory layers describe Proof Agent product semantics; **Memory Provider Adapter** implementations describe replaceable storage and retrieval engines.
+- External memory engines may provide storage, retrieval, summarization, or ranking, but they must not decide **Memory Admission** or bypass the **Control Envelope**.
+- **Case Memory**, **Persistent User Memory**, and **Shared Memory** are distinct memory scopes and must not be merged into a raw transcript store.
+- **Case Memory** is generated from governed run facts, not from raw transcripts or unvalidated model text.
+- **Case Focus** belongs to **Case Memory** and must not become a cross-session **Persistent User Memory** profile in the first implementation stage.
+- **Case Memory** may support follow-up understanding after **Memory Admission**, but it is not **Accepted Evidence**.
 - V1 uses a **Customer Conversation Retention Policy** for short-lived customer chat text and an **Audit Retention Boundary** for longer-lived trace-safe run facts.
 - **RunStore** preserves governed run artifacts separately from the customer conversation timeline.
 - V1 keeps the existing dashboard role as an **Internal Governance Dashboard** and does not deliver an **Agent Control Platform Console**.

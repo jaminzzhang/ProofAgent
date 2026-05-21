@@ -50,7 +50,17 @@ tools:
   file: ./tools.yaml
 
 memory:
-  provider: session
+  provider: local
+  scopes:
+    case:
+      enabled: true
+      retention_days: 30
+      max_records: 5
+      allow_restricted: false
+    user:
+      enabled: false
+    shared:
+      enabled: false
 
 audit:
   trace_path: ../../runs/latest/trace.jsonl

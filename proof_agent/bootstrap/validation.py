@@ -126,13 +126,14 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
             artifact_path=manifest_path,
         )
     _reject_secret_model_params(manifest, manifest_path=manifest_path)
-    if manifest.memory.provider != "session":
+    if manifest.memory.provider not in {"session", "local"}:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"unsupported memory provider: {manifest.memory.provider}",
-            "Use memory.provider: session for v1.",
+            "Use memory.provider: session or memory.provider: local for v1.",
             artifact_path=manifest_path,
         )
+    _validate_memory_config(manifest, manifest_path=manifest_path)
 
     require_path(manifest.policy.file, "policy.file", manifest_path)
     require_path(manifest.tools.file, "tools.file", manifest_path)
@@ -207,12 +208,40 @@ def _validate_checkpointer_config(manifest: AgentManifest, *, manifest_path: Pat
         )
 
 
+def _validate_memory_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    scopes = manifest.memory.scopes
+    if scopes.user.enabled:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "memory.scopes.user.enabled is not supported yet",
+            "Set memory.scopes.user.enabled: false for Stage 1 Case Memory.",
+            artifact_path=manifest_path,
+        )
+    if scopes.shared.enabled:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "memory.scopes.shared.enabled is not supported yet",
+            "Set memory.scopes.shared.enabled: false for Stage 1 Case Memory.",
+            artifact_path=manifest_path,
+        )
+    if scopes.case.retention_days <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "memory.scopes.case.retention_days must be greater than 0",
+            "Set memory.scopes.case.retention_days to a positive integer.",
+            artifact_path=manifest_path,
+        )
+    if scopes.case.max_records <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "memory.scopes.case.max_records must be greater than 0",
+            "Set memory.scopes.case.max_records to a positive integer.",
+            artifact_path=manifest_path,
+        )
+
+
 def _reject_secret_model_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    forbidden = sorted(
-        key
-        for key in manifest.model.params
-        if _is_forbidden_model_param(str(key))
-    )
+    forbidden = sorted(key for key in manifest.model.params if _is_forbidden_model_param(str(key)))
     if forbidden:
         raise ProofAgentError(
             "PA_SECRET_001",
@@ -254,11 +283,7 @@ def _validate_react_config(manifest: AgentManifest, *, manifest_path: Path) -> N
             f"Supported providers: {', '.join(sorted(SUPPORTED_MODEL_PROVIDERS))}.",
             artifact_path=manifest_path,
         )
-    forbidden = sorted(
-        key
-        for key in react.planner.params
-        if _is_forbidden_model_param(str(key))
-    )
+    forbidden = sorted(key for key in react.planner.params if _is_forbidden_model_param(str(key)))
     if forbidden:
         raise ProofAgentError(
             "PA_SECRET_001",
@@ -317,11 +342,7 @@ def _validate_review_config(manifest: AgentManifest, *, manifest_path: Path) -> 
             "Set review.subagent.fail_closed to true.",
             artifact_path=manifest_path,
         )
-    forbidden = sorted(
-        key
-        for key in subagent.params
-        if _is_forbidden_model_param(str(key))
-    )
+    forbidden = sorted(key for key in subagent.params if _is_forbidden_model_param(str(key)))
     if forbidden:
         raise ProofAgentError(
             "PA_SECRET_001",
@@ -338,9 +359,7 @@ def _is_forbidden_model_param(key: str) -> bool:
     return any(part in normalized for part in FORBIDDEN_MODEL_PARAM_PARTS)
 
 
-def _validate_knowledge_provider_params(
-    manifest: AgentManifest, *, manifest_path: Path
-) -> None:
+def _validate_knowledge_provider_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
     params = manifest.knowledge.params
     provider = manifest.knowledge.provider
     if provider == "local_markdown":
@@ -359,7 +378,9 @@ def _validate_knowledge_provider_params(
         _required_param(params, "index_name", provider, manifest_path)
         mock_results_path = params.get("mock_results_path")
         if mock_results_path is not None:
-            require_path(Path(mock_results_path), "knowledge.params.mock_results_path", manifest_path)
+            require_path(
+                Path(mock_results_path), "knowledge.params.mock_results_path", manifest_path
+            )
         return
     if provider == "pageindex":
         _required_param(params, "endpoint_env", provider, manifest_path)
@@ -409,7 +430,9 @@ def _validate_retrieval_config(manifest: AgentManifest, *, manifest_path: Path) 
             "Set retrieval.min_score to a number from 0 to 1.",
             artifact_path=manifest_path,
         )
-    if retrieval.strategy == "agentic" and (retrieval.max_steps is None or retrieval.max_steps <= 0):
+    if retrieval.strategy == "agentic" and (
+        retrieval.max_steps is None or retrieval.max_steps <= 0
+    ):
         raise ProofAgentError(
             "PA_CONFIG_002",
             "retrieval.max_steps is required for agentic retrieval",
@@ -418,9 +441,7 @@ def _validate_retrieval_config(manifest: AgentManifest, *, manifest_path: Path) 
         )
 
 
-def _required_param(
-    params: Mapping[str, Any], key: str, provider: str, manifest_path: Path
-) -> Any:
+def _required_param(params: Mapping[str, Any], key: str, provider: str, manifest_path: Path) -> Any:
     value = params.get(key)
     if value in (None, ""):
         raise ProofAgentError(
@@ -434,9 +455,7 @@ def _required_param(
 
 def _reject_secret_knowledge_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
     forbidden = sorted(
-        key
-        for key in manifest.knowledge.params
-        if _is_forbidden_knowledge_param(str(key))
+        key for key in manifest.knowledge.params if _is_forbidden_knowledge_param(str(key))
     )
     if forbidden:
         raise ProofAgentError(

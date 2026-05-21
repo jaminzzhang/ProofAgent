@@ -173,3 +173,93 @@ def test_customer_feedback_is_observation_only(tmp_path: Path) -> None:
 
     assert feedback.status_code == 200
     assert feedback.json()["feedback"]["applies_to_training"] is False
+
+
+def test_customer_run_admits_same_case_memory_on_follow_up(tmp_path: Path) -> None:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    first = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are required for inpatient claim reimbursement?"},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are needed for that reimbursement again?"},
+    )
+
+    assert second.status_code == 200
+    trace = client.get(f"/api/runs/{second.json()['run_id']}/trace").json()["events"]
+    admission = next(event for event in trace if event["event_type"] == "memory_admission")
+    assert admission["payload"]["admitted"] is True
+    assert admission["payload"]["included_memory_ids"]
+    assert "inpatient" in admission["payload"]["summary"].lower()
+
+
+def test_customer_run_does_not_admit_memory_from_another_case(tmp_path: Path) -> None:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+    )
+    client = TestClient(app)
+    first_conversation = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    ).json()["conversation_id"]
+    second_conversation = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    ).json()["conversation_id"]
+
+    client.post(
+        f"/api/customer/conversations/{first_conversation}/runs",
+        json={"question": "What documents are required for inpatient claim reimbursement?"},
+    )
+    response = client.post(
+        f"/api/customer/conversations/{second_conversation}/runs",
+        json={"question": "What documents are needed for that reimbursement again?"},
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
+    admission = next(event for event in trace if event["event_type"] == "memory_admission")
+    assert admission["payload"]["admitted"] is False
+    assert admission["payload"]["included_memory_ids"] == []
+
+
+def test_customer_run_traces_case_memory_write_decision(tmp_path: Path) -> None:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are required for inpatient claim reimbursement?"},
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
+    event_types = [event["event_type"] for event in trace]
+    assert "memory_candidate_generated" in event_types
+    assert "memory_write_requested" in event_types
+    assert "memory_write_decision" in event_types

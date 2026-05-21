@@ -668,8 +668,128 @@ Real MCP strategy:
 
 Current baseline is session memory.
 
+Long-term memory planning uses three Proof Agent memory scopes:
+- Case Memory for one case, task, customer issue, or conversation journey.
+- User Memory for long-lived user or customer facts that can cross conversations.
+- Shared Memory for long-lived organizational or Agent-shared facts.
+
+These scopes are product and governance semantics, not storage choices. Mem0, LangGraph Store, databases, vector indexes, graph memory engines, or other external systems may be used as Memory Provider Adapters for any scope. Provider-native taxonomies must not replace Proof Agent memory contracts.
+
+The first implementation stage should focus on Case Memory because it extends existing conversation context, customer journeys, and run audit facts without introducing cross-user long-term profiling. User Memory and Shared Memory should follow only after Memory Admission, deletion, retention, redaction, and tenant controls are proven on Case Memory.
+
+Case Memory must be generated from governed run facts, such as conversation turns, customer-safe response snapshots, outcomes, accepted evidence summaries, authorized tool result summaries, clarification requests, handoff reasons, and policy decisions. Raw transcripts and unvalidated model text must not be written directly as Case Memory.
+
+Case Memory may include Case Focus: active topics, report dimensions, filters, requested views, and unresolved areas of interest within the current case. Case Focus is not a cross-session user interest profile. Long-term user interests belong to future User Memory and require separate consent, deletion, and profiling controls.
+
+For report-style questions, Case Memory stores report intent and view context, such as topic, dimensions, filters, requested view, and missing fields. It must not store report result snapshots, raw query output, metric values, rankings, or stale business numbers as memory. Report data must be fetched again through authorized tools or knowledge providers before it can support an answer.
+
+Case Memory writes should happen after the governed run finishes and after trace, receipt, and RunStore artifacts are available. The write produces memory for future runs only; it must not modify the current run's policy decisions, evidence admission, or final output.
+
+Admitted Case Memory can enter Structured Control Context for follow-up resolution, missing-field tracking, and state continuity. It is not Accepted Evidence and cannot support customer-facing business claims. Such claims still require Accepted Evidence or an authorized tool result.
+
+The first Case Memory implementation should define Proof Agent memory contracts and a local memory store before adding external adapters. Mem0 or similar systems should be integrated afterward through a Memory Provider Adapter so external framework behavior cannot shape the Proof Agent memory contract.
+
+A Mem0 adapter may provide storage, retrieval, summarization enhancement, and similarity recall after the local contract is stable. It must not decide whether memory can be written, whether memory can enter a run, how retention works, or whether a remembered fact may support an answer. Those decisions remain in Proof Agent policy, redaction, retention, tenant boundary, and Memory Admission logic.
+
+The first MemoryCandidate generation path should be deterministic. It should extract candidates only from governed run facts such as outcome, clarification missing fields, handoff reason, accepted evidence summaries, authorized tool result summaries, Customer Response Snapshot, and Case Focus. LLM-based memory summarization is a later extension and must emit a validated JSON MemoryCandidate, fail closed on invalid output, and still pass `before_memory_write` plus sensitive-field validation.
+
+The first MemoryRecord contract should stay minimal:
+- `memory_id`
+- `scope`, initially `case`
+- `case_id`
+- `agent_id`
+- `summary`
+- `facts`
+- `source_run_id`
+- `source_turn_id`
+- `created_at`
+- `expires_at`
+- `sensitivity`
+- `status`
+
+Embeddings, graph edges, confidence sub-scores, provider-native ids, and ranking metadata are adapter concerns until the core admission contract requires them.
+
+The first Case Memory read path should use same-case bounded recall:
+- query by `case_id` and `agent_id`
+- include only `status: active`
+- exclude expired records
+- return at most the most recent five records by default
+- pass returned records through Memory Admission before any context injection
+
+Cross-case semantic recall is out of the first Case Memory stage because it increases tenant, privacy, and false-transfer risk.
+
+The first Case Memory retention behavior should require `expires_at`, default to 30 days, support soft deletion by `case_id`, and exclude deleted or expired records from recall. Delete operations must be audit-linked. Expired records may remain until cleanup, but they must not be admitted.
+
+The first Memory Admission rules are deterministic:
+- `scope` is `case`
+- `case_id` matches the current case or conversation
+- `agent_id` matches the current Published Agent
+- `status` is `active`
+- the record is not expired
+- `sensitivity` is not `restricted` unless the Agent Contract explicitly allows restricted memory
+
+The admission output should include `admitted`, `included_memory_ids`, `summary`, `facts`, `rejected_memory_ids`, and `rejection_reasons`. LLMs may not decide Memory Admission in the first implementation stage.
+
+The Case Memory audit loop should use four events:
+- `memory_candidate_generated` records trace-safe candidate ids, source run id, scope, and case id after a run completes.
+- `memory_write_requested` records the write attempt with field names, sensitivity, and expiration metadata.
+- `memory_write_decision` records policy and validator allow/deny results.
+- `memory_admission` records which memory ids were admitted or rejected for a later run and why.
+
+`memory_read` may remain provider-level read metadata; `memory_admission` is the event that records whether memory can enter context.
+
+The planned Agent Contract shape keeps memory as one top-level section while exposing all scopes explicitly:
+
+```yaml
+memory:
+  provider: local
+  scopes:
+    case:
+      enabled: true
+      retention_days: 30
+      max_records: 5
+      allow_restricted: false
+    user:
+      enabled: false
+    shared:
+      enabled: false
+```
+
+The first implementation stage should allow only Case Memory to be enabled. User Memory and Shared Memory may appear as disabled config entries, but enabling them must fail until their governance behavior is implemented.
+
+Case Memory should be integrated first with the Customer Run API, using the customer conversation id as `case_id`. Assisted Chat may reuse the same design with its conversation id. CLI single-run execution does not enable Case Memory unless a future entry point supplies an explicit `case_id`.
+
+Memory roadmap:
+
+| Stage | Goal | Key deliverables |
+| --- | --- | --- |
+| 1 | Local Case Memory | memory contracts, local store, same-case recall, Memory Admission, deterministic post-run extractor, Customer Run API integration, trace events |
+| 2 | Mem0 Adapter | Mem0-backed storage, retrieval, summarization enhancement, and similarity recall behind the same Proof Agent contracts |
+| 3 | User Memory | cross-session user memory with consent, delete/export, retention, sensitivity policy, and restricted-memory handling |
+| 4 | Shared Memory | organization or Agent-shared memory with clear separation from Knowledge Provider and no bypass around evidence requirements |
+
+Stage 1 Local Case Memory acceptance:
+- Customer Run API second and later turns can recall Case Memory by the same `conversation_id`.
+- Recalled memory passes `memory_admission` before entering Structured Control Context.
+- Case Memory can carry `policy_id`, `claim_id`, missing fields, Case Focus, and report view context.
+- Case Memory does not store full report results, raw transcripts, raw tool payloads, or raw evidence content.
+- Case Memory is not Accepted Evidence; business claims still require Accepted Evidence or authorized tool results.
+- Expired, deleted, wrong-case, wrong-Agent, and disallowed restricted memory are not admitted.
+- Trace includes `memory_candidate_generated`, `memory_write_requested`, `memory_write_decision`, and `memory_admission`.
+- The deterministic demo remains runnable without network access, API keys, Mem0, or external memory services.
+
+Stage 1 module boundaries:
+- `proof_agent/contracts/memory.py` owns `MemoryRecord`, `MemoryCandidate`, `MemoryQuery`, `MemoryAdmission`, scope, status, and sensitivity contracts.
+- `proof_agent/capabilities/memory/local_store.py` owns local append, read, and soft-delete mechanics without admission authority.
+- `proof_agent/control/memory/extractor.py` owns deterministic MemoryCandidate generation from governed run facts.
+- `proof_agent/control/memory/admission.py` owns deterministic Memory Admission.
+- `proof_agent/bootstrap/manifest.py` and `proof_agent/contracts/manifest.py` own Agent Contract memory config parsing and validation.
+- `proof_agent/delivery/customer_api.py` integrates run-before recall/admission and run-after candidate/write behavior for Customer Run API.
+- `proof_agent/observability/audit/trace.py` emits memory candidate, write, and admission events.
+
 Rules:
 - All writes pass `before_memory_write`.
+- Retrieved memory passes Memory Admission before it enters Structured Control Context or a model request.
 - Sensitive fields are denied or redacted.
 - memory read/write emits trace events.
 - Persistent memory providers require retention, deletion, redaction, and tenant boundary design before adoption.

@@ -102,8 +102,22 @@ class ToolsConfig(FrozenModel):
     file: Path
 
 
+class MemoryScopeConfig(FrozenModel):
+    enabled: bool = False
+    retention_days: int = 30
+    max_records: int = 5
+    allow_restricted: bool = False
+
+
+class MemoryScopesConfig(FrozenModel):
+    case: MemoryScopeConfig = Field(default_factory=MemoryScopeConfig)
+    user: MemoryScopeConfig = Field(default_factory=MemoryScopeConfig)
+    shared: MemoryScopeConfig = Field(default_factory=MemoryScopeConfig)
+
+
 class MemoryConfig(FrozenModel):
     provider: str
+    scopes: MemoryScopesConfig = Field(default_factory=MemoryScopesConfig)
 
 
 class AuditConfig(FrozenModel):

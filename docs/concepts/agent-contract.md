@@ -45,6 +45,23 @@ audit:
 
 The base schema is intentionally small. It is enough to run the Enterprise QA template while leaving room for ReAct planning, review, remote model, vector store, MCP, and dashboard integrations through explicit sections and adapter-specific params.
 
+Planned long-term memory keeps the same top-level `memory` section but exposes Proof Agent scopes explicitly. The first long-term implementation enables only Case Memory; User Memory and Shared Memory may be declared only as disabled until their governance rules are implemented.
+
+```yaml
+memory:
+  provider: local
+  scopes:
+    case:
+      enabled: true
+      retention_days: 30
+      max_records: 5
+      allow_restricted: false
+    user:
+      enabled: false
+    shared:
+      enabled: false
+```
+
 ## ReAct Shape
 
 The `react_enterprise_qa` template adds `react`, `review`, and `response` sections. These sections are part of the Agent Contract, not hidden runtime knobs.

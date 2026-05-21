@@ -72,8 +72,10 @@ Every trace line is one JSON object:
 | `tool_request` | requested governed tool call |
 | `tool_result` | tool result or safe skipped result |
 | `memory_read` | session memory read |
+| `memory_candidate_generated` | post-run trace-safe memory candidates generated from governed run facts |
 | `memory_write_requested` | requested session memory write |
 | `memory_write_decision` | memory policy decision |
+| `memory_admission` | deterministic decision about which retrieved memory may enter Structured Control Context |
 | `final_output` | final answer, refusal, escalation, or waiting state |
 | `redaction_applied` | sensitive fields removed or masked |
 | `artifact_written` | trace or receipt artifact path |
