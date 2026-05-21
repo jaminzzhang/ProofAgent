@@ -1,0 +1,46 @@
+import { Link } from 'react-router-dom'
+import { StatusDot } from '../components/StatusDot'
+
+export function ModeSelectionPage() {
+  return (
+    <main className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-3xl flex-col justify-center px-6 py-12">
+      <div className="space-y-8">
+        <div className="space-y-3">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
+            <StatusDot status="connected" />
+            API Live
+          </div>
+          <div>
+            <h1 className="text-3xl font-semibold tracking-normal text-[var(--text-primary)]">
+              Proof Agent Chat
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+              Choose the chat surface for this session.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Link
+            to="/operator"
+            className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 transition hover:border-[var(--accent)] hover:shadow-sm"
+          >
+            <span className="text-base font-semibold text-[var(--text-primary)]">Operator Chat</span>
+            <span className="mt-2 block text-sm leading-6 text-[var(--text-secondary)]">
+              Internal governed QA with audit and approval context.
+            </span>
+          </Link>
+          <Link
+            to="/customer"
+            className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 transition hover:border-[var(--accent)] hover:shadow-sm"
+          >
+            <span className="text-base font-semibold text-[var(--text-primary)]">Customer Chat</span>
+            <span className="mt-2 block text-sm leading-6 text-[var(--text-secondary)]">
+              Customer-safe service chat for policy and claim support.
+            </span>
+          </Link>
+        </div>
+      </div>
+    </main>
+  )
+}

@@ -111,15 +111,11 @@ proof_agent/
     api/routers/
       handoffs.py
 
-customer/
-  index.html
-  package.json
-  vite.config.ts
+chat/
   src/
-    api/
-    components/
-    pages/
-    styles/
+    chat-core/
+    modes/customer/
+    modes/operator/
 
 examples/
   insurance_customer_service/
@@ -133,7 +129,7 @@ examples/
     expected/
 ```
 
-The exact storage implementation may reuse existing `ConversationStore` and `RunStore` internals, but customer-facing code should be separated from the existing operator-facing `chat/` app.
+The exact storage implementation may reuse existing `ConversationStore` and `RunStore` internals. Customer-facing frontend code now lives inside the unified `chat/` SPA as a separate `/customer` mode with its own Customer Run API adapter and customer-safe projection boundary.
 
 ## End-To-End Flow
 
@@ -345,7 +341,7 @@ Models:
 
 ## Customer Web Chat
 
-Create a separate `customer/` frontend rather than reusing the operator-facing `chat/` app.
+Deliver customer service through the unified `chat/` frontend using the `/customer` route namespace rather than a separate Vite app.
 
 The UI should support:
 
@@ -426,7 +422,7 @@ Real LLM path is product-capable, but deterministic behavior remains the require
 
 ### Phase 4: Customer Web Chat And Handoff Monitor
 
-- Add `customer/` Vite app.
+- Add customer mode to the unified `chat/` Vite app.
 - Add customer-safe UI states.
 - Add feedback UI.
 - Add Dashboard handoff monitor route/view.
@@ -470,11 +466,11 @@ Future ADR candidates:
 - Business claim validation may need a conservative first implementation before semantic claim extraction improves.
 - PageIndex failure behavior must be deterministic and testable.
 - Mock auth must prove authorization isolation without looking like production identity.
-- Customer Web Chat must not accidentally expose internal URLs or run artifacts.
+- Customer Web Chat mode must not accidentally expose internal URLs or run artifacts.
 - Feedback must remain observational and must not become an implicit learning loop.
 
 ## Final Recommendation
 
 Build V1 as a customer-facing private pilot reference implementation on top of the reusable Controlled Agent Harness Framework.
 
-Use `react_enterprise_qa` as the customer-service workflow, create a new Insurance Customer Service Agent package, add a separate Customer Run API and customer Web Chat, keep deterministic release gates, and preserve the framework boundaries so future Agents can reuse the same control, policy, tool, knowledge, model, and observability contracts.
+Use `react_enterprise_qa` as the customer-service workflow, create a new Insurance Customer Service Agent package, add a separate Customer Run API and customer-safe `/customer` mode in the unified Chat frontend, keep deterministic release gates, and preserve the framework boundaries so future Agents can reuse the same control, policy, tool, knowledge, model, and observability contracts.

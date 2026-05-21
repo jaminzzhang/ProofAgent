@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.12, Pydantic v2 frozen contracts, FastAPI, LangGraph, JSONL trace, Jinja receipt rendering, Vite/React/TypeScript/Tailwind v4, pytest, Ruff, mypy.
 
+> **Supersession note:** The customer frontend file layout in this historical plan was superseded by ADR 0007 and the 2026-05-21 Unified Chat Frontend plan. Customer service now lives in the unified `chat/` SPA under `/customer`, not in an independent `customer/` Vite app.
+
 ---
 
 ## Scope Check

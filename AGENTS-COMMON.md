@@ -22,7 +22,7 @@ Proof Agent is a **Controlled Agent Harness Framework** for enterprise Agent del
 
 The target user is an enterprise AI Agent owner, Agent platform owner, or platform architect who needs governed, auditable Agent behavior rather than a generic chatbot or ungoverned RAG demo.
 
-Use these terms consistently: `Controlled Agent Harness Framework`, `Control Envelope`, `Harness Engineering`, `Harness RAG`, `Plain RAG`, `Agent Contract`, `PolicyEngine`, `Tool Gateway`, `MCP approval`, `Trace & Audit`, `Governance Receipt`, `Enterprise QA Template`, `Enterprise QA Reference Agent`, `Assisted QA Chat Frontend`, and `Controlled Conversation Context`.
+Use these terms consistently: `Controlled Agent Harness Framework`, `Control Envelope`, `Harness Engineering`, `Harness RAG`, `Plain RAG`, `Agent Contract`, `PolicyEngine`, `Tool Gateway`, `MCP approval`, `Trace & Audit`, `Governance Receipt`, `Enterprise QA Template`, `Enterprise QA Reference Agent`, `Assisted QA Chat Frontend`, `Customer Service Chat Frontend`, `Unified Chat Frontend`, and `Controlled Conversation Context`.
 
 ## Current Status
 
@@ -30,7 +30,7 @@ The repository contains a Python MVP plus application surfaces:
 
 - Python package with typed contracts, bootstrap/composition, policy enforcement, LangGraph runtime runner, knowledge providers, model provider boundaries, tool approval gating, bounded memory, trace/audit output, RunStore, ConversationStore, Dashboard API, Run Execution API, comparison utilities, tests, CI, Docker assets, and deterministic examples.
 - Dashboard frontend under `dashboard/` for run history, stats, run detail, timeline, evidence, approval, receipt, and model usage views.
-- Assisted Chat frontend under `chat/` for operator-facing governed question answering through the Run Execution and Conversation APIs.
+- Unified Chat frontend under `chat/` for operator-facing Assisted QA Chat and customer-facing Customer Service Chat modes.
 - Example Agent packages under `examples/enterprise_qa/` and `examples/insurance_service_qa/`.
 
 The deterministic demo must remain runnable without network access, API keys, or external services. Expected demo outcomes:
@@ -77,7 +77,7 @@ Documentation is bilingual. English docs live under `docs/`; Chinese translation
 - `proof_agent/evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison.
 - `tests/` contains pytest coverage for contracts, bootstrap, policy, knowledge, model providers, tool approval, memory, audit output, API, compare, workflow, and CLI behavior.
 - `dashboard/` contains the Vite/React Dashboard SPA.
-- `chat/` contains the Vite/React Assisted Chat SPA.
+- `chat/` contains the Vite/React Unified Chat SPA with `/operator` and `/customer` modes.
 - `examples/` contains runnable Agent packages.
 - `docs/` contains product, architecture, concept, example, agent, and ADR documentation.
 - `runs/` is the local audit output directory; only `runs/.gitkeep` should be committed.
@@ -113,7 +113,7 @@ cd chat && npm run build
 cd chat && npm test
 ```
 
-The Dashboard dev server runs on port 5173 by default. The Chat dev server runs on port 5174 by default. Both expect the API server on `127.0.0.1:8000`.
+The Dashboard dev server runs on port 5173 by default. The Chat dev server runs on port 5174 by default. Both expect the API server on `127.0.0.1:8000`. Use `/operator` for Assisted QA Chat and `/customer` for Customer Service Chat.
 
 For documentation-only edits, at minimum run:
 

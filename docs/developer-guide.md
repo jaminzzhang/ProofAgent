@@ -70,15 +70,15 @@ Run the customer journey acceptance suite:
 uv run --extra dashboard --extra dev python -m pytest tests/test_customer_journeys.py -v
 ```
 
-Run the customer Web Chat during local development:
+Run the unified Chat frontend during local development:
 
 ```bash
-cd customer
+cd chat
 npm install
 npm run dev
 ```
 
-The customer app defaults to port `5175` and expects the API server on `127.0.0.1:8000`.
+The Chat app defaults to port `5174` and expects the API server on `127.0.0.1:8000`. Open `/operator` for the internal Assisted QA Chat mode or `/customer` for the customer-safe Customer Service Chat mode.
 
 ## 3. Architecture Mental Model
 

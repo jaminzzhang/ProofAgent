@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { submitFeedback } from '../api/client'
+
+import { submitCustomerFeedback } from './customerAdapter'
 
 export function FeedbackControl({
   conversationId,
@@ -15,7 +16,7 @@ export function FeedbackControl({
     if (busy || submitted) return
     setBusy(true)
     try {
-      await submitFeedback(conversationId, turnId, rating)
+      await submitCustomerFeedback(conversationId, turnId, rating)
       setSubmitted(rating)
     } finally {
       setBusy(false)
@@ -23,10 +24,10 @@ export function FeedbackControl({
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <button
         type="button"
-        onClick={() => send('up')}
+        onClick={() => void send('up')}
         disabled={busy || submitted !== null}
         className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs font-semibold text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-default disabled:opacity-60"
       >
@@ -34,7 +35,7 @@ export function FeedbackControl({
       </button>
       <button
         type="button"
-        onClick={() => send('down')}
+        onClick={() => void send('down')}
         disabled={busy || submitted !== null}
         className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs font-semibold text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-default disabled:opacity-60"
       >

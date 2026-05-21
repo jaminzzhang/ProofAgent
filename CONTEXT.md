@@ -256,6 +256,10 @@ _Avoid_: Assisted QA Chat Frontend, observability dashboard
 The V1 Customer Service Chat Frontend delivered as a browser-based customer chat surface.
 _Avoid_: Omnichannel customer service, channel adapter
 
+**Unified Chat Frontend**:
+A shared browser chat surface that presents consistent design and conversation flow for operator and customer chat modes while preserving audience-specific response projections.
+_Avoid_: Merged internal/customer permissions, customer-visible audit console
+
 **Text-Only Customer Intake**:
 The V1 customer-service input boundary where customers submit text messages but not files, images, audio, or other attachments.
 _Avoid_: Attachment analysis, customer document upload, OCR intake
@@ -558,6 +562,10 @@ _Avoid_: Evidence content dump
 - A **Run Execution API** starts Harness runs; Dashboard and receipt views remain read projections over run artifacts.
 - A **Customer Service Chat Frontend** submits customer messages through the **Customer Run API**, not through the internal chat execution response shape.
 - A **Customer Run API** starts governed Harness runs for a **Published Agent** while returning only **Customer-Safe Response Projection** values.
+- A **Unified Chat Frontend** may share design, navigation rhythm, and message-composition flow across **Assisted QA Chat Frontend** and **Customer Service Chat Frontend** modes.
+- A **Unified Chat Frontend** must not expose audit links, **Governance Detail Projection**, approval state, raw run identifiers, or receipt links in customer mode.
+- A **Unified Chat Frontend** does not merge **Run Execution API** and **Customer Run API** response contracts; audience-specific projections remain separate.
+- **Assisted QA Chat Frontend** mode may expose conversation management and internal audit affordances that **Customer Service Chat Frontend** mode must hide.
 - The first **Assisted QA Chat Frontend** uses an **Approval Continuation Run** after approval decisions rather than claiming durable checkpoint resume.
 - The first framework boundary pass should make **Harness Invocation** and **Workflow Template** reusable while preserving **Enterprise QA Reference Agent** behavior.
 - The **Enterprise QA Reference Agent** is built on the **Controlled Agent Harness Framework**.
@@ -682,6 +690,7 @@ _Avoid_: Evidence content dump
 - "Insurance customer service Agent" could mean the existing insurance QA example or the V1 customer-facing Agent. Resolved: use **Insurance Customer Service Agent** for the V1 Published Agent and keep the existing insurance QA example as a baseline package.
 - "Intelligent customer service" could mean direct customer-facing automation or staff assistance. Resolved: V1 delivery is **Autonomous Customer Service Mode**; **Assisted Service Mode** is a separate staff-assistance mode.
 - "Chat frontend" could mean a customer-facing chatbot or a staff workbench. Resolved: V1 chat is a **Customer Service Chat Frontend**; **Assisted QA Chat Frontend** is the operator-facing surface.
+- "Shared chat frontend" could mean one unrestricted UI or a shared shell with separate audience projections. Resolved: use **Unified Chat Frontend** for a shared design and interaction shell, with customer mode limited to **Customer-Safe Response Projection**.
 - "Customer channel" could mean Web chat, messaging apps, email, mobile SDK, or contact-center integration. Resolved: V1 ships **Customer Service Web Chat**; other channels are future adapters.
 - "Customer intake" could mean text questions or uploaded customer documents. Resolved: V1 uses **Text-Only Customer Intake**; attachment analysis is future work.
 - "Customer chat session" could mean anonymous policy browsing or authenticated account service. Resolved: use **Anonymous Customer Session** for generic-only access and **Authenticated Customer Session** for customer-specific service.
