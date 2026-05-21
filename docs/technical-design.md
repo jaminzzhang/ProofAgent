@@ -690,7 +690,9 @@ Admitted Case Memory can enter Structured Control Context for follow-up resoluti
 
 The first Case Memory implementation should define Proof Agent memory contracts and a local memory store before adding external adapters. Mem0 or similar systems should be integrated afterward through a Memory Provider Adapter so external framework behavior cannot shape the Proof Agent memory contract.
 
-A Mem0 adapter may provide storage, retrieval, summarization enhancement, and similarity recall after the local contract is stable. It must not decide whether memory can be written, whether memory can enter a run, how retention works, or whether a remembered fact may support an answer. Those decisions remain in Proof Agent policy, redaction, retention, tenant boundary, and Memory Admission logic.
+A Mem0 adapter may provide storage, retrieval, summarization enhancement, and similarity recall after the local contract is stable. It must not decide whether memory can be written, whether memory can enter a run, how retention works, or whether a remembered fact may support an answer. Those decisions remain in Proof Agent policy, redaction, retention, tenant boundary, and Memory Admission logic. The adapter maps Proof Agent Case Memory to Mem0 `add` and `search` calls while preserving `case_id`, `agent_id`, source ids, expiration, sensitivity, status, and facts in metadata.
+
+`memory.provider: mem0` is optional. The deterministic baseline and local Case Memory path do not require Mem0, network access, API keys, or external services. Deployments that enable the Mem0 provider must install the `mem0ai` package in their environment or inject a compatible Mem0 client into the application factory.
 
 The first MemoryCandidate generation path should be deterministic. It should extract candidates only from governed run facts such as outcome, clarification missing fields, handoff reason, accepted evidence summaries, authorized tool result summaries, Customer Response Snapshot, and Case Focus. LLM-based memory summarization is a later extension and must emit a validated JSON MemoryCandidate, fail closed on invalid output, and still pass `before_memory_write` plus sensitive-field validation.
 
@@ -743,7 +745,7 @@ The planned Agent Contract shape keeps memory as one top-level section while exp
 
 ```yaml
 memory:
-  provider: local
+  provider: local  # or mem0
   scopes:
     case:
       enabled: true

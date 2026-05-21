@@ -481,7 +481,7 @@ These scopes are independent from provider frameworks. A provider such as Mem0 m
 The planned Case Memory contract shape is:
 ```yaml
 memory:
-  provider: local
+  provider: local  # or mem0
   scopes:
     case:
       enabled: true
@@ -495,6 +495,8 @@ memory:
 ```
 
 The first implementation stage should reject enabled User Memory or Shared Memory while allowing them to be explicitly disabled.
+
+Use `memory.provider: mem0` only when the runtime environment supplies the optional `mem0ai` package or an injected compatible Mem0 client. The Mem0 adapter maps Proof Agent Case Memory to Mem0 storage and search, then Proof Agent still applies Memory Admission before context injection.
 
 Before extending persistent memory, you must define:
 - retention policy

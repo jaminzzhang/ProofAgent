@@ -20,6 +20,8 @@ Proof Agent will define its own memory contracts and local Case Memory store bef
 
 Mem0 adapters may provide storage, retrieval, summarization enhancement, and similarity recall. They may not decide write permission, admission, retention, tenant boundary, policy behavior, or whether remembered content can support an answer.
 
+The Mem0 adapter maps Proof Agent Case Memory records into Mem0 `add` and `search` calls while keeping Proof Agent metadata for scope, case, Agent, source run, source turn, expiration, sensitivity, status, and facts. Mem0 remains optional and is not required for deterministic demos or local Case Memory.
+
 The first MemoryCandidate generator is deterministic and uses governed run facts only. LLM memory summarization is deferred until it can produce validated JSON candidates and fail closed without weakening memory write policy.
 
 The first Case Memory read path is same-case bounded recall. It reads active, unexpired records for the same `case_id` and `agent_id`, then applies Memory Admission. Cross-case semantic recall is deferred to avoid false transfer and tenant-boundary risk.

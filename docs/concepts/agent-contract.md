@@ -49,7 +49,7 @@ Planned long-term memory keeps the same top-level `memory` section but exposes P
 
 ```yaml
 memory:
-  provider: local
+  provider: local  # or mem0
   scopes:
     case:
       enabled: true

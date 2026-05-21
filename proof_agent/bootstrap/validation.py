@@ -126,11 +126,11 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
             artifact_path=manifest_path,
         )
     _reject_secret_model_params(manifest, manifest_path=manifest_path)
-    if manifest.memory.provider not in {"session", "local"}:
+    if manifest.memory.provider not in {"session", "local", "mem0"}:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"unsupported memory provider: {manifest.memory.provider}",
-            "Use memory.provider: session or memory.provider: local for v1.",
+            "Use memory.provider: session, local, or mem0 for v1.",
             artifact_path=manifest_path,
         )
     _validate_memory_config(manifest, manifest_path=manifest_path)

@@ -1,9 +1,46 @@
 from pathlib import Path
+import shutil
 
 import pytest
 from fastapi.testclient import TestClient
 
+from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
 from proof_agent.observability.api.app import create_app
+
+
+class RecordingMem0Client:
+    def __init__(self) -> None:
+        self.memories: list[dict[str, object]] = []
+
+    def add(self, messages: object, **kwargs: object) -> dict[str, object]:
+        metadata = kwargs["metadata"]
+        assert isinstance(metadata, dict)
+        memory_id = f"mem0_{len(self.memories) + 1}"
+        self.memories.append(
+            {
+                "id": memory_id,
+                "memory": "Case focus: inpatient reimbursement.",
+                "created_at": "2026-05-21T00:00:00Z",
+                "metadata": metadata,
+            }
+        )
+        return {"id": memory_id}
+
+    def search(self, query: str, **kwargs: object) -> dict[str, object]:
+        _ = query
+        filters = kwargs.get("filters")
+        assert isinstance(filters, dict)
+        expected_agent = filters["AND"][0]["agent_id"]  # type: ignore[index]
+        expected_case = filters["AND"][1]["run_id"]  # type: ignore[index]
+        return {
+            "results": [
+                memory
+                for memory in self.memories
+                if isinstance(memory["metadata"], dict)
+                and memory["metadata"]["proof_agent_agent_id"] == expected_agent
+                and memory["metadata"]["proof_agent_case_id"] == expected_case
+            ]
+        }
 
 
 def test_customer_run_returns_customer_safe_projection(tmp_path: Path) -> None:
@@ -633,3 +670,44 @@ def test_customer_run_traces_case_memory_write_decision(tmp_path: Path) -> None:
     assert "memory_candidate_generated" in event_types
     assert "memory_write_requested" in event_types
     assert "memory_write_decision" in event_types
+
+
+def test_customer_run_can_use_mem0_case_memory_adapter(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "insurance_customer_service_mem0"
+    shutil.copytree(Path("examples/insurance_customer_service"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "memory:\n  provider: local",
+            "memory:\n  provider: mem0",
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={"insurance_mem0": manifest_path},
+        mem0_memory_store=Mem0MemoryStore(client=RecordingMem0Client()),
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_mem0", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are required for inpatient claim reimbursement?"},
+    )
+    response = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are needed for that reimbursement again?"},
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
+    admission = next(event for event in trace if event["event_type"] == "memory_admission")
+    assert admission["payload"]["admitted"] is True
+    assert admission["payload"]["included_memory_ids"] == ["mem0_1"]

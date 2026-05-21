@@ -82,6 +82,7 @@ class MemoryQuery(FrozenModel):
     agent_id: str
     max_records: int = 5
     allow_restricted: bool = False
+    query_text: str = ""
 
 
 class MemoryAdmission(FrozenModel):

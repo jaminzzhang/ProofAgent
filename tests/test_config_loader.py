@@ -163,6 +163,31 @@ memory:
     assert manifest.memory.scopes.shared.enabled is False
 
 
+def test_loads_mem0_case_memory_contract(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        memory_section="""
+memory:
+  provider: mem0
+  scopes:
+    case:
+      enabled: true
+      retention_days: 30
+      max_records: 5
+      allow_restricted: false
+    user:
+      enabled: false
+    shared:
+      enabled: false
+""",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.memory.provider == "mem0"
+    assert manifest.memory.scopes.case.enabled is True
+
+
 def test_user_memory_enabled_is_rejected_for_stage_one(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,

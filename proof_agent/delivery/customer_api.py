@@ -13,6 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
+
+from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
+from proof_agent.capabilities.tools.gateway import ToolGateway
+
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
@@ -340,7 +344,7 @@ def _admit_customer_case_memory(
         max_records=case_config.max_records,
         allow_restricted=case_config.allow_restricted,
     )
-    records = _get_memory_store(app_request).read(query)
+    records = _get_case_memory_store(app_request, manifest).read(query)
     return admit_memory(records, query=query)
 
 
@@ -426,7 +430,7 @@ def _write_case_memory(
         )
         return
 
-    record = _get_memory_store(app_request).append(candidate)
+    record = _get_case_memory_store(app_request, manifest).append(candidate)
     _append_run_trace_event(
         app_request=app_request,
         run_id=run_id,
@@ -443,7 +447,7 @@ def _write_case_memory(
 
 
 def _case_memory_enabled(manifest: AgentManifest) -> bool:
-    return manifest.memory.provider == "local" and manifest.memory.scopes.case.enabled
+    return manifest.memory.provider in {"local", "mem0"} and manifest.memory.scopes.case.enabled
 
 
 def _append_memory_admission_event(
@@ -632,6 +636,19 @@ def _get_customer_store(request: Request) -> CustomerStore:
 
 def _get_memory_store(request: Request) -> LocalMemoryStore:
     return cast(LocalMemoryStore, request.app.state.memory_store)
+
+
+def _get_case_memory_store(
+    request: Request,
+    manifest: AgentManifest,
+) -> LocalMemoryStore | Mem0MemoryStore:
+    if manifest.memory.provider == "mem0":
+        store = getattr(request.app.state, "mem0_memory_store", None)
+        if store is None:
+            store = Mem0MemoryStore()
+            request.app.state.mem0_memory_store = store
+        return cast(Mem0MemoryStore, store)
+    return _get_memory_store(request)
 
 
 def _get_run_store(request: Request) -> RunStore:
