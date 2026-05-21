@@ -473,7 +473,7 @@ memory:
 
 Planned long-term memory uses three Proof Agent scopes:
 - Case Memory
-- User Memory
+- Persistent User Memory
 - Shared Memory
 
 These scopes are independent from provider frameworks. A provider such as Mem0 may back one or more scopes through a Memory Provider Adapter, but Proof Agent still owns write policy, retrieval policy, Memory Admission, redaction, trace, and retention behavior.
@@ -494,9 +494,15 @@ memory:
       enabled: false
 ```
 
-The first implementation stage should reject enabled User Memory or Shared Memory while allowing them to be explicitly disabled.
+Customer Persistent User Memory can be enabled with `memory.scopes.user.enabled: true` for Customer Service conversations. Shared Memory is still rejected when enabled.
 
-Use `memory.provider: mem0` only when the runtime environment supplies the optional `mem0ai` package or an injected compatible Mem0 client. The Mem0 adapter maps Proof Agent Case Memory to Mem0 storage and search, then Proof Agent still applies Memory Admission before context injection.
+Use `memory.provider: mem0` only when the runtime environment supplies the optional `mem0ai` package or an injected compatible Mem0 client. The Mem0 adapter maps Proof Agent Case Memory to Mem0 storage, search, and filtered deletion, then Proof Agent still applies Memory Admission before context injection.
+
+Customer Service conversations can request Case Memory deletion through `DELETE /api/customer/conversations/{conversation_id}/memory`. The response returns the deleted count and, when the conversation already has an audited run, the run id whose trace received the `memory_delete_decision` event. The endpoint does not expose memory summaries, facts, raw transcripts, or provider payloads.
+
+Customer Persistent User Memory for Customer Service conversations is scoped by `agent_id + subject_ref`, where `subject_ref` is the customer reference. It requires explicit customer memory consent before read or write, stores only Customer Memory Interest Profile data, and can be exported or deleted at the customer reference boundary without exposing provider payloads.
+
+Set `memory_consent: true` on `POST /api/customer/conversations` or on an individual `POST /api/customer/conversations/{conversation_id}/runs` request to allow Customer Persistent User Memory read/write for that run. Export with `GET /api/customer/memory/{subject_ref}?agent_id={agent_id}` and delete with `DELETE /api/customer/memory/{subject_ref}?agent_id={agent_id}`.
 
 Before extending persistent memory, you must define:
 - retention policy

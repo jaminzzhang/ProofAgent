@@ -34,12 +34,14 @@ class CustomerStore:
         *,
         agent_id: str,
         customer_ref: str | None,
+        memory_consent: bool = False,
     ) -> CustomerConversationRecord:
         now = _now()
         record = CustomerConversationRecord(
             conversation_id=f"cust_conv_{uuid4().hex[:8]}",
             agent_id=agent_id,
             customer_ref=customer_ref,
+            memory_consent=memory_consent,
             created_at=now,
             updated_at=now,
         )
@@ -72,6 +74,7 @@ class CustomerStore:
             customer_ref=record.customer_ref,
             created_at=record.created_at,
             updated_at=_now(),
+            memory_consent=record.memory_consent,
             snapshots=(*record.snapshots, snapshot),
             disambiguation_options=record.disambiguation_options,
         )
@@ -122,6 +125,22 @@ class CustomerStore:
             encoding="utf-8",
         )
         return feedback
+
+    def latest_run_id_for_customer(self, *, agent_id: str, customer_ref: str) -> str | None:
+        latest_snapshot: CustomerResponseSnapshot | None = None
+        for path in self._conversations_dir.glob("*/conversation.json"):
+            try:
+                record = CustomerConversationRecord.model_validate(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if record.agent_id != agent_id or record.customer_ref != customer_ref:
+                continue
+            for snapshot in record.snapshots:
+                if latest_snapshot is None or snapshot.created_at > latest_snapshot.created_at:
+                    latest_snapshot = snapshot
+        return latest_snapshot.run_id if latest_snapshot is not None else None
 
     def _conversation_path(self, conversation_id: str) -> Path:
         return self._conversations_dir / conversation_id / "conversation.json"

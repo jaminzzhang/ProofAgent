@@ -468,6 +468,10 @@ _Avoid_: Direct memory backend, model-owned memory, uncontrolled memory plugin
 Memory scoped to one case, task, customer issue, or conversation journey, containing admitted structured case facts or bounded trace-safe summaries rather than complete customer-visible messages.
 _Avoid_: Persistent user profile, audit log, raw conversation transcript
 
+**Case Memory Lifecycle Controls**:
+The governed controls for inspecting, deleting, expiring, and auditing Case Memory without exposing internal memory contents to customers.
+_Avoid_: Customer-visible memory management, unrestricted memory admin, raw memory dump
+
 **Case Focus**:
 The current case's active topics, requested report views, filters, or unresolved areas of interest used for follow-up understanding inside Case Memory.
 _Avoid_: Persistent user interest profile, marketing preference, cross-session behavioral profile
@@ -475,6 +479,26 @@ _Avoid_: Persistent user interest profile, marketing preference, cross-session b
 **Persistent User Memory**:
 Long-lived memory about a user or customer that may be reused across conversations only when consent, retention, deletion, redaction, tenant boundary, and policy admission rules are defined.
 _Avoid_: Case Memory, customer transcript archive, automatic behavioral profile
+
+**Customer Persistent User Memory**:
+Persistent User Memory scoped to a customer reference and reused across customer conversations only for governed long-lived preferences, recurring interests, and follow-up context.
+_Avoid_: Operator profile, Case Memory, report result cache, policy or claim source of truth
+
+**Customer Memory Interest Profile**:
+A Customer Persistent User Memory subset that records durable attention areas, preferred report views, and interaction preferences without storing business result values or sensitive customer facts.
+_Avoid_: Report cache, customer data profile, marketing persona, raw transcript summary
+
+**Customer Memory Consent**:
+The explicit permission boundary that allows Customer Persistent User Memory to be read or written for a customer reference across customer conversations.
+_Avoid_: Authentication state, generic privacy banner, tool authorization, marketing consent
+
+**Customer Memory Lifecycle Controls**:
+The governed controls for exporting, deleting, auditing, and disabling Customer Persistent User Memory at the customer reference boundary.
+_Avoid_: Single-turn correction UI, raw provider memory browser, customer data export of business records
+
+**Memory Subject Reference**:
+A provider-neutral identifier for the subject a memory is about; Customer Persistent User Memory uses the customer reference as its Memory Subject Reference.
+_Avoid_: Case id, raw customer identity document, provider user id, authentication token
 
 **Shared Memory**:
 Long-lived organizational memory shared across users or Agents after governance admission.
@@ -799,8 +823,16 @@ _Avoid_: Evidence content dump
 - A **Hybrid Memory Framework** may use one or more **Memory Provider Adapter** implementations, but **Memory Admission** remains a Control Plane decision.
 - Memory layers describe Proof Agent product semantics; **Memory Provider Adapter** implementations describe replaceable storage and retrieval engines.
 - External memory engines may provide storage, retrieval, summarization, or ranking, but they must not decide **Memory Admission** or bypass the **Control Envelope**.
-- **Case Memory**, **Persistent User Memory**, and **Shared Memory** are distinct memory scopes and must not be merged into a raw transcript store.
 - **Case Memory** is generated from governed run facts and bounded, trace-safe facts or summaries derived from **Customer Response Snapshot** linkage, not from complete customer-visible message text, **Customer Feedback Signal**, raw transcripts, or unvalidated model text.
+- **Case Memory Lifecycle Controls** must be proven before **Persistent User Memory** is enabled.
+- The first **Persistent User Memory** implementation targets **Customer Persistent User Memory**, not operator or staff user profiles.
+- The first **Customer Persistent User Memory** writes only a **Customer Memory Interest Profile**; it must not store report result values, policy status, claim status, raw tool payloads, raw evidence, sensitive customer facts, or model-inferred marketing personas.
+- **Customer Persistent User Memory** may support intent understanding, preference-aware follow-up, and missing-field prompts after **Memory Admission**, but it is not **Accepted Evidence** and must not automatically trigger sensitive data retrieval.
+- **Customer Memory Consent** gates Customer Persistent User Memory reads and writes.
+- **Customer Memory Lifecycle Controls** operate at the customer reference boundary before single-memory editing is introduced.
+- The first **Customer Persistent User Memory** implementation is isolated by Published Agent and customer reference; it must not cross Agent boundaries.
+- A **Memory Subject Reference** identifies who **Persistent User Memory** is about without reusing **Case Memory** identifiers.
+- **Case Memory** is generated from governed run facts, not from raw transcripts or unvalidated model text.
 - **Case Focus** belongs to **Case Memory** and must not become a cross-session **Persistent User Memory** profile in the first implementation stage.
 - **Case Memory** may support follow-up understanding after **Memory Admission**, but it is not **Accepted Evidence**.
 - V1 uses a **Customer Conversation Retention Policy** for short-lived customer chat text and an **Audit Retention Boundary** for longer-lived trace-safe run facts.

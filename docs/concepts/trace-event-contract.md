@@ -71,11 +71,13 @@ Every trace line is one JSON object:
 | `approval_timeout` | approval timed out |
 | `tool_request` | requested governed tool call |
 | `tool_result` | tool result or safe skipped result |
-| `memory_read` | session memory read |
+| `memory_read` | memory provider read metadata |
 | `memory_candidate_generated` | post-run trace-safe memory candidates generated from governed run facts |
-| `memory_write_requested` | requested session memory write |
+| `memory_write_requested` | requested memory write |
 | `memory_write_decision` | memory policy decision |
 | `memory_admission` | deterministic decision about which retrieved memory may enter Structured Control Context |
+| `memory_export_decision` | lifecycle decision that exports trace-safe memory summaries and metadata without provider payloads |
+| `memory_delete_decision` | lifecycle decision that deletes memory by scope, case or subject, Agent, and provider without exposing memory contents |
 | `final_output` | final answer, refusal, escalation, or waiting state |
 | `redaction_applied` | sensitive fields removed or masked |
 | `artifact_written` | trace or receipt artifact path |

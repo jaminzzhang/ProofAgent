@@ -11,6 +11,7 @@ from proof_agent.observability.api.app import create_app
 class RecordingMem0Client:
     def __init__(self) -> None:
         self.memories: list[dict[str, object]] = []
+        self.delete_all_calls: list[dict[str, object]] = []
 
     def add(self, messages: object, **kwargs: object) -> dict[str, object]:
         metadata = kwargs["metadata"]
@@ -41,6 +42,21 @@ class RecordingMem0Client:
                 and memory["metadata"]["proof_agent_case_id"] == expected_case
             ]
         }
+
+    def delete_all(self, **kwargs: object) -> dict[str, object]:
+        self.delete_all_calls.append(kwargs)
+        expected_agent = kwargs["agent_id"]
+        expected_case = kwargs["run_id"]
+        self.memories = [
+            memory
+            for memory in self.memories
+            if not (
+                isinstance(memory["metadata"], dict)
+                and memory["metadata"]["proof_agent_agent_id"] == expected_agent
+                and memory["metadata"]["proof_agent_case_id"] == expected_case
+            )
+        ]
+        return {"message": "Memories deleted successfully!"}
 
 
 def test_customer_run_returns_customer_safe_projection(tmp_path: Path) -> None:
@@ -711,3 +727,286 @@ def test_customer_run_can_use_mem0_case_memory_adapter(tmp_path: Path) -> None:
     admission = next(event for event in trace if event["event_type"] == "memory_admission")
     assert admission["payload"]["admitted"] is True
     assert admission["payload"]["included_memory_ids"] == ["mem0_1"]
+
+
+def test_customer_case_memory_can_be_deleted_for_conversation(tmp_path: Path) -> None:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    first = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are required for inpatient claim reimbursement?"},
+    )
+    run_id = first.json()["run_id"]
+    deleted = client.delete(f"/api/customer/conversations/{conversation_id}/memory")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_count"] == 1
+    assert deleted.json()["audit_run_id"] == run_id
+    delete_trace = client.get(f"/api/runs/{run_id}/trace").json()["events"]
+    delete_event = next(
+        event for event in delete_trace if event["event_type"] == "memory_delete_decision"
+    )
+    assert delete_event["payload"] == {
+        "scope": "case",
+        "case_id": conversation_id,
+        "agent_id": "insurance_customer_service",
+        "provider": "local",
+        "deleted_count": 1,
+    }
+
+    response = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are needed for that reimbursement again?"},
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
+    admission = next(event for event in trace if event["event_type"] == "memory_admission")
+    assert admission["payload"]["admitted"] is False
+    assert admission["payload"]["included_memory_ids"] == []
+
+
+def test_customer_case_memory_can_be_deleted_for_mem0_provider(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "insurance_customer_service_mem0"
+    shutil.copytree(Path("examples/insurance_customer_service"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "memory:\n  provider: local",
+            "memory:\n  provider: mem0",
+        ),
+        encoding="utf-8",
+    )
+    mem0_client = RecordingMem0Client()
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={"insurance_mem0": manifest_path},
+        mem0_memory_store=Mem0MemoryStore(client=mem0_client),
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_mem0", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are required for inpatient claim reimbursement?"},
+    )
+    deleted = client.delete(f"/api/customer/conversations/{conversation_id}/memory")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_count"] == 1
+    assert mem0_client.delete_all_calls == [
+        {"agent_id": "insurance_mem0", "run_id": conversation_id}
+    ]
+
+    response = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "What documents are needed for that reimbursement again?"},
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
+    admission = next(event for event in trace if event["event_type"] == "memory_admission")
+    assert admission["payload"]["admitted"] is False
+    assert admission["payload"]["included_memory_ids"] == []
+
+
+def test_customer_persistent_user_memory_is_admitted_across_conversations_with_consent(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "insurance_customer_service_user_memory"
+    shutil.copytree(Path("examples/insurance_customer_service"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "    user:\n      enabled: false",
+            "    user:\n      enabled: true",
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={"insurance_user_memory": manifest_path},
+    )
+    client = TestClient(app)
+    first = client.post(
+        "/api/customer/conversations",
+        json={
+            "agent_id": "insurance_user_memory",
+            "customer_id": "CUST-001",
+            "memory_consent": True,
+        },
+    )
+    first_conversation_id = first.json()["conversation_id"]
+    client.post(
+        f"/api/customer/conversations/{first_conversation_id}/runs",
+        json={"question": "I usually care about monthly claim reports."},
+    )
+    second = client.post(
+        "/api/customer/conversations",
+        json={
+            "agent_id": "insurance_user_memory",
+            "customer_id": "CUST-001",
+            "memory_consent": True,
+        },
+    )
+    second_conversation_id = second.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/customer/conversations/{second_conversation_id}/runs",
+        json={"question": "Can we use that report view again?"},
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
+    user_admission = next(
+        event
+        for event in trace
+        if event["event_type"] == "memory_admission" and event["payload"]["scope"] == "user"
+    )
+    assert user_admission["payload"]["admitted"] is True
+    assert user_admission["payload"]["subject_ref"] == "CUST-001"
+    assert user_admission["payload"]["included_memory_ids"]
+    assert "claim reports" in user_admission["payload"]["summary"]
+
+
+def test_customer_persistent_user_memory_can_be_exported_and_deleted(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "insurance_customer_service_user_memory"
+    shutil.copytree(Path("examples/insurance_customer_service"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "    user:\n      enabled: false",
+            "    user:\n      enabled: true",
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={"insurance_user_memory": manifest_path},
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={
+            "agent_id": "insurance_user_memory",
+            "customer_id": "CUST-001",
+            "memory_consent": True,
+        },
+    )
+    conversation_id = created.json()["conversation_id"]
+    first_run = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "I usually care about monthly claim reports."},
+    )
+    run_id = first_run.json()["run_id"]
+
+    exported = client.get(
+        "/api/customer/memory/CUST-001",
+        params={"agent_id": "insurance_user_memory"},
+    )
+    deleted = client.delete(
+        "/api/customer/memory/CUST-001",
+        params={"agent_id": "insurance_user_memory"},
+    )
+    exported_after_delete = client.get(
+        "/api/customer/memory/CUST-001",
+        params={"agent_id": "insurance_user_memory"},
+    )
+
+    assert exported.status_code == 200
+    assert exported.json()["agent_id"] == "insurance_user_memory"
+    assert exported.json()["subject_ref"] == "CUST-001"
+    assert exported.json()["audit_run_id"] == run_id
+    assert len(exported.json()["memories"]) == 1
+    memory = exported.json()["memories"][0]
+    assert set(memory) == {
+        "memory_id",
+        "scope",
+        "subject_ref",
+        "agent_id",
+        "summary",
+        "facts",
+        "source_run_id",
+        "source_turn_id",
+        "created_at",
+        "expires_at",
+        "sensitivity",
+        "status",
+    }
+    assert "claim reports" in memory["summary"]
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_count"] == 1
+    assert deleted.json()["audit_run_id"] == run_id
+    assert exported_after_delete.json()["memories"] == []
+
+    trace = client.get(f"/api/runs/{run_id}/trace").json()["events"]
+    export_event = next(event for event in trace if event["event_type"] == "memory_export_decision")
+    delete_event = next(
+        event
+        for event in trace
+        if event["event_type"] == "memory_delete_decision"
+        and event["payload"]["scope"] == "user"
+    )
+    assert export_event["payload"]["exported_count"] == 1
+    assert export_event["payload"]["subject_ref"] == "CUST-001"
+    assert delete_event["payload"]["deleted_count"] == 1
+    assert delete_event["payload"]["subject_ref"] == "CUST-001"
+
+
+def test_customer_persistent_user_memory_is_not_written_without_consent(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "insurance_customer_service_user_memory"
+    shutil.copytree(Path("examples/insurance_customer_service"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "    user:\n      enabled: false",
+            "    user:\n      enabled: true",
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={"insurance_user_memory": manifest_path},
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_user_memory", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "I usually care about monthly claim reports."},
+    )
+    exported = client.get(
+        "/api/customer/memory/CUST-001",
+        params={"agent_id": "insurance_user_memory"},
+    )
+
+    assert exported.status_code == 200
+    assert exported.json()["memories"] == []

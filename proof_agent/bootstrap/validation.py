@@ -212,18 +212,11 @@ def _validate_checkpointer_config(manifest: AgentManifest, *, manifest_path: Pat
 
 def _validate_memory_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
     scopes = manifest.memory.scopes
-    if scopes.user.enabled:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "memory.scopes.user.enabled is not supported yet",
-            "Set memory.scopes.user.enabled: false for Stage 1 Case Memory.",
-            artifact_path=manifest_path,
-        )
     if scopes.shared.enabled:
         raise ProofAgentError(
             "PA_CONFIG_002",
             "memory.scopes.shared.enabled is not supported yet",
-            "Set memory.scopes.shared.enabled: false for Stage 1 Case Memory.",
+            "Set memory.scopes.shared.enabled: false until Shared Memory is implemented.",
             artifact_path=manifest_path,
         )
     if scopes.case.retention_days <= 0:
@@ -238,6 +231,20 @@ def _validate_memory_config(manifest: AgentManifest, *, manifest_path: Path) -> 
             "PA_CONFIG_002",
             "memory.scopes.case.max_records must be greater than 0",
             "Set memory.scopes.case.max_records to a positive integer.",
+            artifact_path=manifest_path,
+        )
+    if scopes.user.retention_days <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "memory.scopes.user.retention_days must be greater than 0",
+            "Set memory.scopes.user.retention_days to a positive integer.",
+            artifact_path=manifest_path,
+        )
+    if scopes.user.max_records <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "memory.scopes.user.max_records must be greater than 0",
+            "Set memory.scopes.user.max_records to a positive integer.",
             artifact_path=manifest_path,
         )
 

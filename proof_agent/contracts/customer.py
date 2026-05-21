@@ -98,6 +98,7 @@ class CustomerConversationRecord(FrozenModel):
     created_at: str
     updated_at: str
     customer_ref: str | None = None
+    memory_consent: bool = False
     snapshots: tuple[CustomerResponseSnapshot, ...] = Field(default_factory=tuple)
     disambiguation_options: tuple[CustomerDisambiguationOption, ...] = Field(default_factory=tuple)
 

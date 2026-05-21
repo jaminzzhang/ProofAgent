@@ -43,6 +43,37 @@ def candidate_from_customer_turn(
     )
 
 
+def customer_interest_candidate_from_customer_turn(
+    *,
+    subject_ref: str,
+    agent_id: str,
+    question: str,
+    safe_response: CustomerSafeResponse,
+    source_run_id: str,
+    source_turn_id: str,
+    retention_days: int = 30,
+) -> MemoryCandidate | None:
+    """Build a Customer Persistent User Memory candidate from safe interest signals."""
+
+    if not source_run_id or not subject_ref:
+        return None
+    facts = _extract_interest_facts(question, safe_response)
+    summary = _interest_summary_from_facts(facts)
+    if not summary:
+        return None
+    return MemoryCandidate(
+        scope=MemoryScope.USER,
+        subject_ref=subject_ref,
+        agent_id=agent_id,
+        summary=summary,
+        facts=facts,
+        source_run_id=source_run_id,
+        source_turn_id=source_turn_id,
+        expires_at=_expires_at(retention_days),
+        sensitivity=MemorySensitivity.INTERNAL,
+    )
+
+
 def _extract_facts(question: str, safe_response: CustomerSafeResponse) -> dict[str, Any]:
     normalized = question.lower()
     facts: dict[str, Any] = {}
@@ -79,6 +110,40 @@ def _extract_facts(question: str, safe_response: CustomerSafeResponse) -> dict[s
     return facts
 
 
+def _extract_interest_facts(question: str, safe_response: CustomerSafeResponse) -> dict[str, Any]:
+    normalized = question.lower()
+    facts: dict[str, Any] = {}
+    topics: list[str] = []
+    if "claim" in normalized:
+        topics.append("claim_reports" if "report" in normalized else "claims")
+    if "policy" in normalized or "保单" in question:
+        topics.append("policy_terms")
+    if "report" in normalized or "报表" in question:
+        topics.append("reports")
+    if "reimbursement" in normalized:
+        topics.append("reimbursement")
+    if topics:
+        facts["interest_topics"] = _unique_preserve(topics)
+
+    views: list[str] = []
+    if "month" in normalized or "monthly" in normalized or "月" in question:
+        views.append("monthly_summary")
+    if "trend" in normalized or "趋势" in question:
+        views.append("trend")
+    if "table" in normalized or "表格" in question:
+        views.append("summary_table")
+    if views:
+        facts["preferred_views"] = _unique_preserve(views)
+
+    if "summary" in normalized or "摘要" in question:
+        facts["interaction_preference"] = "summary_first"
+    elif "detail" in normalized or "明细" in question:
+        facts["interaction_preference"] = "detail_friendly"
+
+    _ = safe_response
+    return facts
+
+
 def _summary_from_facts(facts: dict[str, Any]) -> str:
     topics = facts.get("focus_topics")
     if isinstance(topics, list) and topics:
@@ -92,6 +157,21 @@ def _summary_from_facts(facts: dict[str, Any]) -> str:
     return ""
 
 
+def _interest_summary_from_facts(facts: dict[str, Any]) -> str:
+    topics = facts.get("interest_topics")
+    if isinstance(topics, list) and topics:
+        topic_text = " ".join(str(topic).replace("_", " ") for topic in topics)
+        return f"Customer interest: {topic_text}."
+    views = facts.get("preferred_views")
+    if isinstance(views, list) and views:
+        view_text = " ".join(str(view).replace("_", " ") for view in views)
+        return f"Customer preferred view: {view_text}."
+    preference = facts.get("interaction_preference")
+    if isinstance(preference, str) and preference:
+        return f"Customer interaction preference: {preference.replace('_', ' ')}."
+    return ""
+
+
 def _unique(values: list[str]) -> list[str]:
     seen: list[str] = []
     for value in values:
@@ -99,6 +179,17 @@ def _unique(values: list[str]) -> list[str]:
         if normalized not in seen:
             seen.append(normalized)
     return seen
+
+
+def _unique_preserve(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        key = value.lower()
+        if key not in seen:
+            unique.append(value)
+            seen.add(key)
+    return unique
 
 
 def _expires_at(retention_days: int) -> str:

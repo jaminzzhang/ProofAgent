@@ -43,10 +43,18 @@ def admit_memory(
 
 
 def _rejection_reason(record: MemoryRecord, *, query: MemoryQuery, now: str) -> str | None:
-    if record.scope != MemoryScope.CASE or query.scope != MemoryScope.CASE:
+    if record.scope != query.scope:
         return "scope_mismatch"
-    if record.case_id != query.case_id:
-        return "case_id_mismatch"
+    if query.scope == MemoryScope.CASE:
+        if record.case_id != query.case_id:
+            return "case_id_mismatch"
+    elif query.scope == MemoryScope.USER:
+        if not query.consent_granted:
+            return "consent_required"
+        if record.subject_ref != query.subject_ref:
+            return "subject_ref_mismatch"
+    else:
+        return "scope_mismatch"
     if record.agent_id != query.agent_id:
         return "agent_id_mismatch"
     if record.status != MemoryStatus.ACTIVE:

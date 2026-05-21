@@ -671,16 +671,16 @@ Current baseline is session memory.
 
 Long-term memory planning uses three Proof Agent memory scopes:
 - Case Memory for one case, task, customer issue, or conversation journey.
-- User Memory for long-lived user or customer facts that can cross conversations.
+- Persistent User Memory for long-lived user or customer facts that can cross conversations.
 - Shared Memory for long-lived organizational or Agent-shared facts.
 
 These scopes are product and governance semantics, not storage choices. Mem0, LangGraph Store, databases, vector indexes, graph memory engines, or other external systems may be used as Memory Provider Adapters for any scope. Provider-native taxonomies must not replace Proof Agent memory contracts.
 
-The first implementation stage should focus on Case Memory because it extends existing conversation context, customer journeys, and run audit facts without introducing cross-user long-term profiling. User Memory and Shared Memory should follow only after Memory Admission, deletion, retention, redaction, and tenant controls are proven on Case Memory.
+The first implementation stage should focus on Case Memory because it extends existing conversation context, customer journeys, and run audit facts without introducing cross-user long-term profiling. Persistent User Memory and Shared Memory should follow only after Memory Admission, deletion, retention, redaction, and tenant controls are proven on Case Memory.
 
 Case Memory must be generated from governed run facts, such as conversation turns, customer-safe response snapshots, outcomes, accepted evidence summaries, authorized tool result summaries, clarification requests, handoff reasons, and policy decisions. Raw transcripts and unvalidated model text must not be written directly as Case Memory.
 
-Case Memory may include Case Focus: active topics, report dimensions, filters, requested views, and unresolved areas of interest within the current case. Case Focus is not a cross-session user interest profile. Long-term user interests belong to future User Memory and require separate consent, deletion, and profiling controls.
+Case Memory may include Case Focus: active topics, report dimensions, filters, requested views, and unresolved areas of interest within the current case. Case Focus is not a cross-session user interest profile. Long-term user interests belong to future Persistent User Memory and require separate consent, deletion, and profiling controls.
 
 For report-style questions, Case Memory stores report intent and view context, such as topic, dimensions, filters, requested view, and missing fields. It must not store report result snapshots, raw query output, metric values, rankings, or stale business numbers as memory. Report data must be fetched again through authorized tools or knowledge providers before it can support an answer.
 
@@ -690,7 +690,7 @@ Admitted Case Memory can enter Structured Control Context for follow-up resoluti
 
 The first Case Memory implementation should define Proof Agent memory contracts and a local memory store before adding external adapters. Mem0 or similar systems should be integrated afterward through a Memory Provider Adapter so external framework behavior cannot shape the Proof Agent memory contract.
 
-A Mem0 adapter may provide storage, retrieval, summarization enhancement, and similarity recall after the local contract is stable. It must not decide whether memory can be written, whether memory can enter a run, how retention works, or whether a remembered fact may support an answer. Those decisions remain in Proof Agent policy, redaction, retention, tenant boundary, and Memory Admission logic. The adapter maps Proof Agent Case Memory to Mem0 `add` and `search` calls while preserving `case_id`, `agent_id`, source ids, expiration, sensitivity, status, and facts in metadata.
+A Mem0 adapter may provide storage, retrieval, summarization enhancement, and similarity recall after the local contract is stable. It must not decide whether memory can be written, whether memory can enter a run, how retention works, or whether a remembered fact may support an answer. Those decisions remain in Proof Agent policy, redaction, retention, tenant boundary, and Memory Admission logic. The adapter maps Proof Agent Case Memory to Mem0 `add`, `search`, and filtered deletion calls while preserving `case_id`, `agent_id`, source ids, expiration, sensitivity, status, and facts in metadata.
 
 `memory.provider: mem0` is optional. The deterministic baseline and local Case Memory path do not require Mem0, network access, API keys, or external services. Deployments that enable the Mem0 provider must install the `mem0ai` package in their environment or inject a compatible Mem0 client into the application factory.
 
@@ -721,7 +721,7 @@ The first Case Memory read path should use same-case bounded recall:
 
 Cross-case semantic recall is out of the first Case Memory stage because it increases tenant, privacy, and false-transfer risk.
 
-The first Case Memory retention behavior should require `expires_at`, default to 30 days, support soft deletion by `case_id`, and exclude deleted or expired records from recall. Delete operations must be audit-linked. Expired records may remain until cleanup, but they must not be admitted.
+The first Case Memory retention behavior should require `expires_at`, default to 30 days, support deletion by `case_id`, and exclude deleted or expired records from recall. The local adapter marks records as `deleted`; the Mem0 adapter deletes records with `delete_all(agent_id=agent_id, run_id=case_id)`. Both behaviors satisfy the same Proof Agent lifecycle contract: deleted Case Memory must not enter future Memory Admission. Delete operations must be audit-linked. Expired records may remain until cleanup, but they must not be admitted.
 
 The first Memory Admission rules are deterministic:
 - `scope` is `case`
@@ -733,11 +733,13 @@ The first Memory Admission rules are deterministic:
 
 The admission output should include `admitted`, `included_memory_ids`, `summary`, `facts`, `rejected_memory_ids`, and `rejection_reasons`. LLMs may not decide Memory Admission in the first implementation stage.
 
-The Case Memory audit loop should use four events:
+The memory audit loop uses these events:
 - `memory_candidate_generated` records trace-safe candidate ids, source run id, scope, and case id after a run completes.
 - `memory_write_requested` records the write attempt with field names, sensitivity, and expiration metadata.
 - `memory_write_decision` records policy and validator allow/deny results.
 - `memory_admission` records which memory ids were admitted or rejected for a later run and why.
+- `memory_export_decision` records lifecycle export by scope, Agent id, subject reference, provider, and exported count without exposing provider payloads.
+- `memory_delete_decision` records lifecycle deletion by scope, case id or subject reference, Agent id, provider, and deleted count without exposing memory contents.
 
 `memory_read` may remain provider-level read metadata; `memory_admission` is the event that records whether memory can enter context.
 
@@ -753,12 +755,12 @@ memory:
       max_records: 5
       allow_restricted: false
     user:
-      enabled: false
+      enabled: true  # Customer Persistent User Memory for Customer Run API
     shared:
       enabled: false
 ```
 
-The first implementation stage should allow only Case Memory to be enabled. User Memory and Shared Memory may appear as disabled config entries, but enabling them must fail until their governance behavior is implemented.
+Stage 1 allowed only Case Memory to be enabled. Stage 3 enables Customer Persistent User Memory for Customer Run API through the `user` scope. Shared Memory may appear as disabled config entries, but enabling it still fails until its governance behavior is implemented.
 
 Case Memory should be integrated first with the Customer Run API, using the customer conversation id as `case_id`. Assisted Chat may reuse the same design with its conversation id. CLI single-run execution does not enable Case Memory unless a future entry point supplies an explicit `case_id`.
 
@@ -767,8 +769,8 @@ Memory roadmap:
 | Stage | Goal | Key deliverables |
 | --- | --- | --- |
 | 1 | Local Case Memory | memory contracts, local store, same-case recall, Memory Admission, deterministic post-run extractor, Customer Run API integration, trace events |
-| 2 | Mem0 Adapter | Mem0-backed storage, retrieval, summarization enhancement, and similarity recall behind the same Proof Agent contracts |
-| 3 | User Memory | cross-session user memory with consent, delete/export, retention, sensitivity policy, and restricted-memory handling |
+| 2 | Mem0 Adapter | Mem0-backed storage, retrieval, filtered Case Memory deletion, summarization enhancement, and similarity recall behind the same Proof Agent contracts |
+| 3 | Customer Persistent User Memory | cross-conversation customer interest memory with consent, delete/export, retention, sensitivity policy, and restricted-memory handling |
 | 4 | Shared Memory | organization or Agent-shared memory with clear separation from Knowledge Provider and no bypass around evidence requirements |
 
 Stage 1 Local Case Memory acceptance:
@@ -778,7 +780,7 @@ Stage 1 Local Case Memory acceptance:
 - Case Memory does not store full report results, raw transcripts, raw tool payloads, or raw evidence content.
 - Case Memory is not Accepted Evidence; business claims still require Accepted Evidence or authorized tool results.
 - Expired, deleted, wrong-case, wrong-Agent, and disallowed restricted memory are not admitted.
-- Trace includes `memory_candidate_generated`, `memory_write_requested`, `memory_write_decision`, and `memory_admission`.
+- Trace includes `memory_candidate_generated`, `memory_write_requested`, `memory_write_decision`, `memory_admission`, and lifecycle `memory_delete_decision` when deletion is requested after an audited run.
 - The deterministic demo remains runnable without network access, API keys, Mem0, or external memory services.
 
 Stage 1 module boundaries:
@@ -789,6 +791,33 @@ Stage 1 module boundaries:
 - `proof_agent/bootstrap/manifest.py` and `proof_agent/contracts/manifest.py` own Agent Contract memory config parsing and validation.
 - `proof_agent/delivery/customer_api.py` integrates run-before recall/admission and run-after candidate/write behavior for Customer Run API.
 - `proof_agent/observability/audit/trace.py` emits memory candidate, write, and admission events.
+
+Stage 3 Customer Persistent User Memory design:
+- Stage 3 targets Customer Persistent User Memory for Customer Run API only. It does not introduce operator or staff user profiles.
+- The stored subset is a Customer Memory Interest Profile: durable attention areas, preferred report views, interaction preferences, and cross-conversation follow-up context.
+- It must not store report result values, rankings, policy status, claim status, balances, raw customer identity data, raw transcripts, raw tool payloads, raw evidence, or model-inferred marketing personas.
+- The user memory isolation key is `agent_id + subject_ref`, where `subject_ref` is the provider-neutral Memory Subject Reference and equals the customer reference for the first Customer Service implementation.
+- `case_id` remains the Case Memory key and must not be reused as a Persistent User Memory key.
+- Customer Persistent User Memory requires Customer Memory Consent for both read and write. No consent means no read, no write, and no context injection.
+- The first consent shape is runtime consent on Customer Conversation creation or Customer Run creation, not a platform-wide privacy preference store.
+- Customer Memory Lifecycle Controls operate at the customer reference boundary in Stage 3: export all admitted customer interest memories for an `agent_id + subject_ref`, delete all customer interest memories for that boundary, and audit both operations.
+- Single-memory editing, customer-visible memory management UI, and cross-Agent customer memory sharing are deferred.
+- Read admission uses the same Control Plane Memory Admission concept but extends the deterministic rules for `scope: user`: matching `agent_id`, matching `subject_ref`, active status, not expired, consent present, and restricted memory disallowed unless the Agent Contract allows it.
+- Admitted Customer Persistent User Memory may enter Structured Control Context for intent understanding, preference-aware follow-up, missing-field prompts, and next-step suggestions. It is not Accepted Evidence and cannot support customer-facing business claims.
+- It must not automatically trigger sensitive data retrieval. If a remembered interest suggests a report or account-data direction, the run must still ask for required fields or use authorized tools under normal policy.
+- Writes happen after a governed run completes, using deterministic extraction from customer-safe run facts and Case Focus-style signals. LLM summarization remains deferred until it can emit validated JSON and fail closed.
+- Stage 3 should support the same provider boundary as Case Memory. The local adapter should support `scope: user` using `agent_id + subject_ref`; the Mem0 adapter should map `subject_ref` into provider metadata while leaving admission and lifecycle decisions in Proof Agent.
+
+Stage 3 acceptance:
+- Enabling `memory.scopes.user.enabled: true` succeeds only when Customer Persistent User Memory governance is implemented; `shared.enabled: true` remains rejected.
+- A customer conversation or run without memory consent neither reads nor writes Customer Persistent User Memory.
+- A consented customer run can write a Customer Memory Interest Profile from governed facts such as recurring focus topics, report view preferences, and interaction preferences.
+- A later consented conversation for the same `agent_id + subject_ref` can admit that profile into Structured Control Context.
+- A different `agent_id` or different `subject_ref` cannot admit the profile.
+- Admitted user memory never appears as Accepted Evidence and never replaces retrieval, tool authorization, evidence evaluation, or final-output validation.
+- Export returns only trace-safe memory summaries, facts, ids, scope, subject reference, sensitivity, expiration, and source ids; it does not expose provider raw payloads.
+- Delete removes or marks inactive all Customer Persistent User Memory for the `agent_id + subject_ref` boundary and prevents later admission.
+- Trace includes lifecycle events for user-memory candidate generation, write request/decision, admission, `memory_export_decision`, and `memory_delete_decision` without raw transcript, raw evidence, report result values, or provider payloads.
 
 Rules:
 - All writes pass `before_memory_write`.
@@ -849,8 +878,12 @@ approval_timeout
 tool_request
 tool_result
 memory_read
+memory_candidate_generated
 memory_write_requested
 memory_write_decision
+memory_admission
+memory_export_decision
+memory_delete_decision
 final_output
 redaction_applied
 artifact_written

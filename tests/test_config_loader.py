@@ -188,7 +188,7 @@ memory:
     assert manifest.memory.scopes.case.enabled is True
 
 
-def test_user_memory_enabled_is_rejected_for_stage_one(tmp_path: Path) -> None:
+def test_loads_customer_persistent_user_memory_contract(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
         memory_section="""
@@ -204,11 +204,33 @@ memory:
 """,
     )
 
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.memory.scopes.user.enabled is True
+    assert manifest.memory.scopes.shared.enabled is False
+
+
+def test_shared_memory_enabled_is_still_rejected(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        memory_section="""
+memory:
+  provider: local
+  scopes:
+    case:
+      enabled: true
+    user:
+      enabled: true
+    shared:
+      enabled: true
+""",
+    )
+
     with pytest.raises(ProofAgentError) as exc:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "memory.scopes.user.enabled is not supported yet" in exc.value.message
+    assert "memory.scopes.shared.enabled is not supported yet" in exc.value.message
 
 
 def test_unsupported_workflow_checkpointer_provider_is_rejected(tmp_path: Path) -> None:

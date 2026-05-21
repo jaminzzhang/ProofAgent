@@ -22,6 +22,8 @@ class Mem0Client(Protocol):
 
     def search(self, query: str, **kwargs: object) -> object: ...
 
+    def delete_all(self, **kwargs: object) -> object: ...
+
 
 class Mem0MemoryStore:
     """Memory Provider Adapter backed by Mem0."""
@@ -31,17 +33,18 @@ class Mem0MemoryStore:
 
     def append(self, candidate: MemoryCandidate) -> MemoryRecord:
         metadata = _metadata_from_candidate(candidate)
-        response = self._client.add(
-            [{"role": "assistant", "content": candidate.summary}],
-            agent_id=candidate.agent_id,
-            run_id=candidate.case_id,
-            metadata=metadata,
-        )
+        kwargs: dict[str, object] = {"agent_id": candidate.agent_id, "metadata": metadata}
+        if candidate.scope == MemoryScope.USER:
+            kwargs["user_id"] = candidate.subject_ref
+        else:
+            kwargs["run_id"] = candidate.case_id
+        response = self._client.add([{"role": "assistant", "content": candidate.summary}], **kwargs)
         memory_id = _memory_id_from_response(response)
         return MemoryRecord(
             memory_id=memory_id,
             scope=candidate.scope,
             case_id=candidate.case_id,
+            subject_ref=candidate.subject_ref,
             agent_id=candidate.agent_id,
             summary=candidate.summary,
             facts=candidate.facts,
@@ -54,20 +57,32 @@ class Mem0MemoryStore:
         )
 
     def read(self, query: MemoryQuery) -> tuple[MemoryRecord, ...]:
-        if query.scope != MemoryScope.CASE:
+        if query.scope == MemoryScope.CASE:
+            response = self._client.search(
+                query.query_text or query.case_id,
+                agent_id=query.agent_id,
+                run_id=query.case_id,
+                filters={
+                    "AND": [
+                        {"agent_id": query.agent_id},
+                        {"run_id": query.case_id},
+                    ]
+                },
+                top_k=query.max_records,
+            )
+        elif query.scope == MemoryScope.USER:
+            response = self._client.search(
+                query.query_text or query.subject_ref,
+                filters={
+                    "AND": [
+                        {"user_id": query.subject_ref},
+                        {"agent_id": query.agent_id},
+                    ]
+                },
+                top_k=query.max_records,
+            )
+        else:
             return ()
-        response = self._client.search(
-            query.query_text or query.case_id,
-            agent_id=query.agent_id,
-            run_id=query.case_id,
-            filters={
-                "AND": [
-                    {"agent_id": query.agent_id},
-                    {"run_id": query.case_id},
-                ]
-            },
-            top_k=query.max_records,
-        )
         records = [_record_from_result(result) for result in _results_from_response(response)]
         now = _now()
         return tuple(
@@ -77,12 +92,38 @@ class Mem0MemoryStore:
             and record.status == MemoryStatus.ACTIVE
             and record.expires_at > now
             and record.agent_id == query.agent_id
-            and record.case_id == query.case_id
+            and (
+                (query.scope == MemoryScope.CASE and record.case_id == query.case_id)
+                or (query.scope == MemoryScope.USER and record.subject_ref == query.subject_ref)
+            )
         )[: query.max_records]
 
     def soft_delete_case(self, *, agent_id: str, case_id: str) -> int:
-        _ = (agent_id, case_id)
-        raise NotImplementedError("Mem0 case soft delete is not implemented in Stage 2.")
+        existing_records = self.read(
+            MemoryQuery(
+                scope=MemoryScope.CASE,
+                agent_id=agent_id,
+                case_id=case_id,
+                max_records=10_000,
+            )
+        )
+        self._client.delete_all(agent_id=agent_id, run_id=case_id)
+        return len(existing_records)
+
+    def export_subject(self, *, agent_id: str, subject_ref: str) -> tuple[MemoryRecord, ...]:
+        return self.read(
+            MemoryQuery(
+                scope=MemoryScope.USER,
+                agent_id=agent_id,
+                subject_ref=subject_ref,
+                max_records=10_000,
+            )
+        )
+
+    def soft_delete_subject(self, *, agent_id: str, subject_ref: str) -> int:
+        existing_records = self.export_subject(agent_id=agent_id, subject_ref=subject_ref)
+        self._client.delete_all(agent_id=agent_id, user_id=subject_ref)
+        return len(existing_records)
 
 
 def _create_default_client() -> Mem0Client:
@@ -101,6 +142,7 @@ def _metadata_from_candidate(candidate: MemoryCandidate) -> dict[str, object]:
     return {
         "proof_agent_scope": candidate.scope.value,
         "proof_agent_case_id": candidate.case_id,
+        "proof_agent_subject_ref": candidate.subject_ref,
         "proof_agent_agent_id": candidate.agent_id,
         "proof_agent_source_run_id": candidate.source_run_id,
         "proof_agent_source_turn_id": candidate.source_turn_id,
@@ -121,6 +163,7 @@ def _record_from_result(result: object) -> MemoryRecord | None:
         memory_id=str(result.get("id") or result.get("memory_id") or ""),
         scope=MemoryScope(str(metadata.get("proof_agent_scope") or MemoryScope.CASE.value)),
         case_id=str(metadata.get("proof_agent_case_id") or ""),
+        subject_ref=str(metadata.get("proof_agent_subject_ref") or ""),
         agent_id=str(metadata.get("proof_agent_agent_id") or ""),
         summary=str(result.get("memory") or result.get("content") or ""),
         facts=_mapping_or_empty(metadata.get("proof_agent_facts")),

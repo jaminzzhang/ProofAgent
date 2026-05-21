@@ -30,6 +30,7 @@ class LocalMemoryStore:
             memory_id=f"mem_{uuid4().hex[:8]}",
             scope=candidate.scope,
             case_id=candidate.case_id,
+            subject_ref=candidate.subject_ref,
             agent_id=candidate.agent_id,
             summary=candidate.summary,
             facts=candidate.facts,
@@ -53,14 +54,17 @@ class LocalMemoryStore:
         return record
 
     def read(self, query: MemoryQuery) -> tuple[MemoryRecord, ...]:
-        if query.scope != MemoryScope.CASE:
+        if query.scope == MemoryScope.CASE:
+            memory_dir = self._case_dir(query.agent_id, query.case_id)
+        elif query.scope == MemoryScope.USER:
+            memory_dir = self._subject_dir(query.agent_id, query.subject_ref)
+        else:
             return ()
-        case_dir = self._case_dir(query.agent_id, query.case_id)
-        if not case_dir.exists():
+        if not memory_dir.exists():
             return ()
         now = _now()
         records: list[MemoryRecord] = []
-        for path in case_dir.glob("*.json"):
+        for path in memory_dir.glob("*.json"):
             try:
                 record = MemoryRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, ValueError):
@@ -84,6 +88,46 @@ class LocalMemoryStore:
                 memory_id=record.memory_id,
                 scope=record.scope,
                 case_id=record.case_id,
+                subject_ref=record.subject_ref,
+                agent_id=record.agent_id,
+                summary=record.summary,
+                facts=record.facts,
+                source_run_id=record.source_run_id,
+                source_turn_id=record.source_turn_id,
+                created_at=record.created_at,
+                expires_at=record.expires_at,
+                sensitivity=record.sensitivity,
+                status=MemoryStatus.DELETED,
+            )
+            self._record_path(record).write_text(
+                json.dumps(
+                    _jsonable(updated.model_dump(mode="python", warnings=False)),
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            deleted += 1
+        return deleted
+
+    def export_subject(self, *, agent_id: str, subject_ref: str) -> tuple[MemoryRecord, ...]:
+        return self.read(
+            MemoryQuery(
+                scope=MemoryScope.USER,
+                agent_id=agent_id,
+                subject_ref=subject_ref,
+                max_records=10_000,
+            )
+        )
+
+    def soft_delete_subject(self, *, agent_id: str, subject_ref: str) -> int:
+        deleted = 0
+        for record in self.export_subject(agent_id=agent_id, subject_ref=subject_ref):
+            updated = MemoryRecord(
+                memory_id=record.memory_id,
+                scope=record.scope,
+                case_id=record.case_id,
+                subject_ref=record.subject_ref,
                 agent_id=record.agent_id,
                 summary=record.summary,
                 facts=record.facts,
@@ -106,10 +150,15 @@ class LocalMemoryStore:
         return deleted
 
     def _record_path(self, record: MemoryRecord) -> Path:
+        if record.scope == MemoryScope.USER:
+            return self._subject_dir(record.agent_id, record.subject_ref) / f"{record.memory_id}.json"
         return self._case_dir(record.agent_id, record.case_id) / f"{record.memory_id}.json"
 
     def _case_dir(self, agent_id: str, case_id: str) -> Path:
         return self._memory_dir / "case" / _safe_path_part(agent_id) / _safe_path_part(case_id)
+
+    def _subject_dir(self, agent_id: str, subject_ref: str) -> Path:
+        return self._memory_dir / "user" / _safe_path_part(agent_id) / _safe_path_part(subject_ref)
 
 
 def _safe_path_part(value: str) -> str:

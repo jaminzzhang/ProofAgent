@@ -37,7 +37,8 @@ class MemoryCandidate(FrozenModel):
     """Trace-safe memory proposed from governed run facts."""
 
     scope: MemoryScope
-    case_id: str
+    case_id: str = ""
+    subject_ref: str = ""
     agent_id: str
     summary: str
     facts: Mapping[str, Any] = Field(default_factory=dict)
@@ -57,7 +58,8 @@ class MemoryRecord(FrozenModel):
 
     memory_id: str
     scope: MemoryScope
-    case_id: str
+    case_id: str = ""
+    subject_ref: str = ""
     agent_id: str
     summary: str
     facts: Mapping[str, Any] = Field(default_factory=dict)
@@ -78,10 +80,12 @@ class MemoryQuery(FrozenModel):
     """Bounded memory lookup request."""
 
     scope: MemoryScope
-    case_id: str
+    case_id: str = ""
+    subject_ref: str = ""
     agent_id: str
     max_records: int = 5
     allow_restricted: bool = False
+    consent_granted: bool = False
     query_text: str = ""
 
 

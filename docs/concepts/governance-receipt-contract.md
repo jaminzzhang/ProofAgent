@@ -47,7 +47,7 @@ Every receipt must include:
 | ReAct Review | `review_requested`, `review_decision`, `review_error`, `review_overridden` events |
 | Evidence | `retrieval_step`, `retrieval_result`, and `evidence_evaluation` events |
 | Tools | `tool_request`, `approval_requested`, `approval_granted`, `approval_denied`, `approval_timeout`, `tool_result` events |
-| Memory | `memory_read`, `memory_write_requested`, `memory_write_decision` events |
+| Memory | `memory_read`, `memory_write_requested`, `memory_write_decision`, `memory_export_decision`, `memory_delete_decision` events |
 | Model Usage | `model_request`, `model_response`, `model_error` events |
 | Audit Artifacts | run metadata and artifact writer events |
 | Redaction Summary | `redaction_applied` events and trace writer metadata |

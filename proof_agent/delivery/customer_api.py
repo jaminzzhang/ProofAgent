@@ -27,13 +27,18 @@ from proof_agent.contracts import (
     CustomerSafeResponse,
     HandoffReason,
     MemoryAdmission,
+    MemoryCandidate,
     MemoryQuery,
+    MemoryRecord,
     MemoryScope,
     ValidationStatus,
 )
 from proof_agent.contracts.dashboard import RunDetail
 from proof_agent.control.memory.admission import admit_memory
-from proof_agent.control.memory.extractor import candidate_from_customer_turn
+from proof_agent.control.memory.extractor import (
+    candidate_from_customer_turn,
+    customer_interest_candidate_from_customer_turn,
+)
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.validators.customer_response import validate_customer_safe_response
 from proof_agent.delivery.api import _execute_published_agent_run
@@ -57,6 +62,7 @@ class CustomerConversationCreateRequest(BaseModel):
 
     agent_id: str = Field(min_length=1)
     customer_id: str | None = None
+    memory_consent: bool = False
 
 
 class CustomerRunRequest(BaseModel):
@@ -65,6 +71,7 @@ class CustomerRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1)
+    memory_consent: bool | None = None
 
 
 class CustomerFeedbackRequest(BaseModel):
@@ -96,11 +103,13 @@ def create_customer_conversation(
     record = _get_customer_store(app_request).create_conversation(
         agent_id=request.agent_id,
         customer_ref=request.customer_id,
+        memory_consent=request.memory_consent,
     )
     return {
         "conversation_id": record.conversation_id,
         "agent_id": record.agent_id,
         "customer_id": record.customer_ref,
+        "memory_consent": record.memory_consent,
     }
 
 
@@ -110,6 +119,129 @@ def get_customer_conversation(conversation_id: str, app_request: Request) -> dic
 
     record = _require_customer_conversation(app_request, conversation_id)
     return _customer_conversation_payload(record)
+
+
+@router.get("/customer/memory/{subject_ref}")
+def export_customer_user_memory(
+    subject_ref: str,
+    agent_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Export trace-safe Customer Persistent User Memory for one customer reference."""
+
+    manifest = _require_published_agent_manifest(app_request, agent_id)
+    audit_run_id = _get_customer_store(app_request).latest_run_id_for_customer(
+        agent_id=agent_id,
+        customer_ref=subject_ref,
+    )
+    if not _user_memory_enabled(manifest):
+        memories: tuple[MemoryRecord, ...] = ()
+    else:
+        memories = _get_case_memory_store(app_request, manifest).export_subject(
+            agent_id=agent_id,
+            subject_ref=subject_ref,
+        )
+    _append_customer_user_memory_export_event(
+        app_request=app_request,
+        run_id=audit_run_id,
+        manifest=manifest,
+        agent_id=agent_id,
+        subject_ref=subject_ref,
+        exported_count=len(memories),
+    )
+    return {
+        "agent_id": agent_id,
+        "subject_ref": subject_ref,
+        "audit_run_id": audit_run_id,
+        "memories": [_customer_user_memory_payload(record) for record in memories],
+    }
+
+
+@router.delete("/customer/memory/{subject_ref}")
+def delete_customer_user_memory(
+    subject_ref: str,
+    agent_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Delete Customer Persistent User Memory for one customer reference."""
+
+    manifest = _require_published_agent_manifest(app_request, agent_id)
+    audit_run_id = _get_customer_store(app_request).latest_run_id_for_customer(
+        agent_id=agent_id,
+        customer_ref=subject_ref,
+    )
+    deleted_count = (
+        _get_case_memory_store(app_request, manifest).soft_delete_subject(
+            agent_id=agent_id,
+            subject_ref=subject_ref,
+        )
+        if _user_memory_enabled(manifest)
+        else 0
+    )
+    _append_customer_user_memory_delete_event(
+        app_request=app_request,
+        run_id=audit_run_id,
+        manifest=manifest,
+        agent_id=agent_id,
+        subject_ref=subject_ref,
+        deleted_count=deleted_count,
+    )
+    return {
+        "agent_id": agent_id,
+        "subject_ref": subject_ref,
+        "audit_run_id": audit_run_id,
+        "deleted_count": deleted_count,
+    }
+
+
+@router.delete("/customer/conversations/{conversation_id}/memory")
+def delete_customer_case_memory(conversation_id: str, app_request: Request) -> dict[str, Any]:
+    """Delete Case Memory for a customer conversation without exposing memory contents."""
+
+    conversation = _require_customer_conversation(app_request, conversation_id)
+    registry = _get_published_agents(app_request)
+    published_agent = registry.resolve(conversation.agent_id)
+    if published_agent is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": f"Published Agent not found: {conversation.agent_id}",
+                "available_agent_ids": registry.list_agent_ids(),
+            },
+        )
+    manifest = _load_manifest(published_agent.manifest_path)
+    audit_run_id = _latest_customer_run_id(conversation)
+    if not _case_memory_enabled(manifest):
+        _append_case_memory_delete_event(
+            app_request=app_request,
+            run_id=audit_run_id,
+            conversation=conversation,
+            manifest=manifest,
+            deleted_count=0,
+        )
+        return {
+            "conversation_id": conversation.conversation_id,
+            "agent_id": conversation.agent_id,
+            "deleted_count": 0,
+            "audit_run_id": audit_run_id,
+        }
+    deleted_count = _get_case_memory_store(app_request, manifest).soft_delete_case(
+        agent_id=conversation.agent_id,
+        case_id=conversation.conversation_id,
+    )
+    _append_case_memory_delete_event(
+        app_request=app_request,
+        run_id=audit_run_id,
+        conversation=conversation,
+        manifest=manifest,
+        deleted_count=deleted_count,
+    )
+    return {
+        "conversation_id": conversation.conversation_id,
+        "agent_id": conversation.agent_id,
+        "deleted_count": deleted_count,
+        "audit_run_id": audit_run_id,
+    }
 
 
 @router.post("/customer/conversations/{conversation_id}/runs")
@@ -185,10 +317,19 @@ def create_customer_run(
         )
         return payload
 
-    memory_enabled = _case_memory_enabled(manifest)
-    memory_admission = (
+
+    manifest = _load_manifest(manifest_path)
+    case_memory_enabled = _case_memory_enabled(manifest)
+    user_memory_enabled = _user_memory_enabled(manifest)
+    user_memory_consent = _customer_memory_consent(conversation, request)
+    case_memory_admission = (
         _admit_customer_case_memory(app_request, conversation, manifest)
-        if memory_enabled
+        if case_memory_enabled
+        else MemoryAdmission(admitted=False)
+    )
+    user_memory_admission = (
+        _admit_customer_user_memory(app_request, conversation, manifest)
+        if user_memory_enabled and user_memory_consent and conversation.customer_ref is not None
         else MemoryAdmission(admitted=False)
     )
     result, detail, _ = _execute_published_agent_run(
@@ -196,14 +337,26 @@ def create_customer_run(
         manifest_path=manifest_path,
         question=request.question,
         approved=None,
-        conversation_context=_memory_context(memory_admission),
+        conversation_context=_memory_context(
+            ("Case Memory", case_memory_admission),
+            ("Customer Persistent User Memory", user_memory_admission),
+        ),
     )
-    if memory_enabled:
+    if case_memory_enabled:
         _append_memory_admission_event(
             app_request=app_request,
             detail=cast(RunDetail, detail),
-            admission=memory_admission,
+            admission=case_memory_admission,
             conversation=conversation,
+            scope=MemoryScope.CASE,
+        )
+    if user_memory_enabled and user_memory_consent and conversation.customer_ref is not None:
+        _append_memory_admission_event(
+            app_request=app_request,
+            detail=cast(RunDetail, detail),
+            admission=user_memory_admission,
+            conversation=conversation,
+            scope=MemoryScope.USER,
         )
     safe_response = CustomerSafeResponse(
         message=str(result.final_output),
@@ -217,8 +370,18 @@ def create_customer_run(
         created_at=str(detail.updated_at),
         question=request.question,
     )
-    if memory_enabled:
+    if case_memory_enabled:
         _write_case_memory(
+            app_request=app_request,
+            conversation=conversation,
+            safe_response=safe_response,
+            question=request.question,
+            run_id=str(detail.run_id),
+            turn_id=str(payload["turn_id"]),
+            manifest=manifest,
+        )
+    if user_memory_enabled and user_memory_consent and conversation.customer_ref is not None:
+        _write_user_memory(
             app_request=app_request,
             conversation=conversation,
             safe_response=safe_response,
@@ -232,6 +395,33 @@ def create_customer_run(
 
 def _load_manifest(manifest_path: Path) -> AgentManifest:
     return load_agent_manifest(manifest_path)
+
+
+def _require_published_agent_manifest(request: Request, agent_id: str) -> AgentManifest:
+    registry = _get_published_agents(request)
+    published_agent = registry.resolve(agent_id)
+    if published_agent is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": f"Published Agent not found: {agent_id}",
+                "available_agent_ids": registry.list_agent_ids(),
+            },
+        )
+    return _load_manifest(published_agent.manifest_path)
+
+
+def _load_customer_context(
+    manifest_path: Path,
+    customer_ref: str | None,
+) -> CustomerAuthorizationContext:
+    try:
+        return load_mock_customer_context(
+            manifest_path.parent / "customers.yaml",
+            customer_id=customer_ref,
+        )
+    except CustomerAccessError:
+        return CustomerAuthorizationContext(session_type=CustomerSessionType.ANONYMOUS)
 
 
 def _store_customer_response(
@@ -348,17 +538,53 @@ def _admit_customer_case_memory(
     return admit_memory(records, query=query)
 
 
-def _memory_context(admission: MemoryAdmission) -> ContextAdmission | None:
-    if not admission.admitted:
+def _admit_customer_user_memory(
+    app_request: Request,
+    conversation: CustomerConversationRecord,
+    manifest: AgentManifest,
+) -> MemoryAdmission:
+    user_config = manifest.memory.scopes.user
+    if conversation.customer_ref is None:
+        return MemoryAdmission(admitted=False)
+    query = MemoryQuery(
+        scope=MemoryScope.USER,
+        subject_ref=conversation.customer_ref,
+        agent_id=conversation.agent_id,
+        max_records=user_config.max_records,
+        allow_restricted=user_config.allow_restricted,
+        consent_granted=True,
+    )
+    records = _get_case_memory_store(app_request, manifest).read(query)
+    return admit_memory(records, query=query)
+
+
+def _memory_context(*admissions: tuple[str, MemoryAdmission]) -> ContextAdmission | None:
+    admitted = [(label, admission) for label, admission in admissions if admission.admitted]
+    if not admitted:
         return None
+    included_ids = tuple(
+        memory_id
+        for _label, admission in admitted
+        for memory_id in admission.included_memory_ids
+    )
+    summary = " | ".join(
+        f"Admitted {label}: {admission.summary}" for label, admission in admitted
+    )
     return ContextAdmission(
         admitted=True,
-        turn_count=len(admission.included_memory_ids),
-        included_turn_ids=admission.included_memory_ids,
-        summary=f"Admitted Case Memory: {admission.summary}",
-        char_count=len(admission.summary),
+        turn_count=len(included_ids),
+        included_turn_ids=included_ids,
+        summary=summary,
+        char_count=len(summary),
         max_turns=5,
     )
+
+
+def _customer_memory_consent(
+    conversation: CustomerConversationRecord,
+    request: CustomerRunRequest,
+) -> bool:
+    return request.memory_consent if request.memory_consent is not None else conversation.memory_consent
 
 
 def _write_case_memory(
@@ -382,6 +608,52 @@ def _write_case_memory(
     )
     if candidate is None:
         return
+    _write_memory_candidate(
+        app_request=app_request,
+        run_id=run_id,
+        manifest=manifest,
+        candidate=candidate,
+    )
+
+
+def _write_user_memory(
+    *,
+    app_request: Request,
+    conversation: CustomerConversationRecord,
+    safe_response: CustomerSafeResponse,
+    question: str,
+    run_id: str,
+    turn_id: str,
+    manifest: AgentManifest,
+) -> None:
+    if conversation.customer_ref is None:
+        return
+    candidate = customer_interest_candidate_from_customer_turn(
+        subject_ref=conversation.customer_ref,
+        agent_id=conversation.agent_id,
+        question=question,
+        safe_response=safe_response,
+        source_run_id=run_id,
+        source_turn_id=turn_id,
+        retention_days=manifest.memory.scopes.user.retention_days,
+    )
+    if candidate is None:
+        return
+    _write_memory_candidate(
+        app_request=app_request,
+        run_id=run_id,
+        manifest=manifest,
+        candidate=candidate,
+    )
+
+
+def _write_memory_candidate(
+    *,
+    app_request: Request,
+    run_id: str,
+    manifest: AgentManifest,
+    candidate: MemoryCandidate,
+) -> None:
     _append_run_trace_event(
         app_request=app_request,
         run_id=run_id,
@@ -390,6 +662,7 @@ def _write_case_memory(
         payload={
             "scope": candidate.scope.value,
             "case_id": candidate.case_id,
+            "subject_ref": candidate.subject_ref,
             "agent_id": candidate.agent_id,
             "source_run_id": candidate.source_run_id,
             "source_turn_id": candidate.source_turn_id,
@@ -405,6 +678,7 @@ def _write_case_memory(
         payload={
             "scope": candidate.scope.value,
             "case_id": candidate.case_id,
+            "subject_ref": candidate.subject_ref,
             "field_names": sorted(candidate.facts.keys()),
             "sensitivity": candidate.sensitivity.value,
             "expires_at": candidate.expires_at,
@@ -426,6 +700,7 @@ def _write_case_memory(
                 "reason": policy_decision.reason,
                 "scope": candidate.scope.value,
                 "case_id": candidate.case_id,
+                "subject_ref": candidate.subject_ref,
             },
         )
         return
@@ -442,6 +717,7 @@ def _write_case_memory(
             "memory_id": record.memory_id,
             "scope": record.scope.value,
             "case_id": record.case_id,
+            "subject_ref": record.subject_ref,
         },
     )
 
@@ -450,13 +726,19 @@ def _case_memory_enabled(manifest: AgentManifest) -> bool:
     return manifest.memory.provider in {"local", "mem0"} and manifest.memory.scopes.case.enabled
 
 
+def _user_memory_enabled(manifest: AgentManifest) -> bool:
+    return manifest.memory.provider in {"local", "mem0"} and manifest.memory.scopes.user.enabled
+
+
 def _append_memory_admission_event(
     *,
     app_request: Request,
     detail: RunDetail,
     admission: MemoryAdmission,
     conversation: CustomerConversationRecord,
+    scope: MemoryScope,
 ) -> None:
+    subject_ref = conversation.customer_ref if scope == MemoryScope.USER else ""
     _append_run_trace_event(
         app_request=app_request,
         run_id=detail.run_id,
@@ -464,7 +746,9 @@ def _append_memory_admission_event(
         status="ok" if admission.admitted else "blocked",
         payload={
             "admitted": admission.admitted,
+            "scope": scope.value,
             "case_id": conversation.conversation_id,
+            "subject_ref": subject_ref,
             "agent_id": conversation.agent_id,
             "included_memory_ids": list(admission.included_memory_ids),
             "summary": admission.summary,
@@ -473,6 +757,89 @@ def _append_memory_admission_event(
             "rejection_reasons": dict(admission.rejection_reasons),
         },
     )
+
+
+def _append_case_memory_delete_event(
+    *,
+    app_request: Request,
+    run_id: str | None,
+    conversation: CustomerConversationRecord,
+    manifest: AgentManifest,
+    deleted_count: int,
+) -> None:
+    if run_id is None:
+        return
+    _append_run_trace_event(
+        app_request=app_request,
+        run_id=run_id,
+        event_type="memory_delete_decision",
+        status="ok",
+        payload={
+            "scope": MemoryScope.CASE.value,
+            "case_id": conversation.conversation_id,
+            "agent_id": conversation.agent_id,
+            "provider": manifest.memory.provider,
+            "deleted_count": deleted_count,
+        },
+    )
+
+
+def _append_customer_user_memory_export_event(
+    *,
+    app_request: Request,
+    run_id: str | None,
+    manifest: AgentManifest,
+    agent_id: str,
+    subject_ref: str,
+    exported_count: int,
+) -> None:
+    if run_id is None:
+        return
+    _append_run_trace_event(
+        app_request=app_request,
+        run_id=run_id,
+        event_type="memory_export_decision",
+        status="ok",
+        payload={
+            "scope": MemoryScope.USER.value,
+            "subject_ref": subject_ref,
+            "agent_id": agent_id,
+            "provider": manifest.memory.provider,
+            "exported_count": exported_count,
+        },
+    )
+
+
+def _append_customer_user_memory_delete_event(
+    *,
+    app_request: Request,
+    run_id: str | None,
+    manifest: AgentManifest,
+    agent_id: str,
+    subject_ref: str,
+    deleted_count: int,
+) -> None:
+    if run_id is None:
+        return
+    _append_run_trace_event(
+        app_request=app_request,
+        run_id=run_id,
+        event_type="memory_delete_decision",
+        status="ok",
+        payload={
+            "scope": MemoryScope.USER.value,
+            "subject_ref": subject_ref,
+            "agent_id": agent_id,
+            "provider": manifest.memory.provider,
+            "deleted_count": deleted_count,
+        },
+    )
+
+
+def _latest_customer_run_id(conversation: CustomerConversationRecord) -> str | None:
+    if not conversation.snapshots:
+        return None
+    return conversation.snapshots[-1].run_id
 
 
 def _append_run_trace_event(
@@ -585,6 +952,7 @@ def _customer_conversation_payload(record: CustomerConversationRecord) -> dict[s
         "conversation_id": record.conversation_id,
         "agent_id": record.agent_id,
         "customer_id": record.customer_ref,
+        "memory_consent": record.memory_consent,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "turns": [
@@ -598,6 +966,33 @@ def _customer_conversation_payload(record: CustomerConversationRecord) -> dict[s
             for snapshot in record.snapshots
         ],
     }
+
+
+def _customer_user_memory_payload(record: MemoryRecord) -> dict[str, Any]:
+    return {
+        "memory_id": record.memory_id,
+        "scope": record.scope.value,
+        "subject_ref": record.subject_ref,
+        "agent_id": record.agent_id,
+        "summary": record.summary,
+        "facts": _plain_payload(record.facts),
+        "source_run_id": record.source_run_id,
+        "source_turn_id": record.source_turn_id,
+        "created_at": record.created_at,
+        "expires_at": record.expires_at,
+        "sensitivity": record.sensitivity.value,
+        "status": record.status.value,
+    }
+
+
+def _plain_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _plain_payload(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_plain_payload(item) for item in value]
+    if hasattr(value, "items"):
+        return {str(key): _plain_payload(item) for key, item in value.items()}
+    return value
 
 
 def _safe_sources(detail: RunDetail) -> tuple[str, ...]:
