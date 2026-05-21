@@ -1,4 +1,10 @@
-import type { CustomerConversation, CustomerFeedbackResponse, CustomerRunResponse } from './types'
+import type { ChatTurnView } from '../../chat-core/types'
+import type {
+  CustomerConversation,
+  CustomerFeedbackResponse,
+  CustomerRunResponse,
+  CustomerTurn,
+} from '../../api/types'
 
 const BASE = '/api'
 
@@ -11,7 +17,7 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export function createConversation(
+export function createCustomerConversation(
   agentId: string,
   customerId?: string | null,
 ): Promise<CustomerConversation> {
@@ -22,11 +28,11 @@ export function createConversation(
   })
 }
 
-export function fetchConversation(conversationId: string): Promise<CustomerConversation> {
+export function fetchCustomerConversation(conversationId: string): Promise<CustomerConversation> {
   return fetchJson<CustomerConversation>(`${BASE}/customer/conversations/${conversationId}`)
 }
 
-export function createRun(
+export function createCustomerRun(
   conversationId: string,
   question: string,
 ): Promise<CustomerRunResponse> {
@@ -37,7 +43,7 @@ export function createRun(
   })
 }
 
-export function submitFeedback(
+export function submitCustomerFeedback(
   conversationId: string,
   turnId: string,
   rating: 'up' | 'down',
@@ -51,4 +57,18 @@ export function submitFeedback(
       body: JSON.stringify({ rating, comment: comment || null }),
     },
   )
+}
+
+export function normalizeCustomerTurn(turn: CustomerTurn): ChatTurnView {
+  return {
+    id: turn.turn_id,
+    question: turn.question,
+    createdAt: turn.created_at,
+    assistant: {
+      content: turn.response_snapshot.message,
+      progressState: turn.response_snapshot.progress_state,
+      sources: turn.response_snapshot.safe_sources,
+      suggestedNextSteps: turn.response_snapshot.suggested_next_steps,
+    },
+  }
 }

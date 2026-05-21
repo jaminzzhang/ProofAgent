@@ -1,4 +1,4 @@
-import { BrowserRouter, useNavigate, useParams, useLocation } from 'react-router-dom'
+import { BrowserRouter, matchPath, useLocation, useNavigate } from 'react-router-dom'
 import { AppRoutes } from './router'
 import { TopNav } from './components/TopNav'
 import { ThemeProvider } from './components/ThemeProvider'
@@ -9,12 +9,15 @@ import type { ConversationRecord } from './api/types'
 
 function Layout() {
   const [conversations, setConversations] = useState<ConversationRecord[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
-  const { conversationId } = useParams()
   const location = useLocation()
+  const isOperatorRoute = location.pathname.startsWith('/operator')
+  const operatorMatch = matchPath('/operator/c/:conversationId', location.pathname)
+  const conversationId = operatorMatch?.params.conversationId
 
   const loadConversations = async () => {
+    setLoading(true)
     try {
       const data = await fetchConversations()
       setConversations(data)
@@ -28,17 +31,22 @@ function Layout() {
   }
 
   useEffect(() => {
-    loadConversations()
-  }, [])
+    if (isOperatorRoute) {
+      void loadConversations()
+    } else {
+      setConversations([])
+      setLoading(false)
+    }
+  }, [isOperatorRoute])
 
   useEffect(() => {
-    if (!conversationId && !loading && conversations.length > 0 && location.pathname === '/') {
-      navigate(`/c/${conversations[0].conversation_id}`, { replace: true })
+    if (!conversationId && !loading && conversations.length > 0 && location.pathname === '/operator') {
+      navigate(`/operator/c/${conversations[0].conversation_id}`, { replace: true })
     }
   }, [conversationId, loading, conversations, location.pathname, navigate])
 
   const handleNewChat = () => {
-    navigate('/new')
+    navigate('/operator/new')
   }
 
   const handleRename = async (id: string, title: string) => {
@@ -58,9 +66,9 @@ function Layout() {
       setConversations(updated)
       if (wasActive) {
         if (updated.length > 0) {
-          navigate(`/c/${updated[0].conversation_id}`, { replace: true })
+          navigate(`/operator/c/${updated[0].conversation_id}`, { replace: true })
         } else {
-          navigate('/', { replace: true })
+          navigate('/operator', { replace: true })
         }
       }
     } catch (err) {
@@ -81,15 +89,18 @@ function Layout() {
     <div className="h-screen bg-[var(--bg-base)] text-[var(--text-primary)] transition-colors duration-200 flex flex-col overflow-hidden">
       <TopNav />
       <div className="flex flex-1 overflow-hidden">
-        <HistorySidebar
-          conversations={conversations}
-          onNewChat={handleNewChat}
-          onRename={handleRename}
-          onDelete={handleDelete}
-          onTogglePin={handleTogglePin}
-        />
+        {isOperatorRoute && (
+          <HistorySidebar
+            conversations={conversations}
+            onNewChat={handleNewChat}
+            onRename={handleRename}
+            onDelete={handleDelete}
+            onTogglePin={handleTogglePin}
+            routePrefix="/operator"
+          />
+        )}
         <main className="flex-1 w-full overflow-y-auto px-8 py-8 relative">
-          <div className="max-w-4xl mx-auto pb-12">
+          <div className="w-full pb-12">
             <AppRoutes onConversationUpdate={loadConversations} />
           </div>
         </main>

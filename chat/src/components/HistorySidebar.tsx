@@ -8,6 +8,7 @@ interface HistorySidebarProps {
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
   onTogglePin: (id: string, pinned: boolean) => void
+  routePrefix?: string
 }
 
 export function HistorySidebar({
@@ -16,6 +17,7 @@ export function HistorySidebar({
   onRename,
   onDelete,
   onTogglePin,
+  routePrefix = '',
 }: HistorySidebarProps) {
   const location = useLocation()
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
@@ -100,7 +102,7 @@ export function HistorySidebar({
         ) : (
           <div className="space-y-0.5">
             {conversations.map((conv) => {
-              const isActive = location.pathname === `/c/${conv.conversation_id}`
+              const isActive = location.pathname === `${routePrefix}/c/${conv.conversation_id}`
               const displayTitle =
                 conv.title || conv.turns[0]?.question || 'New Conversation'
               const isRenaming = renamingId === conv.conversation_id
@@ -109,7 +111,7 @@ export function HistorySidebar({
                 <div key={conv.conversation_id}>
                   <div className="group relative">
                     <NavLink
-                      to={`/c/${conv.conversation_id}`}
+                      to={`${routePrefix}/c/${conv.conversation_id}`}
                       className={`flex flex-col px-3 py-2.5 rounded-lg transition-colors ${
                         isActive
                           ? 'bg-[var(--bg-hover)] text-[var(--text-primary)]'

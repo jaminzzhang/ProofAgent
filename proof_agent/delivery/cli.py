@@ -135,7 +135,7 @@ def server(
     typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
     typer.echo("To start the frontends in development mode, run:")
     typer.echo("  Dashboard: cd dashboard && npm run dev (port 5173)")
-    typer.echo("  Chat Console: cd chat && npm run dev (port 5174)")
+    typer.echo("  Unified Chat: cd chat && npm run dev (port 5174, /operator and /customer)")
     uvicorn.run(app, host=host, port=port)
 
 

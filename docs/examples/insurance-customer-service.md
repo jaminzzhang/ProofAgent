@@ -95,10 +95,10 @@ Run the customer journeys:
 uv run --extra dashboard --extra dev python -m pytest tests/test_customer_journeys.py -v
 ```
 
-Build the customer app:
+Build the unified Chat app:
 
 ```bash
-cd customer
+cd chat
 npm install
 npm run build
 ```

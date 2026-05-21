@@ -163,7 +163,7 @@ The planner and review subagent are inputs to governance, not governance authori
 Autonomous Customer Service Mode adds a customer-facing delivery path around the same Harness:
 
 ```text
-Customer Web Chat
+Unified Chat Frontend `/customer` mode
   -> Customer Run API
   -> mock customer session context
   -> customer authorization guard for account data
@@ -175,7 +175,7 @@ Customer Web Chat
   -> Internal Handoff Monitor projection
 ```
 
-The customer path is deliberately separate from the operator-facing Chat API. Customer responses must not contain trace links, receipt links, policy decisions, review results, approval state, raw tool parameters, or internal handoff state. Handoff remains an internal trace/projection concept, not a customer-visible `ESCALATED_TO_HUMAN` outcome.
+The customer path is deliberately separate from the operator-facing Chat API even though both modes are delivered by the unified Chat SPA. Customer responses must not contain trace links, receipt links, policy decisions, review results, approval state, raw tool parameters, or internal handoff state. Handoff remains an internal trace/projection concept, not a customer-visible `ESCALATED_TO_HUMAN` outcome.
 
 Layer boundary rules:
 - Control Plane owns decisions. Runtime and Capability layers cannot bypass PolicyEngine, Approval, Validators, or Outcome mapping.
