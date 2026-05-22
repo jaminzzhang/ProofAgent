@@ -11,6 +11,7 @@ _POLICY_STATUS = {
 
 _CLAIM_STATUS = {
     ("CUST-001", "CLM-001"): {"status": "in_review", "received_date": "2026-05-01"},
+    ("CUST-001", "CLM-003"): {"status": "received", "received_date": "2026-05-04"},
     ("CUST-002", "CLM-002"): {"status": "received", "received_date": "2026-05-03"},
 }
 

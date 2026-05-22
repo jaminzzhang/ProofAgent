@@ -79,6 +79,8 @@ def is_claim_status_question(question: str) -> bool:
     normalized = question.lower()
     return "claim status" in normalized or (
         "status" in normalized and extract_claim_id(question) is not None
+    ) or (
+        "status" in normalized and "claim" in normalized
     )
 
 
@@ -96,6 +98,55 @@ def is_transactional_customer_action(question: str) -> bool:
         "approve my claim",
     )
     return any(term in normalized for term in transactional_terms)
+
+
+def is_payment_or_coverage_guarantee_request(question: str) -> bool:
+    """Detect personalized coverage, eligibility, payable amount, or payment requests."""
+
+    normalized = question.lower()
+    personalized_terms = (
+        "my claim",
+        "my policy",
+        "based on my claim",
+        "based on my policy",
+    )
+    decision_terms = (
+        "am i covered",
+        "am i eligible",
+        "how much will i be paid",
+        "how much will you pay",
+        "will i be paid",
+        "will be paid",
+        "payable amount",
+        "payment amount",
+        "guarantee payment",
+        "guarantee coverage",
+    )
+    has_personalized_context = any(term in normalized for term in personalized_terms) or (
+        extract_claim_id(question) is not None
+    )
+    return has_personalized_context and any(term in normalized for term in decision_terms)
+
+
+def is_tool_execution_failure_retry_request(question: str) -> bool:
+    """Detect a customer-facing retry after an authorized read tool failed."""
+
+    normalized = question.lower()
+    lookup_terms = ("claim status", "policy status", "status lookup")
+    failure_terms = (
+        "service times out",
+        "service timed out",
+        "service timeout",
+        "times out",
+        "timed out",
+        "timeout",
+        "unavailable",
+    )
+    return (
+        "retry" in normalized
+        and any(term in normalized for term in lookup_terms)
+        and any(term in normalized for term in failure_terms)
+    )
 
 
 def extract_policy_id(question: str) -> str | None:

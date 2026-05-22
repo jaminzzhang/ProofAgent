@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from proof_agent.contracts import (
     CustomerConversationRecord,
+    CustomerDisambiguationOption,
     CustomerFeedbackSignal,
     CustomerResponseSnapshot,
 )
@@ -72,6 +73,28 @@ class CustomerStore:
             created_at=record.created_at,
             updated_at=_now(),
             snapshots=(*record.snapshots, snapshot),
+            disambiguation_options=record.disambiguation_options,
+        )
+        self._write(updated)
+        return updated
+
+    def set_disambiguation_options(
+        self,
+        *,
+        conversation_id: str,
+        options: tuple[CustomerDisambiguationOption, ...],
+    ) -> CustomerConversationRecord | None:
+        record = self.get_conversation(conversation_id)
+        if record is None:
+            return None
+        updated = CustomerConversationRecord(
+            conversation_id=record.conversation_id,
+            agent_id=record.agent_id,
+            customer_ref=record.customer_ref,
+            created_at=record.created_at,
+            updated_at=_now(),
+            snapshots=record.snapshots,
+            disambiguation_options=options,
         )
         self._write(updated)
         return updated

@@ -5,6 +5,7 @@ customers:
       - POL-001
     claims:
       - CLM-001
+      - CLM-003
   - customer_id: CUST-002
     display_name: Demo Customer Two
     policies:

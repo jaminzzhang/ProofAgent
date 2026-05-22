@@ -393,6 +393,18 @@ def _planner_semantic_error(
 def _deterministic_query(question: str) -> str:
     if question == "What is the reimbursement rule for travel meals?":
         return "travel meals reimbursement rule"
+    if question == "住院理赔需要哪些材料？":
+        return "inpatient claim reimbursement required documents"
+    if question == "What does deductible mean in inpatient reimbursement coverage?":
+        return "deductible out of pocket before reimbursement"
+    if question == "How should I understand the waiting period clause in a health insurance policy?":
+        return "waiting period policy starts benefits"
+    if question == "住院医疗险里的免赔额和等待期是什么意思？":
+        return "deductible waiting period policy terms reimbursement"
+    if question == "What happens after I submit an inpatient reimbursement claim?":
+        return "claim review documents status after submit"
+    if question == "What documents should I prepare to improve my claim approval odds?":
+        return "claim documents preparation review approval likelihood"
     return question
 
 

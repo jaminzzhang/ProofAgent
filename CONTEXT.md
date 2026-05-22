@@ -20,6 +20,10 @@ _Avoid_: Wrapper, guardrail layer
 The public configuration contract that declares an Agent's purpose, workflow, knowledge, model, policy, tools, memory, and audit behavior.
 _Avoid_: Internal config, runtime config
 
+**Tool Contract**:
+The public capability contract that declares a governed tool's purpose, risk level, read/write class, authorization conditions, parameter bounds, and audit behavior.
+_Avoid_: Runtime adapter, provider-native tool schema, prompt instruction
+
 **Workflow Template**:
 A reusable governed flow shape for a class of Agents, such as enterprise question answering.
 _Avoid_: One-off orchestrator branch, runtime graph
@@ -96,6 +100,10 @@ _Avoid_: Tool call, approved action, model decision
 The fixed V1 set of allowed ReAct action types: ask clarification, plan retrieval, run retrieval step, propose tool call, generate final answer, escalate, or stop.
 _Avoid_: Free-form action name, arbitrary model command
 
+**Tool Proposal Scope**:
+The run-specific set of Tool Contract identifiers that a ReAct Planner may mention in ReAct Action Proposal values before Harness policy decides whether execution is allowed.
+_Avoid_: Tool execution permission, provider-native tool list, prompt-only allowlist
+
 **Auto Review Mode**:
 A Harness operating mode where configured rules and, when enabled, a Harness Review Subagent review control nodes without human approval unless a decision requires it.
 _Avoid_: Unconstrained autonomous mode
@@ -153,31 +161,63 @@ The Agent Contract policy that sets the maximum governance detail a backend resp
 _Avoid_: Frontend-only visibility flag, unrestricted API projection
 
 **Customer-Safe Response Projection**:
-A customer-facing response shape that exposes only the governed reply, safe source references, clarification needs, or safe follow-up acknowledgement while hiding internal trace, receipt, policy, review, tool, and handoff details.
+A customer-facing response shape that exposes only the governed reply, safe source references, clarification needs, or safe follow-up acknowledgement while hiding internal trace, receipt, policy, review, tool, and handoff details. It may differ from the internal run final output when customer-safety wording requires projection.
 _Avoid_: Governance Detail Projection, raw Run Detail, internal audit response
+
+**Customer-Safe Source Label**:
+A customer-visible source reference that names the business record category or customer-owned record without exposing internal tool names, trace identifiers, receipt identifiers, authorization reasons, or raw payloads.
+_Avoid_: Tool name, trace link, receipt link, raw record payload
 
 **Customer-Facing Business Claim**:
 Any customer-visible statement about policy rules, coverage, status, timing, amount, eligibility, required action, or service next steps.
 _Avoid_: Greeting, clarification prompt, escalation notice
 
+**Insurance Product Term Interpretation**:
+An evidence-backed customer-facing explanation or analysis of insurance product terms, policy clauses, coverage language, exclusions, deductibles, waiting periods, or customer obligations.
+_Avoid_: Personalized coverage decision, payment guarantee, unsupported legal advice
+
+**Insurance Service Process Guidance**:
+An evidence-backed customer-facing explanation or analysis of insurance service workflows, claim submission steps, document requirements, review stages, status meanings, or safe next-step options.
+_Avoid_: Transactional action, SLA commitment, claim outcome decision
+
+**Outcome Optimization Advice**:
+Customer-facing advice that predicts, optimizes, or improves the likelihood of a claim, coverage, eligibility, approval, or payment outcome for a specific customer case.
+_Avoid_: Evidence-backed document checklist, generic service process guidance
+
+**Safe Process Guidance Reframe**:
+A customer-safe response pattern that declines to assess outcome likelihood or optimize a case outcome, then answers with evidence-backed document checklists, preparation steps, or service process guidance.
+_Avoid_: Direct refusal only, outcome prediction, rule evasion advice
+
+**Personalized Insurance Service Request**:
+A customer-facing request that asks about the authenticated customer's own policy, claim, eligibility, coverage, payable amount, deadline, status, or next required action.
+_Avoid_: Generic product term question, generic service process question
+
+**Personalized Coverage Or Payment Decision**:
+A customer-specific conclusion about whether a claim is covered, eligible, payable, how much will be paid, or when payment is guaranteed.
+_Avoid_: Evidence-backed term explanation, read-only status lookup, service process guidance
+
 **Safe Conversational Text**:
-Customer-facing text that contains no business claim, such as greetings, acknowledgements, clarification prompts, refusals, or escalation notices.
+Customer-facing text that contains no business claim, such as greetings, acknowledgements, clarification prompts, refusals, temporary failure wording, or escalation notices.
 _Avoid_: Unsupported policy explanation, unsupported service commitment
 
 **Customer Response Language Policy**:
 The customer-facing language rule that limits V1 replies to Chinese or English while preserving evidence and tool support requirements.
 _Avoid_: Unbounded multilingual support, free translation layer
 
+**Evidence-Bound Translation**:
+A customer-facing translation of already-supported business claims that preserves the source meaning, source references, and evidence boundary.
+_Avoid_: New business explanation, localized commitment, unsupported interpretation
+
 **Customer Journey Acceptance Suite**:
-A fixed set of customer-facing scenarios used to validate V1 autonomous service behavior across anonymous access, authenticated lookup, refusal, clarification, internal handoff, retrieval failure, and supported languages.
+A fixed set of customer-facing scenarios used to validate V1 autonomous service behavior across product-term interpretation, service-process guidance, anonymous access, authenticated lookup, refusal, clarification, internal handoff, retrieval failure, and supported languages.
 _Avoid_: Single-question demo, ad hoc manual testing
 
 **Customer Feedback Signal**:
-A customer-provided thumbs up/down rating and optional comment attached to a conversation turn for internal observation only.
+A customer-provided thumbs up/down rating and optional comment attached to a conversation turn for internal observation only, linked through conversation id, turn id, and the turn's governed run id. It is not a Case Memory source in V1.
 _Avoid_: Training signal, automatic policy update, online learning input
 
 **Customer Response Snapshot**:
-The exact customer-visible response projection stored with a conversation turn and linked to the governed run that produced it.
+The exact customer-visible response projection stored with a conversation turn and linked to the governed run that produced it, including cases where customer-safety wording differs from the internal run final output. It is an audit artifact, not a Case Memory payload.
 _Avoid_: Recomputed response, internal run detail, raw trace replay
 
 **Private Pilot Customer Service Bot**:
@@ -273,8 +313,32 @@ A customer-facing conversation bound to a verified customer identity and an expl
 _Avoid_: Anonymous customer session, raw login token
 
 **Customer Authorization Context**:
-The trace-safe customer identity and permission summary admitted into a customer-facing Harness run.
+The trace-safe customer identity and permission summary admitted into a customer-facing Harness run as Structured Control Context for policy, planner/reviewer, Tool Gateway, trace, and receipt behavior.
 _Avoid_: Raw identity token, customer profile dump, tool credential
+
+**Customer-Owned Resource Resolution**:
+The deterministic match between a customer request, Customer Authorization Context, normalized input parameters, and any Owned Resource Handle Index data that identifies exactly one customer-owned account, policy, claim, or service record for a customer-specific read.
+_Avoid_: Planner guess, most-recent default, broad customer profile lookup
+
+**Customer Resource Resolution Basis**:
+The internal audit record explaining how Customer-Owned Resource Resolution identified exactly one resource, including the handle index source, matched trace-safe resource identifier, matching rule, and whether disambiguation was skipped.
+_Avoid_: Customer-visible authorization reason, raw resource payload, planner rationale
+
+**Customer Resource Disambiguation Prompt**:
+A customer-safe Clarification Request that presents bounded, minimal option handles for customer-owned resources so the customer can select exactly one resource for a Single-Resource Customer Read.
+_Avoid_: Bulk status listing, raw resource export, hidden default selection
+
+**Customer-Safe Resource Handle**:
+A customer-visible resource identifier fragment or short descriptor used for disambiguation, such as a fixture-provided id, last-four identifier, date, or resource type label, without exposing status, amount, coverage, internal customer id, raw payload fields, or authorization details.
+_Avoid_: Raw resource id, internal customer id, status-bearing summary
+
+**Owned Resource Handle Index**:
+A trace-safe set of customer-owned resource handles and optional resource counts supplied by Customer Authorization Context, Mock Customer Persona fixtures, or a future Customer Identity Adapter for disambiguation before a Single-Resource Customer Read.
+_Avoid_: Policy status result list, claim status result list, bulk tool lookup cache
+
+**Customer Disambiguation Option Mapping**:
+A short-lived conversation-scoped mapping from customer-visible option handles in a Customer Resource Disambiguation Prompt to trace-safe customer-owned resource identifiers, linked to the originating run and Customer Response Snapshot and valid only for the current clarification sequence.
+_Avoid_: Customer Authorization Context, Case Memory, bulk resource index
 
 **Mock Authenticated Customer Session**:
 A deterministic V1 authentication stand-in that supplies a verified customer identity and authorization scope without integrating a production identity provider.
@@ -285,7 +349,7 @@ A deterministic customer identity and owned-resource fixture used to prove custo
 _Avoid_: Single hard-coded customer, production customer record
 
 **Cross-Customer Access Attempt**:
-A customer-facing request that tries to read another customer's account, policy, claim, or service data.
+A customer-facing request that tries to read another customer's account, policy, claim, or service data and must create an internal Customer Escalation Handoff after the customer-specific read is blocked.
 _Avoid_: Valid customer lookup, generic policy question
 
 **Customer Identity Adapter**:
@@ -300,8 +364,12 @@ _Avoid_: Transactional customer service, self-service operations
 A governed tool that retrieves facts about the authenticated customer's own account, policy, claim, or service status without changing business state.
 _Avoid_: Write tool, transaction tool, generic knowledge retrieval
 
+**Single-Resource Customer Read**:
+A customer-specific read that targets exactly one customer-owned account, policy, claim, or service record after Customer-Owned Resource Resolution.
+_Avoid_: Bulk customer resource listing, broad account export, guessed default resource
+
 **Policy-Authorized Read Tool**:
-A Customer-Specific Read Tool that PolicyEngine may allow automatically when customer identity, authorization scope, tool risk, and parameters satisfy V1 read-only rules.
+A Customer-Specific Read Tool that runs inside a governed Harness run and that PolicyEngine may allow automatically when customer identity, authorization scope, tool risk, and parameters satisfy V1 read-only rules.
 _Avoid_: Human-approved customer lookup, ungoverned tool call
 
 **Policy Status Lookup Tool**:
@@ -312,12 +380,36 @@ _Avoid_: Generic customer lookup, policy modification tool
 A Policy-Authorized Read Tool that retrieves the authenticated customer's claim status without changing business state or deciding claim outcome.
 _Avoid_: Claim submission tool, claim approval tool, payment commitment
 
+**Authorized Tool Result**:
+A trace-safe, redacted result returned by Tool Gateway after PolicyEngine and tool authorization checks allow a governed tool call, with customer-facing references projected through Customer-Safe Source Label values.
+_Avoid_: Accepted Evidence, raw tool payload, ungoverned tool response
+
+**Customer Tool Authorization Denial**:
+An internal deterministic denial recorded when PolicyEngine or Tool Gateway refuses a customer-specific read before execution because identity, ownership, parameter, risk, or Tool Contract authorization conditions are not satisfied.
+_Avoid_: Customer-visible policy explanation, raw tool error, model refusal
+
+**Customer Tool Execution Failure**:
+An internal failure recorded when an authorized customer-specific read cannot complete because Tool Gateway, adapter, dependency, timeout, or runtime execution failed after authorization.
+_Avoid_: Customer Tool Authorization Denial, insufficient evidence, raw tool error
+
+**Customer Tool Retry Run**:
+A new governed Customer Run API turn that retries a customer-specific read after a Customer Tool Execution Failure while linking to the failed run for audit continuity.
+_Avoid_: Tool replay, reused authorization, same-run retry
+
+**Customer Tool Failure Series**:
+The linked sequence of Customer Tool Execution Failure and Customer Tool Retry Run records for the same conversation, customer-owned resource, and tool intent.
+_Avoid_: Automatic handoff, hidden retry loop, merged failure
+
 **Transactional Customer Action**:
 A customer-service action that changes business state, creates obligations, submits requests, modifies records, or makes payment or coverage commitments.
 _Avoid_: Read-only lookup, policy explanation
 
+**Payment Or Coverage Guarantee Request**:
+A customer-facing request that asks the Agent to guarantee claim payment, coverage, reimbursement amount, eligibility, deadline, or service commitment before governed evidence and authorized review support such a claim.
+_Avoid_: Evidence-backed policy explanation, authorized read-only status lookup
+
 **Customer Escalation Handoff**:
-An internal traceable follow-up record created when the Agent cannot safely complete a customer-facing run autonomously.
+An internal traceable follow-up record created when the Agent cannot safely complete a customer-facing run autonomously and the reason is operationally significant, security-relevant, or explicitly configured for follow-up.
 _Avoid_: Customer-visible escalated-to-human outcome, real ticket creation, silent failure
 
 **Handoff-Safe Customer Wording**:
@@ -332,12 +424,16 @@ _Avoid_: Final outcome, customer-visible escalation status, ticket event
 A fixed reason code explaining why a Customer Escalation Handoff was created.
 _Avoid_: Free-form handoff note, customer-visible explanation
 
+**Handoff Trigger Policy**:
+The governed rule set that decides which customer-service conditions create an internal Customer Escalation Handoff.
+_Avoid_: Frontend-defined trigger, prompt-defined trigger, arbitrary user-defined escalation
+
 **Handoff Projection**:
 An internal Dashboard/RunStore read projection that shows Customer Escalation Handoff records for monitoring and run-detail drilldown.
 _Avoid_: Customer-Safe Response Projection, ticket workflow state
 
 **Controlled Conversation Context**:
-Conversation history admitted into a new Harness run only after policy, redaction, length, and relevance checks.
+Conversation history and short-lived clarification state admitted into a new Harness run only after policy, redaction, length, and relevance checks.
 _Avoid_: Raw transcript injection, unrestricted chat memory
 
 **Conversation Store**:
@@ -357,7 +453,7 @@ A Capability Layer adapter that connects an external or internal memory engine t
 _Avoid_: Direct memory backend, model-owned memory, uncontrolled memory plugin
 
 **Case Memory**:
-Memory scoped to one case, task, customer issue, or conversation journey.
+Memory scoped to one case, task, customer issue, or conversation journey, containing admitted structured case facts or bounded trace-safe summaries rather than complete customer-visible messages.
 _Avoid_: Persistent user profile, audit log, raw conversation transcript
 
 **Case Focus**:
@@ -384,6 +480,10 @@ _Avoid_: Permanent customer transcript storage, audit retention policy
 The separation between short-lived customer conversation text and longer-lived trace-safe run audit facts.
 _Avoid_: Raw transcript archive, unrestricted audit log
 
+**Run Artifact Consistency**:
+The requirement that Trace, Governance Receipt, run metadata, and read projections describe the same governed run facts.
+_Avoid_: Post-finalize trace mutation, receipt drift, projection-only audit fact
+
 **Internal Governance Dashboard**:
 The internal observability surface for inspecting governed runs, traces, receipts, stats, and escalation handoff records.
 _Avoid_: Customer Service Chat Frontend, customer response UI, full admin console
@@ -397,7 +497,7 @@ A future administrative console for RBAC, tenant management, multi-Agent configu
 _Avoid_: Internal Governance Dashboard, Customer Service Web Chat
 
 **Insurance Service QA Domain**:
-The first customer-service domain for the Enterprise QA Reference Agent, covering insurance policy questions and authenticated read-only service lookups.
+The first customer-service domain for the Enterprise QA Reference Agent, covering insurance product term interpretation, service process guidance, policy questions, and authenticated read-only service lookups.
 _Avoid_: Generic enterprise QA, direct claims decisioning
 
 **Harness RAG**:
@@ -558,6 +658,7 @@ _Avoid_: Evidence content dump
 - **Structured Control Context** may include user question, Agent purpose, step budget, allowed actions, tool risk summary, evidence state, conversation summary, enforcement point, and policy-relevant metadata.
 - A model may produce a **ReAct Action Proposal**, but only **Auto Review Mode** or another Harness review path can admit it for execution.
 - Every **ReAct Action Proposal** must use the fixed **ReAct Action Set**; non-enumerated actions are denied and traced.
+- Every tool-call **ReAct Action Proposal** must name a tool inside the run's **Tool Proposal Scope**, which is derived from the **Agent Contract** tool scope and matching **Tool Contract** definitions.
 - **Auto Review Mode** may use a **Harness Review Subagent** as a Control Plane component.
 - A **Harness Review Subagent** reviews Harness control nodes; it does not generate the final user answer.
 - A **Harness Review Subagent** is configured by **Review Subagent Config**, not by the final answer model config.
@@ -575,11 +676,27 @@ _Avoid_: Evidence content dump
 - **Response Detail Policy** sets the maximum **Governance Detail Projection** allowed for an Agent; API requests may request less detail but cannot exceed it.
 - A **Customer-Safe Response Projection** is required for **Customer Service Chat Frontend** responses and must not expose **Governance Detail Projection**, trace links, receipt links, internal policy decisions, review results, or raw tool parameters.
 - A **Customer-Safe Response Projection** must not expose **Customer Escalation Handoff** as an `ESCALATED_TO_HUMAN` customer-visible outcome.
-- Every **Customer-Facing Business Claim** must be supported by **Accepted Evidence** or an authorized read-only tool result.
+- A **Customer-Safe Response Projection** may expose **Authorized Tool Result** support only through **Customer-Safe Source Label** values, not through tool names, trace identifiers, receipt identifiers, internal authorization reasons, or raw tool payloads.
+- A **Customer-Safe Response Projection** may differ from the internal run final output for safety, audience, or handoff wording, but the exact customer-visible projection must be recorded as a **Customer Response Snapshot** linked to the run.
+- Every **Customer-Facing Business Claim** must be supported by **Accepted Evidence** or an **Authorized Tool Result**.
+- **Insurance Product Term Interpretation** and **Insurance Service Process Guidance** are in V1 scope when every business claim is supported by **Accepted Evidence** or an **Authorized Tool Result** and the answer avoids personalized coverage decisions, payment guarantees, **Outcome Optimization Advice**, transactional action, or unsupported legal advice.
+- V1 **Insurance Service Process Guidance** may provide evidence-backed document checklists, preparation steps, and process expectations, but must not claim to improve approval likelihood, predict case success, or frame guidance as outcome optimization.
+- When a customer asks for **Outcome Optimization Advice**, V1 should use a **Safe Process Guidance Reframe** when possible: state that it cannot assess or promise approval likelihood, then provide evidence-backed required materials, preparation steps, and service process guidance.
+- If a customer persists in asking for outcome prediction, **Personalized Coverage Or Payment Decision**, payment guarantee, or rule evasion advice after a **Safe Process Guidance Reframe**, V1 returns a customer-safe refusal or follows the applicable **Handoff Trigger Policy**.
+- An **Anonymous Customer Session** may receive generic **Insurance Product Term Interpretation** and **Insurance Service Process Guidance** when the answer is evidence-backed and does not become a **Personalized Insurance Service Request**.
+- A **Personalized Insurance Service Request** requires an **Authenticated Customer Session** before customer-specific answers, resource disambiguation, read tools, eligibility discussion, payable amount discussion, or personalized next-step guidance can proceed.
+- Authentication and read-only status lookup do not authorize a **Personalized Coverage Or Payment Decision** in V1; the Agent may explain relevant terms, service process, and authorized status facts, but must not conclude coverage, eligibility, payable amount, or guaranteed payment timing.
 - **Safe Conversational Text** may appear without evidence only when it does not add business facts or commitments.
 - V1 uses a **Customer Response Language Policy** that supports Chinese and English customer replies only; other languages are future localization work.
+- V1 allows **Evidence-Bound Translation** from English evidence or tool output into Chinese customer replies, but translated **Customer-Facing Business Claim** values must remain supported by **Accepted Evidence** or **Authorized Tool Result** values.
+- **Evidence-Bound Translation** must not add business facts, commitments, deadlines, amounts, eligibility decisions, or policy interpretations beyond the accepted source; customer-safe source references continue to point to the original evidence or tool result.
 - V1 is accepted through a **Customer Journey Acceptance Suite**, not only through isolated single-question outcomes.
+- V1 **Customer Journey Acceptance Suite** is a release gate and must cover anonymous generic answers, **Insurance Product Term Interpretation**, **Insurance Service Process Guidance**, authenticated single-resource status lookup, multi-resource disambiguation, clarification continuation, ordinal disambiguation replies, cross-customer refusal plus handoff, tool authorization denial, tool execution failure plus retry, ordinary insufficient evidence without handoff, payment or coverage guarantee handoff, and Chinese **Evidence-Bound Translation**.
+- During development, the **Customer Journey Acceptance Suite** may run in two layers: always-on customer-safe smoke assertions for current behavior, and V1 release-gate assertions that enumerate unmet release requirements until strict release validation is enabled.
+- Passing V1 release-gate assertions requires each customer turn to produce a governed run identity through the full **Customer Run API** Harness path, including authentication prompts, clarification prompts, refusals, handoff acknowledgements, and read-only status answers.
 - V1 may collect **Customer Feedback Signal** values for internal observation, but feedback must not automatically update models, policies, retrieval indexes, or future answers.
+- V1 **Customer Feedback Signal** storage may live in CustomerStore rather than the run artifact, but it must preserve conversation id, turn id, and run linkage; feedback does not rewrite Trace, Receipt, or the governed run outcome.
+- V1 **Customer Feedback Signal** values must not create, update, rank, or admit **Case Memory**; feedback cannot become an implicit preference, fact, or follow-up instruction.
 - Each customer-facing turn stores a **Customer Response Snapshot** linked to the RunStore `run_id` for audit replay and complaint investigation.
 - V1 is released as a **Private Pilot Customer Service Bot**, not as a public internet production bot or full contact-center platform.
 - V1 customer-facing execution may expose **Customer Run Progress State** values but does not stream unvalidated model tokens.
@@ -594,6 +711,7 @@ _Avoid_: Evidence content dump
 - A **Run Execution API** starts Harness runs; Dashboard and receipt views remain read projections over run artifacts.
 - A **Customer Service Chat Frontend** submits customer messages through the **Customer Run API**, not through the internal chat execution response shape.
 - A **Customer Run API** starts governed Harness runs for a **Published Agent** while returning only **Customer-Safe Response Projection** values.
+- Every **Customer Run API** turn must produce a non-empty RunStore `run_id` and a **Customer Response Snapshot** linked to that run, including authentication prompts, missing-field clarification prompts, safe refusals, and handoff-safe acknowledgements.
 - A **Unified Chat Frontend** may share design, navigation rhythm, and message-composition flow across **Assisted QA Chat Frontend** and **Customer Service Chat Frontend** modes.
 - A **Unified Chat Frontend** must not expose audit links, **Governance Detail Projection**, approval state, raw run identifiers, or receipt links in customer mode.
 - A **Unified Chat Frontend** does not merge **Run Execution API** and **Customer Run API** response contracts; audience-specific projections remain separate.
@@ -608,21 +726,61 @@ _Avoid_: Evidence content dump
 - **Assisted Service Mode** remains a supported product direction but is no longer the V1 default target.
 - An **Anonymous Customer Session** may ask generic policy questions but cannot access customer-specific tools, account facts, policy status, claim status, or personalized commitments.
 - An **Authenticated Customer Session** is required before any customer-specific answer or tool call can proceed.
-- **Customer Authorization Context** is admitted separately from **Controlled Conversation Context** and must not expose raw credentials to model prompts, trace, receipt, or tool parameters.
+- **Customer Authorization Context** is admitted separately from **Controlled Conversation Context** and must enter the **Harness Invocation** or run state as Structured Control Context; it must not remain only as Customer Run API preflight state.
+- **Customer Authorization Context** must not expose raw credentials to model prompts, trace, receipt, or tool parameters.
 - V1 may use a **Mock Authenticated Customer Session** to prove the authentication and authorization boundary without integrating production OAuth, OIDC, IAM, or SSO.
 - V1 requires at least two **Mock Customer Persona** fixtures so authorization isolation can be tested.
-- A **Cross-Customer Access Attempt** must be refused or escalated before a customer-specific read tool executes.
+- A **Cross-Customer Access Attempt** must be refused before any customer-specific read tool executes and must create an internal **Customer Escalation Handoff** for monitoring.
 - A **Customer Identity Adapter** is the future integration point for production identity providers.
 - V1 **Autonomous Customer Service Mode** is **Read-Only Customer Service**.
 - A **Customer-Specific Read Tool** requires an **Authenticated Customer Session** and **Customer Authorization Context**.
+- V1 customer-specific read tools are limited to **Single-Resource Customer Read** behavior; bulk customer resource listing is future capability work.
 - A **Policy-Authorized Read Tool** does not require human approval in V1 when PolicyEngine confirms it is authenticated, authorized, read-only, and parameter-bounded.
+- A **Policy-Authorized Read Tool** must still execute inside a full **Harness Invocation** with PolicyEngine, Tool Gateway, Trace, Governance Receipt, and RunStore artifacts; Customer Run API preflight must not become a second tool execution path.
+- **Tool Contract** and **Agent Contract** policy metadata are the authority for customer read-tool authorization conditions such as read-only classification, authenticated-customer requirements, ownership checks, risk level, and parameter bounds.
+- PolicyEngine and Tool Gateway enforce customer read-tool authorization by comparing normalized tool arguments with **Customer Authorization Context** before execution; the ReAct Planner and Harness Review Subagent may propose or recommend, but cannot assert that authorization conditions are satisfied.
+- A denied customer read-tool proposal records a **Customer Tool Authorization Denial** in Trace, Governance Receipt, and RunStore with deterministic denial reason and redacted argument/resource summaries.
+- A **Customer Tool Authorization Denial** projects to customers only as a **Customer-Safe Response Projection** containing a safe refusal or **Clarification Request**; it must not expose policy rule names, authorization reasons, tool names, raw arguments, risk levels, internal resource identifiers, or Tool Gateway errors.
+- A **Customer Tool Authorization Denial** that involves a **Cross-Customer Access Attempt** or suspected abuse/security risk must also create an internal **Customer Escalation Handoff** according to the **Handoff Trigger Policy**.
+- An authorized customer read tool that fails during Tool Gateway, adapter, dependency, timeout, or runtime execution records a **Customer Tool Execution Failure** in Trace, Governance Receipt, and RunStore.
+- A **Customer Tool Execution Failure** projects to customers as a customer-safe temporary failure or refusal and must not be relabeled as **Customer Tool Authorization Denial**, insufficient evidence, or an unsupported business answer.
+- Customer-facing wording for **Customer Tool Execution Failure** may ask the customer to try again later as **Safe Conversational Text**, but must not promise system recovery, guarantee successful retry, claim human follow-up, or say the issue was escalated unless a **Customer Escalation Handoff** was actually created and projected with **Handoff-Safe Customer Wording**.
+- A **Customer Tool Execution Failure** does not create a **Customer Escalation Handoff** by default; handoff occurs only when the **Handoff Trigger Policy** classifies that failure as an enterprise high-value failure, suspected abuse, or security-relevant condition.
+- A customer retry after **Customer Tool Execution Failure** is a **Customer Tool Retry Run**: it starts a new governed run, links to the failed run, and repeats **Customer-Owned Resource Resolution**, PolicyEngine authorization, and Tool Gateway execution.
+- A **Customer Tool Retry Run** must not reuse prior authorization, skip policy checks, or replay prior tool arguments directly; any prior failure context is admitted only as trace-safe conversation context.
+- Consecutive **Customer Tool Execution Failure** events for the same conversation, customer-owned resource, and tool intent form a **Customer Tool Failure Series** recorded through linked run artifacts.
+- A **Customer Tool Failure Series** does not automatically create a **Customer Escalation Handoff**; the **Handoff Trigger Policy** may configure enterprise high-value failure rules such as N consecutive failures for the same resource in one conversation.
 - V1 customer-specific read scope includes **Policy Status Lookup Tool** and **Claim Status Lookup Tool**.
+- A customer-specific read may proceed only after **Customer-Owned Resource Resolution** uniquely identifies the customer-owned policy, claim, or service record required by the proposed tool arguments.
+- If the **Owned Resource Handle Index** contains exactly one matching resource for the customer's request, **Customer-Owned Resource Resolution** may identify that resource without a **Customer Resource Disambiguation Prompt**, allowing the planner to propose the corresponding single-resource lookup.
+- Trace, Governance Receipt, and RunStore artifacts must record a **Customer Resource Resolution Basis** whenever V1 proceeds to single-resource lookup, including cases where disambiguation was skipped because exactly one owned resource matched.
+- Customer-facing responses expose only **Customer-Safe Resource Handle** or **Customer-Safe Source Label** values for resolved resources; they must not expose **Customer Resource Resolution Basis** internals.
+- In customer mode, a **LLM ReAct Planner** may propose **Policy Status Lookup Tool** or **Claim Status Lookup Tool** only as **ReAct Action Proposal** values when those tools are inside the run's **Tool Proposal Scope**.
+- The customer-mode **Tool Proposal Scope** does not grant execution rights; PolicyEngine and Tool Gateway still authorize or deny the proposed read tool before execution.
+- An **Authorized Tool Result** is distinct from **Accepted Evidence**, but final answer validation may use it to support a **Customer-Facing Business Claim** when it has a trace-safe source reference, redacted payload, tool authorization record, and matching Trace, Governance Receipt, and RunStore artifacts.
+- A **Customer Response Snapshot** stores the exact customer-visible **Customer-Safe Source Label** values shown for **Authorized Tool Result** support, while internal run artifacts preserve the mapping from each label to the specific authorized tool result for audit replay.
+- If an authenticated customer owns multiple matching resources and the request lacks a claim id, policy id, or other disambiguating input, V1 returns a **Customer Resource Disambiguation Prompt** with full run artifacts rather than silently selecting the most recent, most active, or highest-value resource.
+- A **Customer Resource Disambiguation Prompt** may expose bounded option numbers and **Customer-Safe Resource Handle** values needed for selection, but must not expose claim status, policy status, coverage decisions, amounts, raw payload fields, internal customer ids, or internal authorization details.
+- A **Customer Resource Disambiguation Prompt** may expose the count of matching owned resources, such as "you have 3 claims", only as disambiguation metadata from the **Owned Resource Handle Index**; the count must not imply claim status, policy status, amount, coverage, or eligibility.
+- **Customer-Safe Resource Handle** values used in a **Customer Resource Disambiguation Prompt** must come from an **Owned Resource Handle Index** supplied by **Customer Authorization Context**, **Mock Customer Persona** fixtures, or a future **Customer Identity Adapter**.
+- **Policy Status Lookup Tool** and **Claim Status Lookup Tool** must not be used to batch-read status results merely to construct disambiguation options; if no safe handle is available, V1 asks the customer to provide a claim id, policy id, or other stable identifier.
+- A **Customer Disambiguation Option Mapping** is stored in **Controlled Conversation Context** and linked to the originating run and **Customer Response Snapshot**; it must not be stored as **Customer Authorization Context** or admitted as **Case Memory**.
+- A **Clarification Continuation Run** may resolve replies such as "first", "the recent one", or "that second claim" when they unambiguously refer to a prior **Customer Resource Disambiguation Prompt** preserved in **Controlled Conversation Context** and the **Customer Disambiguation Option Mapping** identifies exactly one customer-owned resource.
+- A **Customer Disambiguation Option Mapping** expires after successful single-resource resolution and lookup, a new disambiguation prompt, authenticated customer change, conversation reset, Published Agent change, or configured timeout.
+- If a **Customer Disambiguation Option Mapping** is expired or absent, ambiguous replies such as "first" or "the recent one" produce a new **Clarification Request** rather than restoring the mapping from old transcripts, **Customer Response Snapshot** text, or **Case Memory**.
+- A customer request to list all owned policies, claims, or claim statuses does not trigger a batch of **Policy-Authorized Read Tool** calls in V1; the response asks the customer to select one resource through a **Customer Resource Disambiguation Prompt** or safely explains the single-resource scope.
 - A **Transactional Customer Action** is out of V1 scope and must produce a governed refusal, clarification, or internal handoff rather than execution.
+- Ordinary unsupported or insufficient-evidence customer questions do not create a **Customer Escalation Handoff** by default; they return a customer-safe refusal with full run artifacts.
+- A **Payment Or Coverage Guarantee Request** must return customer-safe refusal wording and create an internal **Customer Escalation Handoff** for review.
+- A request for **Personalized Coverage Or Payment Decision** must be handled as a **Payment Or Coverage Guarantee Request** when the customer asks for a coverage, eligibility, payable amount, reimbursement, deadline, or payment commitment conclusion.
+- V1 **Customer Escalation Handoff** triggers include **Cross-Customer Access Attempt**, **Transactional Customer Action**, **Payment Or Coverage Guarantee Request**, suspected abuse or security risk, and enterprise-configured high-value failure scenarios.
+- V1 **Handoff Trigger Policy** has fixed baseline triggers and may allow Agent Contract or policy configuration to add enterprise high-value failure scenarios; frontend requests, user prompts, and arbitrary natural-language instructions cannot define handoff triggers.
 - V1 records a **Customer Escalation Handoff** for internal follow-up monitoring instead of creating a ticket in a real CRM, helpdesk, or contact-center system.
 - A **Customer Escalation Handoff** is an internal operational fact, not a customer-visible final outcome.
 - Customer-visible responses for internal handoff cases use **Handoff-Safe Customer Wording**.
 - A **Customer Escalation Handoff** is recorded through a **Customer Handoff Event** and exposed internally through a **Handoff Projection**, not through the final outcome enum.
 - Each **Customer Handoff Event** uses a fixed **Handoff Reason** for trace, RunStore, Dashboard filtering, and acceptance tests.
+- **Customer Handoff Event**, memory candidate, memory write, and memory admission facts must preserve **Run Artifact Consistency**: they are emitted before run finalization, or through a governed artifact append path that refreshes Receipt and RunStore projections together.
 - The **Assisted QA Chat Frontend** uses **Controlled Conversation Context** for automatic multi-turn context injection.
 - A **Conversation Store** preserves chat timelines while each turn remains linked to a governed run in RunStore.
 - **Controlled Agent Memory** extends memory beyond per-run session state while remaining inside the **Control Envelope**.
@@ -630,7 +788,7 @@ _Avoid_: Evidence content dump
 - Memory layers describe Proof Agent product semantics; **Memory Provider Adapter** implementations describe replaceable storage and retrieval engines.
 - External memory engines may provide storage, retrieval, summarization, or ranking, but they must not decide **Memory Admission** or bypass the **Control Envelope**.
 - **Case Memory**, **Persistent User Memory**, and **Shared Memory** are distinct memory scopes and must not be merged into a raw transcript store.
-- **Case Memory** is generated from governed run facts, not from raw transcripts or unvalidated model text.
+- **Case Memory** is generated from governed run facts and bounded, trace-safe facts or summaries derived from **Customer Response Snapshot** linkage, not from complete customer-visible message text, **Customer Feedback Signal**, raw transcripts, or unvalidated model text.
 - **Case Focus** belongs to **Case Memory** and must not become a cross-session **Persistent User Memory** profile in the first implementation stage.
 - **Case Memory** may support follow-up understanding after **Memory Admission**, but it is not **Accepted Evidence**.
 - V1 uses a **Customer Conversation Retention Policy** for short-lived customer chat text and an **Audit Retention Boundary** for longer-lived trace-safe run facts.
@@ -646,6 +804,7 @@ _Avoid_: Evidence content dump
 - An **Agent Contract** selects a **Knowledge Provider** and supplies that provider's own parameters.
 - An **Evidence Chunk** may carry an **Evidence Citation** and **Evidence Metadata** separate from its content.
 - **Control Envelope** evidence evaluation turns **Candidate Evidence** into **Accepted Evidence** or rejected evidence.
+- **Authorized Tool Result** values are admitted through governed tool authorization and execution, not through evidence evaluation, even though they may support final-answer claim validation.
 - Trace and Governance Receipt record **Evidence Summary** by default, not full evidence content.
 - An **Agent Contract** must explicitly declare its **Retrieval Strategy**.
 - An **Evidence Threshold** belongs to the **Retrieval Strategy**, not to a **Knowledge Provider**.
@@ -685,6 +844,7 @@ _Avoid_: Evidence content dump
 - "LLM planner" could mean replacing deterministic acceptance behavior or adding a second planner implementation. Resolved: use **LLM ReAct Planner** as an additional implementation.
 - "V1 LLM support" could mean deterministic-only demo or unbounded model support. Resolved: V1 is real-LLM capable through the supported **Model Provider Registry** paths while deterministic planner, reviewer, and model behavior remain the release gate.
 - "ReAct action" could mean arbitrary model output or a bounded action enum. Resolved: V1 uses a fixed **ReAct Action Set**.
+- "Planner tool allowlist" could mean direct execution permission or the set of tool identifiers the planner may propose. Resolved: use **Tool Proposal Scope** for proposal eligibility only; execution still requires Harness policy and Tool Gateway authorization.
 - "LLM automatic decision" could mean model self-approval, rule-based Harness review, or a Control Plane review subagent. Resolved: use **Harness Review Subagent** for the LLM-backed control component that runs only in **Auto Review Mode**.
 - "LLM reviewer" could mean replacing deterministic review behavior or adding a provider-backed reviewer implementation. Resolved: use **LLM Harness Review Subagent** as an additional implementation.
 - "Review model" could mean the final answer model or a separate control-plane reviewer. Resolved: **Review Subagent Config** is independent from final answer `model`.
@@ -707,11 +867,22 @@ _Avoid_: Evidence content dump
 - "Show planning" could mean trace recording or user-visible response projection. Resolved: **Governance Detail Projection** controls API/UI exposure, not trace completeness.
 - "Response visibility flag" could mean an unrestricted frontend request. Resolved: **Response Detail Policy** caps what API responses can expose.
 - "Customer response" could mean the full internal run response or a customer-safe shape. Resolved: customer-facing surfaces use **Customer-Safe Response Projection** and internal operator/developer surfaces use governed audit projections.
-- "Friendly wording" could mean harmless conversational text or unsupported business advice. Resolved: **Safe Conversational Text** may be unaudited for evidence, but every **Customer-Facing Business Claim** requires accepted evidence or an authorized read-only tool result.
+- "Customer projection" could mean rewriting the run result without audit linkage. Resolved: projection is allowed for customer safety only when the exact customer-visible **Customer Response Snapshot** is linked to the governed run.
+- "Customer-visible tool source" could mean exposing the tool name or internal run reference. Resolved: customer-facing responses use **Customer-Safe Source Label** values, and internal run artifacts map those labels to specific **Authorized Tool Result** records.
+- "Product term explanation" could mean generic evidence-backed interpretation or a personalized coverage decision. Resolved: V1 supports **Insurance Product Term Interpretation** only when grounded in accepted evidence or authorized tool results and not framed as a guarantee or legal advice.
+- "Insurance service process" could mean explaining how the process works or executing a service action. Resolved: V1 supports **Insurance Service Process Guidance** for evidence-backed process explanation and safe next-step options, not transactional action, SLA commitment, or claim outcome decision.
+- "Anonymous insurance question" could mean generic product/process explanation or a personalized service request. Resolved: anonymous sessions may ask generic term and process questions, but **Personalized Insurance Service Request** handling requires authentication.
+- "Am I covered" could mean explaining relevant coverage terms or making a personalized coverage/payment decision. Resolved: V1 may explain terms, process, and authorized status facts, but **Personalized Coverage Or Payment Decision** is out of autonomous scope and maps to **Payment Or Coverage Guarantee Request** when a conclusion is requested.
+- "Improve approval odds" could mean a document checklist or **Outcome Optimization Advice**. Resolved: V1 may provide evidence-backed preparation steps and required materials, but must not predict, optimize, or imply improved claim, coverage, eligibility, approval, or payment outcomes.
+- "Unsafe process wording" could mean refusing the whole request or safely reframing it. Resolved: V1 uses **Safe Process Guidance Reframe** when possible, and refuses or hands off only when the user insists on prediction, guarantee, personalized decision, or rule evasion.
+- "Analysis" could mean evidence-bound explanation or unsupported reasoning beyond the source. Resolved: customer-facing analysis stays inside the evidence boundary and every business claim remains validated.
+- "Friendly wording" could mean harmless conversational text or unsupported business advice. Resolved: **Safe Conversational Text** may be unaudited for evidence, but every **Customer-Facing Business Claim** requires **Accepted Evidence** or an **Authorized Tool Result**.
 - "Multilingual customer service" could mean Chinese/English support or arbitrary language coverage. Resolved: V1 uses **Customer Response Language Policy** for Chinese and English only.
+- "Translation" could mean a customer-safe projection or a new fact-generation layer. Resolved: V1 allows **Evidence-Bound Translation** only for claims already supported by **Accepted Evidence** or **Authorized Tool Result** values, with source references anchored to the original source.
 - "V1 acceptance" could mean isolated demo questions or complete customer journeys. Resolved: V1 uses a **Customer Journey Acceptance Suite** covering anonymous, authenticated, refusal, clarification, internal handoff, retrieval failure, and bilingual paths.
-- "Customer feedback" could mean an observation signal or online learning. Resolved: V1 uses **Customer Feedback Signal** for observation only and does not automatically train or update behavior.
-- "Customer-visible answer history" could mean recomputing from trace or storing what the customer actually saw. Resolved: V1 stores a **Customer Response Snapshot** linked to the governed run.
+- "Journey acceptance test" could mean a compatibility smoke test or a hard release blocker. Resolved: keep always-on smoke assertions for current customer-safe behavior, and use V1 release-gate assertions to expose unmet release requirements until strict validation is enabled.
+- "Customer feedback" could mean an observation signal, run artifact fact, memory source, or online learning input. Resolved: V1 uses **Customer Feedback Signal** for observation only, keeps it linked to conversation turn and governed run, and does not create **Case Memory**, train, or update behavior.
+- "Customer-visible answer history" could mean recomputing from trace, using the complete visible message as memory, or storing what the customer actually saw. Resolved: V1 stores the complete text as a **Customer Response Snapshot** linked to the governed run; **Case Memory** may only use bounded, trace-safe facts or summaries derived from that snapshot linkage.
 - "V1 release" could mean private enterprise pilot or public internet production. Resolved: V1 is a **Private Pilot Customer Service Bot**; public-scale operations are future platform work.
 - "Streaming" could mean customer-safe stage progress or raw model tokens. Resolved: V1 exposes **Customer Run Progress State** only; token streaming is future verified streaming work.
 - "ReAct loop" could mean unlimited autonomous tool use or a bounded governed loop. Resolved: V1 uses a **ReAct Step Budget** and permits at most one governed tool call.
@@ -733,18 +904,45 @@ _Avoid_: Evidence content dump
 - "Shared chat frontend" could mean one unrestricted UI or a shared shell with separate audience projections. Resolved: use **Unified Chat Frontend** for a shared design and interaction shell, with customer mode limited to **Customer-Safe Response Projection**.
 - "Customer channel" could mean Web chat, messaging apps, email, mobile SDK, or contact-center integration. Resolved: V1 ships **Customer Service Web Chat**; other channels are future adapters.
 - "Customer intake" could mean text questions or uploaded customer documents. Resolved: V1 uses **Text-Only Customer Intake**; attachment analysis is future work.
+- "Customer-safe text" could mean no Harness run is needed for prompts or refusals. Resolved: Safe Conversational Text may not require Accepted Evidence, but every **Customer Run API** turn still needs a governed run and non-empty RunStore `run_id`.
 - "Customer chat session" could mean anonymous policy browsing or authenticated account service. Resolved: use **Anonymous Customer Session** for generic-only access and **Authenticated Customer Session** for customer-specific service.
 - "Customer context" could mean conversation history, identity, authorization, or raw credentials. Resolved: use **Controlled Conversation Context** for prior turns and **Customer Authorization Context** for verified customer scope; raw credentials never enter the Harness run context.
+- "Customer authorization check" could mean API preflight or Harness-governed policy context. Resolved: Customer Run API may resolve mock identity, but **Customer Authorization Context** must be admitted into the Harness run so PolicyEngine, Tool Gateway, trace, receipt, and review paths can explain customer-specific access.
+- "Customer resource selection" could mean choosing a default resource, presenting safe disambiguation options, or deterministically resolving one. Resolved: V1 requires **Customer-Owned Resource Resolution** to identify exactly one owned resource before a customer-specific read; otherwise it returns a **Customer Resource Disambiguation Prompt**.
+- "Only one matching resource" could mean still asking for an id or proceeding with the unique resource. Resolved: when the **Owned Resource Handle Index** has exactly one matching customer-owned resource, V1 may proceed to single-resource lookup proposal without a disambiguation prompt.
+- "Resolution audit" could mean customer-visible explanation or internal run basis. Resolved: **Customer Resource Resolution Basis** is an internal artifact fact recorded in Trace, Governance Receipt, and RunStore; customers see only safe handles or source labels.
+- "Partial resource identifier" could mean a safe customer-facing handle or a raw backend identifier. Resolved: V1 disambiguation prompts may show **Customer-Safe Resource Handle** values such as fixture-provided ids, last-four identifiers, dates, or type labels, but not status, amounts, coverage, internal customer ids, raw payload fields, or authorization details.
+- "Resource handle source" could mean authenticated owned-resource metadata or a hidden batch lookup. Resolved: **Customer-Safe Resource Handle** values come from an **Owned Resource Handle Index** supplied by auth context, mock personas, or a future identity adapter, not from running status lookup tools in bulk.
+- "Resource count" could mean disambiguation metadata or a bulk account summary. Resolved: V1 may show matching resource counts from the **Owned Resource Handle Index** only to explain selection, not as status, amount, coverage, or eligibility information.
+- "Disambiguation option state" could mean authorization, memory, or conversation context. Resolved: use **Customer Disambiguation Option Mapping** inside **Controlled Conversation Context**, linked to the originating run and **Customer Response Snapshot**, not **Customer Authorization Context** or **Case Memory**.
+- "Disambiguation lifetime" could mean reusable conversation memory or a one-step clarification aid. Resolved: **Customer Disambiguation Option Mapping** is valid only for the current clarification sequence and expires on successful lookup, replacement prompt, identity change, conversation reset, Agent change, or timeout.
+- "Expired disambiguation" could mean recovering stale option mappings from conversation history or asking again. Resolved: expired or absent **Customer Disambiguation Option Mapping** forces a new **Clarification Request**; old transcripts, snapshots, and **Case Memory** cannot restore it.
 - "Customer authentication" could mean proving the Harness authorization boundary or integrating a production identity provider. Resolved: V1 uses **Mock Authenticated Customer Session** and reserves production OAuth/OIDC/IAM for **Customer Identity Adapter** work.
 - "Mock customer" could mean a single demo identity or multiple authorization fixtures. Resolved: V1 uses at least two **Mock Customer Persona** fixtures and tests **Cross-Customer Access Attempt** behavior.
+- "Cross-customer access" could mean a normal refusal or an internal security signal. Resolved: V1 returns customer-safe refusal wording and records an internal **Customer Escalation Handoff** for every **Cross-Customer Access Attempt**.
 - "Customer service automation" could mean read-only answers or business-state changes. Resolved: V1 is **Read-Only Customer Service**; state-changing work is a **Transactional Customer Action** and is out of scope.
+- "Payment guarantee" could mean an ordinary unsupported question or a high-risk service commitment request. Resolved: use **Payment Or Coverage Guarantee Request** and create an internal **Customer Escalation Handoff** while returning customer-safe refusal wording.
+- "Handoff trigger configuration" could mean hard-coded only, business-configurable, or prompt-defined. Resolved: V1 keeps fixed baseline triggers and permits Agent Contract or policy configuration only for enterprise high-value failure scenarios; frontend and prompt-defined triggers are not trusted.
 - "Customer lookup" could mean generic retrieval, authenticated account lookup, or a transaction. Resolved: use **Customer-Specific Read Tool** for authenticated read-only account facts.
 - "Customer status lookup" could mean policy status, claim status, or a generic customer profile dump. Resolved: V1 exposes **Policy Status Lookup Tool** and **Claim Status Lookup Tool** only.
+- "Missing claim id" could mean asking about all claims, guessing the newest claim, or asking the customer to clarify. Resolved: when multiple customer-owned claims match and no unique claim is resolved, V1 asks through a **Customer Resource Disambiguation Prompt** and does not propose a concrete lookup until a follow-up resolves exactly one resource.
+- "The first one" could mean ordinary language understanding or unsafe default selection. Resolved: V1 may use ordinal or descriptive clarification replies only when they point to a prior **Customer Resource Disambiguation Prompt** option through **Customer Disambiguation Option Mapping** preserved in **Controlled Conversation Context**.
+- "List all my claims" could mean a safe disambiguation aid or a bulk customer resource listing. Resolved: V1 read tools support **Single-Resource Customer Read** only; bounded disambiguation handles are allowed, but bulk status listing is future capability work.
+- "Customer planner tool scope" could mean a generic customer lookup tool or the concrete V1 status lookup tools. Resolved: customer-mode **Tool Proposal Scope** includes **Policy Status Lookup Tool** and **Claim Status Lookup Tool** when declared by the Agent Contract and Tool Contracts; proposals remain non-executable until authorized.
 - "Approval for customer lookup" could mean human approval or policy authorization. Resolved: V1 customer-facing read lookups are **Policy-Authorized Read Tool** calls; human approval is reserved for assisted or higher-risk flows.
+- "Policy-authorized read" could mean direct Customer API preflight execution or a governed tool call that skips only human approval. Resolved: it skips human approval only; the read still runs inside the **Control Envelope** and writes full Harness run artifacts.
+- "Tool authorization" could mean planner self-certification, reviewer advice, or deterministic contract enforcement. Resolved: **Tool Contract** and **Agent Contract** policy metadata define the conditions, while PolicyEngine and Tool Gateway enforce them against normalized arguments and **Customer Authorization Context**.
+- "Read-tool authorization failure" could mean exposing access-control details to the customer or recording an internal denial. Resolved: V1 uses **Customer Tool Authorization Denial** internally and returns only customer-safe refusal or clarification text externally.
+- "Tool Gateway failure" could mean authorization denial, insufficient evidence, or runtime failure. Resolved: after authorization, Tool Gateway, adapter, dependency, timeout, or runtime failures are **Customer Tool Execution Failure** events with customer-safe temporary failure wording and no default handoff.
+- "Try again later" could mean safe temporary failure wording or a service commitment. Resolved: V1 may use it as **Safe Conversational Text** for **Customer Tool Execution Failure**, without promising recovery, successful retry, human follow-up, or escalation.
+- "Retry customer lookup" could mean replaying the previous tool call or starting a governed retry. Resolved: V1 uses **Customer Tool Retry Run**, a new governed run linked to the failed run that repeats resolution, authorization, and execution.
+- "Repeated tool failures" could mean automatic handoff or configurable high-value failure detection. Resolved: **Customer Tool Failure Series** records linked failures by conversation/resource/tool intent, and handoff occurs only when **Handoff Trigger Policy** configures that series as high-value or security-relevant.
 - "Escalation" could mean a customer-visible outcome, an internal follow-up fact, or a real helpdesk ticket. Resolved: V1 creates an internal **Customer Escalation Handoff** for monitoring and returns only a **Customer-Safe Response Projection**; real ticket-system integration is future adapter work.
+- "Insufficient evidence" could mean a normal customer-safe refusal or an internal handoff. Resolved: ordinary insufficient-evidence refusals do not create handoffs by default; handoff is reserved for operationally significant, security-relevant, or configured follow-up scenarios.
 - "Handoff wording" could mean telling customers they were escalated to a human or giving a safe service acknowledgement. Resolved: V1 uses **Handoff-Safe Customer Wording** and hides internal handoff state from customers.
 - "Handoff state" could mean a run outcome, a trace event, or a dashboard row. Resolved: V1 uses **Customer Handoff Event** plus **Handoff Projection**; final outcomes remain customer-service result semantics.
 - "Handoff reason" could mean free-form notes or stable operational categories. Resolved: V1 uses fixed **Handoff Reason** codes.
+- "Appending trace after a run" could mean a governed artifact update or a storage shortcut. Resolved: V1 requires **Run Artifact Consistency**; trace, Receipt, run metadata, and read projections must be updated as one coherent governed artifact set.
 - "Multi-turn context" could mean raw transcript injection or governed context admission. Resolved: automatic context uses **Controlled Conversation Context** and must not replace per-turn evidence retrieval.
 - "Conversation storage" could mean customer UX history, audit run storage, or persistent enterprise memory. Resolved: **Conversation Store** owns short-lived chat timelines, **RunStore** owns run artifacts, and persistent enterprise memory is a separate future capability.
 - "Retention" could mean customer chat transcript retention or audit retention. Resolved: V1 separates **Customer Conversation Retention Policy** from the **Audit Retention Boundary**.
@@ -758,6 +956,8 @@ _Avoid_: Evidence content dump
 - "Agentic RAG" could be modeled as a workflow template or a retrieval strategy. Resolved: it is a **Retrieval Strategy**, while workflow templates keep business-flow meaning.
 - "Citation" could mean part of the evidence text or source metadata. Resolved: **Evidence Citation** is evidence metadata, not evidence content.
 - "Accepted evidence" could mean evidence returned by retrieval or evidence admitted by governance. Resolved: only Control Plane evidence evaluation creates **Accepted Evidence**.
+- "Tool result as evidence" could mean renaming tool output to **Accepted Evidence** or letting raw tool output support claims. Resolved: use **Authorized Tool Result** as a distinct claim-support source that requires tool authorization, redaction, source reference, and coherent run artifacts.
+- "Tool source reference" could mean customer-safe basis disclosure or internal control-plane linkage. Resolved: customers see **Customer-Safe Source Label** values; Trace, Governance Receipt, and RunStore keep the internal mapping to tool authorization and redacted result details.
 - "Audited evidence" could mean full content or safe summary. Resolved: default audit output records **Evidence Summary**, not raw evidence content.
 - "Planner model" could mean another answer generator. Resolved: a **Planner Model** may only produce retrieval plans or query candidates.
 - "Fallback" could mean silent best-effort behavior. Resolved: **Single-Step Retrieval Fallback** must be explicit in the Retrieval Strategy.

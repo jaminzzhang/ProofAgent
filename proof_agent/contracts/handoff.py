@@ -20,6 +20,7 @@ class HandoffReason(str, Enum):
     RETRIEVAL_FAILURE = "retrieval_failure"
     MODEL_OUTPUT_VALIDATION_FAILED = "model_output_validation_failed"
     HIGH_RISK_COMMITMENT_REQUESTED = "high_risk_commitment_requested"
+    PAYMENT_OR_COVERAGE_GUARANTEE_REQUEST = "payment_or_coverage_guarantee_request"
     LOW_CONFIDENCE = "low_confidence"
     POLICY_GAP = "policy_gap"
     CUSTOMER_REQUESTED_FOLLOW_UP = "customer_requested_follow_up"

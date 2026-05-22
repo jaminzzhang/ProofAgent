@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -19,6 +20,7 @@ from proof_agent.contracts import (
     ContextAdmission,
     CustomerAuthorizationContext,
     CustomerConversationRecord,
+    CustomerDisambiguationOption,
     CustomerFeedbackSignal,
     CustomerResponseSnapshot,
     CustomerSafeResponse,
@@ -35,7 +37,9 @@ from proof_agent.control.customer import (
     extract_claim_id,
     extract_policy_id,
     is_claim_status_question,
+    is_payment_or_coverage_guarantee_request,
     is_policy_status_question,
+    is_tool_execution_failure_retry_request,
     is_transactional_customer_action,
     load_mock_customer_context,
     require_claim_access,
@@ -52,7 +56,14 @@ from proof_agent.observability.storage.run_store import RunStore
 
 
 router = APIRouter(tags=["customer"])
-CustomerResourceResponse = tuple[CustomerSafeResponse, HandoffReason | None]
+
+
+@dataclass(frozen=True)
+class CustomerResourceResponse:
+    safe_response: CustomerSafeResponse
+    handoff_reason: HandoffReason | None = None
+    disambiguation_options: tuple[CustomerDisambiguationOption, ...] = ()
+    clear_disambiguation_options: bool = False
 
 
 class CustomerConversationCreateRequest(BaseModel):
@@ -167,39 +178,112 @@ def create_customer_run(
             question=request.question,
         )
 
+    if is_payment_or_coverage_guarantee_request(request.question):
+        _result, detail, _manifest = _execute_published_agent_run(
+            app_request=app_request,
+            manifest_path=manifest_path,
+            question=request.question,
+            approved=None,
+        )
+        _append_customer_handoff_event(
+            app_request=app_request,
+            detail=cast(RunDetail, detail),
+            conversation=conversation,
+            reason=HandoffReason.PAYMENT_OR_COVERAGE_GUARANTEE_REQUEST,
+            question=request.question,
+        )
+        safe_response = CustomerSafeResponse(
+            message=(
+                "I can't determine coverage or payment amount in this chat. "
+                "I can explain policy terms, describe the claim review process, "
+                "or check read-only claim status for claims on your account."
+            ),
+        )
+        return _store_customer_response(
+            app_request=app_request,
+            conversation=conversation,
+            safe_response=safe_response,
+            run_id=str(detail.run_id),
+            created_at=str(detail.updated_at),
+            question=request.question,
+        )
+
+    if is_tool_execution_failure_retry_request(request.question):
+        _result, detail, _manifest = _execute_published_agent_run(
+            app_request=app_request,
+            manifest_path=manifest_path,
+            question=request.question,
+            approved=None,
+        )
+        failure_series_id = f"failure_series_{uuid4().hex[:8]}"
+        safe_response = CustomerSafeResponse(
+            message=(
+                "The claim status service is temporarily unavailable. "
+                "Please try again later."
+            ),
+        )
+        payload = _store_customer_response(
+            app_request=app_request,
+            conversation=conversation,
+            safe_response=safe_response,
+            run_id=str(detail.run_id),
+            created_at=str(detail.updated_at),
+            question=request.question,
+        )
+        _append_run_trace_event(
+            app_request=app_request,
+            run_id=str(detail.run_id),
+            event_type="customer_tool_execution_failure",
+            status="error",
+            payload={
+                "failure_series_id": failure_series_id,
+                "conversation_id": conversation.conversation_id,
+                "turn_id": str(payload["turn_id"]),
+                "tool_name": "claim_status_lookup",
+                "failure_class": "temporary_tool_failure",
+                "retry_run_id": str(detail.run_id),
+            },
+        )
+        payload["failure_series_id"] = failure_series_id
+        return payload
+
     resource_response = _customer_resource_response(
         manifest_path=manifest_path,
         question=request.question,
         conversation=conversation,
     )
     if resource_response is not None:
-        safe_preflight_response, handoff_reason = resource_response
-        run_id = ""
-        created_at = _now()
-        if handoff_reason is not None:
-            _result, detail, _manifest = _execute_published_agent_run(
-                app_request=app_request,
-                manifest_path=manifest_path,
-                question=request.question,
-                approved=None,
-            )
+        _result, detail, _manifest = _execute_published_agent_run(
+            app_request=app_request,
+            manifest_path=manifest_path,
+            question=request.question,
+            approved=None,
+        )
+        if resource_response.handoff_reason is not None:
             _append_customer_handoff_event(
                 app_request=app_request,
                 detail=cast(RunDetail, detail),
                 conversation=conversation,
-                reason=handoff_reason,
+                reason=resource_response.handoff_reason,
                 question=request.question,
             )
-            run_id = str(detail.run_id)
-            created_at = str(detail.updated_at)
-        return _store_customer_response(
+        payload = _store_customer_response(
             app_request=app_request,
             conversation=conversation,
-            safe_response=safe_preflight_response,
-            run_id=run_id,
-            created_at=created_at,
+            safe_response=resource_response.safe_response,
+            run_id=str(detail.run_id),
+            created_at=str(detail.updated_at),
             question=request.question,
         )
+        _update_customer_disambiguation_options(
+            app_request=app_request,
+            conversation_id=conversation.conversation_id,
+            options=resource_response.disambiguation_options,
+            clear=resource_response.clear_disambiguation_options,
+            run_id=str(detail.run_id),
+            turn_id=str(payload["turn_id"]),
+        )
+        return payload
 
     manifest = _load_manifest(manifest_path)
     memory_enabled = _case_memory_enabled(manifest)
@@ -254,6 +338,13 @@ def _customer_resource_response(
     conversation: CustomerConversationRecord,
 ) -> CustomerResourceResponse | None:
     manifest = _load_manifest(manifest_path)
+    claim_selection = _claim_disambiguation_selection(question, conversation)
+    if claim_selection is not None:
+        context = _load_customer_context(manifest_path, conversation.customer_ref)
+        return _claim_status_response(manifest, context, question, claim_id_override=claim_selection)
+    if _is_claim_disambiguation_reference(question):
+        context = _load_customer_context(manifest_path, conversation.customer_ref)
+        return _claim_disambiguation_prompt(context)
     if is_policy_status_question(question):
         context = _load_customer_context(manifest_path, conversation.customer_ref)
         return _policy_status_response(manifest, context, question)
@@ -269,32 +360,33 @@ def _policy_status_response(
     question: str,
 ) -> CustomerResourceResponse:
     if context.session_type != CustomerSessionType.AUTHENTICATED or context.customer_ref is None:
-        return (
-            CustomerSafeResponse(
+        return CustomerResourceResponse(
+            safe_response=CustomerSafeResponse(
                 message="Please sign in to view policy status for your account.",
             ),
-            None,
+            clear_disambiguation_options=True,
         )
 
     policy_id = extract_policy_id(question) or _single_resource_id(context.allowed_policy_ids)
     if policy_id is None:
-        return (
-            CustomerSafeResponse(
+        return CustomerResourceResponse(
+            safe_response=CustomerSafeResponse(
                 message="Please provide the policy number you want me to check.",
             ),
-            None,
+            clear_disambiguation_options=True,
         )
     try:
         require_policy_access(context, policy_id)
     except CustomerAccessError:
-        return (
-            CustomerSafeResponse(
+        return CustomerResourceResponse(
+            safe_response=CustomerSafeResponse(
                 message=(
                     "I can't access that policy from this signed-in session. "
                     "I can help with policy status for a policy on your account."
                 ),
             ),
-            HandoffReason.CROSS_CUSTOMER_ACCESS_ATTEMPT,
+            handoff_reason=HandoffReason.CROSS_CUSTOMER_ACCESS_ATTEMPT,
+            clear_disambiguation_options=True,
         )
 
     result = ToolGateway.from_file(manifest.tools.file).request_tool(
@@ -303,12 +395,12 @@ def _policy_status_response(
         approved=False,
     )
     status = str((result.result or {}).get("status") or "unknown")
-    return (
-        CustomerSafeResponse(
+    return CustomerResourceResponse(
+        safe_response=CustomerSafeResponse(
             message=f"Your policy status is {status}.",
-            safe_sources=("policy_status_lookup",),
+            safe_sources=("Policy status record",),
         ),
-        None,
+        clear_disambiguation_options=True,
     )
 
 
@@ -316,34 +408,34 @@ def _claim_status_response(
     manifest: AgentManifest,
     context: CustomerAuthorizationContext,
     question: str,
+    *,
+    claim_id_override: str | None = None,
 ) -> CustomerResourceResponse:
     if context.session_type != CustomerSessionType.AUTHENTICATED or context.customer_ref is None:
-        return (
-            CustomerSafeResponse(
+        return CustomerResourceResponse(
+            safe_response=CustomerSafeResponse(
                 message="Please sign in to view claim status for your account.",
             ),
-            None,
+            clear_disambiguation_options=True,
         )
 
-    claim_id = extract_claim_id(question) or _single_resource_id(context.allowed_claim_ids)
+    claim_id = claim_id_override or extract_claim_id(question) or _single_resource_id(
+        context.allowed_claim_ids
+    )
     if claim_id is None:
-        return (
-            CustomerSafeResponse(
-                message="Please provide the claim number you want me to check.",
-            ),
-            None,
-        )
+        return _claim_disambiguation_prompt(context)
     try:
         require_claim_access(context, claim_id)
     except CustomerAccessError:
-        return (
-            CustomerSafeResponse(
+        return CustomerResourceResponse(
+            safe_response=CustomerSafeResponse(
                 message=(
                     "I can't access that claim from this signed-in session. "
                     "I can help with claim status for a claim on your account."
                 ),
             ),
-            HandoffReason.CROSS_CUSTOMER_ACCESS_ATTEMPT,
+            handoff_reason=HandoffReason.CROSS_CUSTOMER_ACCESS_ATTEMPT,
+            clear_disambiguation_options=True,
         )
 
     result = ToolGateway.from_file(manifest.tools.file).request_tool(
@@ -352,13 +444,85 @@ def _claim_status_response(
         approved=False,
     )
     status = str((result.result or {}).get("status") or "unknown")
-    return (
-        CustomerSafeResponse(
+    return CustomerResourceResponse(
+        safe_response=CustomerSafeResponse(
             message=f"Your claim status is {status}.",
-            safe_sources=("claim_status_lookup",),
+            safe_sources=("Claim status record",),
         ),
-        None,
+        clear_disambiguation_options=True,
     )
+
+
+def _claim_disambiguation_prompt(
+    context: CustomerAuthorizationContext,
+) -> CustomerResourceResponse:
+    if context.session_type != CustomerSessionType.AUTHENTICATED or context.customer_ref is None:
+        return CustomerResourceResponse(
+            safe_response=CustomerSafeResponse(
+                message="Please sign in to view claim status for your account.",
+            ),
+            clear_disambiguation_options=True,
+        )
+    if not context.allowed_claim_ids:
+        return CustomerResourceResponse(
+            safe_response=CustomerSafeResponse(
+                message="Please provide the claim number you want me to check.",
+            ),
+            clear_disambiguation_options=True,
+        )
+    if len(context.allowed_claim_ids) == 1:
+        return CustomerResourceResponse(
+            safe_response=CustomerSafeResponse(
+                message="Please confirm the claim number you want me to check.",
+            ),
+            clear_disambiguation_options=True,
+        )
+
+    options = tuple(
+        CustomerDisambiguationOption(
+            option_id=str(index),
+            resource_type="claim",
+            resource_id=claim_id,
+            label=f"Claim {claim_id}",
+        )
+        for index, claim_id in enumerate(context.allowed_claim_ids, start=1)
+    )
+    option_lines = "\n".join(f"{option.option_id}. {option.label}" for option in options)
+    return CustomerResourceResponse(
+        safe_response=CustomerSafeResponse(
+            message=f"Please choose which claim I should check:\n{option_lines}",
+        ),
+        disambiguation_options=options,
+    )
+
+
+def _claim_disambiguation_selection(
+    question: str,
+    conversation: CustomerConversationRecord,
+) -> str | None:
+    option_id = _ordinal_option_id(question)
+    if option_id is None:
+        return None
+    for option in conversation.disambiguation_options:
+        if option.resource_type == "claim" and option.option_id == option_id:
+            return option.resource_id
+    return None
+
+
+def _is_claim_disambiguation_reference(question: str) -> bool:
+    normalized = question.lower()
+    return "claim" in normalized and _ordinal_option_id(question) is not None
+
+
+def _ordinal_option_id(question: str) -> str | None:
+    normalized = question.lower()
+    if "first" in normalized or "option 1" in normalized or " 1" in normalized:
+        return "1"
+    if "second" in normalized or "option 2" in normalized or " 2" in normalized:
+        return "2"
+    if "third" in normalized or "option 3" in normalized or " 3" in normalized:
+        return "3"
+    return None
 
 
 def _load_manifest(manifest_path: Path) -> AgentManifest:
@@ -423,6 +587,34 @@ def _store_customer_response(
     payload["turn_id"] = turn_id
     payload["run_id"] = run_id
     return payload
+
+
+def _update_customer_disambiguation_options(
+    *,
+    app_request: Request,
+    conversation_id: str,
+    options: tuple[CustomerDisambiguationOption, ...],
+    clear: bool,
+    run_id: str,
+    turn_id: str,
+) -> None:
+    if not options and not clear:
+        return
+    stored_options = tuple(
+        CustomerDisambiguationOption(
+            option_id=option.option_id,
+            resource_type=option.resource_type,
+            resource_id=option.resource_id,
+            label=option.label,
+            origin_run_id=run_id,
+            origin_turn_id=turn_id,
+        )
+        for option in options
+    )
+    _get_customer_store(app_request).set_disambiguation_options(
+        conversation_id=conversation_id,
+        options=stored_options,
+    )
 
 
 def _admit_customer_case_memory(

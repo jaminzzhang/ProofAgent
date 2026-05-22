@@ -72,6 +72,17 @@ class CustomerResponseSnapshot(FrozenModel):
     customer_ref: str | None = None
 
 
+class CustomerDisambiguationOption(FrozenModel):
+    """Short-lived mapping from a customer-safe option to one owned resource."""
+
+    option_id: str
+    resource_type: Literal["claim", "policy"]
+    resource_id: str
+    label: str
+    origin_run_id: str | None = None
+    origin_turn_id: str | None = None
+
+
 class CustomerConversationRecord(FrozenModel):
     """Customer-facing conversation metadata and safe response snapshots."""
 
@@ -81,6 +92,7 @@ class CustomerConversationRecord(FrozenModel):
     updated_at: str
     customer_ref: str | None = None
     snapshots: tuple[CustomerResponseSnapshot, ...] = Field(default_factory=tuple)
+    disambiguation_options: tuple[CustomerDisambiguationOption, ...] = Field(default_factory=tuple)
 
 
 class CustomerFeedbackSignal(FrozenModel):
