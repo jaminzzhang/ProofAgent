@@ -1,4 +1,4 @@
-from proof_agent.capabilities.tools.insurance_read import (
+from examples.insurance_customer_service.tools import (
     claim_status_lookup,
     policy_status_lookup,
 )

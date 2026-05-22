@@ -137,6 +137,8 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
 
     require_path(manifest.policy.file, "policy.file", manifest_path)
     require_path(manifest.tools.file, "tools.file", manifest_path)
+    if manifest.customer is not None and manifest.customer.adapter is not None:
+        require_path(manifest.customer.adapter, "customer.adapter", manifest_path)
     require_writable_parent(manifest.audit.trace_path, "audit.trace_path", manifest_path)
     require_writable_parent(manifest.audit.receipt_path, "audit.receipt_path", manifest_path)
 

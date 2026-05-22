@@ -1,6 +1,7 @@
 from proof_agent.contracts import (
     CustomerAuthorizationContext,
     CustomerFeedbackSignal,
+    CustomerOwnedResource,
     CustomerRunProgressState,
     CustomerSafeResponse,
     CustomerSessionType,
@@ -12,15 +13,23 @@ def test_customer_authorization_context_is_trace_safe() -> None:
     context = CustomerAuthorizationContext(
         session_type=CustomerSessionType.AUTHENTICATED,
         customer_ref="cust_demo_001",
-        allowed_policy_ids=("POL-001",),
-        allowed_claim_ids=("CLM-001",),
-        auth_scope=("read:policy_status", "read:claim_status"),
+        owned_resources=(
+            CustomerOwnedResource(
+                resource_type="account",
+                resource_id="ACC-001",
+                label="Account ending 001",
+            ),
+        ),
+        auth_scope=("read:account",),
     )
 
     payload = context.model_dump(mode="json")
 
     assert payload["session_type"] == "authenticated"
     assert payload["customer_ref"] == "cust_demo_001"
+    assert payload["owned_resources"][0]["resource_type"] == "account"
+    assert "allowed_policy_ids" not in payload
+    assert "allowed_claim_ids" not in payload
     assert "access_token" not in payload
     assert "raw_token" not in payload
 

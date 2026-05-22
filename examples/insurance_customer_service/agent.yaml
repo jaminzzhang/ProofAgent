@@ -49,6 +49,9 @@ policy:
 tools:
   file: ./tools.yaml
 
+customer:
+  adapter: ./customer_adapter.py
+
 memory:
   provider: local
   scopes:

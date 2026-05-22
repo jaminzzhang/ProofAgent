@@ -102,6 +102,10 @@ class ToolsConfig(FrozenModel):
     file: Path
 
 
+class CustomerConfig(FrozenModel):
+    adapter: Path | None = None
+
+
 class MemoryScopeConfig(FrozenModel):
     enabled: bool = False
     retention_days: int = 30
@@ -134,6 +138,7 @@ class AgentManifest(FrozenModel):
     model: ModelConfig
     policy: PolicyConfig
     tools: ToolsConfig
+    customer: CustomerConfig | None = None
     memory: MemoryConfig
     audit: AuditConfig
     react: ReActConfig | None = None

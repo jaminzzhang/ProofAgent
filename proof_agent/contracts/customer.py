@@ -35,10 +35,17 @@ class CustomerAuthorizationContext(FrozenModel):
 
     session_type: CustomerSessionType
     customer_ref: str | None = None
-    allowed_policy_ids: tuple[str, ...] = Field(default_factory=tuple)
-    allowed_claim_ids: tuple[str, ...] = Field(default_factory=tuple)
+    owned_resources: tuple["CustomerOwnedResource", ...] = Field(default_factory=tuple)
     auth_scope: tuple[str, ...] = Field(default_factory=tuple)
     locale: str | None = None
+
+
+class CustomerOwnedResource(FrozenModel):
+    """Trace-safe handle for one customer-owned resource."""
+
+    resource_type: str
+    resource_id: str
+    label: str | None = None
 
 
 class CustomerSafeSource(FrozenModel):
@@ -76,7 +83,7 @@ class CustomerDisambiguationOption(FrozenModel):
     """Short-lived mapping from a customer-safe option to one owned resource."""
 
     option_id: str
-    resource_type: Literal["claim", "policy"]
+    resource_type: str
     resource_id: str
     label: str
     origin_run_id: str | None = None

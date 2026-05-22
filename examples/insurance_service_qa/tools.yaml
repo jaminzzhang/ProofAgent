@@ -2,10 +2,11 @@ tools:
   - name: customer_lookup
     description: "Mock insurance policy status lookup."
     transport: stdio
+    handler: ../demo_tools.py:customer_lookup
     command: python
     args:
       - -m
-      - proof_agent.capabilities.tools.mcp_mock
+      - examples.demo_tools
     risk_level: medium
     requires_approval: true
     allowed_parameters:

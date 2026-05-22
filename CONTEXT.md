@@ -24,6 +24,10 @@ _Avoid_: Internal config, runtime config
 The public capability contract that declares a governed tool's purpose, risk level, read/write class, authorization conditions, parameter bounds, and audit behavior.
 _Avoid_: Runtime adapter, provider-native tool schema, prompt instruction
 
+**Local Tool Handler**:
+An Agent-package-owned Python callable referenced from `tools.yaml` for deterministic local demos or fixtures behind Tool Gateway.
+_Avoid_: Framework-owned business tool registry, ungoverned function call
+
 **Workflow Template**:
 A reusable governed flow shape for a class of Agents, such as enterprise question answering.
 _Avoid_: One-off orchestrator branch, runtime graph
@@ -260,6 +264,10 @@ _Avoid_: Dashboard read API, direct model endpoint
 A customer-facing Delivery entry point that starts governed customer-service runs and returns Customer-Safe Response Projection values.
 _Avoid_: Internal Chat API, Dashboard read API, raw run execution response
 
+**Customer Run Adapter**:
+An Agent-package-owned adapter that handles domain-specific customer-service intents, customer authorization fixtures, resource disambiguation, customer-safe wording, and optional trace annotations before the generic Customer Run API stores the Customer-Safe Response Projection.
+_Avoid_: Framework-owned insurance logic, prompt-only customer routing, frontend-defined customer safety
+
 **Published Agent**:
 An approved Agent package exposed to application surfaces through a stable agent identifier.
 _Avoid_: Arbitrary manifest path, uploaded config
@@ -315,6 +323,10 @@ _Avoid_: Anonymous customer session, raw login token
 **Customer Authorization Context**:
 The trace-safe customer identity and permission summary admitted into a customer-facing Harness run as Structured Control Context for policy, planner/reviewer, Tool Gateway, trace, and receipt behavior.
 _Avoid_: Raw identity token, customer profile dump, tool credential
+
+**Customer-Owned Resource Handle**:
+A generic trace-safe identifier for a customer-owned business resource, with the resource type and id supplied by a Customer Run Adapter or future Customer Identity Adapter.
+_Avoid_: Framework-owned policy id, framework-owned claim id, raw customer record
 
 **Customer-Owned Resource Resolution**:
 The deterministic match between a customer request, Customer Authorization Context, normalized input parameters, and any Owned Resource Handle Index data that identifies exactly one customer-owned account, policy, claim, or service record for a customer-specific read.

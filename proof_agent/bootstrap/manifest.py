@@ -6,6 +6,7 @@ from typing import Any
 from proof_agent.contracts import (
     AgentManifest,
     AuditConfig,
+    CustomerConfig,
     KnowledgeConfig,
     MemoryConfig,
     MemoryScopeConfig,
@@ -68,6 +69,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         ),
         policy=PolicyConfig(file=resolve_path(base_dir, policy["file"])),
         tools=ToolsConfig(file=resolve_path(base_dir, tools["file"])),
+        customer=_customer_config_from_mapping(raw.get("customer"), base_dir=base_dir),
         memory=_memory_config_from_mapping(memory),
         audit=AuditConfig(
             trace_path=resolve_path(base_dir, audit["trace_path"]),
@@ -121,6 +123,17 @@ def _memory_config_from_mapping(raw: dict[str, Any]) -> MemoryConfig:
             user=_memory_scope_config_from_mapping(scopes.get("user")),
             shared=_memory_scope_config_from_mapping(scopes.get("shared")),
         ),
+    )
+
+
+def _customer_config_from_mapping(raw: Any, *, base_dir: Path) -> CustomerConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("customer must be a mapping")
+    adapter = raw.get("adapter")
+    return CustomerConfig(
+        adapter=resolve_path(base_dir, adapter) if adapter is not None else None,
     )
 
 

@@ -9,7 +9,9 @@ examples/insurance_customer_service/
   agent.yaml              # local Markdown customer-service Agent
   agent.pageindex.yaml    # PageIndex-ready variant
   policy.yaml             # answer, read-only tool, and memory rules
-  tools.yaml              # policy_status_lookup and claim_status_lookup
+  tools.yaml              # declares policy_status_lookup and claim_status_lookup
+  tools.py                # deterministic insurance read handlers
+  customer_adapter.py     # insurance-specific Customer Run Adapter
   customers.yaml          # mock authenticated customer sessions
   journeys.yaml           # customer journey acceptance suite
   knowledge/              # customer-safe policy knowledge
@@ -17,6 +19,8 @@ examples/insurance_customer_service/
 ```
 
 `insurance_service_qa` remains the staff-facing baseline package. `insurance_customer_service` is the terminal-customer package.
+
+The framework-owned Customer Run API stays generic. This package owns the insurance-specific adapter that detects policy/claim status requests, loads mock customer resources, performs resource disambiguation, calls the read-only local tool handlers, and returns a Customer-Safe Response Projection.
 
 ## Customer API
 

@@ -24,10 +24,10 @@ Authoritative design doc: `docs/technical-design.md`.
 | Bootstrap | `bootstrap/` owns YAML loader, path resolution, provider validation, retrieval config validation, secret-looking param rejection, and `HarnessInvocation` composition |
 | Control | `control/` owns Enterprise QA and Controlled ReAct Enterprise QA workflow, policy, review fail-closed behavior, validators, evidence decisions, approval, and outcome behavior |
 | Runtime | `runtime/langgraph_runner.py` executes supported LangGraph `StateGraph` templates with composed Harness dependencies |
-| Capability | `capabilities/` owns model providers, ReAct planner, review subagent, knowledge provider registry, memory, ToolGateway, mock `customer_lookup`, and future Skill packs |
+| Capability | `capabilities/` owns model providers, ReAct planner, review subagent, knowledge provider registry, memory, ToolGateway, local tool handler loading, and future Skill packs |
 | Audit | `observability/audit/` owns JSONL trace, ReAct review/reasoning projections, redaction, Governance Receipt, model usage section |
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed runs and persists them through RunStore |
-| Customer Service | `delivery/customer_api.py`, `observability/storage/customer_store.py`, `observability/api/routers/handoffs.py`, `chat/` customer mode, and `examples/insurance_customer_service/` implement V1 customer-facing automatic replies with internal handoff monitoring |
+| Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `observability/api/routers/handoffs.py`, `chat/` customer mode, and `examples/insurance_customer_service/` implement V1 customer-facing automatic replies with the insurance-specific Demo behind a Customer Run Adapter |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
 | Tests | 36 test files and 164 statically detected `test_` functions at last scan |
 

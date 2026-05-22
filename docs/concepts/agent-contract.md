@@ -242,7 +242,8 @@ The contract is part of trust. If configuration is ambiguous, the Agent should n
 `insurance_customer_service` uses the same `agent.yaml` contract as other Published Agents. Customer-specific behavior lives beside the contract in package fixtures:
 
 - `customers.yaml` for V1 mock authenticated sessions
-- `tools.yaml` for policy-authorized read-only status tools
+- `tools.yaml` plus local handlers for policy-authorized read-only status tools
+- `customer_adapter.py` for insurance-specific Customer Run Adapter behavior
 - `journeys.yaml` for customer journey acceptance
 - `agent.pageindex.yaml` for the PageIndex knowledge variant
 

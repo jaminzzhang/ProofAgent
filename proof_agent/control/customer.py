@@ -1,17 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-import re
-from typing import Any
-
-import yaml  # type: ignore[import-untyped]
-
 from proof_agent.contracts import CustomerAuthorizationContext, CustomerSessionType
 from proof_agent.errors import ProofAgentError
-
-
-_POLICY_ID_RE = re.compile(r"\bPOL-\d+\b", re.IGNORECASE)
-_CLAIM_ID_RE = re.compile(r"\bCLM-\d+\b", re.IGNORECASE)
 
 
 class CustomerAccessError(ProofAgentError):
@@ -25,155 +15,32 @@ class CustomerAccessError(ProofAgentError):
         )
 
 
-def load_mock_customer_context(
-    path: Path,
+def owned_resource_ids(
+    context: CustomerAuthorizationContext,
+    resource_type: str,
+) -> tuple[str, ...]:
+    """Return trace-safe resource handles for one customer-owned resource type."""
+
+    return tuple(
+        resource.resource_id
+        for resource in context.owned_resources
+        if resource.resource_type == resource_type
+    )
+
+
+def require_owned_resource(
+    context: CustomerAuthorizationContext,
     *,
-    customer_id: str | None,
-) -> CustomerAuthorizationContext:
-    """Load a V1 mock customer session from a local fixture."""
-
-    if customer_id is None:
-        return CustomerAuthorizationContext(session_type=CustomerSessionType.ANONYMOUS)
-
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    for customer in _customer_records(raw):
-        if str(customer.get("customer_id")) == customer_id:
-            return CustomerAuthorizationContext(
-                session_type=CustomerSessionType.AUTHENTICATED,
-                customer_ref=customer_id,
-                allowed_policy_ids=_string_tuple(customer.get("policies", ())),
-                allowed_claim_ids=_string_tuple(customer.get("claims", ())),
-                auth_scope=("read:policy_status", "read:claim_status"),
-            )
-    raise CustomerAccessError(f"unknown mock customer: {customer_id}")
-
-
-def require_policy_access(context: CustomerAuthorizationContext, policy_id: str) -> None:
-    """Require the authenticated customer to own the requested policy."""
+    resource_type: str,
+    resource_id: str,
+) -> None:
+    """Require the authenticated customer to own one named resource."""
 
     _require_authenticated(context)
-    if policy_id not in context.allowed_policy_ids:
-        raise CustomerAccessError("customer is not authorized for the requested policy.")
-
-
-def require_claim_access(context: CustomerAuthorizationContext, claim_id: str) -> None:
-    """Require the authenticated customer to own the requested claim."""
-
-    _require_authenticated(context)
-    if claim_id not in context.allowed_claim_ids:
-        raise CustomerAccessError("customer is not authorized for the requested claim.")
-
-
-def is_policy_status_question(question: str) -> bool:
-    """Detect deterministic V1 policy-status intents before tool execution."""
-
-    normalized = question.lower()
-    return "policy status" in normalized or (
-        "status" in normalized and extract_policy_id(question) is not None
-    )
-
-
-def is_claim_status_question(question: str) -> bool:
-    """Detect deterministic V1 claim-status intents before tool execution."""
-
-    normalized = question.lower()
-    return "claim status" in normalized or (
-        "status" in normalized and extract_claim_id(question) is not None
-    ) or (
-        "status" in normalized and "claim" in normalized
-    )
-
-
-def is_transactional_customer_action(question: str) -> bool:
-    """Detect V1 account-changing requests that require internal follow-up only."""
-
-    normalized = question.lower()
-    transactional_terms = (
-        "cancel my policy",
-        "cancel policy",
-        "change my policy",
-        "update my policy",
-        "submit a claim",
-        "submit claim",
-        "approve my claim",
-    )
-    return any(term in normalized for term in transactional_terms)
-
-
-def is_payment_or_coverage_guarantee_request(question: str) -> bool:
-    """Detect personalized coverage, eligibility, payable amount, or payment requests."""
-
-    normalized = question.lower()
-    personalized_terms = (
-        "my claim",
-        "my policy",
-        "based on my claim",
-        "based on my policy",
-    )
-    decision_terms = (
-        "am i covered",
-        "am i eligible",
-        "how much will i be paid",
-        "how much will you pay",
-        "will i be paid",
-        "will be paid",
-        "payable amount",
-        "payment amount",
-        "guarantee payment",
-        "guarantee coverage",
-    )
-    has_personalized_context = any(term in normalized for term in personalized_terms) or (
-        extract_claim_id(question) is not None
-    )
-    return has_personalized_context and any(term in normalized for term in decision_terms)
-
-
-def is_tool_execution_failure_retry_request(question: str) -> bool:
-    """Detect a customer-facing retry after an authorized read tool failed."""
-
-    normalized = question.lower()
-    lookup_terms = ("claim status", "policy status", "status lookup")
-    failure_terms = (
-        "service times out",
-        "service timed out",
-        "service timeout",
-        "times out",
-        "timed out",
-        "timeout",
-        "unavailable",
-    )
-    return (
-        "retry" in normalized
-        and any(term in normalized for term in lookup_terms)
-        and any(term in normalized for term in failure_terms)
-    )
-
-
-def extract_policy_id(question: str) -> str | None:
-    match = _POLICY_ID_RE.search(question)
-    return match.group(0).upper() if match else None
-
-
-def extract_claim_id(question: str) -> str | None:
-    match = _CLAIM_ID_RE.search(question)
-    return match.group(0).upper() if match else None
+    if resource_id not in owned_resource_ids(context, resource_type):
+        raise CustomerAccessError("customer is not authorized for the requested resource.")
 
 
 def _require_authenticated(context: CustomerAuthorizationContext) -> None:
     if context.session_type != CustomerSessionType.AUTHENTICATED:
         raise CustomerAccessError("authenticated customer session is required.")
-
-
-def _customer_records(raw: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw, dict):
-        return []
-    records = raw.get("customers", [])
-    if not isinstance(records, list):
-        return []
-    return [record for record in records if isinstance(record, dict)]
-
-
-def _string_tuple(values: Any) -> tuple[str, ...]:
-    if not isinstance(values, list | tuple):
-        return ()
-    return tuple(str(value) for value in values)

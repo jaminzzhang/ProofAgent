@@ -198,12 +198,12 @@ Layer boundary rules:
 | Policy | `control/policy/` owns retrieval, ReAct review, answer, tool, memory, and model call enforcement points |
 | Knowledge | `capabilities/knowledge/` owns Markdown deterministic retrieval; vector stack optional |
 | Model | `capabilities/models/` owns `deterministic`, `openai_compatible`, `openai`, `deepseek`; Azure/Anthropic placeholders |
-| Tools | `capabilities/tools/` owns ToolGateway, mock `customer_lookup`, approval state |
+| Tools | `capabilities/tools/` owns ToolGateway, local handler loading, approval state |
 | Memory | `capabilities/memory/` owns session memory with denylist |
 | Validators | `control/validators/` owns schema, evidence, safety, citations, tool result |
 | Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, Model Usage |
 | Storage/API | `observability/storage/` and `observability/api/` own RunStore, FastAPI health/runs/stats routes |
-| Customer Service | `delivery/customer_api.py`, `observability/storage/customer_store.py`, `contracts/customer.py`, and `contracts/handoff.py` own customer-safe projections and internal handoff monitoring |
+| Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `contracts/customer.py`, and `contracts/handoff.py` own customer-safe projections, the Customer Run Adapter seam, and internal handoff monitoring |
 | Tests/CI | pytest, Ruff, mypy, GitHub Actions |
 
 ## 5. Developer Lifecycle
@@ -655,9 +655,10 @@ ToolGateway is the governed tool entry point.
 
 Current behavior:
 - `tools.yaml` declares allowlist and risk level.
+- `tools.yaml` can reference an Agent-package Local Tool Handler with `handler: ./module.py:function_name`.
 - parameter allowlist/denylist is enforced.
 - high-risk tool calls require approval.
-- mock `customer_lookup` proves requested/granted/denied/timeout paths.
+- example Agent packages provide deterministic local handlers to prove requested/granted/denied/timeout paths.
 
 Real MCP strategy:
 - MCP stdio/HTTP transport is an adapter behind ToolGateway.

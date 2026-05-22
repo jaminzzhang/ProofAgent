@@ -127,7 +127,7 @@ Core boundaries:
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
 | Model | `deterministic`, `openai_compatible`, `openai`, and `deepseek` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
 | Policy | `before_retrieval`, `before_retrieval_plan`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
-| Tools / MCP | ToolGateway, mock `customer_lookup`, approval state; real MCP transport is the extension direction |
+| Tools / MCP | ToolGateway, Agent-package local tool handlers, approval state; real MCP transport is the extension direction |
 | Memory | `memory.provider: session`, with sensitive field denylist |
 | Validators | schema, evidence, safety, citations, tool result |
 | Audit | JSONL trace, Governance Receipt, RunStore, ConversationStore, Dashboard read API |
@@ -137,10 +137,11 @@ The v1 deterministic path must always operate without requiring API keys, networ
 
 ### Customer Service V1
 
-`examples/insurance_customer_service/` is a direct-to-customer private-pilot Agent package. It keeps the framework generic while proving:
+`examples/insurance_customer_service/` is a direct-to-customer private-pilot Agent package. It keeps the framework generic by providing its own Customer Run Adapter and local tool handlers while proving:
 
 - mock authenticated customer sessions through `customers.yaml`
 - read-only account status tools through `policy_status_lookup` and `claim_status_lookup`
+- insurance-specific customer resource routing through `customer_adapter.py`
 - customer-safe responses through `/api/customer/...`
 - internal handoffs through `/api/handoffs`
 - PageIndex configuration through `agent.pageindex.yaml`
@@ -510,10 +511,11 @@ tools:
   - name: customer_lookup
     description: "Mock customer policy status lookup."
     transport: stdio
+    handler: ../demo_tools.py:customer_lookup
     command: python
     args:
       - -m
-      - proof_agent.capabilities.tools.mcp_mock
+      - examples.demo_tools
     risk_level: medium
     requires_approval: true
     allowed_parameters:
@@ -527,6 +529,7 @@ tools:
 
 Tool development principles:
 - All tool calls must pass through ToolGateway.
+- Deterministic local tools live in the Agent package or `examples/`, and `tools.yaml` references them with `handler: ./module.py:function_name`.
 - High-risk tools must enter the approval state.
 - Parameters must have allowlists / denylists.
 - Tool results must pass through validators.
