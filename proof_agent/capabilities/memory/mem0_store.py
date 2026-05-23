@@ -133,7 +133,7 @@ def _create_default_client() -> Mem0Client:
         raise ProofAgentError(
             "PA_CONFIG_002",
             "Mem0 memory provider requires the mem0ai package.",
-            "Install the optional Mem0 extra before using memory.provider: mem0.",
+            "Install mem0ai or inject a compatible Mem0 client before using memory.provider: mem0.",
         ) from exc
     return cast(Mem0Client, Memory())
 

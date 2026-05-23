@@ -64,3 +64,4 @@ node_modules/
 dist/
 .vite/
 *.tsbuildinfo
+.antigravitycli/

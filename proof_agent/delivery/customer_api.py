@@ -13,9 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
-
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
-from proof_agent.capabilities.tools.gateway import ToolGateway
 
 from proof_agent.contracts import (
     AgentManifest,
@@ -409,19 +407,6 @@ def _require_published_agent_manifest(request: Request, agent_id: str) -> AgentM
             },
         )
     return _load_manifest(published_agent.manifest_path)
-
-
-def _load_customer_context(
-    manifest_path: Path,
-    customer_ref: str | None,
-) -> CustomerAuthorizationContext:
-    try:
-        return load_mock_customer_context(
-            manifest_path.parent / "customers.yaml",
-            customer_id=customer_ref,
-        )
-    except CustomerAccessError:
-        return CustomerAuthorizationContext(session_type=CustomerSessionType.ANONYMOUS)
 
 
 def _store_customer_response(
