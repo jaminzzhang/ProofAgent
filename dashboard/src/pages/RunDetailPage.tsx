@@ -59,6 +59,10 @@ export function RunDetailPage() {
         </div>
         <div className="flex items-center gap-4 mt-4 text-xs font-mono text-[var(--text-muted)]">
           <span>{new Date(detail.created_at).toLocaleString()}</span>
+          <span>{detail.run_purpose}</span>
+          {detail.agent_id && <span>{detail.agent_id}</span>}
+          {detail.agent_version_id && <span>{detail.agent_version_id}</span>}
+          {detail.draft_id && <span>{detail.draft_id}</span>}
         </div>
       </div>
 

@@ -85,6 +85,9 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
         manifest_path=published_agent.manifest_path,
         question=request.question,
         approved=request.approved,
+        agent_id=published_agent.agent_id,
+        agent_version_id=published_agent.agent_version_id,
+        draft_id=published_agent.source_draft_id,
     )
 
     return _run_response(
@@ -184,6 +187,9 @@ def create_conversation_run(
         question=request.question,
         approved=request.approved,
         conversation_context=context_admission,
+        agent_id=published_agent.agent_id,
+        agent_version_id=published_agent.agent_version_id,
+        draft_id=published_agent.source_draft_id,
     )
     governance_details = _governance_projection(
         detail,
@@ -229,6 +235,9 @@ def _execute_published_agent_run(
     question: str,
     approved: bool | None,
     conversation_context: ContextAdmission | None = None,
+    agent_id: str | None = None,
+    agent_version_id: str | None = None,
+    draft_id: str | None = None,
 ) -> tuple[Any, Any, AgentManifest]:
     store = _get_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
@@ -243,6 +252,9 @@ def _execute_published_agent_run(
             run_id=run_id,
             store=store,
             manifest=manifest,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
         )
     except ProofAgentError as exc:
         raise HTTPException(
@@ -269,6 +281,7 @@ def _run_response(
 ) -> dict[str, Any]:
     response = {
         "agent_id": agent_id,
+        "agent_version_id": detail.agent_version_id,
         "run_id": detail.run_id,
         "outcome": detail.outcome.value,
         "final_output": final_output or _final_output_from_trace(detail),

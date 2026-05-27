@@ -20,9 +20,21 @@ _Avoid_: Wrapper, guardrail layer
 The public configuration contract that declares an Agent's purpose, workflow, knowledge, model, policy, tools, memory, and audit behavior.
 _Avoid_: Internal config, runtime config
 
+**Agent Package**:
+A reviewable delivery artifact containing an Agent Contract plus its policy, tools, knowledge references, fixtures, and domain adapters.
+_Avoid_: Database-only Agent, uploaded manifest path, loose config bundle
+
 **Tool Contract**:
 The public capability contract that declares a governed tool's purpose, risk level, read/write class, authorization conditions, parameter bounds, and audit behavior.
 _Avoid_: Runtime adapter, provider-native tool schema, prompt instruction
+
+**Tool Source**:
+A reusable tool connection or local tool package that can expose one or more governed Tool Contracts.
+_Avoid_: Tool Contract, Agent Tool Binding, direct model function
+
+**Agent Tool Binding**:
+The Agent-specific configuration that enables selected Tool Contracts and constrains their proposal scope, approval behavior, call budget, and authorization conditions.
+_Avoid_: Tool Source, ungoverned tool list, provider-native tool call
 
 **Local Tool Handler**:
 An Agent-package-owned Python callable referenced from `tools.yaml` for deterministic local demos or fixtures behind Tool Gateway.
@@ -31,6 +43,14 @@ _Avoid_: Framework-owned business tool registry, ungoverned function call
 **Workflow Template**:
 A reusable governed flow shape for a class of Agents, such as enterprise question answering.
 _Avoid_: One-off orchestrator branch, runtime graph
+
+**Workflow Template Node Configuration**:
+The editable per-node settings exposed by a registered Workflow Template while preserving the template's governed node types, ordering constraints, and Control Envelope semantics.
+_Avoid_: Free-form runtime graph editing, arbitrary node creation, prompt-defined workflow
+
+**Workflow Node Panel**:
+The first UI representation of Workflow Template Node Configuration as an ordered, expandable node list rather than a drag-and-drop canvas.
+_Avoid_: Free-form workflow canvas, runtime graph layout, node layout source of truth
 
 **Controlled ReAct Workflow**:
 A Workflow Template where a model proposes reasoning steps and action proposals, while the Control Envelope governs whether each step may execute.
@@ -67,6 +87,10 @@ _Avoid_: Business Agent AI Core, model self-approval
 **Model Provider Registry**:
 The shared capability registry that resolves model providers for final answers, planning, and Harness review roles.
 _Avoid_: Role-specific provider registry
+
+**Model Role Configuration**:
+The Agent-specific configuration for each model call role, including final answer generation, ReAct planning, and Harness review assistance.
+_Avoid_: Single global Agent model, hidden model reuse, provider-native agent config
 
 **Harness-Normalized Model Output**:
 Model output parsed into Proof Agent contracts before it can affect workflow, review, tool, or answer behavior.
@@ -163,6 +187,10 @@ _Avoid_: Trace storage toggle, raw debugging dump
 **Response Detail Policy**:
 The Agent Contract policy that sets the maximum governance detail a backend response may expose.
 _Avoid_: Frontend-only visibility flag, unrestricted API projection
+
+**Policy Rule Configuration**:
+The structured Agent-specific policy settings that compile into policy rules for enforcement points, conditions, decisions, and audit reason templates.
+_Avoid_: Natural-language policy, frontend-only guardrail, prompt instruction
 
 **Customer-Safe Response Projection**:
 A customer-facing response shape that exposes only the governed reply, safe source references, clarification needs, or safe follow-up acknowledgement while hiding internal trace, receipt, policy, review, tool, and handoff details. It may differ from the internal run final output when customer-safety wording requires projection.
@@ -264,13 +292,57 @@ _Avoid_: Dashboard read API, direct model endpoint
 A customer-facing Delivery entry point that starts governed customer-service runs and returns Customer-Safe Response Projection values.
 _Avoid_: Internal Chat API, Dashboard read API, raw run execution response
 
+**Agent Configuration API**:
+The configuration boundary for Draft Agents, reusable configuration assets, validation, publication, rollback, import, and export.
+_Avoid_: Dashboard read API, production run execution API, arbitrary manifest runner
+
 **Customer Run Adapter**:
 An Agent-package-owned adapter that handles domain-specific customer-service intents, customer authorization fixtures, resource disambiguation, customer-safe wording, and optional trace annotations before the generic Customer Run API stores the Customer-Safe Response Projection.
 _Avoid_: Framework-owned insurance logic, prompt-only customer routing, frontend-defined customer safety
 
+**Draft Agent**:
+An editable Agent configuration version inside the Agent Configuration Workspace that may be saved, validated, and test-run before publication.
+_Avoid_: Published Agent, arbitrary runtime manifest, unvalidated production Agent
+
+**Agent Configuration Store**:
+The configuration-system store for Draft Agents, version history, validation results, publication metadata, and reviewable contract snapshots.
+_Avoid_: RunStore, Conversation Store, arbitrary local filesystem path
+
+**Local Agent Configuration Store**:
+The first Agent Configuration Store implementation using local directories and JSON/contract files while preserving a replaceable store boundary.
+_Avoid_: Production database requirement, router-owned file layout, hidden in-memory drafts
+
+**Agent Package Import**:
+The migration path that converts an existing reviewable Agent Package into a Draft Agent while preserving its contract files and unsupported advanced fields.
+_Avoid_: Direct production overwrite, arbitrary manifest execution, lossy UI conversion
+
+**Published Agent Version**:
+An immutable published snapshot of an Agent Contract or Agent Package that application-facing execution surfaces can resolve by stable Agent identity and version.
+_Avoid_: Mutable draft, latest filesystem path, frontend-selected manifest
+
+**Active Agent Version**:
+The Published Agent Version currently selected for default application-facing execution for a stable Agent identity.
+_Avoid_: Latest draft, mutable production config, frontend-selected version
+
+**Agent Version Rollback**:
+The governed operation that changes a Published Agent's Active Agent Version back to an earlier immutable Published Agent Version.
+_Avoid_: Editing old versions, deleting publication history, restoring a draft as production
+
 **Published Agent**:
-An approved Agent package exposed to application surfaces through a stable agent identifier.
-_Avoid_: Arbitrary manifest path, uploaded config
+An approved Agent configuration version exposed to application surfaces through a stable agent identifier after validation and publication.
+_Avoid_: Draft Agent, arbitrary manifest path, uploaded config
+
+**Agent Publication**:
+The governed transition that promotes a validated Draft Agent into a Published Agent Version available to Run Execution API or Customer Run API callers.
+_Avoid_: Save draft, direct run, frontend-only enablement
+
+**Agent Validation Run**:
+A pre-publication governed run or validation pass that checks a Draft Agent's contract, retrieval behavior, workflow behavior, policy decisions, and receipt preview.
+_Avoid_: Production run, frontend preview only, unchecked smoke test
+
+**Run Purpose**:
+The run metadata classification that distinguishes production, validation, and preview runs while keeping all governed runs in RunStore.
+_Avoid_: Separate preview log, hidden test execution, metric-only tag
 
 **Approval Continuation Run**:
 A follow-up Harness run that carries an explicit approval decision after an earlier run reached a waiting-for-approval outcome.
@@ -464,6 +536,10 @@ _Avoid_: Vendor-owned memory taxonomy, hidden prompt cache, framework-defined go
 A Capability Layer adapter that connects an external or internal memory engine to Proof Agent memory contracts without giving that engine authority over Harness decisions.
 _Avoid_: Direct memory backend, model-owned memory, uncontrolled memory plugin
 
+**Agent Memory Configuration**:
+The Agent-specific memory settings that choose a Memory Provider Adapter and configure governed memory scopes, retention, record limits, restricted-data handling, and lifecycle controls.
+_Avoid_: Reusable memory asset, Accepted Evidence source, cross-Agent memory pool
+
 **Case Memory**:
 Memory scoped to one case, task, customer issue, or conversation journey, containing admitted structured case facts or bounded trace-safe summaries rather than complete customer-visible messages.
 _Avoid_: Persistent user profile, audit log, raw conversation transcript
@@ -524,6 +600,38 @@ _Avoid_: Post-finalize trace mutation, receipt drift, projection-only audit fact
 The internal observability surface for inspecting governed runs, traces, receipts, stats, and escalation handoff records.
 _Avoid_: Customer Service Chat Frontend, customer response UI, full admin console
 
+**Dashboard Shell**:
+The shared internal web workspace that hosts both observability views and Agent configuration views while preserving separate API boundaries for observation, configuration, and execution.
+_Avoid_: Single backend API surface, customer-facing console, ungoverned execution UI
+
+**Agent-Centric Dashboard Shell**:
+A Dashboard Shell information architecture where each Agent detail view combines monitoring, configuration, validation, versioning, and contract inspection for that Agent.
+_Avoid_: Settings-only configuration, detached builder app, global-only run dashboard
+
+**Agent Configuration Workspace**:
+A Dashboard-hosted configuration surface for drafting, validating, testing, and publishing Agent Contracts, Workflow Template settings, Knowledge Provider settings, Tool Contracts, policy, memory, and response disclosure settings.
+_Avoid_: Dashboard API execution path, direct arbitrary manifest execution, prompt-only Agent setup
+
+**Agent Configuration MVP**:
+The first implementation scope that proves the import, Draft Agent edit, validation, publication, monitoring, versioning, and rollback loop before deep editing for every configuration module.
+_Avoid_: Full no-code platform, complete RBAC product, all-module deep editor
+
+**Agent Configuration Permission Model**:
+The role semantics for viewing Agent configuration, editing Draft Agents, publishing or rolling back versions, and administering reusable configuration assets.
+_Avoid_: Full tenant RBAC, frontend-only permission check, untracked local edits
+
+**Configuration Operation Audit**:
+The audit metadata that records who created, changed, validated, published, or rolled back Agent configuration.
+_Avoid_: Run trace, Governance Receipt, invisible config mutation
+
+**Contract View**:
+An advanced Agent Configuration Workspace view that shows and optionally edits the Agent Contract and related policy/tool contract files compiled from the same Draft Agent state.
+_Avoid_: Separate configuration source, export-only YAML, hidden runtime config
+
+**Agent Creation Wizard**:
+A guided first-time setup flow that helps an Agent owner create a Draft Agent by selecting purpose, Workflow Template, Knowledge Provider, governed capabilities, and validation path.
+_Avoid_: Runtime graph editor, production publish action, generic settings page
+
 **Internal Handoff Monitor**:
 The V1 dashboard projection for reviewing Customer Escalation Handoff records and drilling into their governed run details.
 _Avoid_: Ticket workflow, SLA queue, assignment console
@@ -543,6 +651,18 @@ _Avoid_: Plain RAG, uncontrolled RAG
 **Plain RAG**:
 A retrieve-then-generate flow without Harness policy gates or evidence admission.
 _Avoid_: Harness RAG
+
+**Knowledge Source**:
+A reusable knowledge asset or connection that can be bound to one or more Agents through a Knowledge Provider.
+_Avoid_: Retrieval Strategy, Accepted Evidence, Agent-only knowledge setting
+
+**Agent Knowledge Binding**:
+The Agent-specific configuration that authorizes and parameterizes how a Draft Agent or Published Agent Version may use a Knowledge Source.
+_Avoid_: Knowledge Source, Knowledge Provider, global retrieval defaults
+
+**Knowledge Binding Strategy**:
+The governed strategy that determines whether an Agent uses one Knowledge Binding, a priority fallback chain, or a future multi-source retrieval plan.
+_Avoid_: Provider configuration, unbounded multi-source search, implicit fallback
 
 **Knowledge Provider**:
 A capability that retrieves candidate evidence and returns normalized evidence chunks.
@@ -821,6 +941,7 @@ _Avoid_: Evidence content dump
 - A **Conversation Store** preserves chat timelines while each turn remains linked to a governed run in RunStore.
 - **Controlled Agent Memory** extends memory beyond per-run session state while remaining inside the **Control Envelope**.
 - A **Hybrid Memory Framework** may use one or more **Memory Provider Adapter** implementations, but **Memory Admission** remains a Control Plane decision.
+- The **Agent Configuration Workspace** exposes **Agent Memory Configuration** per Agent and does not treat memory as a reusable cross-Agent asset in the first implementation stage.
 - Memory layers describe Proof Agent product semantics; **Memory Provider Adapter** implementations describe replaceable storage and retrieval engines.
 - External memory engines may provide storage, retrieval, summarization, or ranking, but they must not decide **Memory Admission** or bypass the **Control Envelope**.
 - **Case Memory** is generated from governed run facts and bounded, trace-safe facts or summaries derived from **Customer Response Snapshot** linkage, not from complete customer-visible message text, **Customer Feedback Signal**, raw transcripts, or unvalidated model text.
@@ -838,6 +959,20 @@ _Avoid_: Evidence content dump
 - V1 uses a **Customer Conversation Retention Policy** for short-lived customer chat text and an **Audit Retention Boundary** for longer-lived trace-safe run facts.
 - **RunStore** preserves governed run artifacts separately from the customer conversation timeline.
 - V1 keeps the existing dashboard role as an **Internal Governance Dashboard** and does not deliver an **Agent Control Platform Console**.
+- Agent configuration planning extends the **Dashboard Shell** with an **Agent Configuration Workspace** while preserving separate configuration, execution, and observability API boundaries.
+- **Agent Configuration API** owns Draft Agent editing, reusable configuration assets, validation, publication, rollback, import, and export; it may trigger **Agent Validation Run** but not ordinary production execution.
+- The first **Agent Configuration Store** implementation is a **Local Agent Configuration Store** aligned with RunStore and ConversationStore, while API and domain code depend on a replaceable store boundary.
+- The Dashboard Shell should become **Agent-Centric**: global observability remains available, and each Agent detail view combines monitor, configure, validate/test, versions, and Contract View.
+- **Agent Configuration MVP** prioritizes the vertical import-to-publication-to-monitoring loop before full Tool Source management, advanced Policy condition building, broad multi-source retrieval, full RBAC, deep visual diffs, or memory lifecycle UI.
+- **Agent Configuration MVP** uses a **Workflow Node Panel** for Workflow Template Node Configuration before adding any visual workflow canvas.
+- New Agent setup enters through an **Agent Creation Wizard** and then lands in the module-based **Agent Configuration Workspace** for ongoing edits.
+- The **Agent Configuration Workspace** edits **Draft Agent** versions in the **Agent Configuration Store**; application-facing execution surfaces can call only immutable **Published Agent Version** snapshots after **Agent Publication**.
+- A **Published Agent** resolves to an **Active Agent Version** by default, and **Agent Version Rollback** changes that pointer without mutating prior Published Agent Version snapshots.
+- **Agent Contract** and **Agent Package** remain the reviewable execution artifacts even when drafts and publication metadata live in the **Agent Configuration Store**.
+- **Agent Package Import** turns existing example or registry Agent Packages into Draft Agents without overwriting the original package files by default.
+- **Agent Publication** requires a successful **Agent Validation Run** for the Draft Agent version being published.
+- **Agent Validation Run** artifacts are stored in RunStore with **Run Purpose** metadata so validation evidence remains auditable without polluting default production run metrics.
+- The first **Agent Configuration Workspace** may run as a single-user local experience, but it should still preserve **Agent Configuration Permission Model** roles and **Configuration Operation Audit** metadata for future RBAC.
 - V1 includes an **Internal Handoff Monitor** for handoff visibility and run-detail drilldown, but not assignment, SLA, notification, or ticket workflow.
 - The **Insurance Customer Service Agent** is the V1 customer-facing Published Agent for the **Insurance Service QA Domain**.
 - The existing insurance service QA example remains a baseline and compatibility package rather than the V1 customer-facing Agent package.
@@ -880,6 +1015,7 @@ _Avoid_: Evidence content dump
 - "Harness Agent framework" could mean the framework itself or an Agent built with it. Resolved: use **Controlled Agent Harness Framework** for the framework category.
 - "V1 deliverable" could mean only the customer-service bot or the reusable Agent framework plus reference Agent. Resolved: V1 includes an **Agent Framework Deliverable** and the **Insurance Customer Service Agent**.
 - "Workflow" could mean business flow, runtime graph mechanics, or a hard-coded orchestrator branch. Resolved: use **Workflow Template** for the governed flow shape, and keep runtime mechanics separate.
+- "Workflow node editing" could mean configuring registered template nodes or freely rewriting the runtime graph. Resolved: use **Workflow Template Node Configuration** for editable node settings that compile back to the Agent Contract without changing Harness semantics.
 - "ReAct framework" could mean an autonomous model-driven agent loop or a governed flow shape. Resolved: use **Controlled ReAct Workflow** for the governed Proof Agent version.
 - "`enterprise_qa` with flags" could blur the deterministic baseline with ReAct behavior. Resolved: V1 adds **React Enterprise QA Template** instead of changing the existing template.
 - "Customer service workflow" could mean the existing linear Enterprise QA path or the ReAct path. Resolved: V1 customer-facing automation uses **React Enterprise QA Template**; **Enterprise QA Template** remains the baseline path.
@@ -893,6 +1029,7 @@ _Avoid_: Evidence content dump
 - "LLM reviewer" could mean replacing deterministic review behavior or adding a provider-backed reviewer implementation. Resolved: use **LLM Harness Review Subagent** as an additional implementation.
 - "Review model" could mean the final answer model or a separate control-plane reviewer. Resolved: **Review Subagent Config** is independent from final answer `model`.
 - "AI core capability" could mean business answer generation, ReAct planning, or Harness review. Resolved: use **Business Agent AI Core** for business-facing AI and **Harness Decision Assistance** for control-facing AI.
+- "Agent model configuration" could mean one shared model for every role or role-specific model settings. Resolved: use **Model Role Configuration**; UI may offer reuse shortcuts, but the Agent Contract stores distinct final, planner, and reviewer role settings.
 - "Separate model provider" could mean separate provider registries or separate configured instances. Resolved: **Business Agent AI Core** and **Harness Decision Assistance** share the **Model Provider Registry** but remain separate configured instances.
 - "`ai_core` configuration" could mean a new top-level Agent Contract field or the existing role-specific model fields. Resolved: keep role-specific `model`, `react.planner`, and `review.subagent` fields.
 - "Planner provider" or "review provider" could mean role-specific provider names. Resolved: provider names identify external model channels; role semantics come from the Agent Contract section.
@@ -910,6 +1047,7 @@ _Avoid_: Evidence content dump
 - "Review trace" could mean final policy or reviewer suggestion. Resolved: **Review Decision Event** records the suggestion; `policy_decision` records the final governance decision.
 - "Show planning" could mean trace recording or user-visible response projection. Resolved: **Governance Detail Projection** controls API/UI exposure, not trace completeness.
 - "Response visibility flag" could mean an unrestricted frontend request. Resolved: **Response Detail Policy** caps what API responses can expose.
+- "Policy configuration" could mean natural-language instructions, prompt rules, or executable governance rules. Resolved: use **Policy Rule Configuration** for structured rules; natural-language descriptions are non-executable unless compiled and validated.
 - "Customer response" could mean the full internal run response or a customer-safe shape. Resolved: customer-facing surfaces use **Customer-Safe Response Projection** and internal operator/developer surfaces use governed audit projections.
 - "Customer projection" could mean rewriting the run result without audit linkage. Resolved: projection is allowed for customer safety only when the exact customer-visible **Customer Response Snapshot** is linked to the governed run.
 - "Customer-visible tool source" could mean exposing the tool name or internal run reference. Resolved: customer-facing responses use **Customer-Safe Source Label** values, and internal run artifacts map those labels to specific **Authorized Tool Result** records.
@@ -936,9 +1074,22 @@ _Avoid_: Evidence content dump
 - "Loaded manifest" could mean raw configuration or a ready-to-run execution object. Resolved: use **Harness Invocation** for the resolved run input assembled from contract and capabilities.
 - "Chat API" could mean a raw model chat endpoint or a governed execution endpoint. Resolved: use **Run Execution API** for starting Harness runs from chat surfaces.
 - "Customer chat API" could mean reusing the internal Chat API or adding a customer-safe endpoint. Resolved: V1 uses **Customer Run API** for customer-facing runs and keeps internal Chat API responses for operator/developer surfaces.
+- "Configuration API" could mean extending Dashboard read routes, execution routes, or a separate boundary. Resolved: use **Agent Configuration API** for configuration lifecycle while keeping **Dashboard API**, **Run Execution API**, and **Customer Run API** separate.
 - "Agent selection" could mean a user-provided manifest path or a configured Agent identity. Resolved: application surfaces call a **Published Agent** by stable agent identifier.
+- "Save Agent configuration" could mean creating a runnable Agent or persisting work in progress. Resolved: saving creates or updates a **Draft Agent**; only **Agent Publication** creates or updates a **Published Agent** for application-facing execution.
+- "Rollback" could mean editing an old version, overwriting current production config, or changing the active pointer. Resolved: **Agent Version Rollback** selects an earlier immutable **Published Agent Version** as the **Active Agent Version**.
+- "Configuration storage" could mean replacing Agent Contract files or storing editable product state. Resolved: the **Agent Configuration Store** owns draft/version metadata, while **Agent Contract** and **Agent Package** remain the reviewable execution artifacts.
+- "Configuration database" could mean requiring a production DB for the first implementation or defining a replaceable persistence boundary. Resolved: first use a **Local Agent Configuration Store** with a store adapter boundary.
+- "Import Agent" could mean running an arbitrary manifest, overwriting example files, or creating an editable draft. Resolved: **Agent Package Import** creates a **Draft Agent** from a reviewable Agent Package and preserves advanced fields.
+- "Configuration permissions" could mean full enterprise RBAC or no permission model at all. Resolved: first-stage configuration may be single-user, but the **Agent Configuration Permission Model** and **Configuration Operation Audit** fields are part of the domain model.
+- "Test run" could mean a cosmetic frontend preview or a governed pre-publication execution. Resolved: use **Agent Validation Run** for required validation and test execution before **Agent Publication**.
+- "Validation run storage" could mean a separate preview log or ordinary run history. Resolved: store validation artifacts in RunStore and distinguish them with **Run Purpose** metadata.
+- "Workflow builder UI" could mean an ordered node configuration panel or a drag-and-drop canvas. Resolved: first use a **Workflow Node Panel**; any future canvas remains a presentation of Workflow Template Node Configuration, not a new runtime graph source.
+- "YAML editor" could mean a second source of truth, an export pane, or a contract-level editor. Resolved: use **Contract View** as an advanced view over the same Draft Agent state, validated before save or publication.
 - "Dashboard API" could mean read-only observability or execution. Resolved: Dashboard and receipt views remain read projections; **Run Execution API** owns run creation.
-- "Management console" could mean internal run observability or a full platform administration product. Resolved: V1 keeps an **Internal Governance Dashboard** only; **Agent Control Platform Console** work is future scope.
+- "Management console" could mean internal run observability, Dashboard-hosted Agent configuration, or a full platform administration product. Resolved: V1 keeps an **Internal Governance Dashboard** for observability; Agent configuration belongs in an **Agent Configuration Workspace** hosted by the **Dashboard Shell** with separate configuration APIs; full **Agent Control Platform Console** work is future scope.
+- "Agent builder" could mean a blank free-form graph editor or a guided Contract-first setup. Resolved: new Agents start in an **Agent Creation Wizard** and continue in the **Agent Configuration Workspace**.
+- "Dashboard navigation" could mean a separate builder app, a settings page, or Agent-centered operations. Resolved: use an **Agent-Centric Dashboard Shell** with global observability and Agent detail views for monitoring and configuration.
 - "Handoff monitoring" could mean a dashboard projection or a full ticket workflow. Resolved: V1 provides **Internal Handoff Monitor** only; assignment, SLA, notification, and ticket status workflows are future scope.
 - "Approve and continue" could mean durable checkpoint resume or a new governed follow-up run. Resolved: first-stage chat uses an **Approval Continuation Run** and must not present it as checkpoint resume.
 - "Enterprise QA intelligent customer service" could mean the whole product or the first Agent built with it. Resolved: use **Enterprise QA Reference Agent** for the first Agent and keep Proof Agent as the framework.
@@ -973,6 +1124,7 @@ _Avoid_: Evidence content dump
 - "The first one" could mean ordinary language understanding or unsafe default selection. Resolved: V1 may use ordinal or descriptive clarification replies only when they point to a prior **Customer Resource Disambiguation Prompt** option through **Customer Disambiguation Option Mapping** preserved in **Controlled Conversation Context**.
 - "List all my claims" could mean a safe disambiguation aid or a bulk customer resource listing. Resolved: V1 read tools support **Single-Resource Customer Read** only; bounded disambiguation handles are allowed, but bulk status listing is future capability work.
 - "Customer planner tool scope" could mean a generic customer lookup tool or the concrete V1 status lookup tools. Resolved: customer-mode **Tool Proposal Scope** includes **Policy Status Lookup Tool** and **Claim Status Lookup Tool** when declared by the Agent Contract and Tool Contracts; proposals remain non-executable until authorized.
+- "Tool configuration" could mean a reusable connection, a governance contract, or an Agent-specific enablement rule. Resolved: use **Tool Source** for the connection/package, **Tool Contract** for governance, and **Agent Tool Binding** for per-Agent scope and approval settings.
 - "Approval for customer lookup" could mean human approval or policy authorization. Resolved: V1 customer-facing read lookups are **Policy-Authorized Read Tool** calls; human approval is reserved for assisted or higher-risk flows.
 - "Policy-authorized read" could mean direct Customer API preflight execution or a governed tool call that skips only human approval. Resolved: it skips human approval only; the read still runs inside the **Control Envelope** and writes full Harness run artifacts.
 - "Tool authorization" could mean planner self-certification, reviewer advice, or deterministic contract enforcement. Resolved: **Tool Contract** and **Agent Contract** policy metadata define the conditions, while PolicyEngine and Tool Gateway enforce them against normalized arguments and **Customer Authorization Context**.
@@ -993,6 +1145,8 @@ _Avoid_: Evidence content dump
 - "Enterprise QA" could mean a generic knowledge demo or a concrete first domain. Resolved: first-stage acceptance uses the **Insurance Service QA Domain** while keeping framework boundaries generic.
 - "Production knowledge integration" could mean building local vector indexing first or using a remote retrieval service first. Resolved: first-stage production-directed integration uses the **PageIndex Provider**, while **Local Markdown Provider** remains the deterministic baseline.
 - "V1 knowledge source" could mean replacing local fixtures with PageIndex or keeping only Markdown. Resolved: V1 uses **Local Markdown Provider** for deterministic regression and **PageIndex Provider** for the production-directed customer-service path.
+- "Knowledge base configuration" could mean a reusable data asset, a provider adapter, or an Agent-specific retrieval binding. Resolved: use **Knowledge Source** for the asset, **Knowledge Provider** for the adapter, and **Agent Knowledge Binding** for per-Agent use and retrieval settings.
+- "Multiple knowledge bases" could mean unrestricted blended retrieval or a governed binding strategy. Resolved: use **Knowledge Binding Strategy**; initial publication permits single-source and explicit priority fallback before broader multi-source retrieval.
 - "Agentic RAG" could mean either a provider or a workflow. Resolved: **Agentic RAG** is a controlled retrieval workflow, not a **Knowledge Provider**.
 - "`knowledge.path`" could mean a universal knowledge field or a local-provider parameter. Resolved: provider-specific knowledge configuration belongs under the selected **Knowledge Provider** parameters.
 - "`local`" could mean Markdown files, local vector indexes, or any local source. Resolved: use **Local Markdown Provider** and **Local Vector Provider** as distinct provider concepts.

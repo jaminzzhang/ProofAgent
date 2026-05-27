@@ -1,6 +1,6 @@
 # Proof Agent Development Progress
 
-> Last updated: 2026-05-20
+> Last updated: 2026-05-27
 > Purpose: Give AI coding agents a short, current map of the implementation. Verify all claims against the code before changing behavior.
 
 ## 1. Current Positioning
@@ -13,20 +13,23 @@ Authoritative design doc: `docs/technical-design.md`.
 
 - LLM-backed ReAct planning and Harness review now use the shared Model Provider Registry with role-specific configuration, bounded JSON normalization, role-aware trace events, and fail-closed behavior for invalid model output.
 - V1 Autonomous Customer Service Mode now adds customer contracts, Customer Run API, customer-safe response snapshots, read-only customer status tools, internal handoff events, handoff monitor API/UI, and the `insurance_customer_service` reference Agent.
+- Dashboard-hosted Agent Configuration now adds Draft Agents, Contract Bundles,
+  validation runs, Published Agent Versions, rollback, Run Purpose metadata, and
+  an Agents workspace in the Dashboard shell.
 
 ## 2. Implementation Snapshot
 
 | Area | Status |
 | --- | --- |
-| Contracts | Pydantic v2 frozen models for manifest, policy, ReAct action/review, evidence, approval, tools, model, trace, receipt, run, dashboard |
-| Delivery | `delivery/cli.py` exposes Typer commands; `delivery/api.py` exposes Run Execution and Conversation APIs; `delivery/published_agents.py` maps Published Agent ids to approved manifests |
+| Contracts | Pydantic v2 frozen models for manifest, policy, ReAct action/review, evidence, approval, tools, model, trace, receipt, run, dashboard, and Agent Configuration |
+| Delivery | `delivery/cli.py` exposes Typer commands; `delivery/api.py` exposes Run Execution and Conversation APIs; `delivery/configuration_api.py` exposes Agent Configuration workflows; `delivery/published_agents.py` resolves static Published Agents and Active Agent Versions |
 | Docker | `Dockerfile` and `docker-compose.yml` run deterministic demo |
 | Bootstrap | `bootstrap/` owns YAML loader, path resolution, provider validation, retrieval config validation, secret-looking param rejection, and `HarnessInvocation` composition |
 | Control | `control/` owns Enterprise QA and Controlled ReAct Enterprise QA workflow, policy, review fail-closed behavior, validators, evidence decisions, approval, and outcome behavior |
 | Runtime | `runtime/langgraph_runner.py` executes supported LangGraph `StateGraph` templates with composed Harness dependencies |
 | Capability | `capabilities/` owns model providers, ReAct planner, review subagent, knowledge provider registry, memory, ToolGateway, local tool handler loading, and future Skill packs |
 | Audit | `observability/audit/` owns JSONL trace, ReAct review/reasoning projections, redaction, Governance Receipt, model usage section |
-| Storage / API | `observability/storage/` owns RunStore and ConversationStore; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed runs and persists them through RunStore |
+| Storage / API | `observability/storage/` owns RunStore and ConversationStore; `configuration/local_store.py` owns local Agent Configuration state; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed production runs and Agent Configuration API starts governed validation runs through RunStore |
 | Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `observability/api/routers/handoffs.py`, `chat/` customer mode, and `examples/insurance_customer_service/` implement V1 customer-facing automatic replies with the insurance-specific Demo behind a Customer Run Adapter |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
 | Tests | 36 test files and 164 statically detected `test_` functions at last scan |
@@ -69,7 +72,7 @@ runs/latest/governance_receipt.md
 | Real MCP | Mock tool proves approval contract | stdio/HTTP MCP adapter behind ToolGateway |
 | Vector provider | Local Vector provider queries existing Chroma indexes | Index build lifecycle and broader vector store adapters |
 | Agentic RAG | PageIndex provider path emits governed retrieval plan/step events and evaluates evidence locally | Planner-driven multi-step retrieval strategy beyond provider-agentic retrieval |
-| Dashboard UI | Implemented for overview, runs, run detail, evidence, receipt, model usage, approvals, timeline, and governed ReAct details; SPA mount supported if built assets exist | Approval Console actions and richer filtering |
+| Dashboard UI | Implemented for overview, runs, run detail, evidence, receipt, model usage, approvals, timeline, governed ReAct details, handoffs, and the Agents configuration workspace with Workflow node editing, validation, publish, and rollback | Approval Console actions, RBAC, and richer multi-agent operations |
 | Handoff Monitor | Implemented as read-only internal projection of customer handoff trace events | Filtering and richer run correlation |
 | Unified Chat UI | Implemented under `chat/` with `/operator` and `/customer` modes, Conversation API integration, governed ReAct detail display, and customer-safe API responses | Polish, multi-agent selection, production auth, and deployment packaging |
 | Azure/Anthropic | Placeholder providers | Real provider adapters with mocked tests |

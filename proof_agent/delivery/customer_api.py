@@ -280,6 +280,9 @@ def create_customer_run(
             manifest_path=manifest_path,
             question=request.question,
             approved=None,
+            agent_id=published_agent.agent_id,
+            agent_version_id=published_agent.agent_version_id,
+            draft_id=published_agent.source_draft_id,
         )
         if adapter_response.handoff_reason is not None:
             _append_customer_handoff_event(
@@ -339,6 +342,9 @@ def create_customer_run(
             ("Case Memory", case_memory_admission),
             ("Customer Persistent User Memory", user_memory_admission),
         ),
+        agent_id=published_agent.agent_id,
+        agent_version_id=published_agent.agent_version_id,
+        draft_id=published_agent.source_draft_id,
     )
     if case_memory_enabled:
         _append_memory_admission_event(

@@ -913,7 +913,7 @@ RunStore:
 - writes per-run history under `runs/history/{run_id}`
 - powers Dashboard API read projections
 
-## 20. Execution API And Dashboard API
+## 20. Execution API, Agent Configuration API, And Dashboard API
 
 Run Execution API is Delivery behavior. It starts governed Harness runs for
 application surfaces such as the Assisted QA Chat Frontend.
@@ -929,9 +929,40 @@ Execution routes:
 Rules:
 - Application surfaces call Published Agents by stable `agent_id`.
 - The request body must not accept arbitrary `agent.yaml` paths.
+- Published Agent resolution can use the local Agent Configuration Store. When
+  an Active Agent Version exists, execution uses that immutable version package
+  and records `agent_id` and `agent_version_id` in RunStore metadata.
 - Execution still goes through Bootstrap / Composition, Runtime Plane, PolicyEngine, ToolGateway, Validators, Trace, Receipt, and RunStore.
 - The first approval continuation shape carries an explicit approval decision into a follow-up run; durable checkpoint resume is future Runtime Plane work.
 - Conversation runs admit a trace-safe summary of recent turns as Controlled Conversation Context; prior turns can resolve follow-ups but cannot replace current-turn evidence retrieval.
+
+Agent Configuration API is Delivery behavior for Dashboard configuration
+workflows. It is separate from the Run Execution API and does not let application
+surfaces submit arbitrary manifests for production execution.
+
+Configuration routes:
+| Route | Purpose |
+| --- | --- |
+| `GET /api/config/agents` | list locally configured Agent identities |
+| `POST /api/config/agents/import` | import an existing Agent Package into Draft Agent state |
+| `GET /api/config/agents/{agent_id}/drafts/{draft_id}` | read Draft Agent metadata |
+| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}` | update Draft Agent display fields |
+| `GET /api/config/agents/{agent_id}/drafts/{draft_id}/contract` | read preserved Contract View files |
+| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/contract` | update Contract View files after validation |
+| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/validate` | run a Draft Agent as `run_purpose: validation` |
+| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/publish` | publish a validated Draft Agent as an immutable version |
+| `POST /api/config/agents/{agent_id}/versions/{version_id}/rollback` | switch the Active Agent Version pointer |
+
+Rules:
+- Draft Agents are editable configuration state and must not be executed as
+  production agents directly.
+- Validation runs are governed Harness runs persisted through RunStore with
+  `run_purpose: validation`, `agent_id`, and `draft_id`.
+- Published Agent Versions are immutable snapshots of the Contract Bundle and
+  require a recorded validation run id.
+- The Dashboard may show configuration and monitoring in one shell, but the
+  Agent Configuration API, Run Execution API, and Dashboard read API remain
+  separate boundaries.
 
 Dashboard API is observability, not execution.
 
@@ -939,7 +970,7 @@ Dashboard routes:
 | Route | Purpose |
 | --- | --- |
 | `/api/health` | service health |
-| `/api/runs` | run list, filters, pagination |
+| `/api/runs` | run list, filters, pagination, production/validation purpose filtering |
 | `/api/runs/{run_id}` | run detail |
 | `/api/runs/{run_id}/trace` | trace events |
 | `/api/runs/{run_id}/receipt` | receipt markdown |
