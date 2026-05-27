@@ -9,10 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from proof_agent.delivery.api import router as execution_router
+from proof_agent.delivery.configuration_api import router as configuration_router
 from proof_agent.delivery.customer_api import router as customer_router
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.api.routers import handoffs, health, runs, stats
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.customer_store import CustomerStore
@@ -27,6 +29,8 @@ def create_app(
     published_agents: dict[str, Path] | None = None,
     static_dir: Path | None = None,
     mem0_memory_store: Mem0MemoryStore | None = None,
+    agent_configuration_store: LocalAgentConfigurationStore | None = None,
+    agent_configuration_dir: Path = Path("runs/config"),
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -47,6 +51,11 @@ def create_app(
     mem0_memory_store:
         Optional Mem0-backed memory store injection for tests or deployments that
         configure ``memory.provider: mem0``.
+    agent_configuration_store:
+        Optional Agent Configuration Store injection for tests or deployments that
+        publish Agent Versions through the Dashboard configuration workspace.
+    agent_configuration_dir:
+        Local root used when ``agent_configuration_store`` is not injected.
     """
     application = FastAPI(
         title="Proof Agent Dashboard API",
@@ -74,9 +83,17 @@ def create_app(
         conversations_dir.with_name(f"{conversations_dir.name}_memory")
     )
     application.state.mem0_memory_store = mem0_memory_store
-    application.state.published_agents = PublishedAgentRegistry(published_agents)
+    configuration_store = agent_configuration_store or LocalAgentConfigurationStore(
+        agent_configuration_dir
+    )
+    application.state.agent_configuration_store = configuration_store
+    application.state.published_agents = PublishedAgentRegistry(
+        published_agents,
+        configuration_store=configuration_store,
+    )
 
     application.include_router(execution_router, prefix="/api")
+    application.include_router(configuration_router, prefix="/api")
     application.include_router(customer_router, prefix="/api")
     application.include_router(runs.router, prefix="/api")
     application.include_router(stats.router, prefix="/api")

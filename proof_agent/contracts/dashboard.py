@@ -7,6 +7,7 @@ without leaking framework or runtime internals.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from pydantic import Field
@@ -16,12 +17,23 @@ from proof_agent.contracts.approval import ApprovalStatus
 from proof_agent.contracts.receipt import ReceiptOutcome
 
 
+class RunPurpose(str, Enum):
+    """Operational purpose for a persisted run."""
+
+    PRODUCTION = "production"
+    VALIDATION = "validation"
+
+
 class RunSummary(FrozenModel):
     """Row-level data for the Runs List and Overview pages."""
 
     run_id: str
     question: str
     outcome: ReceiptOutcome
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION
+    agent_id: str | None = None
+    agent_version_id: str | None = None
+    draft_id: str | None = None
     created_at: str
     updated_at: str
     approval_status: ApprovalStatus | None = None
@@ -38,6 +50,10 @@ class RunDetail(FrozenModel):
     run_id: str
     question: str
     outcome: ReceiptOutcome
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION
+    agent_id: str | None = None
+    agent_version_id: str | None = None
+    draft_id: str | None = None
     created_at: str
     updated_at: str
     approval_status: ApprovalStatus | None = None
@@ -57,6 +73,10 @@ class RunIndex(FrozenModel):
     run_id: str
     question: str
     outcome: ReceiptOutcome
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION
+    agent_id: str | None = None
+    agent_version_id: str | None = None
+    draft_id: str | None = None
     created_at: str
     updated_at: str
     approval_status: ApprovalStatus | None = None

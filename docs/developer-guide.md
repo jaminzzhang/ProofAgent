@@ -608,6 +608,28 @@ not accept arbitrary manifest paths from application clients. The Dashboard API
 continues to read run history, trace, receipt, evidence, model usage, and
 approval state from persisted run artifacts.
 
+Agent Configuration API path:
+```bash
+curl -X POST http://127.0.0.1:8000/api/config/agents/import \
+  -H "Content-Type: application/json" \
+  -d '{"manifest_path":"examples/enterprise_qa/agent.yaml","actor":"local-user"}'
+
+curl -X POST http://127.0.0.1:8000/api/config/agents/enterprise_qa/drafts/{draft_id}/validate \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What is the reimbursement rule for travel meals?","actor":"validator"}'
+
+curl -X POST http://127.0.0.1:8000/api/config/agents/enterprise_qa/drafts/{draft_id}/publish \
+  -H "Content-Type: application/json" \
+  -d '{"validation_run_id":"run_123","actor":"publisher"}'
+```
+
+The Dashboard Agents workspace uses the Agent Configuration API to import
+existing Agent Packages, edit Draft Agent metadata and Workflow node settings,
+validate drafts through the normal Harness, publish immutable Published Agent
+Versions, and roll back the Active Agent Version pointer. Validation runs share
+RunStore and Dashboard monitoring, but are tagged as `run_purpose: validation`;
+Overview metrics and the default Runs view stay scoped to production runs.
+
 Conversation API path:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/chat/conversations \

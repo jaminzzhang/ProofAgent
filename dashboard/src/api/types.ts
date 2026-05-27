@@ -8,6 +8,9 @@ export type ReceiptOutcome =
   | 'FAILED_WITH_TRACE'
   | 'FAILED_RECEIPT_UNAVAILABLE'
 
+export type RunPurpose = 'production' | 'validation'
+export type RunPurposeFilter = RunPurpose | 'all'
+
 export interface GovernanceDetails {
   reasoning_summary?: Record<string, unknown> | null
   review_results?: Record<string, unknown>[]
@@ -20,6 +23,10 @@ export interface RunSummary {
   run_id: string
   question: string
   outcome: ReceiptOutcome
+  run_purpose: RunPurpose
+  agent_id: string | null
+  agent_version_id: string | null
+  draft_id: string | null
   created_at: string
   updated_at: string
   approval_status: ApprovalStatus | null
@@ -30,6 +37,10 @@ export interface RunDetail {
   run_id: string
   question: string
   outcome: ReceiptOutcome
+  run_purpose: RunPurpose
+  agent_id: string | null
+  agent_version_id: string | null
+  draft_id: string | null
   created_at: string
   updated_at: string
   approval_status: ApprovalStatus | null
@@ -132,6 +143,113 @@ export interface HandoffsResponse {
   data: HandoffProjection[]
 }
 
+export interface ContractBundle {
+  agent_yaml: string
+  policy_yaml: string
+  tools_yaml: string
+  extra_files: Record<string, string>
+  advanced_fields: Record<string, unknown>
+}
+
+export type ConfigurationOperation =
+  | 'imported'
+  | 'updated'
+  | 'validated'
+  | 'published'
+  | 'rolled_back'
+
+export interface ConfigurationOperationAudit {
+  operation_id: string
+  operation: ConfigurationOperation
+  actor: string
+  created_at: string
+  summary: string
+  metadata: Record<string, unknown>
+}
+
+export interface AgentValidationRecord {
+  validation_id: string
+  draft_id: string
+  run_id: string
+  status: string
+  created_at: string
+  summary: string
+  errors: string[]
+}
+
+export interface ConfigAgentSummary {
+  agent_id: string
+  display_name: string
+  purpose: string
+  draft_count: number
+  latest_draft_id: string | null
+  version_count: number
+  active_version_id: string | null
+  updated_at: string | null
+}
+
+export interface DraftAgent {
+  agent_id: string
+  draft_id: string
+  display_name: string
+  purpose: string
+  created_at: string
+  updated_at: string
+  created_by: string
+  updated_by: string
+  version_id: string | null
+  validation_records: AgentValidationRecord[]
+  operation_audit: ConfigurationOperationAudit[]
+}
+
+export interface PublishedAgentVersion {
+  agent_id: string
+  version_id: string
+  source_draft_id: string
+  validation_run_id: string
+  published_at: string
+  published_by: string
+  operation_audit: ConfigurationOperationAudit[]
+}
+
+export interface ActiveAgentVersion {
+  agent_id: string
+  version_id: string
+  activated_at: string
+  activated_by: string
+  rollback_from_version_id: string | null
+}
+
+export interface ConfigAgentsResponse {
+  data: ConfigAgentSummary[]
+  meta: {
+    total: number
+  }
+}
+
+export interface ConfigVersionsResponse {
+  data: PublishedAgentVersion[]
+  meta: {
+    total: number
+    active_version_id: string | null
+  }
+}
+
+export interface DraftValidationResponse {
+  validation_id: string
+  run_id: string
+  status: string
+  outcome: ReceiptOutcome
+  run_purpose: RunPurpose
+  agent_id: string
+  draft_id: string
+  links: {
+    run_detail: string
+    trace: string
+    receipt: string
+  }
+}
+
 export interface ContextAdmission {
   admitted: boolean
   turn_count: number
@@ -170,6 +288,7 @@ export interface ConversationRecord {
 
 export interface ChatRunResponse {
   agent_id: string
+  agent_version_id: string | null
   run_id: string
   outcome: ReceiptOutcome
   final_output: string

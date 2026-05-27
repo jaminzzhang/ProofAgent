@@ -6,9 +6,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from proof_agent.contracts.dashboard import RunPurpose
+from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.observability.api.dependencies import get_store
 from proof_agent.observability.api.serializers import serialize_run_detail, serialize_run_summary
-from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.observability.storage.run_store import RunStore
 
 router = APIRouter(tags=["runs"])
@@ -18,6 +19,10 @@ router = APIRouter(tags=["runs"])
 def list_runs(
     *,
     outcome: str | None = Query(None, description="Filter by receipt outcome"),
+    run_purpose: str | None = Query(
+        None,
+        description="Filter by run purpose: production, validation, or all",
+    ),
     search: str | None = Query(None, description="Search run ID or question text"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -25,7 +30,14 @@ def list_runs(
 ) -> dict[str, Any]:
     """List run summaries with optional filtering and pagination."""
     outcome_enum = _parse_outcome(outcome)
-    runs, total = store.list_runs(outcome=outcome_enum, search=search, limit=limit, offset=offset)
+    purpose_filter = _parse_run_purpose(run_purpose)
+    runs, total = store.list_runs(
+        outcome=outcome_enum,
+        run_purpose=purpose_filter,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
     return {
         "data": [serialize_run_summary(run) for run in runs],
         "meta": {"total": total, "limit": limit, "offset": offset},
@@ -112,4 +124,21 @@ def _parse_outcome(value: str | None) -> ReceiptOutcome | None:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid outcome filter: {value}. Valid values: {valid}",
+        ) from None
+
+
+def _parse_run_purpose(value: str | None) -> RunPurpose | None:
+    """Convert a query string into a RunPurpose enum, defaulting to production."""
+    if value is None:
+        return RunPurpose.PRODUCTION
+    normalized = value.lower()
+    if normalized == "all":
+        return None
+    try:
+        return RunPurpose(normalized)
+    except ValueError:
+        valid = ", ".join([*(purpose.value for purpose in RunPurpose), "all"])
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid run_purpose filter: {value}. Valid values: {valid}",
         ) from None

@@ -1,4 +1,15 @@
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts.agent_configuration import (
+    ActiveAgentVersion,
+    AgentValidationRecord,
+    ConfigurationOperation,
+    ConfigurationOperationAudit,
+    ContractBundle,
+    DraftAgent,
+    KnowledgeSource,
+    PublishedAgentVersion,
+    ToolSource,
+)
 from proof_agent.contracts.approval import ApprovalState, ApprovalStatus
 from proof_agent.contracts.conversation import (
     ContextAdmission,
@@ -70,7 +81,7 @@ from proof_agent.contracts.react_workflow import (
     ReasoningSummary,
     ReviewDecision,
 )
-from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunSummary
+from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunPurpose, RunSummary
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.run import RunResult, ValidationResult, ValidationStatus, WorkflowState
 from proof_agent.contracts.tool import ToolRequest
@@ -78,10 +89,15 @@ from proof_agent.contracts.trace import TraceEvent, TraceEventType
 
 __all__ = [
     "AgentManifest",
+    "ActiveAgentVersion",
     "ALLOWED_REVIEW_DECISIONS",
+    "AgentValidationRecord",
     "ApprovalState",
     "ApprovalStatus",
     "AuditConfig",
+    "ConfigurationOperation",
+    "ConfigurationOperationAudit",
+    "ContractBundle",
     "ContextAdmission",
     "ConversationRecord",
     "ConversationTurn",
@@ -97,6 +113,7 @@ __all__ = [
     "CustomerSafeResponse",
     "CustomerSafeSource",
     "CustomerSessionType",
+    "DraftAgent",
     "EnforcementPoint",
     "EvidenceChunk",
     "EvidenceStatus",
@@ -106,6 +123,7 @@ __all__ = [
     "HandoffProjection",
     "HandoffReason",
     "KnowledgeConfig",
+    "KnowledgeSource",
     "MemoryConfig",
     "MemoryScopeConfig",
     "MemoryScopesConfig",
@@ -126,6 +144,7 @@ __all__ = [
     "PolicyDecision",
     "PolicyDecisionType",
     "PolicyRule",
+    "PublishedAgentVersion",
     "ReceiptOutcome",
     "ReActConfig",
     "ReActActionProposal",
@@ -139,8 +158,10 @@ __all__ = [
     "ReviewSubagentConfig",
     "RunDetail",
     "RunIndex",
+    "RunPurpose",
     "RunResult",
     "RunSummary",
+    "ToolSource",
     "ToolRequest",
     "ToolsConfig",
     "TraceEvent",

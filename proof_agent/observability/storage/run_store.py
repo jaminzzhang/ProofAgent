@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunSummary
+from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunPurpose, RunSummary
 from proof_agent.contracts.receipt import ReceiptOutcome
 
 
@@ -56,6 +56,10 @@ class RunStore:
         question: str,
         outcome: ReceiptOutcome,
         error_code: str | None = None,
+        run_purpose: RunPurpose = RunPurpose.PRODUCTION,
+        agent_id: str | None = None,
+        agent_version_id: str | None = None,
+        draft_id: str | None = None,
     ) -> RunIndex:
         """Copy trace and receipt into the run's history directory and write metadata.
 
@@ -73,6 +77,10 @@ class RunStore:
             run_id=run_id,
             question=question,
             outcome=outcome,
+            run_purpose=run_purpose,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
             created_at=now,
             updated_at=now,
             error_code=error_code,
@@ -102,6 +110,10 @@ class RunStore:
             run_id=meta.run_id,
             question=meta.question,
             outcome=meta.outcome,
+            run_purpose=meta.run_purpose,
+            agent_id=meta.agent_id,
+            agent_version_id=meta.agent_version_id,
+            draft_id=meta.draft_id,
             created_at=meta.created_at,
             updated_at=meta.updated_at,
             approval_status=meta.approval_status,
@@ -119,20 +131,35 @@ class RunStore:
         self,
         *,
         outcome: ReceiptOutcome | None = None,
+        run_purpose: RunPurpose | None = RunPurpose.PRODUCTION,
         search: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[RunSummary], int]:
         """Return filtered, paginated run summaries and total count."""
         all_runs = self._load_all_summaries()
-        filtered = self._apply_filters(all_runs, outcome=outcome, search=search)
+        filtered = self._apply_filters(
+            all_runs,
+            outcome=outcome,
+            run_purpose=run_purpose,
+            search=search,
+        )
         total = len(filtered)
         page = filtered[offset : offset + limit]
         return page, total
 
-    def get_stats(self) -> dict[str, Any]:
+    def get_stats(
+        self,
+        *,
+        run_purpose: RunPurpose | None = RunPurpose.PRODUCTION,
+    ) -> dict[str, Any]:
         """Return aggregated run statistics for the Overview page."""
-        all_runs = self._load_all_summaries()
+        all_runs = self._apply_filters(
+            self._load_all_summaries(),
+            outcome=None,
+            run_purpose=run_purpose,
+            search=None,
+        )
         total = len(all_runs)
         outcome_counts: dict[str, int] = {}
         for run in all_runs:
@@ -166,6 +193,10 @@ class RunStore:
                     run_id=meta.run_id,
                     question=meta.question,
                     outcome=meta.outcome,
+                    run_purpose=meta.run_purpose,
+                    agent_id=meta.agent_id,
+                    agent_version_id=meta.agent_version_id,
+                    draft_id=meta.draft_id,
                     created_at=meta.created_at,
                     updated_at=meta.updated_at,
                     approval_status=meta.approval_status,
@@ -206,9 +237,12 @@ class RunStore:
         runs: list[RunSummary],
         *,
         outcome: ReceiptOutcome | None,
+        run_purpose: RunPurpose | None,
         search: str | None,
     ) -> list[RunSummary]:
         filtered = runs
+        if run_purpose is not None:
+            filtered = [run for run in filtered if run.run_purpose == run_purpose]
         if outcome is not None:
             filtered = [run for run in filtered if run.outcome == outcome]
         if search:

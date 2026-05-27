@@ -12,6 +12,11 @@ const NAV_ITEMS = [
     icon: <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
   },
   {
+    to: '/agents',
+    label: 'Agents',
+    icon: <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M12 12l7-4"/><path d="M12 12v8"/><path d="M12 12L5 8"/></svg>
+  },
+  {
     to: '/handoffs',
     label: 'Handoffs',
     icon: <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 8h10"/><path d="M7 12h6"/><path d="M5 20l-1.5-3A8 8 0 1 1 12 20z"/></svg>
@@ -32,8 +37,8 @@ export function Sidebar() {
   const location = useLocation()
 
   return (
-    <aside className="w-56 shrink-0 border-r border-[var(--border)] bg-[var(--bg-surface)] flex flex-col overflow-y-auto pt-6 pb-4">
-      <nav className="flex-1 px-3 space-y-1" aria-label="Main navigation">
+    <aside className="w-56 shrink-0 border-r border-[var(--border)] bg-[var(--bg-surface)] flex flex-col overflow-y-auto pt-6 pb-4 max-md:w-full max-md:border-r-0 max-md:border-b max-md:pt-2 max-md:pb-2">
+      <nav className="flex-1 px-3 space-y-1 max-md:flex max-md:gap-1 max-md:space-y-0 max-md:overflow-x-auto" aria-label="Main navigation">
         {NAV_ITEMS.map((item) => {
           const isHash = item.to.startsWith('#')
           const isItemActive = isHash 
@@ -44,7 +49,7 @@ export function Sidebar() {
             <NavLink
               key={item.label}
               to={item.to}
-              className={`group flex items-center gap-3 px-3 py-2 text-[14px] font-medium transition-colors rounded-md ${
+              className={`group flex items-center gap-3 px-3 py-2 text-[14px] font-medium transition-colors rounded-md max-md:shrink-0 ${
                   isItemActive
                     ? 'bg-[var(--bg-hover)] text-[var(--text-primary)]'
                     : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
@@ -61,7 +66,7 @@ export function Sidebar() {
       </nav>
 
       {/* Settings at the bottom */}
-      <div className="px-3 mt-auto">
+      <div className="px-3 mt-auto max-md:hidden">
         <NavLink
           to="#settings"
           className={

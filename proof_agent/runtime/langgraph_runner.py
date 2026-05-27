@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.contracts import AgentManifest, ContextAdmission, ReceiptOutcome, RunResult
+from proof_agent.contracts import AgentManifest, ContextAdmission, ReceiptOutcome, RunPurpose, RunResult
 from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.control.workflow.orchestrator import _emit_model_error, _finalize, _is_model_error
 from proof_agent.errors import ProofAgentError
@@ -29,6 +29,10 @@ def run_with_langgraph(
     store: RunStore | None = None,
     checkpointer: Any | None = None,
     manifest: AgentManifest | None = None,
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION,
+    agent_id: str | None = None,
+    agent_version_id: str | None = None,
+    draft_id: str | None = None,
 ) -> RunResult:
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
@@ -130,4 +134,8 @@ def run_with_langgraph(
         outcome=outcome,
         message=message,
         store=store,
+        run_purpose=run_purpose,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
     )

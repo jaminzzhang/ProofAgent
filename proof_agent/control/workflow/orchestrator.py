@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     ModelResponse,
     ModelRole,
     ReceiptOutcome,
+    RunPurpose,
     RunResult,
     ValidationResult,
 )
@@ -45,6 +46,10 @@ def run_enterprise_qa(
     conversation_context: ContextAdmission | None = None,
     run_id: str | None = None,
     store: RunStore | None = None,
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION,
+    agent_id: str | None = None,
+    agent_version_id: str | None = None,
+    draft_id: str | None = None,
 ) -> RunResult:
     """Run the local Enterprise QA harness and write trace/receipt artifacts.
 
@@ -95,6 +100,10 @@ def run_enterprise_qa(
             question=question,
             approved=approved,
             store=store,
+            run_purpose=run_purpose,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
         )
 
     answer_decision = invocation.policy.evaluate(
@@ -212,6 +221,10 @@ def run_enterprise_qa(
         outcome=outcome,
         message=message,
         store=store,
+        run_purpose=run_purpose,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
     )
 
 
@@ -225,6 +238,10 @@ def _handle_tool_question(
     question: str,
     approved: bool | None,
     store: RunStore | None = None,
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION,
+    agent_id: str | None = None,
+    agent_version_id: str | None = None,
+    draft_id: str | None = None,
 ) -> RunResult:
     """Exercise the mock MCP approval flow for a tool-required question."""
 
@@ -249,6 +266,10 @@ def _handle_tool_question(
             outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
             message="Waiting for approval before customer_lookup can execute.",
             store=store,
+            run_purpose=run_purpose,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
         )
     if approved is False:
         # Explicit denial is recorded separately from waiting so receipts are unambiguous.
@@ -273,6 +294,10 @@ def _handle_tool_question(
             outcome=ReceiptOutcome.TOOL_APPROVAL_DENIED,
             message="The customer_lookup tool was not run because approval was denied.",
             store=store,
+            run_purpose=run_purpose,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
         )
 
     gateway_result = tool_gateway.request_tool(
@@ -291,6 +316,10 @@ def _handle_tool_question(
         outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
         message="Customer policy status is active according to the approved mock lookup.",
         store=store,
+        run_purpose=run_purpose,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
     )
 
 
@@ -536,6 +565,10 @@ def _finalize(
     outcome: ReceiptOutcome,
     message: str,
     store: RunStore | None = None,
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION,
+    agent_id: str | None = None,
+    agent_version_id: str | None = None,
+    draft_id: str | None = None,
 ) -> RunResult:
     """Emit the final output, render the receipt, and return CLI-facing metadata."""
 
@@ -563,6 +596,10 @@ def _finalize(
             receipt_source=receipt_path,
             question=question,
             outcome=outcome,
+            run_purpose=run_purpose,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
         )
         history_dir = store.history_dir.parent
         update_latest_symlink(store.history_dir / trace.run_id, history_dir)
