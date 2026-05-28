@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { CodeBlock } from '../CodeBlock'
+import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
 
 interface FieldConfig {
   label: string
@@ -32,7 +33,7 @@ export function ModuleEditor({
 }: ModuleEditorProps) {
   const [showYaml, setShowYaml] = useState(false)
 
-  const sectionYaml = extractSectionYaml(agentYaml, yamlSection)
+  const sectionYaml = extractAgentYamlSection(agentYaml, yamlSection)
 
   return (
     <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
@@ -84,7 +85,7 @@ export function ModuleEditor({
               )}
               {field.input === 'select' && field.options ? (
                 <select
-                  value={readFieldValue(agentYaml, field.path)}
+                  value={readAgentYamlField(agentYaml, field.path)}
                   onChange={(e) => onFieldChange(field.path, e.target.value)}
                   className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                 >
@@ -95,7 +96,7 @@ export function ModuleEditor({
               ) : (
                 <input
                   type={field.input}
-                  value={readFieldValue(agentYaml, field.path)}
+                  value={readAgentYamlField(agentYaml, field.path)}
                   onChange={(e) => onFieldChange(field.path, e.target.value)}
                   className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                 />
@@ -106,82 +107,6 @@ export function ModuleEditor({
       </div>
     </div>
   )
-}
-
-function readFieldValue(agentYaml: string, path: string[]): string {
-  const lines = agentYaml.split('\n')
-
-  if (path.length === 1) {
-    for (const line of lines) {
-      const match = line.match(new RegExp(`^${path[0]}:\\s*(.*)$`))
-      if (match) return parseYamlValue(match[1])
-    }
-    return ''
-  }
-
-  const sectionStart = findSectionStart(lines, path[0])
-  if (sectionStart === -1) return ''
-
-  if (path.length === 2) {
-    for (let i = sectionStart + 1; i < lines.length; i++) {
-      if (lines[i].trim() && !lines[i].startsWith(' ')) break
-      const match = lines[i].match(new RegExp(`^  ${path[1]}:\\s*(.*)$`))
-      if (match) return parseYamlValue(match[1])
-    }
-    return ''
-  }
-
-  if (path.length === 3) {
-    let parentStart = -1
-    let parentEnd = lines.length
-    for (let i = sectionStart + 1; i < lines.length; i++) {
-      if (lines[i].trim() && !lines[i].startsWith(' ')) break
-      if (lines[i].match(new RegExp(`^  ${path[1]}:`))) {
-        parentStart = i
-      } else if (parentStart !== -1 && lines[i].trim() && !lines[i].startsWith('    ')) {
-        parentEnd = i
-        break
-      }
-    }
-    if (parentStart === -1) return ''
-    for (let i = parentStart + 1; i < parentEnd; i++) {
-      const match = lines[i].match(new RegExp(`^    ${path[2]}:\\s*(.*)$`))
-      if (match) return parseYamlValue(match[1])
-    }
-    return ''
-  }
-
-  return ''
-}
-
-function extractSectionYaml(agentYaml: string, sectionName: string): string {
-  const lines = agentYaml.split('\n')
-  const start = findSectionStart(lines, sectionName)
-  if (start === -1) return ''
-
-  let end = lines.length
-  for (let i = start + 1; i < lines.length; i++) {
-    if (lines[i].trim() && !lines[i].startsWith(' ')) {
-      end = i
-      break
-    }
-  }
-  return lines.slice(start, end).join('\n')
-}
-
-function findSectionStart(lines: string[], sectionName: string): number {
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].match(new RegExp(`^${sectionName}:`))) return i
-  }
-  return -1
-}
-
-function parseYamlValue(value: string): string {
-  const trimmed = value.trim()
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1)
-  }
-  return trimmed
 }
 
 export type { FieldConfig, ModuleEditorProps }

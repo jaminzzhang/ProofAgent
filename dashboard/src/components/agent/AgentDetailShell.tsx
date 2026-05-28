@@ -33,7 +33,7 @@ export function AgentDetailShell({
           {agentName}
         </h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
-          Auto-saved draft &bull; Last edited 2m ago
+          Draft configuration workspace
         </p>
       </div>
 

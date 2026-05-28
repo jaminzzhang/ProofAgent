@@ -20,6 +20,7 @@ function parseToolNames(yaml: string): readonly string[] {
 export function ToolsPage() {
   const [entries, setEntries] = useState<readonly ToolEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<readonly string[]>([])
 
   useEffect(() => {
@@ -37,6 +38,9 @@ export function ToolsPage() {
             return { agentId: agent.agent_id, agentName: agent.display_name, draftId: agent.latest_draft_id!, toolsYaml: res.value.tools_yaml }
           }).filter((e): e is ToolEntry => e !== null)
         setEntries(results)
+        setError(null)
+      } catch {
+        setError('Unable to load tool contracts.')
       } finally { setLoading(false) }
     }
     load()
@@ -51,30 +55,34 @@ export function ToolsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <div className="w-full max-w-6xl space-y-6 overflow-hidden max-md:max-w-[calc(100vw-2rem)]">
       <div>
         <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Tools</h2>
-        <p className="text-sm text-[var(--text-muted)] mt-1">Browse tool contracts across all agents. Edit within agent configuration.</p>
+        <p className="mt-1 max-w-full break-words text-sm text-[var(--text-muted)]">Browse tool contracts across all agents. Edit within agent configuration.</p>
       </div>
 
-      {entries.length === 0 ? (
+      {error ? (
+        <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-4 py-3 text-sm text-[var(--danger)]">
+          {error}
+        </div>
+      ) : entries.length === 0 ? (
         <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
           <EmptyState message="No tool contracts found." />
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 min-w-0">
           {entries.map(entry => {
             const toolNames = parseToolNames(entry.toolsYaml)
             const isOpen = expanded.includes(entry.agentId)
             const preview = toolNames.slice(0, 2).join(', ')
             return (
-              <div key={entry.agentId} className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg overflow-hidden">
+              <div key={entry.agentId} className="min-w-0 bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg overflow-hidden">
                 <button onClick={() => toggle(entry.agentId)}
-                  className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-[var(--bg-hover)] transition-colors">
-                  <span className={`text-[var(--text-muted)] transition-transform ${isOpen ? 'rotate-90' : ''}`}>&#9654;</span>
-                  <span className="font-medium text-[var(--text-primary)]">{entry.agentName}</span>
-                  <span className="text-sm text-[var(--text-secondary)]">{toolNames.length} tools</span>
-                  {preview && <span className="text-xs text-[var(--text-muted)] truncate">&mdash; {preview}</span>}
+                  className="w-full min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-4 text-left hover:bg-[var(--bg-hover)] transition-colors">
+                  <span className={`shrink-0 text-[var(--text-muted)] transition-transform ${isOpen ? 'rotate-90' : ''}`}>&#9654;</span>
+                  <span className="min-w-0 flex-1 basis-40 truncate font-medium text-[var(--text-primary)]">{entry.agentName}</span>
+                  <span className="shrink-0 text-sm text-[var(--text-secondary)]">{toolNames.length} tools</span>
+                  {preview && <span className="min-w-0 basis-full truncate pl-6 text-xs text-[var(--text-muted)] md:basis-auto md:pl-0">&mdash; {preview}</span>}
                 </button>
                 {isOpen && (
                   <div className="px-5 pb-4 space-y-3">

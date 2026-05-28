@@ -1,5 +1,5 @@
 export const MEMORY_FIELDS = [
-  { label: 'Memory Provider', path: ['memory', 'provider'], input: 'select' as const, options: ['local', 'none'], description: 'Memory storage provider' },
+  { label: 'Memory Provider', path: ['memory', 'provider'], input: 'select' as const, options: ['session', 'local', 'mem0'], description: 'Memory storage provider' },
   { label: 'Case Memory', path: ['memory', 'scopes', 'case', 'enabled'], input: 'select' as const, options: ['true', 'false'], description: 'Enable case-scoped memory' },
   { label: 'Case Retention (days)', path: ['memory', 'scopes', 'case', 'retention_days'], input: 'number' as const },
   { label: 'Case Max Records', path: ['memory', 'scopes', 'case', 'max_records'], input: 'number' as const },

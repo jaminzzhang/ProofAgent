@@ -65,24 +65,13 @@ export function updateAgentYamlField(
   path: string[],
   value: string,
 ): string {
-  if (path.length === 1) {
-    return replaceLine(agentYaml, 0, path[0], value)
-  }
-  if (path.length === 2) {
-    return replaceNestedLine(agentYaml, path[0], 2, path[1], value)
-  }
-  if (path.length === 3) {
-    const section = extractSection(agentYaml, path[0])
-    if (!section) return agentYaml
-    const parentRange = findLineRange(section.lines, 2, path[1])
-    if (!parentRange) return agentYaml
-    const lineIndex = findLineIndex(section.lines, 4, path[2], parentRange.start + 1, parentRange.end)
-    if (lineIndex === -1) return agentYaml
-    const lines = agentYaml.split('\n')
-    lines[section.start + lineIndex] = `${' '.repeat(4)}${path[2]}: ${formatYamlValue(value)}`
-    return lines.join('\n')
-  }
-  return agentYaml
+  const lines = agentYaml.split('\n')
+  const lineIndex = findYamlPathLineIndex(lines, path)
+  if (lineIndex === -1) return agentYaml
+
+  const indent = (path.length - 1) * 2
+  lines[lineIndex] = `${' '.repeat(indent)}${path[path.length - 1]}: ${formatYamlValue(value)}`
+  return lines.join('\n')
 }
 
 function field(
@@ -100,85 +89,24 @@ function field(
 }
 
 function readYamlScalar(agentYaml: string, path: string[]): string {
-  if (path.length === 1) {
-    return readLineValue(agentYaml.split('\n'), 0, path[0])
-  }
-  const section = extractSection(agentYaml, path[0])
-  if (!section) return ''
-  if (path.length === 2) {
-    return readLineValue(section.lines, 2, path[1])
-  }
-  const parentRange = findLineRange(section.lines, 2, path[1])
-  if (!parentRange) return ''
-  const lineIndex = findLineIndex(section.lines, 4, path[2], parentRange.start + 1, parentRange.end)
-  if (lineIndex === -1) return ''
-  return parseYamlValue(section.lines[lineIndex])
+  return readAgentYamlField(agentYaml, path)
 }
 
-function replaceLine(agentYaml: string, indent: number, key: string, value: string): string {
+export function readAgentYamlField(agentYaml: string, path: string[]): string {
   const lines = agentYaml.split('\n')
-  const lineIndex = findLineIndex(lines, indent, key)
-  if (lineIndex === -1) return agentYaml
-  lines[lineIndex] = `${' '.repeat(indent)}${key}: ${formatYamlValue(value)}`
-  return lines.join('\n')
-}
-
-function replaceNestedLine(
-  agentYaml: string,
-  sectionName: string,
-  indent: number,
-  key: string,
-  value: string,
-): string {
-  const section = extractSection(agentYaml, sectionName)
-  if (!section) return agentYaml
-  const lineIndex = findLineIndex(section.lines, indent, key)
-  if (lineIndex === -1) return agentYaml
-  const lines = agentYaml.split('\n')
-  lines[section.start + lineIndex] = `${' '.repeat(indent)}${key}: ${formatYamlValue(value)}`
-  return lines.join('\n')
-}
-
-function extractSection(
-  agentYaml: string,
-  sectionName: string,
-): { start: number; lines: string[] } | null {
-  const lines = agentYaml.split('\n')
-  const start = findLineIndex(lines, 0, sectionName)
-  if (start === -1) return null
-  let end = lines.length
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (line.trim() && !line.startsWith(' ')) {
-      end = index
-      break
-    }
-  }
-  return { start, lines: lines.slice(start, end) }
-}
-
-function readLineValue(lines: string[], indent: number, key: string): string {
-  const lineIndex = findLineIndex(lines, indent, key)
+  const lineIndex = findYamlPathLineIndex(lines, path)
   if (lineIndex === -1) return ''
   return parseYamlValue(lines[lineIndex])
 }
 
-function findLineRange(
-  lines: string[],
-  indent: number,
-  key: string,
-): { start: number; end: number } | null {
-  const start = findLineIndex(lines, indent, key)
-  if (start === -1) return null
-  let end = lines.length
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (line.trim() && line.startsWith(' '.repeat(indent)) && !line.startsWith(' '.repeat(indent + 2))) {
-      end = index
-      break
-    }
-  }
-  return { start, end }
+export function extractAgentYamlSection(
+  agentYaml: string,
+  sectionName: string,
+): string {
+  const lines = agentYaml.split('\n')
+  const start = findLineIndex(lines, 0, sectionName)
+  if (start === -1) return ''
+  return lines.slice(start, findBlockEnd(lines, start, 0)).join('\n')
 }
 
 function findLineIndex(
@@ -193,6 +121,36 @@ function findLineIndex(
     if (pattern.test(lines[index])) return index
   }
   return -1
+}
+
+function findYamlPathLineIndex(lines: string[], path: string[]): number {
+  if (path.length === 0) return -1
+
+  let start = 0
+  let end = lines.length
+  let lineIndex = -1
+
+  for (let depth = 0; depth < path.length; depth += 1) {
+    const indent = depth * 2
+    lineIndex = findLineIndex(lines, indent, path[depth], start, end)
+    if (lineIndex === -1) return -1
+    start = lineIndex + 1
+    end = findBlockEnd(lines, lineIndex, indent)
+  }
+
+  return lineIndex
+}
+
+function findBlockEnd(lines: string[], start: number, indent: number): number {
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (line.trim() && indentation(line) <= indent) return index
+  }
+  return lines.length
+}
+
+function indentation(line: string): number {
+  return line.length - line.trimStart().length
 }
 
 function parseYamlValue(line: string): string {

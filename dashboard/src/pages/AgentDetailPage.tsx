@@ -42,7 +42,6 @@ export function AgentDetailPage() {
   const [purpose, setPurpose] = useState('')
   const [agentYaml, setAgentYaml] = useState('')
   const [selectedNodeId, setSelectedNodeId] = useState('workflow')
-  const [validationQuestion, setValidationQuestion] = useState('What is the reimbursement rule for travel meals?')
   const [status, setStatus] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -96,18 +95,6 @@ export function AgentDetailPage() {
         actor: 'dashboard',
       })
       setStatus('Workflow node configuration saved.')
-      refresh()
-    })
-  }
-
-  async function runValidation() {
-    if (!agentId || !draftId) return
-    await runAction('validation', async () => {
-      const result = await validateConfigDraft(agentId, draftId, {
-        question: validationQuestion,
-        actor: 'dashboard',
-      })
-      setStatus(`Validation run ${result.run_id} completed with ${result.outcome}.`)
       refresh()
     })
   }
@@ -317,15 +304,16 @@ export function AgentDetailPage() {
           agentId={agentId}
           draftId={draftId}
           validationRecords={draft.validation_records}
-          onValidate={async (question) => {
-            setValidationQuestion(question)
-            const result = await validateConfigDraft(agentId, draftId, {
-              question,
-              actor: 'dashboard',
+          onValidate={(question) =>
+            runAction('validation', async () => {
+              const result = await validateConfigDraft(agentId, draftId, {
+                question,
+                actor: 'dashboard',
+              })
+              setStatus(`Validation run ${result.run_id} completed with ${result.outcome}.`)
+              refresh()
             })
-            setStatus(`Validation run ${result.run_id} completed with ${result.outcome}.`)
-            refresh()
-          }}
+          }
           busy={busy === 'validation'}
         />
       )}

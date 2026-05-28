@@ -36,6 +36,23 @@ describe('AgentDetailShell', () => {
     expect(screen.getByText('Insurance Service Agent')).toBeInTheDocument()
   })
 
+  it('does not claim unsourced autosave status', () => {
+    renderWithRouter(
+      <AgentDetailShell
+        agentName="Test Agent"
+        modules={mockModules}
+        lifecycle={mockLifecycle}
+        activeModule="general"
+        onModuleChange={() => {}}
+      >
+        <div>Content</div>
+      </AgentDetailShell>
+    )
+
+    expect(screen.queryByText(/Auto-saved/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Last edited 2m ago/)).not.toBeInTheDocument()
+  })
+
   it('renders CONFIGURE section with modules', () => {
     renderWithRouter(
       <AgentDetailShell
