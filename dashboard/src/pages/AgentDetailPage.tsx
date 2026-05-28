@@ -13,6 +13,7 @@ import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { AgentDetailShell } from '../components/agent/AgentDetailShell'
 import { AgentMonitor } from '../components/agent/AgentMonitor'
 import { ModuleEditor } from '../components/agent/ModuleEditor'
+import { WorkflowAccordion } from '../components/agent/WorkflowAccordion'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { WORKFLOW_FIELDS } from '../components/agent/module-configs/workflow'
 import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
@@ -212,16 +213,25 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'workflow' && (
-        <ModuleEditor
-          title="Workflow Configuration"
-          description="Workflow runtime, template, and checkpointer settings"
-          fields={WORKFLOW_FIELDS}
-          yamlSection="workflow"
-          agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
-          onSave={saveWorkflow}
-          busy={busy === 'workflow'}
-        />
+        <div className="space-y-4">
+          <WorkflowAccordion
+            nodes={nodes}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={setSelectedNodeId}
+            onFieldChange={(_nodeId, path, value) =>
+              setAgentYaml((current) => updateAgentYamlField(current, path, value))
+            }
+          />
+          <div className="flex justify-end">
+            <button
+              onClick={saveWorkflow}
+              disabled={busy === 'workflow'}
+              className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+            >
+              {busy === 'workflow' ? 'Saving...' : 'Save Workflow'}
+            </button>
+          </div>
+        </div>
       )}
 
       {activeTab === 'knowledge' && (
