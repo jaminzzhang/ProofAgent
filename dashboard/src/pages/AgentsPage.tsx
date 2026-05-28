@@ -32,6 +32,11 @@ export function AgentsPage() {
           <p className="text-sm text-[var(--text-muted)] mt-1">Configure drafts, validate changes, and publish governed versions.</p>
         </div>
         <div className="flex w-full md:w-auto items-center gap-3">
+          <button
+            className="shrink-0 rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent)]/90"
+          >
+            + Create Agent
+          </button>
           <input
             value={manifestPath}
             onChange={(event) => setManifestPath(event.target.value)}
