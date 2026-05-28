@@ -1,0 +1,5 @@
+# Hybrid Configuration Module Editor
+
+Each Agent Configuration Module uses a hybrid forms plus code editor: forms expose common settings, and a YAML toggle reveals the underlying Agent Contract fragment for advanced editing. Both representations compile back into the same Draft Agent state. We chose this because forms reduce errors for common tasks while preserving power-user flexibility, and it matches the "visual forms" requirement in the Agent Configuration Workspace while keeping Contract View as the advanced escape hatch.
+
+The alternative of forms only was rejected because it removes flexibility for users who need to edit complex or unsupported fields. The alternative of code only (raw YAML) was rejected because it increases error rates for common tasks and doesn't match the "visual forms" requirement. The alternative of visual builders (diagrams, drag-drop) was rejected because it adds implementation complexity without clear benefit for the governed, template-constrained editing model.

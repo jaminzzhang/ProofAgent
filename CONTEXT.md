@@ -632,6 +632,30 @@ _Avoid_: Separate configuration source, export-only YAML, hidden runtime config
 A guided first-time setup flow that helps an Agent owner create a Draft Agent by selecting purpose, Workflow Template, Knowledge Provider, governed capabilities, and validation path.
 _Avoid_: Runtime graph editor, production publish action, generic settings page
 
+**Agent Configuration Module**:
+One of the eight editable sub-features in the Agent Configuration Workspace: General, Workflow, Knowledge, Tools, Policy, Model, Memory, and Response. Each module owns a focused set of Agent Contract fields and uses a hybrid forms plus code editor.
+_Avoid_: Agent Lifecycle Tab, free-form settings page, monolithic configuration form
+
+**Agent Lifecycle Tab**:
+One of the four operational tabs in the Agent detail view: Validate & Test, Versions, Contract View, and Monitor. Lifecycle tabs operate on the Draft Agent or Published Agent Version rather than editing configuration fields.
+_Avoid_: Agent Configuration Module, inline publishing action, detached monitoring dashboard
+
+**Configuration Module Editor**:
+The hybrid forms plus code editing interface for each Agent Configuration Module. Forms expose common settings; a YAML toggle reveals the underlying Agent Contract fragment for advanced editing. Both representations compile back into the same Draft Agent state.
+_Avoid_: Raw YAML only, drag-drop canvas, natural-language policy editor
+
+**Validation Workspace**:
+The Validate & Test interface combining quick test, test suite, and validation history. Users craft test questions, run validation, inspect governed run results, compare multiple validation runs, and decide whether a Draft Agent is ready for publication.
+_Avoid_: Single-shot test runner, detached monitoring view, production run execution
+
+**Shared Asset Library**:
+The reusable asset collections for Knowledge Sources, Tool Sources, and Policy Rule Configurations that multiple Agents can bind to. Agents reference shared assets through Agent Knowledge Bindings, Agent Tool Bindings, and Policy Rule Configuration rather than duplicating definitions.
+_Avoid_: Agent-scoped asset definition, inline-only configuration, duplicated policy rules
+
+**Sidebar Navigation Section**:
+The two top-level sections in the Dashboard Shell sidebar: MONITORING for observability views (Overview, Runs, Handoffs, Approvals) and CONFIGURATION for design-time views (Agents, Policies, Knowledge Sources, Tools). Each section groups related navigation items under a visible header.
+_Avoid_: Flat navigation list, mixed monitoring and configuration items, role-based sections
+
 **Internal Handoff Monitor**:
 The V1 dashboard projection for reviewing Customer Escalation Handoff records and drilling into their governed run details.
 _Avoid_: Ticket workflow, SLA queue, assignment console
@@ -1161,4 +1185,14 @@ _Avoid_: Evidence content dump
 - "Fallback" could mean silent best-effort behavior. Resolved: **Single-Step Retrieval Fallback** must be explicit in the Retrieval Strategy.
 - "`KnowledgeProvider.retrieve`" could mean a workflow step or an implementation method. Resolved: **Retrieval Step** is the workflow concept; `retrieve` is an adapter method.
 - "Local vector implementation" could mean querying or building an index. Resolved: **Local Vector Provider** queries existing indexes; **Vector Index Build** is out of first-stage scope.
+- "Dashboard sidebar" could mean a flat list, role-based sections, or monitoring/configuration separation. Resolved: the **Dashboard Shell** sidebar uses two **Sidebar Navigation Section** groups: MONITORING for observability and CONFIGURATION for design-time views.
+- "Agent configuration sub-features" could mean grouped concerns, workflow stages, or contract artifacts. Resolved: the **Agent Configuration Workspace** uses **Agent Configuration Module** tabs (General, Workflow, Knowledge, Tools, Policy, Model, Memory, Response) organized by contract artifact.
+- "Agent detail navigation" could mean horizontal tabs, vertical tabs, or a sectioned page. Resolved: the **Agent Configuration Workspace** uses vertical tabs in the main content area with CONFIGURE and LIFECYCLE sections.
+- "Configuration editing" could mean forms only, visual builders, code only, or a hybrid. Resolved: each **Agent Configuration Module** uses a **Configuration Module Editor** with forms for common settings and YAML toggle for advanced editing.
+- "Draft save behavior" could mean auto-save per field, save per module, or single draft save. Resolved: **Draft Agent** uses auto-save for all configuration changes with explicit publish in the Versions **Agent Lifecycle Tab**.
+- "Validation interface" could mean a simple test runner, test suite, or validation dashboard. Resolved: the Validate & Test **Agent Lifecycle Tab** uses a **Validation Workspace** combining quick test, test suite, and validation history.
+- "Reusable assets" could mean agent-scoped only, shared library, or hybrid. Resolved: **Knowledge Source**, **Tool Source**, and **Policy Rule Configuration** live in the **Shared Asset Library** and are bound to agents through Agent Knowledge Bindings and Agent Tool Bindings.
+- "Agent-specific monitoring" could mean a separate tab, split view, or lifecycle integration. Resolved: the Monitor **Agent Lifecycle Tab** appears under LIFECYCLE alongside Validate & Test, Versions, and Contract View.
+- "Workflow editing" could mean a linear list, visual diagram, accordion, or tabbed editor. Resolved: the Workflow **Agent Configuration Module** uses an expandable accordion showing all nodes with inline configuration fields.
+- "Agent creation" could mean inline form, modal wizard, or template selection. Resolved: the **Agent Creation Wizard** starts with template selection (Enterprise QA, Customer Service, Blank) before collecting agent details.
 - "Unsupported retrieval" could mean invalid configuration or unavailable capability. Resolved: a recognized but unavailable strategy is a **Retrieval Capability Error**.
