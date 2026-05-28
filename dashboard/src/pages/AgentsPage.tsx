@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { importConfigAgent } from '../api/client'
+import { importConfigAgent, updateConfigDraft } from '../api/client'
+import { CreateAgentWizard } from '../components/agent/CreateAgentWizard'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { useConfigAgents } from '../hooks/useConfigAgents'
@@ -10,6 +11,7 @@ export function AgentsPage() {
   const [manifestPath, setManifestPath] = useState('examples/enterprise_qa/agent.yaml')
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   async function handleImport() {
     setImporting(true)
@@ -33,6 +35,7 @@ export function AgentsPage() {
         </div>
         <div className="flex w-full md:w-auto items-center gap-3">
           <button
+            onClick={() => setWizardOpen(true)}
             className="shrink-0 rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent)]/90"
           >
             + Create Agent
@@ -107,6 +110,23 @@ export function AgentsPage() {
           </table>
         </div>
       )}
+
+      <CreateAgentWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCreated={() => refresh()}
+        onCreate={async (manifestPath, displayName, purpose) => {
+          const agent = await importConfigAgent({ manifest_path: manifestPath, actor: 'dashboard' })
+          if (displayName || purpose) {
+            await updateConfigDraft(agent.agent_id, agent.draft_id, {
+              display_name: displayName || undefined,
+              purpose: purpose || undefined,
+              actor: 'dashboard',
+            })
+          }
+          return agent
+        }}
+      />
     </div>
   )
 }
