@@ -11,7 +11,9 @@ import { CodeBlock } from '../components/CodeBlock'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { AgentDetailShell } from '../components/agent/AgentDetailShell'
+import { AgentMonitor } from '../components/agent/AgentMonitor'
 import { ModuleEditor } from '../components/agent/ModuleEditor'
+import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { WORKFLOW_FIELDS } from '../components/agent/module-configs/workflow'
 import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
 import { TOOLS_FIELDS } from '../components/agent/module-configs/tools'
@@ -300,15 +302,22 @@ export function AgentDetailPage() {
         />
       )}
 
-      {activeTab === 'validate' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Validate &amp; Test
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Validation workspace will be implemented in Phase 3.
-          </p>
-        </div>
+      {activeTab === 'validate' && agentId && draftId && (
+        <ValidateWorkspace
+          agentId={agentId}
+          draftId={draftId}
+          validationRecords={draft.validation_records}
+          onValidate={async (question) => {
+            setValidationQuestion(question)
+            const result = await validateConfigDraft(agentId, draftId, {
+              question,
+              actor: 'dashboard',
+            })
+            setStatus(`Validation run ${result.run_id} completed with ${result.outcome}.`)
+            refresh()
+          }}
+          busy={busy === 'validation'}
+        />
       )}
 
       {activeTab === 'versions' && (
@@ -379,15 +388,8 @@ export function AgentDetailPage() {
         </div>
       )}
 
-      {activeTab === 'monitor' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Agent Monitoring
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Recent runs, success rate, and validation history will be implemented in Phase 3.
-          </p>
-        </div>
+      {activeTab === 'monitor' && agentId && (
+        <AgentMonitor agentId={agentId} />
       )}
 
       {(status || actionError) && (
