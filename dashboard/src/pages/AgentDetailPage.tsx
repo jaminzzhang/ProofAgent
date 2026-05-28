@@ -11,6 +11,14 @@ import { CodeBlock } from '../components/CodeBlock'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { AgentDetailShell } from '../components/agent/AgentDetailShell'
+import { ModuleEditor } from '../components/agent/ModuleEditor'
+import { WORKFLOW_FIELDS } from '../components/agent/module-configs/workflow'
+import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
+import { TOOLS_FIELDS } from '../components/agent/module-configs/tools'
+import { POLICY_FIELDS } from '../components/agent/module-configs/policy'
+import { MODEL_FIELDS } from '../components/agent/module-configs/model'
+import { MEMORY_FIELDS } from '../components/agent/module-configs/memory'
+import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
 import { useConfigVersions } from '../hooks/useConfigVersions'
 import { buildWorkflowNodes, updateAgentYamlField } from '../utils/agentYaml'
@@ -202,80 +210,94 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'workflow' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Workflow Configuration
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Workflow nodes and configuration will be implemented in Phase 4.
-          </p>
-        </div>
+        <ModuleEditor
+          title="Workflow Configuration"
+          description="Workflow runtime, template, and checkpointer settings"
+          fields={WORKFLOW_FIELDS}
+          yamlSection="workflow"
+          agentYaml={agentYaml}
+          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow'}
+        />
       )}
 
       {activeTab === 'knowledge' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Knowledge Configuration
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Knowledge providers and bindings will be implemented in Phase 2.
-          </p>
-        </div>
+        <ModuleEditor
+          title="Knowledge Configuration"
+          description="Knowledge provider and retrieval settings"
+          fields={KNOWLEDGE_FIELDS}
+          yamlSection="knowledge"
+          agentYaml={agentYaml}
+          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow'}
+        />
       )}
 
       {activeTab === 'tools' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Tools Configuration
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Tool contracts and bindings will be implemented in Phase 2.
-          </p>
-        </div>
+        <ModuleEditor
+          title="Tools Configuration"
+          description="Tool contracts file reference"
+          fields={TOOLS_FIELDS}
+          yamlSection="tools"
+          agentYaml={agentYaml}
+          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow'}
+        />
       )}
 
       {activeTab === 'policy' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Policy Configuration
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Policy rules will be implemented in Phase 2.
-          </p>
-        </div>
+        <ModuleEditor
+          title="Policy Configuration"
+          description="Policy rules file reference"
+          fields={POLICY_FIELDS}
+          yamlSection="policy"
+          agentYaml={agentYaml}
+          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow'}
+        />
       )}
 
       {activeTab === 'model' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Model Configuration
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Model providers and roles will be implemented in Phase 2.
-          </p>
-        </div>
+        <ModuleEditor
+          title="Model Configuration"
+          description="Model providers for answer, planner, and reviewer roles"
+          fields={MODEL_FIELDS}
+          yamlSection="model"
+          agentYaml={agentYaml}
+          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow'}
+        />
       )}
 
       {activeTab === 'memory' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Memory Configuration
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Memory providers and scopes will be implemented in Phase 2.
-          </p>
-        </div>
+        <ModuleEditor
+          title="Memory Configuration"
+          description="Memory provider and scope settings"
+          fields={MEMORY_FIELDS}
+          yamlSection="memory"
+          agentYaml={agentYaml}
+          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow'}
+        />
       )}
 
       {activeTab === 'response' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Response Configuration
-          </h3>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            Response disclosure and language settings will be implemented in Phase 2.
-          </p>
-        </div>
+        <ModuleEditor
+          title="Response Configuration"
+          description="Response disclosure and detail settings"
+          fields={RESPONSE_FIELDS}
+          yamlSection="response"
+          agentYaml={agentYaml}
+          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow'}
+        />
       )}
 
       {activeTab === 'validate' && (
