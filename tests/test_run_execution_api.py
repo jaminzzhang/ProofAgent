@@ -4,8 +4,27 @@ import shutil
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
+from proof_agent.configuration.importer import import_agent_package
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.api.app import create_app
 from proof_agent.runtime import langgraph_runner
+
+
+def _app_with_published_agent(tmp_path: Path, manifest_path: Path):
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    draft = import_agent_package(manifest_path, store=store, actor="test-user")
+    store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation",
+        actor="test-user",
+    )
+    return create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        published_agents={},
+        agent_configuration_store=store,
+    )
 
 
 def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
@@ -24,13 +43,7 @@ def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
 
 
 def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Path) -> None:
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        published_agents={
-            "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
-        },
-    )
+    app = _app_with_published_agent(tmp_path, Path("examples/enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -58,13 +71,7 @@ def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Pa
 
 
 def test_chat_run_execution_rejects_unknown_agent_id(tmp_path: Path) -> None:
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        published_agents={
-            "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
-        },
-    )
+    app = _app_with_published_agent(tmp_path, Path("examples/enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -80,13 +87,7 @@ def test_chat_run_execution_rejects_unknown_agent_id(tmp_path: Path) -> None:
 
 
 def test_chat_run_execution_rejects_arbitrary_manifest_path(tmp_path: Path) -> None:
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        published_agents={
-            "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
-        },
-    )
+    app = _app_with_published_agent(tmp_path, Path("examples/enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -104,7 +105,7 @@ def test_chat_run_execution_rejects_arbitrary_manifest_path(tmp_path: Path) -> N
 def test_chat_run_execution_registers_react_enterprise_qa(
     tmp_path: Path,
 ) -> None:
-    app = create_app(history_dir=tmp_path / "history", runs_dir=tmp_path / "latest")
+    app = _app_with_published_agent(tmp_path, Path("examples/react_enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -122,7 +123,7 @@ def test_chat_run_execution_registers_react_enterprise_qa(
 
 
 def test_chat_run_omits_governance_details_by_default(tmp_path: Path) -> None:
-    app = create_app(history_dir=tmp_path / "history", runs_dir=tmp_path / "latest")
+    app = _app_with_published_agent(tmp_path, Path("examples/react_enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -140,7 +141,7 @@ def test_chat_run_omits_governance_details_by_default(tmp_path: Path) -> None:
 def test_chat_run_omits_governance_details_when_agent_policy_denies(
     tmp_path: Path,
 ) -> None:
-    app = create_app(history_dir=tmp_path / "history", runs_dir=tmp_path / "latest")
+    app = _app_with_published_agent(tmp_path, Path("examples/react_enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -160,17 +161,13 @@ def test_chat_run_returns_governance_details_when_agent_policy_allows(
     tmp_path: Path,
 ) -> None:
     manifest_path = _copy_react_agent_with_response_details(tmp_path)
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        published_agents={"react_details": manifest_path},
-    )
+    app = _app_with_published_agent(tmp_path, manifest_path)
     client = TestClient(app)
 
     response = client.post(
         "/api/chat/runs",
         json={
-            "agent_id": "react_details",
+            "agent_id": "react_enterprise_qa",
             "question": "What is the reimbursement rule for travel meals?",
             "include_governance_details": True,
         },
@@ -187,11 +184,7 @@ def test_chat_run_executes_with_same_manifest_used_for_projection(
     monkeypatch: MonkeyPatch,
 ) -> None:
     manifest_path = _copy_react_agent_with_response_details(tmp_path)
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        published_agents={"react_details": manifest_path},
-    )
+    app = _app_with_published_agent(tmp_path, manifest_path)
     client = TestClient(app)
 
     def fail_on_runtime_reload(path: Path | str) -> None:
@@ -202,7 +195,7 @@ def test_chat_run_executes_with_same_manifest_used_for_projection(
     response = client.post(
         "/api/chat/runs",
         json={
-            "agent_id": "react_details",
+            "agent_id": "react_enterprise_qa",
             "question": "What is the reimbursement rule for travel meals?",
             "include_governance_details": True,
         },
@@ -213,13 +206,7 @@ def test_chat_run_executes_with_same_manifest_used_for_projection(
 
 
 def test_chat_run_execution_returns_approval_state_for_tool_question(tmp_path: Path) -> None:
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        published_agents={
-            "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
-        },
-    )
+    app = _app_with_published_agent(tmp_path, Path("examples/enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(

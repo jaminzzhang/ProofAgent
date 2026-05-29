@@ -13,6 +13,10 @@ export function fetchConversations(): Promise<import('./types').ConversationReco
   return fetchJson<import('./types').ConversationRecord[]>(`${BASE}/chat/conversations`)
 }
 
+export function fetchChatAgents(): Promise<import('./types').PublishedAgentDirectoryResponse> {
+  return fetchJson<import('./types').PublishedAgentDirectoryResponse>(`${BASE}/chat/agents`)
+}
+
 export function createConversation(agentId: string): Promise<import('./types').ConversationRecord> {
   return fetchJson<import('./types').ConversationRecord>(`${BASE}/chat/conversations`, {
     method: 'POST',

@@ -12,11 +12,13 @@ export const CUSTOMER_MODES: Array<{ id: CustomerMode; label: string; customerId
 export function CustomerSidebar({
   mode,
   onModeChange,
+  agentLabel,
   turnCount,
   latestSources,
 }: {
   mode: CustomerMode
   onModeChange: (mode: CustomerMode) => void
+  agentLabel: string
   turnCount: number
   latestSources: Array<string | CustomerSafeSource>
 }) {
@@ -52,7 +54,7 @@ export function CustomerSidebar({
           <div className="flex justify-between gap-3">
             <dt className="text-[var(--text-secondary)]">Agent</dt>
             <dd className="min-w-0 break-all text-right font-medium text-[var(--text-primary)]">
-              insurance_customer_service
+              {agentLabel}
             </dd>
           </div>
           <div className="flex justify-between gap-3">

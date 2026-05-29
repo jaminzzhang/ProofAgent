@@ -11,9 +11,11 @@ export function AppRoutes({ onConversationUpdate }: { onConversationUpdate?: () 
       <Route path="/" element={<ModeSelectionPage />} />
       <Route path="/operator" element={<OperatorChatPage onUpdate={onConversationUpdate} />} />
       <Route path="/operator/new" element={<OperatorChatPage onUpdate={onConversationUpdate} />} />
+      <Route path="/operator/agents/:agentId/new" element={<OperatorChatPage onUpdate={onConversationUpdate} />} />
       <Route path="/operator/c/:conversationId" element={<OperatorChatPage onUpdate={onConversationUpdate} />} />
       <Route path="/customer" element={<CustomerChatPage />} />
       <Route path="/customer/new" element={<CustomerChatPage />} />
+      <Route path="/customer/agents/:agentId" element={<CustomerChatPage />} />
       <Route path="/customer/c/:conversationId" element={<CustomerChatPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

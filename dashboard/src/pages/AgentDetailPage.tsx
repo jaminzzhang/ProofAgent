@@ -24,7 +24,7 @@ import { MEMORY_FIELDS } from '../components/agent/module-configs/memory'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
 import { useConfigVersions } from '../hooks/useConfigVersions'
-import { buildWorkflowNodes, updateAgentYamlField } from '../utils/agentYaml'
+import { buildWorkflowNodes, extractAgentYamlSection, updateAgentYamlField } from '../utils/agentYaml'
 
 type Tab = 'general' | 'workflow' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
 
@@ -60,6 +60,7 @@ export function AgentDetailPage() {
   const nodes = useMemo(() => buildWorkflowNodes(agentYaml), [agentYaml])
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0]
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
+  const isCustomerFacing = Boolean(extractAgentYamlSection(agentYaml, 'customer'))
 
   async function runAction(label: string, action: () => Promise<void>) {
     setBusy(label)
@@ -350,9 +351,25 @@ export function AgentDetailPage() {
                     <div className="mt-1 text-xs text-[var(--text-muted)]">validated by {version.validation_run_id}</div>
                   </div>
                   {version.version_id === activeVersionId ? (
-                    <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
-                      Active
-                    </span>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <a
+                        href={`/operator/agents/${version.agent_id}/new`}
+                        className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                      >
+                        Open in Operator Chat
+                      </a>
+                      {isCustomerFacing && (
+                        <a
+                          href={`/customer/agents/${version.agent_id}`}
+                          className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                        >
+                          Open in Customer Chat
+                        </a>
+                      )}
+                      <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
+                        Active
+                      </span>
+                    </div>
                   ) : (
                     <button
                       onClick={() => rollback(version.version_id)}

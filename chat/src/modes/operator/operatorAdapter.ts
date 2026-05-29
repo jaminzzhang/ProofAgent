@@ -2,12 +2,18 @@ import {
   createConversation,
   createConversationRun,
   deleteConversation,
+  fetchChatAgents,
   fetchConversation,
   fetchConversations,
   updateConversation,
 } from '../../api/client'
-import type { ChatRunResponse, ConversationRecord } from '../../api/types'
+import type {
+  ChatRunResponse,
+  ConversationRecord,
+  PublishedAgentDirectoryResponse,
+} from '../../api/types'
 
+export const fetchOperatorAgents = fetchChatAgents
 export const fetchOperatorConversations = fetchConversations
 export const createOperatorConversation = createConversation
 export const fetchOperatorConversation = fetchConversation
@@ -32,4 +38,4 @@ export function createOperatorConversationRun(
   )
 }
 
-export type { ChatRunResponse, ConversationRecord }
+export type { ChatRunResponse, ConversationRecord, PublishedAgentDirectoryResponse }

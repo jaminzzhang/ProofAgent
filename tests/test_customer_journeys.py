@@ -10,6 +10,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from proof_agent.observability.api.app import create_app
+from published_agent_support import publish_agent_package
 
 JOURNEYS_PATH = Path("examples/insurance_customer_service/journeys.yaml")
 STRICT_RELEASE_GATE_ENV = "PROOF_AGENT_STRICT_CUSTOMER_RELEASE_GATES"
@@ -58,6 +59,10 @@ def _create_client(tmp_path: Path) -> TestClient:
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
         conversations_dir=tmp_path / "conversations",
+        agent_configuration_store=publish_agent_package(
+            tmp_path,
+            Path("examples/insurance_customer_service/agent.yaml"),
+        ),
     )
     return TestClient(app)
 

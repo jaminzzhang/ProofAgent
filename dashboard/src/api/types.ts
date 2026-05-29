@@ -207,6 +207,8 @@ export interface PublishedAgentVersion {
   version_id: string
   source_draft_id: string
   validation_run_id: string
+  display_name: string
+  purpose: string
   published_at: string
   published_by: string
   operation_audit: ConfigurationOperationAudit[]

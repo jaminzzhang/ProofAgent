@@ -27,12 +27,16 @@ afterEach(() => {
 
 test('customer route does not fetch operator conversations', async () => {
   window.history.pushState({}, '', '/customer')
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify([]), {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const body =
+      String(input) === '/api/customer/agents'
+        ? { data: [], meta: { total: 0 } }
+        : []
+    return Promise.resolve(new Response(JSON.stringify(body), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
-    }),
-  )
+    }))
+  })
 
   render(<App />)
   await new Promise((resolve) => setTimeout(resolve, 0))

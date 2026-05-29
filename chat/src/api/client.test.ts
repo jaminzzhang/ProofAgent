@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { createConversationRun } from './client'
+import { createConversationRun, fetchChatAgents } from './client'
 
 describe('createConversationRun', () => {
   afterEach(() => {
@@ -80,5 +80,35 @@ describe('createConversationRun', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: 'What is the reimbursement rule?' }),
     })
+  })
+})
+
+describe('fetchChatAgents', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  test('loads operator-facing Published Agent directory entries', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            agent_id: 'enterprise_qa',
+            display_name: 'Enterprise QA',
+            purpose: 'Answer questions.',
+            agent_version_id: 'version_123',
+            customer_facing: false,
+          },
+        ],
+        meta: { total: 1 },
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await fetchChatAgents()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/chat/agents', undefined)
+    expect(response.data[0].agent_id).toBe('enterprise_qa')
   })
 })

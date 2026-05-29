@@ -100,6 +100,8 @@ class PublishedAgentVersion(FrozenModel):
     version_id: str
     source_draft_id: str
     validation_run_id: str
+    display_name: str = ""
+    purpose: str = ""
     contract_bundle: ContractBundle
     published_at: str
     published_by: str

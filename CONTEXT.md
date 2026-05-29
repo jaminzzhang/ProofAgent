@@ -316,6 +316,10 @@ _Avoid_: Production database requirement, router-owned file layout, hidden in-me
 The migration path that converts an existing reviewable Agent Package into a Draft Agent while preserving its contract files and unsupported advanced fields.
 _Avoid_: Direct production overwrite, arbitrary manifest execution, lossy UI conversion
 
+**Example Agent Template**:
+A static reviewable Agent Package used as a starting point for import, validation, documentation, demos, or tests before publication.
+_Avoid_: Published Agent, production Agent, execution allowlist
+
 **Published Agent Version**:
 An immutable published snapshot of an Agent Contract or Agent Package that application-facing execution surfaces can resolve by stable Agent identity and version.
 _Avoid_: Mutable draft, latest filesystem path, frontend-selected manifest
@@ -331,6 +335,26 @@ _Avoid_: Editing old versions, deleting publication history, restoring a draft a
 **Published Agent**:
 An approved Agent configuration version exposed to application surfaces through a stable agent identifier after validation and publication.
 _Avoid_: Draft Agent, arbitrary manifest path, uploaded config
+
+**Published Agent Chat Access**:
+The ability for chat surfaces to create conversations against a Published Agent by stable Agent identity while preserving audience-specific execution APIs and response projections.
+_Avoid_: Frontend manifest selection, one shared chat permission model, draft chat access
+
+**Published Agent Directory**:
+An application-facing discovery projection that lists Published Agents available to a chat audience without exposing manifest paths or Draft Agent state.
+_Avoid_: Agent Configuration API, frontend allowlist, manifest browser
+
+**Published Agent Directory Entry**:
+The chat-safe metadata snapshot for one Published Agent, including stable Agent identity, display name, purpose, active version identity, and customer-facing availability.
+_Avoid_: Draft Agent summary, manifest path, validation run detail
+
+**Direct Agent Chat Entry**:
+A chat entry path that starts or prepares a conversation for a Published Agent from a stable Agent identity without requiring selection from the Published Agent Directory first.
+_Avoid_: Manifest URL, draft preview link, frontend-only agent id
+
+**Customer-Facing Published Agent**:
+A Published Agent whose Agent Contract declares a customer section and may therefore be exposed through the Customer Service Chat Frontend.
+_Avoid_: Agent-id allowlist, purpose-text inference, operator-only Published Agent
 
 **Agent Publication**:
 The governed transition that promotes a validated Draft Agent into a Published Agent Version available to Run Execution API or Customer Run API callers.
@@ -896,6 +920,24 @@ _Avoid_: Evidence content dump
 - A **Unified Chat Frontend** must not expose audit links, **Governance Detail Projection**, approval state, raw run identifiers, or receipt links in customer mode.
 - A **Unified Chat Frontend** does not merge **Run Execution API** and **Customer Run API** response contracts; audience-specific projections remain separate.
 - **Assisted QA Chat Frontend** mode may expose conversation management and internal audit affordances that **Customer Service Chat Frontend** mode must hide.
+- **Published Agent Chat Access** exposes Published Agents to **Assisted QA Chat Frontend** through **Run Execution API** and to **Customer Service Chat Frontend** through **Customer Run API** only when the Agent is a **Customer-Facing Published Agent**.
+- A **Customer-Facing Published Agent** is identified by the Agent Contract's top-level customer section, not by Agent id, workflow template, purpose wording, or frontend configuration.
+- A **Published Agent Directory** may expose separate operator and customer projections, but both resolve through Published Agent state rather than Draft Agent configuration state.
+- A **Published Agent Directory Entry** uses metadata snapshotted at publication time.
+- A **Published Agent Directory Entry** must not expose manifest paths, source Draft Agent ids, validation run ids, or Contract Bundle contents to chat surfaces.
+- **Direct Agent Chat Entry** uses the same stable Agent identity and audience checks as **Published Agent Directory**; it must not accept manifest paths or Draft Agent identifiers.
+- **Direct Agent Chat Entry** prepares a new chat conversation for the requested **Published Agent** identity; existing conversation routes remain conversation-identity routes because the Agent binding already lives on the conversation.
+- **Direct Agent Chat Entry** fails closed when the Agent identity is unknown or unavailable for the requested chat audience; it must not silently fall back to a default Agent.
+- **Direct Agent Chat Entry** does not create an empty conversation on page load; the conversation is created only when the user submits the first message.
+- A chat entry point without an Agent identity may preselect the only available **Published Agent** for that audience, but must present **Published Agent Directory** selection when multiple Agents are available.
+- In customer chat, **Published Agent Chat Access** selects the Agent identity independently from customer session mode or customer identity; customer identity remains part of **Customer Authorization Context** and conversation creation.
+- **Customer Run API** must reject non-customer-facing Agent identities at conversation creation, and customer-facing directory or error projections list only **Customer-Facing Published Agents**.
+- **Agent Publication** may expose explicit chat entry actions for the newly published **Published Agent**, but publication itself does not automatically start or redirect to a chat conversation.
+- An **Example Agent Template** must be imported into a **Draft Agent**, validated through an **Agent Validation Run**, and promoted through **Agent Publication** before any application-facing execution surface treats it as a **Published Agent**.
+- **Run Execution API**, **Customer Run API**, **Published Agent Directory**, and **Direct Agent Chat Entry** must not expose **Example Agent Templates** directly.
+- CLI demo, CLI run, CLI compare, and test fixtures may execute **Example Agent Templates** or manifest paths as local development and validation entry points; those entry points do not create **Published Agent Chat Access**.
+- When no **Published Agent** exists for a chat audience, chat surfaces show an empty state that directs users back to import, validate, and publish through the **Agent Configuration Workspace**; they do not auto-import **Example Agent Templates**.
+- Existing chat conversations remain bound to their original **Published Agent** identity; **Agent Publication** and **Agent Version Rollback** change the **Active Agent Version** resolved for that identity without moving conversations to a different Agent.
 - The first **Assisted QA Chat Frontend** uses an **Approval Continuation Run** after approval decisions rather than claiming durable checkpoint resume.
 - The first framework boundary pass should make **Harness Invocation** and **Workflow Template** reusable while preserving **Enterprise QA Reference Agent** behavior.
 - The **Enterprise QA Reference Agent** is built on the **Controlled Agent Harness Framework**.
@@ -1100,6 +1142,19 @@ _Avoid_: Evidence content dump
 - "Customer chat API" could mean reusing the internal Chat API or adding a customer-safe endpoint. Resolved: V1 uses **Customer Run API** for customer-facing runs and keeps internal Chat API responses for operator/developer surfaces.
 - "Configuration API" could mean extending Dashboard read routes, execution routes, or a separate boundary. Resolved: use **Agent Configuration API** for configuration lifecycle while keeping **Dashboard API**, **Run Execution API**, and **Customer Run API** separate.
 - "Agent selection" could mean a user-provided manifest path or a configured Agent identity. Resolved: application surfaces call a **Published Agent** by stable agent identifier.
+- "Agent discovery" could mean reading draft/version configuration state from the Dashboard or listing application-facing Agents. Resolved: use **Published Agent Directory** for chat discovery and keep **Agent Configuration API** focused on configuration lifecycle.
+- "Chat Agent display name" could mean reading the latest Draft Agent metadata or the publication snapshot. Resolved: **Published Agent Directory Entry** uses metadata captured at publication time; unpublished draft edits do not rename already published chat entries.
+- "Open chat by Agent id" could mean bypassing publication checks or using a direct chat route. Resolved: **Direct Agent Chat Entry** supports stable Agent identities while preserving the same audience checks as directory-based access.
+- "Direct chat route" could mean changing existing conversation URLs or preparing a new Agent-bound conversation. Resolved: **Direct Agent Chat Entry** prepares a new conversation by Agent identity, while existing chat conversations remain addressed by conversation identity.
+- "Invalid direct Agent id" could mean falling back to the default Agent, creating a draft preview, or showing an unavailable state. Resolved: **Direct Agent Chat Entry** fails closed with an unavailable/not-found state for the requested audience.
+- "Open direct Agent chat" could mean immediately creating a stored empty conversation or preparing a new-message draft. Resolved: **Direct Agent Chat Entry** creates the stored conversation only when the first message is submitted.
+- "Customer-visible Agent not found" could mean unknown Agent id only or unavailable for customer audience. Resolved: customer-facing discovery and errors expose only **Customer-Facing Published Agents**, and **Customer Run API** rejects non-customer-facing Agents at conversation creation.
+- "Customer chat Agent selection" could mean selecting both an Agent and customer identity. Resolved: Agent selection and customer session mode are independent; customer identity is supplied through **Customer Authorization Context** during customer conversation creation.
+- "Default chat Agent" could mean a hidden hardcoded example Agent or audience-aware selection. Resolved: if only one **Published Agent** is available for the audience it may be preselected; otherwise chat uses **Published Agent Directory** selection.
+- "After publish, open chat" could mean automatic redirect or an explicit action. Resolved: **Agent Publication** may present chat entry actions, but does not automatically start or redirect to a chat conversation.
+- "Static example Agent" could mean a built-in Published Agent or a reusable package template. Resolved: use **Example Agent Template** for static packages; only **Agent Publication** creates a formal **Published Agent** for application-facing execution.
+- "Running an example Agent" could mean local CLI validation or application-facing execution. Resolved: CLI/demo/test entry points may run **Example Agent Templates** directly, but chat and run APIs require **Agent Publication** first.
+- "No Agents in chat" could mean falling back to examples, auto-importing a template, or showing a setup state. Resolved: chat shows an empty state and points to the **Agent Configuration Workspace**; only explicit import, validation, and publication make an Agent chat-accessible.
 - "Save Agent configuration" could mean creating a runnable Agent or persisting work in progress. Resolved: saving creates or updates a **Draft Agent**; only **Agent Publication** creates or updates a **Published Agent** for application-facing execution.
 - "Rollback" could mean editing an old version, overwriting current production config, or changing the active pointer. Resolved: **Agent Version Rollback** selects an earlier immutable **Published Agent Version** as the **Active Agent Version**.
 - "Configuration storage" could mean replacing Agent Contract files or storing editable product state. Resolved: the **Agent Configuration Store** owns draft/version metadata, while **Agent Contract** and **Agent Package** remain the reviewable execution artifacts.
@@ -1121,6 +1176,8 @@ _Avoid_: Evidence content dump
 - "Intelligent customer service" could mean direct customer-facing automation or staff assistance. Resolved: V1 delivery is **Autonomous Customer Service Mode**; **Assisted Service Mode** is a separate staff-assistance mode.
 - "Chat frontend" could mean a customer-facing chatbot or a staff workbench. Resolved: V1 chat is a **Customer Service Chat Frontend**; **Assisted QA Chat Frontend** is the operator-facing surface.
 - "Shared chat frontend" could mean one unrestricted UI or a shared shell with separate audience projections. Resolved: use **Unified Chat Frontend** for a shared design and interaction shell, with customer mode limited to **Customer-Safe Response Projection**.
+- "Published Agent in chat" could mean every published Agent appears in every chat mode or a mode-specific access boundary. Resolved: **Published Agent Chat Access** exposes all Published Agents to operator chat, and exposes only **Customer-Facing Published Agents** to customer chat.
+- "Customer-facing Agent" could mean an Agent id allowlist, workflow template, purpose text, or contract capability. Resolved: a **Customer-Facing Published Agent** is a Published Agent whose Agent Contract declares a top-level customer section.
 - "Customer channel" could mean Web chat, messaging apps, email, mobile SDK, or contact-center integration. Resolved: V1 ships **Customer Service Web Chat**; other channels are future adapters.
 - "Customer intake" could mean text questions or uploaded customer documents. Resolved: V1 uses **Text-Only Customer Intake**; attachment analysis is future work.
 - "Customer-safe text" could mean no Harness run is needed for prompts or refusals. Resolved: Safe Conversational Text may not require Accepted Evidence, but every **Customer Run API** turn still needs a governed run and non-empty RunStore `run_id`.

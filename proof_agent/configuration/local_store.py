@@ -126,6 +126,8 @@ class LocalAgentConfigurationStore:
             version_id=f"version_{uuid4().hex[:8]}",
             source_draft_id=draft_id,
             validation_run_id=validation_run_id,
+            display_name=draft.display_name,
+            purpose=draft.purpose,
             contract_bundle=draft.contract_bundle,
             published_at=_now(),
             published_by=actor,

@@ -25,16 +25,91 @@ def _publish_package(
     return store, draft.agent_id, version.version_id
 
 
-def test_registry_still_resolves_default_example_agents() -> None:
+def test_registry_defaults_to_no_application_facing_example_agents() -> None:
     registry = PublishedAgentRegistry()
 
     resolved = registry.resolve("enterprise_qa")
 
-    assert resolved is not None
-    assert resolved.agent_id == "enterprise_qa"
-    assert resolved.manifest_path == Path("examples/enterprise_qa/agent.yaml")
-    assert resolved.agent_version_id is None
-    assert "enterprise_qa" in registry.list_agent_ids()
+    assert resolved is None
+    assert registry.list_agent_ids() == ()
+
+
+def test_published_agent_directory_lists_only_active_published_versions(
+    tmp_path: Path,
+) -> None:
+    store, agent_id, version_id = _publish_package(
+        tmp_path,
+        Path("examples/enterprise_qa/agent.yaml"),
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        published_agents={},
+        agent_configuration_store=store,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/chat/agents")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": [
+            {
+                "agent_id": agent_id,
+                "display_name": "enterprise_qa",
+                "purpose": "Answer enterprise knowledge questions only when evidence supports the answer.",
+                "agent_version_id": version_id,
+                "customer_facing": False,
+            }
+        ],
+        "meta": {"total": 1},
+    }
+
+
+def test_customer_agent_directory_lists_only_customer_facing_published_versions(
+    tmp_path: Path,
+) -> None:
+    store, _, _ = _publish_package(
+        tmp_path,
+        Path("examples/enterprise_qa/agent.yaml"),
+    )
+    insurance_draft = import_agent_package(
+        Path("examples/insurance_customer_service/agent.yaml"),
+        store=store,
+        actor="test-user",
+    )
+    insurance_version = store.publish_version(
+        agent_id=insurance_draft.agent_id,
+        draft_id=insurance_draft.draft_id,
+        validation_run_id="run_validation_customer",
+        actor="test-user",
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        published_agents={},
+        agent_configuration_store=store,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/customer/agents")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": [
+            {
+                "agent_id": "insurance_customer_service",
+                "display_name": "insurance_customer_service",
+                "purpose": (
+                    "Provide read-only customer service for insurance policy and claim questions "
+                    "when evidence or authorized account data supports the answer."
+                ),
+                "agent_version_id": insurance_version.version_id,
+                "customer_facing": True,
+            }
+        ],
+        "meta": {"total": 1},
+    }
 
 
 def test_registry_resolves_active_agent_version_from_configuration_store(
@@ -119,6 +194,32 @@ def test_customer_production_run_records_resolved_agent_version_id(tmp_path: Pat
     assert detail.json()["agent_version_id"] == version_id
 
 
+def test_customer_conversation_rejects_operator_only_published_agent(tmp_path: Path) -> None:
+    store, agent_id, _version_id = _publish_package(
+        tmp_path,
+        Path("examples/enterprise_qa/agent.yaml"),
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={},
+        agent_configuration_store=store,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": agent_id, "customer_id": "CUST-001"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "message": f"Customer-facing Published Agent not found: {agent_id}",
+        "available_agent_ids": [],
+    }
+
+
 def test_execution_api_still_rejects_arbitrary_manifest_paths(tmp_path: Path) -> None:
     app = create_app(
         history_dir=tmp_path / "history",
@@ -137,3 +238,26 @@ def test_execution_api_still_rejects_arbitrary_manifest_paths(tmp_path: Path) ->
     )
 
     assert response.status_code == 422
+
+
+def test_chat_execution_rejects_example_template_without_publication(tmp_path: Path) -> None:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        published_agents={},
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "enterprise_qa",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "message": "Published Agent not found: enterprise_qa",
+        "available_agent_ids": [],
+    }

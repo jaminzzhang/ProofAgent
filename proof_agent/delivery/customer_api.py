@@ -45,7 +45,10 @@ from proof_agent.delivery.customer_adapters import (
     CustomerAdapterResult,
     load_customer_run_adapter,
 )
-from proof_agent.delivery.published_agents import PublishedAgentRegistry
+from proof_agent.delivery.published_agents import (
+    PublishedAgentRegistry,
+    published_agent_directory_payload,
+)
 from proof_agent.observability.storage.customer_store import CustomerStore
 from proof_agent.observability.storage.run_store import RunStore
 
@@ -81,6 +84,14 @@ class CustomerFeedbackRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=1000)
 
 
+@router.get("/customer/agents")
+def list_customer_agents(app_request: Request) -> dict[str, Any]:
+    """Return Customer-Facing Published Agents available to customer chat."""
+
+    registry = _get_published_agents(app_request)
+    return published_agent_directory_payload(registry.list_agents(customer_facing_only=True))
+
+
 @router.post("/customer/conversations")
 def create_customer_conversation(
     request: CustomerConversationCreateRequest,
@@ -89,14 +100,8 @@ def create_customer_conversation(
     """Create a customer-facing conversation for a Published Agent."""
 
     registry = _get_published_agents(app_request)
-    if registry.resolve(request.agent_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": f"Published Agent not found: {request.agent_id}",
-                "available_agent_ids": registry.list_agent_ids(),
-            },
-        )
+    if registry.resolve_customer_facing(request.agent_id) is None:
+        raise _customer_agent_not_found(registry, request.agent_id)
 
     record = _get_customer_store(app_request).create_conversation(
         agent_id=request.agent_id,
@@ -198,15 +203,9 @@ def delete_customer_case_memory(conversation_id: str, app_request: Request) -> d
 
     conversation = _require_customer_conversation(app_request, conversation_id)
     registry = _get_published_agents(app_request)
-    published_agent = registry.resolve(conversation.agent_id)
+    published_agent = registry.resolve_customer_facing(conversation.agent_id)
     if published_agent is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": f"Published Agent not found: {conversation.agent_id}",
-                "available_agent_ids": registry.list_agent_ids(),
-            },
-        )
+        raise _customer_agent_not_found(registry, conversation.agent_id)
     manifest = _load_manifest(published_agent.manifest_path)
     audit_run_id = _latest_customer_run_id(conversation)
     if not _case_memory_enabled(manifest):
@@ -252,15 +251,9 @@ def create_customer_run(
 
     conversation = _require_customer_conversation(app_request, conversation_id)
     registry = _get_published_agents(app_request)
-    published_agent = registry.resolve(conversation.agent_id)
+    published_agent = registry.resolve_customer_facing(conversation.agent_id)
     if published_agent is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": f"Published Agent not found: {conversation.agent_id}",
-                "available_agent_ids": registry.list_agent_ids(),
-            },
-        )
+        raise _customer_agent_not_found(registry, conversation.agent_id)
 
     manifest_path = published_agent.manifest_path
     manifest = _load_manifest(manifest_path)
@@ -403,16 +396,20 @@ def _load_manifest(manifest_path: Path) -> AgentManifest:
 
 def _require_published_agent_manifest(request: Request, agent_id: str) -> AgentManifest:
     registry = _get_published_agents(request)
-    published_agent = registry.resolve(agent_id)
+    published_agent = registry.resolve_customer_facing(agent_id)
     if published_agent is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": f"Published Agent not found: {agent_id}",
-                "available_agent_ids": registry.list_agent_ids(),
-            },
-        )
+        raise _customer_agent_not_found(registry, agent_id)
     return _load_manifest(published_agent.manifest_path)
+
+
+def _customer_agent_not_found(registry: PublishedAgentRegistry, agent_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "message": f"Customer-facing Published Agent not found: {agent_id}",
+            "available_agent_ids": list(registry.list_agent_ids(customer_facing_only=True)),
+        },
+    )
 
 
 def _store_customer_response(

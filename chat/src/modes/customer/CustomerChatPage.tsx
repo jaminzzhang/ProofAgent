@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { ChatShell } from '../../chat-core/ChatShell'
 import type { ChatTurnView } from '../../chat-core/types'
+import { AgentSelectionPanel } from '../../components/AgentSelectionPanel'
+import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
 import type {
   CustomerConversation,
   CustomerRunProgressState,
   CustomerRunResponse,
   CustomerSafeSource,
   CustomerTurn,
+  PublishedAgentDirectoryEntry,
 } from '../../api/types'
 import {
   createCustomerConversation,
   createCustomerRun,
+  fetchCustomerAgents,
   fetchCustomerConversation,
   normalizeCustomerTurn,
 } from './customerAdapter'
@@ -28,9 +32,14 @@ const STARTERS = [
 ]
 
 export function CustomerChatPage() {
-  const { conversationId } = useParams<{ conversationId: string }>()
+  const { conversationId, agentId } = useParams<{ conversationId: string; agentId: string }>()
+  const location = useLocation()
   const navigate = useNavigate()
+  const routeConversationId = location.pathname.startsWith('/customer/c/') ? conversationId : undefined
   const [mode, setMode] = useState<CustomerMode>('anonymous')
+  const [agents, setAgents] = useState<PublishedAgentDirectoryEntry[]>([])
+  const [agentsLoading, setAgentsLoading] = useState(false)
+  const [agentsError, setAgentsError] = useState<string | null>(null)
   const [conversation, setConversation] = useState<CustomerConversation | null>(null)
   const [turns, setTurns] = useState<CustomerTurn[]>([])
   const [input, setInput] = useState('')
@@ -43,9 +52,9 @@ export function CustomerChatPage() {
   )
 
   useEffect(() => {
-    if (!conversationId) return
+    if (!routeConversationId) return
     setError(null)
-    fetchCustomerConversation(conversationId)
+    fetchCustomerConversation(routeConversationId)
       .then((record) => {
         setConversation(record)
         setTurns(record.turns)
@@ -53,7 +62,37 @@ export function CustomerChatPage() {
       .catch(() => {
         setError('The conversation is unavailable. Please start a new session.')
       })
-  }, [conversationId])
+  }, [routeConversationId])
+
+  useEffect(() => {
+    if (routeConversationId) {
+      setAgents([])
+      setAgentsLoading(false)
+      setAgentsError(null)
+      return
+    }
+    setAgentsLoading(true)
+    setAgentsError(null)
+    fetchCustomerAgents()
+      .then((response) => setAgents(response.data))
+      .catch(() => setAgentsError('Failed to load Customer-Facing Published Agents.'))
+      .finally(() => setAgentsLoading(false))
+  }, [routeConversationId])
+
+  const selectedAgent = useMemo(() => {
+    if (conversation) {
+      return {
+        agent_id: conversation.agent_id,
+        display_name: conversation.agent_id,
+        purpose: '',
+        agent_version_id: null,
+        customer_facing: true,
+      }
+    }
+    if (routeConversationId) return null
+    if (agentId) return agents.find((agent) => agent.agent_id === agentId) ?? null
+    return agents.length === 1 ? agents[0] : null
+  }, [agentId, agents, conversation, routeConversationId])
 
   const turnViews = useMemo(() => turns.map(normalizeCustomerTurn), [turns])
 
@@ -63,12 +102,15 @@ export function CustomerChatPage() {
     setTurns([])
     setInput('')
     setError(null)
-    navigate('/customer', { replace: true })
+    navigate(agentId ? `/customer/agents/${agentId}` : '/customer', { replace: true })
   }
 
   const ensureConversation = async () => {
     if (conversation) return conversation
-    const created = await createCustomerConversation('insurance_customer_service', activeMode.customerId)
+    if (!selectedAgent) {
+      throw new Error('No Customer-Facing Published Agent selected.')
+    }
+    const created = await createCustomerConversation(selectedAgent.agent_id, activeMode.customerId)
     setConversation(created)
     navigate(`/customer/c/${created.conversation_id}`, { replace: true })
     return created
@@ -96,10 +138,49 @@ export function CustomerChatPage() {
     }
   }
 
+  if (!routeConversationId && agentsLoading) {
+    return (
+      <div className="py-12 flex justify-center">
+        <LoadingSpinner />
+      </div>
+    )
+  }
+
+  if (!routeConversationId && agentsError) {
+    return (
+      <AgentSelectionPanel
+        title="Choose a Customer-Facing Published Agent"
+        description="Select a Published Agent before starting customer chat."
+        agents={[]}
+        emptyTitle="Unable to load Customer-Facing Published Agents"
+        emptyDescription={agentsError}
+        onSelect={() => undefined}
+      />
+    )
+  }
+
+  if (!routeConversationId && !selectedAgent) {
+    return (
+      <AgentSelectionPanel
+        title="Choose a Customer-Facing Published Agent"
+        description="Select a Customer-Facing Published Agent before starting customer chat."
+        agents={agentId ? [] : agents}
+        unavailableAgentId={agentId}
+        emptyTitle="No Customer-Facing Published Agents are available"
+        emptyDescription={
+          agentId
+            ? 'This Agent is not published for customer chat. Publish a customer-facing Agent before opening chat.'
+            : 'Import an Agent template, validate it, and publish a customer-facing Agent in the Dashboard first.'
+        }
+        onSelect={(nextAgentId) => navigate(`/customer/agents/${nextAgentId}`)}
+      />
+    )
+  }
+
   return (
     <ChatShell
       title="Customer Chat"
-      subtitle="Customer-safe service chat for policy and claim support."
+      subtitle={selectedAgent?.display_name ?? 'Customer-safe service chat for policy and claim support.'}
       turns={turnViews}
       inputValue={input}
       onInputChange={setInput}
@@ -118,6 +199,7 @@ export function CustomerChatPage() {
         <CustomerSidebar
           mode={mode}
           onModeChange={handleModeChange}
+          agentLabel={selectedAgent?.display_name ?? conversation?.agent_id ?? ''}
           turnCount={turns.length}
           latestSources={latestSources(turnViews)}
         />

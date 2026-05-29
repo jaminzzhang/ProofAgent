@@ -3,23 +3,32 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { ChatShell } from '../../chat-core/ChatShell'
 import type { ChatTurnView } from '../../chat-core/types'
+import { AgentSelectionPanel } from '../../components/AgentSelectionPanel'
 import { OutcomeBadge } from '../../components/OutcomeBadge'
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
-import type { ConversationRecord, ConversationTurn, GovernanceDetails } from '../../api/types'
+import type {
+  ConversationRecord,
+  ConversationTurn,
+  GovernanceDetails,
+  PublishedAgentDirectoryEntry,
+} from '../../api/types'
 import {
   createOperatorConversation,
   createOperatorConversationRun,
+  fetchOperatorAgents,
   fetchOperatorConversation,
 } from './operatorAdapter'
 
-const SYNTHETIC_NEW_CHAT: ConversationRecord = {
-  conversation_id: '',
-  agent_id: 'enterprise_qa',
-  title: null,
-  pinned: false,
-  created_at: '',
-  updated_at: '',
-  turns: [],
+function syntheticNewChat(agentId: string): ConversationRecord {
+  return {
+    conversation_id: '',
+    agent_id: agentId,
+    title: null,
+    pinned: false,
+    created_at: '',
+    updated_at: '',
+    turns: [],
+  }
 }
 
 function hasGovernanceDetails(details?: GovernanceDetails | null): boolean {
@@ -31,10 +40,14 @@ function hasGovernanceDetails(details?: GovernanceDetails | null): boolean {
 }
 
 export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
-  const { conversationId } = useParams<{ conversationId: string }>()
+  const { conversationId, agentId } = useParams<{ conversationId: string; agentId: string }>()
   const location = useLocation()
   const navigate = useNavigate()
-  const isNewChat = location.pathname === '/operator/new'
+  const routeConversationId = location.pathname.startsWith('/operator/c/') ? conversationId : undefined
+  const isNewChat = location.pathname === '/operator/new' || Boolean(agentId)
+  const [agents, setAgents] = useState<PublishedAgentDirectoryEntry[]>([])
+  const [agentsLoading, setAgentsLoading] = useState(false)
+  const [agentsError, setAgentsError] = useState<string | null>(null)
   const [conversation, setConversation] = useState<ConversationRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -43,34 +56,60 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
   const [includeGovernanceDetails, setIncludeGovernanceDetails] = useState(false)
 
   useEffect(() => {
-    if (conversationId) {
+    if (routeConversationId) {
       setLoading(true)
       setError(null)
       setConversation(null)
-      fetchOperatorConversation(conversationId)
+      fetchOperatorConversation(routeConversationId)
         .then(setConversation)
         .catch(() => {
           setError('Failed to load conversation. It may have been deleted or the server is unavailable.')
         })
         .finally(() => setLoading(false))
     } else if (isNewChat) {
-      setConversation(SYNTHETIC_NEW_CHAT)
+      setConversation(null)
       setLoading(false)
       setError(null)
     } else {
       setLoading(false)
       setConversation(null)
     }
-  }, [conversationId, isNewChat])
+  }, [routeConversationId, isNewChat])
+
+  useEffect(() => {
+    if (!isNewChat) {
+      setAgents([])
+      setAgentsLoading(false)
+      setAgentsError(null)
+      return
+    }
+    setAgentsLoading(true)
+    setAgentsError(null)
+    fetchOperatorAgents()
+      .then((response) => setAgents(response.data))
+      .catch(() => setAgentsError('Failed to load Published Agents.'))
+      .finally(() => setAgentsLoading(false))
+  }, [isNewChat])
+
+  const selectedAgent = useMemo(() => {
+    if (!isNewChat) return null
+    if (agentId) return agents.find((agent) => agent.agent_id === agentId) ?? null
+    return agents.length === 1 ? agents[0] : null
+  }, [agentId, agents, isNewChat])
+
+  const activeConversation = conversation ?? (
+    isNewChat && selectedAgent ? syntheticNewChat(selectedAgent.agent_id) : null
+  )
 
   const turns = useMemo(
-    () => conversation?.turns.map(operatorTurnToView) ?? [],
-    [conversation?.turns],
+    () => activeConversation?.turns.map(operatorTurnToView) ?? [],
+    [activeConversation?.turns],
   )
 
   const handleSubmit = async () => {
     if (!input.trim()) return
-    if (!conversation && !isNewChat) return
+    if (!activeConversation && !isNewChat) return
+    if (isNewChat && !selectedAgent) return
 
     const question = input
     setInput('')
@@ -79,7 +118,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
     try {
       let activeConversationId = conversation?.conversation_id
       if (isNewChat && !activeConversationId) {
-        const newConversation = await createOperatorConversation('enterprise_qa')
+        const newConversation = await createOperatorConversation(selectedAgent!.agent_id)
         activeConversationId = newConversation.conversation_id
       }
 
@@ -133,7 +172,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
     }
   }
 
-  if (!conversationId && !isNewChat) {
+  if (!routeConversationId && !isNewChat) {
     return (
       <div className="flex h-[calc(100vh-160px)] flex-col px-4">
         <div className="flex flex-1 flex-col items-center justify-center space-y-4 text-center">
@@ -156,7 +195,46 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
     )
   }
 
-  if (error && !conversation) {
+  if (isNewChat && agentsLoading) {
+    return (
+      <div className="py-12 flex justify-center">
+        <LoadingSpinner />
+      </div>
+    )
+  }
+
+  if (isNewChat && agentsError) {
+    return (
+      <AgentSelectionPanel
+        title="Choose a Published Agent"
+        description="Select a Published Agent before starting operator chat."
+        agents={[]}
+        emptyTitle="Unable to load Published Agents"
+        emptyDescription={agentsError}
+        onSelect={() => undefined}
+      />
+    )
+  }
+
+  if (isNewChat && !selectedAgent) {
+    return (
+      <AgentSelectionPanel
+        title="Choose a Published Agent"
+        description="Select a Published Agent before starting operator chat."
+        agents={agentId ? [] : agents}
+        unavailableAgentId={agentId}
+        emptyTitle="No Published Agents are available"
+        emptyDescription={
+          agentId
+            ? 'This Agent is not published for operator chat. Publish it before opening chat.'
+            : 'Import an Agent template, validate it, and publish it in the Dashboard first.'
+        }
+        onSelect={(nextAgentId) => navigate(`/operator/agents/${nextAgentId}/new`)}
+      />
+    )
+  }
+
+  if (error && !conversation && !isNewChat) {
     return (
       <div className="flex h-[calc(100vh-160px)] flex-col px-4">
         <div className="flex flex-1 flex-col items-center justify-center space-y-4 text-center">
@@ -166,10 +244,10 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
           </div>
           <button
             onClick={() => {
-              if (!conversationId) return
+              if (!routeConversationId) return
               setError(null)
               setLoading(true)
-              fetchOperatorConversation(conversationId)
+              fetchOperatorConversation(routeConversationId)
                 .then(setConversation)
                 .catch(() => {
                   setError('Failed to load conversation. It may have been deleted or the server is unavailable.')
@@ -185,14 +263,14 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
     )
   }
 
-  if (!conversation) {
+  if (!activeConversation) {
     return null
   }
 
   return (
     <ChatShell
       title="Operator Chat"
-      subtitle="Operator-facing governed question answering."
+      subtitle={selectedAgent?.display_name ?? 'Operator-facing governed question answering.'}
       turns={turns}
       inputValue={input}
       onInputChange={setInput}
@@ -216,12 +294,12 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
         </label>
       }
       renderAssistantMeta={(turn) => {
-        const operatorTurn = findOperatorTurn(conversation, turn.id)
+        const operatorTurn = findOperatorTurn(activeConversation, turn.id)
         if (!operatorTurn) return null
         return <OperatorMessageMeta turn={operatorTurn} />
       }}
       renderAssistantActions={(turn) => {
-        const operatorTurn = findOperatorTurn(conversation, turn.id)
+        const operatorTurn = findOperatorTurn(activeConversation, turn.id)
         if (!operatorTurn) return null
         return <OperatorGovernanceDetails turn={operatorTurn} />
       }}

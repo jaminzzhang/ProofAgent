@@ -3,12 +3,13 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 
 import { AppRoutes } from './router'
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
 })
 
 function renderRoute(path: string) {
@@ -34,10 +35,11 @@ test('legacy un-namespaced chat routes do not open operator chat directly', () =
   expect(screen.queryByText('Assisted Chat')).toBeNull()
 })
 
-test('customer route opens customer-safe chat mode without internal audit affordances', () => {
+test('customer route opens customer-safe chat mode without internal audit affordances', async () => {
+  mockAgentDirectoryFetch('/api/customer/agents', 'insurance_customer_service')
   renderRoute('/customer')
 
-  expect(screen.getByRole('heading', { name: 'Customer Chat' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Customer Chat' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Guest' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Demo 1' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Demo 2' })).toBeTruthy()
@@ -46,3 +48,46 @@ test('customer route opens customer-safe chat mode without internal audit afford
   expect(screen.queryByText(/governance/i)).toBeNull()
   expect(screen.queryByText(/approval/i)).toBeNull()
 })
+
+test('operator direct Agent route opens operator chat mode', async () => {
+  mockAgentDirectoryFetch('/api/chat/agents', 'enterprise_qa')
+  renderRoute('/operator/agents/enterprise_qa/new')
+
+  expect(await screen.findByRole('heading', { name: 'Operator Chat' })).toBeTruthy()
+})
+
+test('customer direct Agent route opens customer-safe chat mode', async () => {
+  mockAgentDirectoryFetch('/api/customer/agents', 'insurance_customer_service')
+  renderRoute('/customer/agents/insurance_customer_service')
+
+  expect(await screen.findByRole('heading', { name: 'Customer Chat' })).toBeTruthy()
+})
+
+function mockAgentDirectoryFetch(url: string, agentId: string) {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+    if (request === url) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              agent_id: agentId,
+              display_name: agentId,
+              purpose: 'Published test Agent.',
+              agent_version_id: 'version_123',
+              customer_facing: url.includes('/customer/'),
+            },
+          ],
+          meta: { total: 1 },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
+    }
+    return new Response(JSON.stringify([]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  })
+}

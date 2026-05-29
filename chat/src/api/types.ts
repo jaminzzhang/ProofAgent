@@ -153,6 +153,21 @@ export interface ConversationRecord {
   turns: ConversationTurn[]
 }
 
+export interface PublishedAgentDirectoryEntry {
+  agent_id: string
+  display_name: string
+  purpose: string
+  agent_version_id: string | null
+  customer_facing: boolean
+}
+
+export interface PublishedAgentDirectoryResponse {
+  data: PublishedAgentDirectoryEntry[]
+  meta: {
+    total: number
+  }
+}
+
 export interface ChatRunResponse {
   agent_id: string
   run_id: string

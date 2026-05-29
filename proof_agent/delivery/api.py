@@ -17,7 +17,10 @@ from proof_agent.contracts.conversation import (
     conversation_record_payload,
 )
 from proof_agent.control.conversation import admit_conversation_context
-from proof_agent.delivery.published_agents import PublishedAgentRegistry
+from proof_agent.delivery.published_agents import (
+    PublishedAgentRegistry,
+    published_agent_directory_payload,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.run_store import RunStore
@@ -63,6 +66,14 @@ class ConversationRunRequest(BaseModel):
     question: str = Field(min_length=1)
     approved: bool | None = None
     include_governance_details: bool = False
+
+
+@router.get("/chat/agents")
+def list_chat_agents(app_request: Request) -> dict[str, Any]:
+    """Return Published Agents available to operator-facing chat."""
+
+    registry = _get_published_agents(app_request)
+    return published_agent_directory_payload(registry.list_agents())
 
 
 @router.post("/chat/runs")

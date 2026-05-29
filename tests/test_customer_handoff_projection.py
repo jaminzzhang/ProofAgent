@@ -1,7 +1,10 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from proof_agent.observability.api.app import create_app
 from proof_agent.observability.storage.handoff_projection import extract_handoffs
+from published_agent_support import publish_agent_package
 
 
 def test_extract_handoff_projection_from_trace_events() -> None:
@@ -45,6 +48,10 @@ def test_handoff_api_lists_handoffs(tmp_path) -> None:
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
         conversations_dir=tmp_path / "conversations",
+        agent_configuration_store=publish_agent_package(
+            tmp_path,
+            Path("examples/insurance_customer_service/agent.yaml"),
+        ),
     )
     client = TestClient(app)
     created = client.post(

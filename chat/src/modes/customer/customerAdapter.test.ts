@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import {
   createCustomerConversation,
   createCustomerRun,
+  fetchCustomerAgents,
   normalizeCustomerTurn,
 } from './customerAdapter'
 
@@ -45,6 +46,34 @@ test('createCustomerRun submits customer questions through customer run API', as
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question: 'What is my policy status?' }),
   })
+})
+
+test('fetchCustomerAgents uses the customer-facing Published Agent directory', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        data: [
+          {
+            agent_id: 'insurance_customer_service',
+            display_name: 'Insurance Customer Service',
+            purpose: 'Customer-safe support.',
+            agent_version_id: 'version_123',
+            customer_facing: true,
+          },
+        ],
+        meta: { total: 1 },
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    ),
+  )
+
+  const response = await fetchCustomerAgents()
+
+  expect(fetchMock).toHaveBeenCalledWith('/api/customer/agents', undefined)
+  expect(response.data[0].agent_id).toBe('insurance_customer_service')
 })
 
 test('normalizeCustomerTurn keeps only customer-safe display fields', () => {

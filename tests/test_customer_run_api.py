@@ -5,7 +5,49 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
-from proof_agent.observability.api.app import create_app
+from proof_agent.configuration.importer import import_agent_package
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.observability.api.app import create_app as create_dashboard_app
+
+
+def create_app(
+    *,
+    history_dir: Path,
+    runs_dir: Path,
+    conversations_dir: Path,
+    published_agents: dict[str, Path] | None = None,
+    agent_configuration_store: LocalAgentConfigurationStore | None = None,
+    **kwargs: object,
+):
+    if published_agents is None and agent_configuration_store is None:
+        agent_configuration_store = _publish_agent_package(
+            history_dir.parent,
+            Path("examples/insurance_customer_service/agent.yaml"),
+        )
+        published_agents = {}
+    return create_dashboard_app(
+        history_dir=history_dir,
+        runs_dir=runs_dir,
+        conversations_dir=conversations_dir,
+        published_agents=published_agents,
+        agent_configuration_store=agent_configuration_store,
+        **kwargs,
+    )
+
+
+def _publish_agent_package(
+    root_dir: Path,
+    manifest_path: Path,
+) -> LocalAgentConfigurationStore:
+    store = LocalAgentConfigurationStore(root_dir / "config")
+    draft = import_agent_package(manifest_path, store=store, actor="test-user")
+    store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation",
+        actor="test-user",
+    )
+    return store
 
 
 class RecordingMem0Client:

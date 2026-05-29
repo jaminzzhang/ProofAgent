@@ -4,6 +4,7 @@ import type {
   CustomerFeedbackResponse,
   CustomerRunResponse,
   CustomerTurn,
+  PublishedAgentDirectoryResponse,
 } from '../../api/types'
 
 const BASE = '/api'
@@ -26,6 +27,10 @@ export function createCustomerConversation(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agent_id: agentId, customer_id: customerId ?? null }),
   })
+}
+
+export function fetchCustomerAgents(): Promise<PublishedAgentDirectoryResponse> {
+  return fetchJson<PublishedAgentDirectoryResponse>(`${BASE}/customer/agents`)
 }
 
 export function fetchCustomerConversation(conversationId: string): Promise<CustomerConversation> {

@@ -3,20 +3,33 @@ import shutil
 
 from fastapi.testclient import TestClient
 
+from proof_agent.configuration.importer import import_agent_package
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.api.app import create_app
 
 
 def _client(
     tmp_path: Path, *, published_agents: dict[str, Path] | None = None
 ) -> TestClient:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    if published_agents is None:
+        published_agents = {
+            "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
+        }
+    for manifest_path in published_agents.values():
+        draft = import_agent_package(manifest_path, store=store, actor="test-user")
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation",
+            actor="test-user",
+        )
     app = create_app(
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
         conversations_dir=tmp_path / "conversations",
-        published_agents=published_agents
-        or {
-            "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
-        },
+        published_agents={},
+        agent_configuration_store=store,
     )
     return TestClient(app)
 
@@ -78,8 +91,8 @@ def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
 
 def test_conversation_run_omits_governance_details_by_default(tmp_path: Path) -> None:
     manifest_path = _copy_react_agent_with_response_details(tmp_path)
-    client = _client(tmp_path, published_agents={"react_details": manifest_path})
-    created = client.post("/api/chat/conversations", json={"agent_id": "react_details"})
+    client = _client(tmp_path, published_agents={"react_enterprise_qa": manifest_path})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 
@@ -99,8 +112,8 @@ def test_conversation_run_returns_and_stores_governance_details_when_policy_allo
     tmp_path: Path,
 ) -> None:
     manifest_path = _copy_react_agent_with_response_details(tmp_path)
-    client = _client(tmp_path, published_agents={"react_details": manifest_path})
-    created = client.post("/api/chat/conversations", json={"agent_id": "react_details"})
+    client = _client(tmp_path, published_agents={"react_enterprise_qa": manifest_path})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 

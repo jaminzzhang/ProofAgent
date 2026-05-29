@@ -397,6 +397,8 @@ def _version_payload(version: Any) -> dict[str, Any]:
         "version_id": version.version_id,
         "source_draft_id": version.source_draft_id,
         "validation_run_id": version.validation_run_id,
+        "display_name": version.display_name,
+        "purpose": version.purpose,
         "published_at": version.published_at,
         "published_by": version.published_by,
         "operation_audit": [
