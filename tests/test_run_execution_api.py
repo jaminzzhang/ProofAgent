@@ -29,7 +29,7 @@ def _app_with_published_agent(tmp_path: Path, manifest_path: Path):
 
 def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
     agent_dir = tmp_path / "react_enterprise_qa"
-    shutil.copytree(Path("examples/react_enterprise_qa"), agent_dir)
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa"), agent_dir)
     manifest_path = agent_dir / "agent.yaml"
     manifest_text = manifest_path.read_text(encoding="utf-8")
     manifest_path.write_text(
@@ -43,7 +43,7 @@ def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
 
 
 def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("examples/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -71,7 +71,7 @@ def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Pa
 
 
 def test_chat_run_execution_rejects_unknown_agent_id(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("examples/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -87,14 +87,14 @@ def test_chat_run_execution_rejects_unknown_agent_id(tmp_path: Path) -> None:
 
 
 def test_chat_run_execution_rejects_arbitrary_manifest_path(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("examples/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
         "/api/chat/runs",
         json={
             "agent_id": "enterprise_qa",
-            "agent_yaml": "examples/enterprise_qa/agent.yaml",
+            "agent_yaml": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
             "question": "What is the reimbursement rule for travel meals?",
         },
     )
@@ -105,7 +105,7 @@ def test_chat_run_execution_rejects_arbitrary_manifest_path(tmp_path: Path) -> N
 def test_chat_run_execution_registers_react_enterprise_qa(
     tmp_path: Path,
 ) -> None:
-    app = _app_with_published_agent(tmp_path, Path("examples/react_enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -123,7 +123,7 @@ def test_chat_run_execution_registers_react_enterprise_qa(
 
 
 def test_chat_run_omits_governance_details_by_default(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("examples/react_enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -141,7 +141,7 @@ def test_chat_run_omits_governance_details_by_default(tmp_path: Path) -> None:
 def test_chat_run_omits_governance_details_when_agent_policy_denies(
     tmp_path: Path,
 ) -> None:
-    app = _app_with_published_agent(tmp_path, Path("examples/react_enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(
@@ -206,7 +206,7 @@ def test_chat_run_executes_with_same_manifest_used_for_projection(
 
 
 def test_chat_run_execution_returns_approval_state_for_tool_question(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("examples/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
     client = TestClient(app)
 
     response = client.post(

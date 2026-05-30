@@ -142,14 +142,14 @@ def test_configuration_operation_audit_is_json_serializable() -> None:
         operation=ConfigurationOperation.IMPORTED,
         actor="local-user",
         created_at="2026-05-27T00:00:00Z",
-        summary="Imported examples/enterprise_qa.",
-        metadata={"source_path": "examples/enterprise_qa/agent.yaml"},
+        summary="Imported proof_agent/evaluation/demo/fixtures/enterprise_qa.",
+        metadata={"source_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"},
     )
 
     payload = audit.model_dump(mode="json")
 
     assert payload["operation"] == "imported"
-    assert payload["metadata"]["source_path"] == "examples/enterprise_qa/agent.yaml"
+    assert payload["metadata"]["source_path"] == "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"
 
 
 def test_configuration_contracts_are_frozen() -> None:

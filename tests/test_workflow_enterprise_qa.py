@@ -9,7 +9,7 @@ from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 def test_supported_question_answers_with_citations(tmp_path: Path) -> None:
     result = run_with_langgraph(
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path,
     )
@@ -34,7 +34,7 @@ def test_supported_question_answers_with_citations(tmp_path: Path) -> None:
 
 def test_unsupported_question_refuses_without_evidence(tmp_path: Path) -> None:
     result = run_with_langgraph(
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         question="What discount should we give this customer next year?",
         runs_dir=tmp_path,
     )
@@ -43,7 +43,7 @@ def test_unsupported_question_refuses_without_evidence(tmp_path: Path) -> None:
 
 def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
     result = run_with_langgraph(
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         question="Look up customer policy status before answering.",
         runs_dir=tmp_path,
     )
@@ -52,7 +52,7 @@ def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
 
 def test_tool_question_handles_denied_approval(tmp_path: Path) -> None:
     result = run_with_langgraph(
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         question="Look up customer policy status before answering.",
         runs_dir=tmp_path,
         approved=False,
@@ -86,7 +86,7 @@ def test_agentic_retrieval_strategy_executes_with_pageindex(
     monkeypatch.setenv("PAGEINDEX_BASE_URL", "http://127.0.0.1:8000")
     monkeypatch.setattr("proof_agent.capabilities.knowledge.pageindex._post_json", fake_post_json)
     example_dir = tmp_path / "enterprise_qa"
-    shutil.copytree(Path("examples/enterprise_qa"), example_dir)
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), example_dir)
     manifest_path = example_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8")
@@ -139,7 +139,7 @@ def test_agentic_retrieval_strategy_executes_with_pageindex(
 
 def test_react_template_executes_when_manifest_uses_react_runtime(tmp_path: Path) -> None:
     example_dir = tmp_path / "react_enterprise_qa"
-    shutil.copytree(Path("examples/enterprise_qa"), example_dir)
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), example_dir)
     manifest_path = example_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8").replace(

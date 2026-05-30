@@ -14,7 +14,7 @@ def _client(
     store = LocalAgentConfigurationStore(tmp_path / "config")
     if published_agents is None:
         published_agents = {
-            "enterprise_qa": Path("examples/enterprise_qa/agent.yaml"),
+            "enterprise_qa": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         }
     for manifest_path in published_agents.values():
         draft = import_agent_package(manifest_path, store=store, actor="test-user")
@@ -36,7 +36,7 @@ def _client(
 
 def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
     agent_dir = tmp_path / "react_enterprise_qa"
-    shutil.copytree(Path("examples/react_enterprise_qa"), agent_dir)
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa"), agent_dir)
     manifest_path = agent_dir / "agent.yaml"
     manifest_text = manifest_path.read_text(encoding="utf-8")
     manifest_path.write_text(

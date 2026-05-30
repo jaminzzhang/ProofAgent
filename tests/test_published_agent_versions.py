@@ -39,7 +39,7 @@ def test_published_agent_directory_lists_only_active_published_versions(
 ) -> None:
     store, agent_id, version_id = _publish_package(
         tmp_path,
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
     )
     app = create_app(
         history_dir=tmp_path / "history",
@@ -71,7 +71,7 @@ def test_customer_agent_directory_lists_only_customer_facing_published_versions(
 ) -> None:
     store, _, _ = _publish_package(
         tmp_path,
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
     )
     insurance_draft = import_agent_package(
         Path("examples/insurance_customer_service/agent.yaml"),
@@ -117,7 +117,7 @@ def test_registry_resolves_active_agent_version_from_configuration_store(
 ) -> None:
     store, agent_id, version_id = _publish_package(
         tmp_path,
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
     )
     registry = PublishedAgentRegistry(agents={}, configuration_store=store)
 
@@ -135,7 +135,7 @@ def test_registry_resolves_active_agent_version_from_configuration_store(
 def test_chat_production_run_records_resolved_agent_version_id(tmp_path: Path) -> None:
     store, agent_id, version_id = _publish_package(
         tmp_path,
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
     )
     app = create_app(
         history_dir=tmp_path / "history",
@@ -197,7 +197,7 @@ def test_customer_production_run_records_resolved_agent_version_id(tmp_path: Pat
 def test_customer_conversation_rejects_operator_only_published_agent(tmp_path: Path) -> None:
     store, agent_id, _version_id = _publish_package(
         tmp_path,
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
     )
     app = create_app(
         history_dir=tmp_path / "history",
@@ -224,7 +224,7 @@ def test_execution_api_still_rejects_arbitrary_manifest_paths(tmp_path: Path) ->
     app = create_app(
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
-        published_agents={"enterprise_qa": Path("examples/enterprise_qa/agent.yaml")},
+        published_agents={"enterprise_qa": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")},
     )
     client = TestClient(app)
 
@@ -232,7 +232,7 @@ def test_execution_api_still_rejects_arbitrary_manifest_paths(tmp_path: Path) ->
         "/api/chat/runs",
         json={
             "agent_id": "enterprise_qa",
-            "agent_yaml": "examples/enterprise_qa/agent.yaml",
+            "agent_yaml": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
             "question": "What is the reimbursement rule for travel meals?",
         },
     )

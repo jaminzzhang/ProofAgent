@@ -37,7 +37,7 @@ The first v1 template is a strongly controlled enterprise knowledge Q&A Agent:
 uv run --extra dev proof-agent demo
 ```
 
-The first demo must run without an LLM API key. It uses bundled sample knowledge and a deterministic provider to show:
+The framework regression demo must run without an LLM API key. It uses internal bundled fixtures and a deterministic provider to show:
 
 - Plain RAG answering loosely
 - Harness RAG refusing or escalating unsupported questions
@@ -50,20 +50,19 @@ The first demo must run without an LLM API key. It uses bundled sample knowledge
 
 ```bash
 docker compose up
-uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml
-uv run --extra dev proof-agent run examples/insurance_service_qa/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
-uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
+uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
+uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
 uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
 ```
 
-The full local evaluation must show three visible outcomes:
+The regression demo and canonical package smoke path together must show three visible outcomes:
 
 | Question type | Example | Expected Harness behavior |
 | --- | --- | --- |
-| Supported | "What is the reimbursement rule for travel meals?" | Answer with citations and receipt |
+| Supported | "What documents are required for inpatient claim reimbursement?" | Answer with citations and receipt |
 | Unsupported | "What discount should we give this customer next year?" | Refuse or escalate because evidence is missing |
-| Tool-required | "Look up customer policy status before answering." | Pause for approval before the MCP mock tool runs |
+| Tool-required regression | `proof-agent demo` fixture: "Look up customer policy status before answering." | Pause for approval before the MCP mock tool runs |
 
 The side-by-side evaluation should show two paths:
 
@@ -75,12 +74,12 @@ The output includes a final answer or refusal plus:
 - `runs/latest/trace.jsonl`
 - `runs/latest/governance_receipt.md`
 
-Expected deterministic demo questions:
+Expected deterministic regression and public smoke questions:
 
-- `What is the reimbursement rule for travel meals?`
+- Regression fixture: `What is the reimbursement rule for travel meals?`
 - `What documents are required for inpatient claim reimbursement?`
 - `What discount should we give this customer next year?`
-- `Look up customer policy status before answering.`
+- Regression fixture: `Look up customer policy status before answering.`
 
 ## Developer Model
 
@@ -154,14 +153,13 @@ proof_agent/
 - [Approval State Contract](docs/concepts/approval-state-contract.md)
 - [Trust Boundaries](docs/concepts/trust-boundaries.md)
 - [Launch Script](docs/examples/launch-script.md)
-- [Enterprise Q&A Demo](docs/examples/enterprise-qa.md)
-- [Insurance Service QA Reference Agent](docs/examples/insurance-service-qa.md)
+- [Insurance Customer Service Agent](docs/examples/insurance-customer-service.md)
 - [Governance Receipt](docs/examples/governance-receipt.md)
 
 Docs are bilingual: English (default) under `docs/`, Chinese translations under `docs/zh/`.
 
 ## v1 Scope
 
-v1 is intentionally narrow: one excellent enterprise Q&A reference template, deterministic demo mode, local knowledge, optional OpenAI-compatible remote model provider path, session memory, one MCP mock tool routed through Tool Gateway approval state, validators, JSONL trace, RunStore, Governance Receipt, Dashboard API, Docker Compose, and CI.
+v1 is intentionally narrow: one canonical Insurance Customer Service Agent package, internal deterministic framework fixtures, local knowledge, optional OpenAI-compatible remote model provider paths, bounded memory, governed tools, validators, JSONL trace, RunStore, Governance Receipt, Dashboard API, Docker Compose, and CI.
 
 Production LangChain/LangGraph adapters, real MCP transport, richer vector providers, Dashboard UI, Approval Console, policy packs, and additional industry templates are vNext.

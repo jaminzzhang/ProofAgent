@@ -31,7 +31,7 @@ The repository contains a Python MVP plus application surfaces:
 - Python package with typed contracts, bootstrap/composition, policy enforcement, LangGraph runtime runner, knowledge providers, model provider boundaries, tool approval gating, bounded memory, trace/audit output, RunStore, ConversationStore, Dashboard API, Run Execution API, comparison utilities, tests, CI, Docker assets, and deterministic examples.
 - Dashboard frontend under `dashboard/` for run history, stats, run detail, timeline, evidence, approval, receipt, and model usage views.
 - Unified Chat frontend under `chat/` for operator-facing Assisted QA Chat and customer-facing Customer Service Chat modes.
-- Example Agent packages under `examples/enterprise_qa/` and `examples/insurance_service_qa/`.
+- The canonical example Agent package under `examples/insurance_customer_service/`.
 
 The deterministic demo must remain runnable without network access, API keys, or external services. Expected demo outcomes:
 
@@ -78,7 +78,7 @@ Documentation is bilingual. English docs live under `docs/`; Chinese translation
 - `tests/` contains pytest coverage for contracts, bootstrap, policy, knowledge, model providers, tool approval, memory, audit output, API, compare, workflow, and CLI behavior.
 - `dashboard/` contains the Vite/React Dashboard SPA.
 - `chat/` contains the Vite/React Unified Chat SPA with `/operator` and `/customer` modes.
-- `examples/` contains runnable Agent packages.
+- `examples/` contains the canonical runnable Agent package.
 - `docs/` contains product, architecture, concept, example, agent, and ADR documentation.
 - `runs/` is the local audit output directory; only `runs/.gitkeep` should be committed.
 
@@ -90,10 +90,10 @@ Use `uv` for Python development:
 uv run --extra dev python -m pytest tests/ -v
 uv run --extra dev ruff check proof_agent tests
 uv run --extra dev ruff format proof_agent tests
-uv run --extra dev mypy proof_agent
+uv run --extra dev --extra openai mypy proof_agent
 uv run --extra dev proof-agent demo
-uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml
-uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
+uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
+uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
 uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
 docker compose up
@@ -155,7 +155,7 @@ Markdown:
 
 - Use clear headings, short paragraphs, and tables only when they improve scanability.
 - Keep terminology aligned with `CONTEXT.md`.
-- Configuration examples should stay in YAML or JSON with descriptive file names, such as `examples/enterprise_qa/agent.yaml`.
+- Configuration examples should stay in YAML or JSON with descriptive file names, such as `examples/insurance_customer_service/agent.yaml`.
 
 ## Testing Guidelines
 

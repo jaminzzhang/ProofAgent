@@ -3,6 +3,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from proof_agent.delivery.cli import app
+from proof_agent.evaluation.compare.result import RagResult
 
 
 runner = CliRunner()
@@ -28,6 +29,31 @@ def test_doctor_command_exists() -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "Python" in result.output
+
+
+def test_compare_command_runs_supplied_manifest(monkeypatch) -> None:
+    calls = []
+
+    def fake_run_harness_rag(question: str, *, agent_yaml: Path) -> RagResult:
+        calls.append((question, agent_yaml))
+        return RagResult(outcome="REFUSED_NO_EVIDENCE", message="Governed refusal")
+
+    monkeypatch.setattr("proof_agent.delivery.cli.run_harness_rag", fake_run_harness_rag)
+
+    result = runner.invoke(
+        app,
+        [
+            "compare",
+            "custom/agent.yaml",
+            "--question",
+            "What discount should we give this customer next year?",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("What discount should we give this customer next year?", Path("custom/agent.yaml"))
+    ]
 
 
 def test_inspect_trace_jsonl(tmp_path: Path) -> None:

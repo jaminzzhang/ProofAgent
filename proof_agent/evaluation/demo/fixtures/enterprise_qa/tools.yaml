@@ -6,7 +6,7 @@ tools:
     command: python
     args:
       - -m
-      - examples.demo_tools
+      - proof_agent.evaluation.demo.fixtures.demo_tools
     risk_level: medium
     requires_approval: true
     allowed_parameters:

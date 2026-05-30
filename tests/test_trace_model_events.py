@@ -22,7 +22,7 @@ def test_trace_event_types_include_react_review_events() -> None:
 
 def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) -> None:
     result = run_with_langgraph(
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path,
     )
@@ -50,7 +50,7 @@ def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) 
 
 def test_final_answer_model_trace_includes_role_and_response_format(tmp_path: Path) -> None:
     result = run_with_langgraph(
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path,
     )
@@ -67,7 +67,7 @@ def test_model_error_is_traced_when_provider_resolution_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     example_dir = tmp_path / "enterprise_qa"
-    shutil.copytree(Path("examples/enterprise_qa"), example_dir)
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), example_dir)
     manifest_path = example_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path

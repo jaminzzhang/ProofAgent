@@ -32,7 +32,7 @@ def test_model_output_must_pass_safety_and_citation_validators(
     monkeypatch.setattr(composition, "resolve_provider", lambda _config: provider)
 
     result = run_with_langgraph(
-        Path("examples/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path,
     )

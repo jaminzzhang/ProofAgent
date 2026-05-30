@@ -18,7 +18,7 @@ questions.yaml      # Optional: Evaluation question set
 expected/           # Optional: Expected trace / receipt examples
 ```
 
-The current runnable reference implementations are the [Enterprise QA Template](examples/enterprise-qa.md), corresponding to `examples/enterprise_qa/`, the [Controlled ReAct Enterprise QA Template](examples/react-enterprise-qa.md), corresponding to `examples/react_enterprise_qa/`, and the [Insurance Customer Service Agent](examples/insurance-customer-service.md), corresponding to `examples/insurance_customer_service/`.
+The canonical runnable reference implementation is the [Insurance Customer Service Agent](examples/insurance-customer-service.md), corresponding to `examples/insurance_customer_service/`. The `enterprise_qa` and `react_enterprise_qa` workflow templates remain supported framework contracts and internal regression fixtures.
 
 ## 2. Quick Start
 
@@ -27,9 +27,9 @@ Run the local deterministic demo from the repository root:
 uv run --extra dev proof-agent demo
 ```
 
-Run the Enterprise QA Template:
+Run the canonical Insurance Customer Service Agent:
 ```bash
-uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml
+uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
 ```
 
 Run the deterministic Controlled ReAct Enterprise QA demo:
@@ -44,7 +44,7 @@ proof-agent react-demo
 
 Compare Plain RAG vs Controlled Harness RAG:
 ```bash
-uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
+uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 ```
 
 View the latest Governance Receipt:
@@ -319,20 +319,7 @@ review:
 
 Planner and reviewer prompts are Harness Control Prompts maintained by Proof Agent. Agent Contracts configure provider channel, model name, and provider parameters, but do not replace the control prompts in V1.
 
-See `examples/react_enterprise_qa/agent.llm.yaml` for a runnable Agent Contract that configures final answer, planner, and reviewer roles with an OpenAI-compatible model provider. See `examples/react_enterprise_qa/agent.deepseek.yaml` for the same role layout using the named DeepSeek provider. Planner and reviewer outputs are parsed as Harness JSON contracts before they affect routing, policy, tool, or answer behavior; provider-native tool calls are not executed in V1.
-
-Run example:
-```bash
-OPENAI_COMPATIBLE_API_KEY=... \
-OPENAI_COMPATIBLE_BASE_URL=... \
-uv run --extra openai proof-agent run examples/react_enterprise_qa/agent.llm.yaml --question "What is the reimbursement rule for travel meals?"
-```
-
-DeepSeek manual smoke example:
-```bash
-DEEPSEEK_API_KEY=... \
-uv run --extra openai proof-agent run examples/react_enterprise_qa/agent.deepseek.yaml --question "What is the reimbursement rule for travel meals?"
-```
+Planner and reviewer outputs are parsed as Harness JSON contracts before they affect routing, policy, tool, or answer behavior; provider-native tool calls are not executed in V1. To run a remote model smoke check, copy `examples/insurance_customer_service/`, configure the model, planner, and reviewer provider sections with environment variable names, and run the copied package.
 
 Remote model smoke checks are opt-in. They are not part of the deterministic demo or default CI gate.
 
@@ -547,7 +534,7 @@ tools:
 
 Tool development principles:
 - All tool calls must pass through ToolGateway.
-- Deterministic local tools live in the Agent package or `examples/`, and `tools.yaml` references them with `handler: ./module.py:function_name`.
+- Deterministic local tools live in the Agent package, and `tools.yaml` references them with `handler: ./module.py:function_name`.
 - High-risk tools must enter the approval state.
 - Parameters must have allowlists / denylists.
 - Tool results must pass through validators.
@@ -567,7 +554,7 @@ When a Skill is imported, it should be registered or compiled into the existing 
 ## 9. Developing a New Agent
 
 Recommended process:
-1. Copy an Agent package from `examples/enterprise_qa/`.
+1. Copy the Agent package from `examples/insurance_customer_service/`.
 2. Modify `name`, `purpose`, `knowledge.params`, `retrieval`, `model`, `audit` in `agent.yaml`.
 3. Replace the business knowledge Markdown under `knowledge/`.
 4. Modify `policy.yaml` to define answering, tool, memory, and model call policies.
@@ -580,12 +567,10 @@ Recommended process:
 
 Suggested validation commands:
 ```bash
-uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "What is the reimbursement rule for travel meals?"
+uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
 uv run --extra dev --extra dashboard proof-agent react-demo
-uv run --extra dev proof-agent run examples/insurance_service_qa/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
-uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
-uv run --extra dev proof-agent run examples/enterprise_qa/agent.yaml --question "Look up customer policy status before answering."
-uv run --extra dev proof-agent compare examples/enterprise_qa/agent.yaml --question "What discount should we give this customer next year?"
+uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
+uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
 ```
 
@@ -610,7 +595,7 @@ Run Execution API path:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/chat/runs \
   -H "Content-Type: application/json" \
-  -d '{"agent_id":"insurance_service_qa","question":"What documents are required for inpatient claim reimbursement?"}'
+  -d '{"agent_id":"insurance_customer_service","question":"What documents are required for inpatient claim reimbursement?"}'
 ```
 
 The Run Execution API starts a configured Published Agent by `agent_id`; it does
@@ -622,13 +607,13 @@ Agent Configuration API path:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/config/agents/import \
   -H "Content-Type: application/json" \
-  -d '{"manifest_path":"examples/enterprise_qa/agent.yaml","actor":"local-user"}'
+  -d '{"manifest_path":"examples/insurance_customer_service/agent.yaml","actor":"local-user"}'
 
-curl -X POST http://127.0.0.1:8000/api/config/agents/enterprise_qa/drafts/{draft_id}/validate \
+curl -X POST http://127.0.0.1:8000/api/config/agents/insurance_customer_service/drafts/{draft_id}/validate \
   -H "Content-Type: application/json" \
-  -d '{"question":"What is the reimbursement rule for travel meals?","actor":"validator"}'
+  -d '{"question":"What documents are required for inpatient claim reimbursement?","actor":"validator"}'
 
-curl -X POST http://127.0.0.1:8000/api/config/agents/enterprise_qa/drafts/{draft_id}/publish \
+curl -X POST http://127.0.0.1:8000/api/config/agents/insurance_customer_service/drafts/{draft_id}/publish \
   -H "Content-Type: application/json" \
   -d '{"validation_run_id":"run_123","actor":"publisher"}'
 ```
@@ -644,11 +629,11 @@ Conversation API path:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/chat/conversations \
   -H "Content-Type: application/json" \
-  -d '{"agent_id":"enterprise_qa"}'
+  -d '{"agent_id":"insurance_customer_service"}'
 
 curl -X POST http://127.0.0.1:8000/api/chat/conversations/{conversation_id}/runs \
   -H "Content-Type: application/json" \
-  -d '{"question":"What about travel meals again?"}'
+  -d '{"question":"What documents are required for inpatient reimbursement?"}'
 ```
 
 Conversation runs automatically admit Controlled Conversation Context from

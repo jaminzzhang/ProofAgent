@@ -4,7 +4,7 @@ This page is the public demo and evaluation contract for Proof Agent. If these p
 
 ## Goal
 
-In two minutes, an enterprise AI Agent owner should see the deterministic Harness demo:
+In two minutes, an enterprise AI Agent owner should see the deterministic Harness regression demo:
 
 - a runnable enterprise Q&A Agent
 - a supported answer with citations
@@ -20,17 +20,18 @@ In two minutes, an enterprise AI Agent owner should see the deterministic Harnes
 proof-agent demo
 ```
 
-The demo must not require an LLM API key. It must use bundled sample knowledge and deterministic model output while still exercising the same policy, evidence, approval, trace, and receipt code paths as the full enterprise evaluation.
+The demo must not require an LLM API key. It uses internal bundled fixtures and deterministic model output while still exercising the same policy, evidence, approval, trace, and receipt code paths as the full enterprise evaluation.
 
 ## 30-Minute Enterprise Evaluation
 
 ```bash
 docker compose up
-proof-agent run examples/enterprise_qa/agent.yaml
+proof-agent run examples/insurance_customer_service/agent.yaml \
+  --question "What documents are required for inpatient claim reimbursement?"
 proof-agent inspect runs/latest/governance_receipt.md
 ```
 
-The CLI or Docker path must load `examples/enterprise_qa/agent.yaml` and write artifacts under `runs/latest/`.
+The CLI or Docker path must load `examples/insurance_customer_service/agent.yaml` and write artifacts under `runs/latest/`.
 
 Optional Dashboard API path:
 
@@ -43,12 +44,15 @@ The Dashboard API reads run artifacts. It must not bypass workflow, policy, vali
 Optional remote model evaluation after configuring `model.provider: openai_compatible` in `agent.yaml`:
 
 ```bash
-OPENAI_API_KEY=... proof-agent run examples/enterprise_qa/agent.yaml --question "What is the reimbursement rule for travel meals?"
+OPENAI_API_KEY=... proof-agent run examples/insurance_customer_service/agent.yaml \
+  --question "What documents are required for inpatient claim reimbursement?"
 ```
 
 Remote provider configuration must use environment variable names in `agent.yaml`; raw secrets must not be committed.
 
 ## Demo Questions
+
+These internal regression questions are exercised by `proof-agent demo`:
 
 | Step | Question | Expected result |
 | --- | --- | --- |
@@ -87,7 +91,7 @@ The receipt must summarize policy decisions, evidence status, tool approval stat
 5. Ask the tool-required question and show approval state.
 6. Open `runs/latest/governance_receipt.md`.
 7. Show the Plain RAG vs Harness RAG comparison.
-8. Optionally run the full Docker + `proof-agent run examples/enterprise_qa/agent.yaml` evaluation.
+8. Optionally run the full Docker + canonical package evaluation command shown above.
 9. Optionally start `proof-agent server` and inspect `/api/health`, `/api/runs`, and `/api/stats`.
 
 ## Smoke Test
@@ -103,7 +107,7 @@ The README demo path is accepted only if:
 
 The enterprise evaluation path is accepted only if:
 
-- the command uses `examples/enterprise_qa/agent.yaml`
+- the command uses `examples/insurance_customer_service/agent.yaml`
 - Docker Compose starts the required local services
 - the run writes the same trace and receipt artifacts
 

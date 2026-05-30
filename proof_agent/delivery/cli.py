@@ -20,6 +20,12 @@ from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 app = typer.Typer(no_args_is_help=True)
 
+DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+REACT_DEMO_AGENT_PATH = Path(
+    "proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"
+)
+PUBLIC_EXAMPLE_PATH = Path("examples/insurance_customer_service/agent.yaml")
+
 
 @app.command()
 def demo() -> None:
@@ -29,7 +35,7 @@ def demo() -> None:
     store = RunStore(Path("runs/history"))
     for scenario in DEMO_SCENARIOS:
         result = run_with_langgraph(
-            Path("examples/enterprise_qa/agent.yaml"),
+            DEMO_AGENT_PATH,
             question=scenario.question,
             runs_dir=Path("runs/latest"),
             store=store,
@@ -45,7 +51,7 @@ def react_demo() -> None:
     store = RunStore(Path("runs/history"))
     for scenario in REACT_DEMO_SCENARIOS:
         result = run_with_langgraph(
-            Path("examples/react_enterprise_qa/agent.yaml"),
+            REACT_DEMO_AGENT_PATH,
             question=scenario.question,
             runs_dir=Path("runs/latest"),
             store=store,
@@ -73,11 +79,11 @@ def doctor() -> None:
         ("runs writable", _writable_status(Path("runs"))),
         (
             "agent.yaml",
-            "ok" if Path("examples/enterprise_qa/agent.yaml").exists() else "missing",
+            "ok" if PUBLIC_EXAMPLE_PATH.exists() else "missing",
         ),
         (
             "sample knowledge",
-            "ok" if Path("examples/enterprise_qa/knowledge").exists() else "missing",
+            "ok" if (PUBLIC_EXAMPLE_PATH.parent / "knowledge").exists() else "missing",
         ),
         ("Docker", "available" if which("docker") else "not found"),
         ("deterministic provider", "ready"),
@@ -109,7 +115,7 @@ def compare(agent_yaml: str, question: str = typer.Option(..., "--question")) ->
     """Show the behavior gap between plain RAG and the governed harness."""
 
     plain = run_plain_rag(question)
-    harness = run_harness_rag(question)
+    harness = run_harness_rag(question, agent_yaml=Path(agent_yaml))
     typer.echo(f"Comparing {agent_yaml}: {question}")
     typer.echo(f"Plain RAG: {plain.outcome} - {plain.message}")
     typer.echo(f"Harness RAG: {harness.outcome} - {harness.message}")

@@ -21,7 +21,7 @@ def handle_customer_run(request):
 """,
         encoding="utf-8",
     )
-    manifest_path = Path("examples/enterprise_qa/agent.yaml")
+    manifest_path = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
     manifest = load_agent_manifest(manifest_path)
     conversation = CustomerConversationRecord(
         conversation_id="cust_conv_test",

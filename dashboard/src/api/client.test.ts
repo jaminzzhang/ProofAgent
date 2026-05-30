@@ -66,7 +66,7 @@ test('importConfigAgent posts manifest path', async () => {
   )
 
   await importConfigAgent({
-    manifest_path: 'examples/enterprise_qa/agent.yaml',
+    manifest_path: 'examples/insurance_customer_service/agent.yaml',
     actor: 'editor',
   })
 
@@ -74,7 +74,7 @@ test('importConfigAgent posts manifest path', async () => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      manifest_path: 'examples/enterprise_qa/agent.yaml',
+      manifest_path: 'examples/insurance_customer_service/agent.yaml',
       actor: 'editor',
     }),
   })

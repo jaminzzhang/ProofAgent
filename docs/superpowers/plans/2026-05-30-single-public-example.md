@@ -267,7 +267,7 @@ Expected: only `examples/insurance_customer_service` is listed; `rg` returns no 
 ```bash
 git diff --check
 uv run --extra dev ruff check proof_agent tests
-uv run --extra dev mypy proof_agent
+uv run --extra dev --extra openai mypy proof_agent
 ```
 
 Expected: PASS.

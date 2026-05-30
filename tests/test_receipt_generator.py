@@ -41,7 +41,7 @@ def test_receipt_renders_evidence_summary_without_raw_content(tmp_path: Path) ->
 
 def test_receipt_renders_react_review_sections(tmp_path: Path) -> None:
     result = run_with_langgraph(
-        Path("examples/react_enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path,
     )
@@ -55,7 +55,7 @@ def test_receipt_renders_react_review_sections(tmp_path: Path) -> None:
 
 def test_receipt_renders_actionable_react_clarification(tmp_path: Path) -> None:
     result = run_with_langgraph(
-        Path("examples/react_enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
         question="Can this customer claim it?",
         runs_dir=tmp_path,
     )

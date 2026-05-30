@@ -10,7 +10,7 @@ from proof_agent.errors import ProofAgentError
 
 
 def test_retrieval_returns_source_chunks() -> None:
-    provider = LocalMarkdownProvider(Path("examples/enterprise_qa/knowledge"))
+    provider = LocalMarkdownProvider(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/knowledge"))
     chunks = provider.retrieve("travel meal reimbursement", top_k=2)
     assert chunks
     assert chunks[0].source.endswith(".md")
@@ -23,7 +23,7 @@ def test_resolves_local_markdown_provider() -> None:
     provider = resolve_knowledge_provider(
         KnowledgeConfig(
             provider="local_markdown",
-            params={"path": Path("examples/enterprise_qa/knowledge")},
+            params={"path": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/knowledge")},
         )
     )
 

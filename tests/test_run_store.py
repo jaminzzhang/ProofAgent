@@ -246,7 +246,7 @@ def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
 def test_run_store_extracts_governance_details_for_react_run(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
     run_with_langgraph(
-        Path("examples/react_enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path / "latest",
         store=store,

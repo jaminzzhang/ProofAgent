@@ -10,10 +10,7 @@ interface Template {
 }
 
 const TEMPLATES: readonly Template[] = [
-  { id: 'react_enterprise_qa', name: 'ReAct Enterprise QA', purpose: 'Answer enterprise knowledge questions through a governed ReAct workflow.', manifestPath: 'examples/react_enterprise_qa/agent.yaml', description: 'ReAct loop with planner, evidence retrieval, policy-gated response generation.' },
-  { id: 'enterprise_qa', name: 'Enterprise QA', purpose: 'Answer enterprise knowledge questions only when evidence supports the answer.', manifestPath: 'examples/enterprise_qa/agent.yaml', description: 'Single-pass evidence retrieval and answer generation.' },
   { id: 'insurance_customer_service', name: 'Insurance Customer Service', purpose: 'Provide read-only customer service for insurance policy and claim questions.', manifestPath: 'examples/insurance_customer_service/agent.yaml', description: 'Customer-facing insurance Q&A with account-scoped evidence.' },
-  { id: 'insurance_service_qa', name: 'Insurance Service QA', purpose: 'Assist service staff with insurance policy and claim questions.', manifestPath: 'examples/insurance_service_qa/agent.yaml', description: 'Internal staff Q&A with policy evidence and governance.' },
 ]
 
 type Step = 'template' | 'details'

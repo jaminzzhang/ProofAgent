@@ -265,14 +265,14 @@ Architecture layer mapping:
 
 | Architecture layer | Current modules |
 | --- | --- |
-| Delivery / Entry | `delivery/cli.py`, compatibility shim `cli.py`, Docker assets, templates under `examples/` |
+| Delivery / Entry | `delivery/cli.py`, compatibility shim `cli.py`, Docker assets, and the canonical package under `examples/` |
 | Bootstrap / Composition | `bootstrap/`, provider registries, current dependency resolution inside `control/workflow/orchestrator.py` |
 | Control Plane | `control/workflow/`, `control/policy/`, `control/validators/`, approval state used by ToolGateway, memory policy checks |
 | Runtime Plane | `runtime/` |
 | Capability Layer | `capabilities/models/`, `capabilities/knowledge/`, `capabilities/memory/`, `capabilities/tools/`, future Skill packs |
 | Contracts & Ports | `contracts/`, provider protocols |
 | Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/` |
-| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, `examples/enterprise_qa/`, `examples/react_enterprise_qa/` |
+| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, internal fixtures under `evaluation/demo/fixtures/`, and the canonical public package under `examples/insurance_customer_service/` |
 
 Boundary rules:
 - `contracts/` cannot import adapter SDKs.

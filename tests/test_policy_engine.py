@@ -3,7 +3,7 @@ from proof_agent.control.policy.engine import PolicyEngine
 
 
 def test_before_answer_denies_weak_evidence() -> None:
-    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    engine = PolicyEngine.from_file("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml")
     decision = engine.evaluate(
         EnforcementPoint.BEFORE_ANSWER,
         {"accepted_evidence_count": 0, "citations_present": False},
@@ -13,7 +13,7 @@ def test_before_answer_denies_weak_evidence() -> None:
 
 
 def test_before_tool_call_requires_approval() -> None:
-    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    engine = PolicyEngine.from_file("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml")
     decision = engine.evaluate(
         EnforcementPoint.BEFORE_TOOL_CALL,
         {"tool_name": "customer_lookup", "risk_level": "medium"},
@@ -22,7 +22,7 @@ def test_before_tool_call_requires_approval() -> None:
 
 
 def test_retrieval_step_defaults_to_allow() -> None:
-    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    engine = PolicyEngine.from_file("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml")
     decision = engine.evaluate(
         EnforcementPoint.BEFORE_RETRIEVAL_STEP,
         {"provider": "local_markdown", "step_id": "step_1", "top_k": 2},
@@ -63,7 +63,7 @@ rules:
 
 
 def test_policy_overrides_review_allow_for_medium_customer_lookup() -> None:
-    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    engine = PolicyEngine.from_file("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml")
     review_decision = ReviewDecision(
         review_id="review.act_tool_1.before_tool_call",
         enforcement_point=EnforcementPoint.BEFORE_TOOL_CALL,
@@ -90,7 +90,7 @@ def test_policy_overrides_review_allow_for_medium_customer_lookup() -> None:
 
 
 def test_invalid_model_call_review_fails_closed_to_deny() -> None:
-    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    engine = PolicyEngine.from_file("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml")
     review_decision = ReviewDecision(
         review_id="review.act_model_1.before_model_call",
         enforcement_point=EnforcementPoint.BEFORE_MODEL_CALL,
@@ -114,7 +114,7 @@ def test_invalid_model_call_review_fails_closed_to_deny() -> None:
 
 
 def test_malformed_retrieval_review_fallback_fails_closed_to_deny() -> None:
-    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    engine = PolicyEngine.from_file("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml")
     review_decision = ReviewDecision(
         review_id="review.act_retrieve_1.before_tool_call",
         enforcement_point=EnforcementPoint.BEFORE_TOOL_CALL,
@@ -138,7 +138,7 @@ def test_malformed_retrieval_review_fallback_fails_closed_to_deny() -> None:
 
 
 def test_stricter_review_reason_is_not_copied_to_policy_decision() -> None:
-    engine = PolicyEngine.from_file("examples/enterprise_qa/policy.yaml")
+    engine = PolicyEngine.from_file("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml")
     sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
     review_decision = ReviewDecision(
         review_id="review.act_retrieve_1.before_retrieval_plan",

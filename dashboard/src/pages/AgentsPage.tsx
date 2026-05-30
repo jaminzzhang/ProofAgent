@@ -8,7 +8,7 @@ import { useConfigAgents } from '../hooks/useConfigAgents'
 
 export function AgentsPage() {
   const { agents, loading, error, refresh } = useConfigAgents()
-  const [manifestPath, setManifestPath] = useState('examples/enterprise_qa/agent.yaml')
+  const [manifestPath, setManifestPath] = useState('examples/insurance_customer_service/agent.yaml')
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)

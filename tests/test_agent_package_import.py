@@ -11,9 +11,9 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
 
 def test_import_agent_package_creates_draft_without_modifying_source(tmp_path: Path) -> None:
-    manifest_path = Path("examples/enterprise_qa/agent.yaml")
+    manifest_path = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
     before_agent_yaml = manifest_path.read_text(encoding="utf-8")
-    before_policy_yaml = Path("examples/enterprise_qa/policy.yaml").read_text(encoding="utf-8")
+    before_policy_yaml = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml").read_text(encoding="utf-8")
     store = LocalAgentConfigurationStore(tmp_path / "config")
 
     draft = import_agent_package(manifest_path, store=store, actor="local-user")
@@ -26,14 +26,14 @@ def test_import_agent_package_creates_draft_without_modifying_source(tmp_path: P
     assert draft.contract_bundle.tools_yaml.startswith("tools:")
     assert "knowledge/customer-support-policy.md" in draft.contract_bundle.extra_files
     assert manifest_path.read_text(encoding="utf-8") == before_agent_yaml
-    assert Path("examples/enterprise_qa/policy.yaml").read_text(encoding="utf-8") == before_policy_yaml
+    assert Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/policy.yaml").read_text(encoding="utf-8") == before_policy_yaml
 
 
 def test_import_preserves_advanced_sections_for_contract_view(tmp_path: Path) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
 
     draft = import_agent_package(
-        Path("examples/react_enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
         store=store,
         actor="local-user",
     )
@@ -46,7 +46,7 @@ def test_import_preserves_advanced_sections_for_contract_view(tmp_path: Path) ->
 
 def test_compile_draft_agent_writes_valid_agent_package(tmp_path: Path) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
-    draft = import_agent_package(Path("examples/enterprise_qa/agent.yaml"), store=store, actor="local-user")
+    draft = import_agent_package(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"), store=store, actor="local-user")
 
     package_dir = compile_draft_agent(draft, tmp_path / "compiled")
 

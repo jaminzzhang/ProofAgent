@@ -22,7 +22,7 @@ def _import_enterprise_qa(client: TestClient) -> dict:
     response = client.post(
         "/api/config/agents/import",
         json={
-            "manifest_path": "examples/enterprise_qa/agent.yaml",
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
             "actor": "test-user",
         },
     )

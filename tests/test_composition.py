@@ -8,7 +8,7 @@ from proof_agent.errors import ProofAgentError
 
 
 def test_compose_harness_invocation_resolves_enterprise_qa_dependencies() -> None:
-    invocation = compose_harness_invocation(Path("examples/enterprise_qa/agent.yaml"))
+    invocation = compose_harness_invocation(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
 
     assert invocation.manifest.name == "enterprise_qa"
     assert invocation.template.name == "enterprise_qa"
@@ -38,7 +38,7 @@ def test_react_workflow_template_resolves_from_registry() -> None:
 
 def test_compose_harness_invocation_resolves_react_dependencies() -> None:
     invocation = compose_harness_invocation(
-        Path("examples/react_enterprise_qa/agent.yaml")
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
     )
 
     assert invocation.template.name == "react_enterprise_qa"

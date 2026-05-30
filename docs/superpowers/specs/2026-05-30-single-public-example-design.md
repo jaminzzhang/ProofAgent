@@ -93,7 +93,7 @@ Run:
 ```bash
 git diff --check
 uv run --extra dev ruff check proof_agent tests
-uv run --extra dev mypy proof_agent
+uv run --extra dev --extra openai mypy proof_agent
 uv run --extra dashboard --extra dev python -m pytest tests/ -v
 cd dashboard && npm test && npm run build
 cd chat && npm test && npm run build

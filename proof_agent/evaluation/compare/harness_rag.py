@@ -6,7 +6,7 @@ from proof_agent.evaluation.compare.result import RagResult
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
-DEFAULT_AGENT_PATH = Path("examples/enterprise_qa/agent.yaml")
+DEFAULT_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
 
 
 def run_harness_rag(question: str, *, agent_yaml: Path = DEFAULT_AGENT_PATH) -> RagResult:

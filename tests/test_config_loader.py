@@ -7,7 +7,7 @@ from proof_agent.errors import ProofAgentError
 
 
 def test_load_valid_enterprise_qa_manifest() -> None:
-    manifest = load_agent_manifest(Path("examples/enterprise_qa/agent.yaml"))
+    manifest = load_agent_manifest(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
     assert manifest.name == "enterprise_qa"
     assert manifest.workflow.runtime == "langgraph"
     assert manifest.workflow.checkpointer is not None
@@ -116,7 +116,7 @@ def test_loads_react_enterprise_qa_contract(tmp_path: Path) -> None:
 
 
 def test_loads_react_enterprise_qa_example_manifest() -> None:
-    manifest = load_agent_manifest(Path("examples/react_enterprise_qa/agent.yaml"))
+    manifest = load_agent_manifest(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"))
 
     assert manifest.workflow.template == "react_enterprise_qa"
     assert manifest.workflow.checkpointer is not None
@@ -136,7 +136,7 @@ def test_loads_react_enterprise_qa_example_manifest() -> None:
 
 
 def test_loads_react_enterprise_qa_deepseek_example_manifest() -> None:
-    manifest = load_agent_manifest(Path("examples/react_enterprise_qa/agent.deepseek.yaml"))
+    manifest = load_agent_manifest(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.deepseek.yaml"))
 
     assert manifest.model.provider == "deepseek"
     assert manifest.model.name == "deepseek-v4-flash"

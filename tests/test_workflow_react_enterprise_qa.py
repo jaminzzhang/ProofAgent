@@ -18,7 +18,7 @@ from proof_agent.contracts import (
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
-REACT_AGENT = Path("examples/react_enterprise_qa/agent.yaml")
+REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 
 
 def _trace_events(path: Path) -> list[dict[str, Any]]:
