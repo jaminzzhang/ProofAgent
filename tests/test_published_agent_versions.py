@@ -245,6 +245,7 @@ def test_chat_execution_rejects_example_template_without_publication(tmp_path: P
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
         published_agents={},
+        agent_configuration_dir=tmp_path / "config",
     )
     client = TestClient(app)
 

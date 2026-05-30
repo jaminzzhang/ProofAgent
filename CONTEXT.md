@@ -88,6 +88,38 @@ _Avoid_: Business Agent AI Core, model self-approval
 The shared capability registry that resolves model providers for final answers, planning, and Harness review roles.
 _Avoid_: Role-specific provider registry
 
+**Named OpenAI-Compatible Model Provider**:
+A first-class Model Provider name that resolves through the OpenAI-compatible adapter while carrying provider-specific defaults such as API key environment variable and base URL.
+_Avoid_: Generic OpenAI-compatible example, provider-specific control plane
+
+**DeepSeek Model Provider**:
+The named OpenAI-compatible Model Provider for DeepSeek API calls. It is a formal Agent Contract provider for final answer generation, ReAct planning, and Harness review assistance, while all outputs still pass through Harness-normalized contracts, validators, PolicyEngine, and trace rules.
+_Avoid_: DeepSeek-specific Harness semantics, provider-native tool execution, openai_compatible-only example
+
+**DeepSeek Model Name Policy**:
+Proof Agent recommends current DeepSeek model names in examples and documentation but does not hard-code a DeepSeek model allowlist in Agent Contract validation. Model inventory is provider-owned and may change without changing Harness semantics.
+_Avoid_: Offline-blocking provider inventory lookup, stale hard-coded model list, silently rewriting model names
+
+**Dashboard Model Configuration**:
+The Dashboard configuration workspace may directly configure Model Role Configuration values for final answers, ReAct planning, and Harness review, including named Model Providers such as DeepSeek. Dashboard editing still writes Agent Contract fields and must preserve the same secret, validation, and Harness-normalization boundaries as YAML editing.
+_Avoid_: Dashboard-only model semantics, provider credential storage, bypassing Agent Contract validation
+
+**Dashboard DeepSeek Model Selection**:
+Dashboard DeepSeek configuration uses provider selection plus editable model names with recommended current DeepSeek model values, not a hard model-name allowlist. API keys remain environment variable references, not stored credentials.
+_Avoid_: Fixed DeepSeek model dropdown, frontend-only provider inventory, storing DeepSeek API keys
+
+**Dashboard Model Parameter Editing**:
+Dashboard Model Configuration may edit shared Model Role Configuration parameters such as API key environment variable, base URL environment variable, temperature, maximum output tokens, and timeout for final answer, planner, and reviewer roles. It must not expose raw credential fields or provider-specific reasoning controls in V1.
+_Avoid_: raw API key input, provider secret storage, DeepSeek-only reasoning parameter passthrough
+
+**External Model Smoke Test**:
+An optional manually triggered verification path that calls a real remote model provider only when the operator supplies the required API key and explicitly opts in. It is not part of the deterministic demo or default CI gate.
+_Avoid_: default CI remote model call, hidden network dependency, mandatory provider credential
+
+**Model Reasoning Control**:
+A future model-provider capability for declaring provider-specific reasoning or thinking controls without weakening Proof Agent's Reasoning Summary, control prompts, trace safety, or output normalization boundaries. V1 DeepSeek support does not expose provider-specific reasoning controls.
+_Avoid_: Unbounded extra_body passthrough, provider-specific hidden reasoning mode, raw chain-of-thought capture
+
 **Model Role Configuration**:
 The Agent-specific configuration for each model call role, including final answer generation, ReAct planning, and Harness review assistance.
 _Avoid_: Single global Agent model, hidden model reuse, provider-native agent config

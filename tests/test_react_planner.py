@@ -177,6 +177,119 @@ def test_llm_react_planner_uses_model_provider_and_json_contract() -> None:
     assert provider.requests[0].stream is False
 
 
+def test_llm_react_planner_accepts_compact_deepseek_style_parameters() -> None:
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "action_type": "plan_retrieval",
+                "params": {"query": "reimbursement rule for travel meals"},
+            }
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="deepseek", name="deepseek-v4-flash"),
+        model_provider=provider,
+    )
+
+    proposal = planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+    )
+
+    assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
+    assert dict(proposal.parameters) == {
+        "query": "reimbursement rule for travel meals"
+    }
+    assert proposal.reasoning_summary.selected_action == ReActActionType.PLAN_RETRIEVAL
+    assert proposal.risk_level == "low"
+
+
+def test_llm_react_planner_maps_compact_search_tool_call_to_retrieval() -> None:
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "action_type": "propose_tool_call",
+                "parameters": {
+                    "tool": "search_policy",
+                    "query": "travel meals reimbursement",
+                },
+            }
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="deepseek", name="deepseek-v4-flash"),
+        model_provider=provider,
+    )
+
+    proposal = planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+    )
+
+    assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
+    assert dict(proposal.parameters) == {"query": "travel meals reimbursement"}
+    assert proposal.target_tool_name is None
+
+
+def test_llm_react_planner_maps_nested_search_tool_arguments_to_retrieval() -> None:
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "action_type": "propose_tool_call",
+                "parameters": {
+                    "tool": "search_policy_documents",
+                    "arguments": {"query": "reimbursement rule for travel meals"},
+                },
+            }
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="deepseek", name="deepseek-v4-flash"),
+        model_provider=provider,
+    )
+
+    proposal = planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+    )
+
+    assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
+    assert dict(proposal.parameters) == {
+        "query": "reimbursement rule for travel meals"
+    }
+
+
+def test_llm_react_planner_maps_compact_plan_field_to_retrieval_query() -> None:
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "action_type": "plan_retrieval",
+                "parameters": {
+                    "plan": "Retrieve the reimbursement rule for travel meals.",
+                },
+            }
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="deepseek", name="deepseek-v4-flash"),
+        model_provider=provider,
+    )
+
+    proposal = planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+    )
+
+    assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
+    assert dict(proposal.parameters) == {
+        "query": "Retrieve the reimbursement rule for travel meals."
+    }
+
+
 def test_llm_react_planner_canonicalizes_retrieval_output_before_returning() -> None:
     sentinel = "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE"
     provider = FakePlannerProvider(

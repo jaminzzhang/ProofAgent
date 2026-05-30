@@ -282,6 +282,8 @@ model:
 
 `deepseek` defaults to `DEEPSEEK_API_KEY` and `https://api.deepseek.com`; set `base_url` or `base_url_env` only when routing through a compatible proxy.
 
+The Dashboard Model Configuration tab can edit the same Agent Contract fields for final answer, ReAct planner, and Harness reviewer roles. Select `deepseek` as the provider, enter the model name such as `deepseek-v4-flash` or `deepseek-v4-pro`, and configure environment variable names such as `DEEPSEEK_API_KEY`; do not enter raw API keys.
+
 ### Configuring LLM-Backed Planning And Review
 
 Use the existing provider names to configure each model role. Provider names describe the external model channel; role semantics come from the Agent Contract section.
@@ -317,7 +319,7 @@ review:
 
 Planner and reviewer prompts are Harness Control Prompts maintained by Proof Agent. Agent Contracts configure provider channel, model name, and provider parameters, but do not replace the control prompts in V1.
 
-See `examples/react_enterprise_qa/agent.llm.yaml` for a runnable Agent Contract that configures final answer, planner, and reviewer roles with an OpenAI-compatible model provider. Planner and reviewer outputs are parsed as Harness JSON contracts before they affect routing, policy, tool, or answer behavior; provider-native tool calls are not executed in V1.
+See `examples/react_enterprise_qa/agent.llm.yaml` for a runnable Agent Contract that configures final answer, planner, and reviewer roles with an OpenAI-compatible model provider. See `examples/react_enterprise_qa/agent.deepseek.yaml` for the same role layout using the named DeepSeek provider. Planner and reviewer outputs are parsed as Harness JSON contracts before they affect routing, policy, tool, or answer behavior; provider-native tool calls are not executed in V1.
 
 Run example:
 ```bash
@@ -325,6 +327,14 @@ OPENAI_COMPATIBLE_API_KEY=... \
 OPENAI_COMPATIBLE_BASE_URL=... \
 uv run --extra openai proof-agent run examples/react_enterprise_qa/agent.llm.yaml --question "What is the reimbursement rule for travel meals?"
 ```
+
+DeepSeek manual smoke example:
+```bash
+DEEPSEEK_API_KEY=... \
+uv run --extra openai proof-agent run examples/react_enterprise_qa/agent.deepseek.yaml --question "What is the reimbursement rule for travel meals?"
+```
+
+Remote model smoke checks are opt-in. They are not part of the deterministic demo or default CI gate.
 
 PageIndex self-hosted retrieval can be used as a remote agentic evidence source while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation:
 

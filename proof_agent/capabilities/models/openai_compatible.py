@@ -111,7 +111,7 @@ class OpenAICompatibleModelProvider:
 
     def generate(self, request: ModelRequest) -> ModelResponse:
         try:
-            from openai import (  # type: ignore[import-not-found]
+            from openai import (
                 APIError,
                 APITimeoutError,
                 AuthenticationError,

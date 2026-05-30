@@ -4,6 +4,8 @@ import json
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from pydantic import BaseModel
+
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.capabilities.models.normalization import (
     ModelOutputNormalizationError,
@@ -180,10 +182,10 @@ class LLMHarnessReviewSubagent:
             },
         )
         response = self.model_provider.generate(request)
-        decision = parse_model_contract(
+        decision = _parse_review_decision(
             content=response.content,
-            contract_type=ReviewDecision,
-            role="harness_review",
+            enforcement_point=point,
+            action=action,
         )
         if (
             decision.enforcement_point != point
@@ -221,10 +223,59 @@ def _json_contract_fallback(value: Any) -> Any:
     return value
 
 
+class _CompactReviewDecision(BaseModel):
+    decision: PolicyDecisionType | None = None
+    suggested_decision: PolicyDecisionType | None = None
+    reason: str | None = None
+    confidence: float | None = None
+    risk_flags: tuple[str, ...] = ()
+
+
+def _parse_review_decision(
+    *,
+    content: str,
+    enforcement_point: EnforcementPoint,
+    action: ReActActionProposal,
+) -> ReviewDecision:
+    try:
+        return parse_model_contract(
+            content=content,
+            contract_type=ReviewDecision,
+            role="harness_review",
+        )
+    except ModelOutputNormalizationError as exc:
+        if exc.error_code != "model_output_contract_validation_failed":
+            raise
+    compact = parse_model_contract(
+        content=content,
+        contract_type=_CompactReviewDecision,
+        role="harness_review",
+    )
+    suggested_decision = compact.suggested_decision or compact.decision
+    if suggested_decision is None:
+        raise ModelOutputNormalizationError(
+            role="harness_review",
+            error_code="model_output_contract_validation_failed",
+            message="Model review output did not include a decision.",
+            raw_content_length=len(content),
+        )
+    return ReviewDecision(
+        review_id=f"review.{action.action_id}.{enforcement_point.value}",
+        enforcement_point=enforcement_point,
+        suggested_decision=suggested_decision,
+        reason=compact.reason or "Compact review decision normalized by Harness.",
+        confidence=compact.confidence if compact.confidence is not None else 0.5,
+        risk_flags=compact.risk_flags,
+        subject_action_id=action.action_id,
+        metadata={"provider_output": "compact"},
+    )
+
+
 def _review_control_prompt() -> str:
     return (
         "You are the Proof Agent LLM Harness Review Subagent. "
         "Return exactly one JSON object matching ReviewDecision. "
+        "If you use a compact form, return decision or suggested_decision with one of the allowed decision values. "
         "Your decision is advisory only; PolicyEngine remains the final authority. "
         "Do not generate final user answers, chain-of-thought, markdown commentary, or tool results. "
         "Use fail-closed reasoning when the action or context is unsafe or underspecified."

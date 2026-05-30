@@ -47,6 +47,7 @@ def test_insurance_service_template_is_not_default_published_agent(tmp_path: Pat
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
         published_agents={},
+        agent_configuration_dir=tmp_path / "config",
     )
     client = TestClient(app)
 

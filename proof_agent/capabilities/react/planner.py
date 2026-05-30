@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
-from typing import Protocol
+from collections.abc import Mapping
+from typing import Any, Protocol
+
+from pydantic import BaseModel, Field
 
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.capabilities.models.normalization import (
@@ -157,10 +160,8 @@ class LLMReActPlanner:
             metadata={"role": "react_planner", "question": question},
         )
         response = self.model_provider.generate(request)
-        proposal = parse_model_contract(
+        proposal = _parse_planner_proposal(
             content=response.content,
-            contract_type=ReActActionProposal,
-            role="react_planner",
         )
         return _validate_planner_proposal(
             proposal,
@@ -172,9 +173,68 @@ def _planner_control_prompt() -> str:
     return (
         "You are the Proof Agent LLM ReAct Planner. "
         "Return exactly one JSON object matching ReActActionProposal. "
+        "If you use a compact form, return action_type plus parameters; params is accepted as an alias for parameters. "
         "Use only allowed action_type values supplied in the user message. "
         "Do not return chain-of-thought, markdown commentary, tool results, or natural language. "
         "A proposed action is not approved and cannot execute until Harness policy admits it."
+    )
+
+
+class _CompactPlannerProposal(BaseModel):
+    action_type: ReActActionType
+    parameters: Mapping[str, Any] = Field(default_factory=dict)
+    params: Mapping[str, Any] = Field(default_factory=dict)
+    target_tool_name: str | None = None
+
+
+def _parse_planner_proposal(*, content: str) -> ReActActionProposal:
+    try:
+        return parse_model_contract(
+            content=content,
+            contract_type=ReActActionProposal,
+            role="react_planner",
+        )
+    except ModelOutputNormalizationError as exc:
+        if exc.error_code != "model_output_contract_validation_failed":
+            raise
+    compact = parse_model_contract(
+        content=content,
+        contract_type=_CompactPlannerProposal,
+        role="react_planner",
+    )
+    parameters = compact.parameters or compact.params
+    action_type = compact.action_type
+    target_tool_name = compact.target_tool_name
+    if (
+        action_type == ReActActionType.PROPOSE_TOOL_CALL
+        and target_tool_name is None
+        and _is_non_empty_string(parameters.get("query"))
+    ):
+        action_type = ReActActionType.PLAN_RETRIEVAL
+        parameters = {"query": parameters["query"]}
+    if (
+        action_type == ReActActionType.PROPOSE_TOOL_CALL
+        and target_tool_name is None
+        and isinstance(parameters.get("arguments"), Mapping)
+        and _is_non_empty_string(parameters["arguments"].get("query"))
+    ):
+        action_type = ReActActionType.PLAN_RETRIEVAL
+        parameters = {"query": parameters["arguments"]["query"]}
+    if (
+        action_type == ReActActionType.PLAN_RETRIEVAL
+        and not _is_non_empty_string(parameters.get("query"))
+        and _is_non_empty_string(parameters.get("plan"))
+    ):
+        parameters = {"query": parameters["plan"]}
+    return ReActActionProposal(
+        action_id="act_llm_compact_1",
+        action_type=action_type,
+        reasoning_summary=_safe_reasoning_summary(action_type),
+        parameters=parameters,
+        target_tool_name=target_tool_name,
+        risk_level="medium"
+        if action_type == ReActActionType.PROPOSE_TOOL_CALL
+        else "low",
     )
 
 

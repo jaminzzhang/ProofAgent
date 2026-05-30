@@ -256,6 +256,27 @@ def test_llm_review_canonicalizes_review_id_before_returning(
     assert "RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE" not in decision.review_id
 
 
+def test_llm_review_accepts_compact_deepseek_style_decision(
+    sample_action_proposal: ReActActionProposal,
+) -> None:
+    provider = FakeReviewProvider('{"decision": "allow"}')
+    reviewer = LLMHarnessReviewSubagent(
+        config=ReviewSubagentConfig(provider="deepseek", name="deepseek-v4-flash"),
+        model_provider=provider,
+    )
+
+    decision = reviewer.review(
+        enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL_PLAN,
+        action=sample_action_proposal,
+        context={"accepted_evidence_count": 0},
+    )
+
+    assert decision.suggested_decision == PolicyDecisionType.ALLOW
+    assert decision.enforcement_point == EnforcementPoint.BEFORE_RETRIEVAL_PLAN
+    assert decision.subject_action_id == "act_retrieve_1"
+    assert decision.review_id == "review.act_retrieve_1.before_retrieval_plan"
+
+
 def test_llm_review_prompt_uses_enforcement_point_allowed_decisions(
     sample_action_proposal: ReActActionProposal,
 ) -> None:

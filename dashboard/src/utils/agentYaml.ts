@@ -67,11 +67,40 @@ export function updateAgentYamlField(
 ): string {
   const lines = agentYaml.split('\n')
   const lineIndex = findYamlPathLineIndex(lines, path)
-  if (lineIndex === -1) return agentYaml
+  if (lineIndex === -1) return insertYamlPath(lines, path, value).join('\n')
 
   const indent = (path.length - 1) * 2
   lines[lineIndex] = `${' '.repeat(indent)}${path[path.length - 1]}: ${formatYamlValue(value)}`
   return lines.join('\n')
+}
+
+function insertYamlPath(lines: string[], path: string[], value: string): string[] {
+  if (path.length === 0) return lines
+
+  let start = 0
+  let end = lines.length
+
+  for (let depth = 0; depth < path.length; depth += 1) {
+    const indent = depth * 2
+    const lineIndex = findLineIndex(lines, indent, path[depth], start, end)
+    if (lineIndex === -1) {
+      if (depth === 0) return lines
+      const insertedLines: string[] = []
+      for (let missingDepth = depth; missingDepth < path.length - 1; missingDepth += 1) {
+        insertedLines.push(`${' '.repeat(missingDepth * 2)}${path[missingDepth]}:`)
+      }
+      insertedLines.push(
+        `${' '.repeat((path.length - 1) * 2)}${path[path.length - 1]}: ${formatYamlValue(value)}`,
+      )
+      lines.splice(end, 0, ...insertedLines)
+      return lines
+    }
+
+    start = lineIndex + 1
+    end = findBlockEnd(lines, lineIndex, indent)
+  }
+
+  return lines
 }
 
 function field(

@@ -66,6 +66,80 @@ def test_openai_compatible_model_config_loads_with_params(tmp_path: Path) -> Non
         manifest.model.params["max_output_tokens"] = 100
 
 
+def test_deepseek_model_provider_loads_for_all_model_roles(tmp_path: Path) -> None:
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: deepseek_model_test
+purpose: "Test DeepSeek model role config."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    provider: sqlite
+    uri: memory
+knowledge:
+  provider: local_markdown
+  params:
+    path: ./knowledge
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+model:
+  provider: deepseek
+  name: deepseek-v4-flash
+  params:
+    api_key_env: DEEPSEEK_API_KEY
+    temperature: 0
+    max_output_tokens: 800
+react:
+  max_steps: 2
+  max_tool_calls: 0
+  record_reasoning_summary: true
+  planner:
+    provider: deepseek
+    name: deepseek-v4-flash
+    params:
+      api_key_env: DEEPSEEK_API_KEY
+      temperature: 0
+review:
+  mode: auto
+  subagent:
+    provider: deepseek
+    name: deepseek-v4-flash
+    timeout_seconds: 20
+    max_output_tokens: 400
+    fail_closed: true
+    params:
+      api_key_env: DEEPSEEK_API_KEY
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.model.provider == "deepseek"
+    assert manifest.model.name == "deepseek-v4-flash"
+    assert manifest.react is not None
+    assert manifest.react.planner.provider == "deepseek"
+    assert manifest.review is not None
+    assert manifest.review.subagent is not None
+    assert manifest.review.subagent.provider == "deepseek"
+
+
 def test_model_config_rejects_secret_looking_params(tmp_path: Path) -> None:
     with pytest.raises(ProofAgentError) as exc:
         load_agent_manifest(

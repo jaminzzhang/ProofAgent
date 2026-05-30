@@ -24,7 +24,14 @@ REQUIRED_TOP_LEVEL_FIELDS = {
 
 SUPPORTED_KNOWLEDGE_PROVIDERS = {"local_markdown", "local_vector", "pageindex", "remote_search"}
 SUPPORTED_RETRIEVAL_STRATEGIES = {"single_step", "agentic"}
-SUPPORTED_MODEL_PROVIDERS = {"deterministic", "openai_compatible", "azure_openai", "anthropic"}
+SUPPORTED_MODEL_PROVIDERS = {
+    "deterministic",
+    "openai_compatible",
+    "openai",
+    "deepseek",
+    "azure_openai",
+    "anthropic",
+}
 SUPPORTED_CHECKPOINTER_PROVIDERS = {"sqlite"}
 FORBIDDEN_KNOWLEDGE_PARAM_PARTS = (
     "api_key",

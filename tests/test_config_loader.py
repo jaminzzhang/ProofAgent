@@ -135,6 +135,19 @@ def test_loads_react_enterprise_qa_example_manifest() -> None:
     assert manifest.response.include_review_results is False
 
 
+def test_loads_react_enterprise_qa_deepseek_example_manifest() -> None:
+    manifest = load_agent_manifest(Path("examples/react_enterprise_qa/agent.deepseek.yaml"))
+
+    assert manifest.model.provider == "deepseek"
+    assert manifest.model.name == "deepseek-v4-flash"
+    assert manifest.model.params["api_key_env"] == "DEEPSEEK_API_KEY"
+    assert manifest.react is not None
+    assert manifest.react.planner.provider == "deepseek"
+    assert manifest.review is not None
+    assert manifest.review.subagent is not None
+    assert manifest.review.subagent.provider == "deepseek"
+
+
 def test_loads_local_case_memory_contract(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,

@@ -8,6 +8,7 @@ interface FieldConfig {
   input: 'text' | 'number' | 'select'
   options?: string[]
   description?: string
+  placeholder?: string
 }
 
 interface ModuleEditorProps {
@@ -97,6 +98,7 @@ export function ModuleEditor({
                 <input
                   type={field.input}
                   value={readAgentYamlField(agentYaml, field.path)}
+                  placeholder={field.placeholder}
                   onChange={(e) => onFieldChange(field.path, e.target.value)}
                   className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                 />
