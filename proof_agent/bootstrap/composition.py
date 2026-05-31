@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
-from proof_agent.capabilities.knowledge import KnowledgeProvider, resolve_knowledge_provider
+from proof_agent.capabilities.knowledge import KnowledgeProvider
+from proof_agent.capabilities.knowledge.blended import resolve_blended_knowledge_provider
 from proof_agent.capabilities.memory.session import SessionMemory
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.capabilities.react import ReActPlanner, resolve_react_planner
@@ -63,7 +65,10 @@ def compose_harness_invocation(
         manifest=resolved_manifest,
         template=template,
         policy=PolicyEngine.from_file(resolved_manifest.policy.file),
-        knowledge_provider=resolve_knowledge_provider(resolved_manifest.knowledge),
+        knowledge_provider=cast(
+            KnowledgeProvider,
+            resolve_blended_knowledge_provider(resolved_manifest),
+        ),
         model_provider=resolve_provider(resolved_manifest.model),
         tool_gateway=ToolGateway.from_file(resolved_manifest.tools.file),
         react_planner=react_planner,

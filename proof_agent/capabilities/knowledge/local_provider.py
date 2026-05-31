@@ -51,7 +51,8 @@ def _evidence_from_chunk(chunk: MarkdownChunk, score: float) -> EvidenceChunk:
     return EvidenceChunk(
         source=chunk.source,
         content=chunk.content,
-        score=score,
+        provider_native_score=score,
+        admission_score=score,
         status=EvidenceStatus.CANDIDATE,
         citation=citation_for_chunk(chunk),
         metadata={"heading": chunk.heading, "line_start": chunk.line_start, "line_end": chunk.line_end},

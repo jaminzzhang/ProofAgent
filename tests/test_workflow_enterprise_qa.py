@@ -91,16 +91,20 @@ def test_agentic_retrieval_strategy_executes_with_pageindex(
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8")
         .replace(
-            """knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge""",
-            """knowledge:
-  provider: pageindex
-  params:
-    endpoint_env: PAGEINDEX_BASE_URL
-    document_id: doc_enterprise_policy
-    thinking: true""",
+            """knowledge_sources:
+  - source_id: enterprise_qa_knowledge
+    name: Enterprise QA Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge""",
+            """knowledge_sources:
+  - source_id: enterprise_qa_knowledge
+    name: Enterprise QA PageIndex
+    provider: pageindex
+    params:
+      endpoint_env: PAGEINDEX_BASE_URL
+      document_id: doc_enterprise_policy
+      thinking: true""",
         )
         .replace(
             """retrieval:

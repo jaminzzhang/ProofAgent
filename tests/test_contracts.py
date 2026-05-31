@@ -48,7 +48,7 @@ def test_workflow_state_collections_are_immutable() -> None:
     evidence = EvidenceChunk(
         source="kb://policy.md",
         content="Policy text",
-        score=0.91,
+        admission_score=0.91,
         status=EvidenceStatus.ACCEPTED,
     )
     workflow = WorkflowState(

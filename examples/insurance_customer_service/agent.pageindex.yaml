@@ -8,13 +8,19 @@ workflow:
     provider: sqlite
     uri: memory
 
-knowledge:
-  provider: pageindex
-  params:
-    endpoint_env: PAGEINDEX_BASE_URL
-    document_id: insurance_customer_service
-    thinking: true
-    timeout_seconds: 10
+knowledge_sources:
+  - source_id: insurance_customer_pageindex
+    name: Insurance Customer PageIndex
+    provider: pageindex
+    params:
+      endpoint_env: PAGEINDEX_BASE_URL
+      document_id: insurance_customer_service
+      thinking: true
+      timeout_seconds: 10
+
+knowledge_bindings:
+  - binding_id: insurance_customer_pageindex_binding
+    source_id: insurance_customer_pageindex
 
 retrieval:
   strategy: agentic

@@ -126,3 +126,41 @@ def test_rollback_changes_active_pointer_without_mutating_versions(tmp_path: Pat
         / version_two.version_id
         / "agent.yaml"
     ).read_text(encoding="utf-8") == "name: enterprise_qa_v2\n"
+
+
+def test_create_list_and_store_knowledge_source_documents(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+
+    source = store.create_knowledge_source(
+        source_id="ks_pageindex",
+        name="PageIndex Policies",
+        provider="pageindex",
+        params={
+            "endpoint_env": "PAGEINDEX_BASE_URL",
+            "document_id": "policies",
+        },
+        actor="local-user",
+    )
+    document = store.add_knowledge_document(
+        source_id=source.source_id,
+        filename="travel-policy.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.4\nsample",
+        state="ready",
+        provider_document_id="pi_travel_policy",
+        actor="local-user",
+    )
+
+    loaded = store.get_knowledge_source(source.source_id)
+    documents = store.list_knowledge_documents(source.source_id)
+
+    assert loaded == source
+    assert store.list_knowledge_sources() == [source]
+    assert documents == [document]
+    assert document.document_id.startswith("doc_")
+    assert document.revision_id.startswith("rev_")
+    assert document.source_id == source.source_id
+    assert document.filename == "travel-policy.pdf"
+    assert document.content_hash
+    assert document.provider_document_id == "pi_travel_policy"
+    assert store.knowledge_document_original_path(document).read_bytes() == b"%PDF-1.4\nsample"

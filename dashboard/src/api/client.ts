@@ -7,6 +7,10 @@ import type {
   DraftValidationResponse,
   HandoffsResponse,
   HealthResponse,
+  KnowledgeDocument,
+  KnowledgeDocumentsResponse,
+  KnowledgeSource,
+  KnowledgeSourcesResponse,
   PublishedAgentVersion,
   RunDetail,
   RunPurposeFilter,
@@ -60,6 +64,67 @@ export function fetchHandoffs(): Promise<HandoffsResponse> {
 
 export function fetchConfigAgents(): Promise<ConfigAgentsResponse> {
   return fetchJson<ConfigAgentsResponse>(`${BASE}/config/agents`)
+}
+
+export function fetchKnowledgeSources(): Promise<KnowledgeSourcesResponse> {
+  return fetchJson<KnowledgeSourcesResponse>(`${BASE}/config/knowledge-sources`)
+}
+
+export function createKnowledgeSource(payload: {
+  source_id?: string
+  name: string
+  provider: string
+  params?: Record<string, unknown>
+  actor?: string
+}): Promise<KnowledgeSource> {
+  return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchKnowledgeDocuments(sourceId: string): Promise<KnowledgeDocumentsResponse> {
+  return fetchJson<KnowledgeDocumentsResponse>(`${BASE}/config/knowledge-sources/${sourceId}/documents`)
+}
+
+export function uploadKnowledgeDocument(
+  sourceId: string,
+  payload: {
+    filename: string
+    content_type: string
+    content_base64: string
+    actor?: string
+  },
+): Promise<KnowledgeDocument> {
+  return fetchJson<KnowledgeDocument>(`${BASE}/config/knowledge-sources/${sourceId}/documents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function bindKnowledgeSourceToDraft(
+  agentId: string,
+  draftId: string,
+  payload: {
+    source_id: string
+    binding_id?: string | null
+    alias?: string | null
+    failure_mode?: 'required' | 'advisory'
+    fusion_weight?: number
+    top_k?: number | null
+    actor?: string
+  },
+): Promise<ContractBundle> {
+  return fetchJson<ContractBundle>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-bindings`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
 }
 
 export function importConfigAgent(payload: {

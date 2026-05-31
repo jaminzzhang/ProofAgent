@@ -44,3 +44,68 @@ def test_compose_harness_invocation_resolves_react_dependencies() -> None:
     assert invocation.template.name == "react_enterprise_qa"
     assert invocation.react_planner is not None
     assert invocation.review_subagent is not None
+
+
+def test_compose_harness_invocation_blends_multiple_knowledge_bindings(tmp_path: Path) -> None:
+    source_one = tmp_path / "knowledge_one"
+    source_two = tmp_path / "knowledge_two"
+    source_one.mkdir()
+    source_two.mkdir()
+    (source_one / "alpha.md").write_text("# Alpha\nAlpha travel meals need receipts.\n", encoding="utf-8")
+    (source_two / "beta.md").write_text("# Beta\nBeta support policy needs receipts.\n", encoding="utf-8")
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: blended_qa
+purpose: "Blend two knowledge sources."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+knowledge_sources:
+  - source_id: ks_alpha
+    name: Alpha Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge_one
+  - source_id: ks_beta
+    name: Beta Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge_two
+knowledge_bindings:
+  - binding_id: kb_alpha
+    source_id: ks_alpha
+    fusion_weight: 1.0
+  - binding_id: kb_beta
+    source_id: ks_beta
+    fusion_weight: 1.0
+retrieval:
+  strategy: single_step
+  top_k: 4
+  min_score: 0.1
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    invocation = compose_harness_invocation(agent_yaml)
+    chunks = invocation.knowledge_provider.retrieve("alpha beta receipts", top_k=4)
+
+    assert invocation.knowledge_provider.provider_name == "mixed"
+    assert {chunk.source_id for chunk in chunks} == {"ks_alpha", "ks_beta"}
+    assert {chunk.binding_id for chunk in chunks} == {"kb_alpha", "kb_beta"}
+    assert all(chunk.fusion_rank is not None for chunk in chunks)
+    assert all(chunk.admission_score is not None for chunk in chunks)

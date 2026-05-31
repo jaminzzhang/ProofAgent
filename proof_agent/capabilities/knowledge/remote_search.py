@@ -47,7 +47,7 @@ class RemoteSearchProvider:
             raise ProofAgentError(
                 "PA_KNOWLEDGE_002",
                 "remote_search requires mock_results_path in this build",
-                "Set knowledge.params.mock_results_path or use local_markdown.",
+                "Set the remote_search Source params.mock_results_path or use local_markdown.",
             )
         raw = json.loads(self.mock_results_path.read_text(encoding="utf-8"))
         if not isinstance(raw, list):
@@ -91,7 +91,8 @@ def _normalize_remote_result(item: Any, fixture_path: Path) -> EvidenceChunk:
     return EvidenceChunk(
         source=source,
         content=content,
-        score=score,
+        provider_native_score=score,
+        admission_score=score,
         status=EvidenceStatus.CANDIDATE,
         citation=item.get("citation"),
         metadata=metadata,

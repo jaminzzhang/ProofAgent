@@ -13,11 +13,117 @@ def test_load_valid_enterprise_qa_manifest() -> None:
     assert manifest.workflow.checkpointer is not None
     assert manifest.workflow.checkpointer.provider == "sqlite"
     assert manifest.workflow.checkpointer.uri == "memory"
-    assert manifest.knowledge.provider == "local_markdown"
-    assert manifest.knowledge.params["path"].name == "knowledge"
+    assert manifest.knowledge_sources[0].provider == "local_markdown"
+    assert manifest.knowledge_sources[0].params["path"].name == "knowledge"
+    assert manifest.knowledge_bindings[0].source_id == manifest.knowledge_sources[0].source_id
     assert manifest.retrieval.strategy == "single_step"
     assert manifest.retrieval.top_k == 2
     assert manifest.retrieval.min_score == 0.2
+
+
+def test_loads_source_owned_knowledge_bindings(tmp_path: Path) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml.write_text(
+        """
+name: source_owned
+purpose: "Source-owned knowledge config."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_id: ks_local
+    alias: policy_docs
+    failure_mode: required
+    fusion_weight: 1.25
+    top_k: 2
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.knowledge_sources[0].source_id == "ks_local"
+    assert manifest.knowledge_sources[0].provider == "local_markdown"
+    assert manifest.knowledge_sources[0].params["path"] == (tmp_path / "knowledge").resolve()
+    assert manifest.knowledge_bindings[0].binding_id == "kb_local"
+    assert manifest.knowledge_bindings[0].source_id == "ks_local"
+    assert manifest.knowledge_bindings[0].alias == "policy_docs"
+    assert manifest.knowledge_bindings[0].failure_mode == "required"
+    assert manifest.knowledge_bindings[0].fusion_weight == 1.25
+    assert manifest.knowledge_bindings[0].top_k == 2
+
+
+def test_inline_knowledge_provider_is_rejected_after_direct_migration(tmp_path: Path) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml.write_text(
+        """
+name: broken
+purpose: "Legacy inline knowledge config."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+knowledge:
+knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "knowledge_bindings" in exc.value.message
 
 
 def test_missing_policy_file_fails_fast(tmp_path: Path) -> None:
@@ -31,10 +137,15 @@ purpose: "Broken manifest."
 workflow:
   runtime: langgraph
   template: enterprise_qa
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_id: ks_local
 retrieval:
   strategy: single_step
   top_k: 2
@@ -350,10 +461,15 @@ purpose: "Controlled ReAct enterprise QA."
 workflow:
   runtime: langgraph
   template: react_enterprise_qa
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_id: ks_local
 retrieval:
   strategy: single_step
   top_k: 2

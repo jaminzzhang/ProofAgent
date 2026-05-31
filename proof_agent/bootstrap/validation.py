@@ -13,7 +13,8 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "name",
     "purpose",
     "workflow",
-    "knowledge",
+    "knowledge_sources",
+    "knowledge_bindings",
     "retrieval",
     "model",
     "policy",
@@ -57,6 +58,14 @@ SUPPORTED_WORKFLOW_TEMPLATES = {"enterprise_qa", "react_enterprise_qa"}
 def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> None:
     """Fail early with actionable messages before Pydantic validation runs."""
 
+    if "knowledge" in raw:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            "legacy inline knowledge.provider is not supported; use knowledge_sources and knowledge_bindings",
+            f"Move provider params out of the Agent knowledge section in {manifest_path}.",
+            artifact_path=manifest_path,
+        )
+
     missing = sorted(REQUIRED_TOP_LEVEL_FIELDS.difference(raw))
     if missing:
         raise ProofAgentError(
@@ -68,7 +77,6 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
 
     required_nested = {
         "workflow": {"runtime", "template"},
-        "knowledge": {"provider", "params"},
         "retrieval": {"strategy"},
         "model": {"provider", "name"},
         "policy": {"file"},
@@ -94,6 +102,9 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
                 artifact_path=manifest_path,
             )
 
+    _require_sequence_of_mappings(raw, "knowledge_sources", manifest_path=manifest_path)
+    _require_sequence_of_mappings(raw, "knowledge_bindings", manifest_path=manifest_path)
+
 
 def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     """Validate the supported v1 runtime envelope and local file dependencies."""
@@ -115,15 +126,8 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     _validate_checkpointer_config(manifest, manifest_path=manifest_path)
     _validate_react_config(manifest, manifest_path=manifest_path)
     _validate_review_config(manifest, manifest_path=manifest_path)
-    if manifest.knowledge.provider not in SUPPORTED_KNOWLEDGE_PROVIDERS:
-        raise ProofAgentError(
-            "PA_KNOWLEDGE_001",
-            f"unsupported knowledge provider: {manifest.knowledge.provider}",
-            f"Supported providers: {', '.join(sorted(SUPPORTED_KNOWLEDGE_PROVIDERS))}.",
-            artifact_path=manifest_path,
-        )
+    _validate_knowledge_sources_and_bindings(manifest, manifest_path=manifest_path)
     _reject_secret_knowledge_params(manifest, manifest_path=manifest_path)
-    _validate_knowledge_provider_params(manifest, manifest_path=manifest_path)
     _validate_retrieval_config(manifest, manifest_path=manifest_path)
     if manifest.model.provider not in SUPPORTED_MODEL_PROVIDERS:
         raise ProofAgentError(
@@ -163,6 +167,26 @@ def require_path(path: Path, field_name: str, manifest_path: Path) -> None:
             "PA_CONFIG_001",
             f"{field_name} is not a file: {path}",
             f"Point {field_name} to a YAML file.",
+            artifact_path=manifest_path,
+        )
+
+
+def _require_sequence_of_mappings(
+    raw: Mapping[str, Any], section: str, *, manifest_path: Path
+) -> None:
+    value = raw.get(section)
+    if not isinstance(value, list) or not value:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"{section} must be a non-empty list",
+            f"Add at least one {section} entry to {manifest_path}.",
+            artifact_path=manifest_path,
+        )
+    if any(not isinstance(item, Mapping) for item in value):
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"{section} entries must be mappings",
+            f"Use mapping entries under {section} in {manifest_path}.",
             artifact_path=manifest_path,
         )
 
@@ -375,32 +399,105 @@ def _is_forbidden_model_param(key: str) -> bool:
     return any(part in normalized for part in FORBIDDEN_MODEL_PARAM_PARTS)
 
 
-def _validate_knowledge_provider_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    params = manifest.knowledge.params
-    provider = manifest.knowledge.provider
+def _validate_knowledge_sources_and_bindings(
+    manifest: AgentManifest, *, manifest_path: Path
+) -> None:
+    source_ids: set[str] = set()
+    for source in manifest.knowledge_sources:
+        if source.source_id in source_ids:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"duplicate knowledge source id: {source.source_id}",
+                "Use unique knowledge_sources[].source_id values.",
+                artifact_path=manifest_path,
+            )
+        source_ids.add(source.source_id)
+        if source.provider not in SUPPORTED_KNOWLEDGE_PROVIDERS:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                f"unsupported knowledge provider: {source.provider}",
+                f"Supported providers: {', '.join(sorted(SUPPORTED_KNOWLEDGE_PROVIDERS))}.",
+                artifact_path=manifest_path,
+            )
+        _validate_knowledge_provider_params(
+            provider=source.provider,
+            params=source.params,
+            field_prefix=f"knowledge_sources[{source.source_id}].params",
+            manifest_path=manifest_path,
+        )
+
+    binding_ids: set[str] = set()
+    for binding in manifest.knowledge_bindings:
+        if binding.binding_id in binding_ids:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"duplicate knowledge binding id: {binding.binding_id}",
+                "Use unique knowledge_bindings[].binding_id values.",
+                artifact_path=manifest_path,
+            )
+        binding_ids.add(binding.binding_id)
+        if binding.source_id not in source_ids:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"knowledge binding references unknown source: {binding.source_id}",
+                "Bind only source ids declared in knowledge_sources.",
+                artifact_path=manifest_path,
+            )
+        if binding.failure_mode not in {"required", "advisory"}:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"unsupported knowledge binding failure_mode: {binding.failure_mode}",
+                "Use failure_mode: required or advisory.",
+                artifact_path=manifest_path,
+            )
+        if binding.fusion_weight <= 0:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "knowledge binding fusion_weight must be greater than 0",
+                "Set fusion_weight to a positive number.",
+                artifact_path=manifest_path,
+            )
+        if binding.top_k is not None and binding.top_k <= 0:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "knowledge binding top_k must be greater than 0",
+                "Set top_k to a positive integer.",
+                artifact_path=manifest_path,
+            )
+
+
+def _validate_knowledge_provider_params(
+    *,
+    provider: str,
+    params: Mapping[str, Any],
+    field_prefix: str,
+    manifest_path: Path,
+) -> None:
     if provider == "local_markdown":
-        path = _required_param(params, "path", provider, manifest_path)
-        require_directory(Path(path), "knowledge.params.path", manifest_path)
+        path = _required_param(params, "path", provider, manifest_path, field_prefix=field_prefix)
+        require_directory(Path(path), f"{field_prefix}.path", manifest_path)
         return
     if provider == "local_vector":
-        index_path = _required_param(params, "index_path", provider, manifest_path)
-        _required_param(params, "collection_name", provider, manifest_path)
-        _required_param(params, "embedding_model", provider, manifest_path)
-        require_directory(Path(index_path), "knowledge.params.index_path", manifest_path)
+        index_path = _required_param(
+            params, "index_path", provider, manifest_path, field_prefix=field_prefix
+        )
+        _required_param(params, "collection_name", provider, manifest_path, field_prefix=field_prefix)
+        _required_param(params, "embedding_model", provider, manifest_path, field_prefix=field_prefix)
+        require_directory(Path(index_path), f"{field_prefix}.index_path", manifest_path)
         return
     if provider == "remote_search":
-        _required_param(params, "endpoint_env", provider, manifest_path)
-        _required_param(params, "api_key_env", provider, manifest_path)
-        _required_param(params, "index_name", provider, manifest_path)
+        _required_param(params, "endpoint_env", provider, manifest_path, field_prefix=field_prefix)
+        _required_param(params, "api_key_env", provider, manifest_path, field_prefix=field_prefix)
+        _required_param(params, "index_name", provider, manifest_path, field_prefix=field_prefix)
         mock_results_path = params.get("mock_results_path")
         if mock_results_path is not None:
             require_path(
-                Path(mock_results_path), "knowledge.params.mock_results_path", manifest_path
+                Path(mock_results_path), f"{field_prefix}.mock_results_path", manifest_path
             )
         return
     if provider == "pageindex":
-        _required_param(params, "endpoint_env", provider, manifest_path)
-        _required_param(params, "document_id", provider, manifest_path)
+        _required_param(params, "endpoint_env", provider, manifest_path, field_prefix=field_prefix)
+        _required_param(params, "document_id", provider, manifest_path, field_prefix=field_prefix)
         timeout_seconds = params.get("timeout_seconds")
         if timeout_seconds is not None:
             try:
@@ -408,7 +505,7 @@ def _validate_knowledge_provider_params(manifest: AgentManifest, *, manifest_pat
             except (TypeError, ValueError) as exc:
                 raise ProofAgentError(
                     "PA_CONFIG_002",
-                    "knowledge.params.timeout_seconds must be numeric",
+                    f"{field_prefix}.timeout_seconds must be numeric",
                     "Set pageindex timeout_seconds to a positive number.",
                     artifact_path=manifest_path,
                 ) from exc
@@ -417,7 +514,7 @@ def _validate_knowledge_provider_params(manifest: AgentManifest, *, manifest_pat
         if timeout_seconds_value <= 0:
             raise ProofAgentError(
                 "PA_CONFIG_002",
-                "knowledge.params.timeout_seconds must be greater than 0",
+                f"{field_prefix}.timeout_seconds must be greater than 0",
                 "Set pageindex timeout_seconds to a positive number.",
                 artifact_path=manifest_path,
             )
@@ -457,13 +554,20 @@ def _validate_retrieval_config(manifest: AgentManifest, *, manifest_path: Path) 
         )
 
 
-def _required_param(params: Mapping[str, Any], key: str, provider: str, manifest_path: Path) -> Any:
+def _required_param(
+    params: Mapping[str, Any],
+    key: str,
+    provider: str,
+    manifest_path: Path,
+    *,
+    field_prefix: str,
+) -> Any:
     value = params.get(key)
     if value in (None, ""):
         raise ProofAgentError(
             "PA_CONFIG_001",
-            f"missing knowledge.params.{key} for {provider}",
-            f"Add knowledge.params.{key} to {manifest_path}",
+            f"missing {field_prefix}.{key} for {provider}",
+            f"Add {field_prefix}.{key} to {manifest_path}",
             artifact_path=manifest_path,
         )
     return value
@@ -471,12 +575,15 @@ def _required_param(params: Mapping[str, Any], key: str, provider: str, manifest
 
 def _reject_secret_knowledge_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
     forbidden = sorted(
-        key for key in manifest.knowledge.params if _is_forbidden_knowledge_param(str(key))
+        f"{source.source_id}.{key}"
+        for source in manifest.knowledge_sources
+        for key in source.params
+        if _is_forbidden_knowledge_param(str(key))
     )
     if forbidden:
         raise ProofAgentError(
             "PA_SECRET_001",
-            f"knowledge.params contains secret-bearing field(s): {', '.join(forbidden)}",
+            f"knowledge_sources[].params contains secret-bearing field(s): {', '.join(forbidden)}",
             "Store secrets in environment variables and reference only *_env names in agent.yaml.",
             artifact_path=manifest_path,
         )

@@ -6,6 +6,7 @@ from proof_agent.contracts.agent_configuration import (
     ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
+    KnowledgeDocument,
     KnowledgeSource,
     PublishedAgentVersion,
     ToolSource,
@@ -28,13 +29,15 @@ from proof_agent.contracts.customer import (
     CustomerSafeSource,
     CustomerSessionType,
 )
-from proof_agent.contracts.evidence import EvidenceChunk, EvidenceStatus
+from proof_agent.contracts.evidence import EvidenceChunk, EvidenceContribution, EvidenceStatus
 from proof_agent.contracts.handoff import CustomerHandoff, HandoffProjection, HandoffReason
 from proof_agent.contracts.manifest import (
     AgentManifest,
     AuditConfig,
     CustomerConfig,
+    KnowledgeBindingConfig,
     KnowledgeConfig,
+    KnowledgeSourceConfig,
     MemoryConfig,
     MemoryScopeConfig,
     MemoryScopesConfig,
@@ -116,6 +119,7 @@ __all__ = [
     "DraftAgent",
     "EnforcementPoint",
     "EvidenceChunk",
+    "EvidenceContribution",
     "EvidenceStatus",
     "FrozenDict",
     "FrozenModel",
@@ -123,6 +127,9 @@ __all__ = [
     "HandoffProjection",
     "HandoffReason",
     "KnowledgeConfig",
+    "KnowledgeBindingConfig",
+    "KnowledgeDocument",
+    "KnowledgeSourceConfig",
     "KnowledgeSource",
     "MemoryConfig",
     "MemoryScopeConfig",

@@ -67,7 +67,13 @@ export interface TraceEvent {
 export interface EvidenceChunk {
   index: number
   source: string
-  score: number | null
+  score?: number | null
+  admission_score?: number | null
+  provider_native_score?: number | null
+  fusion_rank?: number | null
+  source_id?: string | null
+  binding_id?: string | null
+  citation?: string | null
   status: 'accepted' | 'rejected'
 }
 
@@ -234,6 +240,48 @@ export interface ConfigVersionsResponse {
   meta: {
     total: number
     active_version_id: string | null
+  }
+}
+
+export interface KnowledgeSource {
+  source_id: string
+  name: string
+  provider: string
+  params: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  document_count: number
+  ready_document_count: number
+}
+
+export interface KnowledgeDocument {
+  document_id: string
+  source_id: string
+  revision_id: string
+  filename: string
+  content_type: string
+  content_hash: string
+  size_bytes: number
+  state: 'queued' | 'processing' | 'ready' | 'failed' | string
+  storage_path: string
+  provider_document_id: string | null
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeSourcesResponse {
+  data: KnowledgeSource[]
+  meta: {
+    total: number
+  }
+}
+
+export interface KnowledgeDocumentsResponse {
+  data: KnowledgeDocument[]
+  meta: {
+    total: number
   }
 }
 

@@ -123,7 +123,7 @@ Core boundaries:
 | Entry | CLI, Docker demo, Run Execution API, Dashboard API |
 | Workflow template | `enterprise_qa`, `react_enterprise_qa` |
 | Runtime config | `workflow.runtime: langgraph`; Enterprise QA and Controlled ReAct Enterprise QA run through LangGraph `StateGraph` templates using composed Harness dependencies |
-| Knowledge | `knowledge.provider: local_markdown`, local Markdown retrieval |
+| Knowledge | Source-owned `knowledge_sources[]` plus Agent `knowledge_bindings[]`; local Markdown, vector, remote search, and PageIndex adapters |
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
 | Model | `deterministic`, `openai_compatible`, `openai`, and `deepseek` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
 | Policy | `before_retrieval`, `before_retrieval_plan`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
@@ -169,10 +169,16 @@ workflow:
   runtime: langgraph
   template: enterprise_qa
 
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: enterprise_qa_knowledge
+    name: Enterprise QA Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+
+knowledge_bindings:
+  - binding_id: enterprise_qa_knowledge_binding
+    source_id: enterprise_qa_knowledge
 
 retrieval:
   strategy: single_step
@@ -200,11 +206,12 @@ audit:
 Current v1 config constraints:
 - `workflow.runtime` must be `langgraph`.
 - `workflow.template` must be `enterprise_qa` or `react_enterprise_qa`.
-- `knowledge.provider` must be one of `local_markdown`, `local_vector`, `remote_search`, or `pageindex`.
+- each `knowledge_sources[].provider` must be one of `local_markdown`, `local_vector`, `remote_search`, or `pageindex`.
+- `knowledge_bindings[]` may bind one or more declared Source ids; provider params stay Source-owned.
 - `retrieval.strategy` supports `single_step` and `agentic`.
 - `memory.provider` must be `session`.
 - `model.provider` supports `deterministic`, `openai_compatible`, `openai`, `deepseek`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
-- `policy.file`, `tools.file`, and provider-specific paths under `knowledge.params` must exist.
+- `policy.file`, `tools.file`, and provider-specific paths under `knowledge_sources[].params` must exist.
 - The parent directories of `audit.trace_path` and `audit.receipt_path` must be writable.
 
 Controlled ReAct adds these sections to `agent.yaml`:
@@ -326,13 +333,19 @@ Remote model smoke checks are opt-in. They are not part of the deterministic dem
 PageIndex self-hosted retrieval can be used as a remote agentic evidence source while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation:
 
 ```yaml
-knowledge:
-  provider: pageindex
-  params:
-    endpoint_env: PAGEINDEX_BASE_URL
-    document_id: doc_enterprise_policy
-    thinking: true
-    timeout_seconds: 10
+knowledge_sources:
+  - source_id: enterprise_pageindex
+    name: Enterprise PageIndex
+    provider: pageindex
+    params:
+      endpoint_env: PAGEINDEX_BASE_URL
+      document_id: doc_enterprise_policy
+      thinking: true
+      timeout_seconds: 10
+
+knowledge_bindings:
+  - binding_id: enterprise_pageindex_binding
+    source_id: enterprise_pageindex
 
 retrieval:
   strategy: agentic
@@ -341,7 +354,7 @@ retrieval:
   max_steps: 3
 ```
 
-For a default local PageIndex deployment, set `PAGEINDEX_BASE_URL=http://127.0.0.1:8000`. If the deployment requires auth, add `api_key_env: PAGEINDEX_API_KEY` under `knowledge.params` and set that environment variable.
+For a default local PageIndex deployment, set `PAGEINDEX_BASE_URL=http://127.0.0.1:8000`. If the deployment requires auth, add `api_key_env: PAGEINDEX_API_KEY` under the PageIndex Source params and set that environment variable.
 
 ## 6. Configuring the Control Plane
 
@@ -440,12 +453,18 @@ When extending a new model provider:
 - Traces can only record safe summaries like provider, model, token usage, content length, finish reason, etc.
 
 ### Knowledge
-Current v1 uses a local Markdown knowledge base:
+Current v1 binds one or more Knowledge Sources. A local Markdown Source looks like this:
 ```yaml
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: local_policy_docs
+    name: Local Policy Docs
+    provider: local_markdown
+    params:
+      path: ./knowledge
+
+knowledge_bindings:
+  - binding_id: local_policy_docs_binding
+    source_id: local_policy_docs
 
 retrieval:
   strategy: single_step
@@ -455,7 +474,8 @@ retrieval:
 
 When extending vector or enterprise search:
 - Provider must return candidate `EvidenceChunk`.
-- Provider-specific config belongs under `knowledge.params`.
+- Provider-specific config belongs under `knowledge_sources[].params` or the Dashboard Knowledge Source store.
+- Agents bind shared Sources through `knowledge_bindings[]`; they do not own provider credentials or ingestion settings.
 - `top_k` and `min_score` belong under `retrieval`.
 - Retrieval cannot determine the final answer.
 - Whether evidence is sufficient is determined by evaluators, PolicyEngine, and validators.
@@ -555,7 +575,7 @@ When a Skill is imported, it should be registered or compiled into the existing 
 
 Recommended process:
 1. Copy the Agent package from `examples/insurance_customer_service/`.
-2. Modify `name`, `purpose`, `knowledge.params`, `retrieval`, `model`, `audit` in `agent.yaml`.
+2. Modify `name`, `purpose`, `knowledge_sources[]`, `knowledge_bindings[]`, `retrieval`, `model`, `audit` in `agent.yaml`.
 3. Replace the business knowledge Markdown under `knowledge/`.
 4. Modify `policy.yaml` to define answering, tool, memory, and model call policies.
 5. Modify `tools.yaml`, registering only the tools this Agent needs.

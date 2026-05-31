@@ -1,11 +1,15 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import {
+  bindKnowledgeSourceToDraft,
+  createKnowledgeSource,
   fetchConfigAgents,
+  fetchKnowledgeSources,
   fetchRuns,
   importConfigAgent,
   publishConfigDraft,
   rollbackConfigVersion,
   updateConfigDraftContract,
+  uploadKnowledgeDocument,
   validateConfigDraft,
   fetchHandoffs,
 } from './client'
@@ -55,6 +59,83 @@ test('fetchConfigAgents requests Agent Configuration list', async () => {
   await fetchConfigAgents()
 
   expect(fetchMock).toHaveBeenCalledWith('/api/config/agents', undefined)
+})
+
+test('knowledge source client methods use shared source endpoints', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [], meta: { total: 0 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ source_id: 'ks_pageindex' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ document_id: 'doc_1', state: 'ready' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+  await fetchKnowledgeSources()
+  await createKnowledgeSource({
+    source_id: 'ks_pageindex',
+    name: 'PageIndex Policies',
+    provider: 'pageindex',
+    params: { endpoint_env: 'PAGEINDEX_BASE_URL', document_id: 'policies' },
+    actor: 'dashboard',
+  })
+  await uploadKnowledgeDocument('ks_pageindex', {
+    filename: 'travel-policy.pdf',
+    content_type: 'application/pdf',
+    content_base64: 'JVBERi0xLjQ=',
+    actor: 'dashboard',
+  })
+
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/config/knowledge-sources')
+  expect(fetchMock.mock.calls[1][0]).toBe('/api/config/knowledge-sources')
+  expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' })
+  expect(fetchMock.mock.calls[2][0]).toBe('/api/config/knowledge-sources/ks_pageindex/documents')
+  expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: 'POST' })
+})
+
+test('bindKnowledgeSourceToDraft posts a shared source binding request', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ agent_yaml: 'name: enterprise_qa' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  await bindKnowledgeSourceToDraft('enterprise_qa', 'draft_1', {
+    source_id: 'ks_pageindex',
+    alias: 'policies',
+    failure_mode: 'advisory',
+    fusion_weight: 0.75,
+    top_k: 3,
+    actor: 'dashboard',
+  })
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/config/agents/enterprise_qa/drafts/draft_1/knowledge-bindings',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_id: 'ks_pageindex',
+        alias: 'policies',
+        failure_mode: 'advisory',
+        fusion_weight: 0.75,
+        top_k: 3,
+        actor: 'dashboard',
+      }),
+    },
+  )
 })
 
 test('importConfigAgent posts manifest path', async () => {

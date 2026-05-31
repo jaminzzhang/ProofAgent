@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from proof_agent.contracts import EvidenceChunk, ValidationResult, ValidationStatus
+from proof_agent.contracts import EvidenceChunk, EvidenceStatus, ValidationResult, ValidationStatus
 
 
 def evaluate_evidence(
@@ -14,7 +14,9 @@ def evaluate_evidence(
     accepted = tuple(
         chunk
         for chunk in chunk_tuple
-        if chunk.status != "rejected" and chunk.score >= min_score
+        if chunk.status != EvidenceStatus.REJECTED
+        and chunk.admission_score is not None
+        and chunk.admission_score >= min_score
     )
     passed = len(accepted) >= min_count
     accepted_ids = {id(chunk) for chunk in accepted}
@@ -30,12 +32,14 @@ def evaluate_evidence(
                 {
                     "source": chunk.source,
                     "citation": chunk.citation,
-                    "score": chunk.score,
+                    "admission_score": chunk.admission_score,
+                    "provider_native_score": chunk.provider_native_score,
+                    "fusion_rank": chunk.fusion_rank,
                     "status": "accepted" if id(chunk) in accepted_ids else "rejected",
                 }
                 for chunk in chunk_tuple
             ),
-            "scores": tuple(chunk.score for chunk in chunk_tuple),
+            "admission_scores": tuple(chunk.admission_score for chunk in chunk_tuple),
             "min_count": min_count,
             "min_score": min_score,
         },

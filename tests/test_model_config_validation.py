@@ -18,10 +18,15 @@ purpose: "Test model config."
 workflow:
   runtime: langgraph
   template: enterprise_qa
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_id: ks_local
 retrieval:
   strategy: single_step
   top_k: 2
@@ -81,10 +86,15 @@ workflow:
   checkpointer:
     provider: sqlite
     uri: memory
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_id: ks_local
 retrieval:
   strategy: single_step
   top_k: 2

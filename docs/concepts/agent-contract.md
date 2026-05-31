@@ -14,10 +14,16 @@ workflow:
   runtime: langgraph
   template: enterprise_qa
 
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: enterprise_qa_knowledge
+    name: Enterprise QA Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+
+knowledge_bindings:
+  - binding_id: enterprise_qa_knowledge_binding
+    source_id: enterprise_qa_knowledge
 
 retrieval:
   strategy: single_step
@@ -112,7 +118,8 @@ response:
 
 - what this Agent is for
 - which workflow template it uses
-- where knowledge comes from
+- which shared Knowledge Sources are available
+- which Knowledge Sources this Agent binds
 - how retrieval is orchestrated and thresholded
 - which model provider mode it uses
 - which policy controls it
@@ -132,7 +139,7 @@ The supported v1 model providers are:
 
 Provider settings live under `model.params`. They may name environment variables such as `api_key_env`, `base_url_env`, `organization_env`, or `project_env`, but must not contain raw secret values.
 
-Knowledge provider settings live under `knowledge.params`. Supported provider names are `local_markdown`, `local_vector`, `remote_search`, and `pageindex`. Retrieval settings such as `strategy`, `top_k`, `min_score`, and `max_steps` live under the required top-level `retrieval` section. Executable runs use `retrieval.strategy: single_step` for one governed provider call or `retrieval.strategy: agentic` for a governed retrieval plan. The `pageindex` provider uses a remote PageIndex deployment for the retrieval step and still returns candidate evidence only.
+Knowledge provider settings live on `knowledge_sources[].params` and in the Dashboard Knowledge Source store. Supported provider names are `local_markdown`, `local_vector`, `remote_search`, and `pageindex`. Agents bind one or more Sources through `knowledge_bindings[]`; they do not own provider credentials or ingestion settings. Retrieval settings such as `strategy`, `top_k`, `min_score`, and `max_steps` live under the required top-level `retrieval` section. Executable runs blend bound Sources, normalize candidate evidence, and then apply admission and citation validation before any answer is generated. The `pageindex` provider uses a PageIndex deployment for retrieval and still returns candidate evidence only.
 
 ## ReAct Section
 

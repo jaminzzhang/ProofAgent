@@ -14,7 +14,9 @@ def test_retrieval_returns_source_chunks() -> None:
     chunks = provider.retrieve("travel meal reimbursement", top_k=2)
     assert chunks
     assert chunks[0].source.endswith(".md")
-    assert chunks[0].score > 0
+    assert chunks[0].provider_native_score is not None
+    assert chunks[0].provider_native_score > 0
+    assert chunks[0].admission_score == chunks[0].provider_native_score
     assert chunks[0].status == EvidenceStatus.CANDIDATE
     assert chunks[0].citation
 
@@ -116,7 +118,8 @@ def test_pageindex_provider_normalizes_retrieved_nodes(monkeypatch: pytest.Monke
     assert len(chunks) == 1
     assert chunks[0].status == EvidenceStatus.CANDIDATE
     assert chunks[0].source == "travel-policy.pdf"
-    assert chunks[0].score == 0.91
+    assert chunks[0].provider_native_score == 0.91
+    assert chunks[0].admission_score == 0.91
     assert chunks[0].citation == "travel-policy.pdf#page-12"
     assert chunks[0].metadata["provider"] == "pageindex"
     assert chunks[0].metadata["document_id"] == "doc_enterprise_policy"

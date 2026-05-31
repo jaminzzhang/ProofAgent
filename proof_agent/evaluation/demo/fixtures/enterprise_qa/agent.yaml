@@ -8,10 +8,16 @@ workflow:
     provider: sqlite
     uri: memory
 
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: enterprise_qa_knowledge
+    name: Enterprise QA Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+
+knowledge_bindings:
+  - binding_id: enterprise_qa_knowledge_binding
+    source_id: enterprise_qa_knowledge
 
 retrieval:
   strategy: single_step

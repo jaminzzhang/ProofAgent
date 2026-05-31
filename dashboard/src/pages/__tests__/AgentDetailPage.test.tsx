@@ -3,11 +3,17 @@ import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { validateConfigDraft } from '../../api/client'
+import {
+  bindKnowledgeSourceToDraft,
+  fetchKnowledgeSources,
+  validateConfigDraft,
+} from '../../api/client'
 import type { DraftValidationResponse } from '../../api/types'
 import { AgentDetailPage } from '../AgentDetailPage'
 
 vi.mock('../../api/client', () => ({
+  bindKnowledgeSourceToDraft: vi.fn(),
+  fetchKnowledgeSources: vi.fn(),
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
   updateConfigDraft: vi.fn(),
@@ -83,6 +89,7 @@ function renderPage() {
 describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
     mockDraft = {
       agent_id: 'agent-1',
       draft_id: 'draft-1',
@@ -170,5 +177,43 @@ describe('AgentDetailPage', () => {
       'href',
       '/customer/agents/agent-1',
     )
+  })
+
+  it('binds a shared knowledge source into the draft contract', async () => {
+    vi.mocked(fetchKnowledgeSources).mockResolvedValue({
+      data: [
+        {
+          source_id: 'ks_pageindex',
+          name: 'PageIndex Policies',
+          provider: 'pageindex',
+          params: { endpoint_env: 'PAGEINDEX_BASE_URL' },
+          created_at: '2026-05-31T00:00:00Z',
+          updated_at: '2026-05-31T00:00:00Z',
+          document_count: 1,
+          ready_document_count: 1,
+        },
+      ],
+      meta: { total: 1 },
+    })
+    vi.mocked(bindKnowledgeSourceToDraft).mockResolvedValue({
+      ...mockContract,
+      agent_yaml: 'name: insurance\nknowledge_sources:\n- source_id: ks_pageindex\n',
+    })
+
+    renderPage()
+    fireEvent.click(screen.getByText('Knowledge'))
+    expect(await screen.findByText('PageIndex Policies')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Bind Source' }))
+
+    await waitFor(() => {
+      expect(bindKnowledgeSourceToDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
+        source_id: 'ks_pageindex',
+        alias: '',
+        failure_mode: 'required',
+        fusion_weight: 1,
+        actor: 'dashboard',
+      })
+    })
+    expect(refreshDraft).toHaveBeenCalled()
   })
 })

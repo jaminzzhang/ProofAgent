@@ -275,14 +275,13 @@ class RunStore:
         payload = retrieval.get("payload", {})
         sources = payload.get("sources", [])
         chunk_count = payload.get("chunk_count", len(sources))
+        scores = eval_meta.get("admission_scores") or eval_meta.get("scores") or []
         chunks: list[dict[str, Any]] = []
         for i, source in enumerate(sources):
             chunks.append({
                 "index": i,
                 "source": source,
-                "score": eval_meta.get("scores", [None])[i]
-                if i < len(eval_meta.get("scores", []))
-                else None,
+                "admission_score": scores[i] if i < len(scores) else None,
                 "status": "accepted"
                 if i < eval_meta.get("accepted_count", chunk_count)
                 else "rejected",

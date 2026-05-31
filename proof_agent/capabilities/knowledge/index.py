@@ -45,7 +45,8 @@ class LocalVectorProvider:
                 EvidenceChunk(
                     source=source,
                     content=str(document),
-                    score=score,
+                    provider_native_score=score,
+                    admission_score=score,
                     status=EvidenceStatus.CANDIDATE,
                     citation=(metadata or {}).get("citation"),
                     metadata=metadata or {},

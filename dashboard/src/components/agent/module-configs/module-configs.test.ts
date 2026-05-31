@@ -16,16 +16,15 @@ function fieldPaths(fields: readonly { path: readonly string[] }[]): readonly st
 
 describe('module configuration field options', () => {
   it('uses backend-supported knowledge and retrieval values', () => {
-    expect(optionsFor(KNOWLEDGE_FIELDS, 'Knowledge Provider')).toEqual([
-      'local_markdown',
-      'local_vector',
-      'pageindex',
-      'remote_search',
-    ])
     expect(optionsFor(KNOWLEDGE_FIELDS, 'Retrieval Strategy')).toEqual([
       'single_step',
       'agentic',
     ])
+    expect(fieldPaths(KNOWLEDGE_FIELDS)).toEqual(expect.arrayContaining([
+      'retrieval.strategy',
+      'retrieval.top_k',
+      'retrieval.min_score',
+    ]))
   })
 
   it('uses backend-supported workflow, model, review, and memory values', () => {

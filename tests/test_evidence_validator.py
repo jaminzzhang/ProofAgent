@@ -9,13 +9,13 @@ def test_enough_evidence_passes() -> None:
         EvidenceChunk(
             source="customer-support-policy.md",
             content="Meals are reimbursed up to 50.",
-            score=0.9,
+            admission_score=0.9,
             status=EvidenceStatus.CANDIDATE,
         ),
         EvidenceChunk(
             source="customer-support-policy.md",
             content="Receipts are required.",
-            score=0.8,
+            admission_score=0.8,
             status=EvidenceStatus.CANDIDATE,
         ),
     ]
@@ -36,7 +36,7 @@ def test_low_score_candidate_is_rejected_by_validator() -> None:
             EvidenceChunk(
                 source="customer-support-policy.md",
                 content="Receipts are required.",
-                score=0.1,
+                admission_score=0.1,
                 status=EvidenceStatus.CANDIDATE,
             )
         ],
@@ -48,11 +48,30 @@ def test_low_score_candidate_is_rejected_by_validator() -> None:
     assert result.metadata["evidence"][0]["status"] == "rejected"
 
 
+def test_provider_native_score_without_admission_score_is_rejected() -> None:
+    result = evaluate_evidence(
+        [
+            EvidenceChunk(
+                source="customer-support-policy.md",
+                content="Receipts are required.",
+                provider_native_score=0.95,
+                status=EvidenceStatus.CANDIDATE,
+            )
+        ],
+        min_count=1,
+        min_score=0.5,
+    )
+
+    assert result.status == "failed"
+    assert result.metadata["evidence"][0]["status"] == "rejected"
+    assert result.metadata["evidence"][0]["admission_score"] is None
+
+
 def test_evidence_metadata_is_immutable() -> None:
     chunk = EvidenceChunk(
         source="customer-support-policy.md",
         content="Receipts are required.",
-        score=0.8,
+        admission_score=0.8,
         status=EvidenceStatus.CANDIDATE,
         metadata={"document_id": "policy"},
     )

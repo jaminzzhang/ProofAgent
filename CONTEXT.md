@@ -708,6 +708,162 @@ _Avoid_: Single-shot test runner, detached monitoring view, production run execu
 The reusable asset collections for Knowledge Sources, Tool Sources, and Policy Rule Configurations that multiple Agents can bind to. Agents reference shared assets through Agent Knowledge Bindings, Agent Tool Bindings, and Policy Rule Configuration rather than duplicating definitions.
 _Avoid_: Agent-scoped asset definition, inline-only configuration, duplicated policy rules
 
+**Knowledge Source Workspace**:
+The global Dashboard Shared Asset Library surface at `/knowledge` for listing, creating, filtering, and administering reusable Knowledge Sources across Agents. It evolves the existing Knowledge page rather than adding a parallel `/knowledge-sources` route.
+_Avoid_: Agent-only YAML browser, `/knowledge-sources` route, inline document manager inside one Agent
+
+**Knowledge Source Detail Workspace**:
+The Dashboard detail surface at `/knowledge/:sourceId` for administering one reusable Knowledge Source through Overview, Documents, Versions, Provider, and Audit tabs. Agent Knowledge modules link to this surface instead of embedding full document management.
+_Avoid_: Agent-embedded file manager, Source detail modal, provider-only settings page
+
+**Knowledge Source Workspace List Projection**:
+The operational list projection at `/knowledge` that shows Source name, description, tags, provider type, lifecycle state, local index or remote verification availability, current published snapshot or configuration version, local READY and total document counts or remote target index or namespace, referencing Agent count, and warning indicators for unpublished changes, failed ingestion, or stale remote verification. It supports filtering by name, tag, provider, lifecycle, and warning state.
+_Avoid_: Agent YAML excerpt list, provider-only inventory, unfilterable asset table
+
+**Knowledge Source Creation Wizard**:
+The `/knowledge` guided Source Draft setup flow that first selects one of three source-intake paths: upload local documents into `local_pageindex`, connect remote knowledge through `pageindex`, `http_json`, or another registered adapter, or register an existing local `local_markdown` or `local_vector` source for development, migration, and deterministic demos. The wizard creates or updates a Source Draft; validation and explicit Knowledge Source Publication remain separate steps.
+_Avoid_: Automatic Source publication, Agent-scoped upload, provider-free setup, remote-only wizard
+
+**Knowledge Source Documents Tab**:
+The `local_pageindex` Knowledge Source Detail Workspace tab for operating up to 500 Knowledge Documents. It supports batch PDF and Markdown upload, filtering and pagination, revision-state visibility, single-document replacement, failed-revision retry, routing-metadata editing, archive, revision history, bulk failed-revision retry, bulk archive, bulk tag editing, and a persistent Candidate Knowledge Source Snapshot summary with an explicit Publish Source action.
+_Avoid_: Unpaginated file dump, filename-only status, implicit publication, one-document-only upload
+
+**Remote Knowledge Source Provider Tab**:
+The layered Provider tab for a remote Knowledge Source. Its default form exposes adapter, endpoint, environment-variable credential references, index or namespace, timeout, and default `top_k`. Its advanced section exposes protocol version, Remote Retrieval Request Mapping, Remote Retrieval Response Mapping, and Structured Remote Source Reference mapping only when the selected adapter supports them. Typed adapters such as `pageindex` prefer descriptor-driven forms, while `http_json` exposes bounded mapping editors.
+_Avoid_: Raw JSON-only setup, arbitrary script editor, one-size-fits-all adapter form
+
+**Remote Knowledge Source Connection Test**:
+The non-publishing Provider-tab action that validates remote connectivity, authentication, target index or namespace existence, and configured response normalization shape.
+_Avoid_: Knowledge Source Publication, production retrieval, best-effort save
+
+**Remote Knowledge Source Retrieval Preview**:
+The non-publishing Provider-tab action that runs a bounded example query and shows normalized Candidate Evidence, citations, Provider-Native Relevance Scores, and Remote Knowledge Revision Observations without making the Source bindable.
+_Avoid_: Raw remote response dump, Agent Validation Run, implicit Source publication
+
+**Local PageIndex Provider Tab**:
+The layered Provider tab for a `local_pageindex` Knowledge Source. Its default form exposes ingestion model provider, model, environment-variable credential references, inherited Knowledge Routing Model Configuration, and Knowledge Document Selection Budget defaulting to 8. Its advanced section exposes an explicit routing-model override, timeout, retry count, and worker concurrency. Documents and routing metadata remain in Knowledge Source Documents Tab.
+_Avoid_: File list inside provider settings, Agent answer model reuse, raw credential storage, flat advanced form
+
+**Local PageIndex Model Configuration Test**:
+The non-ingesting Provider-tab action that validates local PageIndex ingestion and routing model configuration plus referenced credential availability without rebuilding document indexes.
+_Avoid_: Knowledge Source Ingestion, Source publication, full-corpus rebuild
+
+**Local PageIndex Reingestion Required**:
+The visible Source Draft condition set when a local PageIndex ingestion-configuration change could affect generated index artifacts. Existing published snapshots remain usable, but a replacement candidate snapshot cannot be published until required document revisions have been reingested successfully.
+_Avoid_: Silent old-artifact reuse, immediate published-snapshot mutation, routing-only configuration change
+
+**Knowledge Ingestion Configuration Fingerprint**:
+The stable identifier derived from local PageIndex ingestion model configuration and artifact-affecting ingestion parameters. A Knowledge Document Revision index artifact is compatible only when its content hash and Knowledge Ingestion Configuration Fingerprint match.
+_Avoid_: Routing model fingerprint, filename key, mutable cache identity
+
+**Incremental Local PageIndex Reingestion**:
+The rebuild behavior that queues only Knowledge Document Revisions in the current Candidate Knowledge Source Snapshot that lack a compatible index artifact for their content hash plus Knowledge Ingestion Configuration Fingerprint. Routing-model changes, Knowledge Document Selection Budget changes, and routing-metadata edits do not trigger index rebuilding.
+_Avoid_: Mandatory full-corpus rebuild, routing-only rebuild, stale-artifact publication
+
+**Knowledge Ingestion Worker Policy**:
+The local PageIndex worker execution policy: default per-Source concurrency 2 configurable from 1 through 8, at most 2 automatic retries per revision with backoff for recoverable failures, immediate failure for non-recoverable intake or configuration errors, and persisted-queue recovery after worker restart without rebuilding compatible artifacts.
+_Avoid_: Unbounded concurrency, infinite retry, in-memory-only task state, duplicate compatible build
+
+**Knowledge Ingestion Failure Classification**:
+The stable error classification shown in Dashboard for a failed Knowledge Document Revision. Unsupported format, scanned PDF, missing configuration, and missing credentials are non-recoverable without operator action; model timeout, transient rate limiting, and temporary network failure are recoverable and eligible for bounded automatic retry.
+_Avoid_: Raw stack trace, silent retry loop, one generic failure message
+
+**Operator Knowledge Document Upload Validation**:
+The server-side intake gate for Dashboard-managed local PageIndex files. It accepts only `.pdf` and `.md`, verifies MIME type and content signature rather than trusting extension alone, limits one file to 50 MB, limits one PDF to 500 pages, and limits one batch to 50 files while preserving the 500-document Source capacity. It rejects zip archives, directory uploads, nested attachments, encrypted PDFs, scanned PDFs, macro-bearing files, and executable content.
+_Avoid_: Browser-only validation, extension-only trust, archive extraction, customer attachment intake
+
+**Knowledge Document Upload Quarantine**:
+The isolation area where an operator-uploaded file remains until Operator Knowledge Document Upload Validation succeeds. Storage uses a system-generated path and a sanitized display filename; a rejected upload receives a stable error code and creates neither Knowledge Document Revision nor Knowledge Ingestion Job.
+_Avoid_: Original-filename storage path, direct ingestion queue insertion, failed-upload candidate snapshot
+
+**Managed Knowledge Document Original**:
+The validated original PDF or Markdown file retained with one Knowledge Document Revision in managed storage separately from generated index artifacts. It supports reingestion, citation verification, and audit-safe operator inspection until reference and retention checks allow cleanup.
+_Avoid_: Index-only retention, quarantine file, public attachment URL, mutable original
+
+**Knowledge Document Original Download Audit**:
+The configuration-operation audit record written when an authorized operator downloads a Managed Knowledge Document Original. Download requires `knowledge_source.view`.
+_Avoid_: Anonymous download, raw-file runtime trace, unaudited file export
+
+**Rejected Knowledge Upload Retention**:
+The short quarantine retention window for a file rejected by Operator Knowledge Document Upload Validation: 24 hours for troubleshooting, followed by automatic cleanup without promoting it into long-term managed document storage or audit content.
+_Avoid_: Permanent rejected-file retention, revision creation, candidate snapshot inclusion
+
+**Local Knowledge Citation URI**:
+The stable internal citation for a local PageIndex evidence chunk, for example `knowledge://source/{source_id}/document/{document_id}/revision/{revision_id}#page=12` for PDF or a section anchor for Markdown. It identifies governed source material without exposing a storage path.
+_Avoid_: Filesystem path, public file URL, mutable latest-document link
+
+**Knowledge Citation Preview**:
+The permission-protected Dashboard action that opens cited source material from Run Detail or retrieval preview and navigates to PDF page or Markdown section anchor. Citation preview access is audited separately from Managed Knowledge Document Original download.
+_Avoid_: Anonymous file access, raw storage URL, unaudited download
+
+**Customer-Safe Knowledge Citation Projection**:
+The customer-visible citation representation that shows a safe source name and page or section where appropriate without exposing internal revision ids, storage paths, provider secrets, or operator-only metadata.
+_Avoid_: Internal citation URI, filesystem path, hidden-source omission
+
+**Customer Citation Marker**:
+The short inline customer-facing reference marker such as `[1]` or `[2]` that points to a deduplicated Customer-Safe Knowledge Citation Projection in the answer's Sources list.
+_Avoid_: Internal citation URI, provider id, revision id, confidence disclosure
+
+**Customer Sources List**:
+The customer-facing end-of-answer list that maps Customer Citation Markers to safe source name, page or section, and safe document title. Repeated references to the same safe source location share one marker.
+_Avoid_: Provider details, internal ids, mutable-external technical warning, raw URL without allowlist
+
+**No Accepted Evidence Outcome**:
+The governed retrieval outcome when no Candidate Evidence becomes Accepted Evidence after routing, provider retrieval, fusion, citation enforcement, and evidence admission. It follows insufficient-evidence or refusal behavior and does not permit the model to invent citations or source-backed claims.
+_Avoid_: Best-effort answer, empty Sources list, hallucinated citation, silent provider failure
+
+**Remote Citation Link Allowlist**:
+The protocol and domain validation policy that determines whether an external remote Knowledge Source citation URL may be rendered as a clickable Dashboard or customer-facing link. A citation that fails validation remains visible as non-clickable source text.
+_Avoid_: Arbitrary external link, javascript URL, secret-bearing URL
+
+**Knowledge Source Publication Validation**:
+The Source Draft-version-bound precondition for Knowledge Source Publication. Any relevant Draft configuration change invalidates the prior result and requires validation again before publication.
+_Avoid_: Agent Validation Run, one-time Source validation, configuration-drift publication
+
+**Local PageIndex Source Publication Validation**:
+The local PageIndex publication check that requires at least one READY Knowledge Document Revision, no pending required reingestion, compatible artifacts for every revision included in the Candidate Knowledge Source Snapshot, successful ingestion and routing model configuration tests, and one editable smoke query proving routing, retrieval, and citation resolution.
+_Avoid_: Upload-success publication, partial required rebuild, citation-free smoke test
+
+**Remote Knowledge Source Publication Validation**:
+The remote Source publication check that requires current health-check verification, successful authentication, target index or namespace validation, response normalization validation, and one smoke query proving normalized candidate evidence, citation or adequate Structured Remote Source Reference, and available Remote Knowledge Revision Observation. Adapters without `health_check` remain preview-only.
+_Avoid_: Preview-only publication, stale health check, mapping-only validation
+
+**Knowledge Source Publication Confirmation**:
+The operator confirmation shown immediately before Knowledge Source Publication. It identifies the Source Draft and prior published version, summarizes local document additions, replacements, archives, and READY count or remote adapter, target, consistency mode, and verification time, shows smoke-query validation result and referencing Agent count, requires a `change_note`, and states that publication creates Draft Agent upgrade availability without mutating existing Published Agent Versions.
+_Avoid_: One-click publish, silent Agent upgrade, missing change note, validation-detail omission
+
+**Knowledge Source Versions Tab**:
+The Knowledge Source Detail Workspace history surface for published snapshots or configuration versions. It shows publication time, actor, `change_note`, validation result, referencing Agent count, and version diff actions.
+_Avoid_: Mutable current-state-only view, hidden validation history, Agent version list
+
+**Knowledge Source Rollback Draft**:
+The new Source Draft created from a selected historical published Knowledge Source snapshot or configuration version. It requires review, fresh Knowledge Source Publication Validation, and explicit Knowledge Source Publication to produce a new version; it never mutates history or automatically changes Agent bindings.
+_Avoid_: Published-version mutation, active-pointer rewind, automatic Agent rollback
+
+**Knowledge Source Manifest Export**:
+The audited secret-free export available for every Knowledge Source. It includes metadata, provider type, parameters, environment-variable references, published version information, declarative mappings, and routing configuration without credential values, original documents, or index artifacts.
+_Avoid_: Secret export, full local bundle, index-cache archive
+
+**Local Knowledge Source Offline Bundle**:
+The optional audited export for a local PageIndex Knowledge Source that contains a Knowledge Source manifest plus validated Managed Knowledge Document Originals and content hashes. It excludes credential values and excludes cached index artifacts by default.
+_Avoid_: Default export, trusted external index, secret-bearing archive
+
+**Knowledge Source Import Draft**:
+The Source Draft created by audited manifest or offline-bundle import. Remote Sources require fresh connection test, validation, and publication. Local bundle files pass upload validation again and reingest according to Knowledge Ingestion Configuration Fingerprint; imported index artifacts are never trusted directly.
+_Avoid_: Implicit publication, external index trust, credential import
+
+**Knowledge Source Configuration API**:
+The shared-asset API under `/api/config/knowledge-sources` for listing, creating, filtering, reading, updating Drafts, archiving, restoring, document operations, version history and diff, rollback-Draft creation, validation, publication, remote connection testing, retrieval preview, export, and import. It owns Source provider parameters and lifecycle instead of embedding them in Agent Draft YAML.
+_Avoid_: Dashboard observability API, Agent Draft provider params, execution endpoint
+
+**Agent Knowledge Binding Configuration API**:
+The Agent Draft configuration boundary that stores `knowledge_bindings[]` plus Agent-level blended-retrieval settings and resolves published snapshot or configuration versions during Agent publication. It never owns Knowledge Source provider parameters.
+_Avoid_: Inline provider config, Source lifecycle API, latest-at-runtime lookup
+
+**Direct Knowledge Contract Migration**:
+The one-time breaking cutover from inline Agent `knowledge.provider + params` configuration to Source-owned provider configuration plus Agent `knowledge_bindings[]`. Because no Agent deployment compatibility is required, loader, Dashboard, examples, fixtures, and tests migrate together and the new loader rejects the legacy inline shape.
+_Avoid_: Legacy dual-read path, automatic compatibility Source creation, mixed contract versions
+
 **Sidebar Navigation Section**:
 The two top-level sections in the Dashboard Shell sidebar: MONITORING for observability views (Overview, Runs, Handoffs, Approvals) and CONFIGURATION for design-time views (Agents, Policies, Knowledge Sources, Tools). Each section groups related navigation items under a visible header.
 _Avoid_: Flat navigation list, mixed monitoring and configuration items, role-based sections
@@ -733,24 +889,232 @@ A retrieve-then-generate flow without Harness policy gates or evidence admission
 _Avoid_: Harness RAG
 
 **Knowledge Source**:
-A reusable knowledge asset or connection that can be bound to one or more Agents through a Knowledge Provider.
-_Avoid_: Retrieval Strategy, Accepted Evidence, Agent-only knowledge setting
+A reusable knowledge asset or connection that owns its Knowledge Provider configuration and can be bound to one or more Agents.
+_Avoid_: Retrieval Strategy, Accepted Evidence, Agent-only knowledge setting, provider-free asset
+
+**Knowledge Source Lifecycle State**:
+The reusable Knowledge Source lifecycle status: `ACTIVE` permits editing, publication, and new Agent binding, while `ARCHIVED` blocks new binding and new Agent publication without breaking existing Published Agent Version execution against pinned snapshots or configuration versions.
+_Avoid_: Knowledge Source Index State, physical deletion, automatic Agent mutation
+
+**Knowledge Source Archive**:
+The reversible configuration operation that moves a Knowledge Source to `ARCHIVED`, preserves retained snapshots, configuration versions, artifacts, and Published Agent references, and shows affected Published Agents in Dashboard.
+_Avoid_: Hard delete, snapshot purge, silent production breakage
+
+**Knowledge Source Restore**:
+The configuration operation that returns an archived Knowledge Source to `ACTIVE` without automatically changing any Draft Agent or Published Agent Version binding.
+_Avoid_: Automatic Agent upgrade, snapshot mutation, publication bypass
+
+**Knowledge Source Physical Deletion**:
+The audited irreversible removal allowed only when no retained Knowledge Source Snapshot, Published Agent Version reference, or audit-retention requirement remains.
+_Avoid_: Archive action, referenced artifact cleanup, rollback-breaking purge
+
+**Knowledge Source Permission Model**:
+The configuration capability boundary for reusable knowledge assets: `knowledge_source.view`, `knowledge_source.edit`, `knowledge_source.publish`, and `knowledge_source.archive`. V1 local single-user mode may grant all capabilities by default, but API operations, Dashboard actions, and Configuration Operation Audit records preserve the distinctions for future RBAC.
+_Avoid_: One knowledge admin boolean, Agent permission reuse, runtime retrieval authorization
+
+**Knowledge Configuration Operation Audit**:
+The trace-safe configuration history for Knowledge Source and Agent Knowledge Binding administration. It records actor, timestamp, target source or Agent, prior and resulting version identifiers, document intake and replacement actions, retry, archive and restore, source publication, remote verification, binding changes, retrieval override changes, and explicit source upgrades without storing raw document content, secrets, or complete remote responses.
+_Avoid_: Runtime retrieval trace, raw document archive, secret log, unversioned activity feed
+
+**Knowledge Retrieval Runtime Facts**:
+The trace-safe retrieval facts recorded in Trace, Governance Receipt, and RunStore: resolved source snapshot or configuration versions, routed sources and local document revisions, provider call status, degraded retrieval, upstream revision observations, WRRF ordering, exact-dedup provenance, evidence admission scores, citations, and context-budget truncation. They exclude raw document content, secrets, and complete remote responses.
+_Avoid_: Configuration audit, raw evidence dump, secret log, provider-response archive
+
+**Knowledge Retrieval Plan Summary**:
+The trace-safe two-stage retrieval plan record for one run. It includes binding candidates, selected bindings, local document candidates and selected documents when applicable, provider call outcomes, and compact unselected summaries without raw evidence content.
+_Avoid_: Raw provider results, complete document metadata dump, receipt-sized trace
+
+**Knowledge Binding Candidate Summary**:
+The Knowledge Retrieval Plan Summary entry for one Agent-bound Knowledge Source before source routing. It records source id, alias, tags, lifecycle state, resolved published version, failure mode, and fusion weight.
+_Avoid_: Provider credentials, raw source content, full Source Draft
+
+**Selected Knowledge Binding Summary**:
+The Knowledge Retrieval Plan Summary entry for one source selected for provider retrieval. It records binding id, source id, selection reason, routing score or ordering when available, failure mode, and whether the binding is required or advisory.
+_Avoid_: Hidden source fan-out, unbounded routing trace, raw LLM routing prompt
+
+**Knowledge Provider Call Summary**:
+The trace-safe result summary for one provider call: success or failure, latency, candidate count, stable error code when failed, and upstream revision observation when available.
+_Avoid_: Complete remote response, raw document content, secret-bearing diagnostics
 
 **Agent Knowledge Binding**:
-The Agent-specific configuration that authorizes and parameterizes how a Draft Agent or Published Agent Version may use a Knowledge Source.
-_Avoid_: Knowledge Source, Knowledge Provider, global retrieval defaults
+The Agent-specific configuration that authorizes and parameterizes how a Draft Agent or Published Agent Version may use a Knowledge Source without selecting that source's Knowledge Provider.
+_Avoid_: Knowledge Source, Knowledge Provider configuration, global retrieval defaults
+
+**Draft Knowledge Binding Resolution**:
+The Draft Agent behavior that resolves an unpinned Agent Knowledge Binding to the latest published Knowledge Source snapshot or configuration version while showing the currently resolved version in Dashboard.
+_Avoid_: Published Agent drift, unpublished source version, hidden resolution
+
+**Published Knowledge Binding Resolution**:
+The immutable Published Agent Version record of each Agent Knowledge Binding's resolved Knowledge Source snapshot or configuration version and resolved binding settings. A later Knowledge Source publication cannot silently change it.
+_Avoid_: Latest-at-runtime lookup, mutable Agent version, source publication side effect
+
+**Knowledge Binding Upgrade Available**:
+The Dashboard-visible condition where a Knowledge Source has a newer published snapshot or configuration version than the one resolved by a Draft Agent or Published Agent Version. Applying the upgrade updates a Draft Agent and requires Agent Validation Run plus Agent Publication for a new Published Agent Version.
+_Avoid_: Automatic production upgrade, silent rebinding, validation bypass
+
+**Knowledge Binding Retrieval Override**:
+The bounded Agent Knowledge Binding customization for source use: provider retrieval `top_k`, Knowledge Binding Fusion Weight, Knowledge Binding Failure Mode, and Knowledge Source Routing Metadata hints. Missing values inherit the Knowledge Source defaults, and Published Agent Version snapshots capture the resolved values.
+_Avoid_: Provider endpoint override, credential override, index or namespace override, ingestion override, admission scorer override
+
+**Knowledge Binding Fusion Weight**:
+The Agent Knowledge Binding-specific positive weight used by Weighted Reciprocal Rank Fusion when that binding participates in one Agent's Cross-Source Evidence Fusion. The default is 1.0.
+_Avoid_: Knowledge Source global priority, Provider-Native Relevance Score, Evidence Admission Score, zero or negative weight
+
+**Knowledge Binding Failure Mode**:
+The Agent Knowledge Binding-specific retrieval failure policy: `required` fails the whole retrieval when the selected binding cannot produce a valid result, while `advisory` permits governed degraded retrieval from other selected bindings. The default is `required`.
+_Avoid_: Silent partial retrieval, provider-global failure policy, automatic best effort
+
+**Degraded Knowledge Retrieval**:
+A traceable retrieval condition where one or more selected advisory Agent Knowledge Bindings failed, but remaining selected bindings may continue through normal Cross-Source Evidence Fusion and Control Plane evidence admission.
+_Avoid_: Silent fallback, Accepted Evidence, successful provider call, bypassing Evidence Threshold
+
+**Agent Knowledge Binding Set**:
+The Agent-specific collection of one or more Agent Knowledge Bindings available for governed multi-source retrieval.
+_Avoid_: Single provider config, implicit global source list, provider registry
 
 **Knowledge Binding Strategy**:
-The governed strategy that determines whether an Agent uses one Knowledge Binding, a priority fallback chain, or a future multi-source retrieval plan.
-_Avoid_: Provider configuration, unbounded multi-source search, implicit fallback
+The governed strategy that determines how an Agent routes across and combines evidence from its Agent Knowledge Binding Set.
+_Avoid_: Provider configuration, unbounded multi-source search, implicit fallback, single-source-only retrieval
+
+**Multi-Source Blended Retrieval**:
+The governed retrieval behavior that selects one or more bound Knowledge Sources, retrieves normalized candidate evidence from each selected source, and merges the candidates before Control Plane evidence admission.
+_Avoid_: Priority-only fallback, unbounded fan-out, provider-specific merge
+
+**Knowledge Provider Adapter**:
+The provider-specific implementation that invokes one local or remote knowledge technology stack and converts its retrieval results into normalized Candidate Evidence.
+_Avoid_: Knowledge Source, Agent binding, answer model, cross-source fusion
+
+**Candidate Evidence Identity**:
+The normalized trace-safe identifier set carried by Candidate Evidence: evidence id, source id, source version id, binding id, provider name, optional document id, optional revision id, optional chunk id, citation, provider-native score, fusion rank, admission score, and allowlisted metadata.
+_Avoid_: Raw provider payload, filesystem path, secret-bearing metadata, provider-native id only
+
+**Candidate Evidence Contribution**:
+One source-specific contribution retained when Exact Cross-Source Evidence Deduplication merges matching candidates. It records the contributing Knowledge Source, source version, Agent Knowledge Binding, provider, local document or remote chunk identifiers when available, provider-local rank, provider-native score, binding fusion weight, and citation.
+_Avoid_: Provenance loss, first-result-only merge, raw provider response
+
+**Cross-Source Evidence Fusion**:
+The provider-neutral runtime step that combines normalized Candidate Evidence from selected Knowledge Sources backed by one or more Knowledge Provider Adapters before Control Plane evidence admission.
+_Avoid_: Raw provider response concatenation, answer generation, provider-specific merge, unbounded fan-out
+
+**Canonical Evidence Deduplication Key**:
+The deterministic tuple of canonical citation or trusted-formatted Structured Remote Source Reference plus normalized content hash used to identify one exactly repeated Candidate Evidence chunk across selected Knowledge Sources.
+_Avoid_: Content hash alone, semantic similarity score, provider-native id alone, LLM deduplication
+
+**Exact Cross-Source Evidence Deduplication**:
+The V1 Cross-Source Evidence Fusion step that merges Candidate Evidence only when their Canonical Evidence Deduplication Keys match exactly. The merged candidate retains every contributing Knowledge Source, Agent Knowledge Binding, and citation while Weighted Reciprocal Rank Fusion combines their contributions.
+_Avoid_: Content-only collapse, semantic deduplication, provenance loss, first-result-wins
+
+**Merged Evidence Admission Evaluation**:
+The fail-closed admission rule for an exactly deduplicated Candidate Evidence chunk: WRRF contributions may combine for ranking, but duplicate retrieval hits do not increase Evidence Admission Score. An approved admission scorer evaluates the merged normalized chunk once when configured; otherwise the merged candidate uses the minimum available calibrated Evidence Admission Score from its contributing sources. Contributors without a calibrated admission score remain traceable but do not participate in score aggregation, and a merged candidate with no valid admission score remains inadmissible.
+_Avoid_: Score boosting from duplicate hits, maximum-score selection, averaging incomparable scores, missing-score fallback
+
+**Provider-Native Relevance Score**:
+The backend-specific relevance value returned by a Knowledge Provider Adapter for source-local ordering and audit trace. Provider-native scores from heterogeneous adapters are not assumed to be directly comparable.
+_Avoid_: Cross-source fusion score, Evidence Threshold, universal confidence score
+
+**Weighted Reciprocal Rank Fusion**:
+The V1 Cross-Source Evidence Fusion algorithm that ranks normalized Candidate Evidence by combining each selected Knowledge Source's provider-local result ranks with resolved source weights. It does not compare Provider-Native Relevance Scores across heterogeneous adapters.
+_Avoid_: Raw score sorting, Evidence Threshold, evidence admission, LLM reranking
+
+**Cross-Source Fusion Rank**:
+The provider-neutral order produced by Weighted Reciprocal Rank Fusion for bounded candidate selection before Control Plane evidence admission.
+_Avoid_: Accepted Evidence, Provider-Native Relevance Score, evidence confidence
+
+**Evidence Admission Score**:
+The conservative normalized value from 0 through 1 used by the Control Envelope Evidence Threshold to decide whether one Candidate Evidence chunk may become Accepted Evidence. A Knowledge Provider Adapter may provide the value only when it can map its backend semantics reliably; otherwise the candidate requires an approved admission scorer or remains inadmissible.
+_Avoid_: Provider-Native Relevance Score, Cross-Source Fusion Rank, universal backend score, missing-value fallback
+
+**Direct Evidence Score Contract Migration**:
+The one-time breaking replacement of overloaded `EvidenceChunk.score` with optional `provider_native_score`, fusion-generated `fusion_rank`, and optional `admission_score`. Validator, graph state, Trace, RunStore, Governance Receipt, providers, fixtures, and tests migrate together; no single-provider score alias remains.
+_Avoid_: Legacy score alias, raw-score thresholding, mixed score semantics
+
+**Knowledge Source Implementation Sequence**:
+The agreed implementation order for the Dashboard Knowledge Source capability: contract and loader migration first, then Source store and API, local PageIndex ingestion, multi-source retrieval runtime, Dashboard workspace, and finally fixtures and tests migration.
+_Avoid_: UI-first partial model, compatibility shim first, runtime fusion before contracts
+
+**Accepted Evidence Context Assembly**:
+The post-admission step that prepares only Accepted Evidence, with citations and source attribution, as context for the final-answer LLM.
+_Avoid_: Sending raw Candidate Evidence to the LLM, provider response passthrough, retrieval without evidence admission
+
+**Accepted Evidence LLM Context Item**:
+The fixed prompt-safe projection of one Accepted Evidence chunk sent to the final-answer LLM. It includes evidence id, source label, citation label, content, confidence band derived from Evidence Admission Score, source type, and context rank. It excludes provider-native score, numeric fusion rank, internal source or version ids, revision ids, raw provider payload, and original file paths.
+_Avoid_: Raw Candidate Evidence object, internal citation URI, raw score prompt injection, provider response passthrough
+
+**Accepted Evidence Confidence Band**:
+The low, medium, or high qualitative projection of Evidence Admission Score used in Accepted Evidence LLM Context Item. It is prompt guidance only and is not a substitute for Evidence Threshold evaluation.
+_Avoid_: Provider-native score, fusion rank, numeric admission score in prompt
+
+**Accepted Evidence Context Chunk Budget**:
+The Agent-level limit for how many Accepted Evidence chunks Accepted Evidence Context Assembly may send to the final-answer LLM: default 12 and configurable from 1 through 40.
+_Avoid_: Knowledge Source quota, provider retrieval top_k, unlimited context chunks
+
+**Accepted Evidence Context Token Budget**:
+The Agent-level approximate token limit for Accepted Evidence Context Assembly: default 6000 and configurable from 500 through 20000.
+_Avoid_: Answer token limit, provider retrieval top_k, unlimited evidence context
+
+**Accepted Evidence Context Budget Truncation**:
+The traceable outcome where one or more already-admitted candidates remain outside final-answer LLM context because Accepted Evidence Context Assembly reached its chunk or token budget while iterating in Cross-Source Fusion Rank order.
+_Avoid_: Evidence rejection, per-source quota, silent truncation, provider failure
+
+**Knowledge Source Routing**:
+The query-time selection step that narrows an Agent Knowledge Binding Set to a bounded set of eligible Knowledge Sources before provider-specific retrieval.
+_Avoid_: Knowledge Document Routing, querying every source, implicit global search
+
+**Knowledge Source Routing Metadata**:
+The binding and source metadata used to select Knowledge Sources for a query, including alias, description, tags, business domain, and priority hints.
+_Avoid_: Knowledge Document Routing Metadata, provider secrets, raw evidence content
+
+**Knowledge Source Selection Budget**:
+The Agent Knowledge Binding Set routing limit for how many Knowledge Sources may enter provider-specific retrieval for one query: default 3 and configurable from 1 through 8.
+_Avoid_: Knowledge Document Selection Budget, Agent Retrieval Strategy top_k, unlimited provider fan-out, source capacity
+
+**Knowledge Source Routing Model Configuration**:
+The Agent-specific query-time model provider configuration used after Knowledge Source Routing Metadata filtering to select a bounded subset of Agent Knowledge Bindings.
+_Avoid_: Knowledge Routing Model Configuration, Agent answer model, provider configuration, raw credential storage
 
 **Knowledge Provider**:
 A capability that retrieves candidate evidence and returns normalized evidence chunks.
 _Avoid_: Answer engine, agent runtime
 
 **Knowledge Provider Registry**:
-The capability registry that resolves a named Knowledge Provider from the Agent Contract.
-_Avoid_: Hard-coded retriever selection
+The capability registry that resolves the named Knowledge Provider owned by a Knowledge Source.
+_Avoid_: Agent-selected provider, hard-coded retriever selection
+
+**Knowledge Provider Adapter Descriptor**:
+The trusted registry entry that declares one Knowledge Provider Adapter's name, configuration schema, Dashboard form metadata, and supported capabilities.
+_Avoid_: Arbitrary uploaded script, provider secret storage, Agent Knowledge Binding, runtime result
+
+**Knowledge Provider Capability**:
+A declared adapter behavior used for configuration validation and orchestration planning, including `retrieve`, `health_check`, `snapshot_pin`, and `admission_score`.
+_Avoid_: Prompt instruction, implicit SDK behavior, unvalidated runtime assumption
+
+**HTTP JSON Knowledge Provider**:
+The trusted generic remote Knowledge Provider Adapter that invokes a configured HTTP retrieval endpoint and normalizes either the default Remote Retrieval Protocol or a validated declarative response mapping into Candidate Evidence.
+_Avoid_: Arbitrary remote code execution, vendor SDK passthrough, raw response injection
+
+**Remote Retrieval Protocol**:
+The default versioned HTTP JSON request and response shape supported by the HTTP JSON Knowledge Provider without custom mapping.
+_Avoid_: Provider-native response passthrough, unversioned implicit shape, executable transform
+
+**Remote Retrieval Request Mapping**:
+The versioned, declarative HTTP JSON Knowledge Provider configuration that projects the bounded retrieval inputs `query`, `top_k`, and optional `upstream_revision` as whole-value placeholders into an allowed HTTP method, headers, query parameters, and JSON body. Secret-bearing headers reference environment variables only.
+_Avoid_: String interpolation, dynamic URL path, arbitrary template variables, loops, conditions, functions, network callbacks, script execution, raw secret value
+
+**Remote Retrieval Response Mapping**:
+The versioned, declarative HTTP JSON Knowledge Provider configuration that uses JSON Pointer paths to project a non-standard remote response into normalized Candidate Evidence fields, Structured Remote Source Reference fields, and optional Remote Knowledge Revision Observation values.
+_Avoid_: JSONPath wildcard, filter, recursive query, arbitrary script, code execution, unvalidated JSON passthrough, Evidence Admission bypass
+
+**Remote Retrieval Response Mapping Verification**:
+The fail-closed validation step that resolves a Remote Retrieval Response Mapping against a health-check sample response, requires an array result pointer, and requires normalized content plus either citation or a structurally complete Structured Remote Source Reference that Trusted Citation Formatting can convert into citation for every admitted candidate shape.
+_Avoid_: Runtime-only discovery, best-effort field omission, raw response passthrough
+
+**Structured Remote Source Reference**:
+The normalized, trace-safe citation basis assembled from allowlisted remote result fields such as document id, page, and chunk id when the upstream result lacks one complete citation field. An HTTP JSON Knowledge Provider response mapping may project these fields under `source_ref`; it may not expose the raw provider payload as citation data.
+_Avoid_: Arbitrary citation template, raw provider payload, missing source attribution
+
+**Trusted Citation Formatting**:
+The adapter-owned deterministic formatting rule that converts a Structured Remote Source Reference into an Evidence Citation. Dashboard administrators may select supported source-reference fields but may not author arbitrary citation templates.
+_Avoid_: Operator-authored string template, LLM citation generation, citation-free evidence admission
 
 **Local Markdown Provider**:
 A Knowledge Provider that retrieves evidence from local Markdown files.
@@ -768,13 +1132,133 @@ _Avoid_: Retrieval step
 A Knowledge Provider that retrieves evidence from an external knowledge service or remote index.
 _Avoid_: Remote Agentic RAG
 
+**Remote Knowledge Source Configuration Version**:
+The immutable Proof Agent-managed version of a Remote Knowledge Source's adapter selection, provider parameters, and environment-variable credential references.
+_Avoid_: Upstream corpus revision, raw credential storage, mutable draft connection
+
+**Pinned Remote Knowledge Source**:
+A Remote Knowledge Source whose adapter supports `snapshot_pin` and whose published configuration records an immutable upstream corpus revision for retrieval and replay.
+_Avoid_: Local Knowledge Source Snapshot, mutable external source, observed revision only
+
+**Mutable External Knowledge Source**:
+A Remote Knowledge Source whose upstream technology stack cannot pin an immutable corpus revision. It may be bound and queried, but exact historical replay is not guaranteed.
+_Avoid_: Pinned Remote Knowledge Source, immutable snapshot, silent replay guarantee
+
+**Remote Knowledge Revision Observation**:
+The trace-safe upstream revision, etag, or observation timestamp returned or recorded for one Remote Knowledge Source retrieval attempt.
+_Avoid_: Proof Agent-managed configuration version, immutable revision guarantee, raw provider response
+
+**Remote Knowledge Source Verification**:
+The pre-publication adapter health check that validates a Remote Knowledge Source's connectivity, authentication, target index or namespace, and response normalization against its immutable configuration version.
+_Avoid_: Agent Validation Run, runtime retrieval attempt, unchecked connection save, secret persistence
+
+**Stale Remote Knowledge Source Verification**:
+The visible condition where a previously successful Remote Knowledge Source Verification has exceeded its validity window. It warns operators and blocks new publication or rebinding until refreshed, but does not immediately interrupt already-published Agent execution.
+_Avoid_: Runtime hard stop, silent expiration, healthy verification, mutable external revision change
+
 **Remote Search Provider**:
 A Remote Knowledge Provider that retrieves normalized evidence from a remote search service.
 _Avoid_: Remote provider, remote vector provider, vendor-named provider
 
 **PageIndex Provider**:
 The first production-directed Knowledge Provider for enterprise document retrieval through a self-hosted PageIndex retrieval endpoint.
-_Avoid_: Final answer generator, autonomous QA engine
+_Avoid_: Local PageIndex Provider, final answer generator, autonomous QA engine
+
+**Local PageIndex Provider**:
+A Knowledge Provider that retrieves candidate evidence from locally persisted PageIndex tree indexes created through Knowledge Source Ingestion.
+_Avoid_: PageIndex Provider, Local Vector Provider, final answer generator
+
+**Local PageIndex Snapshot Retrieval**:
+The bounded retrieval behavior that routes a query to eligible Knowledge Document revisions in one resolved snapshot, searches the selected revisions, merges normalized candidate evidence, and fails closed if any selected document search fails.
+_Avoid_: Unbounded corpus scan, silent partial retrieval, cross-source search
+
+**Knowledge Document Routing**:
+The query-time selection step that narrows a resolved Knowledge Source Snapshot to a bounded set of Knowledge Document revisions before document-level retrieval.
+_Avoid_: Searching every document, implicit folder scan, cross-source retrieval
+
+**Knowledge Document Routing Metadata**:
+The operator-managed and ingestion-derived title, description, tags, document type, and business category used to filter and select Knowledge Documents before document-level retrieval.
+_Avoid_: Evidence content, raw credentials, unreviewable hidden profile
+
+**Knowledge Document Selection Budget**:
+The Knowledge Source routing limit for how many document revisions may enter document-level PageIndex search for one query: default 8 and configurable from 1 through 20.
+_Avoid_: Agent Retrieval Strategy top_k, unlimited fallback expansion, source document capacity
+
+**PageIndex-Backed Knowledge Source**:
+A reusable Knowledge Source whose uploaded documents are transformed into locally persisted PageIndex tree indexes.
+_Avoid_: Agent-scoped upload, retrieval result, raw document folder
+
+**Knowledge Source Document Capacity**:
+The maximum number of Knowledge Documents retained by one Knowledge Source; V1 targets up to 500 documents per source.
+_Avoid_: Selected document count per query, unlimited corpus size, Agent binding count
+
+**Knowledge Document**:
+An operator-managed file that belongs to exactly one Knowledge Source and has its own ingestion status and provider-backed index artifact.
+_Avoid_: Knowledge Source, customer attachment, evidence chunk
+
+**Knowledge Document Revision**:
+An immutable uploaded-file version under one stable Knowledge Document identity. Explicit file replacement creates a new revision id, while prior revisions remain available to retained Knowledge Source Snapshots and Published Agent Versions until eligible for cleanup.
+_Avoid_: In-place file overwrite, filename identity, mutable index artifact
+
+**Knowledge Document Content Hash Reuse**:
+The idempotent Knowledge Source Ingestion behavior that reuses an existing provider-backed index artifact when an uploaded Knowledge Document revision has the same content hash and compatible ingestion configuration as an existing revision.
+_Avoid_: Filename-based overwrite, duplicate index build, cross-configuration artifact reuse
+
+**Knowledge Document Ingestion State**:
+The independent lifecycle state of one Knowledge Document revision during Knowledge Source Ingestion: `QUEUED`, `PROCESSING`, `READY`, or `FAILED`. A failed document may be retried, replaced, or archived without discarding other READY document revisions.
+_Avoid_: Knowledge Source Index State, Knowledge Ingestion Job status, silent omission
+
+**Knowledge Document Archive**:
+The reversible lifecycle state that removes a Knowledge Document from candidate snapshots while preserving referenced revisions and index artifacts.
+_Avoid_: Physical deletion, immediate active-snapshot mutation, hard purge
+
+**Unreferenced Knowledge Artifact Cleanup**:
+The audited physical deletion of Knowledge Document revisions and index artifacts that are not referenced by any retained Knowledge Source Snapshot or Published Agent Version.
+_Avoid_: Archive action, active revision deletion, rollback-breaking purge
+
+**Knowledge Source Snapshot**:
+An immutable READY view of the indexed Knowledge Documents available to Agent Knowledge Bindings until a replacement snapshot is promoted.
+_Avoid_: Mutable upload folder, Draft Agent version, partial rebuild
+
+**Candidate Knowledge Source Snapshot**:
+The unpublished collection of READY Knowledge Document revisions eligible for the next Knowledge Source Publication. It excludes `QUEUED`, `PROCESSING`, `FAILED`, and archived document revisions while Dashboard explicitly lists those exclusions. Publication requires at least one READY document revision.
+_Avoid_: Silent partial snapshot, active snapshot mutation, failed document inclusion, empty publication
+
+**Knowledge Source Publication**:
+The explicit operator action that promotes a candidate READY Knowledge Source Snapshot for use by Agent Knowledge Bindings.
+_Avoid_: Automatic activation, document upload, Agent Publication
+
+**Resolved Knowledge Snapshot Binding**:
+The immutable Knowledge Source Snapshot reference captured for one Agent Knowledge Binding when a Published Agent Version is created.
+_Avoid_: Latest snapshot lookup, mutable source pointer, Draft Agent preview
+
+**Knowledge Source Ingestion**:
+The design-time lifecycle that accepts operator-managed documents and creates or refreshes a provider-backed Knowledge Source index.
+_Avoid_: Retrieval Step, customer attachment analysis, Agent Knowledge Binding
+
+**Operator Knowledge Document Intake**:
+The Dashboard design-time upload boundary for text-based PDF and Markdown Knowledge Documents managed by internal operators.
+_Avoid_: Text-Only Customer Intake, OCR pipeline, arbitrary attachment upload
+
+**Knowledge Ingestion Job**:
+A persisted asynchronous unit of Knowledge Source Ingestion work with QUEUED, RUNNING, SUCCEEDED, FAILED, or CANCELLED status.
+_Avoid_: HTTP request lifetime, in-memory callback, Harness run
+
+**Knowledge Ingestion Worker**:
+The replaceable worker process that claims persisted Knowledge Ingestion Jobs and builds provider-backed index artifacts outside Dashboard API request handling.
+_Avoid_: Dashboard API background callback, Run Execution API worker, production queue requirement
+
+**Knowledge Ingestion Model Configuration**:
+The Knowledge Source-specific model provider configuration used by the Knowledge Ingestion Worker to build provider-backed index artifacts.
+_Avoid_: Agent answer model, raw credential storage, deterministic demo dependency
+
+**Knowledge Routing Model Configuration**:
+The Knowledge Source-specific query-time model provider configuration used for Knowledge Document Routing, inheriting Knowledge Ingestion Model Configuration by default while allowing an explicit override.
+_Avoid_: Agent planner model, raw credential storage, mandatory separate model
+
+**Knowledge Source Index State**:
+The bindability state of an ingested Knowledge Source: `PENDING` when it has no published snapshot and ingestion is outstanding, `READY` when it has a bindable published snapshot even if Draft document revisions are processing or failed, or `FAILED` when it has no bindable snapshot and operator action is required.
+_Avoid_: Run outcome, retrieval result, silent best effort
 
 **Remote Search Fixture Adapter**:
 A first-stage Remote Search Provider implementation that normalizes fixture data instead of performing network calls.
@@ -801,7 +1285,7 @@ The Agent Contract policy for how retrieval is orchestrated before evidence admi
 _Avoid_: Knowledge provider params
 
 **Evidence Threshold**:
-The Retrieval Strategy requirement for how many candidate chunks and what minimum score can become accepted evidence.
+The Retrieval Strategy requirement for how many candidate chunks and what minimum Evidence Admission Score can become Accepted Evidence.
 _Avoid_: Provider setting
 
 **Retrieval Plan Gate**:
@@ -849,7 +1333,7 @@ Trace-safe supplemental facts about an Evidence Chunk.
 _Avoid_: Raw SDK response, secret-bearing metadata
 
 **Evidence Summary**:
-An audit-safe representation of evidence source, citation, score, and admission status without raw content.
+An audit-safe representation of evidence source, citation, Provider-Native Relevance Score, Cross-Source Fusion Rank, Evidence Admission Score, and admission status without raw content.
 _Avoid_: Evidence content dump
 
 ## Relationships
@@ -1061,7 +1545,41 @@ _Avoid_: Evidence content dump
 - **Agent Configuration API** owns Draft Agent editing, reusable configuration assets, validation, publication, rollback, import, and export; it may trigger **Agent Validation Run** but not ordinary production execution.
 - The first **Agent Configuration Store** implementation is a **Local Agent Configuration Store** aligned with RunStore and ConversationStore, while API and domain code depend on a replaceable store boundary.
 - The Dashboard Shell should become **Agent-Centric**: global observability remains available, and each Agent detail view combines monitor, configure, validate/test, versions, and Contract View.
-- **Agent Configuration MVP** prioritizes the vertical import-to-publication-to-monitoring loop before full Tool Source management, advanced Policy condition building, broad multi-source retrieval, full RBAC, deep visual diffs, or memory lifecycle UI.
+- The existing Dashboard `/knowledge` route becomes the global **Knowledge Source Workspace** for shared Knowledge Source administration; the product may label the navigation item "Knowledge" or "Knowledge Sources", but it does not add a parallel `/knowledge-sources` route.
+- The **Knowledge Source Workspace** links each Source to **Knowledge Source Detail Workspace** at `/knowledge/:sourceId`. Its Overview, Documents, Versions, Provider, and Audit tabs centralize asset administration, while Agent Knowledge modules remain focused on binding selection, bounded overrides, resolved versions, and upgrade actions.
+- The `/knowledge` **Knowledge Source Workspace List Projection** shows Source identity, description, tags, provider type, ACTIVE or ARCHIVED lifecycle, local index or remote verification availability, current published snapshot or configuration version, local READY and total document counts or remote target index or namespace, referencing Agent count, and warnings for unpublished changes, failed ingestion, or stale remote verification. Operators may filter by name, tag, provider, lifecycle, and warning state.
+- **Knowledge Source Creation Wizard** starts from `/knowledge` and branches immediately into upload local documents for `local_pageindex`, connect remote knowledge for `pageindex`, `http_json`, or another registered adapter, or register an existing `local_markdown` or `local_vector` source. The wizard creates or updates a Source Draft only; verification and **Knowledge Source Publication** remain explicit follow-up actions.
+- For a `local_pageindex` source, **Knowledge Source Documents Tab** supports batch PDF and Markdown upload; filtering by name, tag, and state; pagination; and per-row document name, current READY revision, pending revision, state, update time, and current-published-snapshot membership. Single-document actions include replace, failed-revision retry, routing-metadata edit, archive, and revision history. Bulk actions include failed-revision retry, archive, and tag edit.
+- **Knowledge Source Documents Tab** persistently shows a Candidate Knowledge Source Snapshot summary with included READY count, processing count, failed count, archived count, and explicit Publish Source action.
+- **Remote Knowledge Source Provider Tab** uses a default form for adapter, endpoint, environment-variable credential references, index or namespace, timeout, and default `top_k`, plus an advanced section for supported protocol, request mapping, response JSON Pointer mapping, and Structured Remote Source Reference mapping. Typed adapters such as `pageindex` prefer descriptor-driven forms, while `http_json` exposes bounded mapping editors.
+- **Remote Knowledge Source Connection Test** validates connectivity, authentication, target existence, and normalization shape. **Remote Knowledge Source Retrieval Preview** runs a bounded query and displays normalized candidates, citations, Provider-Native Relevance Scores, and Remote Knowledge Revision Observations. Neither action publishes a Source; a saved Draft still requires successful verification and explicit Knowledge Source Publication.
+- **Local PageIndex Provider Tab** uses a default form for ingestion model provider, model, environment-variable credential references, inherited routing model, and Knowledge Document Selection Budget defaulting to 8, plus an advanced section for explicit routing-model override, timeout, retry count, and worker concurrency. File and routing-metadata management remains in Knowledge Source Documents Tab.
+- **Local PageIndex Model Configuration Test** validates model settings and referenced credential availability without triggering a full rebuild. A change to ingestion configuration that could affect index artifacts sets **Local PageIndex Reingestion Required**; published snapshots remain usable, but the replacement candidate snapshot cannot be published until required document revisions are reingested successfully.
+- **Knowledge Ingestion Configuration Fingerprint** combines artifact-affecting ingestion configuration with each revision's content hash for compatible index-artifact reuse. **Incremental Local PageIndex Reingestion** queues only revisions in the current Candidate Knowledge Source Snapshot that lack compatible artifacts. Routing-model changes, Knowledge Document Selection Budget changes, and routing-metadata edits do not rebuild indexes.
+- Dashboard shows the count of revisions requiring rebuild and exposes `Reingest required documents`. Current published snapshots continue serving while rebuilding, and a replacement candidate snapshot cannot publish until all required revisions are READY.
+- **Knowledge Ingestion Worker Policy** defaults to per-Source concurrency 2 configurable from 1 through 8 and at most 2 automatic retries per revision with backoff. **Knowledge Ingestion Failure Classification** retries recoverable model timeout, transient rate limit, and temporary network failures, but fails unsupported format, scanned PDF, missing configuration, and missing credentials immediately. Exhausted revisions enter FAILED with stable Dashboard error code and short explanation and remain manually retryable.
+- Worker restart resumes unfinished persisted queue tasks and checks compatible index artifacts before building, so recovery does not duplicate completed compatible work.
+- **Operator Knowledge Document Upload Validation** accepts only PDF and Markdown after server-side MIME and content-signature checks, limits one file to 50 MB, one PDF to 500 pages, and one batch to 50 files, and rejects zip archives, directories, nested attachments, encrypted PDFs, scanned PDFs, macro-bearing files, and executable content.
+- Operator files first enter **Knowledge Document Upload Quarantine** under a system-generated storage path with sanitized display filename. A failed validation receives a stable error code and creates neither Knowledge Document Revision nor Knowledge Ingestion Job, so it cannot enter a candidate snapshot.
+- A validated Knowledge Document Revision retains its **Managed Knowledge Document Original** separately from generated index artifacts for reingestion, citation verification, and audit-safe inspection. An operator with `knowledge_source.view` may download it, and **Knowledge Document Original Download Audit** records that action.
+- Archive and replacement retain Managed Knowledge Document Originals while snapshots, Published Agent Versions, or audit-retention rules reference them. **Unreferenced Knowledge Artifact Cleanup** may remove both originals and index artifacts only after those checks pass. **Rejected Knowledge Upload Retention** keeps rejected quarantine files for 24 hours for troubleshooting and then removes them automatically.
+- Local PageIndex citations use **Local Knowledge Citation URI** with stable Source, document, revision, and PDF page or Markdown section identity without exposing storage paths. Run Detail and retrieval preview offer audited, permission-protected **Knowledge Citation Preview**, while original download remains a separate audited action.
+- Customer responses use **Customer-Safe Knowledge Citation Projection** with safe source name plus page or section and omit internal revision ids and storage paths. A remote external citation URL is clickable only when **Remote Citation Link Allowlist** validates its protocol and domain; otherwise the UI renders non-clickable source text.
+- Customer-facing answers cite evidence with **Customer Citation Markers** such as `[1]` and a **Customer Sources List**. The list shows safe source name, page or section, and safe document title, merges repeated references to the same safe source location, and omits confidence, provider, internal ids, revision ids, and remote mutable-external technical warnings.
+- Mutable external replay limitations remain internal Knowledge Retrieval Runtime Facts in Receipt and Run Detail. If no Accepted Evidence exists, the final-answer model must not invent citations and must follow insufficient-evidence refusal behavior.
+- **No Accepted Evidence Outcome** skips free-form final-answer generation or uses only a constrained refusal template without evidence context. Run Detail shows which retrieval phase eliminated evidence, and Receipt records zero Accepted Evidence, candidate count, refusal reason code, and whether provider failure contributed. Customer-safe wording does not include a Sources list.
+- Advisory provider failure may still answer when remaining selected bindings produce Accepted Evidence. A selected required provider failure prevents an answer.
+- **Knowledge Source Publication Validation** is bound to one Source Draft version and becomes stale after relevant configuration changes. For `local_pageindex`, **Local PageIndex Source Publication Validation** requires at least one READY revision, no pending required reingestion, compatible artifacts for all included revisions, successful ingestion and routing model tests, and an editable smoke query proving routing, retrieval, and citation resolution.
+- For remote Sources, **Remote Knowledge Source Publication Validation** requires current health-check verification, authentication, target validation, response normalization, and an editable smoke query proving normalized candidates, citation or adequate Structured Remote Source Reference, and available Remote Knowledge Revision Observation. An adapter without `health_check` remains preview-only and cannot publish for production bindings.
+- **Knowledge Source Publication Confirmation** precedes Publish Source and shows current Source Draft, prior published snapshot or configuration version, local added, replaced, archived, and included READY counts or remote adapter, target index or namespace, pinned or mutable-external consistency mode, latest verification time, smoke-query result, and referencing Agent count. It requires a `change_note` recorded in version history and audit and explicitly states that existing Published Agent Versions do not change automatically.
+- **Knowledge Source Versions Tab** lists published snapshots or configuration versions with publication time, actor, `change_note`, validation result, referencing Agent count, and version diff. Rolling back creates a **Knowledge Source Rollback Draft** from the selected historical version rather than mutating history or moving a production pointer.
+- A Knowledge Source Rollback Draft requires fresh Source validation and explicit publication to create a new Source version. It never changes Published Agent Versions or Draft Agent bindings automatically; an Agent adopts the resulting Source version only through explicit binding upgrade, Agent validation, and Agent publication.
+- Every Source supports audited **Knowledge Source Manifest Export** without credential values, originals, or index artifacts. A local PageIndex Source may additionally create an audited **Local Knowledge Source Offline Bundle** containing the manifest, validated originals, and content hashes while excluding secrets and excluding cached indexes by default.
+- Import creates a **Knowledge Source Import Draft** rather than publishing implicitly. Remote imports require fresh connection test, validation, and publication. Local offline-bundle files pass upload validation again and reingest according to Knowledge Ingestion Configuration Fingerprint; externally supplied index artifacts are never trusted directly.
+- **Knowledge Source Configuration API** owns `/api/config/knowledge-sources` list, create, and filter operations; `/api/config/knowledge-sources/:sourceId` detail, Draft update, archive, and restore; document operations; version list, diff, and rollback-Draft creation; validation; publication; remote connection test; retrieval preview; export; and import.
+- **Agent Knowledge Binding Configuration API** stores Agent Draft `knowledge_bindings[]` and Agent-level blended-retrieval settings only. Knowledge Source provider parameters remain Source-owned, and Published Agent Versions capture resolved Source snapshot or configuration versions plus resolved binding settings.
+- **Direct Knowledge Contract Migration** replaces inline Agent `knowledge.provider + params` with Source-owned provider configuration and Agent `knowledge_bindings[]` in one breaking change. Loader, Dashboard, examples, fixtures, and tests migrate together; the new loader rejects legacy inline knowledge configuration rather than carrying a dual-read path.
+- **Agent Configuration MVP** prioritizes the vertical import-to-publication-to-monitoring loop before full Tool Source management, advanced Policy condition building, unbounded multi-source retrieval, full RBAC, deep visual diffs, or memory lifecycle UI.
 - **Agent Configuration MVP** uses a **Workflow Node Panel** for Workflow Template Node Configuration before adding any visual workflow canvas.
 - New Agent setup enters through an **Agent Creation Wizard** and then lands in the module-based **Agent Configuration Workspace** for ongoing edits.
 - The **Agent Configuration Workspace** edits **Draft Agent** versions in the **Agent Configuration Store**; application-facing execution surfaces can call only immutable **Published Agent Version** snapshots after **Agent Publication**.
@@ -1077,8 +1595,61 @@ _Avoid_: Evidence content dump
 - The V1 **Enterprise QA Reference Agent** targets the **Insurance Service QA Domain** before broader industry templates.
 - Near-term delivery uses the **Enterprise QA Reference Agent** as the acceptance path while preserving framework-level boundaries.
 - A **Knowledge Provider** returns zero or more **Candidate Evidence** chunks.
-- A **Knowledge Provider Registry** resolves the selected **Knowledge Provider** before retrieval.
-- An **Agent Contract** selects a **Knowledge Provider** and supplies that provider's own parameters.
+- A **Knowledge Source** owns its **Knowledge Provider** configuration, and the **Knowledge Provider Registry** resolves that source-owned provider before retrieval.
+- **Knowledge Source Lifecycle State** separates reusable asset lifecycle from bindability and ingestion readiness. **Knowledge Source Archive** blocks new Agent binding and new Agent publication but preserves existing Published Agent Version execution against pinned snapshots or configuration versions. Dashboard shows affected Published Agent references and warning state.
+- **Knowledge Source Restore** returns an archived source to ACTIVE without changing any Agent binding automatically. **Knowledge Source Physical Deletion** is allowed only when retained snapshots, Published Agent references, and audit-retention requirements no longer require the source.
+- **Knowledge Source Permission Model** separates `knowledge_source.view`, `knowledge_source.edit`, `knowledge_source.publish`, and `knowledge_source.archive`. Agent binding edits require `agent.edit`, and publishing a new Agent version requires `agent.publish`. V1 local single-user mode grants all by default while API checks, Dashboard actions, and Configuration Operation Audit preserve these boundaries for future RBAC.
+- **Knowledge Configuration Operation Audit** records actor, time, affected Source or Agent, prior and resulting version identifiers, document intake and replacement, retry, document archive, Source publication, Source archive and restore, remote verification, Agent binding changes, retrieval override changes, and explicit Source upgrades.
+- **Knowledge Retrieval Runtime Facts** record resolved Source snapshot or configuration versions, routed Sources and local document revisions, provider call state, degraded retrieval, upstream revision observations, WRRF ordering, exact-dedup provenance, Evidence Admission Scores, citations, and Accepted Evidence Context Budget Truncation in Trace, Governance Receipt, and RunStore.
+- **Knowledge Retrieval Plan Summary** records `binding_candidates[]` using **Knowledge Binding Candidate Summary**, `selected_bindings[]` using **Selected Knowledge Binding Summary**, local `document_candidates[]` and `selected_documents[]` when applicable, and **Knowledge Provider Call Summary** for each selected provider. Unselected bindings and documents record compact summary reasons only.
+- RunStore and Dashboard Run Detail preserve the full Knowledge Retrieval Plan Summary. Governance Receipt keeps a compressed summary suitable for audit review without raw evidence content.
+- Knowledge audit and retrieval facts do not store raw document content, credential values, or complete remote provider responses.
+- An **Agent Knowledge Binding** may define a **Knowledge Binding Retrieval Override** for provider retrieval `top_k`, fusion weight, failure mode, and source-routing metadata hints. It cannot override provider endpoint, credentials, index or namespace, PageIndex document-processing parameters, or admission scorer. Missing values inherit Knowledge Source defaults, and Published Agent Version snapshots capture resolved values.
+- An unpinned Draft Agent binding uses **Draft Knowledge Binding Resolution** to follow the latest published Knowledge Source snapshot or configuration version and shows that resolved version in Dashboard. **Published Knowledge Binding Resolution** pins the source snapshot or configuration version and resolved binding settings inside each Published Agent Version, so later source publication never silently changes production behavior.
+- When a Knowledge Source publishes a newer version, Dashboard exposes **Knowledge Binding Upgrade Available** for older Draft Agents and Published Agent Versions. An administrator applies an upgrade to a Draft Agent, runs validation, and publishes a new Agent version.
+- V1 **Knowledge Provider Registry** contains trusted **Knowledge Provider Adapter Descriptors** rather than operator-uploaded executable code; each descriptor declares configuration schema, Dashboard form metadata, and **Knowledge Provider Capabilities**.
+- V1 includes an **HTTP JSON Knowledge Provider** with a default versioned **Remote Retrieval Protocol** and validated declarative **Remote Retrieval Response Mapping** for non-standard remote APIs; specialized technology stacks may add trusted typed adapters through code installation.
+- **Remote Retrieval Request Mapping** may project only whole-value placeholders `${query}`, `${top_k}`, and `${upstream_revision}` into query parameters and JSON body fields while preserving their source types; static JSON constants and nested structures remain allowed.
+- Remote request endpoint and URL path are static published configuration values. Headers may be static non-sensitive values or environment-variable references with an optional static prefix. V1 request mapping does not support string interpolation, dynamic URL paths, loops, conditions, functions, network callbacks, or scripts.
+- **Remote Retrieval Response Mapping** uses one JSON Pointer for the result array and relative JSON Pointer fields for each item; it may project normalized content, citation, **Structured Remote Source Reference** fields such as document id, page, and chunk id, id, Provider-Native Relevance Score, metadata, and revision observation fields.
+- V1 response mapping does not support JSONPath wildcards, filters, recursive queries, functions, concatenation, calculations, scripts, raw-response LLM injection, or direct mapping into Evidence Admission Score.
+- **Remote Retrieval Response Mapping Verification** runs during Remote Knowledge Source Verification and fails closed unless the result pointer resolves to an array and every normalized candidate shape provides content plus either citation or an adequate Structured Remote Source Reference.
+- **Trusted Citation Formatting** converts an adequate Structured Remote Source Reference into citation using adapter-owned deterministic rules, for example `document://claims-guide#page-3`. Dashboard administrators cannot configure arbitrary citation templates. A candidate lacking both usable citation and adequate Structured Remote Source Reference remains visible in Trace and provider diagnostics but is inadmissible and excluded from **Accepted Evidence Context Assembly**.
+- Evidence Admission Score may be supplied only through an approved calibrated adapter descriptor or approved admission scorer, not through an ordinary HTTP JSON response mapping.
+- Published Remote Knowledge Source configuration versions capture the selected protocol version, request mapping, and response mapping so validation, audit, and rollback use the same remote retrieval contract.
+- Dashboard configuration stores provider parameters and environment-variable credential references only; V1 does not execute arbitrary scripts uploaded through Dashboard.
+- Every published Remote Knowledge Source captures an immutable **Remote Knowledge Source Configuration Version** managed by Proof Agent.
+- A remote adapter with `snapshot_pin` capability publishes a **Pinned Remote Knowledge Source** with an upstream corpus revision; an adapter without that capability publishes a **Mutable External Knowledge Source** and Dashboard warns that exact historical replay is unavailable.
+- Retrieval from a remote source records a **Remote Knowledge Revision Observation** in Trace, Governance Receipt, and RunStore when the adapter returns a revision or etag, otherwise it records the observation timestamp.
+- Agent Validation Runs and Published Agent Versions preserve whether each bound remote source was pinned or mutable external.
+- A remote adapter must declare `health_check` and pass **Remote Knowledge Source Verification** before its source may be published for production bindings; adapters without `health_check` remain preview-only.
+- **Remote Knowledge Source Verification** validates connectivity, authentication, target index or namespace existence, and response normalization, then records verification time, adapter name, configuration version, and available upstream revision observation.
+- Verification for a **Mutable External Knowledge Source** is valid for 24 hours by default; **Stale Remote Knowledge Source Verification** warns operators and blocks new Agent publication or rebinding until refreshed without immediately interrupting already-published Agent execution.
+- An **Agent Contract** references one or more **Knowledge Sources** through an **Agent Knowledge Binding Set** without selecting providers.
+- **Knowledge Binding Strategy** governs **Multi-Source Blended Retrieval** across the Agent's **Agent Knowledge Binding Set**.
+- **Knowledge Source Routing** first filters **Knowledge Source Routing Metadata**, then uses **Knowledge Source Routing Model Configuration** to choose a bounded set of eligible bindings before each source executes provider-specific retrieval.
+- **Knowledge Source Selection Budget** defaults to 3 selected Knowledge Sources per query and is configurable from 1 through 8 at the Agent Knowledge Binding Set boundary; it is distinct from Knowledge Document Selection Budget and Agent Retrieval Strategy evidence `top_k`.
+- If **Knowledge Source Routing** selects no sources, retrieval returns no evidence rather than silently querying every binding; uncertain selection may include more sources only within the configured Knowledge Source Selection Budget.
+- Each selected **Knowledge Source** may use a different **Knowledge Provider Adapter**, but every adapter returns normalized **Candidate Evidence** through the same provider-neutral contract.
+- **Cross-Source Evidence Fusion** combines normalized Candidate Evidence before Control Plane evidence admission; source routing and fusion cannot bypass Evidence Threshold or citation enforcement.
+- V1 **Cross-Source Evidence Fusion** applies **Exact Cross-Source Evidence Deduplication** using a **Canonical Evidence Deduplication Key** made from canonical citation or trusted-formatted Structured Remote Source Reference plus normalized content hash. Merged candidates preserve every contributing Knowledge Source, Agent Knowledge Binding, and citation, and their WRRF contributions combine.
+- **Candidate Evidence Identity** records evidence id, source id, source version id, binding id, provider name, optional document id, optional revision id, optional chunk id, citation, provider-native score, fusion rank, admission score, and trace-safe allowlisted metadata. Citation is mandatory before LLM context assembly.
+- Deduplicated candidates preserve one **Candidate Evidence Contribution** per contributing source, including source and binding identifiers, provider, local document or remote chunk ids where available, provider-local rank, provider-native score, binding fusion weight, and citation.
+- V1 does not deduplicate on content hash alone and does not perform semantic-similarity deduplication, because those shortcuts may collapse independently attributable evidence.
+- **Merged Evidence Admission Evaluation** does not reward duplicate retrieval hits with a higher Evidence Admission Score. When configured, an approved admission scorer evaluates the merged normalized chunk once; otherwise the merged candidate uses the minimum available calibrated Evidence Admission Score from contributing sources. Contributors without calibrated admission scores remain visible in Trace but do not participate in score aggregation, and a merged candidate with no valid admission score remains inadmissible.
+- V1 **Cross-Source Evidence Fusion** uses **Weighted Reciprocal Rank Fusion** because heterogeneous **Provider-Native Relevance Scores** are meaningful for provider-local ordering and Trace but are not assumed to be directly comparable across adapters.
+- **Weighted Reciprocal Rank Fusion** uses a resolved **Knowledge Binding Fusion Weight** for each participating Agent Knowledge Binding; the default is 1.0, and the weight belongs to the binding rather than the shared Knowledge Source.
+- Each selected binding applies its resolved **Knowledge Binding Failure Mode**: the default `required` mode fails the whole retrieval when its provider-specific call fails, while explicit `advisory` mode permits **Degraded Knowledge Retrieval** from the remaining selected bindings.
+- **Degraded Knowledge Retrieval** records failed advisory binding summaries in Trace, Governance Receipt, and RunStore; remaining candidates still pass through normal Cross-Source Evidence Fusion, Evidence Threshold, and citation enforcement.
+- **Cross-Source Fusion Rank** controls bounded candidate ordering before evidence admission; it does not itself create Accepted Evidence or bypass Evidence Threshold.
+- The Control Envelope applies **Evidence Threshold** only to **Evidence Admission Score**, not to Provider-Native Relevance Score or Cross-Source Fusion Rank.
+- A candidate without a reliable **Evidence Admission Score** remains traceable but inadmissible until an approved admission scorer supplies one.
+- **Direct Evidence Score Contract Migration** removes overloaded `EvidenceChunk.score` in the same breaking implementation cutover as Direct Knowledge Contract Migration. Candidate Evidence uses optional `provider_native_score`, WRRF produces `fusion_rank`, and the Control Envelope evaluates optional `admission_score`. Validator, graph state, Trace, RunStore, Governance Receipt, providers, fixtures, and tests migrate together without a legacy alias.
+- **Knowledge Source Implementation Sequence** starts with data contracts and loader changes for `knowledge_bindings[]`, Source-owned provider configuration, and split evidence scores; then implements Knowledge Source store/API; then `local_pageindex` upload, worker, artifact cache, and snapshots; then multi-source runtime routing, provider calls, WRRF, deduplication, admission, and context assembly; then Dashboard `/knowledge`, Source detail tabs, Agent binding editor, and Run Detail; then fixtures and tests migration with legacy inline knowledge removed.
+- **Accepted Evidence Context Assembly** sends only Accepted Evidence to the final-answer LLM after Control Plane evidence admission.
+- **Accepted Evidence Context Assembly** iterates admitted, cited candidates in Cross-Source Fusion Rank order and stops when either **Accepted Evidence Context Chunk Budget** or **Accepted Evidence Context Token Budget** is exhausted. The defaults are 12 chunks and approximately 6000 tokens; Agent configuration may set 1 through 40 chunks and 500 through 20000 tokens.
+- **Accepted Evidence Context Assembly** emits one **Accepted Evidence LLM Context Item** per included chunk with evidence id, source label, citation label, content, **Accepted Evidence Confidence Band**, source type, and context rank. It does not send Provider-Native Relevance Score, numeric Cross-Source Fusion Rank, internal source/version/revision ids, raw provider payload, or original file paths to the final-answer LLM.
+- Final-answer context assembly does not reserve fixed per-source quotas. Trace records **Accepted Evidence Context Budget Truncation**, including how many already-admitted candidates remained outside LLM context.
 - An **Evidence Chunk** may carry an **Evidence Citation** and **Evidence Metadata** separate from its content.
 - **Control Envelope** evidence evaluation turns **Candidate Evidence** into **Accepted Evidence** or rejected evidence.
 - **Authorized Tool Result** values are admitted through governed tool authorization and execution, not through evidence evaluation, even though they may support final-answer claim validation.
@@ -1088,6 +1659,36 @@ _Avoid_: Evidence content dump
 - A **Local Markdown Provider**, a **Local Vector Provider**, and a **Remote Search Provider** are kinds of **Knowledge Provider**.
 - The **PageIndex Provider** is the first production-directed knowledge integration for the **Insurance Service QA Domain**.
 - V1 **Autonomous Customer Service Mode** keeps the **Local Markdown Provider** as the deterministic regression baseline and uses the **PageIndex Provider** as the production-directed customer-service knowledge path.
+- A **Local PageIndex Provider** retrieves from a **PageIndex-Backed Knowledge Source** created by **Knowledge Source Ingestion**; an Agent may bind that source only when its **Knowledge Source Index State** is READY.
+- V1 **Local PageIndex Snapshot Retrieval** applies **Knowledge Document Routing** within the resolved snapshot before document-level PageIndex search, merges normalized Candidate Evidence from the bounded selected set, applies the Agent Retrieval Strategy limit, and fails closed if any selected document search fails.
+- V1 **Knowledge Source Document Capacity** is up to 500 documents per source; this excludes unbounded per-query scans and requires explicit bounded **Knowledge Document Routing**.
+- V1 **Knowledge Document Routing** first filters operator-managed metadata and then uses an LLM selector over filenames plus editable document descriptions to choose a bounded document set.
+- **Knowledge Document Routing Metadata** includes title, description, tags, document type, and business category; ingestion may generate the description from PageIndex tree summaries, and Dashboard operators may revise it.
+- **Knowledge Document Selection Budget** defaults to 8 selected document revisions per query and is configurable from 1 through 20 at the Knowledge Source boundary; it is distinct from the Agent Retrieval Strategy evidence `top_k`.
+- If **Knowledge Document Routing** selects no documents, retrieval returns no evidence rather than silently widening the search scope; uncertain selection may include more documents only within the configured **Knowledge Document Selection Budget**.
+- The existing governed retrieval plan trace records an audit-safe **Knowledge Document Routing** summary, including selected document identifiers and selection basis without dumping document content.
+- A **PageIndex-Backed Knowledge Source** contains one or more **Knowledge Documents** and exposes an immutable READY **Knowledge Source Snapshot** to Agent Knowledge Bindings.
+- Each **Knowledge Document** belongs to exactly one **Knowledge Source** and is indexed independently; a failed replacement build does not replace the last READY **Knowledge Source Snapshot**.
+- A **Knowledge Document** keeps a stable document id while explicit file replacement creates an immutable **Knowledge Document Revision** with a new revision id. Uploading a same-named file never overwrites implicitly; Dashboard requires the operator to choose new document or replacement.
+- **Knowledge Document Content Hash Reuse** makes repeated upload idempotent when content hash and ingestion configuration are compatible by reusing the existing index artifact rather than rebuilding it.
+- Until a replacement Knowledge Document Revision reaches READY, its candidate snapshot continues to use the prior READY revision. After replacement becomes READY, only the unpublished candidate snapshot changes; the current published Knowledge Source Snapshot remains immutable until explicit Knowledge Source Publication.
+- Each Knowledge Document revision progresses independently through **Knowledge Document Ingestion State** `QUEUED`, `PROCESSING`, `READY`, or `FAILED`. Dashboard permits retry, replacement, or archive for failed revisions without discarding unrelated READY revisions.
+- A **Candidate Knowledge Source Snapshot** contains only READY Knowledge Document revisions. `QUEUED`, `PROCESSING`, `FAILED`, and archived revisions remain visible in Dashboard as explicit exclusions, and **Knowledge Source Publication** requires at least one READY revision.
+- One failed or processing Draft document does not permanently block publication of unrelated READY revisions and does not change an existing bindable source away from **Knowledge Source Index State** `READY`; partial inclusion is explicit rather than silent.
+- **Knowledge Document Archive** removes a document from future candidate snapshots without physically deleting revisions referenced by retained snapshots or Published Agent Versions.
+- **Unreferenced Knowledge Artifact Cleanup** may physically delete only revisions and index artifacts with no retained snapshot or Published Agent Version references, and it must record configuration operation audit metadata.
+- Upload, replacement, and removal of **Knowledge Documents** prepare candidate snapshots; only explicit **Knowledge Source Publication** promotes a candidate READY **Knowledge Source Snapshot** for Agent use.
+- A Draft **Agent Knowledge Binding** may preview its source's latest published **Knowledge Source Snapshot**, but each **Published Agent Version** captures one **Resolved Knowledge Snapshot Binding** for every binding in its **Agent Knowledge Binding Set** so future Knowledge Source Publications do not silently change its retrieval corpus.
+- **Agent Version Rollback** restores every **Resolved Knowledge Snapshot Binding** captured by the selected immutable **Published Agent Version**.
+- V1 **Operator Knowledge Document Intake** accepts text-based PDF and Markdown files only; scanned PDFs, OCR, images, office documents, HTML, and other formats fail closed as unsupported input.
+- **Operator Knowledge Document Intake** is an internal design-time boundary and does not weaken **Text-Only Customer Intake** for customer chat.
+- **Knowledge Source Ingestion** creates persisted **Knowledge Ingestion Jobs** that are claimed by a separate **Knowledge Ingestion Worker** rather than running inside Dashboard API request handling.
+- The local **Knowledge Ingestion Worker** uses a file-backed recoverable queue boundary that future deployments may replace with a distributed queue without changing Knowledge Source semantics.
+- A **PageIndex-Backed Knowledge Source** owns **Knowledge Ingestion Model Configuration** independently from any Agent answer, planner, or review model configuration.
+- **Knowledge Ingestion Model Configuration** stores model provider settings and credential environment-variable references, never raw credentials; missing credentials fail the job while preserving the last READY snapshot.
+- A **PageIndex-Backed Knowledge Source** owns **Knowledge Routing Model Configuration** independently from any Agent planner model configuration; it inherits the source's **Knowledge Ingestion Model Configuration** by default and may override provider, model, or environment-variable references.
+- **Knowledge Document Routing** failure fails the retrieval closed and is recorded in Trace.
+- Optional **Local PageIndex Provider** ingestion cannot become a dependency of the deterministic no-network, no-credential demo or default CI gate.
 - A **Remote Search Fixture Adapter** proves the Remote Search contract before production network integration.
 - A **Local Vector Provider** queries an existing index; **Vector Index Build** is a separate future lifecycle.
 - **Knowledge First Stage** delivers executable single-step retrieval and reserves **Agentic RAG** as a governed future workflow.
@@ -1259,7 +1860,58 @@ _Avoid_: Evidence content dump
 - "Production knowledge integration" could mean building local vector indexing first or using a remote retrieval service first. Resolved: first-stage production-directed integration uses the **PageIndex Provider**, while **Local Markdown Provider** remains the deterministic baseline.
 - "V1 knowledge source" could mean replacing local fixtures with PageIndex or keeping only Markdown. Resolved: V1 uses **Local Markdown Provider** for deterministic regression and **PageIndex Provider** for the production-directed customer-service path.
 - "Knowledge base configuration" could mean a reusable data asset, a provider adapter, or an Agent-specific retrieval binding. Resolved: use **Knowledge Source** for the asset, **Knowledge Provider** for the adapter, and **Agent Knowledge Binding** for per-Agent use and retrieval settings.
-- "Multiple knowledge bases" could mean unrestricted blended retrieval or a governed binding strategy. Resolved: use **Knowledge Binding Strategy**; initial publication permits single-source and explicit priority fallback before broader multi-source retrieval.
+- "Agent knowledge provider" could mean an Agent-selected retrieval adapter or the provider owned by a reusable Knowledge Source. Resolved: a **Knowledge Source** owns its **Knowledge Provider** configuration; an Agent uses **Agent Knowledge Binding** and does not select a provider.
+- "Agent binding customization" could mean no per-Agent tuning, bounded retrieval overrides, or permission to mutate source-owned provider configuration. Resolved: **Knowledge Binding Retrieval Override** permits `top_k`, fusion weight, failure mode, and source-routing metadata hints only; endpoint, credentials, index or namespace, ingestion settings, and admission scorer remain Knowledge Source-owned.
+- "Knowledge Source upgrade" could mean latest-at-runtime lookup for every Agent, immutable binding forever, or explicit Draft upgrade. Resolved: unpinned Draft bindings use **Draft Knowledge Binding Resolution** against the latest published source version, while **Published Knowledge Binding Resolution** remains immutable; Dashboard shows **Knowledge Binding Upgrade Available**, and production changes require Draft update, Agent Validation Run, and Agent Publication.
+- "Archive a Knowledge Source" could mean disabling all current retrieval immediately, removing it only from future configuration, or physically deleting it. Resolved: **Knowledge Source Archive** moves the source to ARCHIVED, blocks new binding and new Agent publication, preserves execution of existing pinned Published Agent Versions, shows affected references, supports explicit restore without Agent mutation, and permits physical deletion only after reference and retention checks pass.
+- "Authorize knowledge configuration" could mean one broad administrator toggle, reusing Agent edit rights for every asset operation, or preserving distinct capabilities. Resolved: **Knowledge Source Permission Model** separates view, edit, publish, and archive; Agent binding changes and Agent publication remain separate `agent.edit` and `agent.publish` capabilities. V1 single-user mode grants all while keeping API, Dashboard, and audit boundaries explicit.
+- "Audit knowledge management and retrieval" could mean one mixed activity log, raw document retention, or separate trace-safe records. Resolved: **Knowledge Configuration Operation Audit** records administrative versioned changes, **Knowledge Retrieval Runtime Facts** record execution-time routing, provider, fusion, admission, citation, and truncation facts, and neither stores raw documents, secrets, or complete remote responses.
+- "Record retrieval planning" could mean only final evidence, every routing prompt and candidate, or a bounded plan summary. Resolved: **Knowledge Retrieval Plan Summary** records binding candidates, selected bindings, local document candidates and selections, provider call outcomes, compact unselected reasons, full RunStore/Dashboard detail, and compressed Governance Receipt summary without raw content.
+- "Multiple knowledge bases" could mean priority-only fallback, querying all sources, or governed evidence blending. Resolved: an Agent has an **Agent Knowledge Binding Set** and uses bounded **Multi-Source Blended Retrieval** with **Knowledge Source Routing** before provider-specific retrieval.
+- "Support multiple knowledge providers" could mean selecting one Agent-level adapter or allowing heterogeneous provider-backed Knowledge Sources in one retrieval plan. Resolved: each **Knowledge Source** owns one **Knowledge Provider Adapter**, and one Agent retrieval plan may select multiple sources backed by different adapters before **Cross-Source Evidence Fusion**.
+- "Give retrieved information to the LLM" could mean passing through every provider result or assembling governed context. Resolved: providers return **Candidate Evidence**, the Control Plane admits **Accepted Evidence**, and **Accepted Evidence Context Assembly** sends only admitted evidence to the final-answer LLM.
+- "Limit blended evidence sent to the LLM" could mean provider-specific quotas, chunk count only, token count only, or a bounded Agent-level assembly step. Resolved: **Accepted Evidence Context Assembly** walks Cross-Source Fusion Rank order without fixed per-source quotas and stops when either **Accepted Evidence Context Chunk Budget** or **Accepted Evidence Context Token Budget** is exhausted; Trace records budget truncation.
+- "Format evidence for the final-answer LLM" could mean raw Candidate Evidence objects, ad hoc prompt concatenation, or a fixed safe projection. Resolved: **Accepted Evidence LLM Context Item** sends source label, citation label, content, confidence band, source type, and rank while excluding raw scores, internal ids, storage paths, and provider payloads.
+- "Rank evidence from different providers" could mean sorting incompatible backend scores directly, requiring one universal scoring backend, or applying rank fusion. Resolved: V1 **Cross-Source Evidence Fusion** uses **Weighted Reciprocal Rank Fusion** over provider-local ranks and resolved source weights; **Provider-Native Relevance Scores** remain source-local and traceable.
+- "Deduplicate evidence from different providers" could mean content-only collapse, semantic-similarity collapse, or deterministic exact identity. Resolved: V1 uses **Exact Cross-Source Evidence Deduplication** only when canonical citation or trusted-formatted Structured Remote Source Reference plus normalized content hash match exactly; merged candidates retain all provenance and combine WRRF contributions.
+- "Identify retrieved evidence" could mean provider-native ids only, citation text only, or a governed normalized key set. Resolved: **Candidate Evidence Identity** carries Source, version, binding, provider, document/revision/chunk ids where available, citation, separated score fields, and trace-safe metadata, while **Candidate Evidence Contribution** preserves per-source provenance after exact deduplication.
+- "Admit an exactly deduplicated candidate" could mean boosting confidence because multiple sources returned it, averaging scores, selecting the highest score, or applying conservative admission. Resolved: **Merged Evidence Admission Evaluation** keeps WRRF contribution aggregation separate from admission; an approved scorer evaluates the merged chunk once when configured, otherwise the minimum available calibrated contributor score applies, and candidates with no valid score remain inadmissible.
+- "Evidence score" could mean a provider-native relevance value, a cross-source fusion result, or a Control Envelope admission value. Resolved: use **Provider-Native Relevance Score** for adapter-local ordering, **Cross-Source Fusion Rank** for WRRF candidate ordering, and **Evidence Admission Score** for Evidence Threshold evaluation. Missing admission scores fail closed.
+- "Migrate overloaded EvidenceChunk.score" could mean retaining a single-provider alias or splitting score semantics directly. Resolved: because the contract is already undergoing a breaking cutover, use **Direct Evidence Score Contract Migration** and remove the old field while migrating validator, graph, observability projections, providers, fixtures, and tests together.
+- "Implement Knowledge Sources" could mean building the Dashboard first, adding runtime fusion first, or migrating contracts first. Resolved: follow **Knowledge Source Implementation Sequence** so the contract and loader define the target shape before store/API, ingestion, runtime retrieval, Dashboard UI, and final fixture/test migration.
+- "Knowledge source weight" could mean one global source priority or an Agent-specific fusion preference. Resolved: use **Knowledge Binding Fusion Weight** on each **Agent Knowledge Binding**, defaulting to 1.0, so different Agents may weight the same shared Knowledge Source differently.
+- "Source routing limit" could mean Agent-level Knowledge Source fan-out, one PageIndex source's document fan-out, or final evidence count. Resolved: use **Knowledge Source Selection Budget** for Agent-level source fan-out, defaulting to 3 and configurable from 1 through 8; **Knowledge Document Selection Budget** and Agent Retrieval Strategy `top_k` remain separate limits.
+- "Choose Agent-bound knowledge sources" could mean query every binding, filter only metadata, or use an unbounded routing model. Resolved: **Knowledge Source Routing** filters **Knowledge Source Routing Metadata**, then uses the Agent-specific **Knowledge Source Routing Model Configuration** within Knowledge Source Selection Budget. Empty selection returns no evidence.
+- "One selected provider failed" could mean fail every mixed retrieval, silently return partial evidence, or apply an explicit binding policy. Resolved: each **Agent Knowledge Binding** has a **Knowledge Binding Failure Mode**, defaulting to `required`; explicit `advisory` mode permits observable **Degraded Knowledge Retrieval** while preserving normal evidence admission.
+- "Support third-party knowledge providers" could mean shipping only vendor-specific code, dynamically executing operator-uploaded scripts, or registering trusted adapters with a generic remote option. Resolved: V1 uses trusted **Knowledge Provider Adapter Descriptors**, includes an **HTTP JSON Knowledge Provider**, permits specialized adapters through code installation, and does not execute Dashboard-uploaded scripts.
+- "HTTP JSON adapter protocol" could mean one rigid response shape, arbitrary executable transforms, or a default protocol with bounded extension. Resolved: the **HTTP JSON Knowledge Provider** supports the versioned default **Remote Retrieval Protocol** plus validated declarative **Remote Retrieval Response Mapping** for non-standard remote responses; mappings normalize evidence fields and cannot execute code or bypass admission.
+- "HTTP JSON request shape" could mean only `{query, top_k}`, unrestricted templates, or bounded declaration. Resolved: **Remote Retrieval Request Mapping** projects only whole-value placeholders `${query}`, `${top_k}`, and `${upstream_revision}` into query parameters and JSON body fields while preserving source types; endpoints and URL paths remain static, headers use static values or environment-variable references, and interpolation or expression features are excluded.
+- "HTTP JSON response mapping language" could mean full JSONPath or JMESPath expressions, executable transforms, or bounded field projection. Resolved: **Remote Retrieval Response Mapping** uses JSON Pointer only: one result-array pointer plus relative item-field pointers. Health-check sample validation fails closed on missing normalized content or usable citation basis, and ordinary mappings cannot supply Evidence Admission Score.
+- "Remote result citation" could mean requiring one upstream citation field, allowing Dashboard-authored citation templates, or accepting mapped structured source-reference fields. Resolved: a candidate must have either a mapped citation or an adequate mapped **Structured Remote Source Reference**; only **Trusted Citation Formatting** in adapter code may convert the latter into citation, and citation-free candidates never enter LLM context.
+- "Version a remote knowledge source" could mean freezing only Proof Agent connection config, pretending every upstream corpus is immutable, or recording explicit consistency levels. Resolved: every remote source publishes a **Remote Knowledge Source Configuration Version**; adapters with `snapshot_pin` create a **Pinned Remote Knowledge Source**, while unsupported upstreams remain visible **Mutable External Knowledge Sources** with **Remote Knowledge Revision Observations** and no exact replay guarantee.
+- "Verify a remote knowledge source" could mean testing only at runtime, permitting unchecked publication, or requiring a bounded pre-publication health check. Resolved: production-capable adapters declare `health_check`; **Remote Knowledge Source Verification** must pass before source publication, mutable external verification defaults to a 24-hour validity window, and **Stale Remote Knowledge Source Verification** blocks new publication or rebinding without immediately stopping existing Agent execution.
+- "Local PageIndex" could mean calling a self-hosted PageIndex HTTP endpoint or indexing uploaded documents inside the Dashboard-managed local workspace. Resolved: keep **PageIndex Provider** for remote endpoint retrieval and add **Local PageIndex Provider** for **Knowledge Source Ingestion** into locally persisted tree indexes.
+- "Retrieve from a multi-document local PageIndex source" could mean unbounded search, implicit file routing, or silent partial results. Resolved: V1 **Local PageIndex Snapshot Retrieval** first applies bounded **Knowledge Document Routing** within the resolved snapshot, then searches selected revisions, merges normalized candidates, and fails closed if any selected document search fails.
+- "Small local knowledge source" could mean capping a source at 20 documents or supporting a larger operator-managed collection. Resolved: V1 **Knowledge Source Document Capacity** targets up to 500 documents per source, so querying every document revision is not an acceptable retrieval path.
+- "Document routing" could mean opaque model choice, metadata-only filtering, or a two-stage governed selection. Resolved: V1 filters **Knowledge Document Routing Metadata**, then uses an LLM selector over filenames and editable descriptions, and records an audit-safe routing summary in the retrieval plan trace.
+- "Document selection limit" could mean final evidence `top_k`, source capacity, or routed search fan-out. Resolved: use **Knowledge Document Selection Budget** for routed document fan-out, with default 8 and configurable range 1 through 20; Agent Retrieval Strategy `top_k` remains the final evidence limit.
+- "Upload PDF into RAG knowledge" could mean customer attachment analysis, direct Agent YAML mutation, or creating a reusable indexed asset. Resolved: Dashboard operator uploads create a **PageIndex-Backed Knowledge Source** through **Knowledge Source Ingestion**; Agents bind only READY sources through **Agent Knowledge Binding**.
+- "One knowledge base" could mean exactly one file or a reusable document collection. Resolved: a **PageIndex-Backed Knowledge Source** contains one or more independently indexed **Knowledge Documents** and exposes the last promoted READY **Knowledge Source Snapshot**.
+- "Partially failed batch ingestion" could mean blocking every source publication, silently dropping failed documents, or publishing an explicit READY subset. Resolved: every revision has an independent **Knowledge Document Ingestion State**; a **Candidate Knowledge Source Snapshot** includes only READY revisions, requires at least one, and Dashboard explicitly lists processing, failed, and archived exclusions while supporting retry, replacement, or archive.
+- "Replace an uploaded document" could mean overwriting by filename, mutating the active index artifact, or creating an immutable revision. Resolved: a stable **Knowledge Document** id owns immutable **Knowledge Document Revisions**; Dashboard requires explicit new-document versus replacement intent, **Knowledge Document Content Hash Reuse** makes compatible repeated uploads idempotent, and replacement changes only a candidate snapshot until publication.
+- "Adding one document" could mean mutating the active retrieval corpus immediately or preparing a replacement corpus. Resolved: document changes build a replacement **Knowledge Source Snapshot**; indexing failure preserves the currently active READY snapshot.
+- "Delete a knowledge document" could mean removing it from future retrieval or physically purging historical artifacts. Resolved: use **Knowledge Document Archive** for reversible removal from candidate snapshots and permit **Unreferenced Knowledge Artifact Cleanup** only when no retained snapshot or Published Agent Version references the revision.
+- "Indexed successfully" could mean immediately changing Agent retrieval behavior or making a candidate snapshot eligible for activation. Resolved: upload, replacement, and removal prepare a candidate READY **Knowledge Source Snapshot**, and **Knowledge Source Publication** is the required manual activation step.
+- "Agent binds a knowledge source" could mean following its latest published snapshot forever or freezing the validated corpus at Agent publication. Resolved: Draft Agents may preview the latest published snapshot, while each **Published Agent Version** records a **Resolved Knowledge Snapshot Binding** to the exact `snapshot_id`.
+- "Rollback an Agent version" could mean restoring only its YAML or restoring its effective knowledge corpus too. Resolved: rollback selects the immutable **Published Agent Version** and therefore restores its captured **Resolved Knowledge Snapshot Binding**.
+- "Dashboard PDF upload" could mean arbitrary attachment analysis or a constrained operator workflow. Resolved: V1 **Operator Knowledge Document Intake** accepts text-based PDF and Markdown Knowledge Documents only and fails closed on scanned PDFs or unsupported formats.
+- "Operator upload" could imply enabling customer attachment uploads. Resolved: **Operator Knowledge Document Intake** is a design-time Dashboard capability and does not change **Text-Only Customer Intake**.
+- "Background indexing" could mean keeping the upload HTTP request open, using an in-process callback, or queueing durable work. Resolved: **Knowledge Source Ingestion** persists a **Knowledge Ingestion Job** and a separate local **Knowledge Ingestion Worker** claims it asynchronously.
+- "Local worker" could mean committing to one production queue technology. Resolved: V1 uses a file-backed recoverable queue behind the **Knowledge Ingestion Worker** boundary; future deployments may replace it with a distributed queue.
+- "PageIndex model" could mean reusing an Agent answer model or configuring a design-time indexing model. Resolved: each **PageIndex-Backed Knowledge Source** has independent **Knowledge Ingestion Model Configuration** with environment-variable credential references only.
+- "Document routing model" could mean reusing an Agent planner, requiring a second source model, or inheriting the ingestion model. Resolved: **Knowledge Routing Model Configuration** belongs to the **Knowledge Source**, inherits **Knowledge Ingestion Model Configuration** by default, and may be overridden independently.
+- "Local PageIndex support" could mean requiring remote model credentials for every Proof Agent workflow. Resolved: local PageIndex ingestion is optional and does not change the deterministic no-network, no-credential demo or default CI gate.
+- "Knowledge source routing" could mean choosing document revisions inside one source or choosing Agent-bound sources before provider calls. Resolved: use **Knowledge Source Routing** across an **Agent Knowledge Binding Set** and **Knowledge Document Routing** inside a selected PageIndex-Backed Knowledge Source.
 - "Agentic RAG" could mean either a provider or a workflow. Resolved: **Agentic RAG** is a controlled retrieval workflow, not a **Knowledge Provider**.
 - "`knowledge.path`" could mean a universal knowledge field or a local-provider parameter. Resolved: provider-specific knowledge configuration belongs under the selected **Knowledge Provider** parameters.
 - "`local`" could mean Markdown files, local vector indexes, or any local source. Resolved: use **Local Markdown Provider** and **Local Vector Provider** as distinct provider concepts.
@@ -1281,6 +1933,26 @@ _Avoid_: Evidence content dump
 - "Draft save behavior" could mean auto-save per field, save per module, or single draft save. Resolved: **Draft Agent** uses auto-save for all configuration changes with explicit publish in the Versions **Agent Lifecycle Tab**.
 - "Validation interface" could mean a simple test runner, test suite, or validation dashboard. Resolved: the Validate & Test **Agent Lifecycle Tab** uses a **Validation Workspace** combining quick test, test suite, and validation history.
 - "Reusable assets" could mean agent-scoped only, shared library, or hybrid. Resolved: **Knowledge Source**, **Tool Source**, and **Policy Rule Configuration** live in the **Shared Asset Library** and are bound to agents through Agent Knowledge Bindings and Agent Tool Bindings.
+- "Knowledge Source workspace route" could mean adding `/knowledge-sources`, keeping the existing `/knowledge`, or embedding all file management under one Agent. Resolved: evolve the existing `/knowledge` page into the global **Knowledge Source Workspace** and do not add `/knowledge-sources`.
+- "Knowledge Source detail route" could mean a modal, an Agent-embedded document manager, or a reusable-asset detail page. Resolved: use **Knowledge Source Detail Workspace** at `/knowledge/:sourceId` with Overview, Documents, Versions, Provider, and Audit tabs; Agent pages link to it without embedding full file management.
+- "Knowledge Source list" could mean a thin link list, raw Agent YAML excerpts, or an operational reusable-asset inventory. Resolved: **Knowledge Source Workspace List Projection** shows identity, metadata, provider, lifecycle, availability, published version, local document counts or remote target, Agent reference count, and warning indicators, with filters for name, tag, provider, lifecycle, and warning state.
+- "Create a Knowledge Source" could mean one provider-specific form, remote-only setup, or an intake wizard with explicit publication. Resolved: **Knowledge Source Creation Wizard** branches into local PageIndex upload, registered remote adapter connection, or existing local-source registration; it saves a Source Draft and never publishes implicitly.
+- "Operate a 500-document local source" could mean a raw upload list, one-file-at-a-time management, or a paginated document workspace. Resolved: **Knowledge Source Documents Tab** provides batch upload, state filters, pagination, revision visibility, per-document and bulk actions, routing metadata edits, and a persistent candidate-snapshot publication summary.
+- "Configure a remote Knowledge Source" could mean raw JSON only, a fixed adapter-specific form, or layered descriptor-driven configuration. Resolved: **Remote Knowledge Source Provider Tab** uses common fields by default, bounded advanced mappings when supported, typed forms for adapters such as `pageindex`, and mapping editors for `http_json`; connection testing and retrieval preview never publish implicitly.
+- "Configure local PageIndex" could mean mixing files and model settings, exposing every setting at once, or using a layered provider form. Resolved: **Local PageIndex Provider Tab** keeps file management in Documents, exposes common model and routing defaults first, folds timeout, retry, concurrency, and routing-model override into advanced settings, offers a non-ingesting model-configuration test, and marks artifact-affecting ingestion changes as **Local PageIndex Reingestion Required**.
+- "Reingest after local PageIndex configuration change" could mean rebuilding every document, silently reusing incompatible artifacts, or rebuilding only missing compatible artifacts. Resolved: **Knowledge Ingestion Configuration Fingerprint** plus content hash identifies reusable artifacts, and **Incremental Local PageIndex Reingestion** queues only candidate-snapshot revisions lacking compatible artifacts; routing-only changes do not rebuild indexes.
+- "Retry local ingestion" could mean retrying everything forever, requiring manual retry for every transient failure, or bounded classified recovery. Resolved: **Knowledge Ingestion Worker Policy** uses Source-level concurrency default 2 configurable 1 through 8, at most 2 automatic backoff retries for recoverable errors, immediate failure for non-recoverable intake or configuration errors, stable Dashboard error classification, manual retry after FAILED, and persisted-queue restart recovery without duplicate compatible builds.
+- "Accept Dashboard document uploads" could mean trusting browser validation, allowing archives, or enforcing server-side quarantine. Resolved: **Operator Knowledge Document Upload Validation** checks type, signature, size, page count, and batch count, rejects unsafe or unsupported inputs, and **Knowledge Document Upload Quarantine** prevents revision creation or ingestion queueing until validation passes.
+- "Retain uploaded originals" could mean discarding files after indexing, keeping every upload forever, or managing validated originals separately from quarantine. Resolved: each validated revision retains a **Managed Knowledge Document Original** for reingestion and citation verification, authorized downloads are audited, archive and replacement preserve referenced originals, cleanup obeys reference and retention checks, and rejected quarantine files use **Rejected Knowledge Upload Retention** of 24 hours only.
+- "Open a knowledge citation" could mean exposing storage paths, using mutable document links, or resolving a governed source reference. Resolved: local evidence uses stable **Local Knowledge Citation URI**, Dashboard opens audited permission-protected **Knowledge Citation Preview** at PDF page or Markdown section, customer output uses **Customer-Safe Knowledge Citation Projection**, remote clickable URLs require **Remote Citation Link Allowlist**, and citation preview audit remains distinct from original-download audit.
+- "Show citations to customers" could mean exposing internal source ids, inline full URLs, or numbered safe references. Resolved: customer answers use **Customer Citation Marker** and **Customer Sources List**, merge duplicate safe locations, omit internal ids and confidence, keep mutable-external replay warnings internal, and never invent citations when no Accepted Evidence exists.
+- "Answer with no Accepted Evidence" could mean best-effort generation, a blank citation list, or governed refusal. Resolved: **No Accepted Evidence Outcome** uses insufficient-evidence/refusal behavior, avoids free-form evidence claims and Sources list, records the failing retrieval phase and candidate counts, and distinguishes advisory failures with remaining evidence from required provider failure.
+- "Validate before Source publication" could mean upload completion, one permanent check, or Draft-version-bound verification. Resolved: **Knowledge Source Publication Validation** invalidates after relevant Draft changes; local PageIndex Sources require READY compatible artifacts, model tests, and routing-retrieval-citation smoke query, while remote Sources require current health check, auth, target, normalization, citation basis, revision observation, and smoke query. Adapters without `health_check` remain preview-only.
+- "Confirm Source publication" could mean one-click activation, an Agent-impacting deployment, or an explicit reviewed promotion. Resolved: **Knowledge Source Publication Confirmation** shows the version delta, local or remote summary, smoke validation, Agent reference count, requires audited `change_note`, and explains that existing Published Agent Versions remain pinned while Draft Agents gain an upgrade option.
+- "Rollback a Knowledge Source" could mean mutating history, rewinding a shared production pointer, or preparing a reviewed replacement. Resolved: **Knowledge Source Versions Tab** creates a **Knowledge Source Rollback Draft** from a historical version, requires fresh validation and publication for a new version, and never automatically changes Published Agent Versions or Draft Agent bindings.
+- "Export or import a Knowledge Source" could mean exporting secrets and cached indexes, exporting only configuration, or supporting an explicit local offline bundle. Resolved: every Source supports audited secret-free **Knowledge Source Manifest Export**; local PageIndex may additionally export **Local Knowledge Source Offline Bundle** with originals and hashes; import always creates **Knowledge Source Import Draft**, revalidates remote connections or local files, reingests local artifacts by fingerprint, and never trusts imported indexes directly.
+- "Knowledge Source API" could mean keeping provider settings inside Agent YAML, adding UI-only state, or exposing shared Source resources. Resolved: **Knowledge Source Configuration API** owns Source CRUD, lifecycle, document, version, validation, publication, preview, and import-export resources, while **Agent Knowledge Binding Configuration API** stores Agent `knowledge_bindings[]` and blended-retrieval settings without provider parameters.
+- "Migrate inline Agent knowledge configuration" could mean long-lived dual-read compatibility, auto-wrapping old manifests at runtime, or a breaking direct cutover. Resolved: because Agents are not yet deployed, use **Direct Knowledge Contract Migration**: migrate loader, Dashboard, examples, fixtures, and tests together, accept only `knowledge_bindings[]` in the new Agent contract, and reject inline `knowledge.provider + params`.
 - "Agent-specific monitoring" could mean a separate tab, split view, or lifecycle integration. Resolved: the Monitor **Agent Lifecycle Tab** appears under LIFECYCLE alongside Validate & Test, Versions, and Contract View.
 - "Workflow editing" could mean a linear list, visual diagram, accordion, or tabbed editor. Resolved: the Workflow **Agent Configuration Module** uses an expandable accordion showing all nodes with inline configuration fields.
 - "Agent creation" could mean inline form, modal wizard, or template selection. Resolved: the **Agent Creation Wizard** starts with template selection (Enterprise QA, Customer Service, Blank) before collecting agent details.

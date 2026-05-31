@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import Enum
@@ -15,6 +17,8 @@ from proof_agent.contracts import (
     ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
+    KnowledgeDocument,
+    KnowledgeSource,
     PublishedAgentVersion,
 )
 
@@ -228,6 +232,128 @@ class LocalAgentConfigurationStore:
         self._write_active_version(active)
         return active
 
+    def create_knowledge_source(
+        self,
+        *,
+        source_id: str,
+        name: str,
+        provider: str,
+        params: Mapping[str, Any],
+        actor: str,
+    ) -> KnowledgeSource:
+        if self.get_knowledge_source(source_id) is not None:
+            raise ValueError(f"Knowledge Source already exists: {source_id}")
+        now = _now()
+        source = KnowledgeSource(
+            source_id=source_id,
+            name=name,
+            provider=provider,
+            params=params,
+            created_at=now,
+            updated_at=now,
+        )
+        self._write_knowledge_source(source)
+        return source
+
+    def get_knowledge_source(self, source_id: str) -> KnowledgeSource | None:
+        path = self._knowledge_source_path(source_id)
+        if not path.exists():
+            return None
+        return KnowledgeSource.model_validate(_read_json(path))
+
+    def list_knowledge_sources(self) -> list[KnowledgeSource]:
+        sources_root = self._root_dir / "knowledge_sources"
+        if not sources_root.exists():
+            return []
+        sources = []
+        for source_dir in sources_root.iterdir():
+            if not source_dir.is_dir():
+                continue
+            source = self.get_knowledge_source(source_dir.name)
+            if source is not None:
+                sources.append(source)
+        return sorted(sources, key=lambda source: source.name)
+
+    def add_knowledge_document(
+        self,
+        *,
+        source_id: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        state: str,
+        provider_document_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        actor: str,
+    ) -> KnowledgeDocument:
+        if self.get_knowledge_source(source_id) is None:
+            raise KeyError(f"Knowledge Source not found: {source_id}")
+        now = _now()
+        document_id = f"doc_{uuid4().hex[:8]}"
+        revision_id = f"rev_{uuid4().hex[:8]}"
+        safe_filename = _safe_filename(filename)
+        storage_path = (
+            Path("knowledge_sources")
+            / source_id
+            / "documents"
+            / document_id
+            / "revisions"
+            / revision_id
+            / safe_filename
+        )
+        original_path = self._root_dir / storage_path
+        original_path.parent.mkdir(parents=True, exist_ok=True)
+        original_path.write_bytes(content)
+        document = KnowledgeDocument(
+            document_id=document_id,
+            source_id=source_id,
+            revision_id=revision_id,
+            filename=safe_filename,
+            content_type=content_type,
+            content_hash=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            state=state,
+            storage_path=storage_path.as_posix(),
+            provider_document_id=provider_document_id,
+            error_code=error_code,
+            error_message=error_message,
+            created_at=now,
+            updated_at=now,
+        )
+        self._write_knowledge_document(document)
+        return document
+
+    def get_knowledge_document(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+    ) -> KnowledgeDocument | None:
+        path = self._knowledge_document_path(source_id, document_id)
+        if not path.exists():
+            return None
+        return KnowledgeDocument.model_validate(_read_json(path))
+
+    def list_knowledge_documents(self, source_id: str) -> list[KnowledgeDocument]:
+        documents_root = self._root_dir / "knowledge_sources" / source_id / "documents"
+        if not documents_root.exists():
+            return []
+        documents = []
+        for document_dir in documents_root.iterdir():
+            if not document_dir.is_dir():
+                continue
+            document = self.get_knowledge_document(
+                source_id=source_id,
+                document_id=document_dir.name,
+            )
+            if document is not None:
+                documents.append(document)
+        return sorted(documents, key=lambda document: document.created_at)
+
+    def knowledge_document_original_path(self, document: KnowledgeDocument) -> Path:
+        return self._root_dir / document.storage_path
+
     def _require_draft(self, agent_id: str, draft_id: str) -> DraftAgent:
         draft = self.get_draft(agent_id, draft_id)
         if draft is None:
@@ -242,6 +368,19 @@ class LocalAgentConfigurationStore:
 
     def _active_version_path(self, agent_id: str) -> Path:
         return self._root_dir / "agents" / agent_id / "active_version.json"
+
+    def _knowledge_source_path(self, source_id: str) -> Path:
+        return self._root_dir / "knowledge_sources" / source_id / "source.json"
+
+    def _knowledge_document_path(self, source_id: str, document_id: str) -> Path:
+        return (
+            self._root_dir
+            / "knowledge_sources"
+            / source_id
+            / "documents"
+            / document_id
+            / "document.json"
+        )
 
     def _write_draft(self, draft: DraftAgent) -> None:
         _write_json(self._draft_path(draft.agent_id, draft.draft_id), draft.model_dump(mode="json"))
@@ -261,6 +400,15 @@ class LocalAgentConfigurationStore:
 
     def _write_active_version(self, active: ActiveAgentVersion) -> None:
         _write_json(self._active_version_path(active.agent_id), active.model_dump(mode="json"))
+
+    def _write_knowledge_source(self, source: KnowledgeSource) -> None:
+        _write_json(self._knowledge_source_path(source.source_id), source.model_dump(mode="json"))
+
+    def _write_knowledge_document(self, document: KnowledgeDocument) -> None:
+        _write_json(
+            self._knowledge_document_path(document.source_id, document.document_id),
+            document.model_dump(mode="json"),
+        )
 
 
 def _audit(
@@ -282,6 +430,11 @@ def _audit(
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _safe_filename(filename: str) -> str:
+    name = Path(filename).name.strip() or "document"
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

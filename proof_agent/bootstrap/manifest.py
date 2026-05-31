@@ -7,7 +7,8 @@ from proof_agent.contracts import (
     AgentManifest,
     AuditConfig,
     CustomerConfig,
-    KnowledgeConfig,
+    KnowledgeBindingConfig,
+    KnowledgeSourceConfig,
     MemoryConfig,
     MemoryScopeConfig,
     MemoryScopesConfig,
@@ -32,7 +33,8 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
     """Convert raw YAML into a typed manifest with paths resolved from agent.yaml."""
 
     workflow = raw["workflow"]
-    knowledge = raw["knowledge"]
+    knowledge_sources = raw["knowledge_sources"]
+    knowledge_bindings = raw["knowledge_bindings"]
     retrieval = raw["retrieval"]
     model = raw["model"]
     policy = raw["policy"]
@@ -48,9 +50,12 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             template=workflow["template"],
             checkpointer=_checkpointer_config_from_mapping(workflow.get("checkpointer")),
         ),
-        knowledge=KnowledgeConfig(
-            provider=knowledge["provider"],
-            params=resolve_param_paths(base_dir, knowledge.get("params", {})),
+        knowledge_sources=tuple(
+            _knowledge_source_config_from_mapping(item, base_dir=base_dir)
+            for item in knowledge_sources
+        ),
+        knowledge_bindings=tuple(
+            _knowledge_binding_config_from_mapping(item) for item in knowledge_bindings
         ),
         retrieval=RetrievalConfig(
             strategy=retrieval["strategy"],
@@ -100,6 +105,33 @@ def resolve_param_paths(base_dir: Path, params: dict[str, Any]) -> dict[str, Any
         else:
             resolved[key] = value
     return resolved
+
+
+def _knowledge_source_config_from_mapping(
+    raw: Any, *, base_dir: Path
+) -> KnowledgeSourceConfig:
+    if not isinstance(raw, dict):
+        raise TypeError("knowledge_sources entries must be mappings")
+    return KnowledgeSourceConfig(
+        source_id=raw["source_id"],
+        name=raw["name"],
+        provider=raw["provider"],
+        params=resolve_param_paths(base_dir, raw.get("params", {})),
+    )
+
+
+def _knowledge_binding_config_from_mapping(raw: Any) -> KnowledgeBindingConfig:
+    if not isinstance(raw, dict):
+        raise TypeError("knowledge_bindings entries must be mappings")
+    return KnowledgeBindingConfig(
+        binding_id=raw["binding_id"],
+        source_id=raw["source_id"],
+        alias=raw.get("alias"),
+        failure_mode=raw.get("failure_mode", "required"),
+        fusion_weight=raw.get("fusion_weight", 1.0),
+        top_k=raw.get("top_k"),
+        routing_metadata=raw.get("routing_metadata", {}),
+    )
 
 
 def _model_config_from_mapping(raw: Any) -> ModelConfig | None:

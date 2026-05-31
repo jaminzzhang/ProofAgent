@@ -77,7 +77,7 @@ def _required_env(env_name: str, label: str) -> str:
         raise ProofAgentError(
             "PA_KNOWLEDGE_002",
             f"{label} environment variable is not set: {env_name}",
-            f"Set {env_name} or update knowledge.params for the pageindex provider.",
+            f"Set {env_name} or update the pageindex Knowledge Source params.",
         )
     return value
 
@@ -183,7 +183,8 @@ def _normalize_pageindex_node(node: object, *, document_id: str) -> EvidenceChun
     return EvidenceChunk(
         source=source,
         content=content,
-        score=_score(node.get("relevance_score")),
+        provider_native_score=_score(node.get("relevance_score")),
+        admission_score=_score(node.get("relevance_score")),
         status=EvidenceStatus.CANDIDATE,
         citation=citation,
         metadata={key: value for key, value in metadata.items() if value is not None},

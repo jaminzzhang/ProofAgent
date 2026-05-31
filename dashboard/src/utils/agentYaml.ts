@@ -23,14 +23,6 @@ export function buildWorkflowNodes(agentYaml: string): WorkflowNodeConfig[] {
       ],
     },
     {
-      id: 'knowledge',
-      label: 'Knowledge',
-      fields: [
-        field(agentYaml, 'Provider', ['knowledge', 'provider']),
-        field(agentYaml, 'Path', ['knowledge', 'params', 'path']),
-      ],
-    },
-    {
       id: 'retrieval',
       label: 'Retrieval',
       fields: [

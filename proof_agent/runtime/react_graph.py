@@ -742,7 +742,9 @@ def _evidence_state_dict(chunk: EvidenceChunk) -> dict[str, Any]:
     return {
         "source": chunk.source,
         "content": chunk.content,
-        "score": chunk.score,
+        "provider_native_score": chunk.provider_native_score,
+        "fusion_rank": chunk.fusion_rank,
+        "admission_score": chunk.admission_score,
         "status": chunk.status.value,
         "citation": chunk.citation,
         "metadata": dict(chunk.metadata),

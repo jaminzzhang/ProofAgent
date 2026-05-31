@@ -9,7 +9,7 @@ def test_citation_validator_accepts_known_evidence_source() -> None:
             EvidenceChunk(
                 source="discount-policy.md",
                 content="Travel meals require receipts.",
-                score=0.8,
+                admission_score=0.8,
                 status=EvidenceStatus.CANDIDATE,
             ),
         ),
@@ -25,7 +25,7 @@ def test_citation_validator_rejects_unknown_source() -> None:
             EvidenceChunk(
                 source="discount-policy.md",
                 content="Travel meals require receipts.",
-                score=0.8,
+                admission_score=0.8,
                 status=EvidenceStatus.CANDIDATE,
             ),
         ),
@@ -42,7 +42,7 @@ def test_citation_validator_accepts_evidence_citation_field() -> None:
             EvidenceChunk(
                 source="policy://travel#meals",
                 content="Travel meals require receipts.",
-                score=0.8,
+                admission_score=0.8,
                 status=EvidenceStatus.CANDIDATE,
                 citation="travel-policy.md#meals:L10-L18",
             ),

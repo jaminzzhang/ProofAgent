@@ -30,6 +30,33 @@ class KnowledgeConfig(FrozenModel):
         return freeze_value(value)
 
 
+class KnowledgeSourceConfig(FrozenModel):
+    source_id: str
+    name: str
+    provider: str
+    params: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("params", mode="after")
+    @classmethod
+    def freeze_params(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class KnowledgeBindingConfig(FrozenModel):
+    binding_id: str
+    source_id: str
+    alias: str | None = None
+    failure_mode: str = "required"
+    fusion_weight: float = 1.0
+    top_k: int | None = None
+    routing_metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("routing_metadata", mode="after")
+    @classmethod
+    def freeze_routing_metadata(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
 class ModelConfig(FrozenModel):
     provider: str
     name: str
@@ -133,7 +160,8 @@ class AgentManifest(FrozenModel):
     name: str
     purpose: str
     workflow: WorkflowConfig
-    knowledge: KnowledgeConfig
+    knowledge_sources: tuple[KnowledgeSourceConfig, ...]
+    knowledge_bindings: tuple[KnowledgeBindingConfig, ...]
     retrieval: RetrievalConfig
     model: ModelConfig
     policy: PolicyConfig

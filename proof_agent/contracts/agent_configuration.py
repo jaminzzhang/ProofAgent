@@ -145,6 +145,25 @@ class KnowledgeSource(FrozenModel):
         return cast(dict[str, Any], _jsonable(value))
 
 
+class KnowledgeDocument(FrozenModel):
+    """Managed document revision inside a reusable Knowledge Source."""
+
+    document_id: str
+    source_id: str
+    revision_id: str
+    filename: str
+    content_type: str
+    content_hash: str
+    size_bytes: int
+    state: str
+    storage_path: str
+    provider_document_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: str
+    updated_at: str
+
+
 class ToolSource(FrozenModel):
     """Reusable tool connection or local tool package."""
 

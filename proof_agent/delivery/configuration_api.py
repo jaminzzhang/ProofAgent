@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -9,18 +12,36 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.capabilities.knowledge.pageindex_ingestion import ingest_pageindex_document
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import AgentValidationRecord, ContractBundle, DraftAgent, RunPurpose
+from proof_agent.contracts import (
+    AgentValidationRecord,
+    ContractBundle,
+    DraftAgent,
+    KnowledgeDocument,
+    KnowledgeSource,
+    RunPurpose,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 router = APIRouter(tags=["configuration"])
+
+SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS = {
+    "local_markdown",
+    "local_vector",
+    "pageindex",
+    "remote_search",
+}
+MAX_SOURCE_DOCUMENTS = 500
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
 class AgentImportRequest(BaseModel):
@@ -78,6 +99,174 @@ class RollbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     actor: str = "local-user"
+
+
+class KnowledgeSourceCreateRequest(BaseModel):
+    """Request body for creating a reusable Knowledge Source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str | None = None
+    name: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "local-user"
+
+
+class KnowledgeDocumentUploadRequest(BaseModel):
+    """JSON/base64 upload for Dashboard-managed knowledge documents."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1)
+    content_type: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class KnowledgeBindingAttachRequest(BaseModel):
+    """Request body for binding a shared Knowledge Source into a Draft Agent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(min_length=1)
+    binding_id: str | None = None
+    alias: str | None = None
+    failure_mode: str = "required"
+    fusion_weight: float = 1.0
+    top_k: int | None = None
+    actor: str = "local-user"
+
+
+@router.get("/config/knowledge-sources")
+def list_knowledge_sources(app_request: Request) -> dict[str, Any]:
+    """List reusable Knowledge Sources managed by the local configuration store."""
+
+    store = _get_configuration_store(app_request)
+    data = [_knowledge_source_payload(store, source) for source in store.list_knowledge_sources()]
+    return {"data": data, "meta": {"total": len(data)}}
+
+
+@router.post("/config/knowledge-sources")
+def create_knowledge_source(
+    request: KnowledgeSourceCreateRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Create a reusable Knowledge Source independent of any Agent binding."""
+
+    if request.provider not in SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported knowledge provider: {request.provider}",
+        )
+    store = _get_configuration_store(app_request)
+    source_id = _source_id(request.source_id or request.name)
+    params = dict(request.params)
+    if request.provider == "pageindex":
+        params.setdefault("document_id", source_id)
+    try:
+        source = store.create_knowledge_source(
+            source_id=source_id,
+            name=request.name,
+            provider=request.provider,
+            params=params,
+            actor=request.actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _knowledge_source_payload(store, source)
+
+
+@router.get("/config/knowledge-sources/{source_id}")
+def get_knowledge_source(source_id: str, app_request: Request) -> dict[str, Any]:
+    """Return one Knowledge Source with document counts."""
+
+    store = _get_configuration_store(app_request)
+    source = store.get_knowledge_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    return _knowledge_source_payload(store, source)
+
+
+@router.get("/config/knowledge-sources/{source_id}/documents")
+def list_knowledge_source_documents(source_id: str, app_request: Request) -> dict[str, Any]:
+    """List managed documents for one Knowledge Source."""
+
+    store = _get_configuration_store(app_request)
+    source = store.get_knowledge_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    documents = store.list_knowledge_documents(source_id)
+    return {
+        "data": [_knowledge_document_payload(document) for document in documents],
+        "meta": {"total": len(documents)},
+    }
+
+
+@router.post("/config/knowledge-sources/{source_id}/documents")
+def upload_knowledge_source_document(
+    source_id: str,
+    request: KnowledgeDocumentUploadRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Validate, store, and index one PDF or Markdown document revision."""
+
+    store = _get_configuration_store(app_request)
+    source = store.get_knowledge_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    documents = store.list_knowledge_documents(source_id)
+    if len(documents) >= MAX_SOURCE_DOCUMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Knowledge Source document limit reached: {MAX_SOURCE_DOCUMENTS}",
+        )
+    content = _decode_upload_content(request.content_base64)
+    _validate_upload_file(
+        filename=request.filename,
+        content_type=request.content_type,
+        content=content,
+    )
+    if source.provider != "pageindex":
+        raise HTTPException(
+            status_code=400,
+            detail="Dashboard document upload currently supports pageindex Knowledge Sources.",
+        )
+
+    state = "ready"
+    provider_document_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    try:
+        ingestion = ingest_pageindex_document(
+            source=source,
+            filename=request.filename,
+            content_type=request.content_type,
+            content=content,
+        )
+        state = str(ingestion.get("state") or ingestion.get("status") or "ready").lower()
+        provider_document_id = _string_or_none(
+            ingestion.get("provider_document_id") or ingestion.get("document_id")
+        )
+        if state not in {"queued", "processing", "ready", "failed"}:
+            state = "ready"
+    except ProofAgentError as exc:
+        state = "failed"
+        error_code = exc.code
+        error_message = exc.message
+
+    document = store.add_knowledge_document(
+        source_id=source.source_id,
+        filename=request.filename,
+        content_type=request.content_type,
+        content=content,
+        state=state,
+        provider_document_id=provider_document_id,
+        error_code=error_code,
+        error_message=error_message,
+        actor=request.actor,
+    )
+    return _knowledge_document_payload(document)
 
 
 @router.get("/config/agents")
@@ -158,6 +347,62 @@ def get_config_draft_contract(
 
     draft = _require_draft(_get_configuration_store(app_request), agent_id, draft_id)
     return draft.contract_bundle.model_dump(mode="json")
+
+
+@router.post("/config/agents/{agent_id}/drafts/{draft_id}/knowledge-bindings")
+def bind_knowledge_source_to_draft(
+    agent_id: str,
+    draft_id: str,
+    request: KnowledgeBindingAttachRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Bind a shared Knowledge Source into a Draft Agent contract."""
+
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+    source = store.get_knowledge_source(request.source_id)
+    if source is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Source not found: {request.source_id}",
+        )
+    if request.failure_mode not in {"required", "advisory"}:
+        raise HTTPException(status_code=400, detail="failure_mode must be required or advisory.")
+    if request.fusion_weight <= 0:
+        raise HTTPException(status_code=400, detail="fusion_weight must be greater than 0.")
+    if request.top_k is not None and request.top_k <= 0:
+        raise HTTPException(status_code=400, detail="top_k must be greater than 0.")
+
+    agent_yaml = _bind_source_in_agent_yaml(
+        draft.contract_bundle.agent_yaml,
+        source=source,
+        request=request,
+    )
+    bundle = ContractBundle(
+        agent_yaml=agent_yaml,
+        policy_yaml=draft.contract_bundle.policy_yaml,
+        tools_yaml=draft.contract_bundle.tools_yaml,
+        extra_files=draft.contract_bundle.extra_files,
+        advanced_fields=draft.contract_bundle.advanced_fields,
+    )
+    candidate = _draft_with_contract_bundle(draft, bundle)
+    try:
+        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
+        load_agent_manifest(package_dir / "agent.yaml")
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
+        ) from exc
+    updated = store.update_draft(
+        agent_id=agent_id,
+        draft_id=draft_id,
+        contract_bundle=bundle,
+        actor=request.actor,
+    )
+    return updated.contract_bundle.model_dump(mode="json")
 
 
 @router.patch("/config/agents/{agent_id}/drafts/{draft_id}/contract")
@@ -407,6 +652,76 @@ def _version_payload(version: Any) -> dict[str, Any]:
     }
 
 
+def _knowledge_source_payload(
+    store: LocalAgentConfigurationStore,
+    source: KnowledgeSource,
+) -> dict[str, Any]:
+    documents = store.list_knowledge_documents(source.source_id)
+    payload = source.model_dump(mode="json")
+    payload["document_count"] = len(documents)
+    payload["ready_document_count"] = sum(
+        1 for document in documents if document.state == "ready"
+    )
+    return payload
+
+
+def _knowledge_document_payload(document: KnowledgeDocument) -> dict[str, Any]:
+    return document.model_dump(mode="json")
+
+
+def _bind_source_in_agent_yaml(
+    agent_yaml: str,
+    *,
+    source: KnowledgeSource,
+    request: KnowledgeBindingAttachRequest,
+) -> str:
+    raw = yaml.safe_load(agent_yaml)
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
+
+    knowledge_sources = raw.setdefault("knowledge_sources", [])
+    if not isinstance(knowledge_sources, list):
+        raise HTTPException(status_code=400, detail="knowledge_sources must be a list.")
+    source_entry = {
+        "source_id": source.source_id,
+        "name": source.name,
+        "provider": source.provider,
+        "params": dict(source.params),
+    }
+    _upsert_by_key(knowledge_sources, "source_id", source.source_id, source_entry)
+
+    knowledge_bindings = raw.setdefault("knowledge_bindings", [])
+    if not isinstance(knowledge_bindings, list):
+        raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
+    binding_id = request.binding_id or f"{source.source_id}_binding"
+    binding_entry: dict[str, Any] = {
+        "binding_id": binding_id,
+        "source_id": source.source_id,
+        "failure_mode": request.failure_mode,
+        "fusion_weight": request.fusion_weight,
+    }
+    if request.alias:
+        binding_entry["alias"] = request.alias
+    if request.top_k is not None:
+        binding_entry["top_k"] = request.top_k
+    _upsert_by_key(knowledge_bindings, "binding_id", binding_id, binding_entry)
+
+    return cast(str, yaml.safe_dump(raw, sort_keys=False))
+
+
+def _upsert_by_key(
+    items: list[Any],
+    key: str,
+    value: str,
+    replacement: dict[str, Any],
+) -> None:
+    for index, item in enumerate(items):
+        if isinstance(item, dict) and item.get(key) == value:
+            items[index] = replacement
+            return
+    items.append(replacement)
+
+
 def _configuration_agent_ids(store: LocalAgentConfigurationStore) -> tuple[str, ...]:
     agents_root = store.root_dir / "agents"
     if not agents_root.exists():
@@ -445,3 +760,59 @@ def _get_runs_dir(request: Request) -> Path:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _source_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower().replace("-", "_"))
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        normalized = f"ks_{uuid4().hex[:8]}"
+    if not normalized.startswith("ks_"):
+        normalized = f"ks_{normalized}"
+    return normalized
+
+
+def _decode_upload_content(content_base64: str) -> bytes:
+    try:
+        content = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="content_base64 is not valid base64") from exc
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded document is empty.")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded document exceeds {MAX_UPLOAD_BYTES} bytes.",
+        )
+    return content
+
+
+def _validate_upload_file(*, filename: str, content_type: str, content: bytes) -> None:
+    suffix = Path(filename).suffix.lower()
+    normalized_content_type = content_type.lower()
+    if suffix == ".pdf" or normalized_content_type == "application/pdf":
+        if not content.startswith(b"%PDF-"):
+            raise HTTPException(status_code=400, detail="PDF upload is missing a PDF signature.")
+        return
+    if suffix in {".md", ".markdown"} or normalized_content_type in {
+        "text/markdown",
+        "text/plain",
+    }:
+        try:
+            content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Markdown upload must be UTF-8 text.",
+            ) from exc
+        return
+    raise HTTPException(
+        status_code=400,
+        detail="Unsupported knowledge document type. Upload PDF or Markdown.",
+    )
+
+
+def _string_or_none(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)

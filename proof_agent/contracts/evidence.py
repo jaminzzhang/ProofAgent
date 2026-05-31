@@ -15,13 +15,38 @@ class EvidenceStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class EvidenceContribution(FrozenModel):
+    source_id: str | None = None
+    source_version_id: str | None = None
+    binding_id: str | None = None
+    provider_name: str | None = None
+    document_id: str | None = None
+    revision_id: str | None = None
+    chunk_id: str | None = None
+    provider_local_rank: int | None = None
+    provider_native_score: float | None = None
+    fusion_weight: float | None = None
+    citation: str | None = None
+
+
 class EvidenceChunk(FrozenModel):
     source: str
     content: str
-    score: float
     status: EvidenceStatus
+    evidence_id: str | None = None
+    source_id: str | None = None
+    source_version_id: str | None = None
+    binding_id: str | None = None
+    provider_name: str | None = None
+    document_id: str | None = None
+    revision_id: str | None = None
+    chunk_id: str | None = None
+    provider_native_score: float | None = None
+    fusion_rank: float | None = None
+    admission_score: float | None = None
     citation: str | None = None
     metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    contributions: tuple[EvidenceContribution, ...] = Field(default_factory=tuple)
 
     @field_validator("metadata", mode="after")
     @classmethod
