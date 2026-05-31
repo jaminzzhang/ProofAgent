@@ -1,0 +1,2 @@
+{"event_type":"run_started","run_id":"run_example","sequence":1,"status":"ok"}
+{"event_type":"final_output","run_id":"run_example","sequence":2,"status":"ok","payload":{"outcome":"ANSWERED_WITH_CITATIONS"}}

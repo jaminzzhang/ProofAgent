@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Self
 
+from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus
 from proof_agent.contracts.manifest import KnowledgeConfig
 from proof_agent.errors import ProofAgentError
@@ -39,6 +40,10 @@ class RemoteSearchProvider:
     @property
     def provider_name(self) -> str:
         return "remote_search"
+
+    @property
+    def capabilities(self) -> RetrievalCapabilities:
+        return RetrievalCapabilities()
 
     def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         """Return normalized fixture evidence until production HTTP is implemented."""

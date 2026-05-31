@@ -62,10 +62,12 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             top_k=retrieval.get("top_k", 3),
             min_score=retrieval.get("min_score", 0.2),
             max_steps=retrieval.get("max_steps"),
+            max_rounds=retrieval.get("max_rounds", 3),
             allow_query_rewrite=retrieval.get("allow_query_rewrite", False),
             allow_rerank=retrieval.get("allow_rerank", False),
             allow_single_step_fallback=retrieval.get("allow_single_step_fallback", False),
             planner_model=_model_config_from_mapping(retrieval.get("planner_model")),
+            evaluator_model=_model_config_from_mapping(retrieval.get("evaluator_model")),
         ),
         model=ModelConfig(
             provider=model["provider"],

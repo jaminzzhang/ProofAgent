@@ -1,0 +1,6 @@
+supported:
+  - "What is the reimbursement rule for travel meals?"
+unsupported:
+  - "What discount should we give this customer next year?"
+tool_required:
+  - "Look up customer policy status before answering."

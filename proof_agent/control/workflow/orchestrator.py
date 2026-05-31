@@ -23,7 +23,10 @@ from proof_agent.contracts import (
 )
 from proof_agent.evaluation.demo.scenarios import TOOL_REQUIRED_QUESTION, UNSUPPORTED_QUESTION
 from proof_agent.capabilities.knowledge import KnowledgeProvider
+from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.control.policy.engine import PolicyEngine
+from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner
+from proof_agent.contracts.manifest import ModelConfig
 from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.capabilities.tools.gateway import ToolGateway
 from proof_agent.control.validators.citations import validate_citations_supported_by_evidence
@@ -86,6 +89,9 @@ def run_enterprise_qa(
         top_k=manifest.retrieval.top_k,
         min_score=manifest.retrieval.min_score,
         max_steps=manifest.retrieval.max_steps,
+        max_rounds=manifest.retrieval.max_rounds,
+        planner_model=manifest.retrieval.planner_model,
+        evaluator_model=manifest.retrieval.evaluator_model,
         force_empty=question == UNSUPPORTED_QUESTION,
     )
 
@@ -433,6 +439,9 @@ def _run_retrieval(
     top_k: int,
     min_score: float,
     max_steps: int | None = None,
+    max_rounds: int | None = None,
+    planner_model: ModelConfig | None = None,
+    evaluator_model: ModelConfig | None = None,
     force_empty: bool = False,
 ) -> tuple[tuple[EvidenceChunk, ...], ValidationResult]:
     if strategy == "single_step":
@@ -454,6 +463,9 @@ def _run_retrieval(
             top_k=top_k,
             min_score=min_score,
             max_steps=max_steps,
+            max_rounds=max_rounds,
+            planner_model=planner_model,
+            evaluator_model=evaluator_model,
             force_empty=force_empty,
         )
     _ensure_retrieval_strategy_is_executable(strategy)
@@ -469,81 +481,99 @@ def _run_agentic_retrieval(
     top_k: int,
     min_score: float,
     max_steps: int | None,
+    max_rounds: int | None = None,
+    planner_model: ModelConfig | None = None,
+    evaluator_model: ModelConfig | None = None,
     force_empty: bool = False,
 ) -> tuple[tuple[EvidenceChunk, ...], ValidationResult]:
-    """Run a governed provider-agentic retrieval plan and evaluate evidence."""
-
+    """Run governed agentic retrieval with multi-round planning."""
     retrieval_decision = policy.evaluate(
         "before_retrieval",
-        {
-            "question": question,
+        {"question": question, "strategy": "agentic"},
+    )
+    trace.emit(
+        "retrieval_plan",
+        status="ok" if retrieval_decision.decision == "allow" else "blocked",
+        payload={
             "strategy": "agentic",
             "provider": knowledge_provider.provider_name,
+            "decision": retrieval_decision.decision,
+            "question": question,
         },
     )
-    _emit_policy(trace, retrieval_decision)
-    plan_context = {
-        "question": question,
-        "strategy": "agentic",
-        "provider": knowledge_provider.provider_name,
-        "top_k": top_k,
-        "max_steps": max_steps,
-        "execution_mode": "provider_agentic_retrieval",
-        "steps": [
-            {
-                "step_id": "step_1",
-                "provider": knowledge_provider.provider_name,
-                "top_k": top_k,
-            }
-        ],
-    }
-    plan_decision = policy.evaluate("before_retrieval_plan", plan_context)
-    _emit_policy(trace, plan_decision)
-    if retrieval_decision.decision == "allow" and plan_decision.decision == "allow":
-        trace.emit("retrieval_plan", status="ok", payload=plan_context)
 
-    step_context = {
-        "question": question,
-        "step_id": "step_1",
-        "provider": knowledge_provider.provider_name,
-        "top_k": top_k,
-        "strategy": "agentic",
-    }
-    step_decision = policy.evaluate("before_retrieval_step", step_context)
-    _emit_policy(trace, step_decision)
-    if (
-        retrieval_decision.decision != "allow"
-        or plan_decision.decision != "allow"
-        or step_decision.decision != "allow"
-    ):
-        evidence: tuple[EvidenceChunk, ...] = ()
-    else:
-        trace.emit("retrieval_step", status="ok", payload=step_context)
-        evidence = knowledge_provider.retrieve(question, top_k=top_k)
-        if force_empty:
-            evidence = ()
+    if retrieval_decision.decision != "allow":
+        return (), evaluate_evidence((), min_count=1, min_score=min_score)
+
+    # Initialize planner and evaluator models
+    planner_provider = resolve_provider(planner_model) if planner_model else None
+    evaluator_provider = resolve_provider(evaluator_model) if evaluator_model else None
+
+    # Fall back to single-step if models not configured
+    if not planner_provider or not evaluator_provider:
+        trace.emit(
+            "retrieval_step",
+            status="ok",
+            payload={
+                "fallback_reason": "planner or evaluator model not configured",
+                "fallback_strategy": "single_step",
+            },
+        )
+        return _run_single_step_retrieval(
+            question=question,
+            trace=trace,
+            policy=policy,
+            knowledge_provider=knowledge_provider,
+            top_k=top_k,
+            min_score=min_score,
+            force_empty=force_empty,
+        )
+
+    # Create retrieval planner
+    planner = RetrievalPlanner(
+        knowledge_provider=knowledge_provider,
+        planner_model=planner_provider,
+        evaluator_model=evaluator_provider,
+        max_rounds=max_rounds or 3,
+    )
+
+    # Execute multi-round retrieval
+    result = planner.plan_and_retrieve(question)
+
+    # Emit trace events for each round
+    for round_obj in result.rounds:
+        trace.emit(
+            "retrieval_step",
+            status="ok",
+            payload={
+                "round_id": round_obj.round_id,
+                "query": round_obj.query,
+                "candidates_count": len(round_obj.candidates),
+                "evaluation": round_obj.evaluation,
+                "action": round_obj.action,
+                "reason": round_obj.reason,
+            },
+        )
+
+    # Emit summary
     trace.emit(
         "retrieval_result",
         status="ok",
         payload={
-            "step_id": "step_1",
-            "provider": knowledge_provider.provider_name,
-            "candidate_count": len(evidence),
-            "chunk_count": len(evidence),
-            "sources": [chunk.source for chunk in evidence],
+            "total_rounds": result.total_rounds,
+            "final_action": result.final_action,
+            "total_evidence": len(result.evidence),
         },
     )
-    evidence_result = evaluate_evidence(evidence, min_count=1, min_score=min_score)
-    trace.emit(
-        "evidence_evaluation",
-        status="ok" if evidence_result.status == "passed" else "blocked",
-        payload={
-            "validator_name": evidence_result.validator_name,
-            "status": evidence_result.status.value,
-            "metadata": dict(evidence_result.metadata),
-        },
-    )
-    return evidence, evidence_result
+
+    # Apply force_empty for unsupported questions
+    if force_empty:
+        return (), evaluate_evidence((), min_count=1, min_score=min_score)
+
+    # Evaluate accumulated evidence
+    evidence_result = evaluate_evidence(result.evidence, min_count=1, min_score=min_score)
+
+    return result.evidence, evidence_result
 
 
 def _ensure_retrieval_strategy_is_executable(strategy: str) -> None:

@@ -1,0 +1,55 @@
+name: agentic_rag_qa
+purpose: "Answer enterprise knowledge questions using agentic multi-round retrieval with local tree index."
+
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+  checkpointer:
+    provider: sqlite
+    uri: memory
+
+knowledge_sources:
+  - source_id: enterprise_qa_knowledge
+    name: Enterprise QA Knowledge (Tree Index)
+    provider: local_index
+    params:
+      index_path: ./indexes/enterprise_qa
+      ingestion_model:
+        provider: openai_compatible
+        name: gpt-4
+      routing_model:
+        provider: openai_compatible
+        name: gpt-4o-mini
+
+knowledge_bindings:
+  - binding_id: enterprise_qa_knowledge_binding
+    source_id: enterprise_qa_knowledge
+
+retrieval:
+  strategy: agentic
+  top_k: 3
+  min_score: 0.2
+  max_steps: 3
+  planner_model:
+    provider: openai_compatible
+    name: gpt-4
+  evaluator_model:
+    provider: openai_compatible
+    name: gpt-4o-mini
+
+model:
+  provider: deterministic
+  name: demo
+
+policy:
+  file: ./policy.yaml
+
+tools:
+  file: ./tools.yaml
+
+memory:
+  provider: session
+
+audit:
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md

@@ -60,9 +60,15 @@ def test_tool_question_handles_denied_approval(tmp_path: Path) -> None:
     assert result.outcome == "TOOL_APPROVAL_DENIED"
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_agentic_retrieval_strategy_executes_with_pageindex(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Test agentic retrieval with deprecated PageIndex provider.
+
+    This test validates backward compatibility for the deprecated pageindex provider.
+    New deployments should use local_index provider instead (ADR-0015).
+    """
     def fake_post_json(
         url: str,
         *,

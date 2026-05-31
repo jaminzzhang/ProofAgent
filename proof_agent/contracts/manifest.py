@@ -115,10 +115,12 @@ class RetrievalConfig(FrozenModel):
     top_k: int = 3
     min_score: float = 0.2
     max_steps: int | None = None
+    max_rounds: int = 3
     allow_query_rewrite: bool = False
     allow_rerank: bool = False
     allow_single_step_fallback: bool = False
     planner_model: ModelConfig | None = None
+    evaluator_model: ModelConfig | None = None
 
 
 class PolicyConfig(FrozenModel):

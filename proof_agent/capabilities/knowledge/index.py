@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Self, cast
 
+from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus
 from proof_agent.contracts.manifest import KnowledgeConfig
 
@@ -22,6 +23,10 @@ class LocalVectorProvider:
     @property
     def provider_name(self) -> str:
         return "local_vector"
+
+    @property
+    def capabilities(self) -> RetrievalCapabilities:
+        return RetrievalCapabilities()
 
     def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         # Heavy local vector dependencies are imported only when this adapter is used.

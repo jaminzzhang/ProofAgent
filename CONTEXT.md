@@ -4,6 +4,8 @@ Proof Agent is a Controlled Agent Harness Framework for enterprise Agent deliver
 
 ## Language
 
+> **ADR-0015 Terminology Update**: Per [ADR-0015](docs/adr/0015-agentic-rag-with-retrieval-planner-and-local-tree-index.md), the remote `pageindex` provider is deprecated and `local_pageindex` is renamed to `local_index` (Local Index Provider) with LlamaIndex TreeIndex as the underlying engine. Key new terms: **RetrievalPlanner**, **RetrievalCapabilities**, **ProofAgentLLM**, **DocumentNode**, **RetrievalAction**, **max_rounds**. Remaining `PageIndex` / `local_pageindex` references in this document should be read as `Local Index` / `local_index` unless explicitly marked as historical context.
+
 **Controlled Agent Harness Framework**:
 The product category for Proof Agent: a framework that governs Agent execution through an explicit Control Envelope.
 _Avoid_: Harness Agent framework, Agent wrapper
@@ -1160,16 +1162,43 @@ _Avoid_: Runtime hard stop, silent expiration, healthy verification, mutable ext
 A Remote Knowledge Provider that retrieves normalized evidence from a remote search service.
 _Avoid_: Remote provider, remote vector provider, vendor-named provider
 
-**PageIndex Provider**:
-The first production-directed Knowledge Provider for enterprise document retrieval through a self-hosted PageIndex retrieval endpoint.
-_Avoid_: Local PageIndex Provider, final answer generator, autonomous QA engine
+**PageIndex Provider**: _DEPRECATED per ADR-0015_. Remote PageIndex retrieval endpoint integration removed in favor of Local Index Provider. Migrate existing `pageindex` sources to `local_index`.
 
-**Local PageIndex Provider**:
-A Knowledge Provider that retrieves candidate evidence from locally persisted PageIndex tree indexes created through Knowledge Source Ingestion.
-_Avoid_: PageIndex Provider, Local Vector Provider, final answer generator
+**Local PageIndex Provider**: _DEPRECATED per ADR-0015_. Renamed to **Local Index Provider** with LlamaIndex TreeIndex as the underlying engine instead of external PageIndex service.
 
-**Local PageIndex Snapshot Retrieval**:
-The bounded retrieval behavior that routes a query to eligible Knowledge Document revisions in one resolved snapshot, searches the selected revisions, merges normalized candidate evidence, and fails closed if any selected document search fails.
+**Local Index Provider**:
+A Knowledge Provider that retrieves candidate evidence from locally persisted tree indexes built by LlamaIndex TreeIndex. Supports structured retrieval interfaces (`list_structure()`, `retrieve_at_scope()`) in addition to standard `retrieve()`. Uses ProofAgentLLM bridge to route all LLM calls through Proof Agent's ModelProvider protocol for unified governance.
+_Avoid_: PageIndex Provider, Local Vector Provider, final answer generator, remote retrieval service
+
+**RetrievalPlanner**:
+An orchestrator component that drives multi-round agentic retrieval loops. Activated only when `retrieval.strategy: agentic`. Uses planner_model for query analysis and rewrite, evaluator_model for evidence sufficiency assessment. Outputs structured RetrievalAction decisions (rewrite/sufficient/abort) and respects max_rounds hard limit. Fails closed on LLM or provider errors, returning accumulated evidence from prior rounds.
+_Avoid_: ReAct planner, final answer model, single-step retrieval, tool calling loop
+
+**RetrievalCapabilities**:
+A data contract that declares what structured retrieval operations a KnowledgeProvider supports. Fields: `supports_structure_listing`, `supports_scoped_retrieval`. Planner uses capabilities flags (not isinstance) to dispatch structured vs basic retrieval.
+_Avoid_: runtime type checking, isinstance protocol, adapter descriptor
+
+**StructuredKnowledgeProvider**:
+A Protocol extension of KnowledgeProvider that adds `list_structure()` and `retrieve_at_scope()` methods. Implemented by Local Index Provider. Other providers implement only the base KnowledgeProvider protocol.
+_Avoid_: KnowledgeProvider base protocol, runtime_checkable decorator
+
+**ProofAgentLLM**:
+A bridge adapter that extends LlamaIndex's CustomLLM base class. Routes all LLM calls from LlamaIndex TreeIndex operations (ingestion node summaries, tree traversal routing) through Proof Agent's ModelProvider protocol. Implements sync interfaces (complete, chat) and explicitly disables async (acomplete, achat). Ensures unified trace, policy gates, and token estimation for all LLM usage.
+_Avoid_: direct LlamaIndex LLM usage, async LLM calls, bypass governance
+
+**RetrievalAction**:
+A frozen dataclass representing the Planner's structured decision after each retrieval round. V1 supports three action types: `rewrite` (generate new query and continue), `sufficient` (evidence adequate, stop), `abort` (evidence inadequate, stop). Trace records action decisions for audit.
+_Avoid_: unstructured text output, implicit continuation, tool calling
+
+**DocumentNode**:
+A frozen dataclass returned by `list_structure()` representing a node in the document tree. Contains node_id, title, summary, depth, child_ids, and metadata (tags, document_type, business_category). Enables Planner to reason about document structure before scoped retrieval.
+_Avoid_: raw tree traversal, full document content, internal storage paths
+
+**max_rounds**:
+A RetrievalConfig field (default 3) that caps the RetrievalPlanner's iterative retrieval loop. Independent from `max_steps` (which governs ReAct tool calling steps). Hard limit ensures bounded LLM cost and execution time.
+_Avoid_: max_steps, infinite loop, unbounded retrieval
+
+**Local PageIndex Snapshot Retrieval**: _Renamed to **Local Index Snapshot Retrieval** per ADR-0015_. The bounded retrieval behavior that routes a query to eligible Knowledge Document revisions in one resolved snapshot, searches the selected revisions via LlamaIndex TreeIndex tree traversal, merges normalized candidate evidence, and fails closed if any selected document search fails.
 _Avoid_: Unbounded corpus scan, silent partial retrieval, cross-source search
 
 **Knowledge Document Routing**:
@@ -1181,11 +1210,11 @@ The operator-managed and ingestion-derived title, description, tags, document ty
 _Avoid_: Evidence content, raw credentials, unreviewable hidden profile
 
 **Knowledge Document Selection Budget**:
-The Knowledge Source routing limit for how many document revisions may enter document-level PageIndex search for one query: default 8 and configurable from 1 through 20.
+The Knowledge Source routing limit for how many document revisions may enter document-level tree index search for one query: default 8 and configurable from 1 through 20.
 _Avoid_: Agent Retrieval Strategy top_k, unlimited fallback expansion, source document capacity
 
-**PageIndex-Backed Knowledge Source**:
-A reusable Knowledge Source whose uploaded documents are transformed into locally persisted PageIndex tree indexes.
+**PageIndex-Backed Knowledge Source**: _Renamed to **Index-Backed Knowledge Source** per ADR-0015_.
+A reusable Knowledge Source whose uploaded documents are transformed into locally persisted LlamaIndex TreeIndex tree indexes. Provider name changed from `local_pageindex` to `local_index`.
 _Avoid_: Agent-scoped upload, retrieval result, raw document folder
 
 **Knowledge Source Document Capacity**:
@@ -1657,17 +1686,17 @@ _Avoid_: Evidence content dump
 - An **Agent Contract** must explicitly declare its **Retrieval Strategy**.
 - An **Evidence Threshold** belongs to the **Retrieval Strategy**, not to a **Knowledge Provider**.
 - A **Local Markdown Provider**, a **Local Vector Provider**, and a **Remote Search Provider** are kinds of **Knowledge Provider**.
-- The **PageIndex Provider** is the first production-directed knowledge integration for the **Insurance Service QA Domain**.
-- V1 **Autonomous Customer Service Mode** keeps the **Local Markdown Provider** as the deterministic regression baseline and uses the **PageIndex Provider** as the production-directed customer-service knowledge path.
-- A **Local PageIndex Provider** retrieves from a **PageIndex-Backed Knowledge Source** created by **Knowledge Source Ingestion**; an Agent may bind that source only when its **Knowledge Source Index State** is READY.
-- V1 **Local PageIndex Snapshot Retrieval** applies **Knowledge Document Routing** within the resolved snapshot before document-level PageIndex search, merges normalized Candidate Evidence from the bounded selected set, applies the Agent Retrieval Strategy limit, and fails closed if any selected document search fails.
+- The **Local Index Provider** is the production-directed knowledge integration for the **Insurance Service QA Domain**, replacing the deprecated **PageIndex Provider** per ADR-0015.
+- V1 **Autonomous Customer Service Mode** keeps the **Local Markdown Provider** as the deterministic regression baseline and uses the **Local Index Provider** as the production-directed customer-service knowledge path.
+- A **Local Index Provider** retrieves from an **Index-Backed Knowledge Source** created by **Knowledge Source Ingestion**; an Agent may bind that source only when its **Knowledge Source Index State** is READY.
+- V1 **Local Index Snapshot Retrieval** applies **Knowledge Document Routing** within the resolved snapshot before document-level tree index search, merges normalized Candidate Evidence from the bounded selected set, applies the Agent Retrieval Strategy limit, and fails closed if any selected document search fails.
 - V1 **Knowledge Source Document Capacity** is up to 500 documents per source; this excludes unbounded per-query scans and requires explicit bounded **Knowledge Document Routing**.
 - V1 **Knowledge Document Routing** first filters operator-managed metadata and then uses an LLM selector over filenames plus editable document descriptions to choose a bounded document set.
-- **Knowledge Document Routing Metadata** includes title, description, tags, document type, and business category; ingestion may generate the description from PageIndex tree summaries, and Dashboard operators may revise it.
+- **Knowledge Document Routing Metadata** includes title, description, tags, document type, and business category; ingestion may generate the description from LlamaIndex tree node summaries, and Dashboard operators may revise it.
 - **Knowledge Document Selection Budget** defaults to 8 selected document revisions per query and is configurable from 1 through 20 at the Knowledge Source boundary; it is distinct from the Agent Retrieval Strategy evidence `top_k`.
 - If **Knowledge Document Routing** selects no documents, retrieval returns no evidence rather than silently widening the search scope; uncertain selection may include more documents only within the configured **Knowledge Document Selection Budget**.
 - The existing governed retrieval plan trace records an audit-safe **Knowledge Document Routing** summary, including selected document identifiers and selection basis without dumping document content.
-- A **PageIndex-Backed Knowledge Source** contains one or more **Knowledge Documents** and exposes an immutable READY **Knowledge Source Snapshot** to Agent Knowledge Bindings.
+- An **Index-Backed Knowledge Source** contains one or more **Knowledge Documents** and exposes an immutable READY **Knowledge Source Snapshot** to Agent Knowledge Bindings.
 - Each **Knowledge Document** belongs to exactly one **Knowledge Source** and is indexed independently; a failed replacement build does not replace the last READY **Knowledge Source Snapshot**.
 - A **Knowledge Document** keeps a stable document id while explicit file replacement creates an immutable **Knowledge Document Revision** with a new revision id. Uploading a same-named file never overwrites implicitly; Dashboard requires the operator to choose new document or replacement.
 - **Knowledge Document Content Hash Reuse** makes repeated upload idempotent when content hash and ingestion configuration are compatible by reusing the existing index artifact rather than rebuilding it.
@@ -1684,11 +1713,11 @@ _Avoid_: Evidence content dump
 - **Operator Knowledge Document Intake** is an internal design-time boundary and does not weaken **Text-Only Customer Intake** for customer chat.
 - **Knowledge Source Ingestion** creates persisted **Knowledge Ingestion Jobs** that are claimed by a separate **Knowledge Ingestion Worker** rather than running inside Dashboard API request handling.
 - The local **Knowledge Ingestion Worker** uses a file-backed recoverable queue boundary that future deployments may replace with a distributed queue without changing Knowledge Source semantics.
-- A **PageIndex-Backed Knowledge Source** owns **Knowledge Ingestion Model Configuration** independently from any Agent answer, planner, or review model configuration.
+- An **Index-Backed Knowledge Source** owns **Knowledge Ingestion Model Configuration** independently from any Agent answer, planner, or review model configuration.
 - **Knowledge Ingestion Model Configuration** stores model provider settings and credential environment-variable references, never raw credentials; missing credentials fail the job while preserving the last READY snapshot.
-- A **PageIndex-Backed Knowledge Source** owns **Knowledge Routing Model Configuration** independently from any Agent planner model configuration; it inherits the source's **Knowledge Ingestion Model Configuration** by default and may override provider, model, or environment-variable references.
+- An **Index-Backed Knowledge Source** owns **Knowledge Routing Model Configuration** independently from any Agent planner model configuration; it inherits the source's **Knowledge Ingestion Model Configuration** by default and may override provider, model, or environment-variable references.
 - **Knowledge Document Routing** failure fails the retrieval closed and is recorded in Trace.
-- Optional **Local PageIndex Provider** ingestion cannot become a dependency of the deterministic no-network, no-credential demo or default CI gate.
+- Optional **Local Index Provider** ingestion cannot become a dependency of the deterministic no-network, no-credential demo or default CI gate.
 - A **Remote Search Fixture Adapter** proves the Remote Search contract before production network integration.
 - A **Local Vector Provider** queries an existing index; **Vector Index Build** is a separate future lifecycle.
 - **Knowledge First Stage** delivers executable single-step retrieval and reserves **Agentic RAG** as a governed future workflow.
@@ -1957,3 +1986,10 @@ _Avoid_: Evidence content dump
 - "Workflow editing" could mean a linear list, visual diagram, accordion, or tabbed editor. Resolved: the Workflow **Agent Configuration Module** uses an expandable accordion showing all nodes with inline configuration fields.
 - "Agent creation" could mean inline form, modal wizard, or template selection. Resolved: the **Agent Creation Wizard** starts with template selection (Enterprise QA, Customer Service, Blank) before collecting agent details.
 - "Unsupported retrieval" could mean invalid configuration or unavailable capability. Resolved: a recognized but unavailable strategy is a **Retrieval Capability Error**.
+- "Agentic retrieval" could mean a single provider call, unbounded multi-round search, or governed iterative planning. Resolved: `retrieval.strategy: agentic` activates the **RetrievalPlanner** which drives a multi-round loop with `planner_model` for query analysis and `evaluator_model` for evidence sufficiency assessment, outputs structured **RetrievalAction** decisions, respects `max_rounds` hard limit, and fails closed on errors returning accumulated evidence.
+- "PageIndex provider" could mean keeping the remote HTTP integration, replacing it with a local engine, or supporting both. Resolved per ADR-0015: deprecate the remote `pageindex` provider entirely, rename `local_pageindex` to `local_index` (**Local Index Provider**), use LlamaIndex TreeIndex as the underlying engine, and require migration of existing `pageindex` sources with forced re-publication of affected Published Agent Versions.
+- "Tree index retrieval" could mean calling the external PageIndex API, using LlamaIndex's built-in retrievers, or implementing custom tree traversal. Resolved: **Local Index Provider** uses LlamaIndex `TreeSelectLeafRetriever` for single-document tree traversal, routes all LLM calls through **ProofAgentLLM** bridge to Proof Agent's ModelProvider protocol, and supports structured interfaces (`list_structure`, `retrieve_at_scope`) declared via **RetrievalCapabilities**.
+- "Planner error handling" could mean retry, partial results, or complete failure. Resolved: **RetrievalPlanner** uses fail-closed semantics — LLM failure, Action Plan parse failure, or provider timeout terminates the loop and returns accumulated evidence from prior rounds; all failures are recorded in trace with stable error codes.
+- "Multi-round trace" could mean one summary event, per-round detail, or full LLM conversation. Resolved: each round emits `retrieval_step`, `model_request`, `model_response` events with `round_id` correlation, and a final `agentic_retrieval_completed` summary event records total rounds, candidates, accepted count, final action, and per-round history.
+- "Planner-Provider boundary" could mean Planner sees merged results, per-source results, or both. Resolved: V1 **RetrievalPlanner** operates above **BlendedKnowledgeProvider** and sees only merged evidence; V2 will evolve to per-source awareness for `narrow_scope` and `try_different_source` actions, accepting the architectural rework cost.
+- "Planner LLM calls" could mean bypassing governance, sharing the final-answer model, or using dedicated governed roles. Resolved per ADR-0005 amendment: **ModelCallRole.RETRIEVAL_PLANNER** and **ModelCallRole.RETRIEVAL_EVALUATOR** are separate LLM roles with independent trace identity, and **ModelCallRole.INGESTION** and **ModelCallRole.ROUTING** govern index-build and tree-traversal LLM calls respectively.

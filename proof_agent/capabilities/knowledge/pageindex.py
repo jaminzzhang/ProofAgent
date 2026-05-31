@@ -1,21 +1,32 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import warnings
 from typing import Self
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus
 from proof_agent.contracts.manifest import KnowledgeConfig
 from proof_agent.errors import ProofAgentError
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_RETRIEVAL_PATH = "/api/v1/retrieval/retrieve"
 
 
 class PageIndexProvider:
-    """Remote PageIndex adapter that normalizes retrieval nodes into evidence."""
+    """Remote PageIndex adapter that normalizes retrieval nodes into evidence.
+
+    .. deprecated:: ADR-0015
+        PageIndexProvider is deprecated. Use LocalIndexProvider (provider='local_index')
+        instead. See docs/adr/0015-agentic-rag-with-retrieval-planner-and-local-tree-index.md
+        for migration guidance.
+    """
 
     def __init__(
         self,
@@ -27,6 +38,13 @@ class PageIndexProvider:
         timeout_seconds: float = 10.0,
         thinking: bool = True,
     ) -> None:
+        warnings.warn(
+            "PageIndexProvider is deprecated as of ADR-0015. "
+            "Use LocalIndexProvider (provider='local_index') instead. "
+            "See docs/adr/0015-agentic-rag-with-retrieval-planner-and-local-tree-index.md",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.endpoint_env = endpoint_env
         self.api_key_env = api_key_env
         self.document_id = document_id
@@ -49,6 +67,10 @@ class PageIndexProvider:
     @property
     def provider_name(self) -> str:
         return "pageindex"
+
+    @property
+    def capabilities(self) -> RetrievalCapabilities:
+        return RetrievalCapabilities()
 
     def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         endpoint = _required_env(self.endpoint_env, "PageIndex endpoint")

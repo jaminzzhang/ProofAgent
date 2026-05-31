@@ -20,6 +20,10 @@ class ModelCallRole(str, Enum):
     FINAL_ANSWER = "final_answer"
     REACT_PLANNER = "react_planner"
     HARNESS_REVIEW = "harness_review"
+    RETRIEVAL_PLANNER = "retrieval_planner"
+    RETRIEVAL_EVALUATOR = "retrieval_evaluator"
+    INGESTION = "ingestion"
+    ROUTING = "routing"
 
 
 class ModelMessage(FrozenModel):

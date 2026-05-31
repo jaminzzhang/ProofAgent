@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Self
 
+from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus
 from proof_agent.capabilities.knowledge.chunker import MarkdownChunk, load_markdown_chunks
 from proof_agent.capabilities.knowledge.citations import citation_for_chunk
@@ -24,6 +25,10 @@ class LocalMarkdownProvider:
     @property
     def provider_name(self) -> str:
         return "local_markdown"
+
+    @property
+    def capabilities(self) -> RetrievalCapabilities:
+        return RetrievalCapabilities()
 
     def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         """Rank Markdown chunks by simple token overlap for reproducible tests."""
