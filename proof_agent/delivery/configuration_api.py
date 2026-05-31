@@ -679,6 +679,10 @@ def _bind_source_in_agent_yaml(
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
 
+    # Remove legacy inline knowledge section when migrating to
+    # knowledge_sources + knowledge_bindings.
+    raw.pop("knowledge", None)
+
     knowledge_sources = raw.setdefault("knowledge_sources", [])
     if not isinstance(knowledge_sources, list):
         raise HTTPException(status_code=400, detail="knowledge_sources must be a list.")
