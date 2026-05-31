@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   bindKnowledgeSourceToDraft,
+  chatUrl,
   fetchKnowledgeSources,
   publishConfigDraft,
   rollbackConfigVersion,
@@ -569,14 +570,18 @@ export function AgentDetailPage() {
                   {version.version_id === activeVersionId ? (
                     <div className="flex flex-wrap items-center justify-end gap-2">
                       <a
-                        href={`/operator/agents/${version.agent_id}/new`}
+                        href={chatUrl(`/operator/agents/${version.agent_id}/new`)}
+                        target="_blank"
+                        rel="noreferrer"
                         className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
                       >
                         Open in Operator Chat
                       </a>
                       {isCustomerFacing && (
                         <a
-                          href={`/customer/agents/${version.agent_id}`}
+                          href={chatUrl(`/customer/agents/${version.agent_id}`)}
+                          target="_blank"
+                          rel="noreferrer"
                           className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
                         >
                           Open in Customer Chat

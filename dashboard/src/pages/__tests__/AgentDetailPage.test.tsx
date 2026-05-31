@@ -13,6 +13,7 @@ import { AgentDetailPage } from '../AgentDetailPage'
 
 vi.mock('../../api/client', () => ({
   bindKnowledgeSourceToDraft: vi.fn(),
+  chatUrl: (path: string) => `http://localhost:5174${path}`,
   fetchKnowledgeSources: vi.fn(),
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
@@ -171,11 +172,11 @@ describe('AgentDetailPage', () => {
 
     expect(screen.getByRole('link', { name: 'Open in Operator Chat' })).toHaveAttribute(
       'href',
-      '/operator/agents/agent-1/new',
+      'http://localhost:5174/operator/agents/agent-1/new',
     )
     expect(screen.getByRole('link', { name: 'Open in Customer Chat' })).toHaveAttribute(
       'href',
-      '/customer/agents/agent-1',
+      'http://localhost:5174/customer/agents/agent-1',
     )
   })
 

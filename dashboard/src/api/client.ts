@@ -19,6 +19,11 @@ import type {
 } from './types'
 
 const BASE = '/api'
+const CHAT_URL = import.meta.env.VITE_CHAT_URL as string | undefined ?? 'http://localhost:5174'
+
+export function chatUrl(path: string): string {
+  return `${CHAT_URL}${path}`
+}
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(url, options)
