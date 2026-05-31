@@ -176,7 +176,10 @@ def _planner_control_prompt() -> str:
         "If you use a compact form, return action_type plus parameters; params is accepted as an alias for parameters. "
         "Use only allowed action_type values supplied in the user message. "
         "Do not return chain-of-thought, markdown commentary, tool results, or natural language. "
-        "A proposed action is not approved and cannot execute until Harness policy admits it."
+        "A proposed action is not approved and cannot execute until Harness policy admits it. "
+        "When action_type is plan_retrieval, set parameters.query to the original question verbatim. "
+        "Do not summarize, shorten, translate, or rephrase the question. "
+        "Preserve the original language, key terms, and full phrasing exactly as provided."
     )
 
 

@@ -182,7 +182,7 @@ class RunStore:
     def _load_all_summaries(self) -> list[RunSummary]:
         """Scan history directories and return all run summaries sorted newest first."""
         summaries: list[RunSummary] = []
-        for entry in sorted(self._history_dir.iterdir(), reverse=True):
+        for entry in self._history_dir.iterdir():
             if not entry.is_dir():
                 continue
             meta = self._load_run_meta(entry)
@@ -203,6 +203,7 @@ class RunStore:
                     error_code=meta.error_code,
                 )
             )
+        summaries.sort(key=lambda run: run.created_at, reverse=True)
         return summaries
 
     def _load_run_meta(self, run_dir: Path) -> RunIndex | None:
