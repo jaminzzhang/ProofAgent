@@ -89,7 +89,10 @@ class PublishedAgentRegistry:
             / version.version_id
         )
         manifest_path = version_dir / "agent.yaml"
-        manifest = load_agent_manifest(manifest_path)
+        try:
+            manifest = load_agent_manifest(manifest_path)
+        except Exception:
+            return None
         return PublishedAgent(
             agent_id=agent_id,
             manifest_path=manifest_path,
