@@ -130,6 +130,12 @@ def server(
     """Start the Proof Agent API server."""
 
     try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # python-dotenv is optional
+
+    try:
         import uvicorn
     except ImportError:
         typer.echo("Dashboard dependencies not installed. Run: uv pip install proof-agent[dashboard]")

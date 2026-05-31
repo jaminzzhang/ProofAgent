@@ -58,6 +58,7 @@ runs/*
 
 # Claude Code
 .claude/
+.agents/
 
 # Frontend
 node_modules/
