@@ -23,7 +23,7 @@ from proof_agent.contracts import (
 )
 from proof_agent.evaluation.demo.scenarios import TOOL_REQUIRED_QUESTION, UNSUPPORTED_QUESTION
 from proof_agent.capabilities.knowledge import KnowledgeProvider
-from proof_agent.capabilities.models import ModelProvider, resolve_provider
+from proof_agent.capabilities.models import resolve_provider
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner
 from proof_agent.contracts.manifest import ModelConfig

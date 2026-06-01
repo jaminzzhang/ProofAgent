@@ -7,7 +7,6 @@
 ```text
 examples/insurance_customer_service/
   agent.yaml              # local Markdown customer-service Agent
-  agent.pageindex.yaml    # PageIndex-ready variant
   policy.yaml             # answer, read-only tool, and memory rules
   tools.yaml              # declares policy_status_lookup and claim_status_lookup
   tools.py                # deterministic insurance read handlers
@@ -74,22 +73,6 @@ curl http://127.0.0.1:8000/api/handoffs
 ```
 
 Customers receive safe wording, not an `ESCALATED_TO_HUMAN` state.
-
-## PageIndex Variant
-
-Use `agent.pageindex.yaml` when the knowledge source is PageIndex:
-
-```yaml
-knowledge:
-  provider: pageindex
-  params:
-    endpoint_env: PAGEINDEX_BASE_URL
-    document_id: insurance_customer_service
-    thinking: true
-    timeout_seconds: 10
-```
-
-The same Control Envelope still applies: retrieval plan/step events, evidence evaluation, customer-safe projection, and trace persistence remain framework-owned.
 
 ## Verification
 

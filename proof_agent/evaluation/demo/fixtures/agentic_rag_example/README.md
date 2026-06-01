@@ -164,7 +164,7 @@ evidence = provider.retrieve_at_scope(
 
 ## Migration from PageIndex
 
-If you're migrating from the deprecated `pageindex` provider, see:
+If you're migrating from the removed `pageindex` provider, see:
 [Migration Guide: PageIndex → LocalIndex](../../../docs/migration/pageindex-to-local-index.md)
 
 ## References

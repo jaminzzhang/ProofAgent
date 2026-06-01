@@ -1,8 +1,7 @@
 """Tests for RetrievalPlanner component (ADR-0015)."""
-import pytest
 
 from proof_agent.contracts.evidence import EvidenceChunk, EvidenceStatus
-from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner, RetrievalRound
+from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner
 
 
 class MockKnowledgeProvider:

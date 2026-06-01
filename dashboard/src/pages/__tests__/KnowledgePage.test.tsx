@@ -22,10 +22,10 @@ describe('KnowledgePage', () => {
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({
       data: [
         {
-          source_id: 'ks_pageindex',
-          name: 'PageIndex Policies',
-          provider: 'pageindex',
-          params: { endpoint_env: 'PAGEINDEX_BASE_URL' },
+          source_id: 'ks_local_index',
+          name: 'Local Index Policies',
+          provider: 'local_index',
+          params: { index_path: './data/indexes/policies' },
           created_at: '2026-05-31T00:00:00Z',
           updated_at: '2026-05-31T00:00:00Z',
           document_count: 2,
@@ -41,7 +41,7 @@ describe('KnowledgePage', () => {
       </MemoryRouter>,
     )
 
-    expect(await screen.findByText('PageIndex Policies')).toBeInTheDocument()
+    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
     expect(screen.getByText('1 / 2 ready')).toBeInTheDocument()
   })
 

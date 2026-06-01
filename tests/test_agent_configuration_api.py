@@ -2,7 +2,6 @@
 
 import base64
 from pathlib import Path
-from typing import Any
 
 from fastapi.testclient import TestClient
 import yaml
@@ -42,41 +41,23 @@ def test_list_config_agents_empty(tmp_path: Path) -> None:
     assert response.json() == {"data": [], "meta": {"total": 0}}
 
 
-def test_create_pageindex_knowledge_source_and_upload_document(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def test_create_local_index_knowledge_source_and_stage_document(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    ingestion_calls: list[dict[str, Any]] = []
-
-    def fake_ingest_pageindex_document(**kwargs: Any) -> dict[str, Any]:
-        ingestion_calls.append(kwargs)
-        return {
-            "provider_document_id": "pi_travel_policy",
-            "state": "ready",
-            "message": "indexed",
-        }
-
-    monkeypatch.setattr(
-        "proof_agent.delivery.configuration_api.ingest_pageindex_document",
-        fake_ingest_pageindex_document,
-    )
 
     created = client.post(
         "/api/config/knowledge-sources",
         json={
-            "source_id": "ks_pageindex",
-            "name": "PageIndex Policies",
-            "provider": "pageindex",
+            "source_id": "ks_local_index",
+            "name": "Local Index Policies",
+            "provider": "local_index",
             "params": {
-                "endpoint_env": "PAGEINDEX_BASE_URL",
-                "document_id": "policies",
+                "index_path": "./indexes/policies",
             },
             "actor": "operator",
         },
     )
     uploaded = client.post(
-        "/api/config/knowledge-sources/ks_pageindex/documents",
+        "/api/config/knowledge-sources/ks_local_index/documents",
         json={
             "filename": "travel-policy.pdf",
             "content_type": "application/pdf",
@@ -85,19 +66,37 @@ def test_create_pageindex_knowledge_source_and_upload_document(
         },
     )
     listed = client.get("/api/config/knowledge-sources")
-    documents = client.get("/api/config/knowledge-sources/ks_pageindex/documents")
+    documents = client.get("/api/config/knowledge-sources/ks_local_index/documents")
 
     assert created.status_code == 200
-    assert created.json()["source_id"] == "ks_pageindex"
+    assert created.json()["source_id"] == "ks_local_index"
+    assert created.json()["provider"] == "local_index"
     assert uploaded.status_code == 200
-    assert uploaded.json()["state"] == "ready"
-    assert uploaded.json()["provider_document_id"] == "pi_travel_policy"
-    assert listed.json()["data"][0]["source_id"] == "ks_pageindex"
+    assert uploaded.json()["state"] == "queued"
+    assert uploaded.json()["provider_document_id"] is None
+    assert listed.json()["data"][0]["source_id"] == "ks_local_index"
     assert listed.json()["data"][0]["document_count"] == 1
-    assert listed.json()["data"][0]["ready_document_count"] == 1
+    assert listed.json()["data"][0]["ready_document_count"] == 0
     assert documents.json()["data"][0]["filename"] == "travel-policy.pdf"
-    assert ingestion_calls[0]["source"].source_id == "ks_pageindex"
-    assert ingestion_calls[0]["content"] == b"%PDF-1.4\nsample"
+
+
+def test_legacy_knowledge_source_providers_are_rejected(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    for provider in ("pageindex", "local_vector"):
+        response = client.post(
+            "/api/config/knowledge-sources",
+            json={
+                "source_id": f"ks_{provider}",
+                "name": f"Legacy {provider}",
+                "provider": provider,
+                "params": {},
+                "actor": "operator",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == f"Unsupported knowledge provider: {provider}"
 
 
 def test_bind_shared_knowledge_source_to_agent_draft(tmp_path: Path) -> None:
@@ -106,12 +105,11 @@ def test_bind_shared_knowledge_source_to_agent_draft(tmp_path: Path) -> None:
     created = client.post(
         "/api/config/knowledge-sources",
         json={
-            "source_id": "ks_pageindex",
-            "name": "PageIndex Policies",
-            "provider": "pageindex",
+            "source_id": "ks_local_markdown",
+            "name": "Local Markdown Policies",
+            "provider": "local_markdown",
             "params": {
-                "endpoint_env": "PAGEINDEX_BASE_URL",
-                "document_id": "policies",
+                "path": "./knowledge",
             },
             "actor": "operator",
         },
@@ -121,7 +119,7 @@ def test_bind_shared_knowledge_source_to_agent_draft(tmp_path: Path) -> None:
     bound = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
         json={
-            "source_id": "ks_pageindex",
+            "source_id": "ks_local_markdown",
             "alias": "policies",
             "failure_mode": "advisory",
             "fusion_weight": 0.75,
@@ -136,12 +134,12 @@ def test_bind_shared_knowledge_source_to_agent_draft(tmp_path: Path) -> None:
     assert bound.status_code == 200
     parsed = yaml.safe_load(bound.json()["agent_yaml"])
     assert any(
-        source["source_id"] == "ks_pageindex"
-        and source["provider"] == "pageindex"
+        source["source_id"] == "ks_local_markdown"
+        and source["provider"] == "local_markdown"
         for source in parsed["knowledge_sources"]
     )
     assert any(
-        binding["source_id"] == "ks_pageindex"
+        binding["source_id"] == "ks_local_markdown"
         and binding["alias"] == "policies"
         and binding["failure_mode"] == "advisory"
         and binding["fusion_weight"] == 0.75

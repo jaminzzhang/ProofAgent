@@ -13,7 +13,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, cast
 
 from llama_index.core import Document, StorageContext, TreeIndex, load_index_from_storage
 from llama_index.core.schema import NodeWithScore
@@ -173,9 +173,12 @@ class LocalIndexProvider(KnowledgeProvider):
         storage_context = StorageContext.from_defaults(persist_dir=str(self.index_path))
 
         # Load index with routing model for queries
-        self._index = load_index_from_storage(
-            storage_context,
-            llm=self.routing_model,
+        self._index = cast(
+            TreeIndex,
+            load_index_from_storage(
+                storage_context,
+                llm=self.routing_model,
+            ),
         )
 
         logger.info("Index loaded successfully")
@@ -386,7 +389,8 @@ class LocalIndexProvider(KnowledgeProvider):
             source_id=doc_id,
             status=EvidenceStatus.CANDIDATE,
             provider_name="local_index",
-            score=score,
+            provider_native_score=score,
+            admission_score=score,
             citation=citation,
             metadata=metadata,
         )

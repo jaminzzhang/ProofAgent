@@ -132,12 +132,11 @@ def test_create_list_and_store_knowledge_source_documents(tmp_path: Path) -> Non
     store = LocalAgentConfigurationStore(tmp_path)
 
     source = store.create_knowledge_source(
-        source_id="ks_pageindex",
-        name="PageIndex Policies",
-        provider="pageindex",
+        source_id="ks_local_index",
+        name="Local Index Policies",
+        provider="local_index",
         params={
-            "endpoint_env": "PAGEINDEX_BASE_URL",
-            "document_id": "policies",
+            "index_path": "./indexes/policies",
         },
         actor="local-user",
     )
@@ -146,8 +145,8 @@ def test_create_list_and_store_knowledge_source_documents(tmp_path: Path) -> Non
         filename="travel-policy.pdf",
         content_type="application/pdf",
         content=b"%PDF-1.4\nsample",
-        state="ready",
-        provider_document_id="pi_travel_policy",
+        state="queued",
+        provider_document_id=None,
         actor="local-user",
     )
 
@@ -162,5 +161,5 @@ def test_create_list_and_store_knowledge_source_documents(tmp_path: Path) -> Non
     assert document.source_id == source.source_id
     assert document.filename == "travel-policy.pdf"
     assert document.content_hash
-    assert document.provider_document_id == "pi_travel_policy"
+    assert document.provider_document_id is None
     assert store.knowledge_document_original_path(document).read_bytes() == b"%PDF-1.4\nsample"

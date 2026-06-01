@@ -1,6 +1,6 @@
 # Proof Agent Technical Design
 
-> Authoritative technical design document. Proof Agent is a Controlled Agent Harness Framework: it uses Harness Engineering to manage the Agent lifecycle and connects remote models, LangChain/LangGraph, vector stores, real MCPs, Dashboard, CLI, and Docker through adapters.
+> Authoritative technical design document. Proof Agent is a Controlled Agent Harness Framework: it uses Harness Engineering to manage the Agent lifecycle and connects remote models, LangChain/LangGraph, governed knowledge providers, real MCPs, Dashboard, CLI, and Docker through adapters.
 
 ## 1. Core Positioning
 
@@ -23,7 +23,7 @@ The current deterministic demo is a regression baseline, not a product boundary.
 Core goals:
 1. Manage the complete Agent lifecycle: config, workflow, policy, retrieval, model, tool, memory, validation, trace, receipt.
 2. Preserve a no-API-key deterministic demo to prove that the governance chain is reproducible.
-3. Support adapters for remote models, LangChain/LangGraph, vector stores, real MCPs, and the Dashboard.
+3. Support adapters for remote models, LangChain/LangGraph, governed local and remote knowledge sources, real MCPs, and the Dashboard.
 4. Provide CLI and Docker execution entry points.
 5. Maintain contract-first design; third-party SDK types must not leak into public contracts.
 
@@ -105,7 +105,7 @@ The overall architecture of Proof Agent is not a simple top-down pipeline, but a
                                   |
                                   v
                            Infrastructure
-      OpenAI-compatible | Azure | Anthropic | local markdown | vector DB
+      OpenAI-compatible | Azure | Anthropic | local markdown | local index | remote retrieval
       MCP stdio/http | local tools | session/remote memory stores
 
 Contracts & Ports:
@@ -196,7 +196,7 @@ Layer boundary rules:
 | Workflow | `control/workflow/` owns Enterprise QA and Controlled ReAct Enterprise QA Harness behavior plus the workflow template registry |
 | Runtime | `runtime/langgraph_runner.py` executes supported `StateGraph` templates through resolved Harness dependencies |
 | Policy | `control/policy/` owns retrieval, ReAct review, answer, tool, memory, and model call enforcement points |
-| Knowledge | `capabilities/knowledge/` owns Markdown deterministic retrieval; vector stack optional |
+| Knowledge | `capabilities/knowledge/` owns Markdown deterministic retrieval, Local Index provider scaffolding, remote adapter boundaries, and legacy providers pending removal per ADR-0016 |
 | Model | `capabilities/models/` owns `deterministic`, `openai_compatible`, `openai`, `deepseek`; Azure/Anthropic placeholders |
 | Tools | `capabilities/tools/` owns ToolGateway, local handler loading, approval state |
 | Memory | `capabilities/memory/` owns session memory with denylist |
@@ -472,7 +472,7 @@ It owns:
 
 It does not own:
 - SDK clients
-- vector database handles
+- knowledge store handles
 - MCP sessions
 - LangGraph internals
 - Dashboard read APIs
@@ -568,7 +568,7 @@ Capability categories:
 | Category | Examples | Required boundary |
 | --- | --- | --- |
 | Model | deterministic, OpenAI-compatible, Azure, Anthropic | `ModelRequest` / `ModelResponse` |
-| Knowledge / Retrieval | local Markdown, local vector, remote search | candidate `EvidenceChunk` |
+| Knowledge / Retrieval | local Markdown, local index, trusted remote adapters | candidate `EvidenceChunk` |
 | Memory | session memory, future persistent memory | memory contract plus `before_memory_write` policy |
 | Tool / MCP | local tools, mock MCP, real MCP stdio/http | `ToolRequest` / `ToolResult` through ToolGateway |
 | Skill Packs | prompt, tool schema, retrieval recipe, policy rule, validator, workflow fragment | registered into Control/Runtime/Capability model |
@@ -580,21 +580,33 @@ Rules:
 - A Skill is a capability pack, not a second execution path.
 - Capability implementations must emit or allow Control Plane to emit trace-safe facts.
 
-## 14. Knowledge And Vector Providers
+## 14. Knowledge Hub And Retrieval Providers
 
 Current baseline:
-- Markdown heading-aware chunking.
+- Markdown heading-aware chunking for deterministic demos and local development.
 - source and line-range citation.
 - token-overlap deterministic retrieval.
 - `EvidenceChunk` output.
 - evidence threshold validation.
 
-Agent Contract shape:
+Knowledge Hub target shape:
+- Knowledge Sources own provider configuration and publication lifecycle.
+- Draft Agents store Agent Knowledge Bindings, not provider credentials or endpoints.
+- Published Agent Versions execute with a Resolved Knowledge Binding Set pinned to source snapshot or configuration versions.
+- Knowledge Retrieval Service in the Control Plane owns source routing, provider coordination, cross-source fusion, citation enforcement, and evidence admission for both Enterprise QA and Controlled ReAct workflows.
+
+Agent package deterministic shape:
 ```yaml
-knowledge:
-  provider: local_markdown
-  params:
-    path: ./knowledge
+knowledge_sources:
+  - source_id: enterprise_qa_knowledge
+    name: Enterprise QA Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+
+knowledge_bindings:
+  - binding_id: enterprise_qa_knowledge_binding
+    source_id: enterprise_qa_knowledge
 
 retrieval:
   strategy: single_step
@@ -602,26 +614,44 @@ retrieval:
   min_score: 0.2
 ```
 
-Provider names:
-- `local_markdown` retrieves candidate evidence from local Markdown files.
-- `local_vector` queries an existing local vector index; index build is a separate lifecycle.
-- `remote_search` normalizes remote-search-shaped evidence through a first-stage fixture adapter; production HTTP is future work.
-- `pageindex` calls a self-hosted PageIndex retrieval endpoint and normalizes `retrieved_nodes` into candidate evidence.
+Knowledge Hub V1 provider set:
+- `local_markdown` retrieves candidate evidence from local Markdown files for deterministic demos and development fixtures.
+- `local_index` retrieves from published local LlamaIndex TreeIndex artifacts built by Knowledge Source Ingestion.
+- `http_json` is the trusted generic remote adapter with a default Remote Retrieval Protocol and bounded declarative mappings for non-standard remote APIs.
+- trusted typed remote adapters may be added through code installation and adapter descriptors.
+- `pageindex` and `local_vector` are outside the target provider set and are rejected rather than retained as hidden compatibility entries.
 
 Rules:
-- Knowledge providers return candidate `EvidenceChunk` objects only.
-- Provider-specific config lives under `knowledge.params`.
-- Retrieval orchestration policy lives under the required top-level `retrieval` section.
+- Knowledge Provider Adapters retrieve one selected source and return candidate `EvidenceChunk` objects only.
+- Provider-specific config lives in Knowledge Sources, not Agent Draft provider params.
+- Retrieval orchestration policy lives under the required top-level `retrieval` section and the Control Plane Knowledge Retrieval Service.
 - `top_k` and `min_score` belong to `retrieval`, not provider params.
 - Control Plane evidence evaluation creates accepted or rejected evidence.
 - Trace and receipt record evidence summaries by default, not raw evidence content.
-- Agentic RAG is a `retrieval.strategy`, not a Knowledge Provider and not a workflow template. With PageIndex, Proof Agent emits a governed retrieval plan and delegates the remote reasoning-based retrieval step to the PageIndex provider while keeping final answer governance local.
+- Agentic RAG is a `retrieval.strategy`, not a Knowledge Provider and not a workflow template.
+- Controlled ReAct may invoke agentic retrieval as a nested retrieval loop, but `react.max_steps` and `retrieval.max_rounds` remain separate budgets.
+- ReAct planners may propose Retrieval Intent only; Knowledge Source Routing remains a Control Envelope step.
+- Empty routing, selected required source failure, or zero Accepted Evidence produces No Accepted Evidence Outcome and must not call a free-form final-answer model.
+- Selected advisory source failure may continue only when remaining selected bindings produce Accepted Evidence, and degraded retrieval remains visible in Trace, Receipt, and RunStore.
 
-Vector strategy:
-- Vector stores live behind adapters.
-- `[vector]` optional dependency can include Chroma and sentence-transformers.
-- Milvus, pgvector, remote enterprise search implementations must still return `EvidenceChunk`.
-- Retrieval never decides final answer.
+Local Index strategy:
+- LlamaIndex TreeIndex construction happens in Knowledge Source Ingestion before source publication.
+- Runtime retrieval performs Local Index Runtime Load against a published READY Knowledge Source Snapshot; it must not build indexes on demand inside an Agent run.
+- Local Index uses stable internal citation URIs and permission-protected citation preview rather than storage paths.
+
+Remote adapter strategy:
+- `http_json` has a preferred default Remote Retrieval Protocol.
+- Non-standard remote APIs may use bounded request and response mappings; mappings are declarative configuration, not executable code.
+- Response mappings use JSON Pointer and must yield content plus citation or an adequate structured source reference before evidence can enter Accepted Evidence Context.
+- Evidence Admission Score may come only from an approved calibrated adapter descriptor or approved admission scorer.
+
+Implementation sequence:
+1. Clean up contracts, loader validation, examples, fixtures, and provider registry so `pageindex` and `local_vector` are no longer target provider entries.
+2. Add the Control Plane Knowledge Retrieval Service for source routing, provider coordination, provider failure handling, WRRF, exact deduplication, citation enforcement, evidence admission, and No Accepted Evidence Outcome mapping.
+3. Complete `local_index` runtime load so Agent execution reads only published READY LlamaIndex-backed Knowledge Source Snapshots.
+4. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
+5. Route Enterprise QA and Controlled ReAct retrieval through the same Knowledge Retrieval Service; ReAct may submit Retrieval Intent but must not directly select sources or call providers.
+6. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
 
 ## 15. Model Providers
 
@@ -1027,13 +1057,13 @@ Optional extras:
 dev = ["pytest", "ruff", "mypy", "httpx"]
 dashboard = ["fastapi", "uvicorn"]
 openai = ["openai"]
-vector = ["sentence-transformers", "chromadb"]
+tree = ["llama-index-core"]
 ```
 
 Dependency rules:
 - deterministic demo cannot require optional extras.
 - provider SDKs belong in provider-specific extras.
-- vector dependencies belong in `[vector]`.
+- local index dependencies belong in `[tree]`.
 - dashboard runtime belongs in `[dashboard]`.
 
 ## 23. Error Codes
@@ -1081,7 +1111,7 @@ Remote provider tests must mock SDK clients and never require real API keys.
 | 1 | deterministic Harness MVP with CLI/Docker |
 | 2 | remote model governance and model trace |
 | 3 | RunStore and Dashboard API |
-| 4 | production adapters: LangChain/LangGraph, real MCP, vector stores, Azure/Anthropic, streaming |
+| 4 | production adapters: LangChain/LangGraph, real MCP, local index, governed remote retrieval, Azure/Anthropic, streaming |
 | 5 | Agent Control Platform: Dashboard UI, Approval Console, RBAC, multi-template, external observability |
 
 ## 26. Stability Rules

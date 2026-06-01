@@ -70,8 +70,8 @@ runs/latest/governance_receipt.md
 | Controlled ReAct | `react_enterprise_qa` runs deterministic planner/review scenarios with fixed action set, advisory review, clarification wait, approval wait, trace, and receipt output | Production-grade checkpoint resume, streaming, and remote planner/review adapters |
 | LangChain integration | Not a public adapter yet | Optional ecosystem adapter that preserves contracts |
 | Real MCP | Mock tool proves approval contract | stdio/HTTP MCP adapter behind ToolGateway |
-| Vector provider | Local Vector provider queries existing Chroma indexes | Index build lifecycle and broader vector store adapters |
-| Agentic RAG | PageIndex provider path emits governed retrieval plan/step events and evaluates evidence locally | Planner-driven multi-step retrieval strategy beyond provider-agentic retrieval |
+| Knowledge Hub provider set | Active code accepts `local_markdown`, `local_index`, and the fixture `remote_search` adapter; `pageindex` and `local_vector` are rejected | Complete Knowledge Retrieval Service, READY Local Index runtime load, and trusted `http_json` remote adapter |
+| Agentic RAG | Agentic retrieval strategy emits governed retrieval plan/step events and falls back through registered Knowledge Providers when planner/evaluator models are absent | Planner-driven multi-step retrieval through the shared Knowledge Retrieval Service |
 | Dashboard UI | Implemented for overview, runs, run detail, evidence, receipt, model usage, approvals, timeline, governed ReAct details, handoffs, and the Agents configuration workspace with Workflow node editing, validation, publish, and rollback | Approval Console actions, RBAC, and richer multi-agent operations |
 | Handoff Monitor | Implemented as read-only internal projection of customer handoff trace events | Filtering and richer run correlation |
 | Unified Chat UI | Implemented under `chat/` with `/operator` and `/customer` modes, Conversation API integration, governed ReAct detail display, and customer-safe API responses | Polish, multi-agent selection, production auth, and deployment packaging |

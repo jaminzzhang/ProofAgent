@@ -90,7 +90,7 @@ class RetrievalAction:
 2. `TreeIndex.from_documents()` → 用 ProofAgentLLM(ingestion_model) 生成节点摘要
 3. 持久化：LlamaIndex 原生格式 + Proof Agent 元数据 sidecar（`artifact_meta.json`）
 4. Sidecar 包含：revision_id、content_hash、ingestion_config_fingerprint、engine_version、engine_name
-5. Sidecar 是 provider-agnostic 的 artifact 元数据契约，未来其他索引引擎（如 `local_vector`）也用同一套格式
+5. Sidecar 是 provider-agnostic 的 artifact 元数据契约，未来其他本地索引引擎也应复用同一套格式；Knowledge Hub V1 不包含 `local_vector`
 
 **检索时**：
 - 单文档内：LlamaIndex `TreeSelectLeafRetriever` 做树遍历（用 ProofAgentLLM(routing_model)）
@@ -247,7 +247,7 @@ all = ["proof-agent[openai,vector,tree]"]
 - `llama-index-core` 是最小核心包，不含 `llama-index-openai` 等 LLM 集成包
 - 通过 `ProofAgentLLM` 桥接，不需要 `llama-index-openai`
 - 注意：`llama-index-core` 会引入传递依赖（tiktoken、numpy、dataclasses-json、typing-inspect 等），估计额外 ~15-20 个包
-- 不安装时 `local_index` provider 不可用，`from_config()` 报 `ProofAgentError`（与 `local_vector` 行为一致）
+- 不安装时 `local_index` provider 不可用，`from_config()` 报 `ProofAgentError`（与其他缺失可选依赖的 provider 行为一致）
 
 ### Trace 审计
 

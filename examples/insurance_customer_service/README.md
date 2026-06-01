@@ -18,5 +18,5 @@ Run the customer journey acceptance suite:
 uv run --extra dashboard --extra dev python -m pytest tests/test_customer_journeys.py -v
 ```
 
-See `docs/examples/insurance-customer-service.md` for the package layout, Customer
-Run API examples, and the PageIndex-ready variant.
+See `docs/examples/insurance-customer-service.md` for the package layout and
+Customer Run API examples.

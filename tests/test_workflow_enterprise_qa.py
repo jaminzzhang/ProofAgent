@@ -2,8 +2,6 @@ from pathlib import Path
 import json
 import shutil
 
-import pytest
-
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
@@ -60,58 +58,12 @@ def test_tool_question_handles_denied_approval(tmp_path: Path) -> None:
     assert result.outcome == "TOOL_APPROVAL_DENIED"
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-def test_agentic_retrieval_strategy_executes_with_pageindex(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test agentic retrieval with deprecated PageIndex provider.
-
-    This test validates backward compatibility for the deprecated pageindex provider.
-    New deployments should use local_index provider instead (ADR-0015).
-    """
-    def fake_post_json(
-        url: str,
-        *,
-        body: dict[str, object],
-        headers: dict[str, str],
-        timeout_seconds: float,
-    ) -> dict[str, object]:
-        return {
-            "retrieved_nodes": [
-                {
-                    "id": "travel-policy-node-1",
-                    "content": "Travel meals are reimbursed up to 50 USD per day with receipts.",
-                    "relevance_score": 0.95,
-                    "file_name": "travel-policy.pdf",
-                    "page_number": 3,
-                }
-            ],
-            "thinking": "remote retrieval reasoning is intentionally not traced",
-        }
-
-    monkeypatch.setenv("PAGEINDEX_BASE_URL", "http://127.0.0.1:8000")
-    monkeypatch.setattr("proof_agent.capabilities.knowledge.pageindex._post_json", fake_post_json)
+def test_agentic_retrieval_strategy_uses_registered_knowledge_provider(tmp_path: Path) -> None:
     example_dir = tmp_path / "enterprise_qa"
     shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), example_dir)
     manifest_path = example_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8")
-        .replace(
-            """knowledge_sources:
-  - source_id: enterprise_qa_knowledge
-    name: Enterprise QA Knowledge
-    provider: local_markdown
-    params:
-      path: ./knowledge""",
-            """knowledge_sources:
-  - source_id: enterprise_qa_knowledge
-    name: Enterprise QA PageIndex
-    provider: pageindex
-    params:
-      endpoint_env: PAGEINDEX_BASE_URL
-      document_id: doc_enterprise_policy
-      thinking: true""",
-        )
         .replace(
             """retrieval:
   strategy: single_step
@@ -142,9 +94,9 @@ def test_agentic_retrieval_strategy_executes_with_pageindex(
     assert event_types.index("retrieval_plan") < event_types.index("retrieval_step")
     retrieval_plan = next(event for event in events if event["event_type"] == "retrieval_plan")
     assert retrieval_plan["payload"]["strategy"] == "agentic"
-    assert retrieval_plan["payload"]["provider"] == "pageindex"
+    assert retrieval_plan["payload"]["provider"] == "local_markdown"
     retrieval_result = next(event for event in events if event["event_type"] == "retrieval_result")
-    assert retrieval_result["payload"]["sources"] == ["travel-policy.pdf"]
+    assert "customer-support-policy.md" in retrieval_result["payload"]["sources"][0]
 
 
 def test_react_template_executes_when_manifest_uses_react_runtime(tmp_path: Path) -> None:

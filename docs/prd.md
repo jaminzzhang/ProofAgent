@@ -15,7 +15,7 @@ The long-term vision is an enterprise-grade **Agent Control Platform**. In the c
 V1 also introduces an **Autonomous Customer Service Mode** private pilot. This mode keeps Proof Agent positioned as the reusable Controlled Agent Harness Framework while delivering a concrete Insurance Customer Service Agent for direct end-customer automatic replies. The V1 product has two deliverables:
 
 - **Agent Framework Deliverable:** customer contracts, Customer Run API, Customer-Safe Response Projection, read-only authorization boundaries, internal handoff events, and handoff monitor projections.
-- **Insurance Customer Service Agent:** `examples/insurance_customer_service/`, customer Web Chat, deterministic journey suite, local Markdown knowledge, and PageIndex-ready manifest.
+- **Insurance Customer Service Agent:** `examples/insurance_customer_service/`, customer Web Chat, deterministic journey suite, and local Markdown knowledge.
 
 ## 2. Target Audience
 

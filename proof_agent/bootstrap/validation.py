@@ -23,7 +23,7 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "audit",
 }
 
-SUPPORTED_KNOWLEDGE_PROVIDERS = {"local_markdown", "local_vector", "pageindex", "remote_search"}
+SUPPORTED_KNOWLEDGE_PROVIDERS = {"local_markdown", "local_index", "remote_search"}
 SUPPORTED_RETRIEVAL_STRATEGIES = {"single_step", "agentic"}
 SUPPORTED_MODEL_PROVIDERS = {
     "deterministic",
@@ -477,13 +477,8 @@ def _validate_knowledge_provider_params(
         path = _required_param(params, "path", provider, manifest_path, field_prefix=field_prefix)
         require_directory(Path(path), f"{field_prefix}.path", manifest_path)
         return
-    if provider == "local_vector":
-        index_path = _required_param(
-            params, "index_path", provider, manifest_path, field_prefix=field_prefix
-        )
-        _required_param(params, "collection_name", provider, manifest_path, field_prefix=field_prefix)
-        _required_param(params, "embedding_model", provider, manifest_path, field_prefix=field_prefix)
-        require_directory(Path(index_path), f"{field_prefix}.index_path", manifest_path)
+    if provider == "local_index":
+        _required_param(params, "index_path", provider, manifest_path, field_prefix=field_prefix)
         return
     if provider == "remote_search":
         _required_param(params, "endpoint_env", provider, manifest_path, field_prefix=field_prefix)
@@ -495,30 +490,6 @@ def _validate_knowledge_provider_params(
                 Path(mock_results_path), f"{field_prefix}.mock_results_path", manifest_path
             )
         return
-    if provider == "pageindex":
-        _required_param(params, "endpoint_env", provider, manifest_path, field_prefix=field_prefix)
-        _required_param(params, "document_id", provider, manifest_path, field_prefix=field_prefix)
-        timeout_seconds = params.get("timeout_seconds")
-        if timeout_seconds is not None:
-            try:
-                timeout_seconds_value = float(timeout_seconds)
-            except (TypeError, ValueError) as exc:
-                raise ProofAgentError(
-                    "PA_CONFIG_002",
-                    f"{field_prefix}.timeout_seconds must be numeric",
-                    "Set pageindex timeout_seconds to a positive number.",
-                    artifact_path=manifest_path,
-                ) from exc
-        else:
-            timeout_seconds_value = 10.0
-        if timeout_seconds_value <= 0:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                f"{field_prefix}.timeout_seconds must be greater than 0",
-                "Set pageindex timeout_seconds to a positive number.",
-                artifact_path=manifest_path,
-            )
-
 
 def _validate_retrieval_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
     retrieval = manifest.retrieval

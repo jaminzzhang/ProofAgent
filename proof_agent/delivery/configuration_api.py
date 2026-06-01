@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.capabilities.knowledge.pageindex_ingestion import ingest_pageindex_document
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
@@ -36,8 +35,7 @@ router = APIRouter(tags=["configuration"])
 
 SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS = {
     "local_markdown",
-    "local_vector",
-    "pageindex",
+    "local_index",
     "remote_search",
 }
 MAX_SOURCE_DOCUMENTS = 500
@@ -162,8 +160,6 @@ def create_knowledge_source(
     store = _get_configuration_store(app_request)
     source_id = _source_id(request.source_id or request.name)
     params = dict(request.params)
-    if request.provider == "pageindex":
-        params.setdefault("document_id", source_id)
     try:
         source = store.create_knowledge_source(
             source_id=source_id,
@@ -227,43 +223,21 @@ def upload_knowledge_source_document(
         content_type=request.content_type,
         content=content,
     )
-    if source.provider != "pageindex":
+    if source.provider != "local_index":
         raise HTTPException(
             status_code=400,
-            detail="Dashboard document upload currently supports pageindex Knowledge Sources.",
+            detail="Dashboard document upload currently supports local_index Knowledge Sources.",
         )
-
-    state = "ready"
-    provider_document_id: str | None = None
-    error_code: str | None = None
-    error_message: str | None = None
-    try:
-        ingestion = ingest_pageindex_document(
-            source=source,
-            filename=request.filename,
-            content_type=request.content_type,
-            content=content,
-        )
-        state = str(ingestion.get("state") or ingestion.get("status") or "ready").lower()
-        provider_document_id = _string_or_none(
-            ingestion.get("provider_document_id") or ingestion.get("document_id")
-        )
-        if state not in {"queued", "processing", "ready", "failed"}:
-            state = "ready"
-    except ProofAgentError as exc:
-        state = "failed"
-        error_code = exc.code
-        error_message = exc.message
 
     document = store.add_knowledge_document(
         source_id=source.source_id,
         filename=request.filename,
         content_type=request.content_type,
         content=content,
-        state=state,
-        provider_document_id=provider_document_id,
-        error_code=error_code,
-        error_message=error_message,
+        state="queued",
+        provider_document_id=None,
+        error_code=None,
+        error_message=None,
         actor=request.actor,
     )
     return _knowledge_document_payload(document)
@@ -814,9 +788,3 @@ def _validate_upload_file(*, filename: str, content_type: str, content: bytes) -
         status_code=400,
         detail="Unsupported knowledge document type. Upload PDF or Markdown.",
     )
-
-
-def _string_or_none(value: object) -> str | None:
-    if value in (None, ""):
-        return None
-    return str(value)

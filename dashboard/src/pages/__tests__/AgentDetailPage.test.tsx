@@ -184,10 +184,10 @@ describe('AgentDetailPage', () => {
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({
       data: [
         {
-          source_id: 'ks_pageindex',
-          name: 'PageIndex Policies',
-          provider: 'pageindex',
-          params: { endpoint_env: 'PAGEINDEX_BASE_URL' },
+          source_id: 'ks_local_index',
+          name: 'Local Index Policies',
+          provider: 'local_index',
+          params: { index_path: './data/indexes/policies' },
           created_at: '2026-05-31T00:00:00Z',
           updated_at: '2026-05-31T00:00:00Z',
           document_count: 1,
@@ -198,17 +198,17 @@ describe('AgentDetailPage', () => {
     })
     vi.mocked(bindKnowledgeSourceToDraft).mockResolvedValue({
       ...mockContract,
-      agent_yaml: 'name: insurance\nknowledge_sources:\n- source_id: ks_pageindex\n',
+      agent_yaml: 'name: insurance\nknowledge_sources:\n- source_id: ks_local_index\n',
     })
 
     renderPage()
     fireEvent.click(screen.getByText('Knowledge'))
-    expect(await screen.findByText('PageIndex Policies')).toBeInTheDocument()
+    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Bind Source' }))
 
     await waitFor(() => {
       expect(bindKnowledgeSourceToDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
-        source_id: 'ks_pageindex',
+        source_id: 'ks_local_index',
         alias: '',
         failure_mode: 'required',
         fusion_weight: 1,

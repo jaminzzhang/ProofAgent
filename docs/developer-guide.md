@@ -123,7 +123,7 @@ Core boundaries:
 | Entry | CLI, Docker demo, Run Execution API, Dashboard API |
 | Workflow template | `enterprise_qa`, `react_enterprise_qa` |
 | Runtime config | `workflow.runtime: langgraph`; Enterprise QA and Controlled ReAct Enterprise QA run through LangGraph `StateGraph` templates using composed Harness dependencies |
-| Knowledge | Source-owned `knowledge_sources[]` plus Agent `knowledge_bindings[]`; local Markdown, vector, remote search, and PageIndex adapters |
+| Knowledge | Source-owned Knowledge Sources plus Agent `knowledge_bindings[]`; `local_markdown` for deterministic/dev fixtures, `local_index` for published local indexes, and trusted remote adapters such as `http_json` |
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
 | Model | `deterministic`, `openai_compatible`, `openai`, and `deepseek` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
 | Policy | `before_retrieval`, `before_retrieval_plan`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
@@ -144,7 +144,7 @@ The v1 deterministic path must always operate without requiring API keys, networ
 - insurance-specific customer resource routing through `customer_adapter.py`
 - customer-safe responses through `/api/customer/...`
 - internal handoffs through `/api/handoffs`
-- PageIndex configuration through `agent.pageindex.yaml`
+- governed knowledge configuration through Knowledge Hub Sources and Agent Knowledge Bindings
 
 Customer-specific policy and claim status require `customer_id` on conversation creation. Anonymous sessions can ask generic policy questions but receive sign-in wording for account data.
 
@@ -206,7 +206,7 @@ audit:
 Current v1 config constraints:
 - `workflow.runtime` must be `langgraph`.
 - `workflow.template` must be `enterprise_qa` or `react_enterprise_qa`.
-- each `knowledge_sources[].provider` must be one of `local_markdown`, `local_vector`, `remote_search`, or `pageindex`.
+- target Knowledge Hub V1 providers are `local_markdown`, `local_index`, and trusted remote adapters such as `http_json`; `pageindex` and `local_vector` are outside the target provider set.
 - `knowledge_bindings[]` may bind one or more declared Source ids; provider params stay Source-owned.
 - `retrieval.strategy` supports `single_step` and `agentic`.
 - `memory.provider` must be `session`.
@@ -330,31 +330,30 @@ Planner and reviewer outputs are parsed as Harness JSON contracts before they af
 
 Remote model smoke checks are opt-in. They are not part of the deterministic demo or default CI gate.
 
-PageIndex self-hosted retrieval can be used as a remote agentic evidence source while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation:
+Knowledge Hub separates local indexed knowledge from remote retrieval adapters while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation.
+
+For production local knowledge, create a `local_index` Knowledge Source through Knowledge Hub ingestion. Local index artifacts are built before Source publication and runtime loads only the published READY snapshot:
 
 ```yaml
 knowledge_sources:
-  - source_id: enterprise_pageindex
-    name: Enterprise PageIndex
-    provider: pageindex
+  - source_id: enterprise_policy
+    name: Enterprise Policy Knowledge
+    provider: local_index
     params:
-      endpoint_env: PAGEINDEX_BASE_URL
-      document_id: doc_enterprise_policy
-      thinking: true
-      timeout_seconds: 10
+      index_path: ./data/indexes/enterprise_policy
 
 knowledge_bindings:
-  - binding_id: enterprise_pageindex_binding
-    source_id: enterprise_pageindex
+  - binding_id: enterprise_policy_binding
+    source_id: enterprise_policy
 
 retrieval:
   strategy: agentic
   top_k: 5
   min_score: 0.2
-  max_steps: 3
+  max_rounds: 3
 ```
 
-For a default local PageIndex deployment, set `PAGEINDEX_BASE_URL=http://127.0.0.1:8000`. If the deployment requires auth, add `api_key_env: PAGEINDEX_API_KEY` under the PageIndex Source params and set that environment variable.
+For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
 
 ## 6. Configuring the Control Plane
 
@@ -472,14 +471,14 @@ retrieval:
   min_score: 0.2
 ```
 
-When extending vector or enterprise search:
-- Provider must return candidate `EvidenceChunk`.
-- Provider-specific config belongs under `knowledge_sources[].params` or the Dashboard Knowledge Source store.
+When extending local indexed knowledge or remote retrieval:
+- Provider Adapter must return candidate `EvidenceChunk`.
+- Provider-specific config belongs to Knowledge Sources or the Dashboard Knowledge Source store.
 - Agents bind shared Sources through `knowledge_bindings[]`; they do not own provider credentials or ingestion settings.
 - `top_k` and `min_score` belong under `retrieval`.
 - Retrieval cannot determine the final answer.
 - Whether evidence is sufficient is determined by evaluators, PolicyEngine, and validators.
-- Vector database SDK types must not enter contracts.
+- Provider SDK types must not enter contracts.
 
 ### Memory
 Current v1 uses session memory:
@@ -715,7 +714,7 @@ When adding new capabilities, first determine which layer it belongs to:
 | Need | Extension point |
 | --- | --- |
 | New model provider | Capability Layer: ModelProvider adapter |
-| New knowledge or vector base | Capability Layer: KnowledgeProvider adapter |
+| New knowledge provider | Capability Layer: KnowledgeProvider adapter |
 | New tool or MCP server | Capability Layer: ToolGateway adapter |
 | New approval mechanism | Control Plane: ApprovalState / approval provider |
 | New Agent state machine | Runtime Plane: LangGraph/LangChain runtime adapter |

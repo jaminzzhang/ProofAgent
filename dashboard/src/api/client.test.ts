@@ -70,7 +70,7 @@ test('knowledge source client methods use shared source endpoints', async () => 
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ source_id: 'ks_pageindex' }), {
+      new Response(JSON.stringify({ source_id: 'ks_local_index' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
@@ -84,13 +84,13 @@ test('knowledge source client methods use shared source endpoints', async () => 
 
   await fetchKnowledgeSources()
   await createKnowledgeSource({
-    source_id: 'ks_pageindex',
-    name: 'PageIndex Policies',
-    provider: 'pageindex',
-    params: { endpoint_env: 'PAGEINDEX_BASE_URL', document_id: 'policies' },
+    source_id: 'ks_local_index',
+    name: 'Local Index Policies',
+    provider: 'local_index',
+    params: { index_path: './data/indexes/policies' },
     actor: 'dashboard',
   })
-  await uploadKnowledgeDocument('ks_pageindex', {
+  await uploadKnowledgeDocument('ks_local_index', {
     filename: 'travel-policy.pdf',
     content_type: 'application/pdf',
     content_base64: 'JVBERi0xLjQ=',
@@ -100,7 +100,7 @@ test('knowledge source client methods use shared source endpoints', async () => 
   expect(fetchMock.mock.calls[0][0]).toBe('/api/config/knowledge-sources')
   expect(fetchMock.mock.calls[1][0]).toBe('/api/config/knowledge-sources')
   expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' })
-  expect(fetchMock.mock.calls[2][0]).toBe('/api/config/knowledge-sources/ks_pageindex/documents')
+  expect(fetchMock.mock.calls[2][0]).toBe('/api/config/knowledge-sources/ks_local_index/documents')
   expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: 'POST' })
 })
 
@@ -113,7 +113,7 @@ test('bindKnowledgeSourceToDraft posts a shared source binding request', async (
   )
 
   await bindKnowledgeSourceToDraft('enterprise_qa', 'draft_1', {
-    source_id: 'ks_pageindex',
+    source_id: 'ks_local_index',
     alias: 'policies',
     failure_mode: 'advisory',
     fusion_weight: 0.75,
@@ -127,7 +127,7 @@ test('bindKnowledgeSourceToDraft posts a shared source binding request', async (
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        source_id: 'ks_pageindex',
+        source_id: 'ks_local_index',
         alias: 'policies',
         failure_mode: 'advisory',
         fusion_weight: 0.75,

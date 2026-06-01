@@ -1,0 +1,5 @@
+# Knowledge Hub V1 Provider Set
+
+Knowledge Hub V1 supports `local_markdown` for deterministic development fixtures, `local_index` for production local indexed knowledge, and trusted remote adapters such as `http_json`. It removes `pageindex` and `local_vector` from the target provider set so production knowledge retrieval goes through either published LlamaIndex-backed local snapshots or governed remote adapter normalization, preserving a clearer Control Envelope and avoiding compatibility paths that would weaken ReAct retrieval stability.
+
+Implementation should remove legacy provider entries before adding new orchestration: first clean contracts, loader validation, examples, fixtures, and registry entries; then introduce the Control Plane Knowledge Retrieval Service; then complete `local_index` READY snapshot runtime load; then add the trusted `http_json` adapter; then route Enterprise QA and Controlled ReAct through the shared service with focused trace, receipt, and regression coverage.

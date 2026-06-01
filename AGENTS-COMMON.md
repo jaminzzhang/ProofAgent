@@ -48,7 +48,7 @@ Current known gaps and extension directions:
 - LangGraph runtime exists; production checkpoint interrupt/resume and streaming hooks are still future work.
 - Real MCP stdio/HTTP transport is not implemented; mock tools prove the approval contract.
 - `openai_compatible` is implemented; Azure OpenAI and Anthropic providers are clean-failure placeholders.
-- Local vector retrieval can query existing indexes; index build lifecycle and broader vector adapters are future work.
+- Knowledge Hub V1 targets `local_markdown`, `local_index`, and trusted remote adapters such as `http_json`; `pageindex` and `local_vector` are historical provider paths removed from active code.
 - Dashboard and Chat SPAs exist; production Approval Console, RBAC, hosted compliance, and multi-agent management are future work.
 
 ## Source Of Truth

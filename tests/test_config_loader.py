@@ -79,6 +79,107 @@ audit:
     assert manifest.knowledge_bindings[0].top_k == 2
 
 
+@pytest.mark.parametrize("legacy_provider", ["pageindex", "local_vector"])
+def test_legacy_knowledge_providers_are_rejected(tmp_path: Path, legacy_provider: str) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "index").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml.write_text(
+        f"""
+name: legacy_provider
+purpose: "Legacy provider should be rejected."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+knowledge_sources:
+  - source_id: ks_legacy
+    name: Legacy Knowledge
+    provider: {legacy_provider}
+    params:
+      endpoint_env: PAGEINDEX_BASE_URL
+      document_id: doc_enterprise_policy
+      index_path: ./index
+      collection_name: legacy
+      embedding_model: all-MiniLM-L6-v2
+knowledge_bindings:
+  - binding_id: kb_legacy
+    source_id: ks_legacy
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_KNOWLEDGE_001"
+    assert f"unsupported knowledge provider: {legacy_provider}" in exc.value.message
+    assert "local_index" in exc.value.fix
+    assert "pageindex" not in exc.value.fix
+    assert "local_vector" not in exc.value.fix
+
+
+def test_local_index_knowledge_source_loads_with_index_path(tmp_path: Path) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml.write_text(
+        """
+name: local_index_manifest
+purpose: "Local index source config."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+knowledge_sources:
+  - source_id: ks_local_index
+    name: Local Index Knowledge
+    provider: local_index
+    params:
+      index_path: ./indexes/policies
+knowledge_bindings:
+  - binding_id: kb_local_index
+    source_id: ks_local_index
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.knowledge_sources[0].provider == "local_index"
+    assert manifest.knowledge_sources[0].params["index_path"] == (
+        tmp_path / "indexes" / "policies"
+    ).resolve()
+
+
 def test_inline_knowledge_provider_is_rejected_after_direct_migration(tmp_path: Path) -> None:
     agent_yaml = tmp_path / "agent.yaml"
     (tmp_path / "knowledge").mkdir()

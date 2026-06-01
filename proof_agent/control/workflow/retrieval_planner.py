@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+from proof_agent.contracts import ModelMessage, ModelRequest, ModelRole
 from proof_agent.contracts.evidence import EvidenceChunk
-from proof_agent.errors import ProofAgentError
 
 
 if TYPE_CHECKING:
@@ -39,7 +39,7 @@ class RetrievalResult:
 class KnowledgeProviderProtocol(Protocol):
     """Protocol for knowledge provider."""
 
-    def retrieve(self, query: str) -> list[EvidenceChunk]:
+    def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         """Retrieve evidence for query."""
         ...
 
@@ -47,7 +47,7 @@ class KnowledgeProviderProtocol(Protocol):
 class ModelProtocol(Protocol):
     """Protocol for LLM model."""
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, request: Any) -> Any:
         """Generate response for prompt."""
         ...
 
@@ -109,8 +109,8 @@ class RetrievalPlanner:
 
             # Execute retrieval
             try:
-                candidates = self.knowledge_provider.retrieve(current_query)
-            except Exception as exc:
+                candidates = tuple(self.knowledge_provider.retrieve(current_query))
+            except Exception:
                 # Provider failure: return accumulated evidence
                 return RetrievalResult(
                     evidence=tuple(all_evidence),
@@ -124,9 +124,9 @@ class RetrievalPlanner:
             # Evaluate evidence sufficiency
             try:
                 evaluation_prompt = self._build_evaluation_prompt(question, all_evidence)
-                evaluation_response = self.evaluator_model.generate(evaluation_prompt)
+                evaluation_response = self._generate_text(self.evaluator_model, evaluation_prompt)
                 evaluation = json.loads(evaluation_response)
-            except Exception as exc:
+            except Exception:
                 # Evaluator failure: return accumulated evidence
                 return RetrievalResult(
                     evidence=tuple(all_evidence),
@@ -140,12 +140,12 @@ class RetrievalPlanner:
                 action_prompt = self._build_action_prompt(
                     question, current_query, candidates, evaluation
                 )
-                action_response = self.planner_model.generate(action_prompt)
+                action_response = self._generate_text(self.planner_model, action_prompt)
                 action_plan = json.loads(action_response)
                 action = action_plan.get("action", "sufficient")
                 reason = action_plan.get("reason", "")
                 new_query = action_plan.get("new_query", "")
-            except Exception as exc:
+            except Exception:
                 # Planner failure: return accumulated evidence
                 return RetrievalResult(
                     evidence=tuple(all_evidence),
@@ -235,7 +235,7 @@ Consider:
         self,
         question: str,
         current_query: str,
-        candidates: list[EvidenceChunk],
+        candidates: tuple[EvidenceChunk, ...],
         evaluation: dict[str, Any],
     ) -> str:
         """Build prompt for action planning.
@@ -276,3 +276,26 @@ Guidelines:
 - If no evidence was found and query seems reasonable, choose "abort"
 - If evidence is partial or off-topic, choose "rewrite" with a more specific query
 """
+
+    def _generate_text(self, model: ModelProtocol, prompt: str) -> str:
+        """Call either a simple test model or a governed ModelProvider and return text."""
+
+        provider_name = getattr(model, "provider_name", None)
+        model_name = getattr(model, "model_name", None)
+        if isinstance(provider_name, str) and isinstance(model_name, str):
+            response = model.generate(
+                ModelRequest(
+                    messages=(ModelMessage(role=ModelRole.USER, content=prompt),),
+                    provider=provider_name,
+                    model=model_name,
+                    response_format="json",
+                )
+            )
+        else:
+            response = model.generate(prompt)
+        if isinstance(response, str):
+            return response
+        content = getattr(response, "content", None)
+        if isinstance(content, str):
+            return content
+        return str(response)

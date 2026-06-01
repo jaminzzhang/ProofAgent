@@ -1,10 +1,10 @@
 # PageIndex to LocalIndex Migration Guide
 
-This guide helps you migrate from the deprecated `pageindex` provider to the new `local_index` provider introduced in ADR-0015.
+This guide helps you migrate from the removed `pageindex` provider to the `local_index` provider introduced in ADR-0015.
 
 ## Overview
 
-The `pageindex` provider has been deprecated in favor of `local_index`, which provides:
+The `pageindex` provider has been removed from active code in favor of `local_index`, which provides:
 - **Agentic retrieval** with multi-round planning and evaluation
 - **Local TreeIndex** using LlamaIndex for hierarchical document retrieval
 - **Structured retrieval** with `list_structure()` and `retrieve_at_scope()` capabilities
@@ -12,7 +12,7 @@ The `pageindex` provider has been deprecated in favor of `local_index`, which pr
 
 ## Key Differences
 
-| Feature | `pageindex` (Deprecated) | `local_index` (New) |
+| Feature | `pageindex` (Removed) | `local_index` |
 |---------|-------------------------|---------------------|
 | Architecture | Remote API calls | Local LlamaIndex TreeIndex |
 | Retrieval Strategy | Single-step only | Single-step + Agentic multi-round |
@@ -152,15 +152,14 @@ evidence = provider.retrieve_at_scope(
 
 ## Troubleshooting
 
-### Deprecation Warnings
+### Removed Provider Errors
 
-If you see deprecation warnings:
+If a manifest or Knowledge Source still uses `pageindex`, active configuration now fails closed:
 ```
-DeprecationWarning: PageIndexProvider is deprecated as of ADR-0015.
-Use LocalIndexProvider (provider='local_index') instead.
+PA_KNOWLEDGE_001: unsupported knowledge provider: pageindex
 ```
 
-This is expected. Follow the migration steps above to switch to `local_index`.
+Follow the migration steps above to switch to `local_index` and republish affected Agent versions.
 
 ### Index Build Failures
 
@@ -180,9 +179,8 @@ If retrieval returns empty results:
 
 ## Timeline
 
-- **Current**: `pageindex` deprecated with warnings
-- **Next Release**: `pageindex` removed from codebase
-- **Migration Deadline**: Complete migration before next major release
+- **Current**: `pageindex` is removed from active code and rejected by configuration validation
+- **Migration Deadline**: Complete migration before publishing affected Agent versions
 
 ## Support
 

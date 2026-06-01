@@ -68,76 +68,25 @@ def test_remote_search_fixture_normalizes_results(tmp_path: Path) -> None:
     assert chunks[0].metadata["document_id"] == "travel-policy"
 
 
-def test_pageindex_provider_normalizes_retrieved_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[dict[str, object]] = []
+def test_legacy_pageindex_and_local_vector_providers_are_not_registered() -> None:
+    for provider_name in ("pageindex", "local_vector"):
+        with pytest.raises(ProofAgentError) as exc:
+            resolve_knowledge_provider(
+                KnowledgeConfig(
+                    provider=provider_name,
+                    params={
+                        "endpoint_env": "PAGEINDEX_BASE_URL",
+                        "document_id": "doc_enterprise_policy",
+                        "index_path": "/tmp/vector",
+                        "collection_name": "legacy",
+                    },
+                )
+            )
 
-    def fake_post_json(
-        url: str,
-        *,
-        body: dict[str, object],
-        headers: dict[str, str],
-        timeout_seconds: float,
-    ) -> dict[str, object]:
-        calls.append(
-            {
-                "url": url,
-                "body": body,
-                "headers": headers,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
-        return {
-            "retrieved_nodes": [
-                {
-                    "id": "node-1",
-                    "content": "Travel meals are reimbursed with itemized receipts.",
-                    "relevance_score": 0.91,
-                    "file_name": "travel-policy.pdf",
-                    "page_number": 12,
-                }
-            ],
-            "thinking": "remote retrieval reasoning is intentionally not stored as evidence",
-        }
-
-    monkeypatch.setenv("PAGEINDEX_BASE_URL", "http://127.0.0.1:8000")
-    monkeypatch.setattr("proof_agent.capabilities.knowledge.pageindex._post_json", fake_post_json)
-    provider = resolve_knowledge_provider(
-        KnowledgeConfig(
-            provider="pageindex",
-            params={
-                "endpoint_env": "PAGEINDEX_BASE_URL",
-                "document_id": "doc_enterprise_policy",
-                "thinking": True,
-                "timeout_seconds": 3,
-            },
-        )
-    )
-
-    chunks = provider.retrieve("travel meal reimbursement", top_k=1)
-
-    assert len(chunks) == 1
-    assert chunks[0].status == EvidenceStatus.CANDIDATE
-    assert chunks[0].source == "travel-policy.pdf"
-    assert chunks[0].provider_native_score == 0.91
-    assert chunks[0].admission_score == 0.91
-    assert chunks[0].citation == "travel-policy.pdf#page-12"
-    assert chunks[0].metadata["provider"] == "pageindex"
-    assert chunks[0].metadata["document_id"] == "doc_enterprise_policy"
-    assert chunks[0].metadata["node_id"] == "node-1"
-    assert "thinking" not in chunks[0].metadata
-    assert calls == [
-        {
-            "url": "http://127.0.0.1:8000/api/v1/retrieval/retrieve",
-            "body": {
-                "query": "travel meal reimbursement",
-                "document_id": "doc_enterprise_policy",
-                "top_k": 1,
-                "thinking": True,
-            },
-            "headers": {"Content-Type": "application/json"},
-            "timeout_seconds": 3.0,
-        }
-    ]
+        assert exc.value.code == "PA_KNOWLEDGE_001"
+        assert "local_index" in exc.value.fix
+        assert "pageindex" not in exc.value.fix
+        assert "local_vector" not in exc.value.fix
 
 
 def test_unknown_knowledge_provider_fails() -> None:

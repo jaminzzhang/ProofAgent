@@ -139,7 +139,7 @@ The supported v1 model providers are:
 
 Provider settings live under `model.params`. They may name environment variables such as `api_key_env`, `base_url_env`, `organization_env`, or `project_env`, but must not contain raw secret values.
 
-Knowledge provider settings live on `knowledge_sources[].params` and in the Dashboard Knowledge Source store. Supported provider names are `local_markdown`, `local_vector`, `remote_search`, and `pageindex`. Agents bind one or more Sources through `knowledge_bindings[]`; they do not own provider credentials or ingestion settings. Retrieval settings such as `strategy`, `top_k`, `min_score`, and `max_steps` live under the required top-level `retrieval` section. Executable runs blend bound Sources, normalize candidate evidence, and then apply admission and citation validation before any answer is generated. The `pageindex` provider uses a PageIndex deployment for retrieval and still returns candidate evidence only.
+Knowledge provider settings live on `knowledge_sources[].params` and in the Dashboard Knowledge Source store. Active provider names are `local_markdown`, `local_index`, and trusted remote adapters; the current fixture remote adapter is `remote_search` until `http_json` is implemented. Agents bind one or more Sources through `knowledge_bindings[]`; they do not own provider credentials or ingestion settings. Retrieval settings such as `strategy`, `top_k`, `min_score`, and `max_steps` live under the required top-level `retrieval` section. Executable runs blend bound Sources, normalize candidate evidence, and then apply admission and citation validation before any answer is generated. `pageindex` and `local_vector` are historical provider paths and are rejected by active configuration.
 
 ## ReAct Section
 
@@ -252,6 +252,5 @@ The contract is part of trust. If configuration is ambiguous, the Agent should n
 - `tools.yaml` plus local handlers for policy-authorized read-only status tools
 - `customer_adapter.py` for insurance-specific Customer Run Adapter behavior
 - `journeys.yaml` for customer journey acceptance
-- `agent.pageindex.yaml` for the PageIndex knowledge variant
 
 Customer API callers still reference a Published Agent id. They must not submit arbitrary manifest paths.

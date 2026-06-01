@@ -9,7 +9,7 @@ import type { KnowledgeDocument, KnowledgeSource } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 
-const DEFAULT_PAGEINDEX_ENDPOINT_ENV = 'PAGEINDEX_BASE_URL'
+const DEFAULT_LOCAL_INDEX_PATH = './data/indexes/knowledge'
 
 export function KnowledgePage() {
   const [sources, setSources] = useState<readonly KnowledgeSource[]>([])
@@ -19,10 +19,9 @@ export function KnowledgePage() {
   const [status, setStatus] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = useState<string | null>(null)
-  const [name, setName] = useState('PageIndex Knowledge')
+  const [name, setName] = useState('Local Index Knowledge')
   const [sourceId, setSourceId] = useState('')
-  const [endpointEnv, setEndpointEnv] = useState(DEFAULT_PAGEINDEX_ENDPOINT_ENV)
-  const [documentId, setDocumentId] = useState('')
+  const [indexPath, setIndexPath] = useState(DEFAULT_LOCAL_INDEX_PATH)
 
   async function loadSources() {
     const { data } = await fetchKnowledgeSources()
@@ -58,19 +57,15 @@ export function KnowledgePage() {
       const source = await createKnowledgeSource({
         source_id: sourceId || undefined,
         name,
-        provider: 'pageindex',
+        provider: 'local_index',
         params: {
-          endpoint_env: endpointEnv,
-          document_id: documentId || sourceId || undefined,
-          retrieval_path: '/api/v1/retrieval/retrieve',
-          ingestion_path: '/api/v1/documents/ingest',
-          timeout_seconds: 30,
+          index_path: indexPath,
         },
         actor: 'dashboard',
       })
       setStatus(`Created ${source.name}.`)
       setSourceId('')
-      setDocumentId('')
+      setIndexPath(DEFAULT_LOCAL_INDEX_PATH)
       await loadSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create knowledge source.')
@@ -134,22 +129,21 @@ export function KnowledgePage() {
       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
         <div className="mb-4">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Create PageIndex Source
+            Create Local Index Source
           </h3>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Upload PDF or Markdown into a PageIndex-backed RAG source. Secrets stay as env-var names.
+            Upload PDF or Markdown into a governed local index source. Index build runs before publication.
           </p>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <TextField label="Name" value={name} onChange={setName} />
           <TextField label="Source ID" value={sourceId} onChange={setSourceId} placeholder="ks_policies" />
-          <TextField label="Endpoint Env" value={endpointEnv} onChange={setEndpointEnv} />
-          <TextField label="PageIndex Document ID" value={documentId} onChange={setDocumentId} placeholder="defaults to Source ID" />
+          <TextField label="Index Path" value={indexPath} onChange={setIndexPath} />
         </div>
         <div className="mt-4 flex justify-end">
           <button
             onClick={createSource}
-            disabled={busy === 'create' || !name.trim() || !endpointEnv.trim()}
+            disabled={busy === 'create' || !name.trim() || !indexPath.trim()}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
             {busy === 'create' ? 'Creating...' : 'Create Source'}
@@ -194,7 +188,7 @@ export function KnowledgePage() {
                   <div className="space-y-4 border-t border-[var(--border)] px-5 py-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="text-sm text-[var(--text-muted)]">
-                        Upload PDF or Markdown. The backend validates content and calls PageIndex ingestion.
+                        Upload PDF or Markdown. The backend validates content and stages it for Local Index ingestion.
                       </div>
                       <label className="cursor-pointer rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]">
                         {busy === `upload-${source.source_id}` ? 'Uploading...' : 'Upload Document'}

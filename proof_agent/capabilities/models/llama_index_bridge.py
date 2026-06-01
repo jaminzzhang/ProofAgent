@@ -15,7 +15,7 @@ from llama_index.core.base.llms.types import (
 )
 from llama_index.core.llms import CustomLLM, MessageRole
 
-from proof_agent.contracts import ModelCallRole, ModelMessage, ModelRequest, ModelResponse
+from proof_agent.contracts import ModelCallRole, ModelMessage, ModelRequest, ModelResponse, ModelRole
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.models.protocol import ModelProvider
@@ -23,10 +23,10 @@ if TYPE_CHECKING:
 
 # Mapping from LlamaIndex MessageRole to Proof Agent ModelRole
 _ROLE_MAP = {
-    MessageRole.SYSTEM: "system",
-    MessageRole.USER: "user",
-    MessageRole.ASSISTANT: "assistant",
-    MessageRole.TOOL: "tool",
+    MessageRole.SYSTEM: ModelRole.SYSTEM,
+    MessageRole.USER: ModelRole.USER,
+    MessageRole.ASSISTANT: ModelRole.ASSISTANT,
+    MessageRole.TOOL: ModelRole.TOOL,
 }
 
 
@@ -131,7 +131,7 @@ class ProofAgentLLM(CustomLLM):
             CompletionResponse with generated text and metadata
         """
         # Convert prompt to ModelRequest
-        message = ModelMessage(role="user", content=prompt)
+        message = ModelMessage(role=ModelRole.USER, content=prompt)
         request = ModelRequest(
             messages=(message,),
             provider=self._provider.provider_name,
