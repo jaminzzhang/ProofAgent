@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.validation import validate_secret_safe_params
 from proof_agent.errors import ProofAgentError
 
 
@@ -165,3 +166,32 @@ def test_model_config_rejects_secret_looking_params(tmp_path: Path) -> None:
         )
 
     assert exc.value.code == "PA_SECRET_001"
+
+
+def test_recursive_secret_safe_params_reject_nested_raw_credentials() -> None:
+    with pytest.raises(ProofAgentError) as exc:
+        validate_secret_safe_params(
+            {
+                "ingestion_model": {
+                    "provider": "openai",
+                    "params": {"api_key": "sk-do-not-echo"},
+                }
+            },
+            field_prefix="knowledge_sources[ks_policy].params",
+        )
+
+    assert exc.value.code == "PA_SECRET_001"
+    assert "knowledge_sources[ks_policy].params.ingestion_model.params.api_key" in exc.value.message
+    assert "sk-do-not-echo" not in str(exc.value)
+
+
+def test_recursive_secret_safe_params_allow_nested_environment_references() -> None:
+    validate_secret_safe_params(
+        {
+            "ingestion_model": {
+                "provider": "openai",
+                "params": {"api_key_env": "OPENAI_API_KEY"},
+            }
+        },
+        field_prefix="knowledge_sources[ks_policy].params",
+    )

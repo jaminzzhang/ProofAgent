@@ -491,6 +491,7 @@ def _validate_knowledge_provider_params(
             )
         return
 
+
 def _validate_retrieval_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
     retrieval = manifest.retrieval
     if retrieval.strategy not in SUPPORTED_RETRIEVAL_STRATEGIES:
@@ -545,19 +546,44 @@ def _required_param(
 
 
 def _reject_secret_knowledge_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    forbidden = sorted(
-        f"{source.source_id}.{key}"
-        for source in manifest.knowledge_sources
-        for key in source.params
-        if _is_forbidden_knowledge_param(str(key))
-    )
+    for source in manifest.knowledge_sources:
+        validate_secret_safe_params(
+            source.params,
+            field_prefix=f"knowledge_sources[{source.source_id}].params",
+            artifact_path=manifest_path,
+        )
+
+
+def validate_secret_safe_params(
+    params: Mapping[str, Any],
+    *,
+    field_prefix: str,
+    artifact_path: Path | str | None = None,
+) -> None:
+    """Reject nested raw credential fields while allowing environment-variable references."""
+
+    forbidden = sorted(_secret_bearing_field_paths(params, field_prefix=field_prefix))
     if forbidden:
         raise ProofAgentError(
             "PA_SECRET_001",
-            f"knowledge_sources[].params contains secret-bearing field(s): {', '.join(forbidden)}",
-            "Store secrets in environment variables and reference only *_env names in agent.yaml.",
-            artifact_path=manifest_path,
+            f"{field_prefix} contains secret-bearing field(s): {', '.join(forbidden)}",
+            "Store secrets in environment variables and reference only *_env names.",
+            artifact_path=artifact_path,
         )
+
+
+def _secret_bearing_field_paths(value: Any, *, field_prefix: str) -> tuple[str, ...]:
+    paths: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            path = f"{field_prefix}.{key}"
+            if _is_forbidden_knowledge_param(str(key)):
+                paths.append(path)
+            paths.extend(_secret_bearing_field_paths(item, field_prefix=path))
+    elif isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            paths.extend(_secret_bearing_field_paths(item, field_prefix=f"{field_prefix}[{index}]"))
+    return tuple(paths)
 
 
 def _is_forbidden_knowledge_param(key: str) -> bool:
