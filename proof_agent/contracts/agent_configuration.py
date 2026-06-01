@@ -158,8 +158,87 @@ class KnowledgeDocument(FrozenModel):
     state: str
     storage_path: str
     provider_document_id: str | None = None
+    ingestion_job_id: str | None = None
+    artifact_path: str | None = None
     error_code: str | None = None
     error_message: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class KnowledgeArtifactBuildSpec(FrozenModel):
+    """Immutable artifact-affecting inputs frozen when one ingestion job is created."""
+
+    provider: str
+    engine_name: str
+    engine_version: str
+    parser_fingerprint_identity: str
+    content_hash: str
+    parsed_text_sha256: str
+    declared_ingestion_model: Mapping[str, Any] | None = None
+
+    @field_validator("declared_ingestion_model", mode="after")
+    @classmethod
+    def freeze_declared_ingestion_model(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("declared_ingestion_model")
+    def serialize_declared_ingestion_model(
+        self, value: Mapping[str, Any] | None
+    ) -> dict[str, Any] | None:
+        return cast(dict[str, Any] | None, _jsonable(value))
+
+
+class QuarantinedKnowledgeUpload(FrozenModel):
+    """Persisted operator-upload intake record awaiting asynchronous validation."""
+
+    upload_id: str
+    source_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    storage_path: str
+    state: str
+    attempt_count: int = 0
+    claimed_at: str | None = None
+    claim_token: str | None = None
+    lease_expires_at: str | None = None
+    completed_at: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    promoted_document_id: str | None = None
+    promoted_revision_id: str | None = None
+    ingestion_job_id: str | None = None
+    expires_at: str | None = None
+    purged_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class KnowledgeIngestionJob(FrozenModel):
+    """Persisted single-revision Local Index artifact-build task."""
+
+    job_id: str
+    source_id: str
+    document_id: str
+    revision_id: str
+    state: str
+    attempt_count: int = 0
+    auto_retry_count: int = 0
+    max_auto_retries: int = 2
+    ingestion_config_fingerprint: str
+    artifact_build_spec: KnowledgeArtifactBuildSpec
+    artifact_path: str | None = None
+    claimed_at: str | None = None
+    claim_token: str | None = None
+    lease_expires_at: str | None = None
+    completed_at: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    last_error_code: str | None = None
+    last_error_message: str | None = None
+    last_failure_classification: str | None = None
+    next_attempt_at: str | None = None
     created_at: str
     updated_at: str
 

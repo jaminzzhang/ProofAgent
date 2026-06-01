@@ -12,10 +12,15 @@ from proof_agent.contracts import (
     ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
+    KnowledgeArtifactBuildSpec,
+    KnowledgeDocument,
+    KnowledgeIngestionJob,
     KnowledgeSource,
+    QuarantinedKnowledgeUpload,
     PublishedAgentVersion,
     ToolSource,
 )
+from proof_agent.errors import ErrorCode
 
 
 def _contract_bundle() -> ContractBundle:
@@ -149,7 +154,10 @@ def test_configuration_operation_audit_is_json_serializable() -> None:
     payload = audit.model_dump(mode="json")
 
     assert payload["operation"] == "imported"
-    assert payload["metadata"]["source_path"] == "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"
+    assert (
+        payload["metadata"]["source_path"]
+        == "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"
+    )
 
 
 def test_configuration_contracts_are_frozen() -> None:
@@ -167,3 +175,85 @@ def test_configuration_contracts_are_frozen() -> None:
 
     with pytest.raises(ValidationError):
         draft.display_name = "Changed"  # type: ignore[misc]
+
+
+def test_knowledge_ingestion_task_contracts_are_frozen_and_json_serializable() -> None:
+    upload = QuarantinedKnowledgeUpload(
+        upload_id="upload_001",
+        source_id="ks_policy",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        size_bytes=1024,
+        storage_path="knowledge_sources/ks_policy/quarantined_uploads/upload_001/original-upload.bin",
+        state="queued",
+        created_at="2026-06-01T00:00:00Z",
+        updated_at="2026-06-01T00:00:00Z",
+    )
+    build_spec = KnowledgeArtifactBuildSpec(
+        provider="local_index",
+        engine_name="llama-index-tree",
+        engine_version="llama-index-tree@0.14.22",
+        parser_fingerprint_identity="pypdf:v1@6.12.2",
+        content_hash="original-sha256",
+        parsed_text_sha256="parsed-text-sha256",
+        declared_ingestion_model={
+            "provider": "openai",
+            "name": "gpt-4.1-mini",
+            "params": {"api_key_env": "OPENAI_API_KEY"},
+        },
+    )
+    job = KnowledgeIngestionJob(
+        job_id="job_001",
+        source_id="ks_policy",
+        document_id="doc_001",
+        revision_id="rev_001",
+        state="queued",
+        ingestion_config_fingerprint="fingerprint",
+        artifact_build_spec=build_spec,
+        created_at="2026-06-01T00:00:00Z",
+        updated_at="2026-06-01T00:00:00Z",
+    )
+
+    assert upload.attempt_count == 0
+    assert upload.claim_token is None
+    assert upload.lease_expires_at is None
+    assert job.attempt_count == 0
+    assert job.auto_retry_count == 0
+    assert job.max_auto_retries == 2
+    assert job.artifact_path is None
+    assert job.claimed_at is None
+    assert job.completed_at is None
+    assert job.model_dump(mode="json")["artifact_build_spec"]["engine_version"] == (
+        "llama-index-tree@0.14.22"
+    )
+
+    with pytest.raises(ValidationError):
+        upload.state = "processing"  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        job.state = "processing"  # type: ignore[misc]
+
+
+def test_knowledge_document_defaults_ingestion_job_and_artifact_reference() -> None:
+    document = KnowledgeDocument(
+        document_id="doc_001",
+        source_id="ks_policy",
+        revision_id="rev_001",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        content_hash="original-sha256",
+        size_bytes=1024,
+        state="queued",
+        storage_path="knowledge_sources/ks_policy/documents/doc_001/revisions/rev_001/original.bin",
+        created_at="2026-06-01T00:00:00Z",
+        updated_at="2026-06-01T00:00:00Z",
+    )
+
+    assert document.ingestion_job_id is None
+    assert document.artifact_path is None
+
+
+def test_knowledge_ingestion_error_codes_are_stable() -> None:
+    assert ErrorCode.PA_INGESTION_001.value == "PA_INGESTION_001"
+    assert ErrorCode.PA_INGESTION_002.value == "PA_INGESTION_002"
+    assert ErrorCode.PA_INGESTION_003.value == "PA_INGESTION_003"
+    assert ErrorCode.PA_INGESTION_004.value == "PA_INGESTION_004"
