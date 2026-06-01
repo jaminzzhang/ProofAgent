@@ -642,6 +642,7 @@ Rules:
 Local Index strategy:
 - LlamaIndex TreeIndex construction happens in Knowledge Source Ingestion before source publication.
 - Runtime retrieval performs Local Index Runtime Load against a published READY Knowledge Source Snapshot; it must not build indexes on demand inside an Agent run.
+- Runtime load validates the immutable snapshot `artifact_meta.json` sidecar before opening storage and resolves the Source-owned routing model, inheriting the ingestion model when no routing override is configured.
 - Local Index uses stable internal citation URIs and permission-protected citation preview rather than storage paths.
 
 Remote adapter strategy:
@@ -653,7 +654,7 @@ Remote adapter strategy:
 Implementation sequence:
 1. Clean up contracts, loader validation, examples, fixtures, and provider registry so `pageindex` and `local_vector` are no longer target provider entries.
 2. Add the Control Plane Knowledge Retrieval Service and route Enterprise QA plus Controlled ReAct retrieval through it; the current service centralizes policy-gated or reviewed provider calls, deterministic binding metadata routing for single-step and reviewed/fallback retrieval, binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and evidence admission.
-3. Complete `local_index` runtime load so Agent execution reads only published READY LlamaIndex-backed Knowledge Source Snapshots.
+3. Complete `local_index` runtime load so Agent execution reads only published READY LlamaIndex-backed Knowledge Source Snapshots; the current runtime validates the READY publication sidecar, resolves Source-owned routing configuration, and loads storage read-only.
 4. Extend planner/evaluator-backed agentic retrieval with the same service-routed provider adapter; each round now re-enters bounded source routing and records round-correlated provider summaries. Add richer retrieval plan summaries and citation enforcement next.
 5. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
 6. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.

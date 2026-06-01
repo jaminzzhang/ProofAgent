@@ -11,19 +11,27 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
 from llama_index.core import Document, StorageContext, TreeIndex, load_index_from_storage
 from llama_index.core.schema import NodeWithScore
+from pydantic import ValidationError
 
 from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.capabilities.knowledge.contracts import DocumentNode
+from proof_agent.capabilities.knowledge.local_index_snapshot import (
+    LocalIndexSnapshotMetadata,
+    load_ready_snapshot_metadata,
+)
 from proof_agent.capabilities.knowledge.provider import KnowledgeProvider
+from proof_agent.capabilities.models import resolve_provider
 from proof_agent.capabilities.models.llama_index_bridge import ProofAgentLLM
-from proof_agent.contracts import EvidenceChunk, EvidenceStatus
-from proof_agent.contracts.manifest import KnowledgeConfig
+from proof_agent.contracts import EvidenceChunk, EvidenceStatus, ModelCallRole
+from proof_agent.contracts.manifest import KnowledgeConfig, ModelConfig
+from proof_agent.errors import ProofAgentError
 
 logger = logging.getLogger(__name__)
 
@@ -66,20 +74,24 @@ class LocalIndexProvider(KnowledgeProvider):
 
     def __init__(
         self,
-        ingestion_model: ProofAgentLLM,
+        ingestion_model: ProofAgentLLM | None,
         routing_model: ProofAgentLLM,
         index_path: Path,
+        *,
+        snapshot_metadata: LocalIndexSnapshotMetadata | None = None,
     ) -> None:
         """Initialize LocalIndexProvider.
 
         Args:
-            ingestion_model: ProofAgentLLM for index building (INGESTION role)
+            ingestion_model: Optional ProofAgentLLM for management-plane index building
             routing_model: ProofAgentLLM for retrieval routing (ROUTING role)
             index_path: Path to persist/load index
+            snapshot_metadata: Trace-safe identity for a published runtime snapshot
         """
         self.ingestion_model = ingestion_model
         self.routing_model = routing_model
         self.index_path = index_path
+        self.snapshot_metadata = snapshot_metadata
         self._index: TreeIndex | None = None
 
     @classmethod
@@ -93,13 +105,23 @@ class LocalIndexProvider(KnowledgeProvider):
             Configured LocalIndexProvider instance
 
         Raises:
-            ValueError: If required params are missing
+            ProofAgentError: If the runtime config or READY snapshot is invalid
         """
-        # TODO: Phase 5 will wire this up with ModelProviderRegistry
-        # For now, raise NotImplementedError to indicate this needs wiring
-        raise NotImplementedError(
-            "from_config() requires ModelProviderRegistry integration (Phase 5)"
+        index_path = _index_path_from_params(config.params)
+        snapshot_metadata = load_ready_snapshot_metadata(index_path)
+        routing_config = _routing_model_config_from_params(config.params)
+        routing_model = ProofAgentLLM(
+            model_provider=resolve_provider(routing_config),
+            role=ModelCallRole.ROUTING,
         )
+        provider = cls(
+            ingestion_model=None,
+            routing_model=routing_model,
+            index_path=index_path,
+            snapshot_metadata=snapshot_metadata,
+        )
+        provider.load_index()
+        return provider
 
     @property
     def capabilities(self) -> RetrievalCapabilities:
@@ -130,7 +152,15 @@ class LocalIndexProvider(KnowledgeProvider):
 
         Raises:
             ValueError: If documents list is empty
+            ProofAgentError: If called on a read-only runtime provider
         """
+        ingestion_model = self.ingestion_model
+        if ingestion_model is None:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "Runtime Local Index providers cannot build indexes on demand.",
+                "Build and publish a READY local_index snapshot before activating this source.",
+            )
         if not documents:
             raise ValueError("Cannot build index from empty document list")
 
@@ -149,7 +179,7 @@ class LocalIndexProvider(KnowledgeProvider):
         # Build TreeIndex using ingestion model
         self._index = TreeIndex.from_documents(
             llama_docs,
-            llm=self.ingestion_model,
+            llm=ingestion_model,
             show_progress=True,
         )
 
@@ -162,24 +192,24 @@ class LocalIndexProvider(KnowledgeProvider):
         """Load persisted TreeIndex from disk.
 
         Raises:
-            ValueError: If index doesn't exist at index_path
+            ProofAgentError: If the snapshot storage cannot be loaded
         """
         if not self.index_path.exists():
-            raise ValueError(f"Index path does not exist: {self.index_path}")
+            raise _snapshot_load_failure(f"Index path does not exist: {self.index_path}")
 
         logger.info(f"Loading TreeIndex from {self.index_path}")
 
-        # Load storage context
-        storage_context = StorageContext.from_defaults(persist_dir=str(self.index_path))
-
-        # Load index with routing model for queries
-        self._index = cast(
-            TreeIndex,
-            load_index_from_storage(
-                storage_context,
-                llm=self.routing_model,
-            ),
-        )
+        try:
+            storage_context = StorageContext.from_defaults(persist_dir=str(self.index_path))
+            self._index = cast(
+                TreeIndex,
+                load_index_from_storage(
+                    storage_context,
+                    llm=self.routing_model,
+                ),
+            )
+        except Exception as exc:
+            raise _snapshot_load_failure("Local Index snapshot storage could not be loaded.") from exc
 
         logger.info("Index loaded successfully")
 
@@ -329,6 +359,13 @@ class LocalIndexProvider(KnowledgeProvider):
         """Persist index to disk with metadata sidecar."""
         if self._index is None:
             raise ValueError("No index to persist")
+        ingestion_model = self.ingestion_model
+        if ingestion_model is None:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "Runtime Local Index providers cannot persist indexes.",
+                "Use a management-plane Local Index provider to build and publish snapshots.",
+            )
 
         # Create index directory
         self.index_path.mkdir(parents=True, exist_ok=True)
@@ -344,8 +381,8 @@ class LocalIndexProvider(KnowledgeProvider):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "document_count": len(self._index.docstore.docs),
             "ingestion_model": {
-                "provider": self.ingestion_model._provider.provider_name,
-                "model": self.ingestion_model._provider.model_name,
+                "provider": ingestion_model._provider.provider_name,
+                "model": ingestion_model._provider.model_name,
             },
             "routing_model": {
                 "provider": self.routing_model._provider.provider_name,
@@ -394,3 +431,45 @@ class LocalIndexProvider(KnowledgeProvider):
             citation=citation,
             metadata=metadata,
         )
+
+
+def _index_path_from_params(params: Mapping[str, Any]) -> Path:
+    index_path = params.get("index_path")
+    if isinstance(index_path, Path):
+        return index_path
+    if isinstance(index_path, str) and index_path.strip():
+        return Path(index_path)
+    raise ProofAgentError(
+        "PA_KNOWLEDGE_001",
+        "Local Index runtime config requires a non-empty params.index_path.",
+        "Point params.index_path at one published READY local_index snapshot directory.",
+    )
+
+
+def _routing_model_config_from_params(params: Mapping[str, Any]) -> ModelConfig:
+    if "routing_model" in params:
+        routing_model = params["routing_model"]
+    else:
+        routing_model = params.get("ingestion_model")
+    if not isinstance(routing_model, Mapping):
+        raise ProofAgentError(
+            "PA_KNOWLEDGE_001",
+            "Local Index runtime config requires params.routing_model or params.ingestion_model.",
+            "Configure a source-owned routing model using the ModelConfig shape.",
+        )
+    try:
+        return ModelConfig.model_validate(routing_model)
+    except ValidationError as exc:
+        raise ProofAgentError(
+            "PA_KNOWLEDGE_001",
+            "Local Index routing model config is invalid.",
+            "Configure params.routing_model using provider, name, and optional params.",
+        ) from exc
+
+
+def _snapshot_load_failure(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_KNOWLEDGE_002",
+        message,
+        "Rebuild and publish the Local Index snapshot, then activate the READY artifact.",
+    )
