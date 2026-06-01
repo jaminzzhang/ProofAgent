@@ -43,6 +43,14 @@ class KnowledgeRetrievalResult:
     evidence_result: ValidationResult
 
 
+@dataclass(frozen=True)
+class _RoutingDecision:
+    selected: tuple[BoundKnowledgeProvider, ...]
+    binding_candidates: list[dict[str, Any]]
+    selection_reason: str
+    no_evidence_reason_code: str | None = None
+
+
 class KnowledgeRetrievalService:
     """Control Plane entry point for governed knowledge retrieval."""
 
@@ -289,7 +297,35 @@ class KnowledgeRetrievalService:
         provider_calls: list[dict[str, Any]] = []
         raw_candidates: list[EvidenceChunk] = []
         degraded = False
-        for bound in bound_providers:
+        routing = _route_bound_providers(request.question, bound_providers)
+        if not routing.selected:
+            self._trace.emit(
+                "retrieval_result",
+                status="ok",
+                payload={
+                    "step_id": step_id,
+                    "provider": self._knowledge_provider.provider_name,
+                    "candidate_count": 0,
+                    "chunk_count": 0,
+                    "raw_candidate_count": 0,
+                    "deduplicated_count": 0,
+                    "sources": [],
+                    "binding_candidates": routing.binding_candidates,
+                    "selected_bindings": [],
+                    "provider_calls": [],
+                    "degraded": False,
+                    "routing": _routing_payload(routing),
+                    "no_evidence_reason_code": routing.no_evidence_reason_code,
+                },
+            )
+            evidence_result = self._evaluate_evidence(
+                (),
+                min_score=request.min_score,
+                no_evidence_reason_code=routing.no_evidence_reason_code,
+            )
+            return KnowledgeRetrievalResult(evidence=(), evidence_result=evidence_result)
+
+        for bound in routing.selected:
             binding_top_k = bound.binding.top_k or request.top_k
             try:
                 chunks = bound.provider.retrieve(request.question, top_k=binding_top_k)
@@ -309,9 +345,15 @@ class KnowledgeRetrievalService:
                         "raw_candidate_count": len(raw_candidates),
                         "deduplicated_count": 0,
                         "sources": [],
-                        "selected_bindings": _selected_binding_summaries(bound_providers),
+                        "binding_candidates": routing.binding_candidates,
+                        "selected_bindings": _selected_binding_summaries(
+                            routing.selected,
+                            selection_reason=routing.selection_reason,
+                        ),
                         "provider_calls": provider_calls,
                         "degraded": degraded,
+                        "routing": _routing_payload(routing),
+                        "no_evidence_reason_code": "required_provider_failure",
                     },
                 )
                 raise
@@ -334,12 +376,21 @@ class KnowledgeRetrievalService:
                 "raw_candidate_count": len(raw_candidates),
                 "deduplicated_count": max(0, len(raw_candidates) - len(fused_candidates)),
                 "sources": [chunk.source for chunk in evidence],
-                "selected_bindings": _selected_binding_summaries(bound_providers),
+                "binding_candidates": routing.binding_candidates,
+                "selected_bindings": _selected_binding_summaries(
+                    routing.selected,
+                    selection_reason=routing.selection_reason,
+                ),
                 "provider_calls": provider_calls,
                 "degraded": degraded,
+                "routing": _routing_payload(routing),
             },
         )
-        evidence_result = self._evaluate_evidence(evidence, min_score=request.min_score)
+        evidence_result = self._evaluate_evidence(
+            evidence,
+            min_score=request.min_score,
+            no_evidence_reason_code="zero_accepted_evidence",
+        )
         return KnowledgeRetrievalResult(evidence=evidence, evidence_result=evidence_result)
 
     def _result_for_evidence(
@@ -368,8 +419,15 @@ class KnowledgeRetrievalService:
         evidence: tuple[EvidenceChunk, ...],
         *,
         min_score: float,
+        no_evidence_reason_code: str | None = None,
     ) -> ValidationResult:
         evidence_result = evaluate_evidence(evidence, min_count=1, min_score=min_score)
+        if evidence_result.status == "failed":
+            metadata = dict(evidence_result.metadata)
+            metadata["no_evidence_reason_code"] = (
+                no_evidence_reason_code or "zero_accepted_evidence"
+            )
+            evidence_result = evidence_result.model_copy(update={"metadata": metadata})
         self._trace.emit(
             "evidence_evaluation",
             status="ok" if evidence_result.status == "passed" else "blocked",
@@ -418,6 +476,105 @@ def _allowed(decision: PolicyDecision) -> bool:
 
 def _decision_value(decision: PolicyDecision) -> str:
     return decision.decision.value
+
+
+def _route_bound_providers(
+    query: str,
+    bound_providers: tuple[BoundKnowledgeProvider, ...],
+    *,
+    selection_budget: int = 3,
+) -> _RoutingDecision:
+    binding_candidates = _binding_candidate_summaries(query, bound_providers)
+    if len(bound_providers) == 1:
+        return _RoutingDecision(
+            selected=bound_providers,
+            binding_candidates=binding_candidates,
+            selection_reason="single_binding",
+        )
+
+    matched = tuple(
+        bound
+        for bound in bound_providers
+        if _routing_metadata_matches(query, bound)
+    )
+    if matched:
+        selected = matched[:selection_budget]
+        reason = (
+            "routing_metadata_match"
+            if len(matched) <= selection_budget
+            else "routing_metadata_match_budgeted"
+        )
+        return _RoutingDecision(
+            selected=selected,
+            binding_candidates=binding_candidates,
+            selection_reason=reason,
+        )
+
+    if any(_routing_terms(bound) for bound in bound_providers):
+        return _RoutingDecision(
+            selected=(),
+            binding_candidates=binding_candidates,
+            selection_reason="routing_metadata_no_match",
+            no_evidence_reason_code="routing_empty",
+        )
+    return _RoutingDecision(
+        selected=(),
+        binding_candidates=binding_candidates,
+        selection_reason="ambiguous_no_routing_metadata",
+        no_evidence_reason_code="routing_ambiguous",
+    )
+
+
+def _routing_metadata_matches(query: str, bound: BoundKnowledgeProvider) -> bool:
+    normalized_query = _normalize_content(query)
+    return any(_normalize_content(term) in normalized_query for term in _routing_terms(bound))
+
+
+def _routing_terms(bound: BoundKnowledgeProvider) -> tuple[str, ...]:
+    terms: list[str] = []
+    if bound.binding.alias:
+        terms.append(bound.binding.alias)
+    terms.extend(_strings_from_value(dict(bound.binding.routing_metadata)))
+    return tuple(term for term in terms if term.strip())
+
+
+def _strings_from_value(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        terms: list[str] = []
+        for item in value.values():
+            terms.extend(_strings_from_value(item))
+        return terms
+    if isinstance(value, list | tuple | set | frozenset):
+        terms = []
+        for item in value:
+            terms.extend(_strings_from_value(item))
+        return terms
+    return []
+
+
+def _binding_candidate_summaries(
+    query: str,
+    bound_providers: tuple[BoundKnowledgeProvider, ...],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **_binding_summary(bound),
+            "routing_metadata_keys": sorted(str(key) for key in bound.binding.routing_metadata),
+            "matched": _routing_metadata_matches(query, bound),
+        }
+        for bound in bound_providers
+    ]
+
+
+def _routing_payload(routing: _RoutingDecision) -> dict[str, Any]:
+    return {
+        "selection_reason": routing.selection_reason,
+        "selected_count": len(routing.selected),
+        "candidate_count": len(routing.binding_candidates),
+        "no_evidence_reason_code": routing.no_evidence_reason_code,
+    }
 
 
 def _bound_providers(
@@ -533,18 +690,27 @@ def _wrrf_score(chunk: EvidenceChunk, *, rank_constant: float = 60.0) -> float:
 
 def _selected_binding_summaries(
     bound_providers: tuple[BoundKnowledgeProvider, ...],
+    *,
+    selection_reason: str,
 ) -> list[dict[str, Any]]:
     return [
         {
-            "binding_id": bound.binding.binding_id,
-            "source_id": bound.source.source_id,
-            "provider": bound.provider.provider_name,
-            "failure_mode": bound.binding.failure_mode,
-            "fusion_weight": bound.binding.fusion_weight,
-            "top_k": bound.binding.top_k,
+            **_binding_summary(bound),
+            "selection_reason": selection_reason,
         }
         for bound in bound_providers
     ]
+
+
+def _binding_summary(bound: BoundKnowledgeProvider) -> dict[str, Any]:
+    return {
+        "binding_id": bound.binding.binding_id,
+        "source_id": bound.source.source_id,
+        "provider": bound.provider.provider_name,
+        "failure_mode": bound.binding.failure_mode,
+        "fusion_weight": bound.binding.fusion_weight,
+        "top_k": bound.binding.top_k,
+    }
 
 
 def _successful_provider_call(

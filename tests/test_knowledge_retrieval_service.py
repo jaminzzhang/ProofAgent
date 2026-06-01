@@ -163,8 +163,8 @@ def test_mixed_retrieval_continues_after_advisory_binding_failure(
         trace=trace,
         policy=PolicyEngine(()),
         knowledge_provider=_mixed_provider(
-            _bound("ks_remote", "kb_remote", failing, failure_mode="advisory"),
-            _bound("ks_local", "kb_local", fallback),
+            _bound("ks_remote", "kb_remote", failing, failure_mode="advisory", keywords=("receipt",)),
+            _bound("ks_local", "kb_local", fallback, keywords=("receipt",)),
         ),
     )
 
@@ -203,7 +203,9 @@ def test_mixed_retrieval_fails_closed_on_required_binding_failure(
     service = KnowledgeRetrievalService(
         trace=trace,
         policy=PolicyEngine(()),
-        knowledge_provider=_mixed_provider(_bound("ks_required", "kb_required", failing)),
+        knowledge_provider=_mixed_provider(
+            _bound("ks_required", "kb_required", failing, keywords=("receipt",))
+        ),
     )
 
     with pytest.raises(ProofAgentError) as exc:
@@ -263,12 +265,14 @@ def test_mixed_retrieval_deduplicates_exact_evidence_and_preserves_contributions
                 "kb_a",
                 FakeKnowledgeProvider((duplicate_a, unique_a), provider_name="local_markdown"),
                 fusion_weight=1.0,
+                keywords=("travel",),
             ),
             _bound(
                 "ks_b",
                 "kb_b",
                 FakeKnowledgeProvider((duplicate_b, unique_b), provider_name="remote_search"),
                 fusion_weight=2.0,
+                keywords=("travel",),
             ),
         ),
     )
@@ -301,6 +305,115 @@ def test_mixed_retrieval_deduplicates_exact_evidence_and_preserves_contributions
     assert retrieval_result["payload"]["deduplicated_count"] == 1
 
 
+def test_mixed_retrieval_routes_to_matching_binding_metadata(tmp_path: Path) -> None:
+    travel_provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="travel.md",
+                content="Travel meals require receipts.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.8,
+                citation="travel.md:1",
+            ),
+        )
+    )
+    claims_provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="claims.md",
+                content="Claims need invoices.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.8,
+                citation="claims.md:1",
+            ),
+        )
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=_mixed_provider(
+            _bound("ks_travel", "kb_travel", travel_provider, keywords=("travel", "meal")),
+            _bound("ks_claims", "kb_claims", claims_provider, keywords=("claim",)),
+        ),
+    )
+
+    result = service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="travel meal reimbursement",
+            strategy="single_step",
+            top_k=3,
+            min_score=0.2,
+        )
+    )
+
+    assert result.evidence_result.status == "passed"
+    assert travel_provider.calls == [("travel meal reimbursement", 3)]
+    assert claims_provider.calls == []
+    retrieval_result = _last_event(trace.trace_path, "retrieval_result")
+    assert [binding["binding_id"] for binding in retrieval_result["payload"]["selected_bindings"]] == [
+        "kb_travel"
+    ]
+    assert retrieval_result["payload"]["routing"]["selection_reason"] == "routing_metadata_match"
+
+
+def test_mixed_retrieval_returns_no_evidence_when_routing_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    first = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="first.md",
+                content="First source.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.8,
+                citation="first.md:1",
+            ),
+        )
+    )
+    second = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="second.md",
+                content="Second source.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.8,
+                citation="second.md:1",
+            ),
+        )
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=_mixed_provider(
+            _bound("ks_first", "kb_first", first),
+            _bound("ks_second", "kb_second", second),
+        ),
+    )
+
+    result = service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="unrouted question",
+            strategy="single_step",
+            top_k=3,
+            min_score=0.2,
+        )
+    )
+
+    assert result.evidence == ()
+    assert result.evidence_result.status == "failed"
+    assert result.evidence_result.metadata["no_evidence_reason_code"] == "routing_ambiguous"
+    assert first.calls == []
+    assert second.calls == []
+    retrieval_result = _last_event(trace.trace_path, "retrieval_result")
+    assert retrieval_result["payload"]["candidate_count"] == 0
+    assert retrieval_result["payload"]["no_evidence_reason_code"] == "routing_ambiguous"
+    assert retrieval_result["payload"]["selected_bindings"] == []
+    assert len(retrieval_result["payload"]["binding_candidates"]) == 2
+    assert retrieval_result["payload"]["provider_calls"] == []
+
+
 def _mixed_provider(*bound: BoundKnowledgeProvider) -> BlendedKnowledgeProvider:
     return BlendedKnowledgeProvider(bound)
 
@@ -312,6 +425,7 @@ def _bound(
     *,
     failure_mode: str = "required",
     fusion_weight: float = 1.0,
+    keywords: tuple[str, ...] = (),
 ) -> BoundKnowledgeProvider:
     return BoundKnowledgeProvider(
         source=KnowledgeSourceConfig(
@@ -324,6 +438,7 @@ def _bound(
             source_id=source_id,
             failure_mode=failure_mode,
             fusion_weight=fusion_weight,
+            routing_metadata={"keywords": keywords},
         ),
         provider=provider,
     )
