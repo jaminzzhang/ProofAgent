@@ -51,6 +51,44 @@ class _RoutingDecision:
     no_evidence_reason_code: str | None = None
 
 
+@dataclass(frozen=True)
+class _ProviderStepResult:
+    evidence: tuple[EvidenceChunk, ...]
+    no_evidence_reason_code: str | None = None
+
+
+class _ServiceRoutedProviderAdapter:
+    """Run RetrievalPlanner rounds through Control Plane source routing."""
+
+    def __init__(
+        self,
+        *,
+        service: KnowledgeRetrievalService,
+        request: KnowledgeRetrievalRequest,
+        execution_mode: str | None,
+    ) -> None:
+        self._service = service
+        self._request = request
+        self._execution_mode = execution_mode
+        self.no_evidence_reason_code: str | None = None
+        self.required_provider_failed = False
+
+    def retrieve(self, query: str, *, round_id: str) -> tuple[EvidenceChunk, ...]:
+        try:
+            provider_step = self._service._execute_agentic_round(
+                self._request,
+                query=query,
+                round_id=round_id,
+                execution_mode=self._execution_mode,
+            )
+        except Exception:
+            self.no_evidence_reason_code = "required_provider_failure"
+            self.required_provider_failed = True
+            raise
+        self.no_evidence_reason_code = provider_step.no_evidence_reason_code
+        return provider_step.evidence
+
+
 class KnowledgeRetrievalService:
     """Control Plane entry point for governed knowledge retrieval."""
 
@@ -201,37 +239,49 @@ class KnowledgeRetrievalService:
                 execution_mode=execution_mode,
             )
 
+        provider_adapter = _ServiceRoutedProviderAdapter(
+            service=self,
+            request=request,
+            execution_mode=execution_mode,
+        )
         planner = RetrievalPlanner(
-            knowledge_provider=self._knowledge_provider,
+            retrieval_executor=provider_adapter,
             planner_model=planner_provider,
             evaluator_model=evaluator_provider,
             max_rounds=request.max_rounds or 3,
         )
         planned = planner.plan_and_retrieve(request.question)
-        for round_obj in planned.rounds:
-            self._trace.emit(
-                "retrieval_step",
-                status="ok",
-                payload={
-                    "round_id": round_obj.round_id,
-                    "query": round_obj.query,
-                    "candidates_count": len(round_obj.candidates),
-                    "evaluation": round_obj.evaluation,
-                    "action": round_obj.action,
-                    "reason": round_obj.reason,
-                },
-            )
         self._trace.emit(
             "retrieval_result",
             status="ok",
             payload={
+                "strategy": "agentic",
                 "total_rounds": planned.total_rounds,
                 "final_action": planned.final_action,
                 "total_evidence": len(planned.evidence),
+                "rounds": [
+                    {
+                        "round_id": round_obj.round_id,
+                        "query": round_obj.query,
+                        "candidate_count": len(round_obj.candidates),
+                        "evaluation": round_obj.evaluation,
+                        "action": round_obj.action,
+                        "reason": round_obj.reason,
+                    }
+                    for round_obj in planned.rounds
+                ],
             },
         )
-        evidence = () if request.force_empty else planned.evidence
-        evidence_result = self._evaluate_evidence(evidence, min_score=request.min_score)
+        evidence = (
+            ()
+            if request.force_empty or provider_adapter.required_provider_failed
+            else planned.evidence
+        )
+        evidence_result = self._evaluate_evidence(
+            evidence,
+            min_score=request.min_score,
+            no_evidence_reason_code=provider_adapter.no_evidence_reason_code,
+        )
         return KnowledgeRetrievalResult(evidence=evidence, evidence_result=evidence_result)
 
     def _run_reviewed_or_step_gated_single_step(
@@ -268,42 +318,95 @@ class KnowledgeRetrievalService:
         step_id: str,
     ) -> KnowledgeRetrievalResult:
         self._trace.emit("retrieval_step", status="ok", payload=step_context)
+        provider_step = self._execute_provider_step(
+            request,
+            query=request.question,
+            step_id=step_id,
+        )
+        evidence_result = self._evaluate_evidence(
+            provider_step.evidence,
+            min_score=request.min_score,
+            no_evidence_reason_code=provider_step.no_evidence_reason_code,
+        )
+        return KnowledgeRetrievalResult(
+            evidence=provider_step.evidence,
+            evidence_result=evidence_result,
+        )
+
+    def _execute_agentic_round(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        query: str,
+        round_id: str,
+        execution_mode: str | None,
+    ) -> _ProviderStepResult:
+        step_context = self._step_context(
+            request,
+            execution_mode=execution_mode,
+            question=query,
+            step_id=round_id,
+        )
+        step_context["round_id"] = round_id
+        step_context["strategy"] = "agentic"
+        self._trace.emit("retrieval_step", status="ok", payload=step_context)
+        return self._execute_provider_step(
+            request,
+            query=query,
+            step_id=round_id,
+            round_id=round_id,
+        )
+
+    def _execute_provider_step(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        query: str,
+        step_id: str,
+        round_id: str | None = None,
+    ) -> _ProviderStepResult:
         bound_providers = _bound_providers(self._knowledge_provider)
         if bound_providers is not None:
-            return self._execute_bound_step(
+            return self._execute_bound_provider_step(
                 request,
+                query=query,
                 bound_providers=bound_providers,
                 step_id=step_id,
+                round_id=round_id,
             )
         evidence = self._knowledge_provider.retrieve(
-            request.question,
+            query,
             top_k=request.top_k,
         )
         if request.force_empty:
             evidence = ()
-        return self._result_for_evidence(
+        self._emit_basic_retrieval_result(
             evidence,
             step_id=step_id,
-            min_score=request.min_score,
+            round_id=round_id,
         )
+        return _ProviderStepResult(evidence=evidence)
 
-    def _execute_bound_step(
+    def _execute_bound_provider_step(
         self,
         request: KnowledgeRetrievalRequest,
         *,
+        query: str,
         bound_providers: tuple[BoundKnowledgeProvider, ...],
         step_id: str,
-    ) -> KnowledgeRetrievalResult:
+        round_id: str | None,
+    ) -> _ProviderStepResult:
         provider_calls: list[dict[str, Any]] = []
         raw_candidates: list[EvidenceChunk] = []
         degraded = False
-        routing = _route_bound_providers(request.question, bound_providers)
+        routing = _route_bound_providers(query, bound_providers)
         if not routing.selected:
             self._trace.emit(
                 "retrieval_result",
                 status="ok",
                 payload={
                     "step_id": step_id,
+                    **_round_payload(round_id),
                     "provider": self._knowledge_provider.provider_name,
                     "candidate_count": 0,
                     "chunk_count": 0,
@@ -318,17 +421,15 @@ class KnowledgeRetrievalService:
                     "no_evidence_reason_code": routing.no_evidence_reason_code,
                 },
             )
-            evidence_result = self._evaluate_evidence(
-                (),
-                min_score=request.min_score,
+            return _ProviderStepResult(
+                evidence=(),
                 no_evidence_reason_code=routing.no_evidence_reason_code,
             )
-            return KnowledgeRetrievalResult(evidence=(), evidence_result=evidence_result)
 
         for bound in routing.selected:
             binding_top_k = bound.binding.top_k or request.top_k
             try:
-                chunks = bound.provider.retrieve(request.question, top_k=binding_top_k)
+                chunks = bound.provider.retrieve(query, top_k=binding_top_k)
             except Exception as exc:
                 provider_calls.append(_failed_provider_call(bound, exc))
                 if bound.binding.failure_mode == "advisory":
@@ -339,6 +440,7 @@ class KnowledgeRetrievalService:
                     status="error",
                     payload={
                         "step_id": step_id,
+                        **_round_payload(round_id),
                         "provider": self._knowledge_provider.provider_name,
                         "candidate_count": 0,
                         "chunk_count": 0,
@@ -370,6 +472,7 @@ class KnowledgeRetrievalService:
             status="ok",
             payload={
                 "step_id": step_id,
+                **_round_payload(round_id),
                 "provider": self._knowledge_provider.provider_name,
                 "candidate_count": len(evidence),
                 "chunk_count": len(evidence),
@@ -386,12 +489,10 @@ class KnowledgeRetrievalService:
                 "routing": _routing_payload(routing),
             },
         )
-        evidence_result = self._evaluate_evidence(
-            evidence,
-            min_score=request.min_score,
+        return _ProviderStepResult(
+            evidence=evidence,
             no_evidence_reason_code="zero_accepted_evidence",
         )
-        return KnowledgeRetrievalResult(evidence=evidence, evidence_result=evidence_result)
 
     def _result_for_evidence(
         self,
@@ -400,19 +501,29 @@ class KnowledgeRetrievalService:
         step_id: str,
         min_score: float,
     ) -> KnowledgeRetrievalResult:
+        self._emit_basic_retrieval_result(evidence, step_id=step_id)
+        evidence_result = self._evaluate_evidence(evidence, min_score=min_score)
+        return KnowledgeRetrievalResult(evidence=evidence, evidence_result=evidence_result)
+
+    def _emit_basic_retrieval_result(
+        self,
+        evidence: tuple[EvidenceChunk, ...],
+        *,
+        step_id: str,
+        round_id: str | None = None,
+    ) -> None:
         self._trace.emit(
             "retrieval_result",
             status="ok",
             payload={
                 "step_id": step_id,
+                **_round_payload(round_id),
                 "provider": self._knowledge_provider.provider_name,
                 "candidate_count": len(evidence),
                 "chunk_count": len(evidence),
                 "sources": [chunk.source for chunk in evidence],
             },
         )
-        evidence_result = self._evaluate_evidence(evidence, min_score=min_score)
-        return KnowledgeRetrievalResult(evidence=evidence, evidence_result=evidence_result)
 
     def _evaluate_evidence(
         self,
@@ -444,10 +555,12 @@ class KnowledgeRetrievalService:
         request: KnowledgeRetrievalRequest,
         *,
         execution_mode: str | None,
+        question: str | None = None,
+        step_id: str = "step_1",
     ) -> dict[str, Any]:
         context: dict[str, Any] = {
-            "question": request.question,
-            "step_id": "step_1",
+            "question": question or request.question,
+            "step_id": step_id,
             "provider": self._knowledge_provider.provider_name,
             "top_k": request.top_k,
         }
@@ -476,6 +589,10 @@ def _allowed(decision: PolicyDecision) -> bool:
 
 def _decision_value(decision: PolicyDecision) -> str:
     return decision.decision.value
+
+
+def _round_payload(round_id: str | None) -> dict[str, str]:
+    return {"round_id": round_id} if round_id is not None else {}
 
 
 def _route_bound_providers(

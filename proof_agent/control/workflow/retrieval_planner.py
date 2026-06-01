@@ -36,11 +36,11 @@ class RetrievalResult:
     rounds: tuple[RetrievalRound, ...]
 
 
-class KnowledgeProviderProtocol(Protocol):
-    """Protocol for knowledge provider."""
+class RetrievalExecutorProtocol(Protocol):
+    """Protocol for one Control Plane-routed retrieval round."""
 
-    def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
-        """Retrieve evidence for query."""
+    def retrieve(self, query: str, *, round_id: str) -> tuple[EvidenceChunk, ...]:
+        """Retrieve evidence for query through the governed retrieval service."""
         ...
 
 
@@ -57,7 +57,7 @@ class RetrievalPlanner:
 
     Drives iterative retrieval cycles:
     1. Analyze question and plan retrieval
-    2. Execute retrieval via KnowledgeProvider
+    2. Execute retrieval via the Control Plane retrieval executor
     3. Evaluate evidence sufficiency
     4. Decide next action: rewrite/sufficient/abort
 
@@ -71,7 +71,7 @@ class RetrievalPlanner:
 
     def __init__(
         self,
-        knowledge_provider: KnowledgeProviderProtocol,
+        retrieval_executor: RetrievalExecutorProtocol,
         planner_model: ModelProtocol,
         evaluator_model: ModelProtocol,
         max_rounds: int = 3,
@@ -79,12 +79,12 @@ class RetrievalPlanner:
         """Initialize retrieval planner.
 
         Args:
-            knowledge_provider: Provider for retrieval
+            retrieval_executor: Control Plane executor for one routed retrieval round
             planner_model: LLM for planning and query rewriting
             evaluator_model: LLM for evidence evaluation
             max_rounds: Maximum retrieval rounds (hard limit)
         """
-        self.knowledge_provider = knowledge_provider
+        self.retrieval_executor = retrieval_executor
         self.planner_model = planner_model
         self.evaluator_model = evaluator_model
         self.max_rounds = max_rounds
@@ -109,7 +109,9 @@ class RetrievalPlanner:
 
             # Execute retrieval
             try:
-                candidates = tuple(self.knowledge_provider.retrieve(current_query))
+                candidates = tuple(
+                    self.retrieval_executor.retrieve(current_query, round_id=round_id)
+                )
             except Exception:
                 # Provider failure: return accumulated evidence
                 return RetrievalResult(
