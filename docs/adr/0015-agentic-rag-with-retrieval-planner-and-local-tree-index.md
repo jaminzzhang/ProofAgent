@@ -89,8 +89,13 @@ class RetrievalAction:
 1. 文档解析（PDF/Markdown）→ LlamaIndex Document
 2. `TreeIndex.from_documents()` → 用 ProofAgentLLM(ingestion_model) 生成节点摘要
 3. 持久化：LlamaIndex 原生格式 + Proof Agent 元数据 sidecar（`artifact_meta.json`）
-4. Sidecar 包含：revision_id、content_hash、ingestion_config_fingerprint、engine_version、engine_name
-5. Sidecar 是 provider-agnostic 的 artifact 元数据契约，未来其他本地索引引擎也应复用同一套格式；Knowledge Hub V1 不包含 `local_vector`
+4. Sidecar 包含：content_hash、ingestion_config_fingerprint、parser_identity、engine_version、engine_name；它不包含 source、document 或 revision 身份
+5. Revision promotion 将 artifact-affecting 输入冻结为 secret-safe Knowledge Artifact Build Spec；fingerprint 与 worker 构建都消费同一快照，不在排队后重新读取可变 Source Draft 配置
+6. Revision 和 ingestion job 通过 artifact reference 指向 `{content_hash}/{ingestion_config_fingerprint}` 下的兼容 artifact，在 worker build 前先校验并复用命中 artifact，避免重复构建
+7. Cache miss 按 artifact key 获取 advisory lock 后再次校验；构建只写带 artifact key 和创建时间元数据的 sibling 临时目录，最后原子 rename 发布完整目录，其他 worker 不得读取半成品；临时目录清理必须先非阻塞获取对应 artifact-key lock。Foundation slice 使用 `filelock.FileLock` 封装本地文件系统锁：store transition 锁为 `{store_root}/.locks/store.lock`，最多等待 5 秒，超时以 `PA_INGESTION_004` 失败当前 API 或 CLI 操作且不尝试再次写状态；artifact-key 锁为 `{store_root}/.locks/artifacts/{sha256(artifact_key)}.lock` 并使用非阻塞获取。artifact-key 锁竞争属于正常去重：job 通过 token-protected defer 回到 `queued`，`next_attempt_at = now + 5s`，不计 build failure。锁文件不放入会被 rename 的 artifact 目录；临时目录与最终目录保持同文件系统。共享 NFS 和分布式同步留给后续 queue adapter
+8. Worker queue claim 使用 token 所有权和持久化可续租 lease；`attempt_count` 统计 claim 次数，`auto_retry_count` 仅统计真实 recoverable build failure 并单独限制最多 2 次自动重试。在阶段边界以及有界 provider call 前后续租。续租失败后旧 worker 立即停止发起后续 provider call、artifact 发布和 job 状态提交；若 lease 在已发起的有界 provider call 或原子 rename 期间过期，已完成发布的兼容 artifact 可由新 worker 校验复用
+9. Worker 使用统一原子 claim 在同一 store-root advisory lock 内比较 quarantine-validation 与 artifact-build task、应用 Source 并发闸门、分配 token 并持久化状态迁移，避免跨队列 peek-then-claim 竞态。Claim-time per-Source 并发由整数 `params.worker_concurrency` 控制，默认 2、限制 1 到 8；Source 配置持久化前以 `PA_INGESTION_001` 拒绝无效值，claim 时再次防御性校验手工篡改或旧数据。遇到无效 Source 时不静默 clamp，也不阻塞其他 Source，而是收集 value-safe diagnostic、跳过该 Source 并继续选择其他 Source 最老的 ready task。每次 one-shot worker result 包含可选 task outcome 和 diagnostics；CLI 先打印 warning，再打印 task outcome，存在 diagnostic 时不得打印 `no queued knowledge tasks`。该参数只影响调度，不参与 artifact fingerprint
+10. Sidecar 的 engine_version 使用运行时精确安装版本，例如 `llama-index-tree@0.14.22`，并参与 fingerprint；sidecar 是 provider-agnostic reusable artifact 元数据契约，未来其他本地索引引擎也应复用同一套格式；Knowledge Hub V1 不包含 `local_vector`
 
 **检索时**：
 - 单文档内：LlamaIndex `TreeSelectLeafRetriever` 做树遍历（用 ProofAgentLLM(routing_model)）
