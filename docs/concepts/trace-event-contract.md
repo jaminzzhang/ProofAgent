@@ -59,7 +59,7 @@ Every trace line is one JSON object:
 | `policy_decision` | typed policy decision at an enforcement point |
 | `retrieval_plan` | audit-safe Agentic RAG plan summary |
 | `retrieval_step` | governed retrieval attempt begins |
-| `retrieval_result` | retrieved evidence summary and source ids |
+| `retrieval_result` | retrieved evidence summary, source ids, and trace-safe provider-call summaries for blended retrieval |
 | `evidence_evaluation` | accepted/rejected evidence and thresholds |
 | `context_admission` | trace-safe summary of admitted conversation context |
 | `model_request` | redacted model invocation metadata before generation |

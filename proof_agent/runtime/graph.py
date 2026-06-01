@@ -14,13 +14,13 @@ from proof_agent.contracts import (
     ReceiptOutcome,
 )
 from proof_agent.capabilities.tools.approval import create_approval_state
+from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
 from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
     _cost_class,
     _emit_model_error,
     _emit_policy,
     _model_response_payload,
-    _run_retrieval,
     _system_prompt_length,
     _validate_model_output,
 )
@@ -54,17 +54,25 @@ def build_enterprise_qa_graph(
             # Bypass retrieval for tool required question
             return {}
 
-        evidence, evidence_result = _run_retrieval(
-            question=question,
+        retrieval = KnowledgeRetrievalService(
             trace=trace,
             policy=invocation.policy,
             knowledge_provider=invocation.knowledge_provider,
-            strategy=manifest.retrieval.strategy,
-            top_k=manifest.retrieval.top_k,
-            min_score=manifest.retrieval.min_score,
-            max_steps=manifest.retrieval.max_steps,
-            force_empty=question == UNSUPPORTED_QUESTION,
+        ).retrieve(
+            KnowledgeRetrievalRequest(
+                question=question,
+                strategy=manifest.retrieval.strategy,
+                top_k=manifest.retrieval.top_k,
+                min_score=manifest.retrieval.min_score,
+                max_steps=manifest.retrieval.max_steps,
+                max_rounds=manifest.retrieval.max_rounds,
+                planner_model=manifest.retrieval.planner_model,
+                evaluator_model=manifest.retrieval.evaluator_model,
+                force_empty=question == UNSUPPORTED_QUESTION,
+            )
         )
+        evidence = retrieval.evidence
+        evidence_result = retrieval.evidence_result
 
         answer_decision = invocation.policy.evaluate(
             "before_answer",

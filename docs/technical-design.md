@@ -196,7 +196,7 @@ Layer boundary rules:
 | Workflow | `control/workflow/` owns Enterprise QA and Controlled ReAct Enterprise QA Harness behavior plus the workflow template registry |
 | Runtime | `runtime/langgraph_runner.py` executes supported `StateGraph` templates through resolved Harness dependencies |
 | Policy | `control/policy/` owns retrieval, ReAct review, answer, tool, memory, and model call enforcement points |
-| Knowledge | `capabilities/knowledge/` owns Markdown deterministic retrieval, Local Index provider scaffolding, remote adapter boundaries, and legacy providers pending removal per ADR-0016 |
+| Knowledge | `control/knowledge/` owns Control Plane retrieval orchestration; `capabilities/knowledge/` owns Markdown deterministic retrieval, Local Index provider scaffolding, and remote adapter boundaries |
 | Model | `capabilities/models/` owns `deterministic`, `openai_compatible`, `openai`, `deepseek`; Azure/Anthropic placeholders |
 | Tools | `capabilities/tools/` owns ToolGateway, local handler loading, approval state |
 | Memory | `capabilities/memory/` owns session memory with denylist |
@@ -588,6 +588,8 @@ Current baseline:
 - token-overlap deterministic retrieval.
 - `EvidenceChunk` output.
 - evidence threshold validation.
+- shared Control Plane Knowledge Retrieval Service for Enterprise QA and Controlled ReAct.
+- binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, and provider-call trace summaries for blended retrieval.
 
 Knowledge Hub target shape:
 - Knowledge Sources own provider configuration and publication lifecycle.
@@ -647,10 +649,10 @@ Remote adapter strategy:
 
 Implementation sequence:
 1. Clean up contracts, loader validation, examples, fixtures, and provider registry so `pageindex` and `local_vector` are no longer target provider entries.
-2. Add the Control Plane Knowledge Retrieval Service for source routing, provider coordination, provider failure handling, WRRF, exact deduplication, citation enforcement, evidence admission, and No Accepted Evidence Outcome mapping.
+2. Add the Control Plane Knowledge Retrieval Service and route Enterprise QA plus Controlled ReAct retrieval through it; the current service centralizes policy-gated or reviewed provider calls, binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, and evidence admission.
 3. Complete `local_index` runtime load so Agent execution reads only published READY LlamaIndex-backed Knowledge Source Snapshots.
-4. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
-5. Route Enterprise QA and Controlled ReAct retrieval through the same Knowledge Retrieval Service; ReAct may submit Retrieval Intent but must not directly select sources or call providers.
+4. Extend the Knowledge Retrieval Service with deterministic Knowledge Source Routing, richer retrieval plan summaries, citation enforcement, and richer No Accepted Evidence Outcome mapping.
+5. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
 6. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
 
 ## 15. Model Providers

@@ -28,6 +28,10 @@ class BlendedKnowledgeProvider:
             return self._bound_providers[0].provider.provider_name
         return "mixed"
 
+    @property
+    def bound_providers(self) -> tuple[BoundKnowledgeProvider, ...]:
+        return self._bound_providers
+
     def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         candidates: list[EvidenceChunk] = []
         for bound in self._bound_providers:

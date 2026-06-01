@@ -6,7 +6,6 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from proof_agent.bootstrap.composition import HarnessInvocation
-from proof_agent.capabilities.knowledge import KnowledgeProvider
 from proof_agent.capabilities.models.protocol import ModelProvider
 from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.capabilities.tools.approval import create_approval_state
@@ -24,9 +23,8 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
-    ValidationResult,
 )
-from proof_agent.control.validators.evidence import evaluate_evidence
+from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
 from proof_agent.control.workflow.orchestrator import (
     _build_model_request,
     _cost_class,
@@ -182,15 +180,26 @@ def build_react_enterprise_qa_graph(
                 "governance_message": "I cannot answer because the retrieval step was blocked by policy.",
             }
 
-        evidence, evidence_result = _run_react_retrieval(
-            question=retrieval_query,
+        retrieval = KnowledgeRetrievalService(
             trace=trace,
+            policy=invocation.policy,
             knowledge_provider=invocation.knowledge_provider,
-            top_k=manifest.retrieval.top_k,
-            min_score=manifest.retrieval.min_score,
-            max_steps=manifest.retrieval.max_steps,
-            force_empty=state["question"] == UNSUPPORTED_QUESTION,
+        ).retrieve_reviewed(
+            KnowledgeRetrievalRequest(
+                question=retrieval_query,
+                strategy=manifest.retrieval.strategy,
+                top_k=manifest.retrieval.top_k,
+                min_score=manifest.retrieval.min_score,
+                max_steps=manifest.retrieval.max_steps,
+                max_rounds=manifest.retrieval.max_rounds,
+                planner_model=manifest.retrieval.planner_model,
+                evaluator_model=manifest.retrieval.evaluator_model,
+                force_empty=state["question"] == UNSUPPORTED_QUESTION,
+            ),
+            execution_mode="react_reviewed_retrieval",
         )
+        evidence = retrieval.evidence
+        evidence_result = retrieval.evidence_result
 
         answer_decision = invocation.policy.evaluate(
             EnforcementPoint.BEFORE_ANSWER,
@@ -642,52 +651,6 @@ def _retrieval_step_action_proposal(query: str) -> ReActActionProposal:
         parameters={"query": query, "step_id": "step_1"},
         risk_level="low",
     )
-
-
-def _run_react_retrieval(
-    *,
-    question: str,
-    trace: TraceWriter,
-    knowledge_provider: KnowledgeProvider,
-    top_k: int,
-    min_score: float,
-    max_steps: int | None,
-    force_empty: bool = False,
-) -> tuple[tuple[EvidenceChunk, ...], ValidationResult]:
-    step_context = {
-        "question": question,
-        "step_id": "step_1",
-        "provider": knowledge_provider.provider_name,
-        "top_k": top_k,
-        "max_steps": max_steps,
-        "execution_mode": "react_reviewed_retrieval",
-    }
-    trace.emit("retrieval_step", status="ok", payload=step_context)
-    evidence = knowledge_provider.retrieve(question, top_k=top_k)
-    if force_empty:
-        evidence = ()
-    trace.emit(
-        "retrieval_result",
-        status="ok",
-        payload={
-            "step_id": "step_1",
-            "provider": knowledge_provider.provider_name,
-            "candidate_count": len(evidence),
-            "chunk_count": len(evidence),
-            "sources": [chunk.source for chunk in evidence],
-        },
-    )
-    evidence_result = evaluate_evidence(evidence, min_count=1, min_score=min_score)
-    trace.emit(
-        "evidence_evaluation",
-        status="ok" if evidence_result.status == "passed" else "blocked",
-        payload={
-            "validator_name": evidence_result.validator_name,
-            "status": evidence_result.status.value,
-            "metadata": dict(evidence_result.metadata),
-        },
-    )
-    return evidence, evidence_result
 
 
 def _request_tool_or_refuse(

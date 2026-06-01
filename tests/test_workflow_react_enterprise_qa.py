@@ -102,6 +102,37 @@ def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
     assert "approval_requested" in _event_types(_trace_events(result.trace_path))
 
 
+def test_react_agentic_retrieval_uses_shared_retrieval_service(
+    tmp_path: Path,
+) -> None:
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["retrieval"]["strategy"] = "agentic"
+    manifest["retrieval"]["top_k"] = 1
+    manifest["retrieval"]["max_steps"] = 3
+    manifest["retrieval"]["max_rounds"] = 2
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    event_types = _event_types(events)
+    retrieval_plan = next(event for event in events if event["event_type"] == "retrieval_plan")
+    assert retrieval_plan["payload"]["strategy"] == "agentic"
+    assert retrieval_plan["payload"]["decision"] == "reviewed"
+    assert event_types.count("policy_decision") == 4
+
+
 def test_llm_planner_and_reviewer_calls_emit_safe_model_events(
     tmp_path: Path,
     monkeypatch: Any,
