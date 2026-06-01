@@ -15,6 +15,7 @@ from proof_agent.contracts import (
     EvidenceStatus,
     KnowledgeBindingConfig,
     KnowledgeSourceConfig,
+    ModelConfig,
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.knowledge.retrieval_service import (
@@ -43,6 +44,18 @@ class FakeKnowledgeProvider:
         if self.error is not None:
             raise self.error
         return self.evidence[:top_k]
+
+
+class FakeModelProvider:
+    def __init__(self, responses: tuple[str, ...], *, model_name: str) -> None:
+        self.provider_name = "deterministic"
+        self.model_name = model_name
+        self.responses = list(responses)
+        self.calls: list[Any] = []
+
+    def generate(self, request: Any) -> str:
+        self.calls.append(request)
+        return self.responses.pop(0)
 
 
 def test_single_step_retrieval_service_gates_provider_and_evaluates_evidence(
@@ -412,6 +425,210 @@ def test_mixed_retrieval_returns_no_evidence_when_routing_is_ambiguous(
     assert retrieval_result["payload"]["selected_bindings"] == []
     assert len(retrieval_result["payload"]["binding_candidates"]) == 2
     assert retrieval_result["payload"]["provider_calls"] == []
+
+
+def test_agentic_retrieval_re_routes_rewritten_query_through_service(
+    tmp_path: Path,
+) -> None:
+    travel_provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="travel.md",
+                content="Travel meals require receipts.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.8,
+                citation="travel.md:1",
+            ),
+        )
+    )
+    claims_provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="claims.md",
+                content="Claims need invoices.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.8,
+                citation="claims.md:1",
+            ),
+        )
+    )
+    evaluator = FakeModelProvider(
+        (
+            '{"sufficient": false, "reason": "Need claim documents."}',
+            '{"sufficient": true, "reason": "Enough evidence."}',
+        ),
+        model_name="retrieval-evaluator",
+    )
+    planner = FakeModelProvider(
+        (
+            '{"action": "rewrite", "new_query": "claim invoice", "reason": "Need claims source."}',
+            '{"action": "sufficient", "reason": "Enough evidence."}',
+        ),
+        model_name="retrieval-planner",
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=_mixed_provider(
+            _bound("ks_travel", "kb_travel", travel_provider, keywords=("travel",)),
+            _bound("ks_claims", "kb_claims", claims_provider, keywords=("claim",)),
+        ),
+        model_resolver=lambda config: (
+            planner if config.name == "retrieval-planner" else evaluator
+        ),
+    )
+
+    result = service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="travel reimbursement",
+            strategy="agentic",
+            top_k=3,
+            min_score=0.2,
+            max_rounds=2,
+            planner_model=ModelConfig(provider="deterministic", name="retrieval-planner"),
+            evaluator_model=ModelConfig(provider="deterministic", name="retrieval-evaluator"),
+        )
+    )
+
+    assert result.evidence_result.status == "passed"
+    assert travel_provider.calls == [("travel reimbursement", 3)]
+    assert claims_provider.calls == [("claim invoice", 3)]
+    events = _read_events(trace.trace_path)
+    round_results = [
+        event
+        for event in events
+        if event["event_type"] == "retrieval_result"
+        and event["payload"].get("round_id") is not None
+    ]
+    assert len(round_results) == 2
+    assert [
+        result_event["payload"]["selected_bindings"][0]["binding_id"]
+        for result_event in round_results
+    ] == ["kb_travel", "kb_claims"]
+    round_steps = [
+        event
+        for event in events
+        if event["event_type"] == "retrieval_step"
+        and event["payload"].get("round_id") is not None
+    ]
+    assert [event["payload"]["round_id"] for event in round_steps] == [
+        event["payload"]["round_id"] for event in round_results
+    ]
+
+
+def test_agentic_retrieval_preserves_routing_empty_reason(tmp_path: Path) -> None:
+    first = FakeKnowledgeProvider()
+    second = FakeKnowledgeProvider()
+    evaluator = FakeModelProvider(
+        ('{"sufficient": false, "reason": "No routed evidence."}',),
+        model_name="retrieval-evaluator",
+    )
+    planner = FakeModelProvider(
+        ('{"action": "abort", "reason": "No eligible source."}',),
+        model_name="retrieval-planner",
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=_mixed_provider(
+            _bound("ks_travel", "kb_travel", first, keywords=("travel",)),
+            _bound("ks_claims", "kb_claims", second, keywords=("claim",)),
+        ),
+        model_resolver=lambda config: (
+            planner if config.name == "retrieval-planner" else evaluator
+        ),
+    )
+
+    result = service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="unmatched question",
+            strategy="agentic",
+            top_k=3,
+            min_score=0.2,
+            planner_model=ModelConfig(provider="deterministic", name="retrieval-planner"),
+            evaluator_model=ModelConfig(provider="deterministic", name="retrieval-evaluator"),
+        )
+    )
+
+    assert result.evidence == ()
+    assert result.evidence_result.status == "failed"
+    assert result.evidence_result.metadata["no_evidence_reason_code"] == "routing_empty"
+    assert first.calls == []
+    assert second.calls == []
+
+
+def test_agentic_retrieval_discards_accumulated_evidence_after_required_failure(
+    tmp_path: Path,
+) -> None:
+    travel_provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="travel.md",
+                content="Travel meals require receipts.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.8,
+                citation="travel.md:1",
+            ),
+        )
+    )
+    claims_provider = FakeKnowledgeProvider(
+        provider_name="remote_search",
+        error=ProofAgentError(
+            "PA_KNOWLEDGE_002",
+            "required source timed out",
+            "Retry the required source.",
+        ),
+    )
+    evaluator = FakeModelProvider(
+        ('{"sufficient": false, "reason": "Need claim documents."}',),
+        model_name="retrieval-evaluator",
+    )
+    planner = FakeModelProvider(
+        (
+            '{"action": "rewrite", "new_query": "claim invoice", "reason": "Need claims source."}',
+        ),
+        model_name="retrieval-planner",
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=_mixed_provider(
+            _bound("ks_travel", "kb_travel", travel_provider, keywords=("travel",)),
+            _bound("ks_claims", "kb_claims", claims_provider, keywords=("claim",)),
+        ),
+        model_resolver=lambda config: (
+            planner if config.name == "retrieval-planner" else evaluator
+        ),
+    )
+
+    result = service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="travel reimbursement",
+            strategy="agentic",
+            top_k=3,
+            min_score=0.2,
+            max_rounds=2,
+            planner_model=ModelConfig(provider="deterministic", name="retrieval-planner"),
+            evaluator_model=ModelConfig(provider="deterministic", name="retrieval-evaluator"),
+        )
+    )
+
+    assert result.evidence == ()
+    assert result.evidence_result.status == "failed"
+    assert result.evidence_result.metadata["no_evidence_reason_code"] == (
+        "required_provider_failure"
+    )
+    failed_round = next(
+        event
+        for event in _read_events(trace.trace_path)
+        if event["event_type"] == "retrieval_result"
+        and event["status"] == "error"
+    )
+    assert failed_round["payload"]["round_id"].startswith("round_02_")
+    assert failed_round["payload"]["no_evidence_reason_code"] == "required_provider_failure"
 
 
 def _mixed_provider(*bound: BoundKnowledgeProvider) -> BlendedKnowledgeProvider:

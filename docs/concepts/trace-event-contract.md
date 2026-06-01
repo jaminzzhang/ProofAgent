@@ -58,8 +58,8 @@ Every trace line is one JSON object:
 | `clarification_requested` | ReAct run paused to request missing user details |
 | `policy_decision` | typed policy decision at an enforcement point |
 | `retrieval_plan` | audit-safe Agentic RAG plan summary |
-| `retrieval_step` | governed retrieval attempt begins |
-| `retrieval_result` | retrieved evidence summary, source ids, routing outcome, no-evidence reason codes, and trace-safe provider-call summaries for blended retrieval |
+| `retrieval_step` | governed retrieval attempt begins; agentic rounds carry `round_id` correlation |
+| `retrieval_result` | retrieved evidence summary, source ids, routing outcome, no-evidence reason codes, and trace-safe provider-call summaries for blended retrieval; agentic rounds carry `round_id` correlation |
 | `evidence_evaluation` | accepted/rejected evidence and thresholds |
 | `context_admission` | trace-safe summary of admitted conversation context |
 | `model_request` | redacted model invocation metadata before generation |

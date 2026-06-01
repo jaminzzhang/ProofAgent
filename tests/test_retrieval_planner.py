@@ -11,7 +11,7 @@ class MockKnowledgeProvider:
         self.responses = responses or []
         self.calls: list[str] = []
 
-    def retrieve(self, query: str) -> list[EvidenceChunk]:
+    def retrieve(self, query: str, *, round_id: str) -> list[EvidenceChunk]:
         self.calls.append(query)
         if self.responses:
             return self.responses.pop(0)
@@ -76,7 +76,7 @@ class TestRetrievalPlanner:
         evaluator_model = MockEvaluatorModel([{"sufficient": True, "reason": "Found answer"}])
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=evaluator_model,
             max_rounds=3,
@@ -106,7 +106,7 @@ class TestRetrievalPlanner:
         ])
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=evaluator_model,
             max_rounds=3,
@@ -129,7 +129,7 @@ class TestRetrievalPlanner:
         evaluator_model = MockEvaluatorModel([{"sufficient": False, "reason": "No evidence"}])
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=evaluator_model,
             max_rounds=3,
@@ -157,7 +157,7 @@ class TestRetrievalPlanner:
         ])
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=evaluator_model,
             max_rounds=3,
@@ -179,7 +179,7 @@ class TestRetrievalPlanner:
                 raise Exception("LLM API error")
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=FailingModel(),
             evaluator_model=MockEvaluatorModel([]),
             max_rounds=3,
@@ -201,7 +201,7 @@ class TestRetrievalPlanner:
                 raise Exception("Evaluator API error")
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=FailingEvaluator(),
             max_rounds=3,
@@ -222,7 +222,7 @@ class TestRetrievalPlanner:
                 return "invalid json {"
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=BadPlanner(),
             evaluator_model=MockEvaluatorModel([]),
             max_rounds=3,
@@ -241,7 +241,7 @@ class TestRetrievalPlanner:
             def __init__(self):
                 self.call_count = 0
 
-            def retrieve(self, query: str) -> list[EvidenceChunk]:
+            def retrieve(self, query: str, *, round_id: str) -> list[EvidenceChunk]:
                 self.call_count += 1
                 if self.call_count == 1:
                     return evidence1
@@ -256,7 +256,7 @@ class TestRetrievalPlanner:
         ])
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=evaluator_model,
             max_rounds=3,
@@ -287,7 +287,7 @@ class TestRetrievalPlanner:
         ])
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=evaluator_model,
             max_rounds=5,
@@ -315,7 +315,7 @@ class TestRetrievalPlanner:
         ])
 
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=evaluator_model,
             max_rounds=3,
@@ -352,7 +352,7 @@ class TestRetrievalPlanner:
 
         # Note: In actual implementation, these models would be wrapped with role tracking
         planner = RetrievalPlanner(
-            knowledge_provider=provider,
+            retrieval_executor=provider,
             planner_model=planner_model,
             evaluator_model=evaluator_model,
             max_rounds=3,

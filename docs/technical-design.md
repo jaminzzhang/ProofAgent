@@ -589,7 +589,7 @@ Current baseline:
 - `EvidenceChunk` output.
 - evidence threshold validation.
 - shared Control Plane Knowledge Retrieval Service for Enterprise QA and Controlled ReAct.
-- deterministic binding metadata routing for single-step and reviewed/fallback retrieval.
+- deterministic binding metadata routing for single-step, reviewed/fallback, and planner/evaluator-backed agentic retrieval.
 - binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and provider-call trace summaries for blended retrieval.
 
 Knowledge Hub target shape:
@@ -634,6 +634,7 @@ Rules:
 - Agentic RAG is a `retrieval.strategy`, not a Knowledge Provider and not a workflow template.
 - Controlled ReAct may invoke agentic retrieval as a nested retrieval loop, but `react.max_steps` and `retrieval.max_rounds` remain separate budgets.
 - ReAct planners may propose Retrieval Intent only; Knowledge Source Routing remains a Control Envelope step.
+- Each RetrievalPlanner query rewrite re-enters service-owned bounded Knowledge Source Routing; RetrievalPlanner cannot select a binding or provider directly.
 - Empty routing, selected required source failure, or zero Accepted Evidence produces No Accepted Evidence Outcome and must not call a free-form final-answer model.
 - Multiple bound sources require deterministic routing metadata such as binding alias or `routing_metadata` terms before provider calls; the Control Plane does not silently query every binding when routing is ambiguous.
 - Selected advisory source failure may continue only when remaining selected bindings produce Accepted Evidence, and degraded retrieval remains visible in Trace, Receipt, and RunStore.
@@ -653,7 +654,7 @@ Implementation sequence:
 1. Clean up contracts, loader validation, examples, fixtures, and provider registry so `pageindex` and `local_vector` are no longer target provider entries.
 2. Add the Control Plane Knowledge Retrieval Service and route Enterprise QA plus Controlled ReAct retrieval through it; the current service centralizes policy-gated or reviewed provider calls, deterministic binding metadata routing for single-step and reviewed/fallback retrieval, binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and evidence admission.
 3. Complete `local_index` runtime load so Agent execution reads only published READY LlamaIndex-backed Knowledge Source Snapshots.
-4. Extend planner/evaluator-backed agentic retrieval with the same service-routed provider adapter, then add richer retrieval plan summaries and citation enforcement.
+4. Extend planner/evaluator-backed agentic retrieval with the same service-routed provider adapter; each round now re-enters bounded source routing and records round-correlated provider summaries. Add richer retrieval plan summaries and citation enforcement next.
 5. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
 6. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
 
