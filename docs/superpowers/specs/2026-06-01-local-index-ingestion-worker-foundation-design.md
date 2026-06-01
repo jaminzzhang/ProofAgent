@@ -114,9 +114,10 @@ and trigger incremental reingestion rather than silently reusing old output.
 
 ## Artifact Build
 
-The worker resolves the Source-owned `params.ingestion_model` using the existing `ModelConfig` and
-model registry, wraps it with `ProofAgentLLM(role=INGESTION)`, and invokes a single-revision Local
-Index artifact builder. The builder writes LlamaIndex native persistence plus:
+The worker validates the Source-owned `params.ingestion_model` through one shared helper using the
+existing `ModelConfig` contract. It passes that validated config to a single-revision Local Index
+artifact builder. The builder resolves the model provider, wraps it with
+`ProofAgentLLM(role=INGESTION)`, and writes LlamaIndex native persistence plus:
 
 ```json
 {
