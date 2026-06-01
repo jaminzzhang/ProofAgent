@@ -340,7 +340,13 @@ knowledge_sources:
     name: Enterprise Policy Knowledge
     provider: local_index
     params:
-      index_path: ./data/indexes/enterprise_policy
+      index_path: ./data/indexes/enterprise_policy/snapshot_enterprise_policy_001
+      routing_model:
+        provider: openai_compatible
+        name: gpt-4o-mini
+        params:
+          api_key_env: OPENAI_COMPATIBLE_API_KEY
+          base_url_env: OPENAI_COMPATIBLE_BASE_URL
 
 knowledge_bindings:
   - binding_id: enterprise_policy_binding
@@ -352,6 +358,24 @@ retrieval:
   min_score: 0.2
   max_rounds: 3
 ```
+
+The runtime directory must contain LlamaIndex persistence files plus an `artifact_meta.json`
+publication sidecar:
+
+```json
+{
+  "schema_version": "local_index.snapshot.v1",
+  "snapshot_id": "snapshot_enterprise_policy_001",
+  "state": "READY",
+  "provider": "local_index",
+  "engine_name": "llama-index-tree",
+  "engine_version": "0.12"
+}
+```
+
+Runtime loading rejects missing, malformed, or non-READY metadata before opening index storage.
+`routing_model` is Source-owned. When it is omitted, runtime inherits `ingestion_model` for
+routing. Runtime providers cannot build an index on demand inside an Agent run.
 
 For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
 

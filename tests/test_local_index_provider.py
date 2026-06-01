@@ -5,11 +5,14 @@ from pathlib import Path
 
 import pytest
 
+import proof_agent.capabilities.knowledge.local_index as local_index_module
 from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.capabilities.knowledge.contracts import DocumentNode
 from proof_agent.capabilities.knowledge.local_index import LocalIndexProvider
 from proof_agent.capabilities.models.llama_index_bridge import ProofAgentLLM
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus, ModelCallRole, ModelResponse
+from proof_agent.contracts.manifest import KnowledgeConfig
+from proof_agent.errors import ProofAgentError
 
 
 class MockModelProvider:
@@ -36,6 +39,23 @@ class MockModelProvider:
             provider_name=self._provider_name,
             model_name=self._model_name,
         )
+
+
+def _write_ready_snapshot_metadata(index_path: Path) -> None:
+    index_path.mkdir()
+    (index_path / "artifact_meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "local_index.snapshot.v1",
+                "snapshot_id": "snapshot_enterprise_policy_001",
+                "state": "READY",
+                "provider": "local_index",
+                "engine_name": "llama-index-tree",
+                "engine_version": "0.12",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 class TestLocalIndexProvider:
@@ -395,27 +415,153 @@ class TestLocalIndexProvider:
             with pytest.raises(ValueError, match="not found"):
                 provider.retrieve_at_scope("nonexistent", "query")
 
-    def test_from_config_parses_models_from_params(self) -> None:
-        """from_config() parses ingestion_model and routing_model from params."""
-        from proof_agent.contracts.manifest import KnowledgeConfig
-
+    def test_from_config_resolves_routing_model_and_loads_ready_snapshot(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """from_config() validates and loads an immutable READY snapshot."""
+        index_path = tmp_path / "snapshot"
+        _write_ready_snapshot_metadata(index_path)
+        routing_provider = MockModelProvider("routing", "routing-model")
+        resolved_configs = []
+        loaded_paths = []
+        monkeypatch.setattr(
+            local_index_module,
+            "resolve_provider",
+            lambda config: resolved_configs.append(config) or routing_provider,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            LocalIndexProvider,
+            "load_index",
+            lambda provider: loaded_paths.append(provider.index_path),
+        )
         config = KnowledgeConfig(
             provider="local_index",
             params={
-                "index_path": "/tmp/test_index",
-                "ingestion_model": {
-                    "provider_name": "openai",
-                    "model_name": "gpt-4",
-                },
+                "index_path": index_path,
                 "routing_model": {
-                    "provider_name": "openai",
-                    "model_name": "gpt-3.5-turbo",
+                    "provider": "deterministic",
+                    "name": "routing-model",
                 },
             },
         )
 
-        # This will fail because we need a ModelProviderRegistry
-        # For now, just verify the structure is correct
-        # In Phase 5, we'll wire this up properly
-        with pytest.raises(Exception):  # Will be more specific later
+        provider = LocalIndexProvider.from_config(config)
+
+        assert provider.ingestion_model is None
+        assert provider.routing_model._provider is routing_provider
+        assert provider.routing_model._role == ModelCallRole.ROUTING
+        assert provider.snapshot_metadata is not None
+        assert provider.snapshot_metadata.snapshot_id == "snapshot_enterprise_policy_001"
+        assert loaded_paths == [index_path]
+        assert resolved_configs[0].provider == "deterministic"
+        assert resolved_configs[0].name == "routing-model"
+
+    def test_from_config_inherits_ingestion_model_for_routing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """from_config() falls back to the source-owned ingestion model."""
+        index_path = tmp_path / "snapshot"
+        _write_ready_snapshot_metadata(index_path)
+        routing_provider = MockModelProvider("routing", "inherited-model")
+        resolved_configs = []
+        monkeypatch.setattr(
+            local_index_module,
+            "resolve_provider",
+            lambda config: resolved_configs.append(config) or routing_provider,
+            raising=False,
+        )
+        monkeypatch.setattr(LocalIndexProvider, "load_index", lambda _provider: None)
+        config = KnowledgeConfig(
+            provider="local_index",
+            params={
+                "index_path": index_path,
+                "ingestion_model": {
+                    "provider": "deterministic",
+                    "name": "inherited-model",
+                },
+            },
+        )
+
+        provider = LocalIndexProvider.from_config(config)
+
+        assert provider.routing_model._provider is routing_provider
+        assert resolved_configs[0].name == "inherited-model"
+
+    def test_from_config_rejects_missing_sidecar_before_opening_storage(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """from_config() validates publication metadata before loading storage."""
+        index_path = tmp_path / "snapshot"
+        index_path.mkdir()
+        storage_loads = []
+        monkeypatch.setattr(
+            LocalIndexProvider,
+            "load_index",
+            lambda _provider: storage_loads.append("loaded"),
+        )
+        config = KnowledgeConfig(
+            provider="local_index",
+            params={
+                "index_path": index_path,
+                "routing_model": {
+                    "provider": "deterministic",
+                    "name": "routing-model",
+                },
+            },
+        )
+
+        with pytest.raises(ProofAgentError) as exc:
             LocalIndexProvider.from_config(config)
+
+        assert exc.value.code == "PA_KNOWLEDGE_001"
+        assert storage_loads == []
+
+    def test_runtime_provider_cannot_build_index_on_demand(self, tmp_path: Path) -> None:
+        """A read-only runtime provider cannot build an index."""
+        provider = LocalIndexProvider(
+            ingestion_model=None,
+            routing_model=ProofAgentLLM(
+                model_provider=MockModelProvider("routing", "routing-model"),
+                role=ModelCallRole.ROUTING,
+            ),
+            index_path=tmp_path / "snapshot",
+        )
+
+        with pytest.raises(ProofAgentError) as exc:
+            provider.build_index([{"doc_id": "doc1", "content": "content"}])
+
+        assert exc.value.code == "PA_KNOWLEDGE_001"
+
+    def test_load_index_normalizes_storage_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """load_index() exposes a stable Knowledge Provider failure."""
+        index_path = tmp_path / "snapshot"
+        index_path.mkdir()
+        provider = LocalIndexProvider(
+            ingestion_model=None,
+            routing_model=ProofAgentLLM(
+                model_provider=MockModelProvider("routing", "routing-model"),
+                role=ModelCallRole.ROUTING,
+            ),
+            index_path=index_path,
+        )
+
+        def raise_storage_error(**_kwargs) -> None:
+            raise ValueError("broken storage")
+
+        monkeypatch.setattr(local_index_module.StorageContext, "from_defaults", raise_storage_error)
+
+        with pytest.raises(ProofAgentError) as exc:
+            provider.load_index()
+
+        assert exc.value.code == "PA_KNOWLEDGE_002"
