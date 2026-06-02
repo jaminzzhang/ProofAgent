@@ -7,13 +7,20 @@ import re
 import shutil
 import tempfile
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
 from proof_agent.bootstrap.validation import validate_secret_safe_params
+from proof_agent.capabilities.knowledge.ingestion import (
+    ParsedKnowledgeDocument,
+    ParserMetadata,
+    ingestion_config_fingerprint,
+    local_index_engine_version,
+)
 from proof_agent.contracts import (
     ActiveAgentVersion,
     AgentValidationRecord,
@@ -21,7 +28,9 @@ from proof_agent.contracts import (
     ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
+    KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
+    KnowledgeIngestionJob,
     KnowledgeSource,
     PublishedAgentVersion,
     QuarantinedKnowledgeUpload,
@@ -379,6 +388,131 @@ class LocalAgentConfigurationStore:
     def quarantined_knowledge_upload_bytes_path(self, upload: QuarantinedKnowledgeUpload) -> Path:
         return self._root_dir / upload.storage_path
 
+    def accept_quarantined_knowledge_upload(
+        self,
+        *,
+        source_id: str,
+        upload_id: str,
+        parsed_document: ParsedKnowledgeDocument,
+    ) -> tuple[KnowledgeDocument, KnowledgeIngestionJob]:
+        """Promote one validated upload into immutable managed ingestion state."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
+            if self._upload_promotion_marker_path(source_id, upload_id).exists():
+                return self._repair_accepted_upload_projection_unlocked(upload)
+            if upload.state != "queued":
+                raise _invalid_ingestion_transition(
+                    f"Knowledge upload {upload_id} is not queued for validation."
+                )
+
+            source = self._require_knowledge_source(source_id)
+            validate_secret_safe_params(
+                source.params,
+                field_prefix=f"knowledge_sources[{source_id}].params",
+            )
+            original_bytes = self.quarantined_knowledge_upload_bytes_path(upload).read_bytes()
+            document, job, parser_metadata = self._promoted_knowledge_records(
+                upload=upload,
+                source=source,
+                parsed_document=parsed_document,
+                original_bytes=original_bytes,
+            )
+            revision_dir = self.knowledge_document_original_path(document).parent
+            _write_bytes_atomic(self.knowledge_document_original_path(document), original_bytes)
+            _write_text_atomic(revision_dir / "parsed-text.txt", parsed_document.text)
+            _write_json_atomic(revision_dir / "parser-meta.json", asdict(parser_metadata))
+            self._write_knowledge_document(document)
+            self._write_knowledge_ingestion_job(job)
+            self._write_upload_promotion_marker(upload, document, job)
+            self._write_quarantined_knowledge_upload(
+                _accepted_upload_projection(upload, document=document, job=job)
+            )
+            self.quarantined_knowledge_upload_bytes_path(upload).unlink(missing_ok=True)
+            return document, job
+
+    def reject_quarantined_knowledge_upload(
+        self,
+        *,
+        source_id: str,
+        upload_id: str,
+        error_code: str,
+        error_message: str,
+    ) -> QuarantinedKnowledgeUpload:
+        """Reject one validated quarantine upload while retaining bytes for 24 hours."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
+            if upload.state != "queued":
+                raise _invalid_ingestion_transition(
+                    f"Knowledge upload {upload_id} is not queued for validation."
+                )
+            now = datetime.now(UTC)
+            rejected = upload.model_copy(
+                update={
+                    "state": "rejected",
+                    "completed_at": _timestamp(now),
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "expires_at": _timestamp(now + timedelta(hours=24)),
+                    "updated_at": _timestamp(now),
+                }
+            )
+            self._write_quarantined_knowledge_upload(rejected)
+            return rejected
+
+    def purge_expired_quarantined_upload_bytes(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> list[QuarantinedKnowledgeUpload]:
+        """Delete rejected raw bytes after retention while preserving status records."""
+
+        current_time = now or datetime.now(UTC)
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            purged = []
+            for source in self.list_knowledge_sources():
+                for upload in self.list_quarantined_knowledge_uploads(source.source_id):
+                    if not _is_expired_rejected_upload(upload, now=current_time):
+                        continue
+                    self.quarantined_knowledge_upload_bytes_path(upload).unlink(missing_ok=True)
+                    updated = upload.model_copy(
+                        update={
+                            "purged_at": _timestamp(current_time),
+                            "updated_at": _timestamp(current_time),
+                        }
+                    )
+                    self._write_quarantined_knowledge_upload(updated)
+                    purged.append(updated)
+            return purged
+
+    def get_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+    ) -> KnowledgeIngestionJob | None:
+        path = self._knowledge_ingestion_job_path(source_id, job_id)
+        if not path.exists():
+            return None
+        return KnowledgeIngestionJob.model_validate(_read_json(path))
+
+    def list_knowledge_ingestion_jobs(self, source_id: str) -> list[KnowledgeIngestionJob]:
+        jobs_root = self._knowledge_ingestion_jobs_root(source_id)
+        if not jobs_root.exists():
+            return []
+        jobs = []
+        for job_dir in jobs_root.iterdir():
+            if not job_dir.is_dir():
+                continue
+            job = self.get_knowledge_ingestion_job(
+                source_id=source_id,
+                job_id=job_dir.name,
+            )
+            if job is not None:
+                jobs.append(job)
+        return sorted(jobs, key=lambda job: job.created_at)
+
     def add_knowledge_document(
         self,
         *,
@@ -465,6 +599,108 @@ class LocalAgentConfigurationStore:
             raise KeyError(f"Knowledge Source not found: {source_id}")
         return source
 
+    def _require_quarantined_knowledge_upload(
+        self,
+        source_id: str,
+        upload_id: str,
+    ) -> QuarantinedKnowledgeUpload:
+        upload = self.get_quarantined_knowledge_upload(
+            source_id=source_id,
+            upload_id=upload_id,
+        )
+        if upload is None:
+            raise KeyError(f"Quarantined Knowledge Upload not found: {source_id}/{upload_id}")
+        return upload
+
+    def _promoted_knowledge_records(
+        self,
+        *,
+        upload: QuarantinedKnowledgeUpload,
+        source: KnowledgeSource,
+        parsed_document: ParsedKnowledgeDocument,
+        original_bytes: bytes,
+    ) -> tuple[KnowledgeDocument, KnowledgeIngestionJob, ParserMetadata]:
+        suffix = upload.upload_id.removeprefix("upload_")
+        document_id = f"doc_{suffix}"
+        revision_id = f"rev_{suffix}"
+        job_id = f"job_{suffix}"
+        now = _now()
+        content_hash = hashlib.sha256(original_bytes).hexdigest()
+        parsed_text_sha256 = hashlib.sha256(parsed_document.text.encode("utf-8")).hexdigest()
+        parser_metadata = replace(
+            parsed_document.parser_metadata,
+            parsed_text_sha256=parsed_text_sha256,
+        )
+        artifact_build_spec = KnowledgeArtifactBuildSpec(
+            provider="local_index",
+            engine_name="llama-index-tree",
+            engine_version=local_index_engine_version(),
+            parser_fingerprint_identity=parser_metadata.fingerprint_identity,
+            content_hash=content_hash,
+            parsed_text_sha256=parsed_text_sha256,
+            declared_ingestion_model=_declared_ingestion_model(source.params),
+        )
+        storage_path = (
+            Path("knowledge_sources")
+            / upload.source_id
+            / "documents"
+            / document_id
+            / "revisions"
+            / revision_id
+            / "original.bin"
+        )
+        document = KnowledgeDocument(
+            document_id=document_id,
+            source_id=upload.source_id,
+            revision_id=revision_id,
+            filename=upload.filename,
+            content_type=upload.content_type,
+            content_hash=content_hash,
+            size_bytes=upload.size_bytes,
+            state="queued",
+            storage_path=storage_path.as_posix(),
+            ingestion_job_id=job_id,
+            created_at=now,
+            updated_at=now,
+        )
+        job = KnowledgeIngestionJob(
+            job_id=job_id,
+            source_id=upload.source_id,
+            document_id=document_id,
+            revision_id=revision_id,
+            state="queued",
+            ingestion_config_fingerprint=ingestion_config_fingerprint(artifact_build_spec),
+            artifact_build_spec=artifact_build_spec,
+            created_at=now,
+            updated_at=now,
+        )
+        return document, job, parser_metadata
+
+    def _repair_accepted_upload_projection_unlocked(
+        self,
+        upload: QuarantinedKnowledgeUpload,
+    ) -> tuple[KnowledgeDocument, KnowledgeIngestionJob]:
+        marker = _read_json(self._upload_promotion_marker_path(upload.source_id, upload.upload_id))
+        document_id = _required_marker_string(marker, "document_id")
+        job_id = _required_marker_string(marker, "job_id")
+        document = self.get_knowledge_document(
+            source_id=upload.source_id,
+            document_id=document_id,
+        )
+        job = self.get_knowledge_ingestion_job(
+            source_id=upload.source_id,
+            job_id=job_id,
+        )
+        if document is None or job is None:
+            raise _invalid_ingestion_transition(
+                f"Knowledge upload promotion marker for {upload.upload_id} is incomplete."
+            )
+        self._write_quarantined_knowledge_upload(
+            _accepted_upload_projection(upload, document=document, job=job)
+        )
+        self.quarantined_knowledge_upload_bytes_path(upload).unlink(missing_ok=True)
+        return document, job
+
     def _count_reserved_knowledge_document_slots_unlocked(self, source_id: str) -> int:
         managed_document_count = len(self.list_knowledge_documents(source_id))
         reservation_count = sum(
@@ -518,6 +754,21 @@ class LocalAgentConfigurationStore:
     def _quarantined_knowledge_upload_path(self, source_id: str, upload_id: str) -> Path:
         return self._quarantined_knowledge_uploads_root(source_id) / upload_id / "upload.json"
 
+    def _knowledge_ingestion_jobs_root(self, source_id: str) -> Path:
+        return self._root_dir / "knowledge_sources" / source_id / "ingestion_jobs"
+
+    def _knowledge_ingestion_job_path(self, source_id: str, job_id: str) -> Path:
+        return self._knowledge_ingestion_jobs_root(source_id) / job_id / "job.json"
+
+    def _upload_promotion_marker_path(self, source_id: str, upload_id: str) -> Path:
+        return (
+            self._root_dir
+            / "knowledge_sources"
+            / source_id
+            / "upload_promotions"
+            / f"{upload_id}.json"
+        )
+
     def _store_lock_path(self) -> Path:
         return store_lock_path(self._root_dir)
 
@@ -554,9 +805,37 @@ class LocalAgentConfigurationStore:
         _write_json(self._knowledge_source_path(source.source_id), source.model_dump(mode="json"))
 
     def _write_knowledge_document(self, document: KnowledgeDocument) -> None:
-        _write_json(
+        _write_json_atomic(
             self._knowledge_document_path(document.source_id, document.document_id),
             document.model_dump(mode="json"),
+        )
+
+    def _write_quarantined_knowledge_upload(self, upload: QuarantinedKnowledgeUpload) -> None:
+        _write_json_atomic(
+            self._quarantined_knowledge_upload_path(upload.source_id, upload.upload_id),
+            upload.model_dump(mode="json"),
+        )
+
+    def _write_knowledge_ingestion_job(self, job: KnowledgeIngestionJob) -> None:
+        _write_json_atomic(
+            self._knowledge_ingestion_job_path(job.source_id, job.job_id),
+            job.model_dump(mode="json"),
+        )
+
+    def _write_upload_promotion_marker(
+        self,
+        upload: QuarantinedKnowledgeUpload,
+        document: KnowledgeDocument,
+        job: KnowledgeIngestionJob,
+    ) -> None:
+        _write_json_atomic(
+            self._upload_promotion_marker_path(upload.source_id, upload.upload_id),
+            {
+                "upload_id": upload.upload_id,
+                "document_id": document.document_id,
+                "revision_id": document.revision_id,
+                "job_id": job.job_id,
+            },
         )
 
 
@@ -579,6 +858,10 @@ def _audit(
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _safe_filename(filename: str) -> str:
@@ -605,6 +888,56 @@ def _knowledge_document_capacity_exceeded(source_id: str) -> ProofAgentError:
     )
 
 
+def _declared_ingestion_model(params: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    value = params.get("ingestion_model")
+    return value if isinstance(value, Mapping) else None
+
+
+def _accepted_upload_projection(
+    upload: QuarantinedKnowledgeUpload,
+    *,
+    document: KnowledgeDocument,
+    job: KnowledgeIngestionJob,
+) -> QuarantinedKnowledgeUpload:
+    now = _now()
+    return upload.model_copy(
+        update={
+            "state": "accepted",
+            "completed_at": now,
+            "promoted_document_id": document.document_id,
+            "promoted_revision_id": document.revision_id,
+            "ingestion_job_id": job.job_id,
+            "updated_at": now,
+        }
+    )
+
+
+def _is_expired_rejected_upload(
+    upload: QuarantinedKnowledgeUpload,
+    *,
+    now: datetime,
+) -> bool:
+    if upload.state != "rejected" or upload.expires_at is None or upload.purged_at is not None:
+        return False
+    expires_at = datetime.fromisoformat(upload.expires_at.replace("Z", "+00:00"))
+    return expires_at <= now
+
+
+def _required_marker_string(marker: Mapping[str, Any], key: str) -> str:
+    value = marker.get(key)
+    if not isinstance(value, str) or not value:
+        raise _invalid_ingestion_transition(f"Knowledge upload promotion marker requires {key}.")
+    return value
+
+
+def _invalid_ingestion_transition(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_INGESTION_004",
+        message,
+        "Retry the operation after refreshing the persisted knowledge ingestion state.",
+    )
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
@@ -615,6 +948,31 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
         json.dumps(_jsonable(payload), indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    content = json.dumps(_jsonable(payload), indent=2, sort_keys=True).encode("utf-8")
+    _write_bytes_atomic(path, content)
+
+
+def _write_text_atomic(path: Path, content: str) -> None:
+    _write_bytes_atomic(path, content.encode("utf-8"))
+
+
+def _write_bytes_atomic(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "wb") as handle:
+            handle.write(content)
+        os.replace(temporary_path, path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _jsonable(value: Any) -> Any:
