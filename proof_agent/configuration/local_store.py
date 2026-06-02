@@ -11,11 +11,14 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from proof_agent.bootstrap.validation import validate_secret_safe_params
 from proof_agent.capabilities.knowledge.ingestion import (
+    KnowledgeWorkerClaimSelection,
+    KnowledgeWorkerDiagnostic,
+    KnowledgeWorkerTaskClaim,
     ParsedKnowledgeDocument,
     ParserMetadata,
     ingestion_config_fingerprint,
@@ -394,17 +397,15 @@ class LocalAgentConfigurationStore:
         source_id: str,
         upload_id: str,
         parsed_document: ParsedKnowledgeDocument,
+        claim_token: str,
     ) -> tuple[KnowledgeDocument, KnowledgeIngestionJob]:
         """Promote one validated upload into immutable managed ingestion state."""
 
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
+            _require_owned_processing_claim(upload, claim_token=claim_token)
             if self._upload_promotion_marker_path(source_id, upload_id).exists():
                 return self._repair_accepted_upload_projection_unlocked(upload)
-            if upload.state != "queued":
-                raise _invalid_ingestion_transition(
-                    f"Knowledge upload {upload_id} is not queued for validation."
-                )
 
             source = self._require_knowledge_source(source_id)
             validate_secret_safe_params(
@@ -436,6 +437,7 @@ class LocalAgentConfigurationStore:
         *,
         source_id: str,
         upload_id: str,
+        claim_token: str,
         error_code: str,
         error_message: str,
     ) -> QuarantinedKnowledgeUpload:
@@ -443,10 +445,7 @@ class LocalAgentConfigurationStore:
 
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
-            if upload.state != "queued":
-                raise _invalid_ingestion_transition(
-                    f"Knowledge upload {upload_id} is not queued for validation."
-                )
+            _require_owned_processing_claim(upload, claim_token=claim_token)
             now = datetime.now(UTC)
             rejected = upload.model_copy(
                 update={
@@ -455,6 +454,9 @@ class LocalAgentConfigurationStore:
                     "error_code": error_code,
                     "error_message": error_message,
                     "expires_at": _timestamp(now + timedelta(hours=24)),
+                    "claimed_at": None,
+                    "claim_token": None,
+                    "lease_expires_at": None,
                     "updated_at": _timestamp(now),
                 }
             )
@@ -486,6 +488,40 @@ class LocalAgentConfigurationStore:
                     purged.append(updated)
             return purged
 
+    def claim_next_quarantined_knowledge_upload(
+        self,
+        *,
+        source_id: str | None = None,
+        lease_seconds: int = 300,
+    ) -> QuarantinedKnowledgeUpload | None:
+        """Claim the oldest eligible quarantine upload, optionally for one Source."""
+
+        selection = self._claim_next_knowledge_worker_task(
+            task_kinds={"quarantine_validation"},
+            source_id=source_id,
+            lease_seconds=lease_seconds,
+        )
+        if selection.task is None:
+            return None
+        return selection.task.upload
+
+    def renew_quarantined_knowledge_upload_claim(
+        self,
+        *,
+        source_id: str,
+        upload_id: str,
+        claim_token: str,
+        lease_seconds: int = 300,
+    ) -> QuarantinedKnowledgeUpload:
+        """Extend one token-owned quarantine-validation lease."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
+            _require_owned_processing_claim(upload, claim_token=claim_token)
+            renewed = upload.model_copy(update=_renewed_claim_updates(lease_seconds=lease_seconds))
+            self._write_quarantined_knowledge_upload(renewed)
+            return renewed
+
     def get_knowledge_ingestion_job(
         self,
         *,
@@ -512,6 +548,53 @@ class LocalAgentConfigurationStore:
             if job is not None:
                 jobs.append(job)
         return sorted(jobs, key=lambda job: job.created_at)
+
+    def claim_next_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str | None = None,
+        lease_seconds: int = 300,
+    ) -> KnowledgeIngestionJob | None:
+        """Claim the oldest eligible artifact-build job, optionally for one Source."""
+
+        selection = self._claim_next_knowledge_worker_task(
+            task_kinds={"artifact_build"},
+            source_id=source_id,
+            lease_seconds=lease_seconds,
+        )
+        if selection.task is None:
+            return None
+        return selection.task.ingestion_job
+
+    def renew_knowledge_ingestion_job_claim(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        lease_seconds: int = 300,
+    ) -> KnowledgeIngestionJob:
+        """Extend one token-owned artifact-build lease."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job = self._require_knowledge_ingestion_job(source_id, job_id)
+            _require_owned_processing_claim(job, claim_token=claim_token)
+            renewed = job.model_copy(update=_renewed_claim_updates(lease_seconds=lease_seconds))
+            self._write_knowledge_ingestion_job(renewed)
+            return renewed
+
+    def claim_next_knowledge_worker_task(
+        self,
+        *,
+        lease_seconds: int = 300,
+    ) -> KnowledgeWorkerClaimSelection:
+        """Atomically claim the oldest eligible task across both ingestion queues."""
+
+        return self._claim_next_knowledge_worker_task(
+            task_kinds={"quarantine_validation", "artifact_build"},
+            source_id=None,
+            lease_seconds=lease_seconds,
+        )
 
     def add_knowledge_document(
         self,
@@ -611,6 +694,168 @@ class LocalAgentConfigurationStore:
         if upload is None:
             raise KeyError(f"Quarantined Knowledge Upload not found: {source_id}/{upload_id}")
         return upload
+
+    def _require_knowledge_ingestion_job(
+        self,
+        source_id: str,
+        job_id: str,
+    ) -> KnowledgeIngestionJob:
+        job = self.get_knowledge_ingestion_job(source_id=source_id, job_id=job_id)
+        if job is None:
+            raise KeyError(f"Knowledge Ingestion Job not found: {source_id}/{job_id}")
+        return job
+
+    def _claim_next_knowledge_worker_task(
+        self,
+        *,
+        task_kinds: set[str],
+        source_id: str | None,
+        lease_seconds: int,
+    ) -> KnowledgeWorkerClaimSelection:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            return self._claim_next_knowledge_worker_task_unlocked(
+                task_kinds=task_kinds,
+                source_id=source_id,
+                lease_seconds=lease_seconds,
+            )
+
+    def _claim_next_knowledge_worker_task_unlocked(
+        self,
+        *,
+        task_kinds: set[str],
+        source_id: str | None,
+        lease_seconds: int,
+    ) -> KnowledgeWorkerClaimSelection:
+        now = datetime.now(UTC)
+        diagnostics: list[KnowledgeWorkerDiagnostic] = []
+        source_limits: dict[str, int] = {}
+        for source in self.list_knowledge_sources():
+            if source_id is not None and source.source_id != source_id:
+                continue
+            try:
+                source_limits[source.source_id] = _knowledge_source_worker_concurrency(
+                    source.params
+                )
+            except ProofAgentError:
+                diagnostics.append(
+                    KnowledgeWorkerDiagnostic(
+                        source_id=source.source_id,
+                        code="PA_INGESTION_001",
+                        message="Knowledge Source worker_concurrency is invalid.",
+                    )
+                )
+
+        active_counts = {
+            candidate_source_id: self._active_processing_task_count(
+                candidate_source_id,
+                now=now,
+            )
+            for candidate_source_id in source_limits
+        }
+        candidates: list[
+            tuple[
+                str,
+                Literal["quarantine_validation", "artifact_build"],
+                QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
+            ]
+        ] = []
+        if "quarantine_validation" in task_kinds:
+            for candidate_source_id in source_limits:
+                for upload in self.list_quarantined_knowledge_uploads(candidate_source_id):
+                    if _is_ready_for_claim(upload, now=now):
+                        candidates.append((upload.created_at, "quarantine_validation", upload))
+        if "artifact_build" in task_kinds:
+            for candidate_source_id in source_limits:
+                for job in self.list_knowledge_ingestion_jobs(candidate_source_id):
+                    if self._is_ingestion_job_ready_for_claim(job, now=now):
+                        candidates.append((job.created_at, "artifact_build", job))
+
+        for _, task_kind, candidate in sorted(
+            candidates,
+            key=lambda item: (item[0], item[1], item[2].source_id),
+        ):
+            if active_counts[candidate.source_id] >= source_limits[candidate.source_id]:
+                continue
+            if task_kind == "quarantine_validation":
+                upload = self._claim_quarantined_knowledge_upload_unlocked(
+                    candidate,
+                    lease_seconds=lease_seconds,
+                )
+                return KnowledgeWorkerClaimSelection(
+                    task=KnowledgeWorkerTaskClaim(kind=task_kind, upload=upload),
+                    diagnostics=tuple(diagnostics),
+                )
+            job = self._claim_knowledge_ingestion_job_unlocked(
+                candidate,
+                lease_seconds=lease_seconds,
+            )
+            return KnowledgeWorkerClaimSelection(
+                task=KnowledgeWorkerTaskClaim(kind=task_kind, ingestion_job=job),
+                diagnostics=tuple(diagnostics),
+            )
+        return KnowledgeWorkerClaimSelection(task=None, diagnostics=tuple(diagnostics))
+
+    def _active_processing_task_count(self, source_id: str, *, now: datetime) -> int:
+        tasks: tuple[QuarantinedKnowledgeUpload | KnowledgeIngestionJob, ...] = (
+            *self.list_quarantined_knowledge_uploads(source_id),
+            *self.list_knowledge_ingestion_jobs(source_id),
+        )
+        return sum(
+            task.state == "processing" and _has_active_lease(task, now=now) for task in tasks
+        )
+
+    def _claim_quarantined_knowledge_upload_unlocked(
+        self,
+        upload: QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
+        *,
+        lease_seconds: int,
+    ) -> QuarantinedKnowledgeUpload:
+        if not isinstance(upload, QuarantinedKnowledgeUpload):
+            raise _invalid_ingestion_transition("Expected one quarantine-validation task.")
+        claimed = upload.model_copy(update=_new_claim_updates(upload, lease_seconds=lease_seconds))
+        self._write_quarantined_knowledge_upload(claimed)
+        return claimed
+
+    def _claim_knowledge_ingestion_job_unlocked(
+        self,
+        job: QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
+        *,
+        lease_seconds: int,
+    ) -> KnowledgeIngestionJob:
+        if not isinstance(job, KnowledgeIngestionJob):
+            raise _invalid_ingestion_transition("Expected one artifact-build task.")
+        document = self.get_knowledge_document(
+            source_id=job.source_id,
+            document_id=job.document_id,
+        )
+        if document is None:
+            raise _invalid_ingestion_transition(
+                f"Knowledge ingestion job {job.job_id} is missing its document projection."
+            )
+        updates = _new_claim_updates(job, lease_seconds=lease_seconds)
+        claimed_document = document.model_copy(
+            update={
+                "state": "processing",
+                "updated_at": updates["updated_at"],
+            }
+        )
+        claimed_job = job.model_copy(update=updates)
+        self._write_knowledge_document(claimed_document)
+        self._write_knowledge_ingestion_job(claimed_job)
+        return claimed_job
+
+    def _is_ingestion_job_ready_for_claim(
+        self,
+        job: KnowledgeIngestionJob,
+        *,
+        now: datetime,
+    ) -> bool:
+        upload_id = f"upload_{job.job_id.removeprefix('job_')}"
+        if not self._upload_promotion_marker_path(job.source_id, upload_id).exists():
+            return False
+        if job.next_attempt_at is not None and _parse_timestamp(job.next_attempt_at) > now:
+            return False
+        return _is_ready_for_claim(job, now=now)
 
     def _promoted_knowledge_records(
         self,
@@ -907,6 +1152,9 @@ def _accepted_upload_projection(
             "promoted_document_id": document.document_id,
             "promoted_revision_id": document.revision_id,
             "ingestion_job_id": job.job_id,
+            "claimed_at": None,
+            "claim_token": None,
+            "lease_expires_at": None,
             "updated_at": now,
         }
     )
@@ -936,6 +1184,63 @@ def _invalid_ingestion_transition(message: str) -> ProofAgentError:
         message,
         "Retry the operation after refreshing the persisted knowledge ingestion state.",
     )
+
+
+def _new_claim_updates(
+    task: QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
+    *,
+    lease_seconds: int,
+) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    return {
+        "state": "processing",
+        "attempt_count": task.attempt_count + 1,
+        "claimed_at": _timestamp(now),
+        "claim_token": f"claim_{uuid4().hex}",
+        "lease_expires_at": _timestamp(now + timedelta(seconds=lease_seconds)),
+        "updated_at": _timestamp(now),
+    }
+
+
+def _renewed_claim_updates(*, lease_seconds: int) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    return {
+        "lease_expires_at": _timestamp(now + timedelta(seconds=lease_seconds)),
+        "updated_at": _timestamp(now),
+    }
+
+
+def _require_owned_processing_claim(
+    task: QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
+    *,
+    claim_token: str,
+) -> None:
+    if task.state != "processing" or task.claim_token != claim_token:
+        raise _invalid_ingestion_transition(
+            "Knowledge ingestion task is not owned by the current worker claim."
+        )
+
+
+def _is_ready_for_claim(
+    task: QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
+    *,
+    now: datetime,
+) -> bool:
+    return task.state == "queued" or (
+        task.state == "processing" and not _has_active_lease(task, now=now)
+    )
+
+
+def _has_active_lease(
+    task: QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
+    *,
+    now: datetime,
+) -> bool:
+    return task.lease_expires_at is not None and _parse_timestamp(task.lease_expires_at) > now
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
