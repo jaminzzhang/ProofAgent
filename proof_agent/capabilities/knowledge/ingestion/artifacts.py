@@ -62,9 +62,15 @@ def is_runtime_compatible_local_index_artifact(
     artifact_path: Path,
     *,
     content_hash: str,
+    artifact_root: Path | None = None,
 ) -> bool:
     """Validate the self-described immutable revision artifact before runtime open."""
 
+    if artifact_root is not None and not _is_contained_artifact_path(
+        artifact_path,
+        artifact_root=artifact_root,
+    ):
+        return False
     if not _has_immutable_artifact_files(artifact_path):
         return False
     metadata = _read_json_object(artifact_path / ARTIFACT_META_FILENAME)
@@ -78,6 +84,14 @@ def is_runtime_compatible_local_index_artifact(
         and metadata.get("content_hash") == content_hash
         and _is_non_empty_string(metadata.get("ingestion_config_fingerprint"))
     )
+
+
+def _is_contained_artifact_path(artifact_path: Path, *, artifact_root: Path) -> bool:
+    try:
+        artifact_path.resolve().relative_to(artifact_root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
 
 
 def _is_non_empty_string(value: object) -> bool:

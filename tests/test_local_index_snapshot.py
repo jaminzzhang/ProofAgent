@@ -115,6 +115,7 @@ def test_load_ready_snapshot_manifest_returns_sorted_runtime_descriptors(
     assert runtime.documents[0].artifact_path == (
         artifact_root / "artifacts/doc_alpha/rev_alpha"
     ).resolve()
+    assert runtime.documents[0].artifact_root == artifact_root.resolve()
     assert runtime.documents[0].revision_id == "rev_alpha"
     assert runtime.documents[0].filename == "alpha.md"
     assert runtime.documents[0].content_type == "text/markdown"

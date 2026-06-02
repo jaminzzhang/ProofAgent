@@ -16,7 +16,11 @@ from proof_agent.contracts import (
     EvidenceStatus,
     KnowledgeBindingConfig,
     KnowledgeSourceConfig,
+    ModelMessage,
     ModelConfig,
+    ModelRequest,
+    ModelResponse,
+    ModelRole,
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.knowledge.retrieval_service import (
@@ -70,6 +74,49 @@ class FakeModelProvider:
         return self.responses.pop(0)
 
 
+class FakeOutboundRoutingModel:
+    provider_name = "openai_compatible"
+    model_name = "routing-model"
+
+    def __init__(self) -> None:
+        self.calls: list[ModelRequest] = []
+        self.error: Exception | None = None
+
+    def estimate_tokens(self, request: ModelRequest) -> int | None:
+        return 7
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.calls.append(request)
+        if self.error is not None:
+            raise self.error
+        return ModelResponse(
+            content='{"selected_document_ids":[],"reason":"none"}',
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+        )
+
+
+class FakeRoutingAwareKnowledgeProvider:
+    provider_name = "local_index"
+
+    def __init__(self, routing_provider: FakeOutboundRoutingModel) -> None:
+        self.routing_provider = routing_provider
+
+    def bind_runtime_routing_provider(self, routing_provider: Any) -> None:
+        self.routing_provider = routing_provider
+
+    def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
+        self.routing_provider.generate(
+            ModelRequest(
+                messages=(ModelMessage(role=ModelRole.USER, content=query),),
+                provider=self.routing_provider.provider_name,
+                model=self.routing_provider.model_name,
+                response_format="json",
+            )
+        )
+        return ()
+
+
 def test_single_step_retrieval_service_gates_provider_and_evaluates_evidence(
     tmp_path: Path,
 ) -> None:
@@ -117,7 +164,7 @@ def test_single_step_retrieval_traces_direct_provider_summary(tmp_path: Path) ->
             {
                 "document_candidates": [{"document_id": "doc_policy"}],
                 "selected_documents": [{"document_id": "doc_policy"}],
-                "routing": {"selection_reason": "routing_model_selected"},
+                "document_routing": {"selection_reason": "routing_model_selected"},
             },
         )
     )
@@ -144,7 +191,7 @@ def test_single_step_retrieval_traces_direct_provider_summary(tmp_path: Path) ->
     assert retrieval_result["payload"]["selected_documents"] == [
         {"document_id": "doc_policy"}
     ]
-    assert retrieval_result["payload"]["routing"] == {
+    assert retrieval_result["payload"]["document_routing"] == {
         "selection_reason": "routing_model_selected"
     }
     assert provider.consume_retrieval_summary() is None
@@ -162,7 +209,7 @@ def test_single_step_retrieval_traces_direct_provider_summary_before_failure(
         retrieval_summaries=(
             {
                 "selected_documents": [{"document_id": "doc_policy"}],
-                "routing": {"selection_reason": "selected_document_failed"},
+                "document_routing": {"selection_reason": "selected_document_failed"},
             },
         ),
     )
@@ -189,10 +236,156 @@ def test_single_step_retrieval_traces_direct_provider_summary_before_failure(
     assert retrieval_result["payload"]["selected_documents"] == [
         {"document_id": "doc_policy"}
     ]
-    assert retrieval_result["payload"]["routing"] == {
+    assert retrieval_result["payload"]["document_routing"] == {
         "selection_reason": "selected_document_failed"
     }
     assert provider.consume_retrieval_summary() is None
+
+
+def test_single_step_retrieval_drops_unrecognized_provider_summary_fields(
+    tmp_path: Path,
+) -> None:
+    provider = FakeKnowledgeProvider(
+        retrieval_summaries=(
+            {
+                "document_candidates": [
+                    {
+                        "document_id": "doc_policy",
+                        "filename": "/private/contracts/policy.md",
+                        "artifact_path": "/private/artifacts/policy",
+                        "document_content": "must-not-leak",
+                    }
+                ],
+                "raw_routing_output": "must-not-leak",
+                "artifact_path": "/private/artifacts",
+            },
+        )
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="travel meal reimbursement",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+        )
+    )
+
+    payload = _last_event(trace.trace_path, "retrieval_result")["payload"]
+    assert payload["document_candidates"] == [
+        {"document_id": "doc_policy", "filename": "policy.md"}
+    ]
+    assert "artifact_path" not in payload
+    assert "raw_routing_output" not in payload
+    assert "must-not-leak" not in json.dumps(payload)
+
+
+def test_single_step_retrieval_governs_source_owned_routing_model(
+    tmp_path: Path,
+) -> None:
+    policy_yaml = tmp_path / "policy.yaml"
+    policy_yaml.write_text(
+        """
+rules:
+  - rule_id: model.deny_remote
+    enforcement_point: before_model_call
+    condition:
+      cost_class: remote
+    decision:
+      on_match: deny
+    reason: "Remote model calls are disabled."
+""",
+        encoding="utf-8",
+    )
+    routing_model = FakeOutboundRoutingModel()
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine.from_file(policy_yaml),
+        knowledge_provider=FakeRoutingAwareKnowledgeProvider(routing_model),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        service.retrieve(
+            KnowledgeRetrievalRequest(
+                question="travel meal reimbursement",
+                strategy="single_step",
+                top_k=1,
+                min_score=0.2,
+            )
+        )
+
+    assert exc.value.code == "PA_POLICY_001"
+    assert routing_model.calls == []
+    events = _read_events(trace.trace_path)
+    assert any(
+        event["event_type"] == "policy_decision"
+        and event["status"] == "blocked"
+        and event["payload"]["policy_rule_id"] == "model.deny_remote"
+        for event in events
+    )
+    assert not any(event["event_type"] == "model_request" for event in events)
+
+
+def test_single_step_retrieval_traces_source_owned_routing_model(tmp_path: Path) -> None:
+    routing_model = FakeOutboundRoutingModel()
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=FakeRoutingAwareKnowledgeProvider(routing_model),
+    )
+
+    service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="travel meal reimbursement",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+        )
+    )
+
+    events = _read_events(trace.trace_path)
+    model_request = next(event for event in events if event["event_type"] == "model_request")
+    model_response = next(event for event in events if event["event_type"] == "model_response")
+    assert model_request["payload"]["role"] == "routing"
+    assert model_response["payload"]["role"] == "routing"
+    assert "messages" not in model_request["payload"]
+    assert routing_model.calls
+
+
+def test_single_step_retrieval_normalizes_source_owned_routing_model_error_code(
+    tmp_path: Path,
+) -> None:
+    routing_model = FakeOutboundRoutingModel()
+    routing_model.error = RuntimeError("private routing provider failure")
+    routing_model.error.code = "/private/routing/provider"
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=FakeRoutingAwareKnowledgeProvider(routing_model),
+    )
+
+    with pytest.raises(RuntimeError):
+        service.retrieve(
+            KnowledgeRetrievalRequest(
+                question="travel meal reimbursement",
+                strategy="single_step",
+                top_k=1,
+                min_score=0.2,
+            )
+        )
+
+    model_error = _last_event(trace.trace_path, "model_error")
+    assert model_error["payload"]["error_code"] == "PA_MODEL_002"
+    assert "/private/routing/provider" not in json.dumps(model_error)
 
 
 def test_reviewed_react_retrieval_uses_service_without_extra_policy_gates(
@@ -256,7 +449,7 @@ def test_mixed_retrieval_continues_after_advisory_binding_failure(
             "Retry the remote source.",
         ),
         retrieval_summaries=(
-            {"routing": {"selection_reason": "selected_document_failed"}},
+            {"document_routing": {"selection_reason": "selected_document_failed"}},
         ),
     )
     fallback = FakeKnowledgeProvider(
@@ -270,7 +463,7 @@ def test_mixed_retrieval_continues_after_advisory_binding_failure(
             ),
         ),
         retrieval_summaries=(
-            {"routing": {"selection_reason": "routing_model_selected"}},
+            {"document_routing": {"selection_reason": "routing_model_selected"}},
         ),
     )
     trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
@@ -300,11 +493,11 @@ def test_mixed_retrieval_continues_after_advisory_binding_failure(
     assert provider_calls[0]["status"] == "failed"
     assert provider_calls[0]["failure_mode"] == "advisory"
     assert provider_calls[0]["error_code"] == "PA_KNOWLEDGE_002"
-    assert provider_calls[0]["routing"] == {
+    assert provider_calls[0]["document_routing"] == {
         "selection_reason": "selected_document_failed"
     }
     assert provider_calls[1]["status"] == "ok"
-    assert provider_calls[1]["routing"] == {
+    assert provider_calls[1]["document_routing"] == {
         "selection_reason": "routing_model_selected"
     }
 
@@ -320,7 +513,7 @@ def test_mixed_retrieval_fails_closed_on_required_binding_failure(
             "Retry the required source.",
         ),
         retrieval_summaries=(
-            {"routing": {"selection_reason": "selected_document_failed"}},
+            {"document_routing": {"selection_reason": "selected_document_failed"}},
         ),
     )
     trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
@@ -346,7 +539,7 @@ def test_mixed_retrieval_fails_closed_on_required_binding_failure(
     retrieval_result = _last_event(trace.trace_path, "retrieval_result")
     assert retrieval_result["status"] == "error"
     assert retrieval_result["payload"]["provider_calls"][0]["failure_mode"] == "required"
-    assert retrieval_result["payload"]["provider_calls"][0]["routing"] == {
+    assert retrieval_result["payload"]["provider_calls"][0]["document_routing"] == {
         "selection_reason": "selected_document_failed"
     }
 
@@ -647,7 +840,7 @@ def test_agentic_retrieval_consumes_direct_provider_summary_once_per_round(
         retrieval_summaries=(
             {
                 "selected_documents": [{"document_id": "doc_travel"}],
-                "routing": {"selection_reason": "routing_model_selected"},
+                "document_routing": {"selection_reason": "routing_model_selected"},
             },
         ),
     )

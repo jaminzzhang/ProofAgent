@@ -58,13 +58,15 @@ def _runtime_document(
     tmp_path: Path,
     document_id: str,
 ) -> LocalIndexRuntimeDocument:
+    artifact_root = tmp_path / "artifacts"
     return LocalIndexRuntimeDocument(
         document_id=document_id,
         revision_id=f"rev_{document_id}",
         filename=f"{document_id}.md",
         content_type="text/markdown",
         content_hash="a" * 64,
-        artifact_path=tmp_path / "artifacts" / document_id,
+        artifact_path=artifact_root / document_id,
+        artifact_root=artifact_root,
         routing_metadata={},
     )
 
@@ -543,6 +545,7 @@ class TestLocalIndexProvider:
         assert provider.runtime_snapshot is not None
         assert provider.runtime_snapshot.snapshot_id == "kssnapshot_001"
         assert provider.document_selection_budget == 12
+        assert provider.capabilities == RetrievalCapabilities()
         assert loaded_artifacts == []
         assert resolved_configs[0].provider == "deterministic"
         assert resolved_configs[0].name == "routing-model"
@@ -827,10 +830,29 @@ class TestLocalIndexProvider:
         assert exc.value.code == "PA_KNOWLEDGE_002"
         summary = provider.consume_retrieval_summary()
         assert summary is not None
-        assert summary["document_candidates"] == []
+        assert [item["document_id"] for item in summary["document_candidates"]] == [
+            "doc_policy"
+        ]
         assert summary["selected_documents"] == []
+        assert summary["document_routing"]["routed_candidate_count"] == 1
         assert summary["document_routing"]["selection_reason"] == "routing_model_failed"
         assert summary["document_routing"]["error_code"] == "PA_KNOWLEDGE_002"
+
+    def test_runtime_retrieve_routing_failure_preserves_actual_candidate_page(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        documents = tuple(_runtime_document(tmp_path, f"doc_{index:03d}") for index in range(101))
+        provider = _runtime_provider(tmp_path, documents=documents)
+
+        with pytest.raises(ProofAgentError):
+            provider.retrieve("unmatched")
+
+        summary = provider.consume_retrieval_summary()
+        assert summary is not None
+        assert len(summary["document_candidates"]) == 100
+        assert summary["document_routing"]["routed_candidate_count"] == 100
+        assert summary["document_routing"]["candidate_truncated"] is True
 
     def test_runtime_retrieve_normalizes_revision_retrieval_failure(
         self,
@@ -895,3 +917,27 @@ class TestLocalIndexProvider:
 
         assert exc.value.code == "PA_KNOWLEDGE_002"
         assert "private storage failure" not in str(exc.value)
+
+    def test_runtime_revision_loader_rechecks_artifact_root_containment(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        document = _runtime_document(tmp_path, "doc_policy")
+        checked_roots = []
+        monkeypatch.setattr(
+            local_index_module,
+            "is_runtime_compatible_local_index_artifact",
+            lambda *args, **kwargs: checked_roots.append(kwargs.get("artifact_root")) or False,
+        )
+
+        with pytest.raises(ProofAgentError):
+            local_index_module._load_runtime_revision_index(
+                document,
+                routing_model=ProofAgentLLM(
+                    model_provider=MockModelProvider("routing", "routing-model"),
+                    role=ModelCallRole.ROUTING,
+                ),
+            )
+
+        assert checked_roots == [document.artifact_root]
