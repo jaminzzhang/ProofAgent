@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     ARTIFACT_META_FILENAME,
     REQUIRED_LLAMA_INDEX_FILES,
@@ -198,6 +200,72 @@ def test_runtime_local_index_artifact_rejects_malformed_sidecar(tmp_path: Path) 
     artifact_path = tmp_path / "artifact"
     _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
     (artifact_path / ARTIFACT_META_FILENAME).write_text("{", encoding="utf-8")
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_invalid_utf8_sidecar(tmp_path: Path) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    (artifact_path / ARTIFACT_META_FILENAME).write_bytes(b"\xff")
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_symlinked_required_file(tmp_path: Path) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    required_file = artifact_path / REQUIRED_LLAMA_INDEX_FILES[0]
+    external_file = tmp_path / "external.json"
+    external_file.write_text("{}", encoding="utf-8")
+    required_file.unlink()
+    try:
+        required_file.symlink_to(external_file)
+    except OSError:
+        pytest.skip("Symlinks are not supported by this platform.")
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_symlinked_directory(tmp_path: Path) -> None:
+    spec = _build_spec()
+    actual_artifact_path = tmp_path / "actual-artifact"
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(actual_artifact_path, build_spec=spec, fingerprint="fingerprint")
+    try:
+        artifact_path.symlink_to(actual_artifact_path, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlinks are not supported by this platform.")
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_symlinked_sidecar(tmp_path: Path) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    sidecar_path = artifact_path / ARTIFACT_META_FILENAME
+    external_sidecar = tmp_path / "external.json"
+    external_sidecar.write_text(sidecar_path.read_text(encoding="utf-8"), encoding="utf-8")
+    sidecar_path.unlink()
+    try:
+        sidecar_path.symlink_to(external_sidecar)
+    except OSError:
+        pytest.skip("Symlinks are not supported by this platform.")
 
     assert not is_runtime_compatible_local_index_artifact(
         artifact_path,
