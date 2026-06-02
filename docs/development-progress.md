@@ -1,6 +1,6 @@
 # Proof Agent Development Progress
 
-> Last updated: 2026-05-27
+> Last updated: 2026-06-02
 > Purpose: Give AI coding agents a short, current map of the implementation. Verify all claims against the code before changing behavior.
 
 ## 1. Current Positioning
@@ -16,13 +16,16 @@ Authoritative design doc: `docs/technical-design.md`.
 - Dashboard-hosted Agent Configuration now adds Draft Agents, Contract Bundles,
   validation runs, Published Agent Versions, rollback, Run Purpose metadata, and
   an Agents workspace in the Dashboard shell.
+- Local Index ingestion now adds quarantined single-file upload staging, asynchronous Markdown and
+  text-based PDF validation, immutable revision artifact construction, persisted bounded retries,
+  Source claim concurrency, status APIs, and the one-shot `knowledge-worker --once` CLI.
 
 ## 2. Implementation Snapshot
 
 | Area | Status |
 | --- | --- |
 | Contracts | Pydantic v2 frozen models for manifest, policy, ReAct action/review, evidence, approval, tools, model, trace, receipt, run, dashboard, and Agent Configuration |
-| Delivery | `delivery/cli.py` exposes Typer commands; `delivery/api.py` exposes Run Execution and Conversation APIs; `delivery/configuration_api.py` exposes Agent Configuration workflows; `delivery/published_agents.py` resolves static Published Agents and Active Agent Versions |
+| Delivery | `delivery/cli.py` exposes Typer commands including one-shot `knowledge-worker --once`; `delivery/api.py` exposes Run Execution and Conversation APIs; `delivery/configuration_api.py` exposes Agent Configuration workflows plus Local Index quarantine and ingestion-job status; `delivery/published_agents.py` resolves static Published Agents and Active Agent Versions |
 | Docker | `Dockerfile` and `docker-compose.yml` run deterministic demo |
 | Bootstrap | `bootstrap/` owns YAML loader, path resolution, provider validation, retrieval config validation, secret-looking param rejection, and `HarnessInvocation` composition |
 | Control | `control/` owns Enterprise QA and Controlled ReAct Enterprise QA workflow, policy, review fail-closed behavior, validators, evidence decisions, approval, and outcome behavior |
@@ -32,7 +35,7 @@ Authoritative design doc: `docs/technical-design.md`.
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `configuration/local_store.py` owns local Agent Configuration state; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed production runs and Agent Configuration API starts governed validation runs through RunStore |
 | Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `observability/api/routers/handoffs.py`, `chat/` customer mode, and `examples/insurance_customer_service/` implement V1 customer-facing automatic replies with the insurance-specific Demo behind a Customer Run Adapter |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
-| Tests | 36 test files and 164 statically detected `test_` functions at last scan |
+| Tests | 66 test files and 465 statically detected `test_` functions at last scan |
 
 ## 3. Stable Demo Contract
 
@@ -70,7 +73,7 @@ runs/latest/governance_receipt.md
 | Controlled ReAct | `react_enterprise_qa` runs deterministic planner/review scenarios with fixed action set, advisory review, clarification wait, approval wait, trace, and receipt output | Production-grade checkpoint resume, streaming, and remote planner/review adapters |
 | LangChain integration | Not a public adapter yet | Optional ecosystem adapter that preserves contracts |
 | Real MCP | Mock tool proves approval contract | stdio/HTTP MCP adapter behind ToolGateway |
-| Knowledge Hub provider set | Active code accepts `local_markdown`, `local_index`, and the fixture `remote_search` adapter; `pageindex` and `local_vector` are rejected; `local_index` runtime composition validates an immutable READY `artifact_meta.json` sidecar, resolves the Source-owned routing model, and performs read-only LlamaIndex snapshot load; Enterprise QA and Controlled ReAct now enter retrieval through the shared Control Plane Knowledge Retrieval Service; blended single-step, reviewed/fallback, and planner/evaluator-backed agentic retrieval use deterministic binding metadata routing, record provider calls, apply binding failure modes, exact deduplication, WRRF ordering, and no-evidence reason codes | Add Local Index ingestion worker and Source publication APIs, then the trusted `http_json` remote adapter |
+| Knowledge Hub provider set | Active code accepts `local_markdown`, `local_index`, and the fixture `remote_search` adapter; `pageindex` and `local_vector` are rejected; `local_index` runtime composition validates an immutable READY `artifact_meta.json` sidecar, resolves the Source-owned routing model, and performs read-only LlamaIndex snapshot load; the ingestion foundation stages quarantined uploads, asynchronously validates Markdown and text-based PDF, promotes accepted document revisions, builds immutable revision artifacts, persists bounded retries, and exposes one-shot worker plus status APIs; Enterprise QA and Controlled ReAct now enter retrieval through the shared Control Plane Knowledge Retrieval Service; blended single-step, reviewed/fallback, and planner/evaluator-backed agentic retrieval use deterministic binding metadata routing, record provider calls, apply binding failure modes, exact deduplication, WRRF ordering, and no-evidence reason codes | Add candidate snapshot promotion and Source publication APIs, then continuous worker polling, batch upload, runtime multi-document routing, and the trusted `http_json` remote adapter |
 | Agentic RAG | Agentic retrieval strategy emits governed retrieval plan/step events through the shared Knowledge Retrieval Service and falls back through registered Knowledge Providers when planner/evaluator models are absent; when planner/evaluator models are configured, each rewritten query re-enters service-owned bounded source routing and records round-correlated provider summaries; Controlled ReAct submits reviewed Retrieval Intent without directly calling providers | Richer trace-safe plan summaries and nested retrieval budget projections |
 | Dashboard UI | Implemented for overview, runs, run detail, evidence, receipt, model usage, approvals, timeline, governed ReAct details, handoffs, and the Agents configuration workspace with Workflow node editing, validation, publish, and rollback | Approval Console actions, RBAC, and richer multi-agent operations |
 | Handoff Monitor | Implemented as read-only internal projection of customer handoff trace events | Filtering and richer run correlation |
