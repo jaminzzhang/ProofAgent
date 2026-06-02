@@ -15,6 +15,11 @@ from typing import Any, cast
 
 from llama_index.core import Document, TreeIndex
 
+from proof_agent.capabilities.knowledge.ingestion.artifacts import (
+    ARTIFACT_META_FILENAME,
+    is_compatible_local_index_artifact as _is_compatible_artifact,
+    local_index_artifact_metadata as _artifact_metadata,
+)
 from proof_agent.capabilities.knowledge.ingestion.fingerprint import (
     ingestion_config_fingerprint,
 )
@@ -30,16 +35,7 @@ from proof_agent.configuration.file_locking import artifact_lock_path, try_locke
 from proof_agent.contracts import KnowledgeArtifactBuildSpec, ModelCallRole, ModelConfig
 from proof_agent.errors import ProofAgentError
 
-ARTIFACT_SCHEMA_VERSION = "local_index.artifact.v1"
-ARTIFACT_META_FILENAME = "artifact_meta.json"
 ARTIFACT_TEMP_META_FILENAME = "artifact_temp.json"
-REQUIRED_LLAMA_INDEX_FILES = (
-    "docstore.json",
-    "index_store.json",
-    "graph_store.json",
-    "default__vector_store.json",
-    "image__vector_store.json",
-)
 STALE_ARTIFACT_TEMP_AGE = timedelta(hours=1)
 
 
@@ -269,42 +265,6 @@ class LocalIndexRevisionArtifactBuilder:
         fingerprint: str,
     ) -> str:
         return f"{build_spec.content_hash}/{fingerprint}"
-
-
-def _artifact_metadata(
-    *,
-    build_spec: KnowledgeArtifactBuildSpec,
-    ingestion_config_fingerprint: str,
-) -> dict[str, str]:
-    return {
-        "schema_version": ARTIFACT_SCHEMA_VERSION,
-        "provider": build_spec.provider,
-        "engine_name": build_spec.engine_name,
-        "engine_version": build_spec.engine_version,
-        "parser_identity": build_spec.parser_fingerprint_identity,
-        "content_hash": build_spec.content_hash,
-        "ingestion_config_fingerprint": ingestion_config_fingerprint,
-    }
-
-
-def _is_compatible_artifact(
-    artifact_path: Path,
-    *,
-    build_spec: KnowledgeArtifactBuildSpec,
-    ingestion_config_fingerprint: str,
-) -> bool:
-    if not artifact_path.is_dir():
-        return False
-    if any(not (artifact_path / filename).is_file() for filename in REQUIRED_LLAMA_INDEX_FILES):
-        return False
-    metadata = _read_json_object(artifact_path / ARTIFACT_META_FILENAME)
-    return metadata is not None and all(
-        metadata.get(key) == value
-        for key, value in _artifact_metadata(
-            build_spec=build_spec,
-            ingestion_config_fingerprint=ingestion_config_fingerprint,
-        ).items()
-    )
 
 
 def _resolve_ingestion_provider(model_config: ModelConfig) -> Any:
