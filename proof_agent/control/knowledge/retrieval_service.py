@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any
+from typing import Any, Literal
 
 from proof_agent.capabilities.knowledge import KnowledgeProvider
 from proof_agent.capabilities.knowledge.blended import BoundKnowledgeProvider
@@ -374,16 +374,28 @@ class KnowledgeRetrievalService:
                 step_id=step_id,
                 round_id=round_id,
             )
-        evidence = self._knowledge_provider.retrieve(
-            query,
-            top_k=request.top_k,
-        )
+        try:
+            evidence = self._knowledge_provider.retrieve(
+                query,
+                top_k=request.top_k,
+            )
+        except Exception:
+            self._emit_basic_retrieval_result(
+                (),
+                step_id=step_id,
+                round_id=round_id,
+                status="error",
+                summary=_consume_provider_retrieval_summary(self._knowledge_provider),
+            )
+            raise
+        summary = _consume_provider_retrieval_summary(self._knowledge_provider)
         if request.force_empty:
             evidence = ()
         self._emit_basic_retrieval_result(
             evidence,
             step_id=step_id,
             round_id=round_id,
+            summary=summary,
         )
         return _ProviderStepResult(evidence=evidence)
 
@@ -431,7 +443,13 @@ class KnowledgeRetrievalService:
             try:
                 chunks = bound.provider.retrieve(query, top_k=binding_top_k)
             except Exception as exc:
-                provider_calls.append(_failed_provider_call(bound, exc))
+                provider_calls.append(
+                    _failed_provider_call(
+                        bound,
+                        exc,
+                        summary=_consume_provider_retrieval_summary(bound.provider),
+                    )
+                )
                 if bound.binding.failure_mode == "advisory":
                     degraded = True
                     continue
@@ -459,7 +477,13 @@ class KnowledgeRetrievalService:
                     },
                 )
                 raise
-            provider_calls.append(_successful_provider_call(bound, len(chunks)))
+            provider_calls.append(
+                _successful_provider_call(
+                    bound,
+                    len(chunks),
+                    summary=_consume_provider_retrieval_summary(bound.provider),
+                )
+            )
             for local_rank, chunk in enumerate(chunks, start=1):
                 raw_candidates.append(_tag_bound_chunk(chunk, bound=bound, local_rank=local_rank))
 
@@ -511,18 +535,25 @@ class KnowledgeRetrievalService:
         *,
         step_id: str,
         round_id: str | None = None,
+        status: Literal["ok", "blocked", "waiting", "error"] = "ok",
+        summary: Mapping[str, Any] | None = None,
+        no_evidence_reason_code: str | None = None,
     ) -> None:
+        payload = {
+            **dict(summary or {}),
+            "step_id": step_id,
+            **_round_payload(round_id),
+            "provider": self._knowledge_provider.provider_name,
+            "candidate_count": len(evidence),
+            "chunk_count": len(evidence),
+            "sources": [chunk.source for chunk in evidence],
+        }
+        if no_evidence_reason_code is not None:
+            payload["no_evidence_reason_code"] = no_evidence_reason_code
         self._trace.emit(
             "retrieval_result",
-            status="ok",
-            payload={
-                "step_id": step_id,
-                **_round_payload(round_id),
-                "provider": self._knowledge_provider.provider_name,
-                "candidate_count": len(evidence),
-                "chunk_count": len(evidence),
-                "sources": [chunk.source for chunk in evidence],
-            },
+            status=status,
+            payload=payload,
         )
 
     def _evaluate_evidence(
@@ -833,8 +864,11 @@ def _binding_summary(bound: BoundKnowledgeProvider) -> dict[str, Any]:
 def _successful_provider_call(
     bound: BoundKnowledgeProvider,
     candidate_count: int,
+    *,
+    summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
+        **dict(summary or {}),
         "binding_id": bound.binding.binding_id,
         "source_id": bound.source.source_id,
         "provider": bound.provider.provider_name,
@@ -847,8 +881,11 @@ def _successful_provider_call(
 def _failed_provider_call(
     bound: BoundKnowledgeProvider,
     exc: Exception,
+    *,
+    summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
+        **dict(summary or {}),
         "binding_id": bound.binding.binding_id,
         "source_id": bound.source.source_id,
         "provider": bound.provider.provider_name,
@@ -857,6 +894,16 @@ def _failed_provider_call(
         "error_code": getattr(exc, "code", "PA_KNOWLEDGE_002"),
         "error_class": exc.__class__.__name__,
     }
+
+
+def _consume_provider_retrieval_summary(
+    provider: KnowledgeProvider,
+) -> dict[str, Any]:
+    consume = getattr(provider, "consume_retrieval_summary", None)
+    if not callable(consume):
+        return {}
+    summary = consume()
+    return dict(summary) if isinstance(summary, Mapping) else {}
 
 
 def _ensure_retrieval_strategy_is_executable(strategy: str) -> None:
