@@ -123,6 +123,23 @@ class KnowledgeDocumentUploadRequest(BaseModel):
     actor: str = "local-user"
 
 
+class KnowledgeSourceFoundationValidationRequest(BaseModel):
+    """Request body for validating one derived Local Index candidate snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor: str = "local-user"
+
+
+class KnowledgeSourceSnapshotFreezeRequest(BaseModel):
+    """Request body for freezing one validated Local Index candidate snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    validation_id: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
 class KnowledgeBindingAttachRequest(BaseModel):
     """Request body for binding a shared Knowledge Source into a Draft Agent."""
 
@@ -299,6 +316,112 @@ def get_knowledge_ingestion_job(
             detail=f"Knowledge Ingestion Job not found: {source_id}/{job_id}",
         )
     return _knowledge_ingestion_job_payload(job)
+
+
+@router.get("/config/knowledge-sources/{source_id}/candidate-snapshot")
+def get_candidate_knowledge_source_snapshot(
+    source_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Return the current derived Local Index candidate snapshot."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        candidate = store.get_candidate_knowledge_source_snapshot(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return candidate.model_dump(mode="json")
+
+
+@router.post("/config/knowledge-sources/{source_id}/candidate-snapshot/validate-foundation")
+def validate_candidate_knowledge_source_snapshot_foundation(
+    source_id: str,
+    request: KnowledgeSourceFoundationValidationRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Persist a minimal freeze-readiness validation for the current candidate."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        validation = store.validate_candidate_knowledge_source_snapshot_foundation(
+            source_id=source_id,
+            actor=request.actor,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return validation.model_dump(mode="json")
+
+
+@router.post("/config/knowledge-sources/{source_id}/candidate-snapshot/freeze")
+def freeze_candidate_knowledge_source_snapshot(
+    source_id: str,
+    request: KnowledgeSourceSnapshotFreezeRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Freeze one foundation-validated Local Index snapshot manifest."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        snapshot = store.freeze_candidate_knowledge_source_snapshot(
+            source_id=source_id,
+            validation_id=request.validation_id,
+            actor=request.actor,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Foundation Knowledge Source Validation not found: "
+                f"{source_id}/{request.validation_id}"
+            ),
+        ) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return snapshot.model_dump(mode="json")
+
+
+@router.get("/config/knowledge-sources/{source_id}/snapshots")
+def list_knowledge_source_snapshots(source_id: str, app_request: Request) -> dict[str, Any]:
+    """List immutable Local Index snapshot manifests for one source."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        snapshots = store.list_knowledge_source_snapshots(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return {
+        "data": [snapshot.model_dump(mode="json") for snapshot in snapshots],
+        "meta": {"total": len(snapshots)},
+    }
+
+
+@router.get("/config/knowledge-sources/{source_id}/snapshots/{snapshot_id}")
+def get_knowledge_source_snapshot(
+    source_id: str,
+    snapshot_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Return one immutable Local Index snapshot manifest."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        snapshot = store.get_knowledge_source_snapshot(
+            source_id=source_id,
+            snapshot_id=snapshot_id,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Source Snapshot not found: {source_id}/{snapshot_id}",
+        )
+    return snapshot.model_dump(mode="json")
 
 
 @router.get("/config/agents")
@@ -846,7 +969,11 @@ def _decode_upload_content(content_base64: str) -> bytes:
 
 
 def _proof_agent_http_exception(exc: ProofAgentError) -> HTTPException:
+    status_code = {
+        "PA_INGESTION_004": 503,
+        "PA_INGESTION_005": 409,
+    }.get(exc.code, 400)
     return HTTPException(
-        status_code=503 if exc.code == "PA_INGESTION_004" else 400,
+        status_code=status_code,
         detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
     )
