@@ -24,6 +24,7 @@ from proof_agent.configuration.file_locking import (
     try_locked,
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import KnowledgeDocument, KnowledgeIngestionJob
 from proof_agent.errors import ProofAgentError
 
 
@@ -61,6 +62,33 @@ def _claim_upload(
     assert claimed is not None
     assert claimed.claim_token is not None
     return claimed
+
+
+def _promote_markdown_job(
+    store: LocalAgentConfigurationStore,
+    *,
+    source_id: str = "ks_local_index",
+) -> tuple[KnowledgeDocument, KnowledgeIngestionJob]:
+    _create_local_index_source(store, source_id=source_id, params=_local_index_params())
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id=source_id,
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy\n",
+        actor="local-user",
+    )
+    claimed = _claim_upload(store, source_id=source_id)
+    parsed = parse_quarantined_upload(
+        store.quarantined_knowledge_upload_bytes_path(upload),
+        filename=upload.filename,
+        content_type=upload.content_type,
+    )
+    return store.accept_quarantined_knowledge_upload(
+        source_id=source_id,
+        upload_id=upload.upload_id,
+        parsed_document=parsed,
+        claim_token=claimed.claim_token,
+    )
 
 
 def test_file_lock_paths_are_store_scoped_and_artifact_key_hashed(tmp_path: Path) -> None:
@@ -850,3 +878,192 @@ def test_unified_claim_skips_capped_source_and_reports_malformed_source(tmp_path
     assert len(selection.diagnostics) == 1
     assert selection.diagnostics[0].source_id == "ks_malformed"
     assert selection.diagnostics[0].code == "PA_INGESTION_001"
+
+
+def test_complete_ingestion_job_persists_ready_artifact_reference(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    document, job = _promote_markdown_job(store)
+    claimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert claimed is not None
+    assert claimed.claim_token is not None
+
+    completed = store.complete_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=claimed.claim_token,
+        artifact_path="knowledge_artifacts/content/config",
+    )
+    projected_document = store.get_knowledge_document(
+        source_id=document.source_id,
+        document_id=document.document_id,
+    )
+
+    assert completed.state == "ready"
+    assert completed.artifact_path == "knowledge_artifacts/content/config"
+    assert completed.completed_at is not None
+    assert completed.claim_token is None
+    assert projected_document is not None
+    assert projected_document.state == "ready"
+    assert projected_document.artifact_path == completed.artifact_path
+
+
+def test_defer_ingestion_job_waits_five_seconds_without_counting_build_failure(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    document, job = _promote_markdown_job(store)
+    claimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert claimed is not None
+    assert claimed.claim_token is not None
+
+    deferred = store.defer_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=claimed.claim_token,
+    )
+    projected_document = store.get_knowledge_document(
+        source_id=document.source_id,
+        document_id=document.document_id,
+    )
+
+    assert deferred.state == "queued"
+    assert deferred.next_attempt_at is not None
+    assert deferred.auto_retry_count == 0
+    assert deferred.attempt_count == 1
+    assert deferred.claim_token is None
+    assert projected_document is not None
+    assert projected_document.state == "queued"
+    assert store.claim_next_knowledge_ingestion_job(source_id=job.source_id) is None
+
+    store._write_knowledge_ingestion_job(
+        deferred.model_copy(update={"next_attempt_at": "2000-01-01T00:00:00Z"})
+    )
+    reclaimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+
+    assert reclaimed is not None
+    assert reclaimed.attempt_count == 2
+    assert reclaimed.auto_retry_count == 0
+
+
+def test_reschedule_ingestion_job_allows_two_auto_retries_then_fails(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    document, job = _promote_markdown_job(store)
+
+    for expected_retry_count in (1, 2):
+        claimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+        assert claimed is not None
+        assert claimed.claim_token is not None
+        job = store.reschedule_knowledge_ingestion_job(
+            source_id=job.source_id,
+            job_id=job.job_id,
+            claim_token=claimed.claim_token,
+            error_code="PA_INGESTION_003",
+            error_message="Temporary model timeout.",
+            retry_delay_seconds=0,
+        )
+        assert job.state == "queued"
+        assert job.auto_retry_count == expected_retry_count
+        assert job.last_error_code == "PA_INGESTION_003"
+        assert job.next_attempt_at is not None
+
+    claimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert claimed is not None
+    assert claimed.claim_token is not None
+    failed = store.reschedule_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=claimed.claim_token,
+        error_code="PA_INGESTION_003",
+        error_message="Temporary model timeout.",
+        retry_delay_seconds=0,
+    )
+    projected_document = store.get_knowledge_document(
+        source_id=document.source_id,
+        document_id=document.document_id,
+    )
+
+    assert failed.state == "failed"
+    assert failed.auto_retry_count == 3
+    assert failed.attempt_count == 3
+    assert failed.error_code == "PA_INGESTION_003"
+    assert failed.completed_at is not None
+    assert projected_document is not None
+    assert projected_document.state == "failed"
+
+
+def test_stale_job_claim_cannot_commit_and_failure_does_not_persist_traceback(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _, job = _promote_markdown_job(store)
+    first = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert first is not None
+    assert first.claim_token is not None
+    store._write_knowledge_ingestion_job(
+        first.model_copy(update={"lease_expires_at": "2000-01-01T00:00:00Z"})
+    )
+    reclaimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert reclaimed is not None
+    assert reclaimed.claim_token is not None
+
+    with pytest.raises(ProofAgentError) as complete_exc:
+        store.complete_knowledge_ingestion_job(
+            source_id=job.source_id,
+            job_id=job.job_id,
+            claim_token=first.claim_token,
+            artifact_path="stale",
+        )
+    with pytest.raises(ProofAgentError) as defer_exc:
+        store.defer_knowledge_ingestion_job(
+            source_id=job.source_id,
+            job_id=job.job_id,
+            claim_token=first.claim_token,
+        )
+    with pytest.raises(ProofAgentError) as reschedule_exc:
+        store.reschedule_knowledge_ingestion_job(
+            source_id=job.source_id,
+            job_id=job.job_id,
+            claim_token=first.claim_token,
+            error_code="PA_INGESTION_003",
+            error_message="stale",
+        )
+    with pytest.raises(ProofAgentError) as fail_exc:
+        store.fail_knowledge_ingestion_job(
+            source_id=job.source_id,
+            job_id=job.job_id,
+            claim_token=first.claim_token,
+            error_code="PA_INGESTION_003",
+            error_message="stale",
+        )
+
+    assert complete_exc.value.code == "PA_INGESTION_004"
+    assert defer_exc.value.code == "PA_INGESTION_004"
+    assert reschedule_exc.value.code == "PA_INGESTION_004"
+    assert fail_exc.value.code == "PA_INGESTION_004"
+
+    failed = store.fail_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=reclaimed.claim_token,
+        error_code="PA_INGESTION_003",
+        error_message="Traceback (most recent call last):\nsecret stack detail",
+    )
+
+    assert failed.state == "failed"
+    assert failed.error_message == "Local Index artifact build failed."
+    assert "Traceback" not in failed.error_message
+
+
+def test_complete_ingestion_job_rejects_non_processing_state(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _, job = _promote_markdown_job(store)
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.complete_knowledge_ingestion_job(
+            source_id=job.source_id,
+            job_id=job.job_id,
+            claim_token="claim_missing",
+            artifact_path="knowledge_artifacts/content/config",
+        )
+
+    assert exc.value.code == "PA_INGESTION_004"

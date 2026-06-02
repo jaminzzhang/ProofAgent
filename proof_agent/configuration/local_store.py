@@ -583,6 +583,162 @@ class LocalAgentConfigurationStore:
             self._write_knowledge_ingestion_job(renewed)
             return renewed
 
+    def complete_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        artifact_path: str,
+    ) -> KnowledgeIngestionJob:
+        """Complete one token-owned artifact build with a reusable artifact reference."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            now = _now()
+            completed = job.model_copy(
+                update={
+                    "state": "ready",
+                    "artifact_path": artifact_path,
+                    "completed_at": now,
+                    "error_code": None,
+                    "error_message": None,
+                    "next_attempt_at": None,
+                    **_cleared_claim_updates(),
+                    "updated_at": now,
+                }
+            )
+            projected_document = document.model_copy(
+                update={
+                    "state": "ready",
+                    "artifact_path": artifact_path,
+                    "error_code": None,
+                    "error_message": None,
+                    "updated_at": now,
+                }
+            )
+            self._write_knowledge_document(projected_document)
+            self._write_knowledge_ingestion_job(completed)
+            return completed
+
+    def defer_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+    ) -> KnowledgeIngestionJob:
+        """Defer one artifact-key lock contention without counting a build failure."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            now = datetime.now(UTC)
+            deferred = job.model_copy(
+                update={
+                    "state": "queued",
+                    "next_attempt_at": _timestamp(now + timedelta(seconds=5)),
+                    **_cleared_claim_updates(),
+                    "updated_at": _timestamp(now),
+                }
+            )
+            projected_document = document.model_copy(
+                update={
+                    "state": "queued",
+                    "updated_at": _timestamp(now),
+                }
+            )
+            self._write_knowledge_document(projected_document)
+            self._write_knowledge_ingestion_job(deferred)
+            return deferred
+
+    def reschedule_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        error_code: str,
+        error_message: str,
+        retry_delay_seconds: int = 30,
+    ) -> KnowledgeIngestionJob:
+        """Persist one recoverable build failure or exhaust automatic retries."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            now = datetime.now(UTC)
+            safe_message = _operator_error_message(error_message)
+            auto_retry_count = job.auto_retry_count + 1
+            if auto_retry_count > job.max_auto_retries:
+                return self._fail_knowledge_ingestion_job_unlocked(
+                    job=job,
+                    document=document,
+                    error_code=error_code,
+                    error_message=safe_message,
+                    failure_classification="recoverable_exhausted",
+                    auto_retry_count=auto_retry_count,
+                    completed_at=_timestamp(now),
+                )
+            rescheduled = job.model_copy(
+                update={
+                    "state": "queued",
+                    "auto_retry_count": auto_retry_count,
+                    "last_error_code": error_code,
+                    "last_error_message": safe_message,
+                    "last_failure_classification": "recoverable",
+                    "next_attempt_at": _timestamp(now + timedelta(seconds=retry_delay_seconds)),
+                    **_cleared_claim_updates(),
+                    "updated_at": _timestamp(now),
+                }
+            )
+            projected_document = document.model_copy(
+                update={
+                    "state": "queued",
+                    "updated_at": _timestamp(now),
+                }
+            )
+            self._write_knowledge_document(projected_document)
+            self._write_knowledge_ingestion_job(rescheduled)
+            return rescheduled
+
+    def fail_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        error_code: str,
+        error_message: str,
+    ) -> KnowledgeIngestionJob:
+        """Persist one non-recoverable token-owned artifact-build failure."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            return self._fail_knowledge_ingestion_job_unlocked(
+                job=job,
+                document=document,
+                error_code=error_code,
+                error_message=_operator_error_message(error_message),
+                failure_classification="non_recoverable",
+                auto_retry_count=job.auto_retry_count,
+                completed_at=_now(),
+            )
+
     def claim_next_knowledge_worker_task(
         self,
         *,
@@ -718,6 +874,63 @@ class LocalAgentConfigurationStore:
                 source_id=source_id,
                 lease_seconds=lease_seconds,
             )
+
+    def _owned_job_and_document_unlocked(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+    ) -> tuple[KnowledgeIngestionJob, KnowledgeDocument]:
+        job = self._require_knowledge_ingestion_job(source_id, job_id)
+        _require_owned_processing_claim(job, claim_token=claim_token)
+        document = self.get_knowledge_document(
+            source_id=source_id,
+            document_id=job.document_id,
+        )
+        if document is None:
+            raise _invalid_ingestion_transition(
+                f"Knowledge ingestion job {job_id} is missing its document projection."
+            )
+        return job, document
+
+    def _fail_knowledge_ingestion_job_unlocked(
+        self,
+        *,
+        job: KnowledgeIngestionJob,
+        document: KnowledgeDocument,
+        error_code: str,
+        error_message: str,
+        failure_classification: str,
+        auto_retry_count: int,
+        completed_at: str,
+    ) -> KnowledgeIngestionJob:
+        failed = job.model_copy(
+            update={
+                "state": "failed",
+                "auto_retry_count": auto_retry_count,
+                "completed_at": completed_at,
+                "error_code": error_code,
+                "error_message": error_message,
+                "last_error_code": error_code,
+                "last_error_message": error_message,
+                "last_failure_classification": failure_classification,
+                "next_attempt_at": None,
+                **_cleared_claim_updates(),
+                "updated_at": completed_at,
+            }
+        )
+        projected_document = document.model_copy(
+            update={
+                "state": "failed",
+                "error_code": error_code,
+                "error_message": error_message,
+                "updated_at": completed_at,
+            }
+        )
+        self._write_knowledge_document(projected_document)
+        self._write_knowledge_ingestion_job(failed)
+        return failed
 
     def _claim_next_knowledge_worker_task_unlocked(
         self,
@@ -1210,6 +1423,14 @@ def _renewed_claim_updates(*, lease_seconds: int) -> dict[str, Any]:
     }
 
 
+def _cleared_claim_updates() -> dict[str, Any]:
+    return {
+        "claimed_at": None,
+        "claim_token": None,
+        "lease_expires_at": None,
+    }
+
+
 def _require_owned_processing_claim(
     task: QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
     *,
@@ -1241,6 +1462,13 @@ def _has_active_lease(
 
 def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _operator_error_message(message: str) -> str:
+    first_line = message.strip().splitlines()[0] if message.strip() else ""
+    if not first_line or first_line.startswith("Traceback"):
+        return "Local Index artifact build failed."
+    return first_line[:500]
 
 
 def _read_json(path: Path) -> dict[str, Any]:
