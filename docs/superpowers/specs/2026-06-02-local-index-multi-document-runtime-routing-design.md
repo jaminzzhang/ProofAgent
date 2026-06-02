@@ -161,6 +161,8 @@ Add a provider-neutral frozen routing selection contract:
 
 ```python
 class KnowledgeDocumentRoutingSelection(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     selected_document_ids: tuple[str, ...]
     reason: str
 ```
@@ -182,6 +184,7 @@ requires:
 - every selected id exists in the routed candidate set;
 - selected ids are unique;
 - selected count does not exceed the document-selection budget.
+- unknown response fields are rejected.
 
 Malformed JSON, invalid contract shape, unknown ids, duplicate ids, or over-budget selection raise
 `PA_KNOWLEDGE_002` and fail retrieval closed. The model's raw response and free-form reason are not
@@ -294,7 +297,9 @@ selected-document failure discards partial evidence.
 ```text
 snapshot_path + artifact_root
   -> load v2 runtime snapshot descriptor
-  -> resolve routing model
+  -> resolve the Source-owned ModelProvider once
+  -> retain the raw ModelProvider for bounded document routing
+  -> wrap the same ModelProvider with ProofAgentLLM for selected TreeIndex reads
   -> validate document_selection_budget
   -> return read-only runtime provider
 ```
@@ -387,7 +392,7 @@ Trace summaries must not contain:
 | empty snapshot document set or duplicate document ids | `PA_KNOWLEDGE_001` before storage open |
 | absolute or escaping artifact reference | `PA_KNOWLEDGE_001` before storage open |
 | invalid `document_selection_budget` | `PA_KNOWLEDGE_001` |
-| routing-model malformed JSON, invalid contract, unknown id, duplicate id, or over-budget ids | `PA_KNOWLEDGE_002` |
+| routing-model malformed JSON, invalid contract, unknown field, unknown id, duplicate id, or over-budget ids | `PA_KNOWLEDGE_002` |
 | routing-model valid empty selection | zero evidence with `routing_empty` summary |
 | selected artifact missing or malformed | `PA_KNOWLEDGE_002`, no partial evidence |
 | selected TreeIndex storage load or retrieval failure | `PA_KNOWLEDGE_002`, no partial evidence |
@@ -413,8 +418,8 @@ exception text, model reason text, or raw model output.
 - no metadata match falls back to the sorted full manifest candidate set;
 - more than `100` eligible documents truncates deterministically and records the flag;
 - default and configured document-selection budgets are enforced;
-- strict JSON normalization accepts valid selection and fails closed for malformed, unknown,
-  duplicate, and over-budget ids;
+- strict JSON normalization accepts valid selection and fails closed for malformed, unknown-field,
+  unknown-id, duplicate-id, and over-budget responses;
 - empty valid selection returns a trace-safe `routing_empty` summary.
 
 ### Multi-Document Runtime Retrieval
