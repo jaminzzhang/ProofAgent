@@ -16,14 +16,16 @@ import pytest
 
 import proof_agent.capabilities.knowledge.ingestion.local_index_builder as builder_module
 from proof_agent.capabilities.knowledge.ingestion import ingestion_config_fingerprint
+from proof_agent.capabilities.knowledge.ingestion.artifacts import (
+    ARTIFACT_META_FILENAME,
+    REQUIRED_LLAMA_INDEX_FILES,
+)
 from proof_agent.capabilities.knowledge.ingestion.configuration import (
     ingestion_model_config_from_build_spec,
     local_index_engine_version,
 )
 from proof_agent.capabilities.knowledge.ingestion.local_index_builder import (
-    ARTIFACT_META_FILENAME,
     ARTIFACT_TEMP_META_FILENAME,
-    REQUIRED_LLAMA_INDEX_FILES,
     LocalIndexRevisionArtifactBuilder,
 )
 from proof_agent.capabilities.knowledge.ingestion.worker import KnowledgeIngestionWorker
