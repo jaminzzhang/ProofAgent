@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import Field, field_serializer, field_validator
 
@@ -134,6 +134,9 @@ class KnowledgeSource(FrozenModel):
     params: Mapping[str, Any] = Field(default_factory=FrozenDict)
     created_at: str
     updated_at: str
+    source_draft_version_id: str | None = None
+    latest_snapshot_id: str | None = None
+    published_snapshot_id: str | None = None
 
     @field_validator("params", mode="after")
     @classmethod
@@ -143,6 +146,72 @@ class KnowledgeSource(FrozenModel):
     @field_serializer("params")
     def serialize_params(self, value: Mapping[str, Any]) -> dict[str, Any]:
         return cast(dict[str, Any], _jsonable(value))
+
+
+class KnowledgeSourceSnapshotDocument(FrozenModel):
+    """Immutable document-revision reference inside one Local Index snapshot."""
+
+    document_id: str
+    revision_id: str
+    filename: str
+    content_type: str
+    content_hash: str
+    artifact_path: str
+    routing_metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("routing_metadata", mode="after")
+    @classmethod
+    def freeze_routing_metadata(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("routing_metadata")
+    def serialize_routing_metadata(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
+
+
+class CandidateKnowledgeSourceSnapshot(FrozenModel):
+    """Derived mutable Source Draft projection eligible for snapshot freeze."""
+
+    source_id: str
+    source_draft_version_id: str
+    candidate_digest: str
+    included_documents: tuple[KnowledgeSourceSnapshotDocument, ...]
+    queued_document_count: int
+    processing_document_count: int
+    failed_document_count: int
+    archived_document_count: int
+    required_reingestion_count: int
+
+
+class FoundationKnowledgeSourceValidation(FrozenModel):
+    """Passed minimum validation record required before preview snapshot freeze."""
+
+    validation_id: str
+    source_id: str
+    source_draft_version_id: str
+    candidate_digest: str
+    validation_level: Literal["foundation"]
+    status: Literal["passed"]
+    document_count: int
+    required_reingestion_count: int
+    created_at: str
+    created_by: str
+
+
+class KnowledgeSourceSnapshotManifest(FrozenModel):
+    """Immutable multi-document preview manifest for later routing development."""
+
+    schema_version: Literal["local_index.snapshot.v2"]
+    snapshot_id: str
+    source_id: str
+    state: Literal["READY"]
+    validation_level: Literal["foundation"]
+    source_draft_version_id: str
+    candidate_digest: str
+    foundation_validation_id: str
+    documents: tuple[KnowledgeSourceSnapshotDocument, ...]
+    created_at: str
+    created_by: str
 
 
 class KnowledgeDocument(FrozenModel):
