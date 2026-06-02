@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shutil
+import tempfile
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import Enum
@@ -10,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+from proof_agent.bootstrap.validation import validate_secret_safe_params
 from proof_agent.contracts import (
     ActiveAgentVersion,
     AgentValidationRecord,
@@ -20,7 +24,13 @@ from proof_agent.contracts import (
     KnowledgeDocument,
     KnowledgeSource,
     PublishedAgentVersion,
+    QuarantinedKnowledgeUpload,
 )
+from proof_agent.configuration.file_locking import locked, store_lock_path
+from proof_agent.errors import ProofAgentError
+
+KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY = 500
+STORE_LOCK_TIMEOUT_SECONDS = 5.0
 
 
 class LocalAgentConfigurationStore:
@@ -241,18 +251,24 @@ class LocalAgentConfigurationStore:
         params: Mapping[str, Any],
         actor: str,
     ) -> KnowledgeSource:
-        if self.get_knowledge_source(source_id) is not None:
-            raise ValueError(f"Knowledge Source already exists: {source_id}")
-        now = _now()
-        source = KnowledgeSource(
-            source_id=source_id,
-            name=name,
-            provider=provider,
-            params=params,
-            created_at=now,
-            updated_at=now,
+        validate_secret_safe_params(
+            params,
+            field_prefix=f"knowledge_sources[{source_id}].params",
         )
-        self._write_knowledge_source(source)
+        _knowledge_source_worker_concurrency(params)
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            if self.get_knowledge_source(source_id) is not None:
+                raise ValueError(f"Knowledge Source already exists: {source_id}")
+            now = _now()
+            source = KnowledgeSource(
+                source_id=source_id,
+                name=name,
+                provider=provider,
+                params=params,
+                created_at=now,
+                updated_at=now,
+            )
+            self._write_knowledge_source(source)
         return source
 
     def get_knowledge_source(self, source_id: str) -> KnowledgeSource | None:
@@ -273,6 +289,95 @@ class LocalAgentConfigurationStore:
             if source is not None:
                 sources.append(source)
         return sorted(sources, key=lambda source: source.name)
+
+    def get_knowledge_source_worker_concurrency(self, source_id: str) -> int:
+        """Return a validated claim-time concurrency limit for one source."""
+
+        source = self._require_knowledge_source(source_id)
+        return _knowledge_source_worker_concurrency(source.params)
+
+    def stage_quarantined_knowledge_upload(
+        self,
+        *,
+        source_id: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        actor: str,
+        lock_timeout_seconds: float = STORE_LOCK_TIMEOUT_SECONDS,
+    ) -> QuarantinedKnowledgeUpload:
+        """Persist one operator upload for asynchronous validation."""
+
+        with locked(self._store_lock_path(), timeout_seconds=lock_timeout_seconds):
+            self._require_knowledge_source(source_id)
+            if (
+                self._count_reserved_knowledge_document_slots_unlocked(source_id)
+                >= KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY
+            ):
+                raise _knowledge_document_capacity_exceeded(source_id)
+
+            now = _now()
+            upload_id = f"upload_{uuid4().hex[:8]}"
+            safe_filename = _safe_filename(filename)
+            storage_path = (
+                Path("knowledge_sources")
+                / source_id
+                / "quarantined_uploads"
+                / upload_id
+                / "original-upload.bin"
+            )
+            upload = QuarantinedKnowledgeUpload(
+                upload_id=upload_id,
+                source_id=source_id,
+                filename=safe_filename,
+                content_type=content_type,
+                size_bytes=len(content),
+                storage_path=storage_path.as_posix(),
+                state="queued",
+                created_at=now,
+                updated_at=now,
+            )
+            self._publish_quarantined_knowledge_upload(upload, content)
+            return upload
+
+    def count_reserved_knowledge_document_slots(self, source_id: str) -> int:
+        """Count managed documents plus queued or processing quarantine reservations."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_knowledge_source(source_id)
+            return self._count_reserved_knowledge_document_slots_unlocked(source_id)
+
+    def get_quarantined_knowledge_upload(
+        self,
+        *,
+        source_id: str,
+        upload_id: str,
+    ) -> QuarantinedKnowledgeUpload | None:
+        path = self._quarantined_knowledge_upload_path(source_id, upload_id)
+        if not path.exists():
+            return None
+        return QuarantinedKnowledgeUpload.model_validate(_read_json(path))
+
+    def list_quarantined_knowledge_uploads(
+        self, source_id: str
+    ) -> list[QuarantinedKnowledgeUpload]:
+        uploads_root = self._quarantined_knowledge_uploads_root(source_id)
+        if not uploads_root.exists():
+            return []
+        uploads = []
+        for upload_dir in uploads_root.iterdir():
+            if not upload_dir.is_dir():
+                continue
+            upload = self.get_quarantined_knowledge_upload(
+                source_id=source_id,
+                upload_id=upload_dir.name,
+            )
+            if upload is not None:
+                uploads.append(upload)
+        return sorted(uploads, key=lambda upload: upload.created_at)
+
+    def quarantined_knowledge_upload_bytes_path(self, upload: QuarantinedKnowledgeUpload) -> Path:
+        return self._root_dir / upload.storage_path
 
     def add_knowledge_document(
         self,
@@ -354,6 +459,41 @@ class LocalAgentConfigurationStore:
     def knowledge_document_original_path(self, document: KnowledgeDocument) -> Path:
         return self._root_dir / document.storage_path
 
+    def _require_knowledge_source(self, source_id: str) -> KnowledgeSource:
+        source = self.get_knowledge_source(source_id)
+        if source is None:
+            raise KeyError(f"Knowledge Source not found: {source_id}")
+        return source
+
+    def _count_reserved_knowledge_document_slots_unlocked(self, source_id: str) -> int:
+        managed_document_count = len(self.list_knowledge_documents(source_id))
+        reservation_count = sum(
+            upload.state in {"queued", "processing"}
+            for upload in self.list_quarantined_knowledge_uploads(source_id)
+        )
+        return managed_document_count + reservation_count
+
+    def _publish_quarantined_knowledge_upload(
+        self,
+        upload: QuarantinedKnowledgeUpload,
+        content: bytes,
+    ) -> None:
+        uploads_root = self._quarantined_knowledge_uploads_root(upload.source_id)
+        uploads_root.mkdir(parents=True, exist_ok=True)
+        temporary_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{upload.upload_id}.",
+                dir=uploads_root,
+            )
+        )
+        try:
+            (temporary_dir / "original-upload.bin").write_bytes(content)
+            _write_json(temporary_dir / "upload.json", upload.model_dump(mode="json"))
+            os.replace(temporary_dir, uploads_root / upload.upload_id)
+        except Exception:
+            shutil.rmtree(temporary_dir, ignore_errors=True)
+            raise
+
     def _require_draft(self, agent_id: str, draft_id: str) -> DraftAgent:
         draft = self.get_draft(agent_id, draft_id)
         if draft is None:
@@ -371,6 +511,15 @@ class LocalAgentConfigurationStore:
 
     def _knowledge_source_path(self, source_id: str) -> Path:
         return self._root_dir / "knowledge_sources" / source_id / "source.json"
+
+    def _quarantined_knowledge_uploads_root(self, source_id: str) -> Path:
+        return self._root_dir / "knowledge_sources" / source_id / "quarantined_uploads"
+
+    def _quarantined_knowledge_upload_path(self, source_id: str, upload_id: str) -> Path:
+        return self._quarantined_knowledge_uploads_root(source_id) / upload_id / "upload.json"
+
+    def _store_lock_path(self) -> Path:
+        return store_lock_path(self._root_dir)
 
     def _knowledge_document_path(self, source_id: str, document_id: str) -> Path:
         return (
@@ -435,6 +584,25 @@ def _now() -> str:
 def _safe_filename(filename: str) -> str:
     name = Path(filename).name.strip() or "document"
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+
+
+def _knowledge_source_worker_concurrency(params: Mapping[str, Any]) -> int:
+    value = params.get("worker_concurrency", 2)
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 8:
+        raise ProofAgentError(
+            "PA_INGESTION_001",
+            "Knowledge Source params.worker_concurrency must be an integer from 1 through 8.",
+            "Set params.worker_concurrency to an integer from 1 through 8.",
+        )
+    return value
+
+
+def _knowledge_document_capacity_exceeded(source_id: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_INGESTION_004",
+        f"Knowledge Source {source_id} has reached its document capacity.",
+        "Archive an existing document or wait for a pending upload validation to finish.",
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
