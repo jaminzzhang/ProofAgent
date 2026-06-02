@@ -407,10 +407,19 @@ seconds, before the job becomes failed after the retry budget is exhausted. Sour
 concurrency is configured through `params.worker_concurrency`; it defaults to `2` and accepts
 integers from `1` through `8`.
 
-This foundation does not yet add Source publication APIs, candidate snapshot promotion, continuous
-worker polling, batch-upload APIs, or runtime multi-document routing. The later batch-upload
-contract accepts at most 50 files, reserves full-batch capacity atomically before staging any
-bytes, then validates each staged file independently and asynchronously.
+The snapshot-freeze foundation derives a mutable candidate projection from the READY active
+document revisions. Use `GET /api/config/knowledge-sources/{source_id}/candidate-snapshot`, then
+`POST /api/config/knowledge-sources/{source_id}/candidate-snapshot/validate-foundation` and
+`POST /api/config/knowledge-sources/{source_id}/candidate-snapshot/freeze` to validate and freeze
+an immutable `local_index.snapshot.v2` manifest of reusable revision artifacts. Freeze advances
+the preview-only `latest_snapshot_id`; it does not copy artifact directories, rebuild a merged
+index, or advance `published_snapshot_id`.
+
+A foundation-validated frozen snapshot is not a production publication. This slice does not yet
+add the formal Source publication API, continuous worker polling, batch-upload APIs, or runtime
+multi-document routing. The later batch-upload contract accepts at most 50 files, reserves
+full-batch capacity atomically before staging any bytes, then validates each staged file
+independently and asynchronously.
 
 For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
 
