@@ -52,6 +52,17 @@ def _create_local_index_source(
     )
 
 
+def _claim_upload(
+    store: LocalAgentConfigurationStore,
+    *,
+    source_id: str = "ks_local_index",
+) -> object:
+    claimed = store.claim_next_quarantined_knowledge_upload(source_id=source_id)
+    assert claimed is not None
+    assert claimed.claim_token is not None
+    return claimed
+
+
 def test_file_lock_paths_are_store_scoped_and_artifact_key_hashed(tmp_path: Path) -> None:
     artifact_key = "content-sha256/config-sha256"
 
@@ -258,11 +269,13 @@ def test_accept_upload_promotes_original_derivative_document_job_and_marker(tmp_
         filename=upload.filename,
         content_type=upload.content_type,
     )
+    claimed = _claim_upload(store)
 
     document, job = store.accept_quarantined_knowledge_upload(
         source_id=upload.source_id,
         upload_id=upload.upload_id,
         parsed_document=parsed,
+        claim_token=claimed.claim_token,
     )
 
     suffix = upload.upload_id.removeprefix("upload_")
@@ -318,10 +331,12 @@ def test_reject_upload_releases_capacity_and_purge_removes_only_expired_bytes(
         content=b"MZ",
         actor="local-user",
     )
+    claimed = _claim_upload(store)
 
     rejected = store.reject_quarantined_knowledge_upload(
         source_id=upload.source_id,
         upload_id=upload.upload_id,
+        claim_token=claimed.claim_token,
         error_code="PA_INGESTION_002",
         error_message="Knowledge upload type is not supported.",
     )
@@ -376,6 +391,7 @@ def test_accept_upload_replays_deterministically_after_marker_write_interruption
         filename=upload.filename,
         content_type=upload.content_type,
     )
+    claimed = _claim_upload(store)
 
     def interrupt_marker_write(*args: object, **kwargs: object) -> None:
         raise OSError("simulated marker interruption")
@@ -386,6 +402,7 @@ def test_accept_upload_replays_deterministically_after_marker_write_interruption
             source_id=upload.source_id,
             upload_id=upload.upload_id,
             parsed_document=parsed,
+            claim_token=claimed.claim_token,
         )
     monkeypatch.undo()
 
@@ -393,6 +410,7 @@ def test_accept_upload_replays_deterministically_after_marker_write_interruption
         source_id=upload.source_id,
         upload_id=upload.upload_id,
         parsed_document=parsed,
+        claim_token=claimed.claim_token,
     )
 
     assert document.document_id == f"doc_{upload.upload_id.removeprefix('upload_')}"
@@ -419,6 +437,7 @@ def test_accept_upload_repairs_projection_after_marker_persistence(
         filename=upload.filename,
         content_type=upload.content_type,
     )
+    claimed = _claim_upload(store)
     original_write = store._write_quarantined_knowledge_upload
 
     def interrupt_accepted_projection(candidate: object) -> None:
@@ -432,6 +451,7 @@ def test_accept_upload_repairs_projection_after_marker_persistence(
             source_id=upload.source_id,
             upload_id=upload.upload_id,
             parsed_document=parsed,
+            claim_token=claimed.claim_token,
         )
     monkeypatch.undo()
 
@@ -439,6 +459,7 @@ def test_accept_upload_repairs_projection_after_marker_persistence(
         source_id=upload.source_id,
         upload_id=upload.upload_id,
         parsed_document=parsed,
+        claim_token=claimed.claim_token,
     )
     repaired = store.get_quarantined_knowledge_upload(
         source_id=upload.source_id,
@@ -473,12 +494,14 @@ def test_accept_upload_rejects_legacy_nested_raw_secret_before_job_persistence(
         filename=upload.filename,
         content_type=upload.content_type,
     )
+    claimed = _claim_upload(store)
 
     with pytest.raises(ProofAgentError) as exc:
         store.accept_quarantined_knowledge_upload(
             source_id=upload.source_id,
             upload_id=upload.upload_id,
             parsed_document=parsed,
+            claim_token=claimed.claim_token,
         )
 
     assert exc.value.code == "PA_SECRET_001"
@@ -502,10 +525,12 @@ def test_promoted_job_build_spec_remains_frozen_after_source_edit(tmp_path: Path
         filename=upload.filename,
         content_type=upload.content_type,
     )
+    claimed = _claim_upload(store)
     _, job = store.accept_quarantined_knowledge_upload(
         source_id=upload.source_id,
         upload_id=upload.upload_id,
         parsed_document=parsed,
+        claim_token=claimed.claim_token,
     )
     source_path = tmp_path / "knowledge_sources" / upload.source_id / "source.json"
     source_payload = json.loads(source_path.read_text(encoding="utf-8"))
@@ -538,11 +563,290 @@ def test_promoted_job_freezes_missing_ingestion_model_for_worker_diagnosis(tmp_p
         filename=upload.filename,
         content_type=upload.content_type,
     )
+    claimed = _claim_upload(store)
 
     _, job = store.accept_quarantined_knowledge_upload(
         source_id=upload.source_id,
         upload_id=upload.upload_id,
         parsed_document=parsed,
+        claim_token=claimed.claim_token,
     )
 
     assert job.artifact_build_spec.declared_ingestion_model is None
+
+
+def test_quarantine_claim_renewal_requires_matching_token_and_expired_claim_is_reclaimable(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_local_index_source(store)
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="ks_local_index",
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy\n",
+        actor="local-user",
+    )
+
+    first = store.claim_next_quarantined_knowledge_upload(source_id=upload.source_id)
+
+    assert first is not None
+    assert first.state == "processing"
+    assert first.attempt_count == 1
+    assert first.claim_token is not None
+    assert first.lease_expires_at is not None
+    assert store.claim_next_quarantined_knowledge_upload(source_id=upload.source_id) is None
+
+    renewed = store.renew_quarantined_knowledge_upload_claim(
+        source_id=upload.source_id,
+        upload_id=upload.upload_id,
+        claim_token=first.claim_token,
+        lease_seconds=600,
+    )
+    assert renewed.lease_expires_at is not None
+    assert renewed.lease_expires_at > first.lease_expires_at
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.renew_quarantined_knowledge_upload_claim(
+            source_id=upload.source_id,
+            upload_id=upload.upload_id,
+            claim_token="claim_stale",
+        )
+    assert exc.value.code == "PA_INGESTION_004"
+
+    store._write_quarantined_knowledge_upload(
+        renewed.model_copy(update={"lease_expires_at": "2000-01-01T00:00:00Z"})
+    )
+    reclaimed = store.claim_next_quarantined_knowledge_upload(source_id=upload.source_id)
+
+    assert reclaimed is not None
+    assert reclaimed.attempt_count == 2
+    assert reclaimed.claim_token != first.claim_token
+
+
+def test_stale_quarantine_claim_cannot_accept_or_reject_after_recovery(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_local_index_source(store, params=_local_index_params())
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="ks_local_index",
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy\n",
+        actor="local-user",
+    )
+    first = store.claim_next_quarantined_knowledge_upload(source_id=upload.source_id)
+    assert first is not None
+    assert first.claim_token is not None
+    store._write_quarantined_knowledge_upload(
+        first.model_copy(update={"lease_expires_at": "2000-01-01T00:00:00Z"})
+    )
+    reclaimed = store.claim_next_quarantined_knowledge_upload(source_id=upload.source_id)
+    assert reclaimed is not None
+    parsed = parse_quarantined_upload(
+        store.quarantined_knowledge_upload_bytes_path(upload),
+        filename=upload.filename,
+        content_type=upload.content_type,
+    )
+
+    with pytest.raises(ProofAgentError) as accept_exc:
+        store.accept_quarantined_knowledge_upload(
+            source_id=upload.source_id,
+            upload_id=upload.upload_id,
+            parsed_document=parsed,
+            claim_token=first.claim_token,
+        )
+    with pytest.raises(ProofAgentError) as reject_exc:
+        store.reject_quarantined_knowledge_upload(
+            source_id=upload.source_id,
+            upload_id=upload.upload_id,
+            claim_token=first.claim_token,
+            error_code="PA_INGESTION_002",
+            error_message="stale",
+        )
+
+    assert accept_exc.value.code == "PA_INGESTION_004"
+    assert reject_exc.value.code == "PA_INGESTION_004"
+
+
+def test_ingestion_job_is_not_claimable_until_promotion_marker_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_local_index_source(store, params=_local_index_params())
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="ks_local_index",
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy\n",
+        actor="local-user",
+    )
+    claimed = _claim_upload(store)
+    parsed = parse_quarantined_upload(
+        store.quarantined_knowledge_upload_bytes_path(upload),
+        filename=upload.filename,
+        content_type=upload.content_type,
+    )
+
+    def interrupt_marker_write(*args: object, **kwargs: object) -> None:
+        raise OSError("simulated marker interruption")
+
+    monkeypatch.setattr(store, "_write_upload_promotion_marker", interrupt_marker_write)
+    with pytest.raises(OSError, match="marker interruption"):
+        store.accept_quarantined_knowledge_upload(
+            source_id=upload.source_id,
+            upload_id=upload.upload_id,
+            parsed_document=parsed,
+            claim_token=claimed.claim_token,
+        )
+
+    assert len(store.list_knowledge_ingestion_jobs(upload.source_id)) == 1
+    assert store.claim_next_knowledge_ingestion_job(source_id=upload.source_id) is None
+
+
+def test_ingestion_job_claim_renews_reclaims_and_counts_against_source_limit(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    params = {**_local_index_params(), "worker_concurrency": 1}
+    _create_local_index_source(store, params=params)
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="ks_local_index",
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy\n",
+        actor="local-user",
+    )
+    upload_claim = _claim_upload(store)
+    parsed = parse_quarantined_upload(
+        store.quarantined_knowledge_upload_bytes_path(upload),
+        filename=upload.filename,
+        content_type=upload.content_type,
+    )
+    document, job = store.accept_quarantined_knowledge_upload(
+        source_id=upload.source_id,
+        upload_id=upload.upload_id,
+        parsed_document=parsed,
+        claim_token=upload_claim.claim_token,
+    )
+
+    first = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+
+    assert first is not None
+    assert first.state == "processing"
+    assert first.attempt_count == 1
+    assert first.claim_token is not None
+    assert first.lease_expires_at is not None
+    projected_document = store.get_knowledge_document(
+        source_id=document.source_id,
+        document_id=document.document_id,
+    )
+    assert projected_document is not None
+    assert projected_document.state == "processing"
+    store.stage_quarantined_knowledge_upload(
+        source_id="ks_local_index",
+        filename="queued.md",
+        content_type="text/markdown",
+        content=b"# Queued\n",
+        actor="local-user",
+    )
+    assert store.claim_next_knowledge_worker_task().task is None
+
+    renewed = store.renew_knowledge_ingestion_job_claim(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=first.claim_token,
+        lease_seconds=600,
+    )
+    assert renewed.lease_expires_at is not None
+    assert renewed.lease_expires_at > first.lease_expires_at
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.renew_knowledge_ingestion_job_claim(
+            source_id=job.source_id,
+            job_id=job.job_id,
+            claim_token="claim_stale",
+        )
+    assert exc.value.code == "PA_INGESTION_004"
+
+    store._write_knowledge_ingestion_job(
+        renewed.model_copy(update={"lease_expires_at": "2000-01-01T00:00:00Z"})
+    )
+    reclaimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+
+    assert reclaimed is not None
+    assert reclaimed.attempt_count == 2
+    assert reclaimed.claim_token != first.claim_token
+
+
+def test_unified_claim_selects_oldest_ready_task_across_queues(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_local_index_source(store, source_id="ks_upload")
+    _create_local_index_source(store, source_id="ks_job", params=_local_index_params())
+    oldest_upload = store.stage_quarantined_knowledge_upload(
+        source_id="ks_upload",
+        filename="oldest.md",
+        content_type="text/markdown",
+        content=b"# Oldest\n",
+        actor="local-user",
+    )
+    job_upload = store.stage_quarantined_knowledge_upload(
+        source_id="ks_job",
+        filename="job.md",
+        content_type="text/markdown",
+        content=b"# Job\n",
+        actor="local-user",
+    )
+    job_claim = _claim_upload(store, source_id="ks_job")
+    parsed = parse_quarantined_upload(
+        store.quarantined_knowledge_upload_bytes_path(job_upload),
+        filename=job_upload.filename,
+        content_type=job_upload.content_type,
+    )
+    store.accept_quarantined_knowledge_upload(
+        source_id=job_upload.source_id,
+        upload_id=job_upload.upload_id,
+        parsed_document=parsed,
+        claim_token=job_claim.claim_token,
+    )
+
+    selection = store.claim_next_knowledge_worker_task()
+
+    assert selection.task is not None
+    assert selection.task.kind == "quarantine_validation"
+    assert selection.task.upload is not None
+    assert selection.task.upload.upload_id == oldest_upload.upload_id
+
+
+def test_unified_claim_skips_capped_source_and_reports_malformed_source(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_local_index_source(
+        store,
+        source_id="ks_capped",
+        params={"worker_concurrency": 1},
+    )
+    _create_local_index_source(store, source_id="ks_malformed")
+    _create_local_index_source(store, source_id="ks_eligible")
+    for source_id in ("ks_capped", "ks_capped", "ks_malformed", "ks_eligible"):
+        store.stage_quarantined_knowledge_upload(
+            source_id=source_id,
+            filename=f"{source_id}.md",
+            content_type="text/markdown",
+            content=b"# Policy\n",
+            actor="local-user",
+        )
+    capped = store.claim_next_quarantined_knowledge_upload(source_id="ks_capped")
+    assert capped is not None
+    source_path = tmp_path / "knowledge_sources" / "ks_malformed" / "source.json"
+    source_payload = json.loads(source_path.read_text(encoding="utf-8"))
+    source_payload["params"]["worker_concurrency"] = 0
+    source_path.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    selection = store.claim_next_knowledge_worker_task()
+
+    assert selection.task is not None
+    assert selection.task.upload is not None
+    assert selection.task.upload.source_id == "ks_eligible"
+    assert len(selection.diagnostics) == 1
+    assert selection.diagnostics[0].source_id == "ks_malformed"
+    assert selection.diagnostics[0].code == "PA_INGESTION_001"

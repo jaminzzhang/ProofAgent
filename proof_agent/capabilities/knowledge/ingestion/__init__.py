@@ -6,6 +6,9 @@ from proof_agent.capabilities.knowledge.ingestion.configuration import (
 )
 from proof_agent.capabilities.knowledge.ingestion.contracts import (
     KnowledgeDocumentParser,
+    KnowledgeWorkerClaimSelection,
+    KnowledgeWorkerDiagnostic,
+    KnowledgeWorkerTaskClaim,
     ParsedKnowledgeDocument,
     ParserMetadata,
 )
@@ -22,6 +25,9 @@ from proof_agent.capabilities.knowledge.ingestion.parsers import (
 __all__ = [
     "KnowledgeDocumentParser",
     "KnowledgeDocumentParserRegistry",
+    "KnowledgeWorkerClaimSelection",
+    "KnowledgeWorkerDiagnostic",
+    "KnowledgeWorkerTaskClaim",
     "MarkdownKnowledgeDocumentParser",
     "ParsedKnowledgeDocument",
     "ParserMetadata",
