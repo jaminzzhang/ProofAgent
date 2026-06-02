@@ -139,7 +139,7 @@ def test_local_index_knowledge_source_loads_with_v2_paths(tmp_path: Path) -> Non
         tmp_path,
         params="""
       snapshot_path: ./config/knowledge_sources/ks_policy/snapshots/kssnapshot_001
-      artifact_root: ./config/knowledge_sources/ks_policy/artifacts
+      artifact_root: ./config
       document_selection_budget: 12
 """,
     )
@@ -150,9 +150,7 @@ def test_local_index_knowledge_source_loads_with_v2_paths(tmp_path: Path) -> Non
     assert manifest.knowledge_sources[0].params["snapshot_path"] == (
         tmp_path / "config" / "knowledge_sources" / "ks_policy" / "snapshots" / "kssnapshot_001"
     ).resolve()
-    assert manifest.knowledge_sources[0].params["artifact_root"] == (
-        tmp_path / "config" / "knowledge_sources" / "ks_policy" / "artifacts"
-    ).resolve()
+    assert manifest.knowledge_sources[0].params["artifact_root"] == (tmp_path / "config").resolve()
     assert manifest.knowledge_sources[0].params["document_selection_budget"] == 12
 
 
@@ -180,7 +178,7 @@ def test_local_index_document_selection_budget_rejects_invalid_values(
         tmp_path,
         params=f"""
       snapshot_path: ./config/knowledge_sources/ks_policy/snapshots/kssnapshot_001
-      artifact_root: ./config/knowledge_sources/ks_policy/artifacts
+      artifact_root: ./config
       document_selection_budget: {document_selection_budget!r}
 """,
     )
@@ -206,7 +204,7 @@ def test_local_index_paths_reject_non_path_values(
     tmp_path: Path, field_name: str, invalid_yaml_value: str
 ) -> None:
     snapshot_path = "./config/knowledge_sources/ks_policy/snapshots/kssnapshot_001"
-    artifact_root = "./config/knowledge_sources/ks_policy/artifacts"
+    artifact_root = "./config"
     if field_name == "snapshot_path":
         snapshot_path = invalid_yaml_value
     else:
