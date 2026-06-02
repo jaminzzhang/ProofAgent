@@ -667,7 +667,7 @@ class LocalAgentConfigurationStore:
         claim_token: str,
         error_code: str,
         error_message: str,
-        retry_delay_seconds: int = 30,
+        retry_delay_seconds: int | None = None,
     ) -> KnowledgeIngestionJob:
         """Persist one recoverable build failure or exhaust automatic retries."""
 
@@ -697,7 +697,14 @@ class LocalAgentConfigurationStore:
                     "last_error_code": error_code,
                     "last_error_message": safe_message,
                     "last_failure_classification": "recoverable",
-                    "next_attempt_at": _timestamp(now + timedelta(seconds=retry_delay_seconds)),
+                    "next_attempt_at": _timestamp(
+                        now
+                        + timedelta(
+                            seconds=retry_delay_seconds
+                            if retry_delay_seconds is not None
+                            else _default_auto_retry_delay_seconds(auto_retry_count)
+                        )
+                    ),
                     **_cleared_claim_updates(),
                     "updated_at": _timestamp(now),
                 }
@@ -1469,6 +1476,10 @@ def _operator_error_message(message: str) -> str:
     if not first_line or first_line.startswith("Traceback"):
         return "Local Index artifact build failed."
     return first_line[:500]
+
+
+def _default_auto_retry_delay_seconds(auto_retry_count: int) -> int:
+    return 30 if auto_retry_count == 1 else 120
 
 
 def _read_json(path: Path) -> dict[str, Any]:
