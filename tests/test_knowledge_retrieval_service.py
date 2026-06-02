@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -33,17 +34,28 @@ class FakeKnowledgeProvider:
         *,
         provider_name: str = "local_markdown",
         error: ProofAgentError | None = None,
+        retrieval_summaries: tuple[Mapping[str, Any] | None, ...] = (),
     ) -> None:
         self.provider_name = provider_name
         self.evidence = evidence
         self.error = error
         self.calls: list[tuple[str, int | None]] = []
+        self.retrieval_summaries = list(retrieval_summaries)
+        self._retrieval_summary: Mapping[str, Any] | None = None
 
     def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         self.calls.append((query, top_k))
+        self._retrieval_summary = (
+            self.retrieval_summaries.pop(0) if self.retrieval_summaries else None
+        )
         if self.error is not None:
             raise self.error
         return self.evidence[:top_k]
+
+    def consume_retrieval_summary(self) -> Mapping[str, Any] | None:
+        summary = self._retrieval_summary
+        self._retrieval_summary = None
+        return summary
 
 
 class FakeModelProvider:
@@ -97,6 +109,90 @@ def test_single_step_retrieval_service_gates_provider_and_evaluates_evidence(
     assert event_types.index("policy_decision") < event_types.index("retrieval_step")
     assert event_types.index("retrieval_step") < event_types.index("retrieval_result")
     assert event_types.index("retrieval_result") < event_types.index("evidence_evaluation")
+
+
+def test_single_step_retrieval_traces_direct_provider_summary(tmp_path: Path) -> None:
+    provider = FakeKnowledgeProvider(
+        retrieval_summaries=(
+            {
+                "document_candidates": [{"document_id": "doc_policy"}],
+                "selected_documents": [{"document_id": "doc_policy"}],
+                "routing": {"selection_reason": "routing_model_selected"},
+            },
+        )
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="travel meal reimbursement",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+        )
+    )
+
+    retrieval_result = _last_event(trace.trace_path, "retrieval_result")
+    assert retrieval_result["payload"]["document_candidates"] == [
+        {"document_id": "doc_policy"}
+    ]
+    assert retrieval_result["payload"]["selected_documents"] == [
+        {"document_id": "doc_policy"}
+    ]
+    assert retrieval_result["payload"]["routing"] == {
+        "selection_reason": "routing_model_selected"
+    }
+    assert provider.consume_retrieval_summary() is None
+
+
+def test_single_step_retrieval_traces_direct_provider_summary_before_failure(
+    tmp_path: Path,
+) -> None:
+    provider = FakeKnowledgeProvider(
+        error=ProofAgentError(
+            "PA_KNOWLEDGE_002",
+            "selected document failed",
+            "Retry after republishing.",
+        ),
+        retrieval_summaries=(
+            {
+                "selected_documents": [{"document_id": "doc_policy"}],
+                "routing": {"selection_reason": "selected_document_failed"},
+            },
+        ),
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    with pytest.raises(ProofAgentError):
+        service.retrieve(
+            KnowledgeRetrievalRequest(
+                question="travel meal reimbursement",
+                strategy="single_step",
+                top_k=1,
+                min_score=0.2,
+            )
+        )
+
+    retrieval_result = _last_event(trace.trace_path, "retrieval_result")
+    assert retrieval_result["status"] == "error"
+    assert retrieval_result["payload"]["candidate_count"] == 0
+    assert retrieval_result["payload"]["selected_documents"] == [
+        {"document_id": "doc_policy"}
+    ]
+    assert retrieval_result["payload"]["routing"] == {
+        "selection_reason": "selected_document_failed"
+    }
+    assert provider.consume_retrieval_summary() is None
 
 
 def test_reviewed_react_retrieval_uses_service_without_extra_policy_gates(
@@ -159,6 +255,9 @@ def test_mixed_retrieval_continues_after_advisory_binding_failure(
             "remote source timed out",
             "Retry the remote source.",
         ),
+        retrieval_summaries=(
+            {"routing": {"selection_reason": "selected_document_failed"}},
+        ),
     )
     fallback = FakeKnowledgeProvider(
         (
@@ -169,7 +268,10 @@ def test_mixed_retrieval_continues_after_advisory_binding_failure(
                 admission_score=0.7,
                 citation="local.md:1",
             ),
-        )
+        ),
+        retrieval_summaries=(
+            {"routing": {"selection_reason": "routing_model_selected"}},
+        ),
     )
     trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
     service = KnowledgeRetrievalService(
@@ -198,7 +300,13 @@ def test_mixed_retrieval_continues_after_advisory_binding_failure(
     assert provider_calls[0]["status"] == "failed"
     assert provider_calls[0]["failure_mode"] == "advisory"
     assert provider_calls[0]["error_code"] == "PA_KNOWLEDGE_002"
+    assert provider_calls[0]["routing"] == {
+        "selection_reason": "selected_document_failed"
+    }
     assert provider_calls[1]["status"] == "ok"
+    assert provider_calls[1]["routing"] == {
+        "selection_reason": "routing_model_selected"
+    }
 
 
 def test_mixed_retrieval_fails_closed_on_required_binding_failure(
@@ -210,6 +318,9 @@ def test_mixed_retrieval_fails_closed_on_required_binding_failure(
             "PA_KNOWLEDGE_002",
             "required source timed out",
             "Retry the required source.",
+        ),
+        retrieval_summaries=(
+            {"routing": {"selection_reason": "selected_document_failed"}},
         ),
     )
     trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
@@ -235,6 +346,9 @@ def test_mixed_retrieval_fails_closed_on_required_binding_failure(
     retrieval_result = _last_event(trace.trace_path, "retrieval_result")
     assert retrieval_result["status"] == "error"
     assert retrieval_result["payload"]["provider_calls"][0]["failure_mode"] == "required"
+    assert retrieval_result["payload"]["provider_calls"][0]["routing"] == {
+        "selection_reason": "selected_document_failed"
+    }
 
 
 def test_mixed_retrieval_deduplicates_exact_evidence_and_preserves_contributions(
@@ -515,6 +629,76 @@ def test_agentic_retrieval_re_routes_rewritten_query_through_service(
     assert [event["payload"]["round_id"] for event in round_steps] == [
         event["payload"]["round_id"] for event in round_results
     ]
+
+
+def test_agentic_retrieval_consumes_direct_provider_summary_once_per_round(
+    tmp_path: Path,
+) -> None:
+    provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="travel.md",
+                content="Travel meals require receipts.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.8,
+                citation="travel.md:1",
+            ),
+        ),
+        retrieval_summaries=(
+            {
+                "selected_documents": [{"document_id": "doc_travel"}],
+                "routing": {"selection_reason": "routing_model_selected"},
+            },
+        ),
+    )
+    evaluator = FakeModelProvider(
+        (
+            '{"sufficient": false, "reason": "Need another pass."}',
+            '{"sufficient": true, "reason": "Enough evidence."}',
+        ),
+        model_name="retrieval-evaluator",
+    )
+    planner = FakeModelProvider(
+        (
+            '{"action": "rewrite", "new_query": "travel meal receipt", "reason": "Refine."}',
+            '{"action": "sufficient", "reason": "Enough evidence."}',
+        ),
+        model_name="retrieval-planner",
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+        model_resolver=lambda config: (
+            planner if config.name == "retrieval-planner" else evaluator
+        ),
+    )
+
+    service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="travel reimbursement",
+            strategy="agentic",
+            top_k=1,
+            min_score=0.2,
+            max_rounds=2,
+            planner_model=ModelConfig(provider="deterministic", name="retrieval-planner"),
+            evaluator_model=ModelConfig(provider="deterministic", name="retrieval-evaluator"),
+        )
+    )
+
+    round_results = [
+        event
+        for event in _read_events(trace.trace_path)
+        if event["event_type"] == "retrieval_result"
+        and event["payload"].get("round_id") is not None
+    ]
+    assert len(round_results) == 2
+    assert round_results[0]["payload"]["selected_documents"] == [
+        {"document_id": "doc_travel"}
+    ]
+    assert "selected_documents" not in round_results[1]["payload"]
+    assert provider.consume_retrieval_summary() is None
 
 
 def test_agentic_retrieval_preserves_routing_empty_reason(tmp_path: Path) -> None:
