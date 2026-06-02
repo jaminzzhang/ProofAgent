@@ -478,7 +478,28 @@ def _validate_knowledge_provider_params(
         require_directory(Path(path), f"{field_prefix}.path", manifest_path)
         return
     if provider == "local_index":
-        _required_param(params, "index_path", provider, manifest_path, field_prefix=field_prefix)
+        if "index_path" in params:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"{field_prefix}.index_path is not supported for {provider}",
+                f"Replace {field_prefix}.index_path with {field_prefix}.snapshot_path and "
+                f"{field_prefix}.artifact_root in {manifest_path}.",
+                artifact_path=manifest_path,
+            )
+        _required_param(params, "snapshot_path", provider, manifest_path, field_prefix=field_prefix)
+        _required_param(params, "artifact_root", provider, manifest_path, field_prefix=field_prefix)
+        document_selection_budget = params.get("document_selection_budget", 8)
+        if (
+            isinstance(document_selection_budget, bool)
+            or not isinstance(document_selection_budget, int)
+            or not 1 <= document_selection_budget <= 20
+        ):
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"{field_prefix}.document_selection_budget must be an integer from 1 to 20",
+                f"Set {field_prefix}.document_selection_budget to an integer from 1 to 20.",
+                artifact_path=manifest_path,
+            )
         return
     if provider == "remote_search":
         _required_param(params, "endpoint_env", provider, manifest_path, field_prefix=field_prefix)

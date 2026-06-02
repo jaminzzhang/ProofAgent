@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
-from proof_agent.capabilities.knowledge.contracts import DocumentNode, RetrievalAction
+from proof_agent.capabilities.knowledge.contracts import (
+    DocumentNode,
+    KnowledgeDocumentRoutingSelection,
+    RetrievalAction,
+)
 from proof_agent.capabilities.knowledge.local_provider import (
     LocalKnowledgeProvider,
     LocalMarkdownProvider,
@@ -28,6 +32,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "DocumentNode",
+    "KnowledgeDocumentRoutingSelection",
     "KnowledgeProvider",
     "LocalIndexProvider",
     "LocalKnowledgeProvider",

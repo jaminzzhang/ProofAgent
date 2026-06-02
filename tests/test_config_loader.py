@@ -134,12 +134,71 @@ audit:
     assert "local_vector" not in exc.value.fix
 
 
-def test_local_index_knowledge_source_loads_with_index_path(tmp_path: Path) -> None:
+def test_local_index_knowledge_source_loads_with_v2_paths(tmp_path: Path) -> None:
+    agent_yaml = _write_local_index_manifest(
+        tmp_path,
+        params="""
+      snapshot_path: ./snapshots/policies.json
+      artifact_root: ./artifacts/policies
+      document_selection_budget: 12
+""",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.knowledge_sources[0].provider == "local_index"
+    assert manifest.knowledge_sources[0].params["snapshot_path"] == (
+        tmp_path / "snapshots" / "policies.json"
+    ).resolve()
+    assert manifest.knowledge_sources[0].params["artifact_root"] == (
+        tmp_path / "artifacts" / "policies"
+    ).resolve()
+    assert manifest.knowledge_sources[0].params["document_selection_budget"] == 12
+
+
+def test_local_index_historical_index_path_is_rejected(tmp_path: Path) -> None:
+    agent_yaml = _write_local_index_manifest(
+        tmp_path,
+        params="""
+      index_path: ./indexes/policies
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "snapshot_path" in exc.value.fix
+    assert "artifact_root" in exc.value.fix
+
+
+@pytest.mark.parametrize("document_selection_budget", [0, 21, "8", True])
+def test_local_index_document_selection_budget_rejects_invalid_values(
+    tmp_path: Path, document_selection_budget: object
+) -> None:
+    agent_yaml = _write_local_index_manifest(
+        tmp_path,
+        params=f"""
+      snapshot_path: ./snapshots/policies.json
+      artifact_root: ./artifacts/policies
+      document_selection_budget: {document_selection_budget!r}
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "document_selection_budget" in exc.value.message
+    assert "document_selection_budget" in exc.value.fix
+
+
+def _write_local_index_manifest(tmp_path: Path, *, params: str) -> Path:
     agent_yaml = tmp_path / "agent.yaml"
     (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
     (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
     agent_yaml.write_text(
-        """
+        f"""
 name: local_index_manifest
 purpose: "Local index source config."
 workflow:
@@ -150,7 +209,7 @@ knowledge_sources:
     name: Local Index Knowledge
     provider: local_index
     params:
-      index_path: ./indexes/policies
+{params}
 knowledge_bindings:
   - binding_id: kb_local_index
     source_id: ks_local_index
@@ -171,13 +230,7 @@ audit:
 """,
         encoding="utf-8",
     )
-
-    manifest = load_agent_manifest(agent_yaml)
-
-    assert manifest.knowledge_sources[0].provider == "local_index"
-    assert manifest.knowledge_sources[0].params["index_path"] == (
-        tmp_path / "indexes" / "policies"
-    ).resolve()
+    return agent_yaml
 
 
 def test_inline_knowledge_provider_is_rejected_after_direct_migration(tmp_path: Path) -> None:

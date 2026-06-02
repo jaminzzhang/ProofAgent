@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 
@@ -49,3 +49,12 @@ class RetrievalAction(FrozenModel):
     action: Literal["rewrite", "sufficient", "abort"]
     reason: str
     new_query: str | None = None
+
+
+class KnowledgeDocumentRoutingSelection(FrozenModel):
+    """Strict routing-model output for bounded Local Index document selection."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    selected_document_ids: tuple[str, ...]
+    reason: str

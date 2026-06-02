@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
+from proof_agent.capabilities.knowledge import KnowledgeDocumentRoutingSelection
 from proof_agent.capabilities.knowledge.contracts import DocumentNode, RetrievalAction
 from proof_agent.contracts.manifest import ModelConfig, RetrievalConfig
 
@@ -225,6 +226,34 @@ def test_retrieval_action_serialization_roundtrip() -> None:
     data = original.model_dump()
     restored = RetrievalAction.model_validate(data)
     assert restored == original
+
+
+# ============================================================================
+# KnowledgeDocumentRoutingSelection Tests
+# ============================================================================
+
+
+def test_knowledge_document_routing_selection_serialization_roundtrip() -> None:
+    """model_dump() and model_validate() preserve the strict routing response."""
+    original = KnowledgeDocumentRoutingSelection(
+        selected_document_ids=("doc_001", "doc_002"),
+        reason="The selected documents match the request.",
+    )
+    data = original.model_dump()
+    restored = KnowledgeDocumentRoutingSelection.model_validate(data)
+    assert restored == original
+
+
+def test_knowledge_document_routing_selection_rejects_unknown_fields() -> None:
+    """Unknown routing-model response fields reject validation."""
+    with pytest.raises(ValidationError):
+        KnowledgeDocumentRoutingSelection.model_validate(
+            {
+                "selected_document_ids": ["doc_001"],
+                "reason": "The selected document matches the request.",
+                "confidence": 0.9,
+            }
+        )
 
 
 # ============================================================================
