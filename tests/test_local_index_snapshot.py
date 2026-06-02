@@ -9,7 +9,6 @@ import pytest
 
 from proof_agent.capabilities.knowledge.local_index_snapshot import (
     load_ready_snapshot_manifest,
-    load_ready_snapshot_metadata,
 )
 from proof_agent.contracts import (
     KnowledgeSourceSnapshotDocument,
@@ -257,27 +256,3 @@ def test_load_ready_snapshot_manifest_rejects_symlink_artifact_path_escape(
     )
 
     _assert_invalid_snapshot(snapshot_path, artifact_root, expected_message="escapes")
-
-
-def test_load_ready_snapshot_metadata_remains_available_for_incremental_compatibility(
-    tmp_path: Path,
-) -> None:
-    index_path = tmp_path / "snapshot"
-    index_path.mkdir()
-    (index_path / "artifact_meta.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "local_index.snapshot.v1",
-                "snapshot_id": "snapshot_enterprise_policy_001",
-                "state": "READY",
-                "provider": "local_index",
-                "engine_name": "llama-index-tree",
-                "engine_version": "0.12",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    metadata = load_ready_snapshot_metadata(index_path)
-
-    assert metadata.snapshot_id == "snapshot_enterprise_policy_001"

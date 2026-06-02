@@ -2,6 +2,7 @@
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,8 +10,20 @@ import proof_agent.capabilities.knowledge.local_index as local_index_module
 from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.capabilities.knowledge.contracts import DocumentNode
 from proof_agent.capabilities.knowledge.local_index import LocalIndexProvider
+from proof_agent.capabilities.knowledge.local_index_routing import LocalIndexDocumentRoutingResult
+from proof_agent.capabilities.knowledge.local_index_snapshot import (
+    LocalIndexRuntimeDocument,
+    LocalIndexRuntimeSnapshot,
+)
 from proof_agent.capabilities.models.llama_index_bridge import ProofAgentLLM
-from proof_agent.contracts import EvidenceChunk, EvidenceStatus, ModelCallRole, ModelResponse
+from proof_agent.contracts import (
+    EvidenceChunk,
+    EvidenceStatus,
+    KnowledgeSourceSnapshotDocument,
+    KnowledgeSourceSnapshotManifest,
+    ModelCallRole,
+    ModelResponse,
+)
 from proof_agent.contracts.manifest import KnowledgeConfig
 from proof_agent.errors import ProofAgentError
 
@@ -41,20 +54,92 @@ class MockModelProvider:
         )
 
 
-def _write_ready_snapshot_metadata(index_path: Path) -> None:
-    index_path.mkdir()
-    (index_path / "artifact_meta.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "local_index.snapshot.v1",
-                "snapshot_id": "snapshot_enterprise_policy_001",
-                "state": "READY",
-                "provider": "local_index",
-                "engine_name": "llama-index-tree",
-                "engine_version": "0.12",
-            }
+def _runtime_document(
+    tmp_path: Path,
+    document_id: str,
+) -> LocalIndexRuntimeDocument:
+    return LocalIndexRuntimeDocument(
+        document_id=document_id,
+        revision_id=f"rev_{document_id}",
+        filename=f"{document_id}.md",
+        content_type="text/markdown",
+        content_hash="a" * 64,
+        artifact_path=tmp_path / "artifacts" / document_id,
+        routing_metadata={},
+    )
+
+
+def _runtime_snapshot(
+    tmp_path: Path,
+    *,
+    documents: tuple[LocalIndexRuntimeDocument, ...] | None = None,
+) -> LocalIndexRuntimeSnapshot:
+    return LocalIndexRuntimeSnapshot(
+        snapshot_id="kssnapshot_001",
+        source_id="ks_policy",
+        state="READY",
+        validation_level="foundation",
+        documents=documents or (_runtime_document(tmp_path, "doc_policy"),),
+    )
+
+
+def _runtime_provider(
+    tmp_path: Path,
+    *,
+    documents: tuple[LocalIndexRuntimeDocument, ...] | None = None,
+) -> LocalIndexProvider:
+    routing_provider = MockModelProvider("routing", "routing-model")
+    return LocalIndexProvider(
+        ingestion_model=None,
+        routing_model=ProofAgentLLM(
+            model_provider=routing_provider,
+            role=ModelCallRole.ROUTING,
         ),
+        routing_provider=routing_provider,
+        runtime_snapshot=_runtime_snapshot(tmp_path, documents=documents),
+    )
+
+
+def _write_v2_snapshot(tmp_path: Path) -> tuple[Path, Path]:
+    artifact_root = tmp_path / "config"
+    snapshot_path = artifact_root / "knowledge_sources" / "ks_policy" / "snapshots" / "snapshot_001"
+    document = KnowledgeSourceSnapshotDocument(
+        document_id="doc_policy",
+        revision_id="rev_policy",
+        filename="policy.md",
+        content_type="text/markdown",
+        content_hash="a" * 64,
+        artifact_path="artifacts/doc_policy/fingerprint",
+    )
+    manifest = KnowledgeSourceSnapshotManifest(
+        schema_version="local_index.snapshot.v2",
+        snapshot_id="kssnapshot_001",
+        source_id="ks_policy",
+        state="READY",
+        validation_level="foundation",
+        source_draft_version_id="ksdraft_001",
+        candidate_digest="b" * 64,
+        foundation_validation_id="ksvalidation_001",
+        documents=(document,),
+        created_at="2026-06-02T00:00:00Z",
+        created_by="operator",
+    )
+    snapshot_path.mkdir(parents=True)
+    (snapshot_path / "snapshot.json").write_text(
+        json.dumps(manifest.model_dump(mode="json")),
         encoding="utf-8",
+    )
+    return snapshot_path, artifact_root
+
+
+def _node(node_id: str, content: str, score: float) -> SimpleNamespace:
+    return SimpleNamespace(
+        node=SimpleNamespace(
+            id_=node_id,
+            metadata={"title": node_id},
+            get_content=lambda: content,
+        ),
+        score=score,
     )
 
 
@@ -415,17 +500,16 @@ class TestLocalIndexProvider:
             with pytest.raises(ValueError, match="not found"):
                 provider.retrieve_at_scope("nonexistent", "query")
 
-    def test_from_config_resolves_routing_model_and_loads_ready_snapshot(
+    def test_from_config_loads_v2_manifest_without_opening_artifacts(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """from_config() validates and loads an immutable READY snapshot."""
-        index_path = tmp_path / "snapshot"
-        _write_ready_snapshot_metadata(index_path)
+        """from_config() loads the v2 descriptor but not selected storage."""
+        snapshot_path, artifact_root = _write_v2_snapshot(tmp_path)
         routing_provider = MockModelProvider("routing", "routing-model")
         resolved_configs = []
-        loaded_paths = []
+        loaded_artifacts = []
         monkeypatch.setattr(
             local_index_module,
             "resolve_provider",
@@ -433,14 +517,16 @@ class TestLocalIndexProvider:
             raising=False,
         )
         monkeypatch.setattr(
-            LocalIndexProvider,
-            "load_index",
-            lambda provider: loaded_paths.append(provider.index_path),
+            local_index_module,
+            "_load_runtime_revision_index",
+            lambda *args, **kwargs: loaded_artifacts.append((args, kwargs)),
         )
         config = KnowledgeConfig(
             provider="local_index",
             params={
-                "index_path": index_path,
+                "snapshot_path": snapshot_path,
+                "artifact_root": artifact_root,
+                "document_selection_budget": 12,
                 "routing_model": {
                     "provider": "deterministic",
                     "name": "routing-model",
@@ -453,9 +539,11 @@ class TestLocalIndexProvider:
         assert provider.ingestion_model is None
         assert provider.routing_model._provider is routing_provider
         assert provider.routing_model._role == ModelCallRole.ROUTING
-        assert provider.snapshot_metadata is not None
-        assert provider.snapshot_metadata.snapshot_id == "snapshot_enterprise_policy_001"
-        assert loaded_paths == [index_path]
+        assert provider.routing_provider is routing_provider
+        assert provider.runtime_snapshot is not None
+        assert provider.runtime_snapshot.snapshot_id == "kssnapshot_001"
+        assert provider.document_selection_budget == 12
+        assert loaded_artifacts == []
         assert resolved_configs[0].provider == "deterministic"
         assert resolved_configs[0].name == "routing-model"
 
@@ -465,8 +553,7 @@ class TestLocalIndexProvider:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """from_config() falls back to the source-owned ingestion model."""
-        index_path = tmp_path / "snapshot"
-        _write_ready_snapshot_metadata(index_path)
+        snapshot_path, artifact_root = _write_v2_snapshot(tmp_path)
         routing_provider = MockModelProvider("routing", "inherited-model")
         resolved_configs = []
         monkeypatch.setattr(
@@ -475,11 +562,11 @@ class TestLocalIndexProvider:
             lambda config: resolved_configs.append(config) or routing_provider,
             raising=False,
         )
-        monkeypatch.setattr(LocalIndexProvider, "load_index", lambda _provider: None)
         config = KnowledgeConfig(
             provider="local_index",
             params={
-                "index_path": index_path,
+                "snapshot_path": snapshot_path,
+                "artifact_root": artifact_root,
                 "ingestion_model": {
                     "provider": "deterministic",
                     "name": "inherited-model",
@@ -492,24 +579,14 @@ class TestLocalIndexProvider:
         assert provider.routing_model._provider is routing_provider
         assert resolved_configs[0].name == "inherited-model"
 
-    def test_from_config_rejects_missing_sidecar_before_opening_storage(
+    def test_from_config_rejects_historical_index_path(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """from_config() validates publication metadata before loading storage."""
-        index_path = tmp_path / "snapshot"
-        index_path.mkdir()
-        storage_loads = []
-        monkeypatch.setattr(
-            LocalIndexProvider,
-            "load_index",
-            lambda _provider: storage_loads.append("loaded"),
-        )
         config = KnowledgeConfig(
             provider="local_index",
             params={
-                "index_path": index_path,
+                "index_path": tmp_path / "snapshot",
                 "routing_model": {
                     "provider": "deterministic",
                     "name": "routing-model",
@@ -521,7 +598,45 @@ class TestLocalIndexProvider:
             LocalIndexProvider.from_config(config)
 
         assert exc.value.code == "PA_KNOWLEDGE_001"
-        assert storage_loads == []
+        assert "snapshot_path" in exc.value.fix
+        assert "artifact_root" in exc.value.fix
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {},
+            {"snapshot_path": "/snapshot"},
+            {"artifact_root": "/config"},
+        ],
+    )
+    def test_from_config_rejects_missing_v2_runtime_paths(self, params: dict[str, object]) -> None:
+        with pytest.raises(ProofAgentError) as exc:
+            LocalIndexProvider.from_config(KnowledgeConfig(provider="local_index", params=params))
+
+        assert exc.value.code == "PA_KNOWLEDGE_001"
+
+    @pytest.mark.parametrize("budget", [0, 21, True, "8"])
+    def test_from_config_rejects_invalid_document_selection_budget(
+        self,
+        tmp_path: Path,
+        budget: object,
+    ) -> None:
+        snapshot_path, artifact_root = _write_v2_snapshot(tmp_path)
+
+        with pytest.raises(ProofAgentError) as exc:
+            LocalIndexProvider.from_config(
+                KnowledgeConfig(
+                    provider="local_index",
+                    params={
+                        "snapshot_path": snapshot_path,
+                        "artifact_root": artifact_root,
+                        "document_selection_budget": budget,
+                    },
+                )
+            )
+
+        assert exc.value.code == "PA_KNOWLEDGE_001"
+        assert "document_selection_budget" in exc.value.message
 
     def test_runtime_provider_cannot_build_index_on_demand(self, tmp_path: Path) -> None:
         """A read-only runtime provider cannot build an index."""
@@ -565,3 +680,218 @@ class TestLocalIndexProvider:
             provider.load_index()
 
         assert exc.value.code == "PA_KNOWLEDGE_002"
+
+    def test_runtime_retrieve_loads_only_selected_artifacts_and_merges_top_k(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        doc_alpha = _runtime_document(tmp_path, "doc_alpha")
+        doc_beta = _runtime_document(tmp_path, "doc_beta")
+        doc_unselected = _runtime_document(tmp_path, "doc_unselected")
+        provider = _runtime_provider(tmp_path, documents=(doc_alpha, doc_beta, doc_unselected))
+        loaded = []
+        monkeypatch.setattr(
+            local_index_module,
+            "route_snapshot_documents",
+            lambda *args, **kwargs: LocalIndexDocumentRoutingResult(
+                selected_documents=(doc_beta, doc_alpha),
+                summary={"document_routing": {"selection_reason": "routing_model_selected"}},
+            ),
+        )
+        monkeypatch.setattr(
+            local_index_module,
+            "_load_runtime_revision_index",
+            lambda document, **kwargs: loaded.append(document.artifact_path) or document,
+        )
+        monkeypatch.setattr(
+            local_index_module,
+            "_retrieve_from_runtime_revision",
+            lambda index, **kwargs: (
+                (_node("node_beta", "beta", 0.5),)
+                if index.document_id == "doc_beta"
+                else (_node("node_alpha_2", "alpha 2", 0.9), _node("node_alpha_1", "alpha 1", 0.9))
+            ),
+        )
+
+        chunks = provider.retrieve("query", top_k=2)
+
+        assert loaded == [doc_beta.artifact_path, doc_alpha.artifact_path]
+        assert [chunk.chunk_id for chunk in chunks] == ["node_alpha_1", "node_alpha_2"]
+        assert chunks[0].source_id == "ks_policy"
+        assert chunks[0].source_version_id == "kssnapshot_001"
+        assert chunks[0].document_id == "doc_alpha"
+        assert chunks[0].revision_id == "rev_doc_alpha"
+        assert chunks[0].citation == (
+            "knowledge://source/ks_policy/document/doc_alpha/revision/rev_doc_alpha#node=node_alpha_1"
+        )
+        public_projection = {
+            "source": chunks[0].source,
+            "citation": chunks[0].citation,
+            "metadata": dict(chunks[0].metadata),
+        }
+        assert str(doc_alpha.artifact_path) not in json.dumps(public_projection)
+
+    def test_runtime_retrieve_empty_selection_exposes_one_shot_summary(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        provider = _runtime_provider(tmp_path)
+        summary = {"document_routing": {"selection_reason": "routing_empty"}}
+        monkeypatch.setattr(
+            local_index_module,
+            "route_snapshot_documents",
+            lambda *args, **kwargs: LocalIndexDocumentRoutingResult(
+                selected_documents=(),
+                summary=summary,
+            ),
+        )
+
+        assert provider.retrieve("query") == ()
+        assert provider.consume_retrieval_summary() == summary
+        assert provider.consume_retrieval_summary() is None
+
+    def test_runtime_retrieve_selected_failure_discards_partial_evidence(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        doc_alpha = _runtime_document(tmp_path, "doc_alpha")
+        doc_beta = _runtime_document(tmp_path, "doc_beta")
+        provider = _runtime_provider(tmp_path, documents=(doc_alpha, doc_beta))
+        monkeypatch.setattr(
+            local_index_module,
+            "route_snapshot_documents",
+            lambda *args, **kwargs: LocalIndexDocumentRoutingResult(
+                selected_documents=(doc_alpha, doc_beta),
+                summary={"document_routing": {"selection_reason": "routing_model_selected"}},
+            ),
+        )
+
+        def load_revision(document, **_kwargs):
+            if document.document_id == "doc_beta":
+                raise ValueError("private storage failure")
+            return document
+
+        monkeypatch.setattr(local_index_module, "_load_runtime_revision_index", load_revision)
+        monkeypatch.setattr(
+            local_index_module,
+            "_retrieve_from_runtime_revision",
+            lambda *args, **kwargs: (_node("node_alpha", "alpha", 0.9),),
+        )
+
+        with pytest.raises(ProofAgentError) as exc:
+            provider.retrieve("query")
+
+        assert exc.value.code == "PA_KNOWLEDGE_002"
+        summary = provider.consume_retrieval_summary()
+        assert summary is not None
+        assert summary["document_routing"]["selection_reason"] == "selected_document_failed"
+        assert summary["document_routing"]["error_code"] == "PA_KNOWLEDGE_002"
+        assert "private storage failure" not in json.dumps(summary)
+
+    def test_runtime_retrieve_incompatible_artifact_fails_closed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        document = _runtime_document(tmp_path, "doc_policy")
+        provider = _runtime_provider(tmp_path, documents=(document,))
+        monkeypatch.setattr(
+            local_index_module,
+            "route_snapshot_documents",
+            lambda *args, **kwargs: LocalIndexDocumentRoutingResult(
+                selected_documents=(document,),
+                summary={"document_routing": {"selection_reason": "routing_model_selected"}},
+            ),
+        )
+
+        with pytest.raises(ProofAgentError) as exc:
+            provider.retrieve("query")
+
+        assert exc.value.code == "PA_KNOWLEDGE_002"
+        summary = provider.consume_retrieval_summary()
+        assert summary is not None
+        assert summary["document_routing"]["selection_reason"] == "selected_document_failed"
+
+    def test_runtime_retrieve_routing_failure_exposes_bounded_summary(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        provider = _runtime_provider(tmp_path)
+
+        with pytest.raises(ProofAgentError) as exc:
+            provider.retrieve("query")
+
+        assert exc.value.code == "PA_KNOWLEDGE_002"
+        summary = provider.consume_retrieval_summary()
+        assert summary is not None
+        assert summary["document_candidates"] == []
+        assert summary["selected_documents"] == []
+        assert summary["document_routing"]["selection_reason"] == "routing_model_failed"
+        assert summary["document_routing"]["error_code"] == "PA_KNOWLEDGE_002"
+
+    def test_runtime_retrieve_normalizes_revision_retrieval_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        document = _runtime_document(tmp_path, "doc_policy")
+        provider = _runtime_provider(tmp_path, documents=(document,))
+        monkeypatch.setattr(
+            local_index_module,
+            "route_snapshot_documents",
+            lambda *args, **kwargs: LocalIndexDocumentRoutingResult(
+                selected_documents=(document,),
+                summary={"document_routing": {"selection_reason": "routing_model_selected"}},
+            ),
+        )
+        monkeypatch.setattr(
+            local_index_module,
+            "_load_runtime_revision_index",
+            lambda *args, **kwargs: object(),
+        )
+        monkeypatch.setattr(
+            local_index_module,
+            "_retrieve_from_runtime_revision",
+            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("private retrieval failure")),
+        )
+
+        with pytest.raises(ProofAgentError) as exc:
+            provider.retrieve("query")
+
+        assert exc.value.code == "PA_KNOWLEDGE_002"
+        summary = provider.consume_retrieval_summary()
+        assert summary is not None
+        assert summary["document_routing"]["selection_reason"] == "selected_document_failed"
+        assert "private retrieval failure" not in json.dumps(summary)
+
+    def test_runtime_revision_loader_normalizes_storage_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        document = _runtime_document(tmp_path, "doc_policy")
+        monkeypatch.setattr(
+            local_index_module,
+            "is_runtime_compatible_local_index_artifact",
+            lambda *args, **kwargs: True,
+        )
+        monkeypatch.setattr(
+            local_index_module.StorageContext,
+            "from_defaults",
+            lambda **kwargs: (_ for _ in ()).throw(ValueError("private storage failure")),
+        )
+
+        with pytest.raises(ProofAgentError) as exc:
+            local_index_module._load_runtime_revision_index(
+                document,
+                routing_model=ProofAgentLLM(
+                    model_provider=MockModelProvider("routing", "routing-model"),
+                    role=ModelCallRole.ROUTING,
+                ),
+            )
+
+        assert exc.value.code == "PA_KNOWLEDGE_002"
+        assert "private storage failure" not in str(exc.value)
