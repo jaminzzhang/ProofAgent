@@ -1,6 +1,7 @@
 """Integration tests for the Agent Configuration API."""
 
 import base64
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -10,7 +11,17 @@ import yaml
 import proof_agent.configuration.local_store as local_store_module
 import proof_agent.delivery.configuration_api as configuration_api_module
 from proof_agent.capabilities.knowledge.ingestion import parse_quarantined_upload
+from proof_agent.capabilities.knowledge.ingestion.artifacts import (
+    ARTIFACT_META_FILENAME,
+    REQUIRED_LLAMA_INDEX_FILES,
+    local_index_artifact_metadata,
+)
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import (
+    KnowledgeArtifactBuildSpec,
+    KnowledgeDocument,
+    KnowledgeIngestionJob,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.app import create_app
 
@@ -90,6 +101,68 @@ def _configuration_store(client: TestClient) -> LocalAgentConfigurationStore:
     return client.app.state.agent_configuration_store
 
 
+def _write_compatible_ready_document(
+    client: TestClient,
+    *,
+    document_id: str = "doc_policy",
+) -> KnowledgeDocument:
+    store = _configuration_store(client)
+    artifact_path = f"artifacts/{document_id}/fingerprint"
+    document = KnowledgeDocument(
+        document_id=document_id,
+        source_id="ks_local_index",
+        revision_id=f"rev_{document_id}",
+        filename=f"{document_id}.md",
+        content_type="text/markdown",
+        content_hash="a" * 64,
+        size_bytes=10,
+        state="ready",
+        storage_path=(
+            f"knowledge_sources/ks_local_index/documents/{document_id}/"
+            f"revisions/rev_{document_id}/original.bin"
+        ),
+        ingestion_job_id=f"job_{document_id}",
+        artifact_path=artifact_path,
+        created_at="2026-06-02T00:00:00Z",
+        updated_at="2026-06-02T00:00:00Z",
+    )
+    job = KnowledgeIngestionJob(
+        job_id=f"job_{document_id}",
+        source_id="ks_local_index",
+        document_id=document.document_id,
+        revision_id=document.revision_id,
+        state="ready",
+        ingestion_config_fingerprint="fingerprint",
+        artifact_build_spec=KnowledgeArtifactBuildSpec(
+            provider="local_index",
+            engine_name="llama-index-tree",
+            engine_version="llama-index-tree@0.14.22",
+            parser_fingerprint_identity="markdown:utf-8:v1",
+            content_hash=document.content_hash,
+            parsed_text_sha256="b" * 64,
+        ),
+        artifact_path=artifact_path,
+        created_at="2026-06-02T00:00:00Z",
+        updated_at="2026-06-02T00:00:00Z",
+    )
+    store._write_knowledge_document(document)
+    store._write_knowledge_ingestion_job(job)
+    published_artifact_path = store.root_dir / artifact_path
+    published_artifact_path.mkdir(parents=True)
+    for filename in REQUIRED_LLAMA_INDEX_FILES:
+        (published_artifact_path / filename).write_text("{}", encoding="utf-8")
+    (published_artifact_path / ARTIFACT_META_FILENAME).write_text(
+        json.dumps(
+            local_index_artifact_metadata(
+                build_spec=job.artifact_build_spec,
+                ingestion_config_fingerprint=job.ingestion_config_fingerprint,
+            )
+        ),
+        encoding="utf-8",
+    )
+    return document
+
+
 def test_create_local_index_knowledge_source_and_stage_quarantined_upload(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -109,6 +182,9 @@ def test_create_local_index_knowledge_source_and_stage_quarantined_upload(tmp_pa
 
     assert created["source_id"] == "ks_local_index"
     assert created["provider"] == "local_index"
+    assert created["source_draft_version_id"].startswith("ksdraft_")
+    assert created["latest_snapshot_id"] is None
+    assert created["published_snapshot_id"] is None
     assert uploaded.status_code == 200
     assert uploaded.json()["upload_id"].startswith("upload_")
     assert uploaded.json()["state"] == "queued"
@@ -117,6 +193,39 @@ def test_create_local_index_knowledge_source_and_stage_quarantined_upload(tmp_pa
     assert listed.json()["data"][0]["ready_document_count"] == 0
     assert documents.json() == {"data": [], "meta": {"total": 0}}
     assert uploads.json()["data"][0]["filename"] == "travel-policy.pdf"
+
+
+def test_candidate_validation_and_freeze_management_api_lifecycle(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+    _write_compatible_ready_document(client)
+
+    candidate = client.get("/api/config/knowledge-sources/ks_local_index/candidate-snapshot")
+    validation = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
+        json={"actor": "validator"},
+    )
+    assert validation.status_code == 200
+    frozen = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
+        json={"validation_id": validation.json()["validation_id"], "actor": "operator"},
+    )
+    assert frozen.status_code == 200
+    snapshots = client.get("/api/config/knowledge-sources/ks_local_index/snapshots")
+    detail = client.get(
+        f"/api/config/knowledge-sources/ks_local_index/snapshots/{frozen.json()['snapshot_id']}"
+    )
+    source = client.get("/api/config/knowledge-sources/ks_local_index")
+
+    assert candidate.status_code == 200
+    assert candidate.json()["included_documents"][0]["document_id"] == "doc_policy"
+    assert validation.json()["validation_level"] == "foundation"
+    assert frozen.json()["schema_version"] == "local_index.snapshot.v2"
+    assert frozen.json()["state"] == "READY"
+    assert snapshots.json() == {"data": [frozen.json()], "meta": {"total": 1}}
+    assert detail.json() == frozen.json()
+    assert source.json()["latest_snapshot_id"] == frozen.json()["snapshot_id"]
+    assert source.json()["published_snapshot_id"] is None
 
 
 @pytest.mark.parametrize(
@@ -387,6 +496,9 @@ def test_quarantine_and_job_read_endpoints_return_persisted_state(tmp_path: Path
 @pytest.mark.parametrize(
     "path",
     [
+        "/api/config/knowledge-sources/missing/candidate-snapshot",
+        "/api/config/knowledge-sources/missing/snapshots",
+        "/api/config/knowledge-sources/missing/snapshots/kssnapshot_missing",
         "/api/config/knowledge-sources/missing/quarantined-uploads",
         "/api/config/knowledge-sources/missing/quarantined-uploads/upload_missing",
         "/api/config/knowledge-sources/missing/ingestion-jobs",
@@ -420,6 +532,122 @@ def test_ingestion_projection_detail_endpoints_return_404_for_unknown_record(
         ).status_code
         == 404
     )
+    assert (
+        client.get(
+            "/api/config/knowledge-sources/ks_local_index/snapshots/kssnapshot_missing"
+        ).status_code
+        == 404
+    )
+
+
+def test_snapshot_freeze_returns_404_for_unknown_validation_id(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+
+    frozen = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
+        json={"validation_id": "ksvalidation_missing", "actor": "operator"},
+    )
+
+    assert frozen.status_code == 404
+
+
+def test_candidate_snapshot_rejects_non_local_index_source(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_markdown",
+            "name": "Markdown",
+            "provider": "local_markdown",
+            "params": {"path": "./knowledge"},
+            "actor": "operator",
+        },
+    )
+    assert created.status_code == 200
+
+    candidate = client.get("/api/config/knowledge-sources/ks_markdown/candidate-snapshot")
+
+    assert candidate.status_code == 400
+    assert candidate.json()["detail"]["code"] == "PA_INGESTION_001"
+
+
+def test_snapshot_freeze_maps_stale_validation_to_409(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+    _write_compatible_ready_document(client)
+    validation = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
+        json={"actor": "validator"},
+    )
+    assert validation.status_code == 200
+    store = _configuration_store(client)
+    store._advance_source_draft_version_unlocked(
+        "ks_local_index",
+        updated_at="2026-06-02T01:00:00Z",
+    )
+
+    frozen = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
+        json={"validation_id": validation.json()["validation_id"], "actor": "operator"},
+    )
+
+    assert frozen.status_code == 409
+    assert frozen.json()["detail"]["code"] == "PA_INGESTION_005"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "store_method", "payload"),
+    (
+        (
+            "GET",
+            "/api/config/knowledge-sources/ks_local_index/candidate-snapshot",
+            "get_candidate_knowledge_source_snapshot",
+            None,
+        ),
+        (
+            "POST",
+            "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
+            "validate_candidate_knowledge_source_snapshot_foundation",
+            {"actor": "validator"},
+        ),
+        (
+            "POST",
+            "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
+            "freeze_candidate_knowledge_source_snapshot",
+            {"validation_id": "ksvalidation_001", "actor": "operator"},
+        ),
+    ),
+)
+def test_snapshot_endpoints_map_store_lock_timeout_to_503_without_second_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    store_method: str,
+    payload: dict[str, str] | None,
+) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+    store = _configuration_store(client)
+    calls = 0
+
+    def fail_operation(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise ProofAgentError(
+            "PA_INGESTION_004",
+            "Knowledge ingestion state is busy.",
+            "Retry later.",
+        )
+
+    monkeypatch.setattr(store, store_method, fail_operation)
+
+    response = client.request(method, path, json=payload)
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "PA_INGESTION_004"
+    assert calls == 1
 
 
 def test_upload_maps_store_lock_timeout_to_503_without_second_write(
