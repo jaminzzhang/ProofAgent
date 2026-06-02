@@ -26,7 +26,12 @@ from proof_agent.contracts import (
 from proof_agent.contracts.manifest import CheckpointerConfig
 
 
-PATH_PARAM_KEYS = {"path", "index_path", "mock_results_path"}
+PATH_PARAM_KEYS = {
+    "path",
+    "snapshot_path",
+    "artifact_root",
+    "mock_results_path",
+}
 
 
 def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManifest:
