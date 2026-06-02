@@ -27,6 +27,7 @@ from proof_agent.capabilities.knowledge.ingestion import (
 from proof_agent.contracts import (
     ActiveAgentVersion,
     AgentValidationRecord,
+    CandidateKnowledgeSourceSnapshot,
     ConfigurationOperation,
     ConfigurationOperationAudit,
     ContractBundle,
@@ -35,6 +36,7 @@ from proof_agent.contracts import (
     KnowledgeDocument,
     KnowledgeIngestionJob,
     KnowledgeSource,
+    KnowledgeSourceSnapshotDocument,
     PublishedAgentVersion,
     QuarantinedKnowledgeUpload,
 )
@@ -279,6 +281,7 @@ class LocalAgentConfigurationStore:
                 params=params,
                 created_at=now,
                 updated_at=now,
+                source_draft_version_id=_new_source_draft_version_id(),
             )
             self._write_knowledge_source(source)
         return source
@@ -301,6 +304,16 @@ class LocalAgentConfigurationStore:
             if source is not None:
                 sources.append(source)
         return sorted(sources, key=lambda source: source.name)
+
+    def get_candidate_knowledge_source_snapshot(
+        self,
+        source_id: str,
+    ) -> CandidateKnowledgeSourceSnapshot:
+        """Return the derived mutable READY-revision projection for snapshot freeze."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._normalized_local_index_source_unlocked(source_id)
+            return self._candidate_knowledge_source_snapshot_unlocked(source)
 
     def get_knowledge_source_worker_concurrency(self, source_id: str) -> int:
         """Return a validated claim-time concurrency limit for one source."""
@@ -623,6 +636,7 @@ class LocalAgentConfigurationStore:
             )
             self._write_knowledge_document(projected_document)
             self._write_knowledge_ingestion_job(completed)
+            self._advance_source_draft_version_unlocked(source_id, updated_at=now)
             return completed
 
     def defer_knowledge_ingestion_job(
@@ -1024,6 +1038,98 @@ class LocalAgentConfigurationStore:
             task.state == "processing" and _has_active_lease(task, now=now) for task in tasks
         )
 
+    def _normalized_local_index_source_unlocked(self, source_id: str) -> KnowledgeSource:
+        source = self._require_knowledge_source(source_id)
+        if source.provider != "local_index":
+            raise _invalid_candidate_snapshot(
+                "Candidate snapshot projection requires a local_index Knowledge Source."
+            )
+        if source.source_draft_version_id is None:
+            source = source.model_copy(
+                update={
+                    "source_draft_version_id": _new_source_draft_version_id(),
+                    "updated_at": _now(),
+                }
+            )
+            self._write_knowledge_source(source)
+        return source
+
+    def _candidate_knowledge_source_snapshot_unlocked(
+        self,
+        source: KnowledgeSource,
+    ) -> CandidateKnowledgeSourceSnapshot:
+        if source.source_draft_version_id is None:
+            raise _invalid_candidate_snapshot("Knowledge Source Draft Version is missing.")
+        included_documents = []
+        excluded_counts = {
+            "queued": 0,
+            "processing": 0,
+            "failed": 0,
+            "archived": 0,
+        }
+        for document in self.list_knowledge_documents(source.source_id):
+            if document.state != "ready":
+                if document.state in excluded_counts:
+                    excluded_counts[document.state] += 1
+                continue
+            artifact_path = document.artifact_path
+            if (
+                artifact_path is None
+                or not artifact_path.strip()
+                or Path(artifact_path).is_absolute()
+            ):
+                raise _invalid_candidate_snapshot(
+                    "READY Knowledge Document requires a relative artifact reference."
+                )
+            included_documents.append(
+                KnowledgeSourceSnapshotDocument(
+                    document_id=document.document_id,
+                    revision_id=document.revision_id,
+                    filename=document.filename,
+                    content_type=document.content_type,
+                    content_hash=document.content_hash,
+                    artifact_path=artifact_path,
+                    routing_metadata={},
+                )
+            )
+        sorted_documents = tuple(
+            sorted(included_documents, key=lambda document: document.document_id)
+        )
+        candidate_digest = hashlib.sha256(
+            json.dumps(
+                [document.model_dump(mode="json") for document in sorted_documents],
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        return CandidateKnowledgeSourceSnapshot(
+            source_id=source.source_id,
+            source_draft_version_id=source.source_draft_version_id,
+            candidate_digest=candidate_digest,
+            included_documents=sorted_documents,
+            queued_document_count=excluded_counts["queued"],
+            processing_document_count=excluded_counts["processing"],
+            failed_document_count=excluded_counts["failed"],
+            archived_document_count=excluded_counts["archived"],
+            required_reingestion_count=0,
+        )
+
+    def _advance_source_draft_version_unlocked(
+        self,
+        source_id: str,
+        *,
+        updated_at: str,
+    ) -> KnowledgeSource:
+        source = self._require_knowledge_source(source_id)
+        updated = source.model_copy(
+            update={
+                "source_draft_version_id": _new_source_draft_version_id(),
+                "updated_at": updated_at,
+            }
+        )
+        self._write_knowledge_source(updated)
+        return updated
+
     def _claim_quarantined_knowledge_upload_unlocked(
         self,
         upload: QuarantinedKnowledgeUpload | KnowledgeIngestionJob,
@@ -1267,7 +1373,10 @@ class LocalAgentConfigurationStore:
         _write_json(self._active_version_path(active.agent_id), active.model_dump(mode="json"))
 
     def _write_knowledge_source(self, source: KnowledgeSource) -> None:
-        _write_json(self._knowledge_source_path(source.source_id), source.model_dump(mode="json"))
+        _write_json_atomic(
+            self._knowledge_source_path(source.source_id),
+            source.model_dump(mode="json"),
+        )
 
     def _write_knowledge_document(self, document: KnowledgeDocument) -> None:
         _write_json_atomic(
@@ -1323,6 +1432,10 @@ def _audit(
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _new_source_draft_version_id() -> str:
+    return f"ksdraft_{uuid4().hex[:8]}"
 
 
 def _timestamp(value: datetime) -> str:
@@ -1403,6 +1516,14 @@ def _invalid_ingestion_transition(message: str) -> ProofAgentError:
         "PA_INGESTION_004",
         message,
         "Retry the operation after refreshing the persisted knowledge ingestion state.",
+    )
+
+
+def _invalid_candidate_snapshot(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_INGESTION_001",
+        message,
+        "Refresh the Knowledge Source documents before validating its candidate snapshot.",
     )
 
 
