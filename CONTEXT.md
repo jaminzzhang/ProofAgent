@@ -846,6 +846,10 @@ _Avoid_: Arbitrary external link, javascript URL, secret-bearing URL
 The Source Draft-version-bound precondition for Knowledge Source Publication. Any relevant Draft configuration change invalidates the prior result and requires validation again before publication.
 _Avoid_: Agent Validation Run, one-time Source validation, configuration-drift publication
 
+**Foundation Knowledge Source Publication Validation**:
+The incremental local-index publication check that binds one Knowledge Source Draft Version and proves at least one READY revision, compatible artifacts for every candidate revision, and no pending required reingestion. It may freeze a development-stage READY snapshot for subsequent routing work, but it does not claim production readiness before routing-model tests, smoke retrieval, and citation resolution validation are added.
+_Avoid_: Production-ready validation, upload-success publication, unversioned partial check, routing smoke test
+
 **Local Index Source Publication Validation**:
 The local index publication check that requires at least one READY Knowledge Document Revision, no pending required reingestion, compatible artifacts for every revision included in the Candidate Knowledge Source Snapshot, successful ingestion and routing model configuration tests, and one editable smoke query proving routing, retrieval, and citation resolution.
 _Avoid_: Upload-success publication, partial required rebuild, citation-free smoke test
@@ -1307,16 +1311,32 @@ The audited physical deletion of Knowledge Document revisions and index artifact
 _Avoid_: Archive action, active revision deletion, rollback-breaking purge
 
 **Knowledge Source Snapshot**:
-An immutable READY view of the indexed Knowledge Documents available to Agent Knowledge Bindings until a replacement snapshot is promoted.
-_Avoid_: Mutable upload folder, Draft Agent version, partial rebuild
+An immutable READY view of indexed Knowledge Document revisions. It may be frozen for preview and routing-smoke development or formally published for Agent Knowledge Bindings; only a Published Knowledge Source Snapshot is production-bindable.
+_Avoid_: Mutable upload folder, Draft Agent version, partial rebuild, implicitly bindable frozen snapshot
+
+**Knowledge Source Snapshot Manifest**:
+The immutable manifest for one READY local-index Knowledge Source Snapshot. It records trace-safe document and revision identities, routing metadata, and references to reusable Knowledge Revision Artifacts without copying artifact directories or rebuilding indexes during snapshot freeze or publication.
+_Avoid_: Snapshot-owned artifact copy, merged publication index, mutable artifact path list, runtime folder scan
+
+**Frozen Knowledge Source Snapshot**:
+An immutable development-stage READY Knowledge Source Snapshot created from a foundation-validated Candidate Knowledge Source Snapshot. It may support preview and routing-smoke development through the Source's latest snapshot pointer, but it is not production-bindable and cannot become a Resolved Knowledge Snapshot Binding until full Knowledge Source Publication Validation succeeds.
+_Avoid_: Published Knowledge Source Snapshot, production-bindable snapshot, implicit Source publication, mutable candidate projection
+
+**Published Knowledge Source Snapshot**:
+A fully validated immutable READY Knowledge Source Snapshot selected by the Source's production-bindable published snapshot pointer through explicit Knowledge Source Publication. Agent Knowledge Bindings may resolve it, while later Source publications do not silently mutate bindings already captured by Published Agent Versions.
+_Avoid_: Frozen Knowledge Source Snapshot, latest snapshot pointer, mutable Source Draft, automatic binding upgrade
 
 **Candidate Knowledge Source Snapshot**:
-The unpublished collection of READY Knowledge Document revisions eligible for the next Knowledge Source Publication. It excludes `QUEUED`, `PROCESSING`, `FAILED`, and archived document revisions while Dashboard explicitly lists those exclusions. Publication requires at least one READY document revision.
-_Avoid_: Silent partial snapshot, active snapshot mutation, failed document inclusion, empty publication
+The derived mutable Source Draft projection of READY Knowledge Document revisions eligible for snapshot freeze and later Knowledge Source Publication. It is calculated from managed document state rather than persisted as a second mutable record, excludes `QUEUED`, `PROCESSING`, `FAILED`, and archived revisions while Dashboard explicitly lists those exclusions, and freezes into an immutable Frozen Knowledge Source Snapshot only after foundation validation.
+_Avoid_: Persisted candidate.json mirror, immutable candidate version per worker transition, silent partial snapshot, active snapshot mutation, failed document inclusion, empty publication
+
+**Knowledge Source Draft Version**:
+The change-token identity of one editable Knowledge Source Draft state used to bind Knowledge Source Publication Validation. It changes when source configuration or candidate-snapshot membership changes, but not for worker leases, retry counters, or rejected uploads that do not alter the publication candidate.
+_Avoid_: Published snapshot id, immutable draft history, worker-attempt id, candidate hash only
 
 **Knowledge Source Publication**:
-The explicit operator action that promotes a candidate READY Knowledge Source Snapshot for use by Agent Knowledge Bindings.
-_Avoid_: Automatic activation, document upload, Agent Publication
+The explicit operator action that promotes a fully validated immutable READY Knowledge Source Snapshot into a Published Knowledge Source Snapshot selected by the Source's production-bindable published snapshot pointer for use by Agent Knowledge Bindings.
+_Avoid_: Foundation snapshot freeze, automatic activation, document upload, Agent Publication
 
 **Resolved Knowledge Snapshot Binding**:
 The immutable Knowledge Source Snapshot reference captured for one Agent Knowledge Binding when a Published Agent Version is created.
