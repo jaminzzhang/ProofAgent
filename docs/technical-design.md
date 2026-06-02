@@ -641,8 +641,11 @@ Rules:
 
 Local Index strategy:
 - LlamaIndex TreeIndex construction happens in Knowledge Source Ingestion before source publication.
-- Runtime retrieval performs Local Index Runtime Load against a published READY Knowledge Source Snapshot; it must not build indexes on demand inside an Agent run.
-- Runtime load validates the immutable snapshot `artifact_meta.json` sidecar before opening storage and resolves the Source-owned routing model, inheriting the ingestion model when no routing override is configured.
+- Runtime retrieval performs Local Index Runtime Load against an explicitly configured READY `local_index.snapshot.v2` manifest; it must not build indexes on demand inside an Agent run.
+- Runtime load resolves `snapshot_path + artifact_root`, validates `snapshot.json` before opening storage, and rejects historical `params.index_path` runtime configuration. Every POSIX-relative revision artifact reference must remain contained beneath `artifact_root` after resolution.
+- Runtime routing projects trace-safe filename and allowlisted metadata fields, prefers matching documents when the soft filter finds matches, and falls back to the full snapshot when it does not. It sends at most `100` stable candidates to the Source-owned routing model.
+- The routing model returns a strict JSON document-id selection. `params.document_selection_budget` defaults to `8` and accepts integers from `1` through `20`. Runtime loads only the selected immutable revision artifacts, merges candidate evidence deterministically, and fails closed without partial evidence when any selected document cannot be loaded or searched.
+- Control Plane retrieval traces consume the provider's one-shot summary and record bounded `document_candidates[]` plus `selected_documents[]` without raw document content.
 - Local Index uses stable internal citation URIs and permission-protected citation preview rather than storage paths.
 - The current ingestion foundation stages one upload per API request as a Quarantined Knowledge Upload before creating a document revision or ingestion job. A `knowledge-worker --once` invocation performs housekeeping and processes at most one queued quarantine-validation or artifact-build task.
 - Accepted originals are UTF-8 Markdown or text-based PDF. The default PDF adapter is `pypdf`, which handles font encoding and CMap extraction while failing closed for malformed PDFs, encrypted PDFs, PDFs above 500 pages, and PDFs without meaningful extracted text.
@@ -651,8 +654,8 @@ Local Index strategy:
 - Recoverable artifact-build failures persist bounded retry state with 30-second then 120-second backoff. Artifact-key contention defers without consuming the retry budget.
 - Source claim concurrency is configured through `params.worker_concurrency`, defaults to `2`, and is bounded from `1` through `8`.
 - The snapshot-freeze foundation derives a mutable Candidate Knowledge Source Snapshot from READY active document revisions and a lightweight Source Draft version token. It persists `foundation` freeze-readiness validation, freezes an immutable `local_index.snapshot.v2` manifest of revision artifact references without copying artifacts or rebuilding a merged index, and atomically advances `latest_snapshot_id`.
-- A foundation-validated frozen snapshot is for preview and routing-smoke development only. It does not advance `published_snapshot_id`, imply production publication readiness, or change Agent binding behavior.
-- This foundation does not add the formal Source publication API, continuous worker polling, batch-upload APIs, or runtime multi-document routing.
+- A foundation-validated frozen snapshot is for preview and explicitly configured runtime development only. It does not advance `published_snapshot_id`, imply production publication readiness, or automatically change Agent binding behavior.
+- Remaining Knowledge Hub gaps include the formal Source publication API, continuous worker polling, batch-upload APIs, routing metadata editing, and hierarchical routing beyond the bounded first `100` candidates.
 - The later batch-upload contract accepts at most 50 files, atomically reserves capacity for the full batch before staging bytes, then validates each staged file independently and asynchronously.
 
 Remote adapter strategy:
@@ -664,13 +667,14 @@ Remote adapter strategy:
 Implementation sequence:
 1. Clean up contracts, loader validation, examples, fixtures, and provider registry so `pageindex` and `local_vector` are no longer target provider entries.
 2. Add the Control Plane Knowledge Retrieval Service and route Enterprise QA plus Controlled ReAct retrieval through it; the current service centralizes policy-gated or reviewed provider calls, deterministic binding metadata routing for single-step and reviewed/fallback retrieval, binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and evidence admission.
-3. Complete `local_index` runtime load so Agent execution reads only published READY LlamaIndex-backed Knowledge Source Snapshots; the current runtime validates the READY publication sidecar, resolves Source-owned routing configuration, and loads storage read-only.
+3. Complete initial `local_index` runtime load so Agent execution reads READY LlamaIndex-backed Knowledge Source Snapshots without building indexes on demand.
 4. Extend planner/evaluator-backed agentic retrieval with the same service-routed provider adapter; each round now re-enters bounded source routing and records round-correlated provider summaries. Add richer retrieval plan summaries and citation enforcement next.
 5. Add the Local Index ingestion worker foundation; the current slice stages and validates quarantined uploads, promotes accepted document revisions, builds immutable revision artifacts, persists bounded retries, and exposes one-shot CLI plus status APIs.
 6. Add the Local Index snapshot-freeze foundation; the current slice derives candidate snapshots, persists foundation validation, freezes immutable `local_index.snapshot.v2` manifests, advances the preview-only latest snapshot pointer, and exposes management APIs.
-7. Add formal Source publication, then continuous worker polling, batch upload, and runtime multi-document routing.
-8. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
-9. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
+7. Add `local_index.snapshot.v2` multi-document runtime routing; the current runtime validates the immutable manifest, routes over bounded trace-safe document projections, loads selected revision artifacts read-only, fails closed on selected-document errors, and records one-shot routing summaries through the Control Plane.
+8. Add formal Source publication, then continuous worker polling and atomic batch upload.
+9. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
+10. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
 
 ## 15. Model Providers
 

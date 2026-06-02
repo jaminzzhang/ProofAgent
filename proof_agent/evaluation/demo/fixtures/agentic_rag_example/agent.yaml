@@ -13,7 +13,9 @@ knowledge_sources:
     name: Enterprise QA Knowledge (Tree Index)
     provider: local_index
     params:
-      index_path: ./indexes/enterprise_qa
+      snapshot_path: ./config/knowledge_sources/enterprise_qa_knowledge/snapshots/kssnapshot_example
+      artifact_root: ./config
+      document_selection_budget: 8
       ingestion_model:
         provider: openai_compatible
         name: gpt-4

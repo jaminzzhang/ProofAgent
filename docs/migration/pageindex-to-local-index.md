@@ -19,6 +19,7 @@ The `pageindex` provider has been removed from active code in favor of `local_in
 | Index Building | External service | Local ingestion with LLM summaries |
 | Structured Retrieval | No | Yes (`list_structure`, `retrieve_at_scope`) |
 | Model Integration | N/A | `ingestion_model` + `routing_model` |
+| Registered Runtime | Remote document id | READY `local_index.snapshot.v2` manifest |
 | Governance | Basic | Full trace + policy gates |
 
 ## Migration Steps
@@ -44,7 +45,9 @@ knowledge_sources:
     name: My Knowledge Base
     provider: local_index
     params:
-      index_path: ./data/indexes/my_knowledge
+      snapshot_path: ./config/knowledge_sources/my_knowledge/snapshots/kssnapshot_my_knowledge_001
+      artifact_root: ./config
+      document_selection_budget: 8
       ingestion_model:
         provider: openai_compatible
         name: gpt-4
@@ -55,18 +58,33 @@ knowledge_sources:
 
 ### 2. Configure Models
 
-The `local_index` provider requires two model configurations:
+The `local_index` Source owns two model configurations:
 
 - **`ingestion_model`**: Used during index building to generate hierarchical summaries
-- **`routing_model`**: Used during retrieval to navigate the tree structure
+- **`routing_model`**: Used during retrieval for document selection and tree traversal
 
 These models are configured through Proof Agent's standard `ModelProvider` protocol, ensuring all LLM calls are governed and traced.
 
-### 3. Build the Index
+### 3. Ingest Documents And Freeze A Snapshot
 
 Unlike `pageindex` which relies on an external service, `local_index` requires you to build the index locally:
 
+1. Stage document uploads through Knowledge Hub ingestion.
+2. Run the Local Index worker until accepted document revisions have READY immutable artifacts.
+3. Validate and freeze a Candidate Knowledge Source Snapshot.
+4. Point registered Agent Package runtime config at the frozen `snapshot_path` and its
+   `artifact_root`.
+
+The registered runtime is v2-only. It rejects historical `params.index_path`, loads
+`snapshot.json`, routes over a bounded trace-safe document projection, and opens only selected
+revision artifacts.
+
+For focused management-plane utilities and provider tests, direct construction can still build one
+index artifact:
+
 ```python
+from pathlib import Path
+
 from proof_agent.capabilities.knowledge import LocalIndexProvider
 from proof_agent.capabilities.models import ProofAgentLLM
 from proof_agent.contracts import ModelCallRole
@@ -89,6 +107,9 @@ documents = [
 ]
 provider.build_index(documents)
 ```
+
+`LocalIndexProvider(..., index_path=...)` above is a management-plane utility. It is not a valid
+replacement for registered `knowledge_sources[].params.snapshot_path + artifact_root`.
 
 ### 4. Enable Agentic Retrieval (Optional)
 
@@ -122,8 +143,10 @@ proof-agent run --agent agent.yaml --question "Your question here"
 The trace should show:
 - `retrieval_plan` events (for agentic strategy)
 - `retrieval_step` events (per round)
-- `retrieval_round` events (with round_id for correlation)
-- `retrieval_result` events (final summary)
+- `retrieval_result` events (per-round routing summaries plus final agentic summary)
+
+Local Index per-round results include bounded `document_candidates[]` and `selected_documents[]`
+without raw document content.
 
 ## Structured Retrieval Examples
 
@@ -161,6 +184,13 @@ PA_KNOWLEDGE_001: unsupported knowledge provider: pageindex
 
 Follow the migration steps above to switch to `local_index` and republish affected Agent versions.
 
+### Historical Runtime Path Errors
+
+If registered Agent Package config still uses `params.index_path`, bootstrap fails closed with
+`PA_CONFIG_001`. Replace it with `params.snapshot_path` plus `params.artifact_root`. Direct
+`LocalIndexProvider(..., index_path=...)` remains available only for management-plane utilities and
+focused provider tests.
+
 ### Index Build Failures
 
 If index building fails:
@@ -172,10 +202,11 @@ If index building fails:
 ### Retrieval Returns No Results
 
 If retrieval returns empty results:
-1. Verify the index was built successfully (check `index_path` exists)
-2. Ensure `routing_model` is configured
-3. Check that query matches indexed content
-4. Lower `min_score` threshold if needed
+1. Verify `snapshot_path/snapshot.json` exists and declares at least one READY document revision
+2. Verify each selected revision artifact exists beneath `artifact_root`
+3. Ensure `routing_model` is configured
+4. Check filename and routing metadata such as `title`, `description`, and `tags`
+5. Lower `min_score` threshold if needed
 
 ## Timeline
 

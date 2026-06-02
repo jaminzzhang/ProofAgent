@@ -332,7 +332,10 @@ Remote model smoke checks are opt-in. They are not part of the deterministic dem
 
 Knowledge Hub separates local indexed knowledge from remote retrieval adapters while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation.
 
-For production local knowledge, create a `local_index` Knowledge Source through Knowledge Hub ingestion. Local index artifacts are built before Source publication and runtime loads only the published READY snapshot:
+For production local knowledge, create a `local_index` Knowledge Source through Knowledge Hub
+ingestion. Local index revision artifacts are built before Source publication. The registered
+runtime consumes a READY `local_index.snapshot.v2` manifest and rejects the historical
+single-artifact `params.index_path` configuration:
 
 ```yaml
 knowledge_sources:
@@ -340,7 +343,9 @@ knowledge_sources:
     name: Enterprise Policy Knowledge
     provider: local_index
     params:
-      index_path: ./data/indexes/enterprise_policy/snapshot_enterprise_policy_001
+      snapshot_path: ./config/knowledge_sources/enterprise_policy/snapshots/kssnapshot_enterprise_policy_001
+      artifact_root: ./config
+      document_selection_budget: 8
       routing_model:
         provider: openai_compatible
         name: gpt-4o-mini
@@ -359,23 +364,53 @@ retrieval:
   max_rounds: 3
 ```
 
-The runtime directory must contain LlamaIndex persistence files plus an `artifact_meta.json`
-publication sidecar:
+`snapshot_path` points to a directory containing `snapshot.json`. Each document entry references
+one immutable revision artifact by a POSIX-relative path beneath `artifact_root`:
 
 ```json
 {
-  "schema_version": "local_index.snapshot.v1",
-  "snapshot_id": "snapshot_enterprise_policy_001",
+  "schema_version": "local_index.snapshot.v2",
+  "snapshot_id": "kssnapshot_enterprise_policy_001",
+  "source_id": "enterprise_policy",
   "state": "READY",
-  "provider": "local_index",
-  "engine_name": "llama-index-tree",
-  "engine_version": "0.12"
+  "validation_level": "foundation",
+  "source_draft_version_id": "ksdraft_enterprise_policy_001",
+  "candidate_digest": "sha256...",
+  "foundation_validation_id": "ksvalidation_enterprise_policy_001",
+  "documents": [
+    {
+      "document_id": "ksdoc_travel_policy",
+      "revision_id": "ksrev_travel_policy_001",
+      "filename": "travel-policy.md",
+      "content_type": "text/markdown",
+      "content_hash": "sha256...",
+      "artifact_path": "knowledge_sources/enterprise_policy/artifacts/sha256...",
+      "routing_metadata": {
+        "title": "Travel Policy",
+        "business_category": "expenses"
+      }
+    }
+  ],
+  "created_at": "2026-06-03T00:00:00Z",
+  "created_by": "operator"
 }
 ```
 
-Runtime loading rejects missing, malformed, or non-READY metadata before opening index storage.
-`routing_model` is Source-owned. When it is omitted, runtime inherits `ingestion_model` for
-routing. Runtime providers cannot build an index on demand inside an Agent run.
+Runtime loading rejects missing, malformed, non-READY, or escaping manifest references before
+opening index storage. `routing_model` is Source-owned. When it is omitted, runtime inherits
+`ingestion_model` for routing. Runtime providers cannot build an index on demand inside an Agent
+run.
+
+For each query, runtime first builds a trace-safe document projection from the filename and
+allowlisted routing metadata fields: `title`, `description`, `tags`, `document_type`, and
+`business_category`. Matching metadata narrows the routing candidates; when no metadata matches,
+runtime falls back to the full snapshot. The model sees at most `100` stable candidates and must
+return a strict JSON document-id selection. `document_selection_budget` defaults to `8` and accepts
+integers from `1` through `20`.
+
+Only selected revision artifacts are loaded. If any selected artifact cannot be validated, loaded,
+or searched, retrieval fails closed without partial evidence. Trace records bounded
+`document_candidates[]` and `selected_documents[]` summaries without raw document content.
 
 ### Running Local Index Ingestion
 
@@ -415,9 +450,10 @@ an immutable `local_index.snapshot.v2` manifest of reusable revision artifacts. 
 the preview-only `latest_snapshot_id`; it does not copy artifact directories, rebuild a merged
 index, or advance `published_snapshot_id`.
 
-A foundation-validated frozen snapshot is not a production publication. This slice does not yet
-add the formal Source publication API, continuous worker polling, batch-upload APIs, or runtime
-multi-document routing. The later batch-upload contract accepts at most 50 files, reserves
+A foundation-validated frozen snapshot is not a production publication. It can be used by an
+explicitly configured runtime path for development, but it does not automatically change Agent
+binding behavior. Remaining slices add the formal Source publication API, continuous worker
+polling, and batch-upload APIs. The later batch-upload contract accepts at most 50 files, reserves
 full-batch capacity atomically before staging any bytes, then validates each staged file
 independently and asynchronously.
 

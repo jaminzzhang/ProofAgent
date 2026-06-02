@@ -1,6 +1,6 @@
 # Proof Agent Development Progress
 
-> Last updated: 2026-06-02
+> Last updated: 2026-06-03
 > Purpose: Give AI coding agents a short, current map of the implementation. Verify all claims against the code before changing behavior.
 
 ## 1. Current Positioning
@@ -21,7 +21,10 @@ Authoritative design doc: `docs/technical-design.md`.
   Source claim concurrency, status APIs, and the one-shot `knowledge-worker --once` CLI. The
   snapshot-freeze foundation now derives candidate snapshots, persists foundation validation,
   freezes immutable `local_index.snapshot.v2` manifests, and advances a preview-only latest
-  snapshot pointer without implying production Source publication.
+  snapshot pointer without implying production Source publication. The registered Local Index
+  runtime now consumes `snapshot.v2`, performs bounded metadata-first document routing, loads only
+  selected immutable revision artifacts, fails closed on selected-document errors, and emits
+  trace-safe routing summaries through the shared Control Plane retrieval service.
 
 ## 2. Implementation Snapshot
 
@@ -38,7 +41,7 @@ Authoritative design doc: `docs/technical-design.md`.
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `configuration/local_store.py` owns local Agent Configuration state; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed production runs and Agent Configuration API starts governed validation runs through RunStore |
 | Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `observability/api/routers/handoffs.py`, `chat/` customer mode, and `examples/insurance_customer_service/` implement V1 customer-facing automatic replies with the insurance-specific Demo behind a Customer Run Adapter |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
-| Tests | 68 test files and 540 statically detected `test_` functions at last scan |
+| Tests | 70 test files and 584 statically detected `test_` functions at last scan |
 
 ## 3. Stable Demo Contract
 
@@ -76,8 +79,8 @@ runs/latest/governance_receipt.md
 | Controlled ReAct | `react_enterprise_qa` runs deterministic planner/review scenarios with fixed action set, advisory review, clarification wait, approval wait, trace, and receipt output | Production-grade checkpoint resume, streaming, and remote planner/review adapters |
 | LangChain integration | Not a public adapter yet | Optional ecosystem adapter that preserves contracts |
 | Real MCP | Mock tool proves approval contract | stdio/HTTP MCP adapter behind ToolGateway |
-| Knowledge Hub provider set | Active code accepts `local_markdown`, `local_index`, and the fixture `remote_search` adapter; `pageindex` and `local_vector` are rejected; `local_index` runtime composition still validates the existing immutable READY `artifact_meta.json` sidecar, resolves the Source-owned routing model, and performs read-only single-artifact LlamaIndex load; the ingestion foundation stages quarantined uploads, asynchronously validates Markdown and text-based PDF, promotes accepted document revisions, builds immutable revision artifacts, persists bounded retries, and exposes one-shot worker plus status APIs; the snapshot-freeze foundation derives READY candidate projections, persists foundation validation, freezes immutable `local_index.snapshot.v2` manifests, and advances `latest_snapshot_id` for preview only while leaving `published_snapshot_id` unchanged; Enterprise QA and Controlled ReAct now enter retrieval through the shared Control Plane Knowledge Retrieval Service; blended single-step, reviewed/fallback, and planner/evaluator-backed agentic retrieval use deterministic binding metadata routing, record provider calls, apply binding failure modes, exact deduplication, WRRF ordering, and no-evidence reason codes | Add formal Source publication, then continuous worker polling, batch upload, runtime `local_index.snapshot.v2` multi-document routing, and the trusted `http_json` remote adapter |
-| Agentic RAG | Agentic retrieval strategy emits governed retrieval plan/step events through the shared Knowledge Retrieval Service and falls back through registered Knowledge Providers when planner/evaluator models are absent; when planner/evaluator models are configured, each rewritten query re-enters service-owned bounded source routing and records round-correlated provider summaries; Controlled ReAct submits reviewed Retrieval Intent without directly calling providers | Richer trace-safe plan summaries and nested retrieval budget projections |
+| Knowledge Hub provider set | Active code accepts `local_markdown`, `local_index`, and the fixture `remote_search` adapter; `pageindex` and `local_vector` are rejected; `local_index` registered runtime config is v2-only and resolves explicit `snapshot_path + artifact_root`, validates immutable manifests before storage access, projects bounded trace-safe metadata, sends at most `100` candidates to the Source-owned routing model, loads only selected revision artifacts read-only, and fails closed without partial evidence when selected-document retrieval fails; the ingestion foundation stages quarantined uploads, asynchronously validates Markdown and text-based PDF, promotes accepted document revisions, builds immutable revision artifacts, persists bounded retries, and exposes one-shot worker plus status APIs; the snapshot-freeze foundation derives READY candidate projections, persists foundation validation, freezes immutable `local_index.snapshot.v2` manifests, and advances `latest_snapshot_id` for preview only while leaving `published_snapshot_id` unchanged; Enterprise QA and Controlled ReAct enter retrieval through the shared Control Plane Knowledge Retrieval Service; blended single-step, reviewed/fallback, and planner/evaluator-backed agentic retrieval use deterministic binding metadata routing, record provider calls, apply binding failure modes, exact deduplication, WRRF ordering, no-evidence reason codes, and one-shot Local Index document-routing summaries | Add formal Source publication, continuous worker polling, atomic batch upload, trusted `http_json`, routing metadata editing, and hierarchical routing beyond the first `100` document candidates |
+| Agentic RAG | Agentic retrieval strategy emits governed retrieval plan/step events through the shared Knowledge Retrieval Service and falls back through registered Knowledge Providers when planner/evaluator models are absent; when planner/evaluator models are configured, each rewritten query re-enters service-owned bounded source routing and records round-correlated provider summaries, including Local Index `document_candidates[]` and `selected_documents[]`; Controlled ReAct submits reviewed Retrieval Intent without directly calling providers | Richer trace-safe plan summaries and nested retrieval budget projections |
 | Dashboard UI | Implemented for overview, runs, run detail, evidence, receipt, model usage, approvals, timeline, governed ReAct details, handoffs, and the Agents configuration workspace with Workflow node editing, validation, publish, and rollback | Approval Console actions, RBAC, and richer multi-agent operations |
 | Handoff Monitor | Implemented as read-only internal projection of customer handoff trace events | Filtering and richer run correlation |
 | Unified Chat UI | Implemented under `chat/` with `/operator` and `/customer` modes, Conversation API integration, governed ReAct detail display, and customer-safe API responses | Polish, multi-agent selection, production auth, and deployment packaging |
