@@ -8,14 +8,18 @@ from pydantic import ValidationError
 from proof_agent.contracts import (
     ActiveAgentVersion,
     AgentValidationRecord,
+    CandidateKnowledgeSourceSnapshot,
     ConfigurationOperation,
     ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
+    FoundationKnowledgeSourceValidation,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
     KnowledgeSource,
+    KnowledgeSourceSnapshotDocument,
+    KnowledgeSourceSnapshotManifest,
     QuarantinedKnowledgeUpload,
     PublishedAgentVersion,
     ToolSource,
@@ -125,6 +129,76 @@ def test_sources_are_reusable_assets_not_agent_bindings() -> None:
     assert knowledge.provider == "local_markdown"
     assert knowledge.params["path"] == "./knowledge"
     assert tool.tool_contract_ids == ("policy_status_lookup", "claim_status_lookup")
+
+
+def test_knowledge_snapshot_contracts_are_frozen_and_json_serializable() -> None:
+    source = KnowledgeSource(
+        source_id="ks_policy",
+        name="Policy",
+        provider="local_index",
+        params={},
+        created_at="2026-06-02T00:00:00Z",
+        updated_at="2026-06-02T00:00:00Z",
+    )
+    document = KnowledgeSourceSnapshotDocument(
+        document_id="doc_001",
+        revision_id="rev_001",
+        filename="policy.md",
+        content_type="text/markdown",
+        content_hash="a" * 64,
+        artifact_path="artifacts/content/fingerprint",
+        routing_metadata={"department": {"name": "claims"}},
+    )
+    candidate = CandidateKnowledgeSourceSnapshot(
+        source_id="ks_policy",
+        source_draft_version_id="ksdraft_001",
+        candidate_digest="b" * 64,
+        included_documents=(document,),
+        queued_document_count=0,
+        processing_document_count=0,
+        failed_document_count=0,
+        archived_document_count=0,
+        required_reingestion_count=0,
+    )
+    validation = FoundationKnowledgeSourceValidation(
+        validation_id="ksvalidation_001",
+        source_id="ks_policy",
+        source_draft_version_id="ksdraft_001",
+        candidate_digest=candidate.candidate_digest,
+        validation_level="foundation",
+        status="passed",
+        document_count=1,
+        required_reingestion_count=0,
+        created_at="2026-06-02T00:01:00Z",
+        created_by="operator",
+    )
+    manifest = KnowledgeSourceSnapshotManifest(
+        schema_version="local_index.snapshot.v2",
+        snapshot_id="kssnapshot_001",
+        source_id="ks_policy",
+        state="READY",
+        validation_level="foundation",
+        source_draft_version_id="ksdraft_001",
+        candidate_digest=candidate.candidate_digest,
+        foundation_validation_id=validation.validation_id,
+        documents=(document,),
+        created_at="2026-06-02T00:02:00Z",
+        created_by="operator",
+    )
+
+    assert source.source_draft_version_id is None
+    assert source.latest_snapshot_id is None
+    assert source.published_snapshot_id is None
+    assert candidate.model_dump(mode="json")["included_documents"][0]["routing_metadata"] == {
+        "department": {"name": "claims"}
+    }
+    assert validation.validation_level == "foundation"
+    assert validation.status == "passed"
+    assert manifest.schema_version == "local_index.snapshot.v2"
+    assert manifest.state == "READY"
+
+    with pytest.raises(TypeError):
+        document.routing_metadata["department"]["name"] = "changed"  # type: ignore[index]
 
 
 def test_validation_record_links_draft_to_governed_run() -> None:
@@ -257,3 +331,4 @@ def test_knowledge_ingestion_error_codes_are_stable() -> None:
     assert ErrorCode.PA_INGESTION_002.value == "PA_INGESTION_002"
     assert ErrorCode.PA_INGESTION_003.value == "PA_INGESTION_003"
     assert ErrorCode.PA_INGESTION_004.value == "PA_INGESTION_004"
+    assert ErrorCode.PA_INGESTION_005.value == "PA_INGESTION_005"
