@@ -1,4 +1,5 @@
 """Tests for ProofAgentLLM bridge adapter."""
+
 import pytest
 from llama_index.core.base.llms.types import (
     ChatMessage,
@@ -83,6 +84,24 @@ class TestProofAgentLLM:
         assert len(request.messages) == 1
         assert request.messages[0].role.value == "user"
         assert request.messages[0].content == "Test prompt"
+
+    def test_complete_propagates_timeout_and_invokes_progress_callback_around_provider_call(
+        self,
+    ) -> None:
+        """complete() renews ownership before and after one bounded provider call."""
+        provider = MockModelProvider()
+        progress: list[str] = []
+        llm = ProofAgentLLM(
+            model_provider=provider,
+            role=ModelCallRole.INGESTION,
+            timeout_seconds=17,
+            progress_callback=lambda: progress.append("renewed"),
+        )
+
+        llm.complete("Summarize")
+
+        assert provider._calls[0].timeout_seconds == 17
+        assert progress == ["renewed", "renewed"]
 
     def test_complete_preserves_token_usage(self) -> None:
         """complete() preserves token usage in additional_kwargs."""
@@ -212,6 +231,42 @@ class TestProofAgentLLM:
             "total_tokens": 40,
         }
 
+    def test_chat_propagates_timeout_and_invokes_progress_callback_around_provider_call(
+        self,
+    ) -> None:
+        """chat() renews ownership before and after one bounded provider call."""
+        provider = MockModelProvider()
+        progress: list[str] = []
+        llm = ProofAgentLLM(
+            model_provider=provider,
+            role=ModelCallRole.INGESTION,
+            timeout_seconds=23,
+            progress_callback=lambda: progress.append("renewed"),
+        )
+
+        llm.chat([ChatMessage(role=MessageRole.USER, content="Summarize")])
+
+        assert provider._calls[0].timeout_seconds == 23
+        assert progress == ["renewed", "renewed"]
+
+    def test_progress_callback_failure_stops_provider_call(self) -> None:
+        """Ownership loss before provider invocation aborts the bounded call."""
+        provider = MockModelProvider()
+
+        def lose_ownership() -> None:
+            raise RuntimeError("lease lost")
+
+        llm = ProofAgentLLM(
+            model_provider=provider,
+            role=ModelCallRole.INGESTION,
+            progress_callback=lose_ownership,
+        )
+
+        with pytest.raises(RuntimeError, match="lease lost"):
+            llm.complete("Summarize")
+
+        assert provider._calls == []
+
     def test_metadata_returns_llm_metadata(self) -> None:
         """metadata property returns LLMMetadata with correct model_name."""
         provider = MockModelProvider(
@@ -242,6 +297,7 @@ class TestProofAgentLLM:
 
         with pytest.raises(NotImplementedError, match="ProofAgentLLM does not support async"):
             import asyncio
+
             asyncio.run(llm.acomplete("Prompt"))
 
     def test_achat_raises_not_implemented(self) -> None:
@@ -251,6 +307,7 @@ class TestProofAgentLLM:
 
         with pytest.raises(NotImplementedError, match="ProofAgentLLM does not support async"):
             import asyncio
+
             messages = [ChatMessage(role=MessageRole.USER, content="Hello")]
             asyncio.run(llm.achat(messages))
 
@@ -273,6 +330,7 @@ class TestProofAgentLLM:
 
     def test_provider_errors_propagate(self) -> None:
         """Errors from ModelProvider.generate() propagate to caller."""
+
         class ErrorProvider(MockModelProvider):
             def generate(self, request):
                 raise ValueError("Provider error")
