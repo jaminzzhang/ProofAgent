@@ -137,6 +137,37 @@ def test_runtime_compatible_local_index_artifact_accepts_self_described_revision
     )
 
 
+def test_runtime_local_index_artifact_rejects_missing_directory(tmp_path: Path) -> None:
+    assert not is_runtime_compatible_local_index_artifact(
+        tmp_path / "missing",
+        content_hash=_build_spec().content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_missing_sidecar(tmp_path: Path) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    (artifact_path / ARTIFACT_META_FILENAME).unlink()
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_non_object_sidecar(tmp_path: Path) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    (artifact_path / ARTIFACT_META_FILENAME).write_text("[]", encoding="utf-8")
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
 def test_runtime_local_index_artifact_rejects_manifest_content_hash_mismatch(
     tmp_path: Path,
 ) -> None:
