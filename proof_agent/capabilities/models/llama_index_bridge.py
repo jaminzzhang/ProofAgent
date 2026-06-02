@@ -3,8 +3,10 @@
 This module provides a bridge between LlamaIndex's LLM interface and Proof Agent's
 ModelProvider protocol, ensuring all LLM calls go through the governed harness.
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Sequence
 
 from llama_index.core.base.llms.types import (
@@ -15,7 +17,13 @@ from llama_index.core.base.llms.types import (
 )
 from llama_index.core.llms import CustomLLM, MessageRole
 
-from proof_agent.contracts import ModelCallRole, ModelMessage, ModelRequest, ModelResponse, ModelRole
+from proof_agent.contracts import (
+    ModelCallRole,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ModelRole,
+)
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.models.protocol import ModelProvider
@@ -92,11 +100,15 @@ class ProofAgentLLM(CustomLLM):
     _provider: ModelProvider
     _role: ModelCallRole
     _metadata: LLMMetadata | None
+    _timeout_seconds: int | None
+    _progress_callback: Callable[[], None] | None
 
     def __init__(
         self,
         model_provider: ModelProvider,
         role: ModelCallRole,
+        timeout_seconds: int | None = None,
+        progress_callback: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize ProofAgentLLM adapter.
@@ -104,12 +116,16 @@ class ProofAgentLLM(CustomLLM):
         Args:
             model_provider: Proof Agent ModelProvider instance
             role: ModelCallRole identifying the purpose of LLM calls
+            timeout_seconds: Optional bound for each provider call
+            progress_callback: Optional ownership-renewal callback around provider calls
             **kwargs: Additional arguments passed to CustomLLM base class
         """
         super().__init__(**kwargs)
         self._provider = model_provider
         self._role = role
         self._metadata = None
+        self._timeout_seconds = timeout_seconds
+        self._progress_callback = progress_callback
 
     def complete(
         self,
@@ -136,10 +152,11 @@ class ProofAgentLLM(CustomLLM):
             messages=(message,),
             provider=self._provider.provider_name,
             model=self._provider.model_name,
+            timeout_seconds=self._timeout_seconds,
         )
 
         # Call provider
-        response = self._provider.generate(request)
+        response = self._generate(request)
 
         # Convert to CompletionResponse
         return self._model_response_to_completion(response)
@@ -169,10 +186,11 @@ class ProofAgentLLM(CustomLLM):
             messages=model_messages,
             provider=self._provider.provider_name,
             model=self._provider.model_name,
+            timeout_seconds=self._timeout_seconds,
         )
 
         # Call provider
-        response = self._provider.generate(request)
+        response = self._generate(request)
 
         # Convert to ChatResponse
         return self._model_response_to_chat(response)
@@ -202,9 +220,7 @@ class ProofAgentLLM(CustomLLM):
         Raises:
             NotImplementedError: Always raised to explicitly disable streaming
         """
-        raise NotImplementedError(
-            "ProofAgentLLM does not support streaming. Use chat() instead."
-        )
+        raise NotImplementedError("ProofAgentLLM does not support streaming. Use chat() instead.")
 
     async def acomplete(
         self,
@@ -277,6 +293,17 @@ class ProofAgentLLM(CustomLLM):
                 is_chat_model=True,
             )
         return self._metadata
+
+    def _generate(self, request: ModelRequest) -> ModelResponse:
+        self._report_progress()
+        try:
+            return self._provider.generate(request)
+        finally:
+            self._report_progress()
+
+    def _report_progress(self) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback()
 
     def _model_response_to_completion(
         self,
