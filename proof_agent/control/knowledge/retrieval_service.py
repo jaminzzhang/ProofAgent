@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import PurePosixPath
+import re
 from typing import Any, Literal
 
 from proof_agent.capabilities.knowledge import KnowledgeProvider
@@ -12,7 +14,11 @@ from proof_agent.contracts import (
     EvidenceChunk,
     EvidenceContribution,
     EnforcementPoint,
+    ModelCallRole,
     ModelConfig,
+    ModelRequest,
+    ModelResponse,
+    ModelRole,
     PolicyDecision,
     PolicyDecisionType,
     ValidationResult,
@@ -22,6 +28,22 @@ from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
+
+_TRACE_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,300}$")
+_TRACE_SAFE_ERROR_CODE_RE = re.compile(r"^PA_[A-Z0-9_]{1,96}$")
+_TRACE_SAFE_ROUTING_METADATA_KEYS = frozenset(
+    {"title", "description", "tags", "document_type", "business_category"}
+)
+_TRACE_SAFE_SELECTION_REASONS = frozenset(
+    {
+        "metadata_match",
+        "metadata_fallback",
+        "routing_model_selected",
+        "routing_empty",
+        "routing_model_failed",
+        "selected_document_failed",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +77,90 @@ class _RoutingDecision:
 class _ProviderStepResult:
     evidence: tuple[EvidenceChunk, ...]
     no_evidence_reason_code: str | None = None
+
+
+class _GovernedRoutingModelProvider:
+    """Apply Control Plane policy and trace to Source-owned routing model calls."""
+
+    def __init__(
+        self,
+        *,
+        provider: ModelProvider,
+        policy: PolicyEngine,
+        trace: TraceWriter,
+    ) -> None:
+        self.inner_provider = provider
+        self._policy = policy
+        self._trace = trace
+
+    @property
+    def provider_name(self) -> str:
+        return self.inner_provider.provider_name
+
+    @property
+    def model_name(self) -> str:
+        return self.inner_provider.model_name
+
+    def estimate_tokens(self, request: ModelRequest) -> int | None:
+        return self.inner_provider.estimate_tokens(request)
+
+    def bind(self, *, policy: PolicyEngine, trace: TraceWriter) -> None:
+        self._policy = policy
+        self._trace = trace
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        estimated_tokens = self.estimate_tokens(request)
+        decision = self._policy.evaluate(
+            EnforcementPoint.BEFORE_MODEL_CALL,
+            {
+                "provider": self.provider_name,
+                "model": self.model_name,
+                "estimated_tokens": estimated_tokens,
+                "stream": request.stream,
+                "cost_class": _model_cost_class(self.provider_name),
+                "role": ModelCallRole.ROUTING.value,
+            },
+        )
+        _emit_policy(self._trace, decision)
+        if not _allowed(decision):
+            raise ProofAgentError(
+                "PA_POLICY_001",
+                "Knowledge routing model call was blocked by policy.",
+                "Update policy or configure an allowed Source routing model.",
+            )
+        self._trace.emit(
+            "model_request",
+            status="ok",
+            payload=_routing_model_request_payload(
+                request,
+                estimated_tokens=estimated_tokens,
+            ),
+        )
+        try:
+            response = self.inner_provider.generate(request)
+        except Exception as exc:
+            self._trace.emit(
+                "model_error",
+                status="error",
+                payload={
+                    "provider": self.provider_name,
+                    "model": self.model_name,
+                    "role": ModelCallRole.ROUTING.value,
+                    "error_code": _trace_safe_model_error_code(exc),
+                    "error_class": exc.__class__.__name__,
+                    "retryable": bool(getattr(exc, "retryable", False)),
+                },
+            )
+            raise
+        self._trace.emit(
+            "model_response",
+            status="ok",
+            payload={
+                **_model_response_payload(response),
+                "role": ModelCallRole.ROUTING.value,
+            },
+        )
+        return response
 
 
 class _ServiceRoutedProviderAdapter:
@@ -374,6 +480,11 @@ class KnowledgeRetrievalService:
                 step_id=step_id,
                 round_id=round_id,
             )
+        _bind_provider_routing_model_governance(
+            self._knowledge_provider,
+            policy=self._policy,
+            trace=self._trace,
+        )
         try:
             evidence = self._knowledge_provider.retrieve(
                 query,
@@ -440,6 +551,11 @@ class KnowledgeRetrievalService:
 
         for bound in routing.selected:
             binding_top_k = bound.binding.top_k or request.top_k
+            _bind_provider_routing_model_governance(
+                bound.provider,
+                policy=self._policy,
+                trace=self._trace,
+            )
             try:
                 chunks = bound.provider.retrieve(query, top_k=binding_top_k)
             except Exception as exc:
@@ -903,7 +1019,165 @@ def _consume_provider_retrieval_summary(
     if not callable(consume):
         return {}
     summary = consume()
-    return dict(summary) if isinstance(summary, Mapping) else {}
+    return _trace_safe_retrieval_summary(summary) if isinstance(summary, Mapping) else {}
+
+
+def _bind_provider_routing_model_governance(
+    provider: KnowledgeProvider,
+    *,
+    policy: PolicyEngine,
+    trace: TraceWriter,
+) -> None:
+    bind = getattr(provider, "bind_runtime_routing_provider", None)
+    routing_provider = getattr(provider, "routing_provider", None)
+    if not callable(bind) or routing_provider is None:
+        return
+    if isinstance(routing_provider, _GovernedRoutingModelProvider):
+        routing_provider.bind(policy=policy, trace=trace)
+        return
+    bind(
+        _GovernedRoutingModelProvider(
+            provider=routing_provider,
+            policy=policy,
+            trace=trace,
+        )
+    )
+
+
+def _trace_safe_retrieval_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
+    projected: dict[str, Any] = {}
+    document_candidates = summary.get("document_candidates")
+    if isinstance(document_candidates, list | tuple):
+        projected["document_candidates"] = [
+            _trace_safe_summary_item(
+                item,
+                allowed_fields={
+                    "document_id",
+                    "revision_id",
+                    "filename",
+                    "routing_metadata_keys",
+                    "metadata_matched",
+                    "selection_reason",
+                },
+            )
+            for item in document_candidates[:100]
+            if isinstance(item, Mapping)
+        ]
+    selected_documents = summary.get("selected_documents")
+    if isinstance(selected_documents, list | tuple):
+        projected["selected_documents"] = [
+            _trace_safe_summary_item(
+                item,
+                allowed_fields={"document_id", "revision_id", "selection_reason"},
+            )
+            for item in selected_documents[:20]
+            if isinstance(item, Mapping)
+        ]
+    document_routing = summary.get("document_routing")
+    if isinstance(document_routing, Mapping):
+        projected["document_routing"] = _trace_safe_summary_item(
+            document_routing,
+            allowed_fields={
+                "snapshot_id",
+                "candidate_count",
+                "routed_candidate_count",
+                "selected_count",
+                "candidate_truncated",
+                "selection_budget",
+                "selection_reason",
+                "error_code",
+            },
+        )
+    return projected
+
+
+def _trace_safe_summary_item(
+    item: Mapping[str, Any],
+    *,
+    allowed_fields: set[str],
+) -> dict[str, Any]:
+    projected: dict[str, Any] = {}
+    for key in allowed_fields:
+        value = item.get(key)
+        if key in {"document_id", "revision_id", "snapshot_id"}:
+            if isinstance(value, str) and _TRACE_SAFE_ID_RE.fullmatch(value):
+                projected[key] = value
+        elif key == "filename":
+            if isinstance(value, str):
+                projected[key] = PurePosixPath(value.replace("\\", "/")).name[:300]
+        elif key == "selection_reason":
+            if isinstance(value, str) and value in _TRACE_SAFE_SELECTION_REASONS:
+                projected[key] = value
+        elif key == "error_code":
+            if isinstance(value, str) and _TRACE_SAFE_ERROR_CODE_RE.fullmatch(value):
+                projected[key] = value
+        elif isinstance(value, bool):
+            projected[key] = value
+        elif isinstance(value, int) and value >= 0:
+            projected[key] = value
+        elif key == "routing_metadata_keys" and isinstance(value, list | tuple):
+            projected[key] = [
+                text
+                for text in value[:20]
+                if isinstance(text, str) and text in _TRACE_SAFE_ROUTING_METADATA_KEYS
+            ]
+    return projected
+
+
+def _routing_model_request_payload(
+    request: ModelRequest,
+    *,
+    estimated_tokens: int | None,
+) -> dict[str, Any]:
+    return {
+        "provider": request.provider,
+        "model": request.model,
+        "role": ModelCallRole.ROUTING.value,
+        "response_format": request.response_format,
+        "message_count": len(request.messages),
+        "prompt_length": sum(len(message.content) for message in request.messages),
+        "system_prompt_length": sum(
+            len(message.content)
+            for message in request.messages
+            if message.role == ModelRole.SYSTEM
+        ),
+        "estimated_tokens": estimated_tokens,
+        "stream": request.stream,
+        "cost_class": _model_cost_class(request.provider),
+    }
+
+
+def _model_response_payload(response: ModelResponse) -> dict[str, Any]:
+    token_usage = None
+    if response.token_usage is not None:
+        token_usage = {
+            "input_tokens": response.token_usage.input_tokens,
+            "output_tokens": response.token_usage.output_tokens,
+            "total_tokens": response.token_usage.total_tokens,
+        }
+    return {
+        "provider": response.provider_name,
+        "model": response.model_name,
+        "finish_reason": response.finish_reason,
+        "content_length": len(response.content),
+        "refusal_reason": response.refusal_reason,
+        "token_usage": token_usage,
+    }
+
+
+def _model_cost_class(provider: str) -> str:
+    if provider == "deterministic":
+        return "local"
+    if provider == "azure_openai":
+        return "enterprise"
+    return "remote"
+
+
+def _trace_safe_model_error_code(exc: Exception) -> str:
+    error_code = getattr(exc, "code", None)
+    if isinstance(error_code, str) and _TRACE_SAFE_ERROR_CODE_RE.fullmatch(error_code):
+        return error_code
+    return "PA_MODEL_002"
 
 
 def _ensure_retrieval_strategy_is_executable(strategy: str) -> None:

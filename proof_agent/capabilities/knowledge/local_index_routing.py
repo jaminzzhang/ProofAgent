@@ -40,6 +40,18 @@ class LocalIndexDocumentRoutingResult:
     summary: Mapping[str, Any]
 
 
+class LocalIndexDocumentRoutingFailure(ProofAgentError):
+    """Bounded routing failure with a trace-safe pre-failure projection."""
+
+    def __init__(self, message: str, *, summary: Mapping[str, Any] | None = None) -> None:
+        super().__init__(
+            "PA_KNOWLEDGE_002",
+            message,
+            "Retry retrieval after checking the Source-owned Local Index routing model.",
+        )
+        self.summary = summary
+
+
 @dataclass(frozen=True)
 class _ProjectedDocument:
     document: LocalIndexRuntimeDocument
@@ -115,7 +127,19 @@ def route_snapshot_documents(
     try:
         response = routing_model.generate(request)
     except Exception as exc:
-        raise _routing_failure("Local Index document routing model call failed.") from exc
+        raise _routing_failure(
+            "Local Index document routing model call failed.",
+            summary=_routing_summary(
+                snapshot_id=snapshot_id,
+                candidate_count=len(documents),
+                routed_candidates=routed_candidates,
+                selected_documents=(),
+                selection_budget=selection_budget,
+                candidate_truncated=candidate_truncated,
+                selection_reason="routing_model_failed",
+                error_code=_error_code(exc),
+            ),
+        ) from exc
     try:
         selection = parse_model_contract(
             response.content,
@@ -123,13 +147,40 @@ def route_snapshot_documents(
             ModelCallRole.ROUTING.value,
         )
     except ModelOutputNormalizationError as exc:
-        raise _routing_failure("Local Index document routing model output is invalid.") from exc
+        raise _routing_failure(
+            "Local Index document routing model output is invalid.",
+            summary=_routing_summary(
+                snapshot_id=snapshot_id,
+                candidate_count=len(documents),
+                routed_candidates=routed_candidates,
+                selected_documents=(),
+                selection_budget=selection_budget,
+                candidate_truncated=candidate_truncated,
+                selection_reason="routing_model_failed",
+                error_code=_error_code(exc),
+            ),
+        ) from exc
 
-    selected_documents = _selected_documents(
-        selection,
-        routed_candidates=routed_candidates,
-        selection_budget=selection_budget,
-    )
+    try:
+        selected_documents = _selected_documents(
+            selection,
+            routed_candidates=routed_candidates,
+            selection_budget=selection_budget,
+        )
+    except ProofAgentError as exc:
+        raise _routing_failure(
+            exc.message,
+            summary=_routing_summary(
+                snapshot_id=snapshot_id,
+                candidate_count=len(documents),
+                routed_candidates=routed_candidates,
+                selected_documents=(),
+                selection_budget=selection_budget,
+                candidate_truncated=candidate_truncated,
+                selection_reason="routing_model_failed",
+                error_code=_error_code(exc),
+            ),
+        ) from exc
     return LocalIndexDocumentRoutingResult(
         selected_documents=selected_documents,
         summary=_routing_summary(
@@ -232,8 +283,23 @@ def _routing_summary(
     selected_documents: tuple[LocalIndexRuntimeDocument, ...],
     selection_budget: int,
     candidate_truncated: bool,
+    selection_reason: str | None = None,
+    error_code: str | None = None,
 ) -> dict[str, Any]:
-    selection_reason = "routing_model_selected" if selected_documents else "routing_empty"
+    actual_selection_reason = selection_reason or (
+        "routing_model_selected" if selected_documents else "routing_empty"
+    )
+    document_routing = {
+        "snapshot_id": snapshot_id,
+        "candidate_count": candidate_count,
+        "routed_candidate_count": len(routed_candidates),
+        "selected_count": len(selected_documents),
+        "candidate_truncated": candidate_truncated,
+        "selection_budget": selection_budget,
+        "selection_reason": actual_selection_reason,
+    }
+    if error_code is not None:
+        document_routing["error_code"] = error_code
     return {
         "document_candidates": [
             {
@@ -256,21 +322,17 @@ def _routing_summary(
             }
             for document in selected_documents
         ],
-        "document_routing": {
-            "snapshot_id": snapshot_id,
-            "candidate_count": candidate_count,
-            "routed_candidate_count": len(routed_candidates),
-            "selected_count": len(selected_documents),
-            "candidate_truncated": candidate_truncated,
-            "selection_budget": selection_budget,
-            "selection_reason": selection_reason,
-        },
+        "document_routing": document_routing,
     }
 
 
-def _routing_failure(message: str) -> ProofAgentError:
-    return ProofAgentError(
-        "PA_KNOWLEDGE_002",
-        message,
-        "Retry retrieval after checking the Source-owned Local Index routing model.",
-    )
+def _routing_failure(
+    message: str,
+    *,
+    summary: Mapping[str, Any] | None = None,
+) -> LocalIndexDocumentRoutingFailure:
+    return LocalIndexDocumentRoutingFailure(message, summary=summary)
+
+
+def _error_code(exc: Exception) -> str:
+    return getattr(exc, "code", "PA_KNOWLEDGE_002")

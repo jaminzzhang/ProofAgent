@@ -27,6 +27,7 @@ class LocalIndexRuntimeDocument:
     content_hash: str
     artifact_path: Path
     routing_metadata: Mapping[str, Any]
+    artifact_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,7 @@ def load_ready_snapshot_manifest(
                     artifact_path,
                 ),
                 routing_metadata=document.routing_metadata,
+                artifact_root=resolved_artifact_root,
             )
         )
 

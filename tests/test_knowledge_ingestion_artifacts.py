@@ -254,6 +254,27 @@ def test_runtime_local_index_artifact_rejects_symlinked_directory(tmp_path: Path
     )
 
 
+def test_runtime_local_index_artifact_rejects_parent_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    spec = _build_spec()
+    artifact_root = tmp_path / "store"
+    artifact_root.mkdir()
+    outside_artifact = tmp_path / "outside" / "artifact"
+    _write_artifact(outside_artifact, build_spec=spec, fingerprint="fingerprint")
+    parent = artifact_root / "artifacts"
+    try:
+        parent.symlink_to(outside_artifact.parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlinks are not supported by this platform.")
+
+    assert not is_runtime_compatible_local_index_artifact(
+        parent / "artifact",
+        content_hash=spec.content_hash,
+        artifact_root=artifact_root.resolve(),
+    )
+
+
 def test_runtime_local_index_artifact_rejects_symlinked_sidecar(tmp_path: Path) -> None:
     spec = _build_spec()
     artifact_path = tmp_path / "artifact"

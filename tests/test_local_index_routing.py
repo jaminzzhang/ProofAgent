@@ -232,3 +232,31 @@ def test_document_router_wraps_model_failure_without_leaking_exception_text() ->
 
     assert exc.value.code == "PA_KNOWLEDGE_002"
     assert "credential-like" not in str(exc.value)
+
+
+def test_document_router_model_failure_preserves_bounded_candidate_summary() -> None:
+    model = FakeRoutingModel()
+    model.error = RuntimeError("credential-like model failure")
+    documents = tuple(_document(f"doc_{index:03d}") for index in reversed(range(101)))
+
+    with pytest.raises(ProofAgentError) as exc:
+        route_snapshot_documents(
+            "unmatched",
+            documents=documents,
+            routing_model=model,
+            selection_budget=3,
+            snapshot_id="kssnapshot_001",
+        )
+
+    summary = exc.value.summary
+    assert len(summary["document_candidates"]) == MAX_ROUTING_MODEL_DOCUMENT_CANDIDATES
+    assert summary["document_routing"] == {
+        "snapshot_id": "kssnapshot_001",
+        "candidate_count": 101,
+        "routed_candidate_count": 100,
+        "selected_count": 0,
+        "candidate_truncated": True,
+        "selection_budget": 3,
+        "selection_reason": "routing_model_failed",
+        "error_code": "PA_KNOWLEDGE_002",
+    }

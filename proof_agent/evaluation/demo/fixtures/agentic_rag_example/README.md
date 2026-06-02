@@ -50,7 +50,9 @@ knowledge_sources:
 
 The registered runtime config is v2-only. Before running this illustrative package, an operator
 must freeze a READY `local_index.snapshot.v2` manifest at `snapshot_path`. Historical
-`params.index_path` runtime config is rejected.
+`params.index_path` runtime config is rejected. This fixture is for routing development; a
+foundation-frozen snapshot must not be attached to a production Published Agent until the formal
+Source publication slice adds the production binding guard.
 
 ### Retrieval Strategy
 ```yaml

@@ -332,10 +332,10 @@ Remote model smoke checks are opt-in. They are not part of the deterministic dem
 
 Knowledge Hub separates local indexed knowledge from remote retrieval adapters while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation.
 
-For production local knowledge, create a `local_index` Knowledge Source through Knowledge Hub
+For Local Index routing development, create a `local_index` Knowledge Source through Knowledge Hub
 ingestion. Local index revision artifacts are built before Source publication. The registered
-runtime consumes a READY `local_index.snapshot.v2` manifest and rejects the historical
-single-artifact `params.index_path` configuration:
+runtime can explicitly consume a READY development-stage `local_index.snapshot.v2` manifest and
+rejects the historical single-artifact `params.index_path` configuration:
 
 ```yaml
 knowledge_sources:
@@ -411,6 +411,8 @@ integers from `1` through `20`.
 Only selected revision artifacts are loaded. If any selected artifact cannot be validated, loaded,
 or searched, retrieval fails closed without partial evidence. Trace records bounded
 `document_candidates[]` and `selected_documents[]` summaries without raw document content.
+The Control Plane also applies `before_model_call` policy and safe model request/response tracing
+to Source-owned routing-model calls.
 
 ### Running Local Index Ingestion
 
@@ -452,10 +454,11 @@ index, or advance `published_snapshot_id`.
 
 A foundation-validated frozen snapshot is not a production publication. It can be used by an
 explicitly configured runtime path for development, but it does not automatically change Agent
-binding behavior. Remaining slices add the formal Source publication API, continuous worker
-polling, and batch-upload APIs. The later batch-upload contract accepts at most 50 files, reserves
-full-batch capacity atomically before staging any bytes, then validates each staged file
-independently and asynchronously.
+binding behavior and must not be attached to a production Published Agent. The formal Source
+publication slice adds the production binding guard, then remaining operational slices add
+continuous worker polling and batch-upload APIs. The later batch-upload contract accepts at most
+50 files, reserves full-batch capacity atomically before staging any bytes, then validates each
+staged file independently and asynchronously.
 
 For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
 

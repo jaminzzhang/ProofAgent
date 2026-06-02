@@ -144,6 +144,8 @@ class LocalIndexProvider(KnowledgeProvider):
         Returns:
             RetrievalCapabilities with both structure listing and scoped retrieval
         """
+        if self.runtime_snapshot is not None:
+            return RetrievalCapabilities()
         return RetrievalCapabilities(
             supports_structure_listing=True,
             supports_scoped_retrieval=True,
@@ -286,6 +288,17 @@ class LocalIndexProvider(KnowledgeProvider):
         self._retrieval_summary = None
         return summary
 
+    def bind_runtime_routing_provider(self, routing_provider: ModelProvider) -> None:
+        """Bind a Control Plane-governed provider for runtime routing calls."""
+
+        if self.runtime_snapshot is None:
+            return
+        self.routing_provider = routing_provider
+        self.routing_model = ProofAgentLLM(
+            model_provider=routing_provider,
+            role=ModelCallRole.ROUTING,
+        )
+
     def _retrieve_from_runtime_snapshot(
         self,
         query: str,
@@ -305,11 +318,16 @@ class LocalIndexProvider(KnowledgeProvider):
                 snapshot_id=snapshot.snapshot_id,
             )
         except Exception as exc:
-            self._retrieval_summary = _failed_runtime_summary(
-                snapshot,
-                selection_budget=self.document_selection_budget,
-                selection_reason="routing_model_failed",
-                error_code=_error_code(exc),
+            summary = getattr(exc, "summary", None)
+            self._retrieval_summary = (
+                summary
+                if isinstance(summary, Mapping)
+                else _failed_runtime_summary(
+                    snapshot,
+                    selection_budget=self.document_selection_budget,
+                    selection_reason="routing_model_failed",
+                    error_code=_error_code(exc),
+                )
             )
             if isinstance(exc, ProofAgentError):
                 raise
@@ -575,13 +593,15 @@ def _load_runtime_revision_index(
     *,
     routing_model: ProofAgentLLM,
 ) -> TreeIndex:
+    artifact_path = _resolved_runtime_artifact_path(document)
     if not is_runtime_compatible_local_index_artifact(
-        document.artifact_path,
+        artifact_path,
         content_hash=document.content_hash,
+        artifact_root=document.artifact_root,
     ):
         raise _snapshot_load_failure("Selected Local Index revision artifact is incompatible.")
     try:
-        storage_context = StorageContext.from_defaults(persist_dir=str(document.artifact_path))
+        storage_context = StorageContext.from_defaults(persist_dir=str(artifact_path))
         return cast(
             TreeIndex,
             load_index_from_storage(
@@ -593,6 +613,18 @@ def _load_runtime_revision_index(
         raise _snapshot_load_failure(
             "Selected Local Index revision artifact could not be loaded."
         ) from exc
+
+
+def _resolved_runtime_artifact_path(document: LocalIndexRuntimeDocument) -> Path:
+    try:
+        artifact_path = document.artifact_path.resolve()
+        if document.artifact_root is not None:
+            artifact_path.relative_to(document.artifact_root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise _snapshot_load_failure(
+            "Selected Local Index revision artifact escapes the configured artifact root."
+        ) from exc
+    return artifact_path
 
 
 def _retrieve_from_runtime_revision(
