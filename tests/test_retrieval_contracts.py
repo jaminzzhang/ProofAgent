@@ -241,6 +241,10 @@ def test_knowledge_document_routing_selection_serialization_roundtrip() -> None:
     )
     data = original.model_dump()
     restored = KnowledgeDocumentRoutingSelection.model_validate(data)
+    assert original.model_dump(mode="json") == {
+        "selected_document_ids": ["doc_001", "doc_002"],
+        "reason": "The selected documents match the request.",
+    }
     assert restored == original
 
 

@@ -138,8 +138,8 @@ def test_local_index_knowledge_source_loads_with_v2_paths(tmp_path: Path) -> Non
     agent_yaml = _write_local_index_manifest(
         tmp_path,
         params="""
-      snapshot_path: ./snapshots/policies.json
-      artifact_root: ./artifacts/policies
+      snapshot_path: ./config/knowledge_sources/ks_policy/snapshots/kssnapshot_001
+      artifact_root: ./config/knowledge_sources/ks_policy/artifacts
       document_selection_budget: 12
 """,
     )
@@ -148,10 +148,10 @@ def test_local_index_knowledge_source_loads_with_v2_paths(tmp_path: Path) -> Non
 
     assert manifest.knowledge_sources[0].provider == "local_index"
     assert manifest.knowledge_sources[0].params["snapshot_path"] == (
-        tmp_path / "snapshots" / "policies.json"
+        tmp_path / "config" / "knowledge_sources" / "ks_policy" / "snapshots" / "kssnapshot_001"
     ).resolve()
     assert manifest.knowledge_sources[0].params["artifact_root"] == (
-        tmp_path / "artifacts" / "policies"
+        tmp_path / "config" / "knowledge_sources" / "ks_policy" / "artifacts"
     ).resolve()
     assert manifest.knowledge_sources[0].params["document_selection_budget"] == 12
 
@@ -179,8 +179,8 @@ def test_local_index_document_selection_budget_rejects_invalid_values(
     agent_yaml = _write_local_index_manifest(
         tmp_path,
         params=f"""
-      snapshot_path: ./snapshots/policies.json
-      artifact_root: ./artifacts/policies
+      snapshot_path: ./config/knowledge_sources/ks_policy/snapshots/kssnapshot_001
+      artifact_root: ./config/knowledge_sources/ks_policy/artifacts
       document_selection_budget: {document_selection_budget!r}
 """,
     )
@@ -191,6 +191,41 @@ def test_local_index_document_selection_budget_rejects_invalid_values(
     assert exc.value.code == "PA_CONFIG_001"
     assert "document_selection_budget" in exc.value.message
     assert "document_selection_budget" in exc.value.fix
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_yaml_value"),
+    [
+        ("snapshot_path", "123"),
+        ("snapshot_path", "[./snapshots/kssnapshot_001]"),
+        ("artifact_root", "123"),
+        ("artifact_root", "{path: ./artifacts}"),
+    ],
+)
+def test_local_index_paths_reject_non_path_values(
+    tmp_path: Path, field_name: str, invalid_yaml_value: str
+) -> None:
+    snapshot_path = "./config/knowledge_sources/ks_policy/snapshots/kssnapshot_001"
+    artifact_root = "./config/knowledge_sources/ks_policy/artifacts"
+    if field_name == "snapshot_path":
+        snapshot_path = invalid_yaml_value
+    else:
+        artifact_root = invalid_yaml_value
+    agent_yaml = _write_local_index_manifest(
+        tmp_path,
+        params=f"""
+      snapshot_path: {snapshot_path}
+      artifact_root: {artifact_root}
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    expected_field = f"knowledge_sources[ks_local_index].params.{field_name}"
+    assert exc.value.code == "PA_CONFIG_001"
+    assert expected_field in exc.value.message
+    assert expected_field in exc.value.fix
 
 
 def _write_local_index_manifest(tmp_path: Path, *, params: str) -> Path:
