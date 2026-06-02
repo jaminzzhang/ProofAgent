@@ -377,6 +377,41 @@ Runtime loading rejects missing, malformed, or non-READY metadata before opening
 `routing_model` is Source-owned. When it is omitted, runtime inherits `ingestion_model` for
 routing. Runtime providers cannot build an index on demand inside an Agent run.
 
+### Running Local Index Ingestion
+
+The Local Index ingestion foundation stages uploads into quarantine, validates and parses them
+asynchronously, promotes accepted document revisions, and builds immutable revision artifacts.
+Run one bounded worker iteration with:
+
+```bash
+uv run --extra ingestion --extra tree proof-agent knowledge-worker --once
+```
+
+Each invocation processes at most one queued quarantine validation or artifact-build task. Omit
+`--once` only after continuous worker polling is added in a later operational slice.
+
+The single-upload API stages bytes before document revision or ingestion-job creation. The worker
+then accepts UTF-8 Markdown and text-based PDF originals. PDF parsing uses `pypdf` by default,
+including its font-encoding and CMap text extraction support. Parsing fails closed for malformed
+PDFs, encrypted PDFs, PDFs above 500 pages, and PDFs without meaningful extracted text. A parser
+identity such as `pypdf:v1@{installed_version}` participates in artifact compatibility, so a parser
+upgrade can require rebuild rather than silently reusing an incompatible artifact.
+
+`pypdf` is the intentionally small default adapter for this foundation. Docling remains a future
+layout-aware adapter for documents where tables, formulas, images, OCR, or richer structural
+recovery justify its larger pipeline and model-weight concerns. It is not the default for ordinary
+text-based PDF ingestion.
+
+Artifact-build retries are persisted and bounded: recoverable failures wait 30 seconds, then 120
+seconds, before the job becomes failed after the retry budget is exhausted. Source-level claim
+concurrency is configured through `params.worker_concurrency`; it defaults to `2` and accepts
+integers from `1` through `8`.
+
+This foundation does not yet add Source publication APIs, candidate snapshot promotion, continuous
+worker polling, batch-upload APIs, or runtime multi-document routing. The later batch-upload
+contract accepts at most 50 files, reserves full-batch capacity atomically before staging any
+bytes, then validates each staged file independently and asynchronously.
+
 For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
 
 ## 6. Configuring the Control Plane

@@ -189,14 +189,14 @@ Layer boundary rules:
 
 | Area | Current implementation |
 | --- | --- |
-| Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `server` |
+| Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `server`, and one-shot `knowledge-worker --once` |
 | Docker | `Dockerfile`, `docker-compose.yml` runs demo by default |
 | Contracts | Pydantic v2 frozen models |
 | Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, and `HarnessInvocation` composition |
 | Workflow | `control/workflow/` owns Enterprise QA and Controlled ReAct Enterprise QA Harness behavior plus the workflow template registry |
 | Runtime | `runtime/langgraph_runner.py` executes supported `StateGraph` templates through resolved Harness dependencies |
 | Policy | `control/policy/` owns retrieval, ReAct review, answer, tool, memory, and model call enforcement points |
-| Knowledge | `control/knowledge/` owns Control Plane retrieval orchestration; `capabilities/knowledge/` owns Markdown deterministic retrieval, Local Index provider scaffolding, and remote adapter boundaries |
+| Knowledge | `control/knowledge/` owns Control Plane retrieval orchestration; `capabilities/knowledge/` owns Markdown deterministic retrieval, Local Index runtime load, asynchronous Local Index ingestion, and remote adapter boundaries |
 | Model | `capabilities/models/` owns `deterministic`, `openai_compatible`, `openai`, `deepseek`; Azure/Anthropic placeholders |
 | Tools | `capabilities/tools/` owns ToolGateway, local handler loading, approval state |
 | Memory | `capabilities/memory/` owns session memory with denylist |
@@ -644,6 +644,14 @@ Local Index strategy:
 - Runtime retrieval performs Local Index Runtime Load against a published READY Knowledge Source Snapshot; it must not build indexes on demand inside an Agent run.
 - Runtime load validates the immutable snapshot `artifact_meta.json` sidecar before opening storage and resolves the Source-owned routing model, inheriting the ingestion model when no routing override is configured.
 - Local Index uses stable internal citation URIs and permission-protected citation preview rather than storage paths.
+- The current ingestion foundation stages one upload per API request as a Quarantined Knowledge Upload before creating a document revision or ingestion job. A `knowledge-worker --once` invocation performs housekeeping and processes at most one queued quarantine-validation or artifact-build task.
+- Accepted originals are UTF-8 Markdown or text-based PDF. The default PDF adapter is `pypdf`, which handles font encoding and CMap extraction while failing closed for malformed PDFs, encrypted PDFs, PDFs above 500 pages, and PDFs without meaningful extracted text.
+- Parser identity participates in artifact compatibility. A default PDF identity such as `pypdf:v1@{installed_version}` makes parser upgrades explicit rebuild boundaries.
+- Docling is a future layout-aware parser adapter for tables, formulas, images, OCR, and richer structure recovery. It is not the default foundation adapter because ordinary text-based PDF ingestion does not justify its larger pipeline and model-weight concerns.
+- Recoverable artifact-build failures persist bounded retry state with 30-second then 120-second backoff. Artifact-key contention defers without consuming the retry budget.
+- Source claim concurrency is configured through `params.worker_concurrency`, defaults to `2`, and is bounded from `1` through `8`.
+- This foundation does not add candidate snapshot promotion, Source publication APIs, continuous worker polling, batch-upload APIs, or runtime multi-document routing.
+- The later batch-upload contract accepts at most 50 files, atomically reserves capacity for the full batch before staging bytes, then validates each staged file independently and asynchronously.
 
 Remote adapter strategy:
 - `http_json` has a preferred default Remote Retrieval Protocol.
@@ -656,8 +664,10 @@ Implementation sequence:
 2. Add the Control Plane Knowledge Retrieval Service and route Enterprise QA plus Controlled ReAct retrieval through it; the current service centralizes policy-gated or reviewed provider calls, deterministic binding metadata routing for single-step and reviewed/fallback retrieval, binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and evidence admission.
 3. Complete `local_index` runtime load so Agent execution reads only published READY LlamaIndex-backed Knowledge Source Snapshots; the current runtime validates the READY publication sidecar, resolves Source-owned routing configuration, and loads storage read-only.
 4. Extend planner/evaluator-backed agentic retrieval with the same service-routed provider adapter; each round now re-enters bounded source routing and records round-correlated provider summaries. Add richer retrieval plan summaries and citation enforcement next.
-5. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
-6. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
+5. Add the Local Index ingestion worker foundation; the current slice stages and validates quarantined uploads, promotes accepted document revisions, builds immutable revision artifacts, persists bounded retries, and exposes one-shot CLI plus status APIs.
+6. Add candidate snapshot promotion and Source publication APIs, then continuous worker polling, batch upload, and runtime multi-document routing.
+7. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
+8. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
 
 ## 15. Model Providers
 
@@ -1080,6 +1090,7 @@ Dependency rules:
 | `PA_CONFIG_002` | Config | unsupported runtime/template/memory |
 | `PA_SCHEMA_001/002` | Schema | contract/schema validation |
 | `PA_KNOWLEDGE_001/002` | Knowledge | provider/params/retrieval errors |
+| `PA_INGESTION_001/002/003/004` | Knowledge ingestion | configuration, upload parsing, artifact build, and lock/claim ownership errors |
 | `PA_RETRIEVAL_001` | Retrieval | recognized retrieval strategy not executable in this build |
 | `PA_MODEL_001` | Model | unsupported provider, placeholder, missing SDK |
 | `PA_MODEL_002` | Model | provider API error |
