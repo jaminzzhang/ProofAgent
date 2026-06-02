@@ -23,7 +23,9 @@ from proof_agent.contracts import (
     ContractBundle,
     DraftAgent,
     KnowledgeDocument,
+    KnowledgeIngestionJob,
     KnowledgeSource,
+    QuarantinedKnowledgeUpload,
     RunPurpose,
 )
 from proof_agent.errors import ProofAgentError
@@ -38,7 +40,6 @@ SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS = {
     "local_index",
     "remote_search",
 }
-MAX_SOURCE_DOCUMENTS = 500
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
@@ -170,6 +171,8 @@ def create_knowledge_source(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
     return _knowledge_source_payload(store, source)
 
 
@@ -205,42 +208,97 @@ def upload_knowledge_source_document(
     request: KnowledgeDocumentUploadRequest,
     app_request: Request,
 ) -> dict[str, Any]:
-    """Validate, store, and index one PDF or Markdown document revision."""
+    """Stage one upload for asynchronous validation and Local Index ingestion."""
 
     store = _get_configuration_store(app_request)
     source = store.get_knowledge_source(source_id)
     if source is None:
         raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
-    documents = store.list_knowledge_documents(source_id)
-    if len(documents) >= MAX_SOURCE_DOCUMENTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Knowledge Source document limit reached: {MAX_SOURCE_DOCUMENTS}",
-        )
-    content = _decode_upload_content(request.content_base64)
-    _validate_upload_file(
-        filename=request.filename,
-        content_type=request.content_type,
-        content=content,
-    )
     if source.provider != "local_index":
         raise HTTPException(
             status_code=400,
             detail="Dashboard document upload currently supports local_index Knowledge Sources.",
         )
+    content = _decode_upload_content(request.content_base64)
 
-    document = store.add_knowledge_document(
-        source_id=source.source_id,
-        filename=request.filename,
-        content_type=request.content_type,
-        content=content,
-        state="queued",
-        provider_document_id=None,
-        error_code=None,
-        error_message=None,
-        actor=request.actor,
+    try:
+        upload = store.stage_quarantined_knowledge_upload(
+            source_id=source.source_id,
+            filename=request.filename,
+            content_type=request.content_type,
+            content=content,
+            actor=request.actor,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _quarantined_upload_payload(upload)
+
+
+@router.get("/config/knowledge-sources/{source_id}/quarantined-uploads")
+def list_quarantined_knowledge_uploads(source_id: str, app_request: Request) -> dict[str, Any]:
+    """List asynchronous upload-validation records for one Knowledge Source."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    uploads = store.list_quarantined_knowledge_uploads(source_id)
+    return {
+        "data": [_quarantined_upload_payload(upload) for upload in uploads],
+        "meta": {"total": len(uploads)},
+    }
+
+
+@router.get("/config/knowledge-sources/{source_id}/quarantined-uploads/{upload_id}")
+def get_quarantined_knowledge_upload(
+    source_id: str,
+    upload_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Return one asynchronous upload-validation record."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    upload = store.get_quarantined_knowledge_upload(
+        source_id=source_id,
+        upload_id=upload_id,
     )
-    return _knowledge_document_payload(document)
+    if upload is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Quarantined Knowledge Upload not found: {source_id}/{upload_id}",
+        )
+    return _quarantined_upload_payload(upload)
+
+
+@router.get("/config/knowledge-sources/{source_id}/ingestion-jobs")
+def list_knowledge_ingestion_jobs(source_id: str, app_request: Request) -> dict[str, Any]:
+    """List persisted artifact-build jobs for one Knowledge Source."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    jobs = store.list_knowledge_ingestion_jobs(source_id)
+    return {
+        "data": [_knowledge_ingestion_job_payload(job) for job in jobs],
+        "meta": {"total": len(jobs)},
+    }
+
+
+@router.get("/config/knowledge-sources/{source_id}/ingestion-jobs/{job_id}")
+def get_knowledge_ingestion_job(
+    source_id: str,
+    job_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Return one persisted artifact-build job."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    job = store.get_knowledge_ingestion_job(source_id=source_id, job_id=job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Ingestion Job not found: {source_id}/{job_id}",
+        )
+    return _knowledge_ingestion_job_payload(job)
 
 
 @router.get("/config/agents")
@@ -633,14 +691,20 @@ def _knowledge_source_payload(
     documents = store.list_knowledge_documents(source.source_id)
     payload = source.model_dump(mode="json")
     payload["document_count"] = len(documents)
-    payload["ready_document_count"] = sum(
-        1 for document in documents if document.state == "ready"
-    )
+    payload["ready_document_count"] = sum(1 for document in documents if document.state == "ready")
     return payload
 
 
 def _knowledge_document_payload(document: KnowledgeDocument) -> dict[str, Any]:
     return document.model_dump(mode="json")
+
+
+def _quarantined_upload_payload(upload: QuarantinedKnowledgeUpload) -> dict[str, Any]:
+    return upload.model_dump(mode="json")
+
+
+def _knowledge_ingestion_job_payload(job: KnowledgeIngestionJob) -> dict[str, Any]:
+    return job.model_dump(mode="json")
 
 
 def _bind_source_in_agent_yaml(
@@ -724,6 +788,16 @@ def _require_draft(
     return draft
 
 
+def _require_knowledge_source(
+    store: LocalAgentConfigurationStore,
+    source_id: str,
+) -> KnowledgeSource:
+    source = store.get_knowledge_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    return source
+
+
 def _get_configuration_store(request: Request) -> LocalAgentConfigurationStore:
     return cast(LocalAgentConfigurationStore, request.app.state.agent_configuration_store)
 
@@ -751,6 +825,12 @@ def _source_id(value: str) -> str:
 
 
 def _decode_upload_content(content_base64: str) -> bytes:
+    maximum_encoded_chars = ((MAX_UPLOAD_BYTES + 2) // 3) * 4
+    if len(content_base64) > maximum_encoded_chars:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded encoded upload envelope exceeds {maximum_encoded_chars} characters.",
+        )
     try:
         content = base64.b64decode(content_base64, validate=True)
     except (binascii.Error, ValueError) as exc:
@@ -765,26 +845,8 @@ def _decode_upload_content(content_base64: str) -> bytes:
     return content
 
 
-def _validate_upload_file(*, filename: str, content_type: str, content: bytes) -> None:
-    suffix = Path(filename).suffix.lower()
-    normalized_content_type = content_type.lower()
-    if suffix == ".pdf" or normalized_content_type == "application/pdf":
-        if not content.startswith(b"%PDF-"):
-            raise HTTPException(status_code=400, detail="PDF upload is missing a PDF signature.")
-        return
-    if suffix in {".md", ".markdown"} or normalized_content_type in {
-        "text/markdown",
-        "text/plain",
-    }:
-        try:
-            content.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Markdown upload must be UTF-8 text.",
-            ) from exc
-        return
-    raise HTTPException(
-        status_code=400,
-        detail="Unsupported knowledge document type. Upload PDF or Markdown.",
+def _proof_agent_http_exception(exc: ProofAgentError) -> HTTPException:
+    return HTTPException(
+        status_code=503 if exc.code == "PA_INGESTION_004" else 400,
+        detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
     )
