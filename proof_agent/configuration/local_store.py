@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from proof_agent.bootstrap.validation import validate_secret_safe_params
 from proof_agent.capabilities.knowledge.ingestion import (
     KnowledgeWorkerClaimSelection,
@@ -24,6 +26,9 @@ from proof_agent.capabilities.knowledge.ingestion import (
     ingestion_config_fingerprint,
     local_index_engine_version,
 )
+from proof_agent.capabilities.knowledge.ingestion.artifacts import (
+    is_compatible_local_index_artifact,
+)
 from proof_agent.contracts import (
     ActiveAgentVersion,
     AgentValidationRecord,
@@ -32,11 +37,13 @@ from proof_agent.contracts import (
     ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
+    FoundationKnowledgeSourceValidation,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
     KnowledgeSource,
     KnowledgeSourceSnapshotDocument,
+    KnowledgeSourceSnapshotManifest,
     PublishedAgentVersion,
     QuarantinedKnowledgeUpload,
 )
@@ -314,6 +321,142 @@ class LocalAgentConfigurationStore:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             source = self._normalized_local_index_source_unlocked(source_id)
             return self._candidate_knowledge_source_snapshot_unlocked(source)
+
+    def validate_candidate_knowledge_source_snapshot_foundation(
+        self,
+        *,
+        source_id: str,
+        actor: str,
+    ) -> FoundationKnowledgeSourceValidation:
+        """Persist one passed minimum validation record for the current candidate."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._normalized_local_index_source_unlocked(source_id)
+            candidate = self._candidate_knowledge_source_snapshot_unlocked(source)
+            self._require_foundation_candidate_artifacts_unlocked(candidate)
+            validation = FoundationKnowledgeSourceValidation(
+                validation_id=f"ksvalidation_{uuid4().hex[:8]}",
+                source_id=source.source_id,
+                source_draft_version_id=candidate.source_draft_version_id,
+                candidate_digest=candidate.candidate_digest,
+                validation_level="foundation",
+                status="passed",
+                document_count=len(candidate.included_documents),
+                required_reingestion_count=candidate.required_reingestion_count,
+                created_at=_now(),
+                created_by=actor,
+            )
+            self._write_foundation_knowledge_source_validation(validation)
+            return validation
+
+    def freeze_candidate_knowledge_source_snapshot(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+        actor: str,
+    ) -> KnowledgeSourceSnapshotManifest:
+        """Freeze one unchanged foundation-validated candidate for preview development."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._normalized_local_index_source_unlocked(source_id)
+            validation = self._require_foundation_knowledge_source_validation_for_freeze(
+                source_id=source_id,
+                validation_id=validation_id,
+            )
+            if validation.source_id != source.source_id:
+                raise _snapshot_freeze_conflict(
+                    "Foundation validation record does not belong to this Knowledge Source."
+                )
+            candidate = self._candidate_knowledge_source_snapshot_unlocked(source)
+            if validation.source_draft_version_id != candidate.source_draft_version_id:
+                raise _snapshot_freeze_conflict(
+                    "Foundation validation is stale for the current Knowledge Source Draft Version."
+                )
+            if validation.candidate_digest != candidate.candidate_digest:
+                raise _snapshot_freeze_conflict(
+                    "Foundation validation is stale for the current candidate snapshot."
+                )
+            snapshot_id = _knowledge_source_snapshot_id(
+                source_id=source.source_id,
+                source_draft_version_id=candidate.source_draft_version_id,
+                candidate_digest=candidate.candidate_digest,
+            )
+            manifest = self.get_knowledge_source_snapshot(
+                source_id=source.source_id,
+                snapshot_id=snapshot_id,
+            )
+            if manifest is None:
+                manifest = KnowledgeSourceSnapshotManifest(
+                    schema_version="local_index.snapshot.v2",
+                    snapshot_id=snapshot_id,
+                    source_id=source.source_id,
+                    state="READY",
+                    validation_level="foundation",
+                    source_draft_version_id=candidate.source_draft_version_id,
+                    candidate_digest=candidate.candidate_digest,
+                    foundation_validation_id=validation.validation_id,
+                    documents=candidate.included_documents,
+                    created_at=_now(),
+                    created_by=actor,
+                )
+                self._write_knowledge_source_snapshot(manifest)
+            else:
+                self._require_matching_frozen_snapshot(
+                    manifest,
+                    source=source,
+                    candidate=candidate,
+                )
+            if source.latest_snapshot_id != manifest.snapshot_id:
+                self._write_knowledge_source(
+                    source.model_copy(
+                        update={
+                            "latest_snapshot_id": manifest.snapshot_id,
+                            "updated_at": _now(),
+                        }
+                    )
+                )
+            return manifest
+
+    def get_knowledge_source_snapshot(
+        self,
+        *,
+        source_id: str,
+        snapshot_id: str,
+    ) -> KnowledgeSourceSnapshotManifest | None:
+        """Return one immutable frozen snapshot manifest when it exists."""
+
+        path = self._knowledge_source_snapshot_path(source_id, snapshot_id)
+        if not path.exists():
+            return None
+        try:
+            return KnowledgeSourceSnapshotManifest.model_validate(_read_json(path))
+        except (OSError, json.JSONDecodeError, ValidationError) as exc:
+            raise _snapshot_freeze_conflict(
+                "Frozen Knowledge Source Snapshot manifest is malformed."
+            ) from exc
+
+    def list_knowledge_source_snapshots(
+        self,
+        source_id: str,
+    ) -> list[KnowledgeSourceSnapshotManifest]:
+        """List immutable frozen manifests for one Source."""
+
+        self._require_knowledge_source(source_id)
+        snapshots_root = self._knowledge_source_snapshots_root(source_id)
+        if not snapshots_root.exists():
+            return []
+        snapshots = []
+        for snapshot_dir in snapshots_root.iterdir():
+            if not snapshot_dir.is_dir():
+                continue
+            snapshot = self.get_knowledge_source_snapshot(
+                source_id=source_id,
+                snapshot_id=snapshot_dir.name,
+            )
+            if snapshot is not None:
+                snapshots.append(snapshot)
+        return sorted(snapshots, key=lambda snapshot: snapshot.created_at)
 
     def get_knowledge_source_worker_concurrency(self, source_id: str) -> int:
         """Return a validated claim-time concurrency limit for one source."""
@@ -1114,6 +1257,107 @@ class LocalAgentConfigurationStore:
             required_reingestion_count=0,
         )
 
+    def _require_foundation_candidate_artifacts_unlocked(
+        self,
+        candidate: CandidateKnowledgeSourceSnapshot,
+    ) -> None:
+        if not candidate.included_documents:
+            raise _invalid_candidate_snapshot(
+                "Foundation validation requires at least one READY Knowledge Document."
+            )
+        if candidate.required_reingestion_count:
+            raise _invalid_candidate_snapshot(
+                "Foundation validation requires zero pending document reingestions."
+            )
+        for snapshot_document in candidate.included_documents:
+            document = self.get_knowledge_document(
+                source_id=candidate.source_id,
+                document_id=snapshot_document.document_id,
+            )
+            if (
+                document is None
+                or document.revision_id != snapshot_document.revision_id
+                or document.artifact_path != snapshot_document.artifact_path
+                or document.ingestion_job_id is None
+            ):
+                raise _invalid_candidate_snapshot(
+                    "READY Knowledge Document artifact provenance is incomplete."
+                )
+            job = self.get_knowledge_ingestion_job(
+                source_id=candidate.source_id,
+                job_id=document.ingestion_job_id,
+            )
+            if (
+                job is None
+                or job.document_id != document.document_id
+                or job.revision_id != document.revision_id
+                or job.state != "ready"
+                or job.artifact_path != document.artifact_path
+                or job.artifact_build_spec.content_hash != document.content_hash
+            ):
+                raise _invalid_candidate_snapshot(
+                    "READY Knowledge Document ingestion job provenance is incomplete."
+                )
+            artifact_path = self._contained_artifact_path(document.artifact_path)
+            if not is_compatible_local_index_artifact(
+                artifact_path,
+                build_spec=job.artifact_build_spec,
+                ingestion_config_fingerprint=job.ingestion_config_fingerprint,
+            ):
+                raise _invalid_candidate_snapshot(
+                    "READY Knowledge Document artifact is missing or incompatible."
+                )
+
+    def _contained_artifact_path(self, artifact_path: str) -> Path:
+        relative_path = Path(artifact_path)
+        if relative_path.is_absolute():
+            raise _invalid_candidate_snapshot(
+                "READY Knowledge Document artifact reference must be relative."
+            )
+        try:
+            resolved_path = (self._root_dir / relative_path).resolve()
+            resolved_path.relative_to(self._root_dir.resolve())
+        except (OSError, ValueError) as exc:
+            raise _invalid_candidate_snapshot(
+                "READY Knowledge Document artifact reference escapes the store root."
+            ) from exc
+        return resolved_path
+
+    def _require_foundation_knowledge_source_validation_for_freeze(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+    ) -> FoundationKnowledgeSourceValidation:
+        path = self._foundation_knowledge_source_validation_path(source_id, validation_id)
+        if not path.exists():
+            raise KeyError(f"Foundation Knowledge Source Validation not found: {source_id}")
+        try:
+            return FoundationKnowledgeSourceValidation.model_validate(_read_json(path))
+        except (OSError, json.JSONDecodeError, ValidationError) as exc:
+            raise _snapshot_freeze_conflict(
+                "Foundation Knowledge Source Validation record is malformed."
+            ) from exc
+
+    def _require_matching_frozen_snapshot(
+        self,
+        manifest: KnowledgeSourceSnapshotManifest,
+        *,
+        source: KnowledgeSource,
+        candidate: CandidateKnowledgeSourceSnapshot,
+    ) -> None:
+        if (
+            manifest.source_id != source.source_id
+            or manifest.state != "READY"
+            or manifest.validation_level != "foundation"
+            or manifest.source_draft_version_id != candidate.source_draft_version_id
+            or manifest.candidate_digest != candidate.candidate_digest
+            or manifest.documents != candidate.included_documents
+        ):
+            raise _snapshot_freeze_conflict(
+                "Existing Frozen Knowledge Source Snapshot manifest is incompatible."
+            )
+
     def _advance_source_draft_version_unlocked(
         self,
         source_id: str,
@@ -1331,6 +1575,25 @@ class LocalAgentConfigurationStore:
     def _knowledge_ingestion_job_path(self, source_id: str, job_id: str) -> Path:
         return self._knowledge_ingestion_jobs_root(source_id) / job_id / "job.json"
 
+    def _foundation_knowledge_source_validation_path(
+        self,
+        source_id: str,
+        validation_id: str,
+    ) -> Path:
+        return (
+            self._root_dir
+            / "knowledge_sources"
+            / source_id
+            / "snapshot_validations"
+            / f"{validation_id}.json"
+        )
+
+    def _knowledge_source_snapshots_root(self, source_id: str) -> Path:
+        return self._root_dir / "knowledge_sources" / source_id / "snapshots"
+
+    def _knowledge_source_snapshot_path(self, source_id: str, snapshot_id: str) -> Path:
+        return self._knowledge_source_snapshots_root(source_id) / snapshot_id / "snapshot.json"
+
     def _upload_promotion_marker_path(self, source_id: str, upload_id: str) -> Path:
         return (
             self._root_dir
@@ -1396,6 +1659,24 @@ class LocalAgentConfigurationStore:
             job.model_dump(mode="json"),
         )
 
+    def _write_foundation_knowledge_source_validation(
+        self,
+        validation: FoundationKnowledgeSourceValidation,
+    ) -> None:
+        _write_json_atomic(
+            self._foundation_knowledge_source_validation_path(
+                validation.source_id,
+                validation.validation_id,
+            ),
+            validation.model_dump(mode="json"),
+        )
+
+    def _write_knowledge_source_snapshot(self, manifest: KnowledgeSourceSnapshotManifest) -> None:
+        _write_json_atomic(
+            self._knowledge_source_snapshot_path(manifest.source_id, manifest.snapshot_id),
+            manifest.model_dump(mode="json"),
+        )
+
     def _write_upload_promotion_marker(
         self,
         upload: QuarantinedKnowledgeUpload,
@@ -1436,6 +1717,16 @@ def _now() -> str:
 
 def _new_source_draft_version_id() -> str:
     return f"ksdraft_{uuid4().hex[:8]}"
+
+
+def _knowledge_source_snapshot_id(
+    *,
+    source_id: str,
+    source_draft_version_id: str,
+    candidate_digest: str,
+) -> str:
+    identity = f"{source_id}:{source_draft_version_id}:{candidate_digest}"
+    return f"kssnapshot_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _timestamp(value: datetime) -> str:
@@ -1524,6 +1815,14 @@ def _invalid_candidate_snapshot(message: str) -> ProofAgentError:
         "PA_INGESTION_001",
         message,
         "Refresh the Knowledge Source documents before validating its candidate snapshot.",
+    )
+
+
+def _snapshot_freeze_conflict(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_INGESTION_005",
+        message,
+        "Refresh the candidate snapshot, validate it again, and retry snapshot freeze.",
     )
 
 
