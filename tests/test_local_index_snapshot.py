@@ -200,7 +200,28 @@ def test_load_ready_snapshot_manifest_rejects_absolute_artifact_path(tmp_path: P
     snapshot_path = tmp_path / "snapshot"
     _write_manifest(
         snapshot_path,
-        manifest=_manifest(documents=(_document(artifact_path="/tmp/artifact"),)),
+        manifest=_manifest(documents=(_document(artifact_path="/absolute/artifact"),)),
+    )
+
+    _assert_invalid_snapshot(snapshot_path, tmp_path, expected_message="relative")
+
+
+@pytest.mark.parametrize(
+    "artifact_path",
+    [
+        "C:/escape",
+        r"..\escape",
+        r"artifacts\doc_policy\rev_policy",
+    ],
+)
+def test_load_ready_snapshot_manifest_rejects_non_posix_artifact_path(
+    tmp_path: Path,
+    artifact_path: str,
+) -> None:
+    snapshot_path = tmp_path / "snapshot"
+    _write_manifest(
+        snapshot_path,
+        manifest=_manifest(documents=(_document(artifact_path=artifact_path),)),
     )
 
     _assert_invalid_snapshot(snapshot_path, tmp_path, expected_message="relative")

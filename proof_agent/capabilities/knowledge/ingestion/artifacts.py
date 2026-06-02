@@ -46,9 +46,7 @@ def is_compatible_local_index_artifact(
 ) -> bool:
     """Return whether one published revision artifact is complete and compatible."""
 
-    if not artifact_path.is_dir():
-        return False
-    if any(not (artifact_path / filename).is_file() for filename in REQUIRED_LLAMA_INDEX_FILES):
+    if not _has_immutable_artifact_files(artifact_path):
         return False
     metadata = _read_json_object(artifact_path / ARTIFACT_META_FILENAME)
     return metadata is not None and all(
@@ -67,9 +65,7 @@ def is_runtime_compatible_local_index_artifact(
 ) -> bool:
     """Validate the self-described immutable revision artifact before runtime open."""
 
-    if not artifact_path.is_dir():
-        return False
-    if any(not (artifact_path / filename).is_file() for filename in REQUIRED_LLAMA_INDEX_FILES):
+    if not _has_immutable_artifact_files(artifact_path):
         return False
     metadata = _read_json_object(artifact_path / ARTIFACT_META_FILENAME)
     return (
@@ -88,10 +84,20 @@ def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _has_immutable_artifact_files(artifact_path: Path) -> bool:
+    if not artifact_path.is_dir() or artifact_path.is_symlink():
+        return False
+    filenames = (*REQUIRED_LLAMA_INDEX_FILES, ARTIFACT_META_FILENAME)
+    return all(
+        (artifact_path / filename).is_file() and not (artifact_path / filename).is_symlink()
+        for filename in filenames
+    )
+
+
 def _read_json_object(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     if not isinstance(payload, Mapping):
         return None

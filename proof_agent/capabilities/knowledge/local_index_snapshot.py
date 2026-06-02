@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from pydantic import ValidationError
@@ -214,12 +214,25 @@ def _required_manifest_document_string(
 
 
 def _contained_artifact_path(artifact_root: Path, artifact_path: str) -> Path:
-    relative_path = Path(artifact_path)
-    if relative_path.is_absolute():
+    posix_path = PurePosixPath(artifact_path)
+    windows_path = PureWindowsPath(artifact_path)
+    if (
+        "\\" in artifact_path
+        or posix_path.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or not posix_path.parts
+    ):
         raise _invalid_snapshot(
-            "Local Index snapshot.json artifact_path must be relative.",
-            "Publish the snapshot again with artifact references relative to the artifact root.",
+            "Local Index snapshot.json artifact_path must be a POSIX relative path.",
+            "Publish the snapshot again with POSIX artifact references relative to the artifact root.",
         )
+    if ".." in posix_path.parts:
+        raise _invalid_snapshot(
+            "Local Index snapshot.json artifact_path escapes the artifact root.",
+            "Publish the snapshot again with contained relative artifact references.",
+        )
+    relative_path = Path(*posix_path.parts)
     try:
         resolved_path = (artifact_root / relative_path).resolve()
         resolved_path.relative_to(artifact_root)
