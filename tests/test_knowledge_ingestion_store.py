@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -989,6 +989,50 @@ def test_reschedule_ingestion_job_allows_two_auto_retries_then_fails(tmp_path: P
     assert failed.completed_at is not None
     assert projected_document is not None
     assert projected_document.state == "failed"
+
+
+def test_reschedule_ingestion_job_defaults_to_thirty_then_one_hundred_twenty_second_backoff(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _, job = _promote_markdown_job(store)
+    first_claim = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert first_claim is not None
+    assert first_claim.claim_token is not None
+
+    first_retry_started = datetime.now(UTC)
+    first_retry = store.reschedule_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=first_claim.claim_token,
+        error_code="PA_INGESTION_003",
+        error_message="Temporary model timeout.",
+    )
+
+    assert first_retry.next_attempt_at is not None
+    first_retry_at = datetime.fromisoformat(first_retry.next_attempt_at.replace("Z", "+00:00"))
+    assert timedelta(seconds=29) <= first_retry_at - first_retry_started <= timedelta(seconds=31)
+
+    store._write_knowledge_ingestion_job(
+        first_retry.model_copy(update={"next_attempt_at": "2000-01-01T00:00:00Z"})
+    )
+    second_claim = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert second_claim is not None
+    assert second_claim.claim_token is not None
+    second_retry_started = datetime.now(UTC)
+    second_retry = store.reschedule_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=second_claim.claim_token,
+        error_code="PA_INGESTION_003",
+        error_message="Temporary model timeout.",
+    )
+
+    assert second_retry.next_attempt_at is not None
+    second_retry_at = datetime.fromisoformat(second_retry.next_attempt_at.replace("Z", "+00:00"))
+    assert (
+        timedelta(seconds=119) <= second_retry_at - second_retry_started <= timedelta(seconds=121)
+    )
 
 
 def test_stale_job_claim_cannot_commit_and_failure_does_not_persist_traceback(
