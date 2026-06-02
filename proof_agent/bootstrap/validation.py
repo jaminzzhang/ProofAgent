@@ -486,8 +486,12 @@ def _validate_knowledge_provider_params(
                 f"{field_prefix}.artifact_root in {manifest_path}.",
                 artifact_path=manifest_path,
             )
-        _required_param(params, "snapshot_path", provider, manifest_path, field_prefix=field_prefix)
-        _required_param(params, "artifact_root", provider, manifest_path, field_prefix=field_prefix)
+        _required_path_param(
+            params, "snapshot_path", provider, manifest_path, field_prefix=field_prefix
+        )
+        _required_path_param(
+            params, "artifact_root", provider, manifest_path, field_prefix=field_prefix
+        )
         document_selection_budget = params.get("document_selection_budget", 8)
         if (
             isinstance(document_selection_budget, bool)
@@ -561,6 +565,26 @@ def _required_param(
             "PA_CONFIG_001",
             f"missing {field_prefix}.{key} for {provider}",
             f"Add {field_prefix}.{key} to {manifest_path}",
+            artifact_path=manifest_path,
+        )
+    return value
+
+
+def _required_path_param(
+    params: Mapping[str, Any],
+    key: str,
+    provider: str,
+    manifest_path: Path,
+    *,
+    field_prefix: str,
+) -> Path:
+    value = _required_param(params, key, provider, manifest_path, field_prefix=field_prefix)
+    if not isinstance(value, Path):
+        field_name = f"{field_prefix}.{key}"
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"{field_name} must be a filesystem path for {provider}",
+            f"Set {field_name} to a path string in {manifest_path}.",
             artifact_path=manifest_path,
         )
     return value
