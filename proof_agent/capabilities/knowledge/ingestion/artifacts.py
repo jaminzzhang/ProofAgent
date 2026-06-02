@@ -60,6 +60,34 @@ def is_compatible_local_index_artifact(
     )
 
 
+def is_runtime_compatible_local_index_artifact(
+    artifact_path: Path,
+    *,
+    content_hash: str,
+) -> bool:
+    """Validate the self-described immutable revision artifact before runtime open."""
+
+    if not artifact_path.is_dir():
+        return False
+    if any(not (artifact_path / filename).is_file() for filename in REQUIRED_LLAMA_INDEX_FILES):
+        return False
+    metadata = _read_json_object(artifact_path / ARTIFACT_META_FILENAME)
+    return (
+        metadata is not None
+        and metadata.get("schema_version") == ARTIFACT_SCHEMA_VERSION
+        and metadata.get("provider") == "local_index"
+        and metadata.get("engine_name") == "llama-index-tree"
+        and _is_non_empty_string(metadata.get("engine_version"))
+        and _is_non_empty_string(metadata.get("parser_identity"))
+        and metadata.get("content_hash") == content_hash
+        and _is_non_empty_string(metadata.get("ingestion_config_fingerprint"))
+    )
+
+
+def _is_non_empty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _read_json_object(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))

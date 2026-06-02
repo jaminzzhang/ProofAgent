@@ -9,6 +9,7 @@ from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     ARTIFACT_META_FILENAME,
     REQUIRED_LLAMA_INDEX_FILES,
     is_compatible_local_index_artifact,
+    is_runtime_compatible_local_index_artifact,
     local_index_artifact_metadata,
 )
 from proof_agent.contracts import KnowledgeArtifactBuildSpec
@@ -121,3 +122,105 @@ def test_local_index_artifact_compatibility_rejects_changed_metadata(tmp_path: P
         build_spec=spec,
         ingestion_config_fingerprint=fingerprint,
     )
+
+
+def test_runtime_compatible_local_index_artifact_accepts_self_described_revision(
+    tmp_path: Path,
+) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+
+    assert is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_manifest_content_hash_mismatch(
+    tmp_path: Path,
+) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash="c" * 64,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_missing_required_file(tmp_path: Path) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    (artifact_path / REQUIRED_LLAMA_INDEX_FILES[0]).unlink()
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_malformed_sidecar(tmp_path: Path) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    (artifact_path / ARTIFACT_META_FILENAME).write_text("{", encoding="utf-8")
+
+    assert not is_runtime_compatible_local_index_artifact(
+        artifact_path,
+        content_hash=spec.content_hash,
+    )
+
+
+def test_runtime_local_index_artifact_rejects_wrong_fixed_metadata(tmp_path: Path) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    metadata_path = artifact_path / ARTIFACT_META_FILENAME
+
+    for key, invalid_value in (
+        ("schema_version", "local_index.artifact.changed"),
+        ("provider", "http_json"),
+        ("engine_name", "pageindex"),
+    ):
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        original_value = metadata[key]
+        metadata[key] = invalid_value
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+        assert not is_runtime_compatible_local_index_artifact(
+            artifact_path,
+            content_hash=spec.content_hash,
+        )
+
+        metadata[key] = original_value
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
+def test_runtime_local_index_artifact_rejects_empty_required_identity(
+    tmp_path: Path,
+) -> None:
+    spec = _build_spec()
+    artifact_path = tmp_path / "artifact"
+    _write_artifact(artifact_path, build_spec=spec, fingerprint="fingerprint")
+    metadata_path = artifact_path / ARTIFACT_META_FILENAME
+
+    for key in (
+        "engine_version",
+        "parser_identity",
+        "ingestion_config_fingerprint",
+    ):
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        original_value = metadata[key]
+        metadata[key] = ""
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+        assert not is_runtime_compatible_local_index_artifact(
+            artifact_path,
+            content_hash=spec.content_hash,
+        )
+
+        metadata[key] = original_value
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
