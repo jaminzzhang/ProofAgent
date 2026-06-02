@@ -6,7 +6,8 @@ This example demonstrates **Agentic RAG** (Retrieval-Augmented Generation) with 
 
 Unlike traditional single-step retrieval, this example uses:
 - **Multi-round retrieval**: The planner can reformulate queries and retrieve multiple times
-- **Tree-structured index**: Documents are organized hierarchically using LlamaIndex TreeIndex
+- **Snapshot routing**: Each round selects documents from an immutable `snapshot.v2` manifest
+- **Tree-structured indexes**: Selected document revisions use LlamaIndex TreeIndex artifacts
 - **Structured retrieval**: Supports `list_structure()` and `retrieve_at_scope()` for targeted queries
 - **Evidence evaluation**: An evaluator model assesses whether retrieved evidence is sufficient
 
@@ -36,7 +37,9 @@ knowledge_sources:
   - source_id: enterprise_qa_knowledge
     provider: local_index  # Uses TreeIndex
     params:
-      index_path: ./indexes/enterprise_qa
+      snapshot_path: ./config/knowledge_sources/enterprise_qa_knowledge/snapshots/kssnapshot_example
+      artifact_root: ./config
+      document_selection_budget: 8
       ingestion_model:   # For building index summaries
         provider: openai_compatible
         name: gpt-4
@@ -44,6 +47,10 @@ knowledge_sources:
         provider: openai_compatible
         name: gpt-4o-mini
 ```
+
+The registered runtime config is v2-only. Before running this illustrative package, an operator
+must freeze a READY `local_index.snapshot.v2` manifest at `snapshot_path`. Historical
+`params.index_path` runtime config is rejected.
 
 ### Retrieval Strategy
 ```yaml
@@ -62,7 +69,9 @@ retrieval:
 
 ### 1. Build the Index
 
-First, ingest your documents to build the tree index:
+Knowledge Hub ingestion builds immutable per-revision artifacts before snapshot freeze. For
+focused management-plane utilities and provider tests, direct construction can still build one
+tree index:
 
 ```python
 from pathlib import Path
@@ -70,7 +79,7 @@ from proof_agent.capabilities.knowledge import LocalIndexProvider
 from proof_agent.capabilities.models import ProofAgentLLM
 from proof_agent.contracts import ModelCallRole
 
-# Initialize provider (models would come from your ModelProvider registry)
+# Management-plane utility only. Registered runtime config uses snapshot_path + artifact_root.
 provider = LocalIndexProvider(
     ingestion_model=ingestion_llm,
     routing_model=routing_llm,
@@ -107,8 +116,11 @@ cat runs/latest/trace.jsonl | jq -r 'select(.event_type | startswith("retrieval"
 
 You should see:
 - `retrieval_plan`: Initial retrieval strategy
-- `retrieval_round`: Each retrieval round with round_id
-- `retrieval_result`: Final summary with total rounds and evidence count
+- `retrieval_step`: Each round with a correlated `round_id`
+- `retrieval_result`: Per-round document routing summaries and the final agentic summary
+
+Per-round Local Index results include bounded trace-safe `document_candidates[]` and
+`selected_documents[]` arrays. They do not include raw document content.
 
 ## Structured Retrieval
 
@@ -157,8 +169,8 @@ evidence = provider.retrieve_at_scope(
 
 ```json
 {"event_type": "retrieval_plan", "payload": {"strategy": "agentic", "provider": "local_index"}}
-{"event_type": "retrieval_round", "payload": {"round_id": "r1", "query": "travel meal reimbursement", "candidates_count": 3, "action": "rewrite", "reason": "Need more specific policy details"}}
-{"event_type": "retrieval_round", "payload": {"round_id": "r2", "query": "travel policy meal expense limits receipts", "candidates_count": 5, "action": "sufficient", "reason": "Found relevant policy sections"}}
+{"event_type": "retrieval_step", "payload": {"round_id": "round_01_example", "question": "travel meal reimbursement"}}
+{"event_type": "retrieval_result", "payload": {"round_id": "round_01_example", "document_candidates": [{"document_id": "policy_doc_1"}], "selected_documents": [{"document_id": "policy_doc_1"}]}}
 {"event_type": "retrieval_result", "payload": {"total_rounds": 2, "final_action": "sufficient", "total_evidence": 5}}
 ```
 
