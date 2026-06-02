@@ -73,6 +73,11 @@ directory parents.
 `params.index_path` is no longer accepted by the registered runtime provider. A v1 artifact
 directory or historical v1 sidecar fails closed with an actionable migration error.
 
+When the historical field appears in an Agent Package, bootstrap validation rejects it with
+`PA_CONFIG_001` before provider construction. A direct `LocalIndexProvider.from_config()` call
+rejects the same historical field with `PA_KNOWLEDGE_001`. This preserves the repository's
+existing distinction between invalid Agent Contract configuration and adapter runtime failure.
+
 ### Snapshot Loader Validates Before Storage Open
 
 The v2 manifest loader validates:
@@ -376,7 +381,8 @@ Trace summaries must not contain:
 | Condition | Behavior |
 | --- | --- |
 | missing `snapshot_path` or `artifact_root` | `PA_KNOWLEDGE_001` |
-| historical `index_path` runtime config | `PA_KNOWLEDGE_001` migration error |
+| historical `index_path` in Agent Package | `PA_CONFIG_001` bootstrap migration error |
+| historical `index_path` passed directly to runtime adapter | `PA_KNOWLEDGE_001` migration error |
 | missing, malformed, non-v2, or non-READY `snapshot.json` | `PA_KNOWLEDGE_001` before storage open |
 | empty snapshot document set or duplicate document ids | `PA_KNOWLEDGE_001` before storage open |
 | absolute or escaping artifact reference | `PA_KNOWLEDGE_001` before storage open |
