@@ -34,6 +34,10 @@ _TRACE_SAFE_ERROR_CODE_RE = re.compile(r"^PA_[A-Z0-9_]{1,96}$")
 _TRACE_SAFE_ROUTING_METADATA_KEYS = frozenset(
     {"title", "description", "tags", "document_type", "business_category"}
 )
+_TRACE_SAFE_SUMMARY_BOOL_FIELDS = frozenset({"metadata_matched", "candidate_truncated"})
+_TRACE_SAFE_SUMMARY_COUNT_FIELDS = frozenset(
+    {"candidate_count", "routed_candidate_count", "selected_count", "selection_budget"}
+)
 _TRACE_SAFE_SELECTION_REASONS = frozenset(
     {
         "metadata_match",
@@ -566,7 +570,7 @@ class KnowledgeRetrievalService:
                         summary=_consume_provider_retrieval_summary(bound.provider),
                     )
                 )
-                if bound.binding.failure_mode == "advisory":
+                if bound.binding.failure_mode == "advisory" and not _is_policy_error(exc):
                     degraded = True
                     continue
                 self._trace.emit(
@@ -1111,16 +1115,18 @@ def _trace_safe_summary_item(
         elif key == "error_code":
             if isinstance(value, str) and _TRACE_SAFE_ERROR_CODE_RE.fullmatch(value):
                 projected[key] = value
-        elif isinstance(value, bool):
-            projected[key] = value
-        elif isinstance(value, int) and value >= 0:
-            projected[key] = value
         elif key == "routing_metadata_keys" and isinstance(value, list | tuple):
             projected[key] = [
                 text
                 for text in value[:20]
                 if isinstance(text, str) and text in _TRACE_SAFE_ROUTING_METADATA_KEYS
             ]
+        elif key in _TRACE_SAFE_SUMMARY_BOOL_FIELDS:
+            if isinstance(value, bool):
+                projected[key] = value
+        elif key in _TRACE_SAFE_SUMMARY_COUNT_FIELDS:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                projected[key] = value
     return projected
 
 
@@ -1178,6 +1184,10 @@ def _trace_safe_model_error_code(exc: Exception) -> str:
     if isinstance(error_code, str) and _TRACE_SAFE_ERROR_CODE_RE.fullmatch(error_code):
         return error_code
     return "PA_MODEL_002"
+
+
+def _is_policy_error(exc: BaseException) -> bool:
+    return getattr(exc, "code", None) == "PA_POLICY_001"
 
 
 def _ensure_retrieval_strategy_is_executable(strategy: str) -> None:

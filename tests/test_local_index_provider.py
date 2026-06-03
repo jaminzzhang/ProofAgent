@@ -54,6 +54,21 @@ class MockModelProvider:
         )
 
 
+class FailingModelProvider(MockModelProvider):
+    def __init__(
+        self,
+        provider_name: str,
+        model_name: str,
+        error: Exception,
+    ) -> None:
+        super().__init__(provider_name, model_name)
+        self.error = error
+
+    def generate(self, request) -> ModelResponse:
+        self.call_count += 1
+        raise self.error
+
+
 def _runtime_document(
     tmp_path: Path,
     document_id: str,
@@ -853,6 +868,41 @@ class TestLocalIndexProvider:
         assert len(summary["document_candidates"]) == 100
         assert summary["document_routing"]["routed_candidate_count"] == 100
         assert summary["document_routing"]["candidate_truncated"] is True
+
+    def test_runtime_retrieve_preserves_policy_denial_from_routing_model(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        policy_error = ProofAgentError(
+            "PA_POLICY_001",
+            "Knowledge routing model call was blocked by policy.",
+            "Update policy or configure an allowed Source routing model.",
+        )
+        routing_provider = FailingModelProvider(
+            "openai_compatible",
+            "routing-model",
+            policy_error,
+        )
+        provider = LocalIndexProvider(
+            ingestion_model=None,
+            routing_model=ProofAgentLLM(
+                model_provider=routing_provider,
+                role=ModelCallRole.ROUTING,
+            ),
+            routing_provider=routing_provider,
+            runtime_snapshot=_runtime_snapshot(tmp_path),
+        )
+
+        with pytest.raises(ProofAgentError) as exc:
+            provider.retrieve("unmatched")
+
+        assert exc.value.code == "PA_POLICY_001"
+        summary = provider.consume_retrieval_summary()
+        assert summary is not None
+        assert [item["document_id"] for item in summary["document_candidates"]] == [
+            "doc_policy"
+        ]
+        assert summary["document_routing"]["error_code"] == "PA_POLICY_001"
 
     def test_runtime_retrieve_normalizes_revision_retrieval_failure(
         self,

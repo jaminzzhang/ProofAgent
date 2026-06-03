@@ -127,18 +127,22 @@ def route_snapshot_documents(
     try:
         response = routing_model.generate(request)
     except Exception as exc:
+        summary = _routing_summary(
+            snapshot_id=snapshot_id,
+            candidate_count=len(documents),
+            routed_candidates=routed_candidates,
+            selected_documents=(),
+            selection_budget=selection_budget,
+            candidate_truncated=candidate_truncated,
+            selection_reason="routing_model_failed",
+            error_code=_error_code(exc),
+        )
+        if _is_policy_error(exc):
+            setattr(exc, "summary", summary)
+            raise
         raise _routing_failure(
             "Local Index document routing model call failed.",
-            summary=_routing_summary(
-                snapshot_id=snapshot_id,
-                candidate_count=len(documents),
-                routed_candidates=routed_candidates,
-                selected_documents=(),
-                selection_budget=selection_budget,
-                candidate_truncated=candidate_truncated,
-                selection_reason="routing_model_failed",
-                error_code=_error_code(exc),
-            ),
+            summary=summary,
         ) from exc
     try:
         selection = parse_model_contract(
@@ -336,3 +340,7 @@ def _routing_failure(
 
 def _error_code(exc: Exception) -> str:
     return getattr(exc, "code", "PA_KNOWLEDGE_002")
+
+
+def _is_policy_error(exc: Exception) -> bool:
+    return getattr(exc, "code", None) == "PA_POLICY_001"
