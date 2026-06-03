@@ -1,57 +1,3 @@
-export interface WorkflowNodeField {
-  label: string
-  path: string[]
-  value: string
-  input: 'text' | 'number'
-}
-
-export interface WorkflowNodeConfig {
-  id: string
-  label: string
-  fields: WorkflowNodeField[]
-}
-
-export function buildWorkflowNodes(agentYaml: string): WorkflowNodeConfig[] {
-  return [
-    {
-      id: 'workflow',
-      label: 'Workflow',
-      fields: [
-        field(agentYaml, 'Runtime', ['workflow', 'runtime']),
-        field(agentYaml, 'Template', ['workflow', 'template']),
-        field(agentYaml, 'Checkpointer', ['workflow', 'checkpointer', 'provider']),
-      ],
-    },
-    {
-      id: 'retrieval',
-      label: 'Retrieval',
-      fields: [
-        field(agentYaml, 'Strategy', ['retrieval', 'strategy']),
-        field(agentYaml, 'Top K', ['retrieval', 'top_k'], 'number'),
-        field(agentYaml, 'Min Score', ['retrieval', 'min_score'], 'number'),
-      ],
-    },
-    {
-      id: 'model',
-      label: 'Model',
-      fields: [
-        field(agentYaml, 'Provider', ['model', 'provider']),
-        field(agentYaml, 'Name', ['model', 'name']),
-      ],
-    },
-    {
-      id: 'policy',
-      label: 'Policy',
-      fields: [field(agentYaml, 'File', ['policy', 'file'])],
-    },
-    {
-      id: 'tools',
-      label: 'Tools',
-      fields: [field(agentYaml, 'File', ['tools', 'file'])],
-    },
-  ]
-}
-
 export function updateAgentYamlField(
   agentYaml: string,
   path: string[],
@@ -93,24 +39,6 @@ function insertYamlPath(lines: string[], path: string[], value: string): string[
   }
 
   return lines
-}
-
-function field(
-  agentYaml: string,
-  label: string,
-  path: string[],
-  input: 'text' | 'number' = 'text',
-): WorkflowNodeField {
-  return {
-    label,
-    path,
-    value: readYamlScalar(agentYaml, path),
-    input,
-  }
-}
-
-function readYamlScalar(agentYaml: string, path: string[]): string {
-  return readAgentYamlField(agentYaml, path)
 }
 
 export function readAgentYamlField(agentYaml: string, path: string[]): string {

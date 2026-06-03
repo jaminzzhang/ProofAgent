@@ -21,7 +21,6 @@ import { ModuleEditor } from '../components/agent/ModuleEditor'
 import { ModelModuleEditor } from '../components/agent/ModelModuleEditor'
 import { KnowledgeModuleEditor } from '../components/agent/KnowledgeModuleEditor'
 import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
-import { WorkflowAccordion } from '../components/agent/WorkflowAccordion'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { WORKFLOW_FIELDS } from '../components/agent/module-configs/workflow'
 import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
@@ -31,7 +30,7 @@ import { MEMORY_FIELDS } from '../components/agent/module-configs/memory'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
 import { useConfigVersions } from '../hooks/useConfigVersions'
-import { buildWorkflowNodes, extractAgentYamlSection, updateAgentYamlField } from '../utils/agentYaml'
+import { extractAgentYamlSection, updateAgentYamlField } from '../utils/agentYaml'
 
 type Tab = 'general' | 'workflow' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
 
@@ -48,7 +47,6 @@ export function AgentDetailPage() {
   const [displayName, setDisplayName] = useState('')
   const [purpose, setPurpose] = useState('')
   const [agentYaml, setAgentYaml] = useState('')
-  const [selectedNodeId, setSelectedNodeId] = useState('workflow')
   const [status, setStatus] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -86,8 +84,6 @@ export function AgentDetailPage() {
     }
   }, [activeTab, knowledgeSourcesLoaded])
 
-  const nodes = useMemo(() => buildWorkflowNodes(agentYaml), [agentYaml])
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0]
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
   const isCustomerFacing = Boolean(extractAgentYamlSection(agentYaml, 'customer'))
 
@@ -250,25 +246,16 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'workflow' && (
-        <div className="space-y-4">
-          <WorkflowAccordion
-            nodes={nodes}
-            selectedNodeId={selectedNodeId}
-            onSelectNode={setSelectedNodeId}
-            onFieldChange={(_nodeId, path, value) =>
-              setAgentYaml((current: string) => updateAgentYamlField(current, path, value))
-            }
-          />
-          <div className="flex justify-end">
-            <button
-              onClick={saveWorkflow}
-              disabled={busy === 'workflow'}
-              className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-            >
-              {busy === 'workflow' ? 'Saving...' : 'Save Workflow'}
-            </button>
-          </div>
-        </div>
+        <ModuleEditor
+          title="Workflow Configuration"
+          description="Core orchestration and routing configuration"
+          fields={WORKFLOW_FIELDS}
+          yamlSection="workflow"
+          agentYaml={agentYaml}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow'}
+        />
       )}
 
       {activeTab === 'knowledge' && (
