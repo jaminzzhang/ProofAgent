@@ -260,3 +260,37 @@ def test_document_router_model_failure_preserves_bounded_candidate_summary() -> 
         "selection_reason": "routing_model_failed",
         "error_code": "PA_KNOWLEDGE_002",
     }
+
+
+def test_document_router_preserves_policy_denial_code_and_summary() -> None:
+    model = FakeRoutingModel()
+    policy_error = ProofAgentError(
+        "PA_POLICY_001",
+        "Knowledge routing model call was blocked by policy.",
+        "Update policy or configure an allowed Source routing model.",
+    )
+    model.error = policy_error
+
+    with pytest.raises(ProofAgentError) as exc:
+        route_snapshot_documents(
+            "unmatched",
+            documents=(_document("doc_policy"),),
+            routing_model=model,
+            selection_budget=3,
+            snapshot_id="kssnapshot_001",
+        )
+
+    assert exc.value.code == "PA_POLICY_001"
+    summary = exc.value.summary
+    assert summary["document_candidates"] == [
+        {
+            "document_id": "doc_policy",
+            "revision_id": "rev_doc_policy",
+            "filename": "doc_policy.md",
+            "routing_metadata_keys": [],
+            "metadata_matched": False,
+            "selection_reason": "metadata_fallback",
+        }
+    ]
+    assert summary["document_routing"]["selection_reason"] == "routing_model_failed"
+    assert summary["document_routing"]["error_code"] == "PA_POLICY_001"

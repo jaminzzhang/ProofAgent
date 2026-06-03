@@ -252,10 +252,21 @@ def test_single_step_retrieval_drops_unrecognized_provider_summary_fields(
                     {
                         "document_id": "doc_policy",
                         "filename": "/private/contracts/policy.md",
+                        "metadata_matched": 999,
+                        "routing_metadata_keys": ["tags", "artifact_path", 123],
                         "artifact_path": "/private/artifacts/policy",
                         "document_content": "must-not-leak",
                     }
                 ],
+                "document_routing": {
+                    "snapshot_id": "kssnapshot_001",
+                    "candidate_count": True,
+                    "routed_candidate_count": 1,
+                    "selected_count": 0,
+                    "candidate_truncated": 1,
+                    "selection_budget": 8,
+                    "selection_reason": "routing_model_selected",
+                },
                 "raw_routing_output": "must-not-leak",
                 "artifact_path": "/private/artifacts",
             },
@@ -279,8 +290,19 @@ def test_single_step_retrieval_drops_unrecognized_provider_summary_fields(
 
     payload = _last_event(trace.trace_path, "retrieval_result")["payload"]
     assert payload["document_candidates"] == [
-        {"document_id": "doc_policy", "filename": "policy.md"}
+        {
+            "document_id": "doc_policy",
+            "filename": "policy.md",
+            "routing_metadata_keys": ["tags"],
+        }
     ]
+    assert payload["document_routing"] == {
+        "snapshot_id": "kssnapshot_001",
+        "routed_candidate_count": 1,
+        "selected_count": 0,
+        "selection_budget": 8,
+        "selection_reason": "routing_model_selected",
+    }
     assert "artifact_path" not in payload
     assert "raw_routing_output" not in payload
     assert "must-not-leak" not in json.dumps(payload)
@@ -500,6 +522,64 @@ def test_mixed_retrieval_continues_after_advisory_binding_failure(
     assert provider_calls[1]["document_routing"] == {
         "selection_reason": "routing_model_selected"
     }
+
+
+def test_mixed_retrieval_fails_closed_on_advisory_policy_denial(
+    tmp_path: Path,
+) -> None:
+    failing = FakeKnowledgeProvider(
+        provider_name="local_index",
+        error=ProofAgentError(
+            "PA_POLICY_001",
+            "Knowledge routing model call was blocked by policy.",
+            "Update policy or configure an allowed Source routing model.",
+        ),
+        retrieval_summaries=(
+            {
+                "document_routing": {
+                    "selection_reason": "routing_model_failed",
+                    "error_code": "PA_POLICY_001",
+                }
+            },
+        ),
+    )
+    fallback = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="local.md",
+                content="Receipts are required.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.7,
+                citation="local.md:1",
+            ),
+        )
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=_mixed_provider(
+            _bound("ks_index", "kb_index", failing, failure_mode="advisory", keywords=("receipt",)),
+            _bound("ks_local", "kb_local", fallback, keywords=("receipt",)),
+        ),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        service.retrieve(
+            KnowledgeRetrievalRequest(
+                question="receipt rule",
+                strategy="single_step",
+                top_k=3,
+                min_score=0.2,
+            )
+        )
+
+    assert exc.value.code == "PA_POLICY_001"
+    assert fallback.calls == []
+    retrieval_result = _last_event(trace.trace_path, "retrieval_result")
+    assert retrieval_result["status"] == "error"
+    assert retrieval_result["payload"]["provider_calls"][0]["failure_mode"] == "advisory"
+    assert retrieval_result["payload"]["provider_calls"][0]["error_code"] == "PA_POLICY_001"
 
 
 def test_mixed_retrieval_fails_closed_on_required_binding_failure(

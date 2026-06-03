@@ -43,7 +43,7 @@ Authoritative design doc: `docs/technical-design.md`.
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `configuration/local_store.py` owns local Agent Configuration state; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed production runs and Agent Configuration API starts governed validation runs through RunStore |
 | Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `observability/api/routers/handoffs.py`, `chat/` customer mode, and `examples/insurance_customer_service/` implement V1 customer-facing automatic replies with the insurance-specific Demo behind a Customer Run Adapter |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
-| Tests | 70 test files and 592 statically detected `test_` functions at last scan |
+| Tests | 70 test files and 595 statically detected `test_` functions at last scan |
 
 ## 3. Stable Demo Contract
 
