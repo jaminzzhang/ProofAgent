@@ -175,11 +175,11 @@ def _require_sequence_of_mappings(
     raw: Mapping[str, Any], section: str, *, manifest_path: Path
 ) -> None:
     value = raw.get(section)
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, list):
         raise ProofAgentError(
             "PA_CONFIG_001",
-            f"{section} must be a non-empty list",
-            f"Add at least one {section} entry to {manifest_path}.",
+            f"{section} must be a list",
+            f"Set {section} to a list in {manifest_path}.",
             artifact_path=manifest_path,
         )
     if any(not isinstance(item, Mapping) for item in value):

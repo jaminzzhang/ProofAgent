@@ -154,6 +154,14 @@ class KnowledgeBindingAttachRequest(BaseModel):
     actor: str = "local-user"
 
 
+class KnowledgeBindingDetachRequest(BaseModel):
+    """Request body for removing a Knowledge Source binding from a Draft Agent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor: str = "local-user"
+
+
 @router.get("/config/knowledge-sources")
 def list_knowledge_sources(app_request: Request) -> dict[str, Any]:
     """List reusable Knowledge Sources managed by the local configuration store."""
@@ -560,6 +568,50 @@ def bind_knowledge_source_to_draft(
     return updated.contract_bundle.model_dump(mode="json")
 
 
+@router.delete("/config/agents/{agent_id}/drafts/{draft_id}/knowledge-bindings/{binding_id}")
+def unbind_knowledge_source_from_draft(
+    agent_id: str,
+    draft_id: str,
+    binding_id: str,
+    request: KnowledgeBindingDetachRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Remove a shared Knowledge Source binding from a Draft Agent contract."""
+
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+
+    agent_yaml = _unbind_source_in_agent_yaml(
+        draft.contract_bundle.agent_yaml,
+        binding_id=binding_id,
+    )
+    bundle = ContractBundle(
+        agent_yaml=agent_yaml,
+        policy_yaml=draft.contract_bundle.policy_yaml,
+        tools_yaml=draft.contract_bundle.tools_yaml,
+        extra_files=draft.contract_bundle.extra_files,
+        advanced_fields=draft.contract_bundle.advanced_fields,
+    )
+    candidate = _draft_with_contract_bundle(draft, bundle)
+    try:
+        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
+        load_agent_manifest(package_dir / "agent.yaml")
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
+        ) from exc
+    updated = store.update_draft(
+        agent_id=agent_id,
+        draft_id=draft_id,
+        contract_bundle=bundle,
+        actor=request.actor,
+    )
+    return updated.contract_bundle.model_dump(mode="json")
+
+
 @router.patch("/config/agents/{agent_id}/drafts/{draft_id}/contract")
 def update_config_draft_contract(
     agent_id: str,
@@ -870,6 +922,42 @@ def _bind_source_in_agent_yaml(
     if request.top_k is not None:
         binding_entry["top_k"] = request.top_k
     _upsert_by_key(knowledge_bindings, "binding_id", binding_id, binding_entry)
+
+    return cast(str, yaml.safe_dump(raw, sort_keys=False))
+
+
+def _unbind_source_in_agent_yaml(
+    agent_yaml: str,
+    *,
+    binding_id: str,
+) -> str:
+    raw = yaml.safe_load(agent_yaml)
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
+
+    knowledge_bindings = raw.get("knowledge_bindings", [])
+    if not isinstance(knowledge_bindings, list):
+        raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
+
+    source_id_to_remove = None
+    for binding in knowledge_bindings:
+        if isinstance(binding, dict) and binding.get("binding_id") == binding_id:
+            source_id_to_remove = binding.get("source_id")
+            knowledge_bindings.remove(binding)
+            break
+
+    if source_id_to_remove is not None:
+        is_still_referenced = any(
+            isinstance(b, dict) and b.get("source_id") == source_id_to_remove
+            for b in knowledge_bindings
+        )
+        if not is_still_referenced:
+            knowledge_sources = raw.get("knowledge_sources", [])
+            if isinstance(knowledge_sources, list):
+                for source in knowledge_sources:
+                    if isinstance(source, dict) and source.get("source_id") == source_id_to_remove:
+                        knowledge_sources.remove(source)
+                        break
 
     return cast(str, yaml.safe_dump(raw, sort_keys=False))
 

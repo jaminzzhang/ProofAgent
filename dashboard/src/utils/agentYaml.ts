@@ -165,7 +165,10 @@ function findYamlPathLineIndex(lines: string[], path: string[]): number {
 function findBlockEnd(lines: string[], start: number, indent: number): number {
   for (let index = start + 1; index < lines.length; index += 1) {
     const line = lines[index]
-    if (line.trim() && indentation(line) <= indent) return index
+    if (line.trim() && indentation(line) <= indent) {
+      if (line.trim().startsWith('-')) continue
+      return index
+    }
   }
   return lines.length
 }

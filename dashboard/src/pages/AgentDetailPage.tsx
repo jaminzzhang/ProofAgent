@@ -6,6 +6,7 @@ import {
   fetchKnowledgeSources,
   publishConfigDraft,
   rollbackConfigVersion,
+  unbindKnowledgeSourceFromDraft,
   updateConfigDraft,
   updateConfigDraftContract,
   validateConfigDraft,
@@ -17,13 +18,15 @@ import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { AgentDetailShell } from '../components/agent/AgentDetailShell'
 import { AgentMonitor } from '../components/agent/AgentMonitor'
 import { ModuleEditor } from '../components/agent/ModuleEditor'
+import { ModelModuleEditor } from '../components/agent/ModelModuleEditor'
+import { KnowledgeModuleEditor } from '../components/agent/KnowledgeModuleEditor'
+import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
 import { WorkflowAccordion } from '../components/agent/WorkflowAccordion'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { WORKFLOW_FIELDS } from '../components/agent/module-configs/workflow'
 import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
 import { TOOLS_FIELDS } from '../components/agent/module-configs/tools'
 import { POLICY_FIELDS } from '../components/agent/module-configs/policy'
-import { MODEL_FIELDS } from '../components/agent/module-configs/model'
 import { MEMORY_FIELDS } from '../components/agent/module-configs/memory'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
@@ -52,11 +55,6 @@ export function AgentDetailPage() {
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([])
   const [knowledgeSourcesLoaded, setKnowledgeSourcesLoaded] = useState(false)
   const [knowledgeSourceError, setKnowledgeSourceError] = useState<string | null>(null)
-  const [selectedKnowledgeSourceId, setSelectedKnowledgeSourceId] = useState('')
-  const [bindingAlias, setBindingAlias] = useState('')
-  const [bindingFailureMode, setBindingFailureMode] = useState<'required' | 'advisory'>('required')
-  const [bindingFusionWeight, setBindingFusionWeight] = useState('1')
-  const [bindingTopK, setBindingTopK] = useState('')
 
   useEffect(() => {
     if (draft) {
@@ -78,11 +76,6 @@ export function AgentDetailPage() {
         setKnowledgeSources(response.data)
         setKnowledgeSourcesLoaded(true)
         setKnowledgeSourceError(null)
-        setSelectedKnowledgeSourceId((current) =>
-          response.data.some((source) => source.source_id === current)
-            ? current
-            : response.data[0]?.source_id ?? '',
-        )
       })
       .catch((err) => {
         if (!mounted) return
@@ -136,31 +129,22 @@ export function AgentDetailPage() {
     })
   }
 
-  async function bindKnowledgeSource() {
-    const sourceId = selectedKnowledgeSourceId || knowledgeSources[0]?.source_id
-    if (!agentId || !draftId || !sourceId) return
+  async function bindKnowledgeSource(payload: Parameters<typeof bindKnowledgeSourceToDraft>[2]) {
+    if (!agentId || !draftId || !payload.source_id) return
     await runAction('knowledge-binding', async () => {
-      const payload: {
-        source_id: string
-        alias: string
-        failure_mode: 'required' | 'advisory'
-        fusion_weight: number
-        top_k?: number
-        actor: string
-      } = {
-        source_id: sourceId,
-        alias: bindingAlias,
-        failure_mode: bindingFailureMode,
-        fusion_weight: Number(bindingFusionWeight) || 1,
-        actor: 'dashboard',
-      }
-      const topK = Number(bindingTopK)
-      if (bindingTopK.trim() && Number.isFinite(topK) && topK > 0) {
-        payload.top_k = topK
-      }
       const updated = await bindKnowledgeSourceToDraft(agentId, draftId, payload)
       setAgentYaml(updated.agent_yaml)
       setStatus('Knowledge source binding saved.')
+      refresh()
+    })
+  }
+
+  async function unbindKnowledgeSource(bindingId: string) {
+    if (!agentId || !draftId || !bindingId) return
+    await runAction('knowledge-binding', async () => {
+      const updated = await unbindKnowledgeSourceFromDraft(agentId, draftId, bindingId, { actor: 'dashboard' })
+      setAgentYaml(updated.agent_yaml)
+      setStatus('Knowledge source binding removed.')
       refresh()
     })
   }
@@ -272,7 +256,7 @@ export function AgentDetailPage() {
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
             onFieldChange={(_nodeId, path, value) =>
-              setAgentYaml((current) => updateAgentYamlField(current, path, value))
+              setAgentYaml((current: string) => updateAgentYamlField(current, path, value))
             }
           />
           <div className="flex justify-end">
@@ -288,168 +272,16 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'knowledge' && (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-                  Bind Shared Source
-                </h3>
-                <p className="mt-1 text-sm text-[var(--text-muted)]">
-                  Select a shared Knowledge Source from /knowledge and attach it to this Agent draft. Provider runtime and documents stay source-owned.
-                </p>
-              </div>
-              <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
-                {knowledgeSources.length} sources
-              </span>
-            </div>
-            {knowledgeSourceError && (
-              <div className="mt-4 rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
-                {knowledgeSourceError}
-              </div>
-            )}
-            {knowledgeSources.length === 0 ? (
-              <div className="mt-4">
-                <EmptyState message="No shared Knowledge Sources yet. Create one in /knowledge, then bind it here." />
-              </div>
-            ) : (
-              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                      Knowledge Source
-                    </label>
-                    <select
-                      value={selectedKnowledgeSourceId}
-                      onChange={(event) => setSelectedKnowledgeSourceId(event.target.value)}
-                      className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                    >
-                      {knowledgeSources.map((source) => (
-                        <option key={source.source_id} value={source.source_id}>
-                          {source.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                        Alias
-                      </label>
-                      <input
-                        value={bindingAlias}
-                        onChange={(event) => setBindingAlias(event.target.value)}
-                        placeholder="optional display alias"
-                        className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                        Failure Mode
-                      </label>
-                      <select
-                        value={bindingFailureMode}
-                        onChange={(event) =>
-                          setBindingFailureMode(event.target.value as 'required' | 'advisory')
-                        }
-                        className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                      >
-                        <option value="required">required</option>
-                        <option value="advisory">advisory</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                        Fusion Weight
-                      </label>
-                      <input
-                        type="number"
-                        min="0.1"
-                        step="0.1"
-                        value={bindingFusionWeight}
-                        onChange={(event) => setBindingFusionWeight(event.target.value)}
-                        className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                        Top K Override
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={bindingTopK}
-                        onChange={(event) => setBindingTopK(event.target.value)}
-                        placeholder="use Agent retrieval default"
-                        className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                      />
-                    </div>
-                  </div>
-                  <button
-                    onClick={bindKnowledgeSource}
-                    disabled={busy === 'knowledge-binding' || !selectedKnowledgeSourceId}
-                    className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-                  >
-                    {busy === 'knowledge-binding' ? 'Binding...' : 'Bind Source'}
-                  </button>
-                </div>
-                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                    Available Sources
-                  </div>
-                  <div className="mt-3 space-y-3">
-                    {knowledgeSources.map((source) => (
-                      <div key={source.source_id} className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3">
-                        <div className="text-sm font-medium text-[var(--text-primary)]">
-                          Name: {source.name}
-                        </div>
-                        <div className="mt-1 font-mono text-xs text-[var(--text-muted)]">{source.source_id}</div>
-                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--text-muted)]">
-                          <span>{source.provider}</span>
-                          <span>{source.ready_document_count}/{source.document_count} ready</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              Knowledge Bindings
-            </h3>
-            <p className="mt-1 text-sm text-[var(--text-muted)]">
-              Agents bind shared Knowledge Sources by source_id. Provider settings are managed in /knowledge, not on the Agent.
-            </p>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                  Sources
-                </div>
-                <CodeBlock>{extractAgentYamlSection(agentYaml, 'knowledge_sources') || 'knowledge_sources: []'}</CodeBlock>
-              </div>
-              <div>
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                  Bindings
-                </div>
-                <CodeBlock>{extractAgentYamlSection(agentYaml, 'knowledge_bindings') || 'knowledge_bindings: []'}</CodeBlock>
-              </div>
-            </div>
-          </div>
-          <ModuleEditor
-            title="Retrieval Configuration"
-            description="Agent-level retrieval controls apply across bound knowledge sources"
-            fields={KNOWLEDGE_FIELDS}
-            yamlSection="retrieval"
-            agentYaml={agentYaml}
-            onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
-            onSave={saveWorkflow}
-            busy={busy === 'workflow'}
-          />
-        </div>
+        <KnowledgeModuleEditor
+          agentYaml={agentYaml}
+          knowledgeSources={knowledgeSources}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+          onBindSource={bindKnowledgeSource}
+          onUnbindSource={unbindKnowledgeSource}
+          onSave={saveWorkflow}
+          busy={busy === 'workflow' || busy === 'knowledge-binding'}
+          knowledgeSourceError={knowledgeSourceError}
+        />
       )}
 
       {activeTab === 'tools' && (
@@ -459,7 +291,7 @@ export function AgentDetailPage() {
           fields={TOOLS_FIELDS}
           yamlSection="tools"
           agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onSave={saveWorkflow}
           busy={busy === 'workflow'}
         />
@@ -472,33 +304,25 @@ export function AgentDetailPage() {
           fields={POLICY_FIELDS}
           yamlSection="policy"
           agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onSave={saveWorkflow}
           busy={busy === 'workflow'}
         />
       )}
 
       {activeTab === 'model' && (
-        <ModuleEditor
-          title="Model Configuration"
-          description="Model providers for answer, planner, and reviewer roles"
-          fields={MODEL_FIELDS}
-          yamlSection="model"
+        <ModelModuleEditor
           agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onSave={saveWorkflow}
           busy={busy === 'workflow'}
         />
       )}
 
       {activeTab === 'memory' && (
-        <ModuleEditor
-          title="Memory Configuration"
-          description="Memory provider and scope settings"
-          fields={MEMORY_FIELDS}
-          yamlSection="memory"
+        <MemoryModuleEditor
           agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onSave={saveWorkflow}
           busy={busy === 'workflow'}
         />
@@ -511,7 +335,7 @@ export function AgentDetailPage() {
           fields={RESPONSE_FIELDS}
           yamlSection="response"
           agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current) => updateAgentYamlField(current, path, value))}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onSave={saveWorkflow}
           busy={busy === 'workflow'}
         />

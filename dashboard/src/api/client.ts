@@ -132,6 +132,22 @@ export function bindKnowledgeSourceToDraft(
   )
 }
 
+export function unbindKnowledgeSourceFromDraft(
+  agentId: string,
+  draftId: string,
+  bindingId: string,
+  payload: { actor?: string } = {},
+): Promise<ContractBundle> {
+  return fetchJson<ContractBundle>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-bindings/${bindingId}`,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
 export function importConfigAgent(payload: {
   manifest_path: string
   actor?: string

@@ -110,6 +110,10 @@ _Avoid_: Dashboard-only model semantics, provider credential storage, bypassing 
 Dashboard DeepSeek configuration uses provider selection plus editable model names with recommended current DeepSeek model values, not a hard model-name allowlist. API keys remain environment variable references, not stored credentials.
 _Avoid_: Fixed DeepSeek model dropdown, frontend-only provider inventory, storing DeepSeek API keys
 
+**Dashboard Unified Model Strategy**:
+A Dashboard UI shortcut that applies the same Primary Model settings to all three roles (Answer, Planner, Reviewer) simultaneously without introducing a single global model field in the Agent Contract.
+_Avoid_: Single global Agent model, hidden model reuse
+
 **Dashboard Model Parameter Editing**:
 Dashboard Model Configuration may edit shared Model Role Configuration parameters such as API key environment variable, base URL environment variable, temperature, maximum output tokens, and timeout for final answer, planner, and reviewer roles. It must not expose raw credential fields or provider-specific reasoning controls in V1.
 _Avoid_: raw API key input, provider secret storage, DeepSeek-only reasoning parameter passthrough
