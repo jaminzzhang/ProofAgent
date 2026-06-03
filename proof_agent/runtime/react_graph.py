@@ -25,14 +25,14 @@ from proof_agent.contracts import (
     ReceiptOutcome,
 )
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
-from proof_agent.control.workflow.orchestrator import (
-    _build_model_request,
-    _cost_class,
-    _emit_model_error,
-    _emit_policy,
-    _model_response_payload,
-    _system_prompt_length,
-    _validate_model_output,
+from proof_agent.control.workflow.harness_helpers import (
+    build_model_request,
+    cost_class,
+    emit_model_error,
+    emit_policy_decision,
+    model_response_payload,
+    system_prompt_length,
+    validate_model_output,
 )
 from proof_agent.control.workflow.react_enterprise_qa import (
     clarification_message,
@@ -208,7 +208,7 @@ def build_react_enterprise_qa_graph(
                 "citations_present": bool(evidence),
             },
         )
-        _emit_policy(trace, answer_decision)
+        emit_policy_decision(trace, answer_decision)
 
         memory = invocation.create_memory()
         memory_result = memory.write({"summary": f"Question: {state['question']}"})
@@ -231,7 +231,7 @@ def build_react_enterprise_qa_graph(
 
     def model_node(state: ReActGraphState) -> dict[str, Any]:
         evidence = tuple(EvidenceChunk.model_validate(chunk) for chunk in state.get("evidence", []))
-        model_request = _build_model_request(
+        model_request = build_model_request(
             question=state["question"],
             evidence=evidence,
             provider=invocation.model_provider.provider_name,
@@ -245,7 +245,7 @@ def build_react_enterprise_qa_graph(
             "model": invocation.model_provider.model_name,
             "estimated_tokens": estimated_tokens,
             "stream": False,
-            "cost_class": _cost_class(invocation.model_provider.provider_name),
+            "cost_class": cost_class(invocation.model_provider.provider_name),
             "question": state["question"],
             "accepted_evidence_count": len(evidence),
             "citations_present": bool(evidence),
@@ -276,26 +276,26 @@ def build_react_enterprise_qa_graph(
                 "response_format": model_request.response_format,
                 "message_count": len(model_request.messages),
                 "prompt_length": sum(len(message.content) for message in model_request.messages),
-                "system_prompt_length": _system_prompt_length(model_request),
+                "system_prompt_length": system_prompt_length(model_request),
                 "estimated_tokens": estimated_tokens,
                 "stream": model_request.stream,
-                "cost_class": _cost_class(invocation.model_provider.provider_name),
+                "cost_class": cost_class(invocation.model_provider.provider_name),
             },
         )
         try:
             model_response = invocation.model_provider.generate(model_request)
         except Exception as exc:
-            _emit_model_error(
+            emit_model_error(
                 trace,
                 invocation.model_provider.provider_name,
                 invocation.model_provider.model_name,
                 exc,
             )
             raise
-        trace.emit("model_response", status="ok", payload=_model_response_payload(model_response))
+        trace.emit("model_response", status="ok", payload=model_response_payload(model_response))
 
         outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
-        validation_results = _validate_model_output(
+        validation_results = validate_model_output(
             response=model_response,
             outcome=outcome,
             evidence=evidence,
@@ -533,10 +533,10 @@ class _TracingModelProvider:
                 "response_format": request.response_format,
                 "message_count": len(request.messages),
                 "prompt_length": sum(len(message.content) for message in request.messages),
-                "system_prompt_length": _system_prompt_length(request),
+                "system_prompt_length": system_prompt_length(request),
                 "estimated_tokens": estimated_tokens,
                 "stream": request.stream,
-                "cost_class": _cost_class(self.provider_name),
+                "cost_class": cost_class(self.provider_name),
             },
         )
         try:
@@ -550,7 +550,7 @@ class _TracingModelProvider:
                 exc=exc,
             )
             raise
-        payload = _model_response_payload(response)
+        payload = model_response_payload(response)
         payload["role"] = self._role.value
         self._trace.emit("model_response", status="ok", payload=payload)
         return response

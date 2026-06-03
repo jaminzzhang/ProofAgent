@@ -10,7 +10,7 @@ from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import AgentManifest, ContextAdmission, ReceiptOutcome, RunPurpose, RunResult
 from proof_agent.contracts.conversation import context_admission_payload
-from proof_agent.control.workflow.orchestrator import _emit_model_error, _finalize, _is_model_error
+from proof_agent.control.workflow.harness_helpers import emit_model_error, finalize_run, is_model_error
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
@@ -63,8 +63,8 @@ def run_with_langgraph(
     try:
         invocation = compose_harness_invocation(agent_yaml, manifest=resolved_manifest)
     except Exception as exc:
-        if _is_model_error(exc):
-            _emit_model_error(
+        if is_model_error(exc):
+            emit_model_error(
                 trace,
                 resolved_manifest.model.provider,
                 resolved_manifest.model.name,
@@ -125,7 +125,7 @@ def run_with_langgraph(
         outcome = ReceiptOutcome.REFUSED_NO_EVIDENCE
         message = "Workflow ended unexpectedly without an outcome."
 
-    return _finalize(
+    return finalize_run(
         trace=trace,
         receipt_path=receipt_path,
         trace_path=trace_path,

@@ -13,7 +13,7 @@ from proof_agent.contracts import (
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.policy.review import fail_closed_policy_decision
-from proof_agent.control.workflow.orchestrator import _emit_policy
+from proof_agent.control.workflow.harness_helpers import emit_policy_decision
 from proof_agent.observability.audit.trace import TraceWriter
 
 
@@ -114,7 +114,7 @@ def review_action(
                 },
             )
             trace.emit("review_error", status="error", payload=review_event)
-            _emit_policy(trace, final_decision)
+            emit_policy_decision(trace, final_decision)
             return final_decision, review_event
         except Exception as exc:
             final_decision = fail_closed_policy_decision(
@@ -132,7 +132,7 @@ def review_action(
                 "subject_action_id": proposal.action_id,
             }
             trace.emit("review_error", status="error", payload=review_event)
-            _emit_policy(trace, final_decision)
+            emit_policy_decision(trace, final_decision)
             return final_decision, review_event
 
     final_decision, review_event = policy.evaluate_with_review(
@@ -148,7 +148,7 @@ def review_action(
     )
     if review_event.get("overridden"):
         trace.emit("review_overridden", status="blocked", payload=_jsonable(review_event))
-    _emit_policy(trace, final_decision)
+    emit_policy_decision(trace, final_decision)
     return final_decision, review_event
 
 

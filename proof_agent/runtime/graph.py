@@ -15,14 +15,14 @@ from proof_agent.contracts import (
 )
 from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
-from proof_agent.control.workflow.orchestrator import (
-    _build_model_request,
-    _cost_class,
-    _emit_model_error,
-    _emit_policy,
-    _model_response_payload,
-    _system_prompt_length,
-    _validate_model_output,
+from proof_agent.control.workflow.harness_helpers import (
+    build_model_request,
+    cost_class,
+    emit_model_error,
+    emit_policy_decision,
+    model_response_payload,
+    system_prompt_length,
+    validate_model_output,
 )
 from proof_agent.evaluation.demo.scenarios import TOOL_REQUIRED_QUESTION, UNSUPPORTED_QUESTION
 from proof_agent.observability.audit.trace import TraceWriter
@@ -81,7 +81,7 @@ def build_enterprise_qa_graph(
                 "citations_present": bool(evidence),
             },
         )
-        _emit_policy(trace, answer_decision)
+        emit_policy_decision(trace, answer_decision)
 
         memory = invocation.create_memory()
         memory_result = memory.write({"summary": f"Question: {question}"})
@@ -159,7 +159,7 @@ def build_enterprise_qa_graph(
         question = state["question"]
         evidence = tuple(EvidenceChunk.model_validate(chunk) for chunk in state.get("evidence", []))
         
-        model_request = _build_model_request(
+        model_request = build_model_request(
             question=question,
             evidence=evidence,
             provider=invocation.model_provider.provider_name,
@@ -174,13 +174,13 @@ def build_enterprise_qa_graph(
                 "model": invocation.model_provider.model_name,
                 "estimated_tokens": estimated_tokens,
                 "stream": model_request.stream,
-                "cost_class": _cost_class(invocation.model_provider.provider_name),
+                "cost_class": cost_class(invocation.model_provider.provider_name),
                 "question": question,
                 "accepted_evidence_count": len(evidence), # Approximation
                 "citations_present": bool(evidence),
             },
         )
-        _emit_policy(trace, model_decision)
+        emit_policy_decision(trace, model_decision)
         if model_decision.decision != "allow":
             return {
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
@@ -197,16 +197,16 @@ def build_enterprise_qa_graph(
                 "response_format": model_request.response_format,
                 "message_count": len(model_request.messages),
                 "prompt_length": sum(len(message.content) for message in model_request.messages),
-                "system_prompt_length": _system_prompt_length(model_request),
+                "system_prompt_length": system_prompt_length(model_request),
                 "estimated_tokens": estimated_tokens,
                 "stream": model_request.stream,
-                "cost_class": _cost_class(invocation.model_provider.provider_name),
+                "cost_class": cost_class(invocation.model_provider.provider_name),
             },
         )
         try:
             model_response = invocation.model_provider.generate(model_request)
         except Exception as exc:
-            _emit_model_error(
+            emit_model_error(
                 trace,
                 invocation.model_provider.provider_name,
                 invocation.model_provider.model_name,
@@ -216,12 +216,12 @@ def build_enterprise_qa_graph(
         trace.emit(
             "model_response",
             status="ok",
-            payload=_model_response_payload(model_response),
+            payload=model_response_payload(model_response),
         )
 
         outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
         message = model_response.content
-        validation_results = _validate_model_output(
+        validation_results = validate_model_output(
             response=model_response,
             outcome=outcome,
             evidence=evidence,
