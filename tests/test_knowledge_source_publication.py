@@ -1,0 +1,184 @@
+"""Tests for Knowledge Source publication records and pointers."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from proof_agent.capabilities.knowledge.ingestion.artifacts import (
+    ARTIFACT_META_FILENAME,
+    REQUIRED_LLAMA_INDEX_FILES,
+    local_index_artifact_metadata,
+)
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import (
+    KnowledgeArtifactBuildSpec,
+    KnowledgeDocument,
+    KnowledgeIngestionJob,
+    KnowledgeSourcePublicationValidation,
+)
+from proof_agent.errors import ProofAgentError
+
+
+def test_publication_requires_change_note(tmp_path: Path) -> None:
+    store, validation = _store_with_passed_publication_validation(tmp_path)
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.publish_knowledge_source(
+            source_id="ks_policy",
+            validation_id=validation.validation_id,
+            change_note="",
+            actor="operator",
+        )
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "change_note" in exc.value.message
+
+
+def test_publish_writes_record_and_published_snapshot_pointer(tmp_path: Path) -> None:
+    store, validation = _store_with_passed_publication_validation(tmp_path)
+
+    record = store.publish_knowledge_source(
+        source_id="ks_policy",
+        validation_id=validation.validation_id,
+        change_note="Initial publication.",
+        actor="operator",
+    )
+
+    source = store.get_knowledge_source("ks_policy")
+    assert source is not None
+    assert source.published_snapshot_id == record.snapshot_id
+    assert record.publication_id.startswith("kspub_")
+    assert record.source_id == "ks_policy"
+    assert record.snapshot_id == validation.snapshot_id
+    assert record.source_draft_version_id == validation.source_draft_version_id
+    assert record.validation_id == validation.validation_id
+    assert record.change_note == "Initial publication."
+    assert record.published_by == "operator"
+    assert record.document_count == 1
+    assert record.smoke_query == validation.smoke_query
+    assert record.smoke_result_summary["candidate_count"] == 1
+    assert store.list_knowledge_source_publications("ks_policy") == [record]
+
+
+def test_reusing_publication_validation_conflicts(tmp_path: Path) -> None:
+    store, validation = _store_with_passed_publication_validation(tmp_path)
+    store.publish_knowledge_source(
+        source_id="ks_policy",
+        validation_id=validation.validation_id,
+        change_note="Initial publication.",
+        actor="operator",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.publish_knowledge_source(
+            source_id="ks_policy",
+            validation_id=validation.validation_id,
+            change_note="Duplicate publication.",
+            actor="operator",
+        )
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "already been published" in exc.value.message
+
+
+def _store_with_passed_publication_validation(
+    tmp_path: Path,
+) -> tuple[LocalAgentConfigurationStore, KnowledgeSourcePublicationValidation]:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_source(store)
+    _write_compatible_ready_document(store, tmp_path)
+    foundation = store.validate_candidate_knowledge_source_snapshot_foundation(
+        source_id="ks_policy",
+        actor="validator",
+    )
+    snapshot = store.freeze_candidate_knowledge_source_snapshot(
+        source_id="ks_policy",
+        validation_id=foundation.validation_id,
+        actor="operator",
+    )
+    validation = KnowledgeSourcePublicationValidation(
+        validation_id="kspubval_001",
+        source_id="ks_policy",
+        snapshot_id=snapshot.snapshot_id,
+        source_draft_version_id=snapshot.source_draft_version_id,
+        candidate_digest=snapshot.candidate_digest,
+        status="passed",
+        smoke_query="What does the policy require?",
+        candidate_count=1,
+        citation_count=1,
+        created_at="2026-06-04T00:00:00Z",
+        created_by="validator",
+    )
+    store._write_knowledge_source_publication_validation(validation)
+    return store, validation
+
+
+def _create_source(store: LocalAgentConfigurationStore) -> None:
+    store.create_knowledge_source(
+        source_id="ks_policy",
+        name="Policy Knowledge",
+        provider="local_index",
+        params={},
+        actor="operator",
+    )
+
+
+def _write_compatible_ready_document(
+    store: LocalAgentConfigurationStore,
+    tmp_path: Path,
+) -> None:
+    document = KnowledgeDocument(
+        document_id="doc_policy",
+        source_id="ks_policy",
+        revision_id="rev_policy",
+        filename="policy.md",
+        content_type="text/markdown",
+        content_hash="a" * 64,
+        size_bytes=10,
+        state="ready",
+        storage_path=(
+            "knowledge_sources/ks_policy/documents/doc_policy/"
+            "revisions/rev_policy/original.bin"
+        ),
+        ingestion_job_id="job_policy",
+        artifact_path="artifacts/doc_policy/fingerprint",
+        created_at="2026-06-04T00:00:00Z",
+        updated_at="2026-06-04T00:00:00Z",
+    )
+    job = KnowledgeIngestionJob(
+        job_id="job_policy",
+        source_id="ks_policy",
+        document_id=document.document_id,
+        revision_id=document.revision_id,
+        state="ready",
+        ingestion_config_fingerprint="fingerprint",
+        artifact_build_spec=KnowledgeArtifactBuildSpec(
+            provider="local_index",
+            engine_name="llama-index-tree",
+            engine_version="llama-index-tree@0.14.22",
+            parser_fingerprint_identity="markdown:utf-8:v1",
+            content_hash=document.content_hash,
+            parsed_text_sha256="b" * 64,
+        ),
+        artifact_path=document.artifact_path,
+        created_at="2026-06-04T00:00:00Z",
+        updated_at="2026-06-04T00:00:00Z",
+    )
+    store._write_knowledge_document(document)
+    store._write_knowledge_ingestion_job(job)
+    published_artifact_path = tmp_path / "artifacts" / "doc_policy" / "fingerprint"
+    published_artifact_path.mkdir(parents=True)
+    for filename in REQUIRED_LLAMA_INDEX_FILES:
+        (published_artifact_path / filename).write_text("{}", encoding="utf-8")
+    (published_artifact_path / ARTIFACT_META_FILENAME).write_text(
+        json.dumps(
+            local_index_artifact_metadata(
+                build_spec=job.artifact_build_spec,
+                ingestion_config_fingerprint=job.ingestion_config_fingerprint,
+            )
+        ),
+        encoding="utf-8",
+    )

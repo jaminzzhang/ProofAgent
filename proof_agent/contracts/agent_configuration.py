@@ -198,6 +198,47 @@ class FoundationKnowledgeSourceValidation(FrozenModel):
     created_by: str
 
 
+class KnowledgeSourcePublicationValidation(FrozenModel):
+    """Passed Source-level retrieval smoke validation eligible for publication."""
+
+    validation_id: str
+    source_id: str
+    snapshot_id: str
+    source_draft_version_id: str
+    candidate_digest: str
+    status: Literal["passed"]
+    smoke_query: str
+    candidate_count: int
+    citation_count: int
+    created_at: str
+    created_by: str
+
+
+class KnowledgeSourcePublicationRecord(FrozenModel):
+    """Immutable record for one published Knowledge Source snapshot."""
+
+    publication_id: str
+    source_id: str
+    snapshot_id: str
+    source_draft_version_id: str
+    validation_id: str
+    change_note: str
+    published_at: str
+    published_by: str
+    document_count: int
+    smoke_query: str
+    smoke_result_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("smoke_result_summary", mode="after")
+    @classmethod
+    def freeze_smoke_result_summary(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("smoke_result_summary")
+    def serialize_smoke_result_summary(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
+
+
 class KnowledgeSourceSnapshotManifest(FrozenModel):
     """Immutable multi-document preview manifest for later routing development."""
 

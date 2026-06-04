@@ -42,6 +42,8 @@ from proof_agent.contracts import (
     KnowledgeDocument,
     KnowledgeIngestionJob,
     KnowledgeSource,
+    KnowledgeSourcePublicationRecord,
+    KnowledgeSourcePublicationValidation,
     KnowledgeSourceSnapshotDocument,
     KnowledgeSourceSnapshotManifest,
     PublishedAgentVersion,
@@ -457,6 +459,139 @@ class LocalAgentConfigurationStore:
             if snapshot is not None:
                 snapshots.append(snapshot)
         return sorted(snapshots, key=lambda snapshot: snapshot.created_at)
+
+    def get_knowledge_source_publication_validation(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+    ) -> KnowledgeSourcePublicationValidation | None:
+        path = self._knowledge_source_publication_validation_path(source_id, validation_id)
+        if not path.exists():
+            return None
+        try:
+            return KnowledgeSourcePublicationValidation.model_validate(_read_json(path))
+        except (OSError, json.JSONDecodeError, ValidationError) as exc:
+            raise _knowledge_publication_conflict(
+                "Knowledge Source Publication Validation record is malformed."
+            ) from exc
+
+    def list_knowledge_source_publication_validations(
+        self,
+        source_id: str,
+    ) -> list[KnowledgeSourcePublicationValidation]:
+        self._require_knowledge_source(source_id)
+        validations_root = self._knowledge_source_publication_validations_root(source_id)
+        if not validations_root.exists():
+            return []
+        validations = []
+        for path in validations_root.glob("*.json"):
+            validation = self.get_knowledge_source_publication_validation(
+                source_id=source_id,
+                validation_id=path.stem,
+            )
+            if validation is not None:
+                validations.append(validation)
+        return sorted(validations, key=lambda validation: validation.created_at)
+
+    def list_knowledge_source_publications(
+        self,
+        source_id: str,
+    ) -> list[KnowledgeSourcePublicationRecord]:
+        self._require_knowledge_source(source_id)
+        publications_root = self._knowledge_source_publications_root(source_id)
+        if not publications_root.exists():
+            return []
+        publications = []
+        for path in publications_root.glob("*.json"):
+            try:
+                publications.append(KnowledgeSourcePublicationRecord.model_validate(_read_json(path)))
+            except (OSError, json.JSONDecodeError, ValidationError) as exc:
+                raise _knowledge_publication_conflict(
+                    "Knowledge Source Publication record is malformed."
+                ) from exc
+        return sorted(publications, key=lambda publication: publication.published_at)
+
+    def publish_knowledge_source(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+        change_note: str,
+        actor: str,
+    ) -> KnowledgeSourcePublicationRecord:
+        if not change_note.strip():
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                "knowledge source publication change_note is required",
+                "Provide a concise change_note explaining what is being published.",
+            )
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._normalized_local_index_source_unlocked(source_id)
+            validation = self._require_knowledge_source_publication_validation(
+                source_id=source.source_id,
+                validation_id=validation_id,
+            )
+            if validation.source_id != source.source_id:
+                raise _knowledge_publication_conflict(
+                    "Publication validation record does not belong to this Knowledge Source."
+                )
+            snapshot = self.get_knowledge_source_snapshot(
+                source_id=source.source_id,
+                snapshot_id=validation.snapshot_id,
+            )
+            if snapshot is None:
+                raise _knowledge_publication_conflict(
+                    "Publication validation references a missing Knowledge Source Snapshot."
+                )
+            candidate = self._candidate_knowledge_source_snapshot_unlocked(source)
+            if validation.source_draft_version_id != candidate.source_draft_version_id:
+                raise _knowledge_publication_conflict(
+                    "Publication validation is stale for the current Knowledge Source Draft Version."
+                )
+            if validation.candidate_digest != candidate.candidate_digest:
+                raise _knowledge_publication_conflict(
+                    "Publication validation is stale for the current candidate snapshot."
+                )
+            if snapshot.source_draft_version_id != validation.source_draft_version_id:
+                raise _knowledge_publication_conflict(
+                    "Publication validation does not match its frozen snapshot draft version."
+                )
+            if snapshot.candidate_digest != validation.candidate_digest:
+                raise _knowledge_publication_conflict(
+                    "Publication validation does not match its frozen snapshot candidate digest."
+                )
+            for publication in self.list_knowledge_source_publications(source.source_id):
+                if publication.validation_id == validation.validation_id:
+                    raise _knowledge_publication_conflict(
+                        "Publication validation has already been published."
+                    )
+            record = KnowledgeSourcePublicationRecord(
+                publication_id=f"kspub_{uuid4().hex[:8]}",
+                source_id=source.source_id,
+                snapshot_id=snapshot.snapshot_id,
+                source_draft_version_id=snapshot.source_draft_version_id,
+                validation_id=validation.validation_id,
+                change_note=change_note.strip(),
+                published_at=_now(),
+                published_by=actor,
+                document_count=len(snapshot.documents),
+                smoke_query=validation.smoke_query,
+                smoke_result_summary={
+                    "candidate_count": validation.candidate_count,
+                    "citation_count": validation.citation_count,
+                },
+            )
+            self._write_knowledge_source_publication(record)
+            self._write_knowledge_source(
+                source.model_copy(
+                    update={
+                        "published_snapshot_id": snapshot.snapshot_id,
+                        "updated_at": _now(),
+                    }
+                )
+            )
+            return record
 
     def get_knowledge_source_worker_concurrency(self, source_id: str) -> int:
         """Return a validated claim-time concurrency limit for one source."""
@@ -1339,6 +1474,20 @@ class LocalAgentConfigurationStore:
                 "Foundation Knowledge Source Validation record is malformed."
             ) from exc
 
+    def _require_knowledge_source_publication_validation(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+    ) -> KnowledgeSourcePublicationValidation:
+        validation = self.get_knowledge_source_publication_validation(
+            source_id=source_id,
+            validation_id=validation_id,
+        )
+        if validation is None:
+            raise KeyError(f"Knowledge Source Publication Validation not found: {source_id}")
+        return validation
+
     def _require_matching_frozen_snapshot(
         self,
         manifest: KnowledgeSourceSnapshotManifest,
@@ -1588,6 +1737,29 @@ class LocalAgentConfigurationStore:
             / f"{validation_id}.json"
         )
 
+    def _knowledge_source_publication_validations_root(self, source_id: str) -> Path:
+        return (
+            self._root_dir
+            / "knowledge_sources"
+            / source_id
+            / "publication_validations"
+        )
+
+    def _knowledge_source_publication_validation_path(
+        self,
+        source_id: str,
+        validation_id: str,
+    ) -> Path:
+        return self._knowledge_source_publication_validations_root(source_id) / (
+            f"{validation_id}.json"
+        )
+
+    def _knowledge_source_publications_root(self, source_id: str) -> Path:
+        return self._root_dir / "knowledge_sources" / source_id / "publications"
+
+    def _knowledge_source_publication_path(self, source_id: str, publication_id: str) -> Path:
+        return self._knowledge_source_publications_root(source_id) / f"{publication_id}.json"
+
     def _knowledge_source_snapshots_root(self, source_id: str) -> Path:
         return self._root_dir / "knowledge_sources" / source_id / "snapshots"
 
@@ -1669,6 +1841,30 @@ class LocalAgentConfigurationStore:
                 validation.validation_id,
             ),
             validation.model_dump(mode="json"),
+        )
+
+    def _write_knowledge_source_publication_validation(
+        self,
+        validation: KnowledgeSourcePublicationValidation,
+    ) -> None:
+        _write_json_atomic(
+            self._knowledge_source_publication_validation_path(
+                validation.source_id,
+                validation.validation_id,
+            ),
+            validation.model_dump(mode="json"),
+        )
+
+    def _write_knowledge_source_publication(
+        self,
+        publication: KnowledgeSourcePublicationRecord,
+    ) -> None:
+        _write_json_atomic(
+            self._knowledge_source_publication_path(
+                publication.source_id,
+                publication.publication_id,
+            ),
+            publication.model_dump(mode="json"),
         )
 
     def _write_knowledge_source_snapshot(self, manifest: KnowledgeSourceSnapshotManifest) -> None:
@@ -1823,6 +2019,14 @@ def _snapshot_freeze_conflict(message: str) -> ProofAgentError:
         "PA_INGESTION_005",
         message,
         "Refresh the candidate snapshot, validate it again, and retry snapshot freeze.",
+    )
+
+
+def _knowledge_publication_conflict(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_002",
+        message,
+        "Refresh the Knowledge Source publication state and retry.",
     )
 
 
