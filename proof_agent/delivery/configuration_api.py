@@ -21,7 +21,11 @@ from proof_agent.bootstrap.knowledge_resolution import (
 )
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
-from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.configuration.local_store import (
+    KnowledgeUploadStagingInput,
+    LocalAgentConfigurationStore,
+    MAX_QUARANTINED_UPLOAD_BATCH_FILES,
+)
 from proof_agent.contracts import (
     AgentValidationRecord,
     ContractBundle,
@@ -41,6 +45,7 @@ from proof_agent.runtime.langgraph_runner import run_with_langgraph
 router = APIRouter(tags=["configuration"])
 
 SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS = {
+    "http_json",
     "local_markdown",
     "local_index",
     "remote_search",
@@ -125,6 +130,37 @@ class KnowledgeDocumentUploadRequest(BaseModel):
     filename: str = Field(min_length=1)
     content_type: str = Field(min_length=1)
     content_base64: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class KnowledgeDocumentBatchUploadItemRequest(BaseModel):
+    """One JSON/base64 upload item inside a Dashboard-managed batch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1)
+    content_type: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1)
+
+
+class KnowledgeDocumentBatchUploadRequest(BaseModel):
+    """JSON/base64 upload batch for Dashboard-managed knowledge documents."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    documents: list[KnowledgeDocumentBatchUploadItemRequest] = Field(
+        min_length=1,
+        max_length=MAX_QUARANTINED_UPLOAD_BATCH_FILES,
+    )
+    actor: str = "local-user"
+
+
+class KnowledgeDocumentRoutingMetadataUpdateRequest(BaseModel):
+    """Request body for operator-managed routing metadata edits."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    routing_metadata: dict[str, Any] = Field(default_factory=dict)
     actor: str = "local-user"
 
 
@@ -281,6 +317,73 @@ def upload_knowledge_source_document(
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return _quarantined_upload_payload(upload)
+
+
+@router.patch("/config/knowledge-sources/{source_id}/documents/{document_id}/routing-metadata")
+def update_knowledge_source_document_routing_metadata(
+    source_id: str,
+    document_id: str,
+    request: KnowledgeDocumentRoutingMetadataUpdateRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Update routing-only metadata for one managed Knowledge Document."""
+
+    store = _get_configuration_store(app_request)
+    try:
+        document = store.update_knowledge_document_routing_metadata(
+            source_id=source_id,
+            document_id=document_id,
+            routing_metadata=request.routing_metadata,
+            actor=request.actor,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Document not found: {source_id}/{document_id}",
+        ) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _knowledge_document_payload(document)
+
+
+@router.post("/config/knowledge-sources/{source_id}/documents/batch")
+def upload_knowledge_source_document_batch(
+    source_id: str,
+    request: KnowledgeDocumentBatchUploadRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Stage one upload batch for asynchronous validation and Local Index ingestion."""
+
+    store = _get_configuration_store(app_request)
+    source = store.get_knowledge_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    if source.provider != "local_index":
+        raise HTTPException(
+            status_code=400,
+            detail="Dashboard document upload currently supports local_index Knowledge Sources.",
+        )
+    staging_inputs = tuple(
+        KnowledgeUploadStagingInput(
+            filename=document.filename,
+            content_type=document.content_type,
+            content=_decode_upload_content(document.content_base64),
+        )
+        for document in request.documents
+    )
+
+    try:
+        uploads = store.stage_quarantined_knowledge_upload_batch(
+            source_id=source.source_id,
+            uploads=staging_inputs,
+            actor=request.actor,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return {
+        "data": [_quarantined_upload_payload(upload) for upload in uploads],
+        "meta": {"total": len(uploads)},
+    }
 
 
 @router.get("/config/knowledge-sources/{source_id}/quarantined-uploads")
@@ -465,13 +568,26 @@ def validate_knowledge_source_publication(
     """Run Source-level smoke retrieval and persist a passed publication validation."""
 
     store = _get_configuration_store(app_request)
-    _require_knowledge_source(store, source_id)
+    source = _require_knowledge_source(store, source_id)
     try:
-        validation = store.validate_local_index_source_publication(
-            source_id=source_id,
-            smoke_query=request.smoke_query,
-            actor=request.actor,
-        )
+        if source.provider == "local_index":
+            validation = store.validate_local_index_source_publication(
+                source_id=source_id,
+                smoke_query=request.smoke_query,
+                actor=request.actor,
+            )
+        elif source.provider == "http_json":
+            validation = store.validate_http_json_source_publication(
+                source_id=source_id,
+                smoke_query=request.smoke_query,
+                actor=request.actor,
+            )
+        else:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"Knowledge Source provider cannot be publication-validated: {source.provider}",
+                "Use a publishable Knowledge Source provider such as local_index or http_json.",
+            )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return validation.model_dump(mode="json")
@@ -483,7 +599,7 @@ def publish_knowledge_source(
     request: KnowledgeSourcePublicationRequest,
     app_request: Request,
 ) -> dict[str, Any]:
-    """Publish one validation-passed Knowledge Source snapshot."""
+    """Publish one validation-passed Knowledge Source resource."""
 
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)

@@ -191,15 +191,14 @@ def server(
 def knowledge_worker(
     config_dir: str = typer.Option("runs/config", "--config-dir"),
     once: bool = typer.Option(False, "--once"),
+    poll_interval_seconds: float = typer.Option(
+        5.0,
+        "--poll-interval",
+        min=0.01,
+        help="Seconds to wait after an idle continuous worker poll.",
+    ),
 ) -> None:
-    """Process at most one persisted Local Index knowledge ingestion task."""
-
-    if not once:
-        typer.echo(
-            "Continuous knowledge-worker polling is not implemented; pass --once.",
-            err=True,
-        )
-        raise typer.Exit(code=2)
+    """Process persisted Local Index knowledge ingestion tasks."""
 
     try:
         from proof_agent.capabilities.knowledge.ingestion.local_index_builder import (
@@ -215,11 +214,23 @@ def knowledge_worker(
             store=LocalAgentConfigurationStore(config_path),
             artifact_builder=LocalIndexRevisionArtifactBuilder(config_path),
         )
-        result = worker.run_once()
+        if once:
+            result = worker.run_once()
+        else:
+            typer.echo("knowledge worker started")
+            try:
+                worker.run_continuously(
+                    poll_interval_seconds=poll_interval_seconds,
+                    report_result=_echo_continuous_knowledge_worker_result,
+                )
+            except KeyboardInterrupt:
+                pass
+            typer.echo("knowledge worker stopped")
+            return
     except ImportError:
         typer.echo(
             "Knowledge worker dependencies not installed. Run: "
-            "uv run --extra ingestion --extra tree proof-agent knowledge-worker --once",
+            "uv run --extra ingestion --extra tree proof-agent knowledge-worker",
             err=True,
         )
         raise typer.Exit(code=1) from None
@@ -260,6 +271,11 @@ def _echo_knowledge_worker_result(result: KnowledgeWorkerResult | None) -> None:
         typer.echo(f"knowledge worker warning: {diagnostic.source_id} ({diagnostic.code})")
     if result.outcome is not None:
         typer.echo(_knowledge_worker_outcome_message(result.outcome))
+
+
+def _echo_continuous_knowledge_worker_result(result: KnowledgeWorkerResult | None) -> None:
+    if result is not None:
+        _echo_knowledge_worker_result(result)
 
 
 def _knowledge_worker_outcome_message(outcome: KnowledgeWorkerTaskOutcome) -> str:

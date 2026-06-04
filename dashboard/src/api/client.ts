@@ -15,7 +15,9 @@ import type {
   KnowledgeSourcePublicationValidation,
   KnowledgeSourcePublicationsResponse,
   KnowledgeSourcesResponse,
+  KnowledgeUploadsResponse,
   PublishedAgentVersion,
+  QuarantinedKnowledgeUpload,
   RunDetail,
   RunPurposeFilter,
   RunsListResponse,
@@ -153,12 +155,51 @@ export function uploadKnowledgeDocument(
     content_base64: string
     actor?: string
   },
-): Promise<KnowledgeDocument> {
-  return fetchJson<KnowledgeDocument>(`${BASE}/config/knowledge-sources/${sourceId}/documents`, {
+): Promise<QuarantinedKnowledgeUpload> {
+  return fetchJson<QuarantinedKnowledgeUpload>(`${BASE}/config/knowledge-sources/${sourceId}/documents`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
+}
+
+export function uploadKnowledgeDocuments(
+  sourceId: string,
+  payload: {
+    documents: {
+      filename: string
+      content_type: string
+      content_base64: string
+    }[]
+    actor?: string
+  },
+): Promise<KnowledgeUploadsResponse> {
+  return fetchJson<KnowledgeUploadsResponse>(
+    `${BASE}/config/knowledge-sources/${sourceId}/documents/batch`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function updateKnowledgeDocumentRoutingMetadata(
+  sourceId: string,
+  documentId: string,
+  payload: {
+    routing_metadata: Record<string, unknown>
+    actor?: string
+  },
+): Promise<KnowledgeDocument> {
+  return fetchJson<KnowledgeDocument>(
+    `${BASE}/config/knowledge-sources/${sourceId}/documents/${documentId}/routing-metadata`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
 }
 
 export function bindKnowledgeSourceToDraft(

@@ -30,8 +30,16 @@ class FrozenDict(Mapping[str, Any]):
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Mapping):
-            return dict(self.items()) == dict(other.items())
+            return bool(_json_equivalent(self) == _json_equivalent(other))
         return False
+
+
+def _json_equivalent(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_equivalent(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_equivalent(item) for item in value]
+    return value
 
 
 def freeze_value(value: Any) -> Any:

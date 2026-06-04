@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider
 from proof_agent.capabilities.knowledge.local_provider import LocalMarkdownProvider
 from proof_agent.capabilities.knowledge.provider import KnowledgeProvider
 from proof_agent.capabilities.knowledge.remote_search import RemoteSearchProvider
@@ -8,6 +9,7 @@ from proof_agent.errors import ProofAgentError
 
 
 PROVIDER_MAP: dict[str, type[KnowledgeProvider]] = {
+    "http_json": HttpJsonProvider,
     "local_markdown": LocalMarkdownProvider,
     "remote_search": RemoteSearchProvider,
 }

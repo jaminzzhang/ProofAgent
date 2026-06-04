@@ -177,6 +177,30 @@ def test_worker_processes_exactly_one_task_per_run(tmp_path: Path) -> None:
     assert len(store.list_knowledge_documents("ks_local_index")) == 2
 
 
+def test_worker_continuous_polling_advances_until_idle_then_sleeps(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_source(store)
+    _stage_markdown(store)
+    sleep_calls: list[float] = []
+    reported: list[object] = []
+    worker = KnowledgeIngestionWorker(store=store, artifact_builder=FakeArtifactBuilder())
+
+    worker.run_continuously(
+        poll_interval_seconds=0.25,
+        report_result=reported.append,
+        sleep=lambda seconds: sleep_calls.append(seconds),
+        stop_requested=lambda: bool(sleep_calls),
+    )
+
+    outcomes = [result.outcome for result in reported if result is not None]
+
+    assert [outcome.state for outcome in outcomes if outcome is not None] == [
+        "accepted",
+        "ready",
+    ]
+    assert sleep_calls == [0.25]
+
+
 def test_worker_builds_artifact_from_persisted_parsed_text_on_next_run(tmp_path: Path) -> None:
     store = LocalAgentConfigurationStore(tmp_path)
     _create_source(store)

@@ -190,6 +190,66 @@ audit:
     assert "local_vector" not in exc.value.fix
 
 
+def test_http_json_knowledge_source_loads_with_safe_remote_params(tmp_path: Path) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml.write_text(
+        """
+name: http_json_manifest
+purpose: "Load remote HTTP JSON knowledge."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_remote
+    name: Remote Policies
+    provider: http_json
+    params:
+      endpoint: https://knowledge.example/retrieve
+      timeout_seconds: 10
+      top_k: 3
+      header_env_refs:
+        - name: Authorization
+          value_env: PA_KNOWLEDGE_TOKEN
+          prefix: "Bearer "
+      response_mapping:
+        results: /matches
+        content: /text
+        score: /score
+        citation: /citation
+knowledge_bindings:
+  - binding_id: kb_remote
+    source_ref:
+      scope: package
+      source_id: ks_remote
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    source = manifest.package_knowledge_sources[0]
+    assert source.provider == "http_json"
+    assert source.params["endpoint"] == "https://knowledge.example/retrieve"
+    assert source.params["header_env_refs"][0]["value_env"] == "PA_KNOWLEDGE_TOKEN"
+    assert source.params["response_mapping"]["results"] == "/matches"
+
+
 def test_local_index_knowledge_source_loads_with_v2_paths(tmp_path: Path) -> None:
     agent_yaml = _write_local_index_manifest(
         tmp_path,

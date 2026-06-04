@@ -424,12 +424,16 @@ The production loop for a Dashboard-managed Local Index Source is:
 
 1. Create a `local_index` Knowledge Source in the Dashboard Knowledge Hub or through `POST /api/config/knowledge-sources`.
 2. Upload Markdown or text-based PDF documents in the Source detail workspace.
-3. Run `knowledge-worker --once` until quarantined uploads and ingestion jobs become ready.
-4. Read, validate, and freeze the candidate snapshot.
-5. Validate Source publication with a smoke query.
-6. Publish the passed Source validation.
-7. Bind the published shared Source from the Agent Knowledge module.
-8. Validate and publish the Agent.
+3. Run continuous `knowledge-worker` until quarantined uploads and ingestion jobs become ready.
+4. Review or edit per-document routing metadata in the Source detail workspace when operator-owned titles, descriptions, tags, document types, or business categories need to influence document routing.
+5. Read, validate, and freeze the candidate snapshot.
+6. Validate Source publication with a smoke query.
+7. Publish the passed Source validation.
+8. Bind the published shared Source from the Agent Knowledge module.
+9. Validate and publish the Agent.
+
+Routing metadata edits advance the Source Draft version and candidate digest, but do not reingest
+the document or rebuild revision artifacts.
 
 An API-created Source uses Source-owned ingestion params, for example:
 
@@ -451,14 +455,20 @@ curl -X POST http://127.0.0.1:8000/api/config/knowledge-sources \
 
 The Local Index ingestion foundation stages uploads into quarantine, validates and parses them
 asynchronously, promotes accepted document revisions, and builds immutable revision artifacts.
-Run one bounded worker iteration with:
+Start the continuous worker with:
+
+```bash
+uv run --extra ingestion --extra tree proof-agent knowledge-worker
+```
+
+The worker sleeps after idle polls and stops cleanly on `Ctrl+C`. Run one bounded worker iteration
+for scripts or tests with:
 
 ```bash
 uv run --extra ingestion --extra tree proof-agent knowledge-worker --once
 ```
 
-Each invocation processes at most one queued quarantine validation or artifact-build task. Omit
-`--once` only after continuous worker polling is added in a later operational slice.
+Each `--once` invocation processes at most one queued quarantine validation or artifact-build task.
 
 The single-upload API stages bytes before document revision or ingestion-job creation. The worker
 then accepts UTF-8 Markdown and text-based PDF originals. PDF parsing uses `pypdf` by default,
@@ -498,8 +508,12 @@ curl -X POST http://127.0.0.1:8000/api/config/knowledge-sources/enterprise_polic
   -d '{"validation_id":"kspubval_...","change_note":"Ready for Agent binding.","actor":"operator"}'
 ```
 
-Publishing advances `published_snapshot_id` and records an immutable publication. Dashboard
-binding then writes only an explicit shared Source reference into the Draft Agent contract:
+Publishing advances `published_snapshot_id` and records an immutable publication. For
+`local_index`, the published resource is a `local_index_snapshot` whose `resource_id` equals the
+snapshot id. For `http_json`, the published resource is a `remote_config` with a stable
+`ksremote_*` resource id; the existing `published_snapshot_id` field acts as the legacy published
+resource pointer. Dashboard binding then writes only an explicit shared Source reference into the
+Draft Agent contract:
 
 ```yaml
 package_knowledge_sources: []
@@ -514,13 +528,39 @@ knowledge_bindings:
 ```
 
 Validate the Draft Agent after binding and publish the Agent only from a passed validation run.
-The Agent publication persists the resolved Knowledge Binding Set, including the snapshot path and
-artifact root selected by Source publication, so production runs do not re-resolve mutable draft
-state. Remaining operational slices add continuous worker polling and batch-upload APIs. The later
-batch-upload contract accepts at most 50 files, reserves full-batch capacity atomically before
-staging any bytes, then validates each staged file independently and asynchronously.
+The Agent publication persists the resolved Knowledge Binding Set, including the local snapshot
+path and artifact root or the remote provider configuration version selected by Source
+publication, so production runs do not re-resolve mutable draft state. Batch upload accepts at most
+50 files, reserves full-batch capacity atomically before publishing quarantine records, then
+validates each staged file independently and asynchronously.
 
-For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
+For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol: Proof Agent sends a static-endpoint POST JSON body with `query` and `top_k`, and the remote endpoint returns `protocol_version: proof-agent.remote-retrieval.v1` plus a `results[]` array containing `content`, numeric `score`, and either `citation` or `source_ref`. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
+
+```yaml
+package_knowledge_sources:
+  - source_id: remote_policy
+    name: Remote Policy API
+    provider: http_json
+    params:
+      endpoint: https://knowledge.example/retrieve
+      top_k: 5
+      header_env_refs:
+        - name: Authorization
+          value_env: PA_KNOWLEDGE_TOKEN
+          prefix: "Bearer "
+      response_mapping:
+        results: /matches
+        content: /text
+        score: /score
+        citation: /citation
+```
+
+For a shared Dashboard-managed `http_json` Source, create the Source through
+`POST /api/config/knowledge-sources`, run the same `/publication/validate` endpoint with a smoke
+query, then publish the returned validation through `/publication/publish`. The validation calls
+the configured remote adapter, requires at least one normalized candidate and one citation, and
+publishes a `remote_config` resource without pretending the remote endpoint is a Local Index
+snapshot.
 
 ## 6. Configuring the Control Plane
 

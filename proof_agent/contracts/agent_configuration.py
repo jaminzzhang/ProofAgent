@@ -206,7 +206,9 @@ class KnowledgeSourcePublicationValidation(FrozenModel):
 
     validation_id: str
     source_id: str
-    snapshot_id: str
+    resource_kind: Literal["local_index_snapshot", "remote_config"] = "local_index_snapshot"
+    resource_id: str | None = None
+    snapshot_id: str | None = None
     source_draft_version_id: str
     candidate_digest: str
     status: Literal["passed"]
@@ -218,11 +220,13 @@ class KnowledgeSourcePublicationValidation(FrozenModel):
 
 
 class KnowledgeSourcePublicationRecord(FrozenModel):
-    """Immutable record for one published Knowledge Source snapshot."""
+    """Immutable record for one published Knowledge Source resource."""
 
     publication_id: str
     source_id: str
-    snapshot_id: str
+    resource_kind: Literal["local_index_snapshot", "remote_config"] = "local_index_snapshot"
+    resource_id: str | None = None
+    snapshot_id: str | None = None
     source_draft_version_id: str
     validation_id: str
     change_note: str
@@ -273,10 +277,20 @@ class KnowledgeDocument(FrozenModel):
     provider_document_id: str | None = None
     ingestion_job_id: str | None = None
     artifact_path: str | None = None
+    routing_metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
     error_code: str | None = None
     error_message: str | None = None
     created_at: str
     updated_at: str
+
+    @field_validator("routing_metadata", mode="after")
+    @classmethod
+    def freeze_routing_metadata(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("routing_metadata")
+    def serialize_routing_metadata(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
 
 
 class KnowledgeArtifactBuildSpec(FrozenModel):

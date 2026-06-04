@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
-from proof_agent.contracts import AgentManifest, KnowledgeSource, KnowledgeSourceSnapshotManifest
+from proof_agent.contracts import (
+    AgentManifest,
+    KnowledgeSource,
+    KnowledgeSourcePublicationRecord,
+    KnowledgeSourceSnapshotManifest,
+)
 from proof_agent.contracts.knowledge_resolution import (
     ResolvedKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
@@ -77,6 +82,35 @@ class ConfigurationStoreKnowledgeBindingResolver:
                     f"shared Knowledge Source is not published: {ref.source_id}",
                     "Publish the Knowledge Source before binding it to an Agent.",
                 )
+            if source.provider == "http_json":
+                publication = _published_remote_config_publication(
+                    store=self._store,
+                    source=source,
+                )
+                resource_id = publication.resource_id
+                if resource_id is None:
+                    raise ProofAgentError(
+                        "PA_CONFIG_002",
+                        f"published remote Knowledge Source config is missing: {source.source_id}",
+                        "Publish the Knowledge Source again or repair the Configuration Store.",
+                    )
+                provider_params = _provider_params_for_published_remote_source(source)
+                resolved.append(
+                    ResolvedKnowledgeBinding(
+                        binding_id=binding.binding_id,
+                        source_scope="shared",
+                        source_id=source.source_id,
+                        source_version_id=resource_id,
+                        provider=source.provider,
+                        provider_params=provider_params,
+                        alias=binding.alias,
+                        failure_mode=binding.failure_mode,
+                        fusion_weight=binding.fusion_weight,
+                        top_k=binding.top_k,
+                        routing_metadata=binding.routing_metadata,
+                    )
+                )
+                continue
             snapshot = self._store.get_knowledge_source_snapshot(
                 source_id=source.source_id,
                 snapshot_id=source.published_snapshot_id,
@@ -108,6 +142,31 @@ class ConfigurationStoreKnowledgeBindingResolver:
                 )
             )
         return ResolvedKnowledgeBindingSet(bindings=tuple(resolved))
+
+
+def _published_remote_config_publication(
+    *,
+    store: LocalAgentConfigurationStore,
+    source: KnowledgeSource,
+) -> KnowledgeSourcePublicationRecord:
+    for publication in reversed(store.list_knowledge_source_publications(source.source_id)):
+        resource_id = publication.resource_id
+        if resource_id is None:
+            continue
+        if (
+            publication.resource_kind == "remote_config"
+            and resource_id == source.published_snapshot_id
+        ):
+            return publication
+    raise ProofAgentError(
+        "PA_CONFIG_002",
+        f"published remote Knowledge Source config is missing: {source.source_id}",
+        "Publish the Knowledge Source again or repair the Configuration Store.",
+    )
+
+
+def _provider_params_for_published_remote_source(source: KnowledgeSource) -> dict[str, Any]:
+    return dict(source.params)
 
 
 def _provider_params_for_published_source(

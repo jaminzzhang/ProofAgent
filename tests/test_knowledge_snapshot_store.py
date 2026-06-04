@@ -251,6 +251,71 @@ def test_ready_job_completion_advances_source_draft_token(tmp_path: Path) -> Non
     assert after.source_draft_version_id != before.source_draft_version_id
 
 
+def test_document_routing_metadata_update_advances_source_draft_token_and_candidate(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_source(store)
+    document = _write_compatible_ready_document(
+        store,
+        tmp_path,
+        document_id="doc_policy",
+    )
+    before = store.get_knowledge_source("ks_policy")
+    assert before is not None
+
+    updated = store.update_knowledge_document_routing_metadata(
+        source_id="ks_policy",
+        document_id=document.document_id,
+        routing_metadata={
+            "title": "Claims Policy",
+            "description": "Inpatient claim rules",
+            "tags": ["claims", "inpatient", ""],
+            "document_type": "policy",
+        },
+        actor="operator",
+    )
+    candidate = store.get_candidate_knowledge_source_snapshot("ks_policy")
+    after = store.get_knowledge_source("ks_policy")
+
+    assert after is not None
+    assert after.source_draft_version_id != before.source_draft_version_id
+    assert updated.routing_metadata == {
+        "title": "Claims Policy",
+        "description": "Inpatient claim rules",
+        "tags": ["claims", "inpatient"],
+        "document_type": "policy",
+    }
+    assert candidate.included_documents[0].routing_metadata == updated.routing_metadata
+
+
+def test_document_routing_metadata_update_rejects_unknown_fields_without_draft_change(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_source(store)
+    document = _write_compatible_ready_document(
+        store,
+        tmp_path,
+        document_id="doc_policy",
+    )
+    before = store.get_knowledge_source("ks_policy")
+    assert before is not None
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.update_knowledge_document_routing_metadata(
+            source_id="ks_policy",
+            document_id=document.document_id,
+            routing_metadata={"unknown": "claims"},
+            actor="operator",
+        )
+
+    after = store.get_knowledge_source("ks_policy")
+    assert after is not None
+    assert after.source_draft_version_id == before.source_draft_version_id
+    assert exc.value.code == "PA_CONFIG_001"
+
+
 def test_non_membership_upload_transitions_do_not_advance_source_draft_token(
     tmp_path: Path,
 ) -> None:

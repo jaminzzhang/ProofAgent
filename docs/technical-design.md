@@ -189,7 +189,7 @@ Layer boundary rules:
 
 | Area | Current implementation |
 | --- | --- |
-| Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `server`, and one-shot `knowledge-worker --once` |
+| Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `server`, continuous `knowledge-worker`, and bounded `knowledge-worker --once` |
 | Docker | `Dockerfile`, `docker-compose.yml` runs demo by default |
 | Contracts | Pydantic v2 frozen models |
 | Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, and `HarnessInvocation` composition |
@@ -592,7 +592,7 @@ Current baseline:
 - deterministic binding metadata routing for single-step, reviewed/fallback, and planner/evaluator-backed agentic retrieval.
 - binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and provider-call trace summaries for blended retrieval.
 - explicit `package_knowledge_sources[]` plus `knowledge_bindings[].source_ref` Agent Contract shape.
-- Configuration Store Source publication validation and Published Agent binding resolution for shared `local_index` Sources.
+- Configuration Store Source publication validation and Published Agent binding resolution for shared `local_index` snapshots and shared `http_json` remote configuration versions.
 
 Knowledge Hub target shape:
 - Knowledge Sources own provider configuration and publication lifecycle.
@@ -652,20 +652,20 @@ Local Index strategy:
 - The routing model returns a strict JSON document-id selection. `params.document_selection_budget` defaults to `8` and accepts integers from `1` through `20`. Runtime loads only the selected immutable revision artifacts, merges candidate evidence deterministically, and fails closed without partial evidence when any selected document cannot be loaded or searched.
 - The Control Plane applies `before_model_call` policy and safe model request/response tracing to Source-owned routing-model calls. Retrieval traces consume the provider's one-shot summary through an allowlisted projection and record bounded `document_candidates[]` plus `selected_documents[]` without raw document content.
 - Local Index uses stable internal citation URIs and permission-protected citation preview rather than storage paths.
-- The current ingestion foundation stages one upload per API request as a Quarantined Knowledge Upload before creating a document revision or ingestion job. A `knowledge-worker --once` invocation performs housekeeping and processes at most one queued quarantine-validation or artifact-build task.
+- The current ingestion foundation stages single-file requests and atomic batches as Quarantined Knowledge Upload records before creating document revisions or ingestion jobs. Batch upload accepts at most 50 files, reserves capacity for the full batch before publishing quarantine records, and then validates each staged file independently and asynchronously. Continuous `knowledge-worker` polling performs housekeeping, advances queued quarantine-validation and artifact-build tasks until stopped, and sleeps after idle polls; `knowledge-worker --once` remains available for bounded scripts and tests.
 - Accepted originals are UTF-8 Markdown or text-based PDF. The default PDF adapter is `pypdf`, which handles font encoding and CMap extraction while failing closed for malformed PDFs, encrypted PDFs, PDFs above 500 pages, and PDFs without meaningful extracted text.
 - Parser identity participates in artifact compatibility. A default PDF identity such as `pypdf:v1@{installed_version}` makes parser upgrades explicit rebuild boundaries.
 - Docling is a future layout-aware parser adapter for tables, formulas, images, OCR, and richer structure recovery. It is not the default foundation adapter because ordinary text-based PDF ingestion does not justify its larger pipeline and model-weight concerns.
 - Recoverable artifact-build failures persist bounded retry state with 30-second then 120-second backoff. Artifact-key contention defers without consuming the retry budget.
 - Source claim concurrency is configured through `params.worker_concurrency`, defaults to `2`, and is bounded from `1` through `8`.
 - The snapshot-freeze foundation derives a mutable Candidate Knowledge Source Snapshot from READY active document revisions and a lightweight Source Draft version token. It persists `foundation` freeze-readiness validation, freezes an immutable `local_index.snapshot.v2` manifest of revision artifact references without copying artifacts or rebuilding a merged index, and atomically advances `latest_snapshot_id`.
-- Source publication validation runs a smoke retrieval against the latest frozen snapshot and persists a passed `KnowledgeSourcePublicationValidation`. Publishing that validation creates an immutable publication record and advances `published_snapshot_id`.
-- Dashboard-managed Draft Agents may bind only published shared Sources. Agent validation resolves shared bindings to a `ResolvedKnowledgeBindingSet`, and Published Agent Versions persist that resolved set so production runs use the vetted snapshot path.
-- Remaining Knowledge Hub gaps include continuous worker polling, batch-upload APIs, routing metadata editing, trusted `http_json`, and hierarchical routing beyond the bounded first `100` candidates.
-- The later batch-upload contract accepts at most 50 files, atomically reserves capacity for the full batch before staging bytes, then validates each staged file independently and asynchronously.
+- Dashboard and API operators may edit the allowlisted routing-only fields `title`, `description`, `tags`, `document_type`, and `business_category` on managed Knowledge Documents. Edits advance the Source Draft version and candidate digest without reingesting the document or rebuilding immutable revision artifacts.
+- Source publication validation records an explicit published resource. `local_index` runs smoke retrieval against the latest frozen snapshot and publishes a `local_index_snapshot`; `http_json` runs smoke retrieval against the remote adapter configuration and publishes a `remote_config`. Publishing either validation creates an immutable publication record and advances the legacy `published_snapshot_id` pointer to the published resource id.
+- Dashboard-managed Draft Agents may bind only published shared Sources. Agent validation resolves shared bindings to a `ResolvedKnowledgeBindingSet`, and Published Agent Versions persist that resolved set so production runs use the vetted snapshot path or remote provider configuration version.
+- Remaining Knowledge Hub gaps include richer remote retrieval preview/health-check UX and hierarchical routing beyond the bounded first `100` candidates.
 
 Remote adapter strategy:
-- `http_json` has a preferred default Remote Retrieval Protocol.
+- `http_json` is registered as a trusted remote runtime adapter with a preferred default Remote Retrieval Protocol.
 - Non-standard remote APIs may use bounded request and response mappings; mappings are declarative configuration, not executable code.
 - Response mappings use JSON Pointer and must yield content plus citation or an adequate structured source reference before evidence can enter Accepted Evidence Context.
 - Evidence Admission Score may come only from an approved calibrated adapter descriptor or approved admission scorer.
@@ -675,12 +675,13 @@ Implementation sequence:
 2. Add the Control Plane Knowledge Retrieval Service and route Enterprise QA plus Controlled ReAct retrieval through it; the current service centralizes policy-gated or reviewed provider calls, deterministic binding metadata routing for single-step and reviewed/fallback retrieval, binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and evidence admission.
 3. Complete initial `local_index` runtime load so Agent execution reads READY LlamaIndex-backed Knowledge Source Snapshots without building indexes on demand.
 4. Extend planner/evaluator-backed agentic retrieval with the same service-routed provider adapter; each round now re-enters bounded source routing and records round-correlated provider summaries. Add richer retrieval plan summaries and citation enforcement next.
-5. Add the Local Index ingestion worker foundation; the current slice stages and validates quarantined uploads, promotes accepted document revisions, builds immutable revision artifacts, persists bounded retries, and exposes one-shot CLI plus status APIs.
+5. Add the Local Index ingestion worker foundation; the current slice stages and validates quarantined uploads, promotes accepted document revisions, builds immutable revision artifacts, persists bounded retries, and exposes continuous worker polling, bounded one-shot CLI execution, and status APIs.
 6. Add the Local Index snapshot-freeze foundation; the current slice derives candidate snapshots, persists foundation validation, freezes immutable `local_index.snapshot.v2` manifests, advances the preview-only latest snapshot pointer, and exposes management APIs.
 7. Add `local_index.snapshot.v2` multi-document runtime routing; the current runtime validates the immutable manifest, routes over bounded trace-safe document projections, loads selected revision artifacts read-only, fails closed on selected-document errors, and records one-shot routing summaries through the Control Plane.
-8. Source publication and production binding resolution are implemented for local Configuration Store Sources; the current slice validates publication smoke retrieval, publishes Source snapshots, rejects unpublished shared Source bindings, and persists resolved bindings on Published Agent Versions.
-9. Add continuous worker polling, atomic batch upload, and the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
-10. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
+8. Source publication and production binding resolution are implemented for Configuration Store Sources; the current slice validates publication smoke retrieval, publishes local Source snapshots or remote `http_json` configuration versions, rejects unpublished shared Source bindings, and persists resolved bindings on Published Agent Versions.
+9. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings; the current adapter is package-local/runtime-ready and Configuration API creation-ready.
+10. Add a Remote Source Publication Contract so shared `http_json` Knowledge Sources can be validated, versioned, published, and bound without masquerading as Local Index snapshots; the current contract records `resource_kind: remote_config`, a stable `ksremote_*` resource id, and the smoke validation evidence counts used for publication.
+11. Add richer remote retrieval preview and health-check surfaces, then extend contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
 
 ## 15. Model Providers
 

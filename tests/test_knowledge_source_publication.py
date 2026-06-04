@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import proof_agent.capabilities.knowledge.http_json as http_json_module
 from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     ARTIFACT_META_FILENAME,
     REQUIRED_LLAMA_INDEX_FILES,
@@ -121,14 +122,67 @@ def test_publish_writes_record_and_published_snapshot_pointer(tmp_path: Path) ->
     assert record.publication_id.startswith("kspub_")
     assert record.source_id == "ks_policy"
     assert record.snapshot_id == validation.snapshot_id
+
+
+def test_http_json_publication_validates_and_publishes_remote_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="ks_remote",
+        name="Remote Policies",
+        provider="http_json",
+        params={"endpoint": "https://knowledge.example/retrieve", "top_k": 2},
+        actor="operator",
+    )
+    monkeypatch.setattr(
+        http_json_module,
+        "_send_http_json_request",
+        lambda request: {
+            "protocol_version": "proof-agent.remote-retrieval.v1",
+            "upstream_revision": "remote_rev_1",
+            "results": [
+                {
+                    "content": "Remote policy evidence.",
+                    "score": 0.88,
+                    "citation": "https://knowledge.example/policies#remote",
+                }
+            ],
+        },
+    )
+
+    validation = store.validate_http_json_source_publication(
+        source_id="ks_remote",
+        smoke_query="What does the remote policy require?",
+        actor="validator",
+    )
+    record = store.publish_knowledge_source(
+        source_id="ks_remote",
+        validation_id=validation.validation_id,
+        change_note="Publish remote policy API.",
+        actor="operator",
+    )
+    source = store.get_knowledge_source("ks_remote")
+
+    assert source is not None
+    assert validation.resource_kind == "remote_config"
+    assert validation.resource_id.startswith("ksremote_")
+    assert validation.snapshot_id is None
+    assert validation.candidate_count == 1
+    assert validation.citation_count == 1
+    assert record.resource_kind == "remote_config"
+    assert record.resource_id == validation.resource_id
+    assert record.snapshot_id is None
+    assert source.published_snapshot_id == record.resource_id
     assert record.source_draft_version_id == validation.source_draft_version_id
     assert record.validation_id == validation.validation_id
-    assert record.change_note == "Initial publication."
+    assert record.change_note == "Publish remote policy API."
     assert record.published_by == "operator"
-    assert record.document_count == 1
+    assert record.document_count == 0
     assert record.smoke_query == validation.smoke_query
     assert record.smoke_result_summary["candidate_count"] == 1
-    assert store.list_knowledge_source_publications("ks_policy") == [record]
+    assert store.list_knowledge_source_publications("ks_remote") == [record]
 
 
 def test_reusing_publication_validation_conflicts(tmp_path: Path) -> None:

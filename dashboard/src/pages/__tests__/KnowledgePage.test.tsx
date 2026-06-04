@@ -117,6 +117,69 @@ describe('KnowledgePage', () => {
     })
   })
 
+  it('creates http json sources with endpoint and response mapping params', async () => {
+    vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(createKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_remote',
+      name: 'Remote Policies',
+      provider: 'http_json',
+      params: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: null,
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 0,
+      ready_document_count: 0,
+    })
+
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Knowledge Sources')
+    fireEvent.change(screen.getByLabelText('Source Type'), { target: { value: 'http_json' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Remote Policies' } })
+    fireEvent.change(screen.getByLabelText('Source ID'), { target: { value: 'ks_remote' } })
+    fireEvent.change(screen.getByLabelText('Remote Endpoint'), {
+      target: { value: 'https://knowledge.example/retrieve' },
+    })
+    fireEvent.change(screen.getByLabelText('Header Value Env'), {
+      target: { value: 'PA_KNOWLEDGE_TOKEN' },
+    })
+    fireEvent.change(screen.getByLabelText('Remote Top K'), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Source' }))
+
+    await waitFor(() => {
+      expect(createKnowledgeSource).toHaveBeenCalledWith({
+        source_id: 'ks_remote',
+        name: 'Remote Policies',
+        provider: 'http_json',
+        params: {
+          endpoint: 'https://knowledge.example/retrieve',
+          top_k: 3,
+          header_env_refs: [
+            {
+              name: 'Authorization',
+              value_env: 'PA_KNOWLEDGE_TOKEN',
+              prefix: 'Bearer ',
+            },
+          ],
+          response_mapping: {
+            results: '/results',
+            content: '/content',
+            score: '/score',
+            citation: '/citation',
+          },
+        },
+        actor: 'dashboard',
+      })
+    })
+  })
+
   it('shows an error state when knowledge sources cannot load', async () => {
     vi.mocked(fetchKnowledgeSources).mockRejectedValue(new Error('network down'))
 

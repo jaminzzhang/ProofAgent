@@ -23,7 +23,10 @@ from proof_agent.configuration.file_locking import (
     store_lock_path,
     try_locked,
 )
-from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.configuration.local_store import (
+    KnowledgeUploadStagingInput,
+    LocalAgentConfigurationStore,
+)
 from proof_agent.contracts import KnowledgeDocument, KnowledgeIngestionJob
 from proof_agent.errors import ProofAgentError
 
@@ -200,6 +203,78 @@ def test_stage_quarantined_upload_atomically_persists_bytes_and_record(tmp_path:
         [first.upload_id, second.upload_id]
     )
     assert (uploads_root / first.upload_id / "upload.json").exists()
+
+
+def test_stage_quarantined_upload_batch_reserves_full_batch_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(local_store_module, "KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY", 2)
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_local_index_source(store)
+
+    uploads = store.stage_quarantined_knowledge_upload_batch(
+        source_id="ks_local_index",
+        uploads=(
+            KnowledgeUploadStagingInput(
+                filename="first.md",
+                content_type="text/markdown",
+                content=b"# First\n",
+            ),
+            KnowledgeUploadStagingInput(
+                filename="second.md",
+                content_type="text/markdown",
+                content=b"# Second\n",
+            ),
+        ),
+        actor="local-user",
+    )
+
+    assert [upload.filename for upload in uploads] == ["first.md", "second.md"]
+    assert store.count_reserved_knowledge_document_slots("ks_local_index") == 2
+    assert store.list_quarantined_knowledge_uploads("ks_local_index") == uploads
+    assert [
+        store.quarantined_knowledge_upload_bytes_path(upload).read_bytes()
+        for upload in uploads
+    ] == [b"# First\n", b"# Second\n"]
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.stage_quarantined_knowledge_upload_batch(
+            source_id="ks_local_index",
+            uploads=(
+                KnowledgeUploadStagingInput(
+                    filename="third.md",
+                    content_type="text/markdown",
+                    content=b"# Third\n",
+                ),
+            ),
+            actor="local-user",
+        )
+
+    assert exc.value.code == "PA_INGESTION_004"
+    assert store.list_quarantined_knowledge_uploads("ks_local_index") == uploads
+
+
+def test_stage_quarantined_upload_batch_rejects_more_than_50_files(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_local_index_source(store)
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.stage_quarantined_knowledge_upload_batch(
+            source_id="ks_local_index",
+            uploads=tuple(
+                KnowledgeUploadStagingInput(
+                    filename=f"policy-{index}.md",
+                    content_type="text/markdown",
+                    content=b"# Policy\n",
+                )
+                for index in range(51)
+            ),
+            actor="local-user",
+        )
+
+    assert exc.value.code == "PA_INGESTION_002"
+    assert store.list_quarantined_knowledge_uploads("ks_local_index") == []
 
 
 def test_staging_counts_managed_documents_against_source_capacity(

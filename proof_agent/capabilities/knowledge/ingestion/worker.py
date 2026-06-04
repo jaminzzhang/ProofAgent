@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from time import sleep as _sleep
 from typing import Literal, Protocol
 
 from proof_agent.capabilities.knowledge.ingestion.configuration import (
@@ -107,6 +108,28 @@ class KnowledgeIngestionWorker:
         else:
             outcome = self._process_artifact_build(selection.task)
         return KnowledgeWorkerResult(outcome=outcome, diagnostics=selection.diagnostics)
+
+    def run_continuously(
+        self,
+        *,
+        poll_interval_seconds: float = 5.0,
+        report_result: Callable[[KnowledgeWorkerResult | None], None] | None = None,
+        sleep: Callable[[float], None] = _sleep,
+        stop_requested: Callable[[], bool] = lambda: False,
+    ) -> None:
+        """Keep processing queued work until an explicit stop boundary is reached."""
+
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive.")
+        while not stop_requested():
+            result = self.run_once()
+            if report_result is not None:
+                report_result(result)
+            if result is not None and result.outcome is not None:
+                continue
+            if stop_requested():
+                break
+            sleep(poll_interval_seconds)
 
     def _process_quarantine_validation(
         self,

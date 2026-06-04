@@ -12,6 +12,7 @@ from proof_agent.capabilities.knowledge.local_provider import (
     LocalKnowledgeProvider,
     LocalMarkdownProvider,
 )
+from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider, HttpJsonRequest
 from proof_agent.capabilities.knowledge.provider import (
     KnowledgeProvider,
     StructuredKnowledgeProvider,
@@ -32,6 +33,8 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "DocumentNode",
+    "HttpJsonProvider",
+    "HttpJsonRequest",
     "KnowledgeDocumentRoutingSelection",
     "KnowledgeProvider",
     "LocalIndexProvider",

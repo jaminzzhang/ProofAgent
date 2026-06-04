@@ -14,6 +14,7 @@ export function KnowledgePage() {
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [sourceProvider, setSourceProvider] = useState<'local_index' | 'http_json'>('local_index')
   const [name, setName] = useState('Local Index Knowledge')
   const [sourceId, setSourceId] = useState('')
   const [ingestionProvider, setIngestionProvider] = useState('deterministic')
@@ -21,6 +22,13 @@ export function KnowledgePage() {
   const [credentialEnv, setCredentialEnv] = useState('')
   const [documentSelectionBudget, setDocumentSelectionBudget] = useState('8')
   const [workerConcurrency, setWorkerConcurrency] = useState('2')
+  const [remoteEndpoint, setRemoteEndpoint] = useState('')
+  const [remoteHeaderEnv, setRemoteHeaderEnv] = useState('')
+  const [remoteTopK, setRemoteTopK] = useState('5')
+  const [remoteResultsPointer, setRemoteResultsPointer] = useState('/results')
+  const [remoteContentPointer, setRemoteContentPointer] = useState('/content')
+  const [remoteScorePointer, setRemoteScorePointer] = useState('/score')
+  const [remoteCitationPointer, setRemoteCitationPointer] = useState('/citation')
 
   async function loadSources() {
     const { data } = await fetchKnowledgeSources()
@@ -56,16 +64,22 @@ export function KnowledgePage() {
       const source = await createKnowledgeSource({
         source_id: sourceId || undefined,
         name,
-        provider: 'local_index',
-        params: {
-          ingestion_model: {
-            provider: ingestionProvider,
-            name: ingestionModelName,
-            params: credentialEnv ? { api_key_env: credentialEnv } : {},
-          },
-          document_selection_budget: positiveNumber(documentSelectionBudget, 8),
-          worker_concurrency: positiveNumber(workerConcurrency, 2),
-        },
+        provider: sourceProvider,
+        params: sourceProvider === 'http_json' ? httpJsonParams({
+          endpoint: remoteEndpoint,
+          headerEnv: remoteHeaderEnv,
+          topK: remoteTopK,
+          resultsPointer: remoteResultsPointer,
+          contentPointer: remoteContentPointer,
+          scorePointer: remoteScorePointer,
+          citationPointer: remoteCitationPointer,
+        }) : localIndexParams({
+          ingestionProvider,
+          ingestionModelName,
+          credentialEnv,
+          documentSelectionBudget,
+          workerConcurrency,
+        }),
         actor: 'dashboard',
       })
       setStatus(`Created ${source.name}.`)
@@ -92,25 +106,53 @@ export function KnowledgePage() {
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
         <div className="mb-4">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Create Local Index Source
+            Create Knowledge Source
           </h3>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Configure the ingestion model and worker limits before uploading documents in the Source workspace.
+            Configure a local index source for managed documents or connect a trusted HTTP JSON retrieval API.
           </p>
         </div>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <SelectField
+            label="Source Type"
+            value={sourceProvider}
+            onChange={(value) => setSourceProvider(value as 'local_index' | 'http_json')}
+            options={[
+              { value: 'local_index', label: 'Local Index' },
+              { value: 'http_json', label: 'HTTP JSON' },
+            ]}
+          />
           <TextField label="Name" value={name} onChange={setName} />
           <TextField label="Source ID" value={sourceId} onChange={setSourceId} placeholder="ks_policies" />
-          <TextField label="Ingestion Provider" value={ingestionProvider} onChange={setIngestionProvider} />
-          <TextField label="Ingestion Model" value={ingestionModelName} onChange={setIngestionModelName} />
-          <TextField label="API Key Env" value={credentialEnv} onChange={setCredentialEnv} placeholder="OPENAI_API_KEY" />
-          <NumberField label="Document Selection Budget" value={documentSelectionBudget} onChange={setDocumentSelectionBudget} min={1} />
-          <NumberField label="Worker Concurrency" value={workerConcurrency} onChange={setWorkerConcurrency} min={1} />
+          {sourceProvider === 'local_index' ? (
+            <>
+              <TextField label="Ingestion Provider" value={ingestionProvider} onChange={setIngestionProvider} />
+              <TextField label="Ingestion Model" value={ingestionModelName} onChange={setIngestionModelName} />
+              <TextField label="API Key Env" value={credentialEnv} onChange={setCredentialEnv} placeholder="OPENAI_API_KEY" />
+              <NumberField label="Document Selection Budget" value={documentSelectionBudget} onChange={setDocumentSelectionBudget} min={1} />
+              <NumberField label="Worker Concurrency" value={workerConcurrency} onChange={setWorkerConcurrency} min={1} />
+            </>
+          ) : (
+            <>
+              <TextField label="Remote Endpoint" value={remoteEndpoint} onChange={setRemoteEndpoint} placeholder="https://knowledge.example/retrieve" />
+              <TextField label="Header Value Env" value={remoteHeaderEnv} onChange={setRemoteHeaderEnv} placeholder="PA_KNOWLEDGE_TOKEN" />
+              <NumberField label="Remote Top K" value={remoteTopK} onChange={setRemoteTopK} min={1} />
+              <TextField label="Results Pointer" value={remoteResultsPointer} onChange={setRemoteResultsPointer} />
+              <TextField label="Content Pointer" value={remoteContentPointer} onChange={setRemoteContentPointer} />
+              <TextField label="Score Pointer" value={remoteScorePointer} onChange={setRemoteScorePointer} />
+              <TextField label="Citation Pointer" value={remoteCitationPointer} onChange={setRemoteCitationPointer} />
+            </>
+          )}
         </div>
         <div className="mt-4 flex justify-end">
           <button
             onClick={createSource}
-            disabled={busy === 'create' || !name.trim() || !ingestionProvider.trim() || !ingestionModelName.trim()}
+            disabled={busy === 'create' || !name.trim() || !sourceFormReady({
+              sourceProvider,
+              ingestionProvider,
+              ingestionModelName,
+              remoteEndpoint,
+            })}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
             {busy === 'create' ? 'Creating...' : 'Create Source'}
@@ -188,6 +230,37 @@ function TextField({
   )
 }
 
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 function NumberField({
   label,
   value,
@@ -213,6 +286,83 @@ function NumberField({
       />
     </label>
   )
+}
+
+function localIndexParams({
+  ingestionProvider,
+  ingestionModelName,
+  credentialEnv,
+  documentSelectionBudget,
+  workerConcurrency,
+}: {
+  ingestionProvider: string
+  ingestionModelName: string
+  credentialEnv: string
+  documentSelectionBudget: string
+  workerConcurrency: string
+}): Record<string, unknown> {
+  return {
+    ingestion_model: {
+      provider: ingestionProvider,
+      name: ingestionModelName,
+      params: credentialEnv ? { api_key_env: credentialEnv } : {},
+    },
+    document_selection_budget: positiveNumber(documentSelectionBudget, 8),
+    worker_concurrency: positiveNumber(workerConcurrency, 2),
+  }
+}
+
+function httpJsonParams({
+  endpoint,
+  headerEnv,
+  topK,
+  resultsPointer,
+  contentPointer,
+  scorePointer,
+  citationPointer,
+}: {
+  endpoint: string
+  headerEnv: string
+  topK: string
+  resultsPointer: string
+  contentPointer: string
+  scorePointer: string
+  citationPointer: string
+}): Record<string, unknown> {
+  return {
+    endpoint,
+    top_k: positiveNumber(topK, 5),
+    ...(headerEnv.trim() ? {
+      header_env_refs: [
+        {
+          name: 'Authorization',
+          value_env: headerEnv.trim(),
+          prefix: 'Bearer ',
+        },
+      ],
+    } : {}),
+    response_mapping: {
+      results: resultsPointer,
+      content: contentPointer,
+      score: scorePointer,
+      citation: citationPointer,
+    },
+  }
+}
+
+function sourceFormReady({
+  sourceProvider,
+  ingestionProvider,
+  ingestionModelName,
+  remoteEndpoint,
+}: {
+  sourceProvider: 'local_index' | 'http_json'
+  ingestionProvider: string
+  ingestionModelName: string
+  remoteEndpoint: string
+}): boolean {
+  if (sourceProvider === 'http_json') return Boolean(remoteEndpoint.trim())
+  return Boolean(ingestionProvider.trim() && ingestionModelName.trim())
 }
 
 function positiveNumber(value: string, fallback: number): number {

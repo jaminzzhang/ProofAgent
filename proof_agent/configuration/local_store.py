@@ -7,7 +7,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Mapping
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -17,6 +17,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from proof_agent.bootstrap.validation import validate_secret_safe_params
+from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider
 from proof_agent.capabilities.knowledge.ingestion import (
     KnowledgeWorkerClaimSelection,
     KnowledgeWorkerDiagnostic,
@@ -51,13 +52,33 @@ from proof_agent.contracts import (
     ResolvedKnowledgeBindingSet,
 )
 from proof_agent.configuration.file_locking import locked, store_lock_path
+from proof_agent.contracts.manifest import KnowledgeConfig
 from proof_agent.control.knowledge.source_publication import (
     validate_local_index_publication_smoke,
 )
 from proof_agent.errors import ProofAgentError
 
 KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY = 500
+MAX_QUARANTINED_UPLOAD_BATCH_FILES = 50
+KNOWLEDGE_DOCUMENT_ROUTING_METADATA_KEYS = (
+    "title",
+    "description",
+    "tags",
+    "document_type",
+    "business_category",
+)
+MAX_ROUTING_METADATA_SCALARS = 20
+MAX_ROUTING_METADATA_SCALAR_CHARS = 300
 STORE_LOCK_TIMEOUT_SECONDS = 5.0
+
+
+@dataclass(frozen=True)
+class KnowledgeUploadStagingInput:
+    """One request-envelope-validated upload ready for quarantine staging."""
+
+    filename: str
+    content_type: str
+    content: bytes
 
 
 class LocalAgentConfigurationStore:
@@ -558,6 +579,8 @@ class LocalAgentConfigurationStore:
             validation = KnowledgeSourcePublicationValidation(
                 validation_id=f"kspubval_{uuid4().hex[:8]}",
                 source_id=current_source.source_id,
+                resource_kind="local_index_snapshot",
+                resource_id=current_snapshot.snapshot_id,
                 snapshot_id=current_snapshot.snapshot_id,
                 source_draft_version_id=current_snapshot.source_draft_version_id,
                 candidate_digest=current_snapshot.candidate_digest,
@@ -565,6 +588,77 @@ class LocalAgentConfigurationStore:
                 smoke_query=smoke_query.strip(),
                 candidate_count=smoke_result.candidate_count,
                 citation_count=smoke_result.citation_count,
+                created_at=_now(),
+                created_by=actor,
+            )
+            self._write_knowledge_source_publication_validation(validation)
+            return validation
+
+    def validate_http_json_source_publication(
+        self,
+        *,
+        source_id: str,
+        smoke_query: str,
+        actor: str,
+    ) -> KnowledgeSourcePublicationValidation:
+        if not smoke_query.strip():
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                "knowledge source publication smoke_query is required",
+                "Provide a smoke_query that should retrieve cited evidence from the Source.",
+            )
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._normalized_http_json_source_unlocked(source_id)
+            config_digest = _remote_knowledge_source_config_digest(source)
+            resource_id = _remote_knowledge_source_config_resource_id(
+                source_id=source.source_id,
+                source_draft_version_id=_required_source_draft_version_id(source),
+                config_digest=config_digest,
+            )
+
+        provider = HttpJsonProvider.from_config(
+            KnowledgeConfig(provider="http_json", params=source.params)
+        )
+        evidence = provider.retrieve(smoke_query.strip())
+        candidate_count = len(evidence)
+        citation_count = sum(1 for chunk in evidence if chunk.citation)
+        if candidate_count <= 0:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                "knowledge source publication smoke retrieval returned no evidence",
+                "Use a smoke_query that retrieves at least one candidate evidence result.",
+            )
+        if citation_count <= 0:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                "knowledge source publication smoke retrieval returned no citations",
+                "Ensure the remote Source can return cited evidence.",
+            )
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            current_source = self._normalized_http_json_source_unlocked(source_id)
+            current_digest = _remote_knowledge_source_config_digest(current_source)
+            current_resource_id = _remote_knowledge_source_config_resource_id(
+                source_id=current_source.source_id,
+                source_draft_version_id=_required_source_draft_version_id(current_source),
+                config_digest=current_digest,
+            )
+            if current_resource_id != resource_id:
+                raise _knowledge_publication_conflict(
+                    "Knowledge Source remote configuration changed during publication validation."
+                )
+            validation = KnowledgeSourcePublicationValidation(
+                validation_id=f"kspubval_{uuid4().hex[:8]}",
+                source_id=current_source.source_id,
+                resource_kind="remote_config",
+                resource_id=current_resource_id,
+                snapshot_id=None,
+                source_draft_version_id=_required_source_draft_version_id(current_source),
+                candidate_digest=current_digest,
+                status="passed",
+                smoke_query=smoke_query.strip(),
+                candidate_count=candidate_count,
+                citation_count=citation_count,
                 created_at=_now(),
                 created_by=actor,
             )
@@ -604,7 +698,7 @@ class LocalAgentConfigurationStore:
                 "Provide a concise change_note explaining what is being published.",
             )
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
-            source = self._normalized_local_index_source_unlocked(source_id)
+            source = self._require_knowledge_source(source_id)
             validation = self._require_knowledge_source_publication_validation(
                 source_id=source.source_id,
                 validation_id=validation_id,
@@ -613,62 +707,174 @@ class LocalAgentConfigurationStore:
                 raise _knowledge_publication_conflict(
                     "Publication validation record does not belong to this Knowledge Source."
                 )
-            snapshot = self.get_knowledge_source_snapshot(
-                source_id=source.source_id,
-                snapshot_id=validation.snapshot_id,
+            if source.provider == "local_index":
+                return self._publish_local_index_knowledge_source_unlocked(
+                    source_id=source.source_id,
+                    validation=validation,
+                    change_note=change_note,
+                    actor=actor,
+                )
+            if source.provider == "http_json":
+                return self._publish_http_json_knowledge_source_unlocked(
+                    source_id=source.source_id,
+                    validation=validation,
+                    change_note=change_note,
+                    actor=actor,
+                )
+            raise _knowledge_publication_conflict(
+                f"Knowledge Source provider cannot be published: {source.provider}"
             )
-            if snapshot is None:
-                raise _knowledge_publication_conflict(
-                    "Publication validation references a missing Knowledge Source Snapshot."
-                )
-            candidate = self._candidate_knowledge_source_snapshot_unlocked(source)
-            if validation.source_draft_version_id != candidate.source_draft_version_id:
-                raise _knowledge_publication_conflict(
-                    "Publication validation is stale for the current Knowledge Source Draft Version."
-                )
-            if validation.candidate_digest != candidate.candidate_digest:
-                raise _knowledge_publication_conflict(
-                    "Publication validation is stale for the current candidate snapshot."
-                )
-            if snapshot.source_draft_version_id != validation.source_draft_version_id:
-                raise _knowledge_publication_conflict(
-                    "Publication validation does not match its frozen snapshot draft version."
-                )
-            if snapshot.candidate_digest != validation.candidate_digest:
-                raise _knowledge_publication_conflict(
-                    "Publication validation does not match its frozen snapshot candidate digest."
-                )
-            for publication in self.list_knowledge_source_publications(source.source_id):
-                if publication.validation_id == validation.validation_id:
-                    raise _knowledge_publication_conflict(
-                        "Publication validation has already been published."
-                    )
-            record = KnowledgeSourcePublicationRecord(
-                publication_id=f"kspub_{uuid4().hex[:8]}",
-                source_id=source.source_id,
-                snapshot_id=snapshot.snapshot_id,
-                source_draft_version_id=snapshot.source_draft_version_id,
-                validation_id=validation.validation_id,
-                change_note=change_note.strip(),
-                published_at=_now(),
-                published_by=actor,
-                document_count=len(snapshot.documents),
-                smoke_query=validation.smoke_query,
-                smoke_result_summary={
-                    "candidate_count": validation.candidate_count,
-                    "citation_count": validation.citation_count,
-                },
+
+    def _publish_local_index_knowledge_source_unlocked(
+        self,
+        *,
+        source_id: str,
+        validation: KnowledgeSourcePublicationValidation,
+        change_note: str,
+        actor: str,
+    ) -> KnowledgeSourcePublicationRecord:
+        source = self._normalized_local_index_source_unlocked(source_id)
+        if validation.resource_kind != "local_index_snapshot":
+            raise _knowledge_publication_conflict(
+                "Publication validation resource kind does not match local_index."
             )
-            self._write_knowledge_source_publication(record)
-            self._write_knowledge_source(
-                source.model_copy(
-                    update={
-                        "published_snapshot_id": snapshot.snapshot_id,
-                        "updated_at": _now(),
-                    }
-                )
+        snapshot_id = validation.resource_id or validation.snapshot_id
+        if snapshot_id is None:
+            raise _knowledge_publication_conflict(
+                "Publication validation references no Knowledge Source Snapshot."
             )
-            return record
+        if validation.resource_id is not None and validation.snapshot_id is not None:
+            if validation.resource_id != validation.snapshot_id:
+                raise _knowledge_publication_conflict(
+                    "Publication validation has inconsistent snapshot resource pointers."
+                )
+        snapshot = self.get_knowledge_source_snapshot(
+            source_id=source.source_id,
+            snapshot_id=snapshot_id,
+        )
+        if snapshot is None:
+            raise _knowledge_publication_conflict(
+                "Publication validation references a missing Knowledge Source Snapshot."
+            )
+        candidate = self._candidate_knowledge_source_snapshot_unlocked(source)
+        if validation.source_draft_version_id != candidate.source_draft_version_id:
+            raise _knowledge_publication_conflict(
+                "Publication validation is stale for the current Knowledge Source Draft Version."
+            )
+        if validation.candidate_digest != candidate.candidate_digest:
+            raise _knowledge_publication_conflict(
+                "Publication validation is stale for the current candidate snapshot."
+            )
+        if snapshot.source_draft_version_id != validation.source_draft_version_id:
+            raise _knowledge_publication_conflict(
+                "Publication validation does not match its frozen snapshot draft version."
+            )
+        if snapshot.candidate_digest != validation.candidate_digest:
+            raise _knowledge_publication_conflict(
+                "Publication validation does not match its frozen snapshot candidate digest."
+            )
+        for publication in self.list_knowledge_source_publications(source.source_id):
+            if publication.validation_id == validation.validation_id:
+                raise _knowledge_publication_conflict(
+                    "Publication validation has already been published."
+                )
+        record = KnowledgeSourcePublicationRecord(
+            publication_id=f"kspub_{uuid4().hex[:8]}",
+            source_id=source.source_id,
+            resource_kind="local_index_snapshot",
+            resource_id=snapshot.snapshot_id,
+            snapshot_id=snapshot.snapshot_id,
+            source_draft_version_id=snapshot.source_draft_version_id,
+            validation_id=validation.validation_id,
+            change_note=change_note.strip(),
+            published_at=_now(),
+            published_by=actor,
+            document_count=len(snapshot.documents),
+            smoke_query=validation.smoke_query,
+            smoke_result_summary={
+                "candidate_count": validation.candidate_count,
+                "citation_count": validation.citation_count,
+            },
+        )
+        self._write_knowledge_source_publication(record)
+        self._write_knowledge_source(
+            source.model_copy(
+                update={
+                    "published_snapshot_id": snapshot.snapshot_id,
+                    "updated_at": _now(),
+                }
+            )
+        )
+        return record
+
+    def _publish_http_json_knowledge_source_unlocked(
+        self,
+        *,
+        source_id: str,
+        validation: KnowledgeSourcePublicationValidation,
+        change_note: str,
+        actor: str,
+    ) -> KnowledgeSourcePublicationRecord:
+        source = self._normalized_http_json_source_unlocked(source_id)
+        if validation.resource_kind != "remote_config":
+            raise _knowledge_publication_conflict(
+                "Publication validation resource kind does not match http_json."
+            )
+        if validation.resource_id is None:
+            raise _knowledge_publication_conflict(
+                "Publication validation references no remote configuration resource."
+            )
+        config_digest = _remote_knowledge_source_config_digest(source)
+        resource_id = _remote_knowledge_source_config_resource_id(
+            source_id=source.source_id,
+            source_draft_version_id=_required_source_draft_version_id(source),
+            config_digest=config_digest,
+        )
+        if validation.source_draft_version_id != source.source_draft_version_id:
+            raise _knowledge_publication_conflict(
+                "Publication validation is stale for the current Knowledge Source Draft Version."
+            )
+        if validation.candidate_digest != config_digest:
+            raise _knowledge_publication_conflict(
+                "Publication validation is stale for the current remote configuration."
+            )
+        if validation.resource_id != resource_id:
+            raise _knowledge_publication_conflict(
+                "Publication validation does not match the current remote configuration resource."
+            )
+        for publication in self.list_knowledge_source_publications(source.source_id):
+            if publication.validation_id == validation.validation_id:
+                raise _knowledge_publication_conflict(
+                    "Publication validation has already been published."
+                )
+        record = KnowledgeSourcePublicationRecord(
+            publication_id=f"kspub_{uuid4().hex[:8]}",
+            source_id=source.source_id,
+            resource_kind="remote_config",
+            resource_id=resource_id,
+            snapshot_id=None,
+            source_draft_version_id=_required_source_draft_version_id(source),
+            validation_id=validation.validation_id,
+            change_note=change_note.strip(),
+            published_at=_now(),
+            published_by=actor,
+            document_count=0,
+            smoke_query=validation.smoke_query,
+            smoke_result_summary={
+                "candidate_count": validation.candidate_count,
+                "citation_count": validation.citation_count,
+            },
+        )
+        self._write_knowledge_source_publication(record)
+        self._write_knowledge_source(
+            source.model_copy(
+                update={
+                    "published_snapshot_id": resource_id,
+                    "updated_at": _now(),
+                }
+            )
+        )
+        return record
 
     def get_knowledge_source_worker_concurrency(self, source_id: str) -> int:
         """Return a validated claim-time concurrency limit for one source."""
@@ -688,37 +894,59 @@ class LocalAgentConfigurationStore:
     ) -> QuarantinedKnowledgeUpload:
         """Persist one operator upload for asynchronous validation."""
 
+        uploads = self.stage_quarantined_knowledge_upload_batch(
+            source_id=source_id,
+            uploads=(
+                KnowledgeUploadStagingInput(
+                    filename=filename,
+                    content_type=content_type,
+                    content=content,
+                ),
+            ),
+            actor=actor,
+            lock_timeout_seconds=lock_timeout_seconds,
+        )
+        return uploads[0]
+
+    def stage_quarantined_knowledge_upload_batch(
+        self,
+        *,
+        source_id: str,
+        uploads: tuple[KnowledgeUploadStagingInput, ...],
+        actor: str,
+        lock_timeout_seconds: float = STORE_LOCK_TIMEOUT_SECONDS,
+    ) -> list[QuarantinedKnowledgeUpload]:
+        """Persist one operator upload batch for asynchronous validation."""
+
+        if not uploads:
+            raise _knowledge_upload_batch_invalid("Knowledge upload batch must include a file.")
+        if len(uploads) > MAX_QUARANTINED_UPLOAD_BATCH_FILES:
+            raise _knowledge_upload_batch_invalid(
+                f"Knowledge upload batch exceeds {MAX_QUARANTINED_UPLOAD_BATCH_FILES} files."
+            )
+
         with locked(self._store_lock_path(), timeout_seconds=lock_timeout_seconds):
             self._require_knowledge_source(source_id)
-            if (
-                self._count_reserved_knowledge_document_slots_unlocked(source_id)
-                >= KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY
-            ):
+            if self._count_reserved_knowledge_document_slots_unlocked(source_id) + len(
+                uploads
+            ) > KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY:
                 raise _knowledge_document_capacity_exceeded(source_id)
 
-            now = _now()
-            upload_id = f"upload_{uuid4().hex[:8]}"
-            safe_filename = _safe_filename(filename)
-            storage_path = (
-                Path("knowledge_sources")
-                / source_id
-                / "quarantined_uploads"
-                / upload_id
-                / "original-upload.bin"
+            batch_started_at = datetime.now(UTC)
+            staged_uploads = tuple(
+                _quarantined_upload_from_staging_input(
+                    source_id=source_id,
+                    upload=upload,
+                    now=(batch_started_at + timedelta(microseconds=index))
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                )
+                for index, upload in enumerate(uploads)
             )
-            upload = QuarantinedKnowledgeUpload(
-                upload_id=upload_id,
-                source_id=source_id,
-                filename=safe_filename,
-                content_type=content_type,
-                size_bytes=len(content),
-                storage_path=storage_path.as_posix(),
-                state="queued",
-                created_at=now,
-                updated_at=now,
+            self._publish_quarantined_knowledge_upload_batch(
+                tuple(zip(staged_uploads, (upload.content for upload in uploads), strict=True))
             )
-            self._publish_quarantined_knowledge_upload(upload, content)
-            return upload
+            return list(staged_uploads)
 
     def count_reserved_knowledge_document_slots(self, source_id: str) -> int:
         """Count managed documents plus queued or processing quarantine reservations."""
@@ -1205,6 +1433,40 @@ class LocalAgentConfigurationStore:
                 documents.append(document)
         return sorted(documents, key=lambda document: document.created_at)
 
+    def update_knowledge_document_routing_metadata(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        routing_metadata: Mapping[str, Any],
+        actor: str,
+        lock_timeout_seconds: float = STORE_LOCK_TIMEOUT_SECONDS,
+    ) -> KnowledgeDocument:
+        """Update operator-managed routing metadata for one Knowledge Document."""
+
+        with locked(self._store_lock_path(), timeout_seconds=lock_timeout_seconds):
+            source = self._require_knowledge_source(source_id)
+            if source.provider != "local_index":
+                raise _invalid_routing_metadata(
+                    "Knowledge Document Routing Metadata editing requires a local_index Source."
+                )
+            document = self.get_knowledge_document(source_id=source_id, document_id=document_id)
+            if document is None:
+                raise KeyError(f"Knowledge Document not found: {source_id}/{document_id}")
+            normalized = _normalize_knowledge_document_routing_metadata(routing_metadata)
+            if normalized == dict(document.routing_metadata):
+                return document
+            now = _now()
+            updated = document.model_copy(
+                update={
+                    "routing_metadata": normalized,
+                    "updated_at": now,
+                }
+            )
+            self._write_knowledge_document(updated)
+            self._advance_source_draft_version_unlocked(source_id, updated_at=now)
+            return updated
+
     def knowledge_document_original_path(self, document: KnowledgeDocument) -> Path:
         return self._root_dir / document.storage_path
 
@@ -1409,6 +1671,24 @@ class LocalAgentConfigurationStore:
             self._write_knowledge_source(source)
         return source
 
+    def _normalized_http_json_source_unlocked(self, source_id: str) -> KnowledgeSource:
+        source = self._require_knowledge_source(source_id)
+        if source.provider != "http_json":
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                "http_json publication validation requires an http_json Knowledge Source.",
+                "Use the publication flow that matches the Knowledge Source provider.",
+            )
+        if source.source_draft_version_id is None:
+            source = source.model_copy(
+                update={
+                    "source_draft_version_id": _new_source_draft_version_id(),
+                    "updated_at": _now(),
+                }
+            )
+            self._write_knowledge_source(source)
+        return source
+
     def _candidate_knowledge_source_snapshot_unlocked(
         self,
         source: KnowledgeSource,
@@ -1444,7 +1724,7 @@ class LocalAgentConfigurationStore:
                     content_type=document.content_type,
                     content_hash=document.content_hash,
                     artifact_path=artifact_path,
-                    routing_metadata={},
+                    routing_metadata=dict(document.routing_metadata),
                 )
             )
         sorted_documents = tuple(
@@ -1792,21 +2072,43 @@ class LocalAgentConfigurationStore:
         upload: QuarantinedKnowledgeUpload,
         content: bytes,
     ) -> None:
-        uploads_root = self._quarantined_knowledge_uploads_root(upload.source_id)
+        self._publish_quarantined_knowledge_upload_batch(((upload, content),))
+
+    def _publish_quarantined_knowledge_upload_batch(
+        self,
+        uploads: tuple[tuple[QuarantinedKnowledgeUpload, bytes], ...],
+    ) -> None:
+        if not uploads:
+            return
+        source_id = uploads[0][0].source_id
+        uploads_root = self._quarantined_knowledge_uploads_root(source_id)
         uploads_root.mkdir(parents=True, exist_ok=True)
-        temporary_dir = Path(
+        temporary_batch_dir = Path(
             tempfile.mkdtemp(
-                prefix=f".{upload.upload_id}.",
+                prefix=".batch.",
                 dir=uploads_root,
             )
         )
+        published_dirs: list[Path] = []
         try:
-            (temporary_dir / "original-upload.bin").write_bytes(content)
-            _write_json(temporary_dir / "upload.json", upload.model_dump(mode="json"))
-            os.replace(temporary_dir, uploads_root / upload.upload_id)
+            for upload, content in uploads:
+                temporary_upload_dir = temporary_batch_dir / upload.upload_id
+                temporary_upload_dir.mkdir()
+                (temporary_upload_dir / "original-upload.bin").write_bytes(content)
+                _write_json(
+                    temporary_upload_dir / "upload.json",
+                    upload.model_dump(mode="json"),
+                )
+            for upload, _ in uploads:
+                destination = uploads_root / upload.upload_id
+                os.replace(temporary_batch_dir / upload.upload_id, destination)
+                published_dirs.append(destination)
         except Exception:
-            shutil.rmtree(temporary_dir, ignore_errors=True)
+            for directory in published_dirs:
+                shutil.rmtree(directory, ignore_errors=True)
+            shutil.rmtree(temporary_batch_dir, ignore_errors=True)
             raise
+        shutil.rmtree(temporary_batch_dir, ignore_errors=True)
 
     def _require_draft(self, agent_id: str, draft_id: str) -> DraftAgent:
         draft = self.get_draft(agent_id, draft_id)
@@ -2039,6 +2341,33 @@ def _knowledge_source_snapshot_id(
     return f"kssnapshot_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16]}"
 
 
+def _remote_knowledge_source_config_digest(source: KnowledgeSource) -> str:
+    payload = {
+        "provider": source.provider,
+        "params": _jsonable(source.params),
+    }
+    serialized = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _remote_knowledge_source_config_resource_id(
+    *,
+    source_id: str,
+    source_draft_version_id: str,
+    config_digest: str,
+) -> str:
+    identity = f"{source_id}:{source_draft_version_id}:{config_digest}"
+    return f"ksremote_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _required_source_draft_version_id(source: KnowledgeSource) -> str:
+    if source.source_draft_version_id is None:
+        raise _knowledge_publication_conflict(
+            "Knowledge Source Draft Version is missing for publication."
+        )
+    return source.source_draft_version_id
+
+
 def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
@@ -2064,6 +2393,111 @@ def _knowledge_document_capacity_exceeded(source_id: str) -> ProofAgentError:
         "PA_INGESTION_004",
         f"Knowledge Source {source_id} has reached its document capacity.",
         "Archive an existing document or wait for a pending upload validation to finish.",
+    )
+
+
+def _knowledge_upload_batch_invalid(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_INGESTION_002",
+        message,
+        "Upload one through 50 documents in a single batch.",
+    )
+
+
+def _invalid_routing_metadata(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        message,
+        "Use only title, description, tags, document_type, and business_category routing metadata.",
+    )
+
+
+def _normalize_knowledge_document_routing_metadata(
+    routing_metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(routing_metadata, Mapping):
+        raise _invalid_routing_metadata("Knowledge Document Routing Metadata must be an object.")
+
+    unknown_keys = sorted(set(routing_metadata) - set(KNOWLEDGE_DOCUMENT_ROUTING_METADATA_KEYS))
+    if unknown_keys:
+        joined_keys = ", ".join(unknown_keys)
+        raise _invalid_routing_metadata(
+            f"Knowledge Document Routing Metadata contains unsupported fields: {joined_keys}."
+        )
+
+    normalized: dict[str, Any] = {}
+    for key in KNOWLEDGE_DOCUMENT_ROUTING_METADATA_KEYS:
+        if key not in routing_metadata:
+            continue
+        value = routing_metadata[key]
+        if key == "tags":
+            tags = _normalize_routing_metadata_tags(value)
+            if tags:
+                normalized[key] = tags
+            continue
+        scalar = _normalize_routing_metadata_scalar(key, value)
+        if scalar is not None:
+            normalized[key] = scalar
+    return normalized
+
+
+def _normalize_routing_metadata_scalar(key: str, value: Any) -> str | None:
+    if not isinstance(value, str):
+        raise _invalid_routing_metadata(f"Knowledge Document Routing Metadata field {key} must be a string.")
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped[:MAX_ROUTING_METADATA_SCALAR_CHARS]
+
+
+def _normalize_routing_metadata_tags(value: Any) -> list[str] | None:
+    if not isinstance(value, list | tuple):
+        raise _invalid_routing_metadata("Knowledge Document Routing Metadata field tags must be a list of strings.")
+    tags: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise _invalid_routing_metadata(
+                "Knowledge Document Routing Metadata field tags must be a list of strings."
+            )
+        tag = item.strip()
+        if not tag:
+            continue
+        normalized_tag = tag[:MAX_ROUTING_METADATA_SCALAR_CHARS]
+        dedupe_key = normalized_tag.casefold()
+        if dedupe_key in seen:
+            continue
+        tags.append(normalized_tag)
+        seen.add(dedupe_key)
+        if len(tags) >= MAX_ROUTING_METADATA_SCALARS:
+            break
+    return tags or None
+
+
+def _quarantined_upload_from_staging_input(
+    *,
+    source_id: str,
+    upload: KnowledgeUploadStagingInput,
+    now: str,
+) -> QuarantinedKnowledgeUpload:
+    upload_id = f"upload_{uuid4().hex[:8]}"
+    storage_path = (
+        Path("knowledge_sources")
+        / source_id
+        / "quarantined_uploads"
+        / upload_id
+        / "original-upload.bin"
+    )
+    return QuarantinedKnowledgeUpload(
+        upload_id=upload_id,
+        source_id=source_id,
+        filename=_safe_filename(upload.filename),
+        content_type=upload.content_type,
+        size_bytes=len(upload.content),
+        storage_path=storage_path.as_posix(),
+        state="queued",
+        created_at=now,
+        updated_at=now,
     )
 
 

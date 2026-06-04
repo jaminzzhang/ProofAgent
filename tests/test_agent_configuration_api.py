@@ -10,6 +10,7 @@ import yaml
 
 import proof_agent.configuration.local_store as local_store_module
 import proof_agent.delivery.configuration_api as configuration_api_module
+import proof_agent.capabilities.knowledge.http_json as http_json_module
 from proof_agent.capabilities.knowledge.ingestion import parse_quarantined_upload
 from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     ARTIFACT_META_FILENAME,
@@ -81,6 +82,44 @@ def _create_local_index_source(
     return response.json()
 
 
+def test_create_http_json_knowledge_source_accepts_safe_remote_params(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_remote",
+            "name": "Remote Policies",
+            "provider": "http_json",
+            "params": {
+                "endpoint": "https://knowledge.example/retrieve",
+                "timeout_seconds": 10,
+                "top_k": 3,
+                "header_env_refs": [
+                    {
+                        "name": "Authorization",
+                        "value_env": "PA_KNOWLEDGE_TOKEN",
+                        "prefix": "Bearer ",
+                    }
+                ],
+                "response_mapping": {
+                    "results": "/matches",
+                    "content": "/text",
+                    "score": "/score",
+                    "citation": "/citation",
+                },
+            },
+            "actor": "operator",
+        },
+    )
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["provider"] == "http_json"
+    assert created["params"]["endpoint"] == "https://knowledge.example/retrieve"
+    assert created["document_count"] == 0
+
+
 def _upload(
     client: TestClient,
     *,
@@ -95,6 +134,33 @@ def _upload(
             "filename": filename,
             "content_type": content_type,
             "content_base64": base64.b64encode(content).decode("ascii"),
+            "actor": "operator",
+        },
+    )
+
+
+def _batch_upload(
+    client: TestClient,
+    *,
+    source_id: str = "ks_local_index",
+    documents: list[dict[str, object]] | None = None,
+) -> object:
+    payload_documents = documents or [
+        {
+            "filename": "first.md",
+            "content_type": "text/markdown",
+            "content_base64": base64.b64encode(b"# First\n").decode("ascii"),
+        },
+        {
+            "filename": "second.md",
+            "content_type": "text/markdown",
+            "content_base64": base64.b64encode(b"# Second\n").decode("ascii"),
+        },
+    ]
+    return client.post(
+        f"/api/config/knowledge-sources/{source_id}/documents/batch",
+        json={
+            "documents": payload_documents,
             "actor": "operator",
         },
     )
@@ -283,6 +349,73 @@ def test_source_publication_validation_and_publish_api(
     assert publications.json() == {"data": [published.json()], "meta": {"total": 1}}
 
 
+def test_http_json_source_publication_validation_and_publish_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        http_json_module,
+        "_send_http_json_request",
+        lambda request: {
+            "protocol_version": "proof-agent.remote-retrieval.v1",
+            "results": [
+                {
+                    "content": "Remote policy evidence.",
+                    "score": 0.92,
+                    "citation": "https://knowledge.example/policies#remote",
+                }
+            ],
+        },
+    )
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_remote",
+            "name": "Remote Policies",
+            "provider": "http_json",
+            "params": {
+                "endpoint": "https://knowledge.example/retrieve",
+                "top_k": 2,
+            },
+            "actor": "operator",
+        },
+    )
+
+    validation = client.post(
+        "/api/config/knowledge-sources/ks_remote/publication/validate",
+        json={"smoke_query": "What does the remote policy require?", "actor": "validator"},
+    )
+    published = client.post(
+        "/api/config/knowledge-sources/ks_remote/publication/publish",
+        json={
+            "validation_id": validation.json()["validation_id"],
+            "change_note": "Publish remote policy API.",
+            "actor": "operator",
+        },
+    )
+    source = client.get("/api/config/knowledge-sources/ks_remote")
+    validations = client.get("/api/config/knowledge-sources/ks_remote/publication-validations")
+    publications = client.get("/api/config/knowledge-sources/ks_remote/publications")
+
+    assert created.status_code == 200
+    assert validation.status_code == 200
+    assert validation.json()["resource_kind"] == "remote_config"
+    assert validation.json()["resource_id"].startswith("ksremote_")
+    assert validation.json()["snapshot_id"] is None
+    assert validation.json()["candidate_count"] == 1
+    assert validation.json()["citation_count"] == 1
+    assert published.status_code == 200
+    assert published.json()["resource_kind"] == "remote_config"
+    assert published.json()["resource_id"] == validation.json()["resource_id"]
+    assert published.json()["snapshot_id"] is None
+    assert published.json()["document_count"] == 0
+    assert source.json()["published_snapshot_id"] == validation.json()["resource_id"]
+    assert source.json()["publication_count"] == 1
+    assert validations.json() == {"data": [validation.json()], "meta": {"total": 1}}
+    assert publications.json() == {"data": [published.json()], "meta": {"total": 1}}
+
+
 @pytest.mark.parametrize(
     ("filename", "content_type", "content"),
     [
@@ -400,6 +533,120 @@ def test_upload_capacity_counts_pending_quarantine_reservations(
     assert (
         len(_configuration_store(client).list_quarantined_knowledge_uploads("ks_local_index")) == 1
     )
+
+
+def test_batch_upload_stages_all_documents_in_one_response(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+
+    uploaded = _batch_upload(client)
+
+    assert uploaded.status_code == 200
+    payload = uploaded.json()
+    assert payload["meta"] == {"total": 2}
+    assert [upload["filename"] for upload in payload["data"]] == ["first.md", "second.md"]
+    assert [upload["state"] for upload in payload["data"]] == ["queued", "queued"]
+    store_uploads = _configuration_store(client).list_quarantined_knowledge_uploads(
+        "ks_local_index"
+    )
+    assert [upload.filename for upload in store_uploads] == ["first.md", "second.md"]
+
+
+def test_batch_upload_rejects_invalid_member_without_staging_any_file(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+
+    uploaded = _batch_upload(
+        client,
+        documents=[
+            {
+                "filename": "first.md",
+                "content_type": "text/markdown",
+                "content_base64": base64.b64encode(b"# First\n").decode("ascii"),
+            },
+            {
+                "filename": "broken.md",
+                "content_type": "text/markdown",
+                "content_base64": "not-valid-base64",
+            },
+        ],
+    )
+
+    assert uploaded.status_code == 400
+    assert _configuration_store(client).list_quarantined_knowledge_uploads("ks_local_index") == []
+
+
+def test_batch_upload_reserves_full_batch_capacity_before_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(local_store_module, "KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY", 2)
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+    store = _configuration_store(client)
+    store.add_knowledge_document(
+        source_id="ks_local_index",
+        filename="existing.md",
+        content_type="text/markdown",
+        content=b"# Existing\n",
+        state="ready",
+        actor="operator",
+    )
+
+    uploaded = _batch_upload(client)
+
+    assert uploaded.status_code == 503
+    assert uploaded.json()["detail"]["code"] == "PA_INGESTION_004"
+    assert store.list_quarantined_knowledge_uploads("ks_local_index") == []
+
+
+def test_update_document_routing_metadata_updates_candidate_snapshot(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+    document = _write_compatible_ready_document(client)
+
+    updated = client.patch(
+        f"/api/config/knowledge-sources/ks_local_index/documents/{document.document_id}/routing-metadata",
+        json={
+            "routing_metadata": {
+                "title": "Claims Policy",
+                "description": "Inpatient claim rules",
+                "tags": ["claims", "inpatient"],
+                "document_type": "policy",
+            },
+            "actor": "dashboard",
+        },
+    )
+    candidate = client.get("/api/config/knowledge-sources/ks_local_index/candidate-snapshot")
+
+    assert updated.status_code == 200
+    assert updated.json()["routing_metadata"] == {
+        "title": "Claims Policy",
+        "description": "Inpatient claim rules",
+        "tags": ["claims", "inpatient"],
+        "document_type": "policy",
+    }
+    assert candidate.status_code == 200
+    assert candidate.json()["included_documents"][0]["routing_metadata"] == updated.json()[
+        "routing_metadata"
+    ]
+
+
+def test_update_document_routing_metadata_rejects_unknown_field(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+    document = _write_compatible_ready_document(client)
+
+    updated = client.patch(
+        f"/api/config/knowledge-sources/ks_local_index/documents/{document.document_id}/routing-metadata",
+        json={
+            "routing_metadata": {"unknown": "claims"},
+            "actor": "dashboard",
+        },
+    )
+
+    assert updated.status_code == 400
+    assert updated.json()["detail"]["code"] == "PA_CONFIG_001"
 
 
 def test_rejected_upload_releases_capacity_while_retaining_bytes(

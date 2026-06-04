@@ -297,7 +297,9 @@ export interface KnowledgeSourceSnapshotManifest {
 export interface KnowledgeSourcePublicationValidation {
   validation_id: string
   source_id: string
-  snapshot_id: string
+  resource_kind?: 'local_index_snapshot' | 'remote_config'
+  resource_id?: string | null
+  snapshot_id: string | null
   source_draft_version_id: string
   candidate_digest: string
   status: 'passed'
@@ -311,7 +313,9 @@ export interface KnowledgeSourcePublicationValidation {
 export interface KnowledgeSourcePublicationRecord {
   publication_id: string
   source_id: string
-  snapshot_id: string
+  resource_kind?: 'local_index_snapshot' | 'remote_config'
+  resource_id?: string | null
+  snapshot_id: string | null
   source_draft_version_id: string
   validation_id: string
   change_note: string
@@ -333,8 +337,33 @@ export interface KnowledgeDocument {
   state: 'queued' | 'processing' | 'ready' | 'failed' | string
   storage_path: string
   provider_document_id: string | null
+  routing_metadata: Record<string, unknown>
   error_code: string | null
   error_message: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface QuarantinedKnowledgeUpload {
+  upload_id: string
+  source_id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  storage_path: string
+  state: string
+  attempt_count?: number
+  claimed_at?: string | null
+  claim_token?: string | null
+  lease_expires_at?: string | null
+  completed_at?: string | null
+  error_code?: string | null
+  error_message?: string | null
+  promoted_document_id?: string | null
+  promoted_revision_id?: string | null
+  ingestion_job_id?: string | null
+  expires_at?: string | null
+  purged_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -348,6 +377,13 @@ export interface KnowledgeSourcesResponse {
 
 export interface KnowledgeDocumentsResponse {
   data: KnowledgeDocument[]
+  meta: {
+    total: number
+  }
+}
+
+export interface KnowledgeUploadsResponse {
+  data: QuarantinedKnowledgeUpload[]
   meta: {
     total: number
   }

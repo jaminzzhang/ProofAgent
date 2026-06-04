@@ -9,7 +9,9 @@ import {
   publishConfigDraft,
   rollbackConfigVersion,
   updateConfigDraftContract,
+  updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocument,
+  uploadKnowledgeDocuments,
   validateConfigDraft,
   fetchHandoffs,
 } from './client'
@@ -81,6 +83,18 @@ test('knowledge source client methods use shared source endpoints', async () => 
         headers: { 'Content-Type': 'application/json' },
       }),
     )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ upload_id: 'upload_1' }], meta: { total: 1 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ document_id: 'doc_1', routing_metadata: { title: 'Policy' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
 
   await fetchKnowledgeSources()
   await createKnowledgeSource({
@@ -96,12 +110,34 @@ test('knowledge source client methods use shared source endpoints', async () => 
     content_base64: 'JVBERi0xLjQ=',
     actor: 'dashboard',
   })
+  await uploadKnowledgeDocuments('ks_local_index', {
+    documents: [
+      {
+        filename: 'travel-policy.pdf',
+        content_type: 'application/pdf',
+        content_base64: 'JVBERi0xLjQ=',
+      },
+    ],
+    actor: 'dashboard',
+  })
+  await updateKnowledgeDocumentRoutingMetadata('ks_local_index', 'doc_1', {
+    routing_metadata: { title: 'Policy' },
+    actor: 'dashboard',
+  })
 
   expect(fetchMock.mock.calls[0][0]).toBe('/api/config/knowledge-sources')
   expect(fetchMock.mock.calls[1][0]).toBe('/api/config/knowledge-sources')
   expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' })
   expect(fetchMock.mock.calls[2][0]).toBe('/api/config/knowledge-sources/ks_local_index/documents')
   expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: 'POST' })
+  expect(fetchMock.mock.calls[3][0]).toBe(
+    '/api/config/knowledge-sources/ks_local_index/documents/batch',
+  )
+  expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' })
+  expect(fetchMock.mock.calls[4][0]).toBe(
+    '/api/config/knowledge-sources/ks_local_index/documents/doc_1/routing-metadata',
+  )
+  expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: 'PATCH' })
 })
 
 test('bindKnowledgeSourceToDraft posts a shared source binding request', async () => {

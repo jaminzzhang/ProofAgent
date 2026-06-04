@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import proof_agent.capabilities.knowledge.http_json as http_json_module
 from proof_agent.bootstrap.knowledge_resolution import (
     ConfigurationStoreKnowledgeBindingResolver,
     PackageKnowledgeBindingResolver,
@@ -128,6 +129,64 @@ def test_configuration_store_resolver_maps_published_local_index_snapshot(
         "name": "routing",
     }
     assert binding.provider_params["document_selection_budget"] == 6
+
+
+def test_configuration_store_resolver_maps_published_http_json_remote_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_knowledge_source(
+        source_id="ks_local",
+        name="Remote Knowledge",
+        provider="http_json",
+        params={"endpoint": "https://knowledge.example/retrieve", "top_k": 2},
+        actor="operator",
+    )
+    monkeypatch.setattr(
+        http_json_module,
+        "_send_http_json_request",
+        lambda request: {
+            "protocol_version": "proof-agent.remote-retrieval.v1",
+            "results": [
+                {
+                    "content": "Remote policy evidence.",
+                    "score": 0.9,
+                    "citation": "https://knowledge.example/policies#remote",
+                }
+            ],
+        },
+    )
+    validation = store.validate_http_json_source_publication(
+        source_id="ks_local",
+        smoke_query="What does the remote policy say?",
+        actor="validator",
+    )
+    publication = store.publish_knowledge_source(
+        source_id="ks_local",
+        validation_id=validation.validation_id,
+        change_note="Publish remote API.",
+        actor="operator",
+    )
+    manifest = load_agent_manifest(
+        _write_agent_manifest(
+            tmp_path,
+            source_ref_scope="shared",
+            package_sources_yaml="package_knowledge_sources: []",
+        )
+    )
+
+    resolved = ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
+
+    binding = resolved.bindings[0]
+    assert binding.source_scope == "shared"
+    assert binding.source_id == "ks_local"
+    assert binding.source_version_id == publication.resource_id
+    assert binding.provider == "http_json"
+    assert binding.provider_params == {
+        "endpoint": "https://knowledge.example/retrieve",
+        "top_k": 2,
+    }
 
 
 def _write_agent_manifest(

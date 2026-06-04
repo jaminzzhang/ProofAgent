@@ -286,12 +286,50 @@ def test_knowledge_worker_store_lock_timeout_exits_nonzero(
     assert "PA_INGESTION_004" in result.output
 
 
-def test_knowledge_worker_requires_once_for_bounded_execution() -> None:
-    result = runner.invoke(app, ["knowledge-worker"])
+def test_knowledge_worker_runs_continuous_polling_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[float] = []
 
-    assert result.exit_code != 0
-    assert "--once" in result.output
-    assert "continuous" in result.output.lower()
+    class FakeKnowledgeIngestionWorker:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def run_continuously(self, *, poll_interval_seconds: float, report_result) -> None:
+            calls.append(poll_interval_seconds)
+            report_result(
+                KnowledgeWorkerResult(
+                    outcome=KnowledgeWorkerTaskOutcome(
+                        kind="quarantine_validation",
+                        task_id="upload_continuous",
+                        source_id="source_local",
+                        state="accepted",
+                    )
+                )
+            )
+
+    monkeypatch.setattr(
+        "proof_agent.capabilities.knowledge.ingestion.worker.KnowledgeIngestionWorker",
+        FakeKnowledgeIngestionWorker,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "knowledge-worker",
+            "--config-dir",
+            str(tmp_path),
+            "--poll-interval",
+            "0.25",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [0.25]
+    assert "knowledge worker started" in result.output
+    assert "knowledge upload accepted: upload_continuous" in result.output
+    assert "knowledge worker stopped" in result.output
 
 
 def _invoke_knowledge_worker(

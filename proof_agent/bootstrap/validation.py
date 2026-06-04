@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib import parse
 from uuid import uuid4
 
 from proof_agent.contracts import AgentManifest
@@ -23,7 +24,7 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "audit",
 }
 
-SUPPORTED_KNOWLEDGE_PROVIDERS = {"local_markdown", "local_index", "remote_search"}
+SUPPORTED_KNOWLEDGE_PROVIDERS = {"http_json", "local_markdown", "local_index", "remote_search"}
 SUPPORTED_RETRIEVAL_STRATEGIES = {"single_step", "agentic"}
 SUPPORTED_MODEL_PROVIDERS = {
     "deterministic",
@@ -553,6 +554,151 @@ def _validate_knowledge_provider_params(
                 Path(mock_results_path), f"{field_prefix}.mock_results_path", manifest_path
             )
         return
+    if provider == "http_json":
+        _validate_http_json_provider_params(
+            params=params,
+            field_prefix=field_prefix,
+            manifest_path=manifest_path,
+        )
+        return
+
+
+def _validate_http_json_provider_params(
+    *,
+    params: Mapping[str, Any],
+    field_prefix: str,
+    manifest_path: Path,
+) -> None:
+    endpoint = _required_param(
+        params,
+        "endpoint",
+        "http_json",
+        manifest_path,
+        field_prefix=field_prefix,
+    )
+    if not isinstance(endpoint, str):
+        raise _invalid_http_json_param(
+            f"{field_prefix}.endpoint must be a string.",
+            manifest_path,
+        )
+    parsed = parse.urlparse(endpoint)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise _invalid_http_json_param(
+            f"{field_prefix}.endpoint must be an absolute http(s) URL.",
+            manifest_path,
+        )
+    method = params.get("method", "POST")
+    if not isinstance(method, str) or method.upper() not in {"GET", "POST"}:
+        raise _invalid_http_json_param(
+            f"{field_prefix}.method must be GET or POST.",
+            manifest_path,
+        )
+    timeout_seconds = params.get("timeout_seconds", 10)
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, int | float)
+        or timeout_seconds <= 0
+        or timeout_seconds > 60
+    ):
+        raise _invalid_http_json_param(
+            f"{field_prefix}.timeout_seconds must be greater than 0 and at most 60.",
+            manifest_path,
+        )
+    top_k = params.get("top_k", 5)
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 50:
+        raise _invalid_http_json_param(
+            f"{field_prefix}.top_k must be an integer from 1 through 50.",
+            manifest_path,
+        )
+    _validate_optional_sequence_of_mappings(
+        params,
+        "header_env_refs",
+        field_prefix=field_prefix,
+        manifest_path=manifest_path,
+    )
+    _validate_optional_sequence_of_mappings(
+        params,
+        "headers",
+        field_prefix=field_prefix,
+        manifest_path=manifest_path,
+    )
+    request_mapping = _optional_mapping(
+        params,
+        "request_mapping",
+        field_prefix=field_prefix,
+        manifest_path=manifest_path,
+    )
+    if request_mapping is not None:
+        for key in ("query_params", "json_body"):
+            if key in request_mapping and not isinstance(request_mapping[key], Mapping):
+                raise _invalid_http_json_param(
+                    f"{field_prefix}.request_mapping.{key} must be a mapping.",
+                    manifest_path,
+                )
+    response_mapping = _optional_mapping(
+        params,
+        "response_mapping",
+        field_prefix=field_prefix,
+        manifest_path=manifest_path,
+    )
+    if response_mapping is not None:
+        if "results" not in response_mapping:
+            raise _invalid_http_json_param(
+                f"{field_prefix}.response_mapping.results is required when response_mapping is set.",
+                manifest_path,
+            )
+        for key, value in response_mapping.items():
+            if not isinstance(key, str) or not isinstance(value, str) or (
+                value and not value.startswith("/")
+            ):
+                raise _invalid_http_json_param(
+                    f"{field_prefix}.response_mapping values must be JSON Pointer strings.",
+                    manifest_path,
+                )
+
+
+def _validate_optional_sequence_of_mappings(
+    params: Mapping[str, Any],
+    key: str,
+    *,
+    field_prefix: str,
+    manifest_path: Path,
+) -> None:
+    value = params.get(key)
+    if value is None:
+        return
+    if not isinstance(value, list | tuple) or not all(isinstance(item, Mapping) for item in value):
+        raise _invalid_http_json_param(
+            f"{field_prefix}.{key} must be a list of mappings.",
+            manifest_path,
+        )
+
+
+def _optional_mapping(
+    params: Mapping[str, Any],
+    key: str,
+    *,
+    field_prefix: str,
+    manifest_path: Path,
+) -> Mapping[str, Any] | None:
+    value = params.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise _invalid_http_json_param(
+            f"{field_prefix}.{key} must be a mapping.",
+            manifest_path,
+        )
+    return value
+
+
+def _invalid_http_json_param(message: str, manifest_path: Path) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        message,
+        "Configure http_json with endpoint, optional safe header_env_refs, and JSON Pointer mappings.",
+        artifact_path=manifest_path,
+    )
 
 
 def _validate_retrieval_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
