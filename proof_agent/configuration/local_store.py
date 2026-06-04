@@ -48,6 +48,7 @@ from proof_agent.contracts import (
     KnowledgeSourceSnapshotManifest,
     PublishedAgentVersion,
     QuarantinedKnowledgeUpload,
+    ResolvedKnowledgeBindingSet,
 )
 from proof_agent.configuration.file_locking import locked, store_lock_path
 from proof_agent.control.knowledge.source_publication import (
@@ -159,6 +160,7 @@ class LocalAgentConfigurationStore:
         draft_id: str,
         validation_run_id: str,
         actor: str,
+        resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
     ) -> PublishedAgentVersion:
         draft = self._require_draft(agent_id, draft_id)
         version = PublishedAgentVersion(
@@ -171,6 +173,7 @@ class LocalAgentConfigurationStore:
             contract_bundle=draft.contract_bundle,
             published_at=_now(),
             published_by=actor,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
             operation_audit=(
                 _audit(
                     ConfigurationOperation.PUBLISHED,

@@ -4,8 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from proof_agent.bootstrap.knowledge_resolution import PackageKnowledgeBindingResolver
+from proof_agent.bootstrap.knowledge_resolution import (
+    ConfigurationStoreKnowledgeBindingResolver,
+    PackageKnowledgeBindingResolver,
+)
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import KnowledgeSourceSnapshotManifest
 from proof_agent.errors import ProofAgentError
 
 
@@ -39,6 +44,90 @@ def test_package_resolver_rejects_shared_source_ref(tmp_path: Path) -> None:
 
     assert exc.value.code == "PA_CONFIG_002"
     assert "Configuration Store resolver" in exc.value.fix
+
+
+def test_configuration_store_resolver_rejects_unpublished_source(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_knowledge_source(
+        source_id="ks_local",
+        name="Policy Knowledge",
+        provider="local_index",
+        params={"ingestion_model": {"provider": "deterministic", "name": "routing"}},
+        actor="operator",
+    )
+    manifest = load_agent_manifest(
+        _write_agent_manifest(
+            tmp_path,
+            source_ref_scope="shared",
+            package_sources_yaml="package_knowledge_sources: []",
+        )
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "published" in exc.value.message
+
+
+def test_configuration_store_resolver_maps_published_local_index_snapshot(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    source = store.create_knowledge_source(
+        source_id="ks_local",
+        name="Policy Knowledge",
+        provider="local_index",
+        params={
+            "ingestion_model": {"provider": "deterministic", "name": "routing"},
+            "document_selection_budget": 6,
+        },
+        actor="operator",
+    )
+    assert source.source_draft_version_id is not None
+    snapshot = KnowledgeSourceSnapshotManifest(
+        schema_version="local_index.snapshot.v2",
+        snapshot_id="kssnapshot_001",
+        source_id=source.source_id,
+        state="READY",
+        validation_level="foundation",
+        source_draft_version_id=source.source_draft_version_id,
+        candidate_digest="digest",
+        foundation_validation_id="ksvalidation_001",
+        documents=(),
+        created_at="2026-06-04T00:00:00Z",
+        created_by="operator",
+    )
+    store._write_knowledge_source_snapshot(snapshot)
+    store._write_knowledge_source(source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id}))
+    manifest = load_agent_manifest(
+        _write_agent_manifest(
+            tmp_path,
+            source_ref_scope="shared",
+            package_sources_yaml="package_knowledge_sources: []",
+        )
+    )
+
+    resolved = ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
+
+    binding = resolved.bindings[0]
+    assert binding.source_scope == "shared"
+    assert binding.source_id == "ks_local"
+    assert binding.source_version_id == snapshot.snapshot_id
+    assert binding.provider == "local_index"
+    assert binding.provider_params["snapshot_path"] == (
+        store.root_dir
+        / "knowledge_sources"
+        / "ks_local"
+        / "snapshots"
+        / snapshot.snapshot_id
+    )
+    assert binding.provider_params["artifact_root"] == store.root_dir
+    assert binding.provider_params["routing_model"] == {
+        "provider": "deterministic",
+        "name": "routing",
+    }
+    assert binding.provider_params["document_selection_budget"] == 6
 
 
 def _write_agent_manifest(

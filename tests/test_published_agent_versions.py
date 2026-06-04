@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import ResolvedKnowledgeBinding, ResolvedKnowledgeBindingSet
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.observability.api.app import create_app
 
@@ -130,6 +131,63 @@ def test_registry_resolves_active_agent_version_from_configuration_store(
         store.root_dir / "agents" / agent_id / "versions" / version_id / "agent.yaml"
     )
     assert registry.list_agent_ids() == (agent_id,)
+
+
+def test_published_agent_version_persists_resolved_knowledge_bindings(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    draft = import_agent_package(
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        store=store,
+        actor="test-user",
+    )
+    resolved_bindings = ResolvedKnowledgeBindingSet(
+        bindings=(
+            ResolvedKnowledgeBinding(
+                binding_id="kb_policy",
+                source_scope="shared",
+                source_id="ks_policy",
+                source_version_id="kssnapshot_001",
+                provider="local_index",
+                provider_params={
+                    "snapshot_path": store.root_dir
+                    / "knowledge_sources"
+                    / "ks_policy"
+                    / "snapshots"
+                    / "kssnapshot_001",
+                    "artifact_root": store.root_dir,
+                    "routing_model": {"provider": "deterministic", "name": "routing"},
+                },
+            ),
+        )
+    )
+
+    version = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation",
+        actor="test-user",
+        resolved_knowledge_bindings=resolved_bindings,
+    )
+    registry = PublishedAgentRegistry(agents={}, configuration_store=store)
+    resolved_agent = registry.resolve(draft.agent_id)
+    persisted = store.get_version(draft.agent_id, version.version_id)
+
+    assert version.resolved_knowledge_bindings == resolved_bindings
+    assert persisted is not None
+    assert persisted.resolved_knowledge_bindings is not None
+    persisted_binding = persisted.resolved_knowledge_bindings.bindings[0]
+    assert persisted_binding.source_version_id == "kssnapshot_001"
+    assert Path(persisted_binding.provider_params["snapshot_path"]) == (
+        store.root_dir
+        / "knowledge_sources"
+        / "ks_policy"
+        / "snapshots"
+        / "kssnapshot_001"
+    )
+    assert resolved_agent is not None
+    assert resolved_agent.resolved_knowledge_bindings == persisted.resolved_knowledge_bindings
 
 
 def test_chat_production_run_records_resolved_agent_version_id(tmp_path: Path) -> None:

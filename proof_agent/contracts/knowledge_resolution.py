@@ -8,6 +8,14 @@ from pydantic import Field, field_serializer, field_validator
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 
 
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(item) for item in value]
+    return value
+
+
 class ResolvedKnowledgeBinding(FrozenModel):
     binding_id: str
     source_scope: Literal["package", "shared"]
@@ -28,7 +36,7 @@ class ResolvedKnowledgeBinding(FrozenModel):
 
     @field_serializer("provider_params", "routing_metadata")
     def serialize_mapping(self, value: Mapping[str, Any]) -> dict[str, Any]:
-        return cast(dict[str, Any], dict(value.items()))
+        return cast(dict[str, Any], _jsonable(value))
 
 
 class ResolvedKnowledgeBindingSet(FrozenModel):

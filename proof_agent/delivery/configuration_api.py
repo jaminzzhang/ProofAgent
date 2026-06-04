@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.knowledge_resolution import (
+    ConfigurationStoreKnowledgeBindingResolver,
+    PackageKnowledgeBindingResolver,
+)
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
@@ -26,6 +30,7 @@ from proof_agent.contracts import (
     KnowledgeIngestionJob,
     KnowledgeSource,
     QuarantinedKnowledgeUpload,
+    ResolvedKnowledgeBindingSet,
     RunPurpose,
 )
 from proof_agent.errors import ProofAgentError
@@ -777,6 +782,11 @@ def validate_config_draft(
     config_store = _get_configuration_store(app_request)
     draft = _require_draft(config_store, agent_id, draft_id)
     package_dir = compile_draft_agent(draft, config_store.root_dir / "compiled")
+    manifest = load_agent_manifest(package_dir / "agent.yaml")
+    resolved_knowledge_bindings = _resolve_draft_knowledge_bindings(
+        config_store,
+        manifest,
+    )
     run_store = _get_run_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
     try:
@@ -787,6 +797,8 @@ def validate_config_draft(
             approved=request.approved,
             run_id=run_id,
             store=run_store,
+            manifest=manifest,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
             run_purpose=RunPurpose.VALIDATION,
             agent_id=agent_id,
             draft_id=draft_id,
@@ -806,6 +818,7 @@ def validate_config_draft(
         status=detail.outcome.value,
         created_at=_now(),
         summary=result.final_output[:500],
+        resolved_knowledge_bindings=resolved_knowledge_bindings,
     )
     config_store.record_validation(
         agent_id=agent_id,
@@ -843,7 +856,11 @@ def publish_config_draft(
     validation_run_id = request.validation_run_id or _latest_validation_run_id(draft)
     if validation_run_id is None:
         raise HTTPException(status_code=400, detail="A validation run is required before publish.")
-    if validation_run_id not in {record.run_id for record in draft.validation_records}:
+    validation_record = next(
+        (record for record in draft.validation_records if record.run_id == validation_run_id),
+        None,
+    )
+    if validation_record is None:
         raise HTTPException(
             status_code=400,
             detail=f"Validation run is not recorded for this draft: {validation_run_id}",
@@ -853,6 +870,7 @@ def publish_config_draft(
         draft_id=draft_id,
         validation_run_id=validation_run_id,
         actor=request.actor,
+        resolved_knowledge_bindings=validation_record.resolved_knowledge_bindings,
     )
     return _version_payload(version)
 
@@ -961,6 +979,11 @@ def _version_payload(version: Any) -> dict[str, Any]:
         "purpose": version.purpose,
         "published_at": version.published_at,
         "published_by": version.published_by,
+        "resolved_knowledge_bindings": (
+            version.resolved_knowledge_bindings.model_dump(mode="json")
+            if version.resolved_knowledge_bindings is not None
+            else None
+        ),
         "operation_audit": [
             operation.model_dump(mode="json") for operation in version.operation_audit
         ],
@@ -1097,6 +1120,18 @@ def _latest_validation_run_id(draft: DraftAgent) -> str | None:
     if not draft.validation_records:
         return None
     return draft.validation_records[-1].run_id
+
+
+def _resolve_draft_knowledge_bindings(
+    store: LocalAgentConfigurationStore,
+    manifest: Any,
+) -> ResolvedKnowledgeBindingSet:
+    has_shared_binding = any(
+        binding.source_ref.scope == "shared" for binding in manifest.knowledge_bindings
+    )
+    if has_shared_binding:
+        return ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
+    return PackageKnowledgeBindingResolver().resolve(manifest)
 
 
 def _require_draft(

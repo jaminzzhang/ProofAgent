@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from pydantic import Field, field_serializer, field_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
 
 
 def _jsonable(value: Any) -> Any:
@@ -54,6 +55,7 @@ class AgentValidationRecord(FrozenModel):
     created_at: str
     summary: str = ""
     errors: tuple[str, ...] = Field(default_factory=tuple)
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
 
 
 class ConfigurationOperationAudit(FrozenModel):
@@ -106,6 +108,7 @@ class PublishedAgentVersion(FrozenModel):
     published_at: str
     published_by: str
     operation_audit: tuple[ConfigurationOperationAudit, ...] = Field(default_factory=tuple)
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
 
     @field_validator("validation_run_id")
     @classmethod
