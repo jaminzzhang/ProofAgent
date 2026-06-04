@@ -184,31 +184,62 @@ describe('AgentDetailPage', () => {
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({
       data: [
         {
-          source_id: 'ks_local_index',
-          name: 'Local Index Policies',
+          source_id: 'ks_published',
+          name: 'Shared Published Policies',
           provider: 'local_index',
-          params: { index_path: './data/indexes/policies' },
+          params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
           created_at: '2026-05-31T00:00:00Z',
           updated_at: '2026-05-31T00:00:00Z',
+          source_draft_version_id: 'ksdraft_1',
+          latest_snapshot_id: 'kssnapshot_1',
+          published_snapshot_id: 'kssnapshot_1',
+          publication_count: 1,
+          document_count: 1,
+          ready_document_count: 1,
+        },
+        {
+          source_id: 'ks_unpublished',
+          name: 'Draft Policies',
+          provider: 'local_index',
+          params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
+          created_at: '2026-05-31T00:00:00Z',
+          updated_at: '2026-05-31T00:00:00Z',
+          source_draft_version_id: 'ksdraft_2',
+          latest_snapshot_id: 'kssnapshot_2',
+          published_snapshot_id: null,
+          publication_count: 0,
           document_count: 1,
           ready_document_count: 1,
         },
       ],
-      meta: { total: 1 },
+      meta: { total: 2 },
     })
     vi.mocked(bindKnowledgeSourceToDraft).mockResolvedValue({
       ...mockContract,
-      agent_yaml: 'name: insurance\nknowledge_sources:\n- source_id: ks_local_index\n',
+      agent_yaml: [
+        'name: insurance',
+        'package_knowledge_sources: []',
+        'knowledge_bindings:',
+        '- binding_id: ks_published_binding',
+        '  source_ref:',
+        '    scope: shared',
+        '    source_id: ks_published',
+        '  failure_mode: required',
+        '  fusion_weight: 1',
+        '',
+      ].join('\n'),
     })
 
     renderPage()
     fireEvent.click(screen.getByText('Knowledge'))
-    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
+    expect(await screen.findByText(/Shared Published Policies/)).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Draft Policies/ })).not.toBeInTheDocument()
+    expect(screen.getByText('1 published available')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Bind Source' }))
 
     await waitFor(() => {
       expect(bindKnowledgeSourceToDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
-        source_id: 'ks_local_index',
+        source_id: 'ks_published',
         alias: '',
         failure_mode: 'required',
         fusion_weight: 1,
