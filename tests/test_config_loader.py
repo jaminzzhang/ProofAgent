@@ -13,9 +13,13 @@ def test_load_valid_enterprise_qa_manifest() -> None:
     assert manifest.workflow.checkpointer is not None
     assert manifest.workflow.checkpointer.provider == "sqlite"
     assert manifest.workflow.checkpointer.uri == "memory"
-    assert manifest.knowledge_sources[0].provider == "local_markdown"
-    assert manifest.knowledge_sources[0].params["path"].name == "knowledge"
-    assert manifest.knowledge_bindings[0].source_id == manifest.knowledge_sources[0].source_id
+    assert manifest.package_knowledge_sources[0].provider == "local_markdown"
+    assert manifest.package_knowledge_sources[0].params["path"].name == "knowledge"
+    assert manifest.knowledge_bindings[0].source_ref.scope == "package"
+    assert (
+        manifest.knowledge_bindings[0].source_ref.source_id
+        == manifest.package_knowledge_sources[0].source_id
+    )
     assert manifest.retrieval.strategy == "single_step"
     assert manifest.retrieval.top_k == 2
     assert manifest.retrieval.min_score == 0.2
@@ -33,7 +37,7 @@ purpose: "Source-owned knowledge config."
 workflow:
   runtime: langgraph
   template: enterprise_qa
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
     provider: local_markdown
@@ -41,7 +45,9 @@ knowledge_sources:
       path: ./knowledge
 knowledge_bindings:
   - binding_id: kb_local
-    source_id: ks_local
+    source_ref:
+      scope: package
+      source_id: ks_local
     alias: policy_docs
     failure_mode: required
     fusion_weight: 1.25
@@ -68,15 +74,63 @@ audit:
 
     manifest = load_agent_manifest(agent_yaml)
 
-    assert manifest.knowledge_sources[0].source_id == "ks_local"
-    assert manifest.knowledge_sources[0].provider == "local_markdown"
-    assert manifest.knowledge_sources[0].params["path"] == (tmp_path / "knowledge").resolve()
+    assert manifest.package_knowledge_sources[0].source_id == "ks_local"
+    assert manifest.package_knowledge_sources[0].provider == "local_markdown"
+    assert manifest.package_knowledge_sources[0].params["path"] == (tmp_path / "knowledge").resolve()
     assert manifest.knowledge_bindings[0].binding_id == "kb_local"
-    assert manifest.knowledge_bindings[0].source_id == "ks_local"
+    assert manifest.knowledge_bindings[0].source_ref.scope == "package"
+    assert manifest.knowledge_bindings[0].source_ref.source_id == "ks_local"
     assert manifest.knowledge_bindings[0].alias == "policy_docs"
     assert manifest.knowledge_bindings[0].failure_mode == "required"
     assert manifest.knowledge_bindings[0].fusion_weight == 1.25
     assert manifest.knowledge_bindings[0].top_k == 2
+
+
+def test_legacy_knowledge_sources_field_is_rejected(tmp_path: Path) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml.write_text(
+        """
+name: legacy_source_field
+purpose: "Legacy source field should be rejected."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "package_knowledge_sources" in exc.value.fix
+    assert "source_ref" in exc.value.fix
 
 
 @pytest.mark.parametrize("legacy_provider", ["pageindex", "local_vector"])
@@ -93,7 +147,7 @@ purpose: "Legacy provider should be rejected."
 workflow:
   runtime: langgraph
   template: enterprise_qa
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_legacy
     name: Legacy Knowledge
     provider: {legacy_provider}
@@ -105,7 +159,9 @@ knowledge_sources:
       embedding_model: all-MiniLM-L6-v2
 knowledge_bindings:
   - binding_id: kb_legacy
-    source_id: ks_legacy
+    source_ref:
+      scope: package
+      source_id: ks_legacy
 retrieval:
   strategy: single_step
 model:
@@ -146,12 +202,12 @@ def test_local_index_knowledge_source_loads_with_v2_paths(tmp_path: Path) -> Non
 
     manifest = load_agent_manifest(agent_yaml)
 
-    assert manifest.knowledge_sources[0].provider == "local_index"
-    assert manifest.knowledge_sources[0].params["snapshot_path"] == (
+    assert manifest.package_knowledge_sources[0].provider == "local_index"
+    assert manifest.package_knowledge_sources[0].params["snapshot_path"] == (
         tmp_path / "config" / "knowledge_sources" / "ks_policy" / "snapshots" / "kssnapshot_001"
     ).resolve()
-    assert manifest.knowledge_sources[0].params["artifact_root"] == (tmp_path / "config").resolve()
-    assert manifest.knowledge_sources[0].params["document_selection_budget"] == 12
+    assert manifest.package_knowledge_sources[0].params["artifact_root"] == (tmp_path / "config").resolve()
+    assert manifest.package_knowledge_sources[0].params["document_selection_budget"] == 12
 
 
 def test_local_index_historical_index_path_is_rejected(tmp_path: Path) -> None:
@@ -220,7 +276,7 @@ def test_local_index_paths_reject_non_path_values(
     with pytest.raises(ProofAgentError) as exc:
         load_agent_manifest(agent_yaml)
 
-    expected_field = f"knowledge_sources[ks_local_index].params.{field_name}"
+    expected_field = f"package_knowledge_sources[ks_local_index].params.{field_name}"
     assert exc.value.code == "PA_CONFIG_001"
     assert expected_field in exc.value.message
     assert expected_field in exc.value.fix
@@ -237,7 +293,7 @@ purpose: "Local index source config."
 workflow:
   runtime: langgraph
   template: enterprise_qa
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_local_index
     name: Local Index Knowledge
     provider: local_index
@@ -245,7 +301,9 @@ knowledge_sources:
 {params}
 knowledge_bindings:
   - binding_id: kb_local_index
-    source_id: ks_local_index
+    source_ref:
+      scope: package
+      source_id: ks_local_index
 retrieval:
   strategy: single_step
 model:
@@ -279,7 +337,7 @@ workflow:
   runtime: langgraph
   template: enterprise_qa
 knowledge:
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
     provider: local_markdown
@@ -287,7 +345,9 @@ knowledge_sources:
       path: ./knowledge
 knowledge_bindings:
   - binding_id: kb_local
-    source_id: ks_local
+    source_ref:
+      scope: package
+      source_id: ks_local
 retrieval:
   strategy: single_step
 model:
@@ -324,7 +384,7 @@ purpose: "Broken manifest."
 workflow:
   runtime: langgraph
   template: enterprise_qa
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
     provider: local_markdown
@@ -332,7 +392,9 @@ knowledge_sources:
       path: ./knowledge
 knowledge_bindings:
   - binding_id: kb_local
-    source_id: ks_local
+    source_ref:
+      scope: package
+      source_id: ks_local
 retrieval:
   strategy: single_step
   top_k: 2
@@ -648,7 +710,7 @@ purpose: "Controlled ReAct enterprise QA."
 workflow:
   runtime: langgraph
   template: react_enterprise_qa
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
     provider: local_markdown
@@ -656,7 +718,9 @@ knowledge_sources:
       path: ./knowledge
 knowledge_bindings:
   - binding_id: kb_local
-    source_id: ks_local
+    source_ref:
+      scope: package
+      source_id: ks_local
 retrieval:
   strategy: single_step
   top_k: 2

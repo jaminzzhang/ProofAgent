@@ -13,7 +13,7 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "name",
     "purpose",
     "workflow",
-    "knowledge_sources",
+    "package_knowledge_sources",
     "knowledge_bindings",
     "retrieval",
     "model",
@@ -61,8 +61,15 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
     if "knowledge" in raw:
         raise ProofAgentError(
             "PA_CONFIG_001",
-            "legacy inline knowledge.provider is not supported; use knowledge_sources and knowledge_bindings",
-            f"Move provider params out of the Agent knowledge section in {manifest_path}.",
+            "legacy inline knowledge.provider is not supported; use package_knowledge_sources and knowledge_bindings",
+            f"Move provider params into package_knowledge_sources[] and reference them with knowledge_bindings[].source_ref in {manifest_path}.",
+            artifact_path=manifest_path,
+        )
+    if "knowledge_sources" in raw:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            "legacy knowledge_sources is not supported; use package_knowledge_sources",
+            f"Rename knowledge_sources[] to package_knowledge_sources[] and replace knowledge_bindings[].source_id with knowledge_bindings[].source_ref in {manifest_path}.",
             artifact_path=manifest_path,
         )
 
@@ -102,8 +109,38 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
                 artifact_path=manifest_path,
             )
 
-    _require_sequence_of_mappings(raw, "knowledge_sources", manifest_path=manifest_path)
+    _require_sequence_of_mappings(raw, "package_knowledge_sources", manifest_path=manifest_path)
     _require_sequence_of_mappings(raw, "knowledge_bindings", manifest_path=manifest_path)
+    for index, binding in enumerate(raw["knowledge_bindings"]):
+        if "source_id" in binding:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"knowledge_bindings[{index}].source_id is not supported",
+                f"Replace knowledge_bindings[{index}].source_id with knowledge_bindings[{index}].source_ref in {manifest_path}.",
+                artifact_path=manifest_path,
+            )
+        source_ref = binding.get("source_ref")
+        if not isinstance(source_ref, Mapping):
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"knowledge_bindings[{index}].source_ref must be a mapping",
+                f"Set knowledge_bindings[{index}].source_ref.scope and source_id in {manifest_path}.",
+                artifact_path=manifest_path,
+            )
+        if source_ref.get("scope") not in {"package", "shared"}:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"knowledge_bindings[{index}].source_ref.scope must be package or shared",
+                f"Set knowledge_bindings[{index}].source_ref.scope to package or shared in {manifest_path}.",
+                artifact_path=manifest_path,
+            )
+        if not source_ref.get("source_id"):
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"knowledge_bindings[{index}].source_ref.source_id is required",
+                f"Set knowledge_bindings[{index}].source_ref.source_id in {manifest_path}.",
+                artifact_path=manifest_path,
+            )
 
 
 def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
@@ -403,12 +440,12 @@ def _validate_knowledge_sources_and_bindings(
     manifest: AgentManifest, *, manifest_path: Path
 ) -> None:
     source_ids: set[str] = set()
-    for source in manifest.knowledge_sources:
+    for source in manifest.package_knowledge_sources:
         if source.source_id in source_ids:
             raise ProofAgentError(
                 "PA_CONFIG_002",
                 f"duplicate knowledge source id: {source.source_id}",
-                "Use unique knowledge_sources[].source_id values.",
+                "Use unique package_knowledge_sources[].source_id values.",
                 artifact_path=manifest_path,
             )
         source_ids.add(source.source_id)
@@ -422,7 +459,7 @@ def _validate_knowledge_sources_and_bindings(
         _validate_knowledge_provider_params(
             provider=source.provider,
             params=source.params,
-            field_prefix=f"knowledge_sources[{source.source_id}].params",
+            field_prefix=f"package_knowledge_sources[{source.source_id}].params",
             manifest_path=manifest_path,
         )
 
@@ -436,11 +473,12 @@ def _validate_knowledge_sources_and_bindings(
                 artifact_path=manifest_path,
             )
         binding_ids.add(binding.binding_id)
-        if binding.source_id not in source_ids:
+        ref = binding.source_ref
+        if ref.scope == "package" and ref.source_id not in source_ids:
             raise ProofAgentError(
                 "PA_CONFIG_002",
-                f"knowledge binding references unknown source: {binding.source_id}",
-                "Bind only source ids declared in knowledge_sources.",
+                f"knowledge binding references unknown package source: {ref.source_id}",
+                "Bind package-scoped refs only to ids declared in package_knowledge_sources.",
                 artifact_path=manifest_path,
             )
         if binding.failure_mode not in {"required", "advisory"}:
@@ -591,10 +629,10 @@ def _required_path_param(
 
 
 def _reject_secret_knowledge_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    for source in manifest.knowledge_sources:
+    for source in manifest.package_knowledge_sources:
         validate_secret_safe_params(
             source.params,
-            field_prefix=f"knowledge_sources[{source.source_id}].params",
+            field_prefix=f"package_knowledge_sources[{source.source_id}].params",
             artifact_path=manifest_path,
         )
 

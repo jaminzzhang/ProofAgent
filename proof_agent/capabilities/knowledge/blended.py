@@ -5,13 +5,17 @@ from dataclasses import dataclass
 from proof_agent.capabilities.knowledge.provider import KnowledgeProvider
 from proof_agent.capabilities.knowledge.registry import resolve_knowledge_provider
 from proof_agent.contracts import AgentManifest, EvidenceChunk, EvidenceContribution
-from proof_agent.contracts.manifest import KnowledgeBindingConfig, KnowledgeConfig, KnowledgeSourceConfig
+from proof_agent.contracts.manifest import (
+    KnowledgeBindingConfig,
+    KnowledgeConfig,
+    PackageKnowledgeSourceConfig,
+)
 from proof_agent.errors import ProofAgentError
 
 
 @dataclass(frozen=True)
 class BoundKnowledgeProvider:
-    source: KnowledgeSourceConfig
+    source: PackageKnowledgeSourceConfig
     binding: KnowledgeBindingConfig
     provider: KnowledgeProvider
 
@@ -63,10 +67,10 @@ class BlendedKnowledgeProvider:
 
 
 def resolve_blended_knowledge_provider(manifest: AgentManifest) -> BlendedKnowledgeProvider:
-    source_by_id = {source.source_id: source for source in manifest.knowledge_sources}
+    source_by_id = {source.source_id: source for source in manifest.package_knowledge_sources}
     bound_providers: list[BoundKnowledgeProvider] = []
     for binding in manifest.knowledge_bindings:
-        source = source_by_id[binding.source_id]
+        source = source_by_id[binding.source_ref.source_id]
         provider = resolve_knowledge_provider(
             KnowledgeConfig(provider=source.provider, params=source.params)
         )

@@ -8,7 +8,7 @@ workflow:
     provider: sqlite
     uri: memory
 
-knowledge_sources:
+package_knowledge_sources:
   - source_id: react_enterprise_qa_knowledge
     name: ReAct Enterprise QA Knowledge
     provider: local_markdown
@@ -17,7 +17,9 @@ knowledge_sources:
 
 knowledge_bindings:
   - binding_id: react_enterprise_qa_knowledge_binding
-    source_id: react_enterprise_qa_knowledge
+    source_ref:
+      scope: package
+      source_id: react_enterprise_qa_knowledge
 
 retrieval:
   strategy: single_step

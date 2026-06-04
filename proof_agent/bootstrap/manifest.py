@@ -8,11 +8,12 @@ from proof_agent.contracts import (
     AuditConfig,
     CustomerConfig,
     KnowledgeBindingConfig,
-    KnowledgeSourceConfig,
+    KnowledgeSourceReferenceConfig,
     MemoryConfig,
     MemoryScopeConfig,
     MemoryScopesConfig,
     ModelConfig,
+    PackageKnowledgeSourceConfig,
     PolicyConfig,
     ReActConfig,
     ReActPlannerConfig,
@@ -38,7 +39,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
     """Convert raw YAML into a typed manifest with paths resolved from agent.yaml."""
 
     workflow = raw["workflow"]
-    knowledge_sources = raw["knowledge_sources"]
+    package_knowledge_sources = raw["package_knowledge_sources"]
     knowledge_bindings = raw["knowledge_bindings"]
     retrieval = raw["retrieval"]
     model = raw["model"]
@@ -55,9 +56,9 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             template=workflow["template"],
             checkpointer=_checkpointer_config_from_mapping(workflow.get("checkpointer")),
         ),
-        knowledge_sources=tuple(
-            _knowledge_source_config_from_mapping(item, base_dir=base_dir)
-            for item in knowledge_sources
+        package_knowledge_sources=tuple(
+            _package_knowledge_source_config_from_mapping(item, base_dir=base_dir)
+            for item in package_knowledge_sources
         ),
         knowledge_bindings=tuple(
             _knowledge_binding_config_from_mapping(item) for item in knowledge_bindings
@@ -114,12 +115,12 @@ def resolve_param_paths(base_dir: Path, params: dict[str, Any]) -> dict[str, Any
     return resolved
 
 
-def _knowledge_source_config_from_mapping(
+def _package_knowledge_source_config_from_mapping(
     raw: Any, *, base_dir: Path
-) -> KnowledgeSourceConfig:
+) -> PackageKnowledgeSourceConfig:
     if not isinstance(raw, dict):
-        raise TypeError("knowledge_sources entries must be mappings")
-    return KnowledgeSourceConfig(
+        raise TypeError("package_knowledge_sources entries must be mappings")
+    return PackageKnowledgeSourceConfig(
         source_id=raw["source_id"],
         name=raw["name"],
         provider=raw["provider"],
@@ -130,9 +131,15 @@ def _knowledge_source_config_from_mapping(
 def _knowledge_binding_config_from_mapping(raw: Any) -> KnowledgeBindingConfig:
     if not isinstance(raw, dict):
         raise TypeError("knowledge_bindings entries must be mappings")
+    source_ref = raw["source_ref"]
+    if not isinstance(source_ref, dict):
+        raise TypeError("knowledge_bindings entries require source_ref mappings")
     return KnowledgeBindingConfig(
         binding_id=raw["binding_id"],
-        source_id=raw["source_id"],
+        source_ref=KnowledgeSourceReferenceConfig(
+            scope=source_ref["scope"],
+            source_id=source_ref["source_id"],
+        ),
         alias=raw.get("alias"),
         failure_mode=raw.get("failure_mode", "required"),
         fusion_weight=raw.get("fusion_weight", 1.0),
