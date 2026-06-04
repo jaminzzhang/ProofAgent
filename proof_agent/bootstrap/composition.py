@@ -11,10 +11,14 @@ from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.capabilities.react import ReActPlanner, resolve_react_planner
 from proof_agent.capabilities.review import HarnessReviewSubagent, resolve_review_subagent
 from proof_agent.capabilities.tools.gateway import ToolGateway
-from proof_agent.contracts import AgentManifest
+from proof_agent.contracts import AgentManifest, ResolvedKnowledgeBindingSet
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.workflow.templates import WorkflowTemplate, resolve_workflow_template
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.knowledge_resolution import (
+    KnowledgeBindingResolver,
+    PackageKnowledgeBindingResolver,
+)
 
 
 DEFAULT_MEMORY_DENY_FIELDS = frozenset({"access_token", "customer_phone", "provider_api_key"})
@@ -29,6 +33,7 @@ class HarnessInvocation:
     template: WorkflowTemplate
     policy: PolicyEngine
     knowledge_provider: KnowledgeProvider
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet
     model_provider: ModelProvider
     tool_gateway: ToolGateway
     memory_deny_fields: frozenset[str] = DEFAULT_MEMORY_DENY_FIELDS
@@ -45,6 +50,8 @@ def compose_harness_invocation(
     agent_yaml: Path | str,
     *,
     manifest: AgentManifest | None = None,
+    knowledge_binding_resolver: KnowledgeBindingResolver | None = None,
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
 
@@ -60,6 +67,10 @@ def compose_harness_invocation(
         and resolved_manifest.review.subagent is not None
     ):
         review_subagent = resolve_review_subagent(resolved_manifest.review.subagent)
+    resolved_bindings = resolved_knowledge_bindings
+    if resolved_bindings is None:
+        resolver = knowledge_binding_resolver or PackageKnowledgeBindingResolver()
+        resolved_bindings = resolver.resolve(resolved_manifest)
     return HarnessInvocation(
         manifest_path=manifest_path,
         manifest=resolved_manifest,
@@ -67,8 +78,9 @@ def compose_harness_invocation(
         policy=PolicyEngine.from_file(resolved_manifest.policy.file),
         knowledge_provider=cast(
             KnowledgeProvider,
-            resolve_blended_knowledge_provider(resolved_manifest),
+            resolve_blended_knowledge_provider(resolved_bindings),
         ),
+        resolved_knowledge_bindings=resolved_bindings,
         model_provider=resolve_provider(resolved_manifest.model),
         tool_gateway=ToolGateway.from_file(resolved_manifest.tools.file),
         react_planner=react_planner,

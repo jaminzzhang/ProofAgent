@@ -554,7 +554,7 @@ class KnowledgeRetrievalService:
             )
 
         for bound in routing.selected:
-            binding_top_k = bound.binding.top_k or request.top_k
+            binding_top_k = bound.resolved.top_k or request.top_k
             _bind_provider_routing_model_governance(
                 bound.provider,
                 policy=self._policy,
@@ -570,7 +570,7 @@ class KnowledgeRetrievalService:
                         summary=_consume_provider_retrieval_summary(bound.provider),
                     )
                 )
-                if bound.binding.failure_mode == "advisory" and not _is_policy_error(exc):
+                if bound.resolved.failure_mode == "advisory" and not _is_policy_error(exc):
                     degraded = True
                     continue
                 self._trace.emit(
@@ -800,9 +800,9 @@ def _routing_metadata_matches(query: str, bound: BoundKnowledgeProvider) -> bool
 
 def _routing_terms(bound: BoundKnowledgeProvider) -> tuple[str, ...]:
     terms: list[str] = []
-    if bound.binding.alias:
-        terms.append(bound.binding.alias)
-    terms.extend(_strings_from_value(dict(bound.binding.routing_metadata)))
+    if bound.resolved.alias:
+        terms.append(bound.resolved.alias)
+    terms.extend(_strings_from_value(dict(bound.resolved.routing_metadata)))
     return tuple(term for term in terms if term.strip())
 
 
@@ -829,7 +829,7 @@ def _binding_candidate_summaries(
     return [
         {
             **_binding_summary(bound),
-            "routing_metadata_keys": sorted(str(key) for key in bound.binding.routing_metadata),
+            "routing_metadata_keys": sorted(str(key) for key in bound.resolved.routing_metadata),
             "matched": _routing_metadata_matches(query, bound),
         }
         for bound in bound_providers
@@ -866,22 +866,22 @@ def _tag_bound_chunk(
     if native_score is None:
         native_score = chunk.admission_score
     contribution = EvidenceContribution(
-        source_id=bound.source.source_id,
+        source_id=bound.resolved.source_id,
         source_version_id=chunk.source_version_id,
-        binding_id=bound.binding.binding_id,
+        binding_id=bound.resolved.binding_id,
         provider_name=bound.provider.provider_name,
         document_id=chunk.document_id,
         revision_id=chunk.revision_id,
         chunk_id=chunk.chunk_id,
         provider_local_rank=local_rank,
         provider_native_score=native_score,
-        fusion_weight=bound.binding.fusion_weight,
+        fusion_weight=bound.resolved.fusion_weight,
         citation=chunk.citation,
     )
     return chunk.model_copy(
         update={
-            "source_id": bound.source.source_id,
-            "binding_id": bound.binding.binding_id,
+            "source_id": bound.resolved.source_id,
+            "binding_id": bound.resolved.binding_id,
             "provider_name": bound.provider.provider_name,
             "provider_native_score": native_score,
             "admission_score": chunk.admission_score,
@@ -972,12 +972,12 @@ def _selected_binding_summaries(
 
 def _binding_summary(bound: BoundKnowledgeProvider) -> dict[str, Any]:
     return {
-        "binding_id": bound.binding.binding_id,
-        "source_id": bound.source.source_id,
+        "binding_id": bound.resolved.binding_id,
+        "source_id": bound.resolved.source_id,
         "provider": bound.provider.provider_name,
-        "failure_mode": bound.binding.failure_mode,
-        "fusion_weight": bound.binding.fusion_weight,
-        "top_k": bound.binding.top_k,
+        "failure_mode": bound.resolved.failure_mode,
+        "fusion_weight": bound.resolved.fusion_weight,
+        "top_k": bound.resolved.top_k,
     }
 
 
@@ -989,10 +989,10 @@ def _successful_provider_call(
 ) -> dict[str, Any]:
     return {
         **dict(summary or {}),
-        "binding_id": bound.binding.binding_id,
-        "source_id": bound.source.source_id,
+        "binding_id": bound.resolved.binding_id,
+        "source_id": bound.resolved.source_id,
         "provider": bound.provider.provider_name,
-        "failure_mode": bound.binding.failure_mode,
+        "failure_mode": bound.resolved.failure_mode,
         "status": "ok",
         "candidate_count": candidate_count,
     }
@@ -1006,10 +1006,10 @@ def _failed_provider_call(
 ) -> dict[str, Any]:
     return {
         **dict(summary or {}),
-        "binding_id": bound.binding.binding_id,
-        "source_id": bound.source.source_id,
+        "binding_id": bound.resolved.binding_id,
+        "source_id": bound.resolved.source_id,
         "provider": bound.provider.provider_name,
-        "failure_mode": bound.binding.failure_mode,
+        "failure_mode": bound.resolved.failure_mode,
         "status": "failed",
         "error_code": getattr(exc, "code", "PA_KNOWLEDGE_002"),
         "error_class": exc.__class__.__name__,
