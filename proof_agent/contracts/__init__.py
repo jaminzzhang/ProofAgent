@@ -38,6 +38,10 @@ from proof_agent.contracts.customer import (
 )
 from proof_agent.contracts.evidence import EvidenceChunk, EvidenceContribution, EvidenceStatus
 from proof_agent.contracts.handoff import CustomerHandoff, HandoffProjection, HandoffReason
+from proof_agent.contracts.knowledge_resolution import (
+    ResolvedKnowledgeBinding,
+    ResolvedKnowledgeBindingSet,
+)
 from proof_agent.contracts.manifest import (
     AgentManifest,
     AuditConfig,
@@ -175,6 +179,8 @@ __all__ = [
     "ReActPlannerConfig",
     "ReasoningSummary",
     "ResponseConfig",
+    "ResolvedKnowledgeBinding",
+    "ResolvedKnowledgeBindingSet",
     "RetrievalConfig",
     "ReviewConfig",
     "ReviewDecision",
