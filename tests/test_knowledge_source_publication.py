@@ -13,6 +13,9 @@ from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     local_index_artifact_metadata,
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.control.knowledge.source_publication import (
+    LocalIndexPublicationSmokeResult,
+)
 from proof_agent.contracts import (
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
@@ -20,6 +23,71 @@ from proof_agent.contracts import (
     KnowledgeSourcePublicationValidation,
 )
 from proof_agent.errors import ProofAgentError
+
+
+def test_validate_publication_requires_latest_snapshot(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_source(store)
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.validate_local_index_source_publication(
+            source_id="ks_policy",
+            smoke_query="What does the policy require?",
+            actor="operator",
+        )
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "latest_snapshot_id" in exc.value.message
+
+
+def test_validate_publication_rejects_zero_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store_with_frozen_snapshot(tmp_path)
+
+    monkeypatch.setattr(
+        "proof_agent.configuration.local_store.validate_local_index_publication_smoke",
+        lambda **_: LocalIndexPublicationSmokeResult(candidate_count=0, citation_count=0),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.validate_local_index_source_publication(
+            source_id="ks_policy",
+            smoke_query="What does the policy require?",
+            actor="operator",
+        )
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "evidence" in exc.value.message
+
+
+def test_validate_publication_persists_passed_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store_with_frozen_snapshot(tmp_path)
+
+    monkeypatch.setattr(
+        "proof_agent.configuration.local_store.validate_local_index_publication_smoke",
+        lambda **_: LocalIndexPublicationSmokeResult(candidate_count=1, citation_count=1),
+    )
+
+    validation = store.validate_local_index_source_publication(
+        source_id="ks_policy",
+        smoke_query="What does the policy require?",
+        actor="operator",
+    )
+
+    source = store.get_knowledge_source("ks_policy")
+    assert source is not None
+    assert validation.validation_id.startswith("kspubval_")
+    assert validation.source_id == "ks_policy"
+    assert validation.snapshot_id == source.latest_snapshot_id
+    assert validation.status == "passed"
+    assert validation.candidate_count == 1
+    assert validation.citation_count == 1
+    assert store.list_knowledge_source_publication_validations("ks_policy") == [validation]
 
 
 def test_publication_requires_change_note(tmp_path: Path) -> None:
@@ -87,18 +155,15 @@ def test_reusing_publication_validation_conflicts(tmp_path: Path) -> None:
 def _store_with_passed_publication_validation(
     tmp_path: Path,
 ) -> tuple[LocalAgentConfigurationStore, KnowledgeSourcePublicationValidation]:
-    store = LocalAgentConfigurationStore(tmp_path)
-    _create_source(store)
-    _write_compatible_ready_document(store, tmp_path)
-    foundation = store.validate_candidate_knowledge_source_snapshot_foundation(
+    store = _store_with_frozen_snapshot(tmp_path)
+    source = store.get_knowledge_source("ks_policy")
+    assert source is not None
+    assert source.latest_snapshot_id is not None
+    snapshot = store.get_knowledge_source_snapshot(
         source_id="ks_policy",
-        actor="validator",
+        snapshot_id=source.latest_snapshot_id,
     )
-    snapshot = store.freeze_candidate_knowledge_source_snapshot(
-        source_id="ks_policy",
-        validation_id=foundation.validation_id,
-        actor="operator",
-    )
+    assert snapshot is not None
     validation = KnowledgeSourcePublicationValidation(
         validation_id="kspubval_001",
         source_id="ks_policy",
@@ -114,6 +179,23 @@ def _store_with_passed_publication_validation(
     )
     store._write_knowledge_source_publication_validation(validation)
     return store, validation
+
+
+def _store_with_frozen_snapshot(tmp_path: Path) -> LocalAgentConfigurationStore:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_source(store)
+    _write_compatible_ready_document(store, tmp_path)
+    foundation = store.validate_candidate_knowledge_source_snapshot_foundation(
+        source_id="ks_policy",
+        actor="validator",
+    )
+    snapshot = store.freeze_candidate_knowledge_source_snapshot(
+        source_id="ks_policy",
+        validation_id=foundation.validation_id,
+        actor="operator",
+    )
+    assert snapshot.snapshot_id
+    return store
 
 
 def _create_source(store: LocalAgentConfigurationStore) -> None:
