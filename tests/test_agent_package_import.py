@@ -58,5 +58,5 @@ def test_compile_draft_agent_writes_valid_agent_package(tmp_path: Path) -> None:
     manifest = load_agent_manifest(package_dir / "agent.yaml")
 
     assert manifest.name == "enterprise_qa"
-    assert manifest.knowledge_sources[0].provider == "local_markdown"
-    assert manifest.knowledge_bindings[0].source_id == manifest.knowledge_sources[0].source_id
+    assert manifest.package_knowledge_sources[0].provider == "local_markdown"
+    assert manifest.knowledge_bindings[0].source_ref.source_id == manifest.package_knowledge_sources[0].source_id

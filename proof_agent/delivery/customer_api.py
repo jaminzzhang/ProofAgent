@@ -276,6 +276,7 @@ def create_customer_run(
             agent_id=published_agent.agent_id,
             agent_version_id=published_agent.agent_version_id,
             draft_id=published_agent.source_draft_id,
+            resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
         )
         if adapter_response.handoff_reason is not None:
             _append_customer_handoff_event(
@@ -338,6 +339,7 @@ def create_customer_run(
         agent_id=published_agent.agent_id,
         agent_version_id=published_agent.agent_version_id,
         draft_id=published_agent.source_draft_id,
+        resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
     )
     if case_memory_enabled:
         _append_memory_admission_event(

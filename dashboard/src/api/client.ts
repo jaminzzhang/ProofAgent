@@ -1,5 +1,6 @@
 import type {
   ActiveAgentVersion,
+  CandidateKnowledgeSourceSnapshot,
   ConfigAgentsResponse,
   ConfigVersionsResponse,
   ContractBundle,
@@ -10,6 +11,9 @@ import type {
   KnowledgeDocument,
   KnowledgeDocumentsResponse,
   KnowledgeSource,
+  KnowledgeSourcePublicationRecord,
+  KnowledgeSourcePublicationValidation,
+  KnowledgeSourcePublicationsResponse,
   KnowledgeSourcesResponse,
   PublishedAgentVersion,
   RunDetail,
@@ -75,6 +79,10 @@ export function fetchKnowledgeSources(): Promise<KnowledgeSourcesResponse> {
   return fetchJson<KnowledgeSourcesResponse>(`${BASE}/config/knowledge-sources`)
 }
 
+export function fetchKnowledgeSource(sourceId: string): Promise<KnowledgeSource> {
+  return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}`)
+}
+
 export function createKnowledgeSource(payload: {
   source_id?: string
   name: string
@@ -91,6 +99,50 @@ export function createKnowledgeSource(payload: {
 
 export function fetchKnowledgeDocuments(sourceId: string): Promise<KnowledgeDocumentsResponse> {
   return fetchJson<KnowledgeDocumentsResponse>(`${BASE}/config/knowledge-sources/${sourceId}/documents`)
+}
+
+export function fetchCandidateKnowledgeSourceSnapshot(
+  sourceId: string,
+): Promise<CandidateKnowledgeSourceSnapshot> {
+  return fetchJson<CandidateKnowledgeSourceSnapshot>(
+    `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot`,
+  )
+}
+
+export function validateKnowledgeSourcePublication(
+  sourceId: string,
+  payload: { smoke_query: string; actor?: string },
+): Promise<KnowledgeSourcePublicationValidation> {
+  return fetchJson<KnowledgeSourcePublicationValidation>(
+    `${BASE}/config/knowledge-sources/${sourceId}/publication/validate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function publishKnowledgeSource(
+  sourceId: string,
+  payload: { validation_id: string; change_note: string; actor?: string },
+): Promise<KnowledgeSourcePublicationRecord> {
+  return fetchJson<KnowledgeSourcePublicationRecord>(
+    `${BASE}/config/knowledge-sources/${sourceId}/publication/publish`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function fetchKnowledgeSourcePublications(
+  sourceId: string,
+): Promise<KnowledgeSourcePublicationsResponse> {
+  return fetchJson<KnowledgeSourcePublicationsResponse>(
+    `${BASE}/config/knowledge-sources/${sourceId}/publications`,
+  )
 }
 
 export function uploadKnowledgeDocument(

@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.knowledge_resolution import (
+    ConfigurationStoreKnowledgeBindingResolver,
+    PackageKnowledgeBindingResolver,
+)
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
@@ -26,6 +30,7 @@ from proof_agent.contracts import (
     KnowledgeIngestionJob,
     KnowledgeSource,
     QuarantinedKnowledgeUpload,
+    ResolvedKnowledgeBindingSet,
     RunPurpose,
 )
 from proof_agent.errors import ProofAgentError
@@ -137,6 +142,25 @@ class KnowledgeSourceSnapshotFreezeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     validation_id: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class KnowledgeSourcePublicationValidationRequest(BaseModel):
+    """Request body for Source-level publication smoke validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    smoke_query: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class KnowledgeSourcePublicationRequest(BaseModel):
+    """Request body for publishing one validated Knowledge Source snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    validation_id: str = Field(min_length=1)
+    change_note: str = Field(min_length=1)
     actor: str = "local-user"
 
 
@@ -432,6 +456,95 @@ def get_knowledge_source_snapshot(
     return snapshot.model_dump(mode="json")
 
 
+@router.post("/config/knowledge-sources/{source_id}/publication/validate")
+def validate_knowledge_source_publication(
+    source_id: str,
+    request: KnowledgeSourcePublicationValidationRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Run Source-level smoke retrieval and persist a passed publication validation."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        validation = store.validate_local_index_source_publication(
+            source_id=source_id,
+            smoke_query=request.smoke_query,
+            actor=request.actor,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return validation.model_dump(mode="json")
+
+
+@router.post("/config/knowledge-sources/{source_id}/publication/publish")
+def publish_knowledge_source(
+    source_id: str,
+    request: KnowledgeSourcePublicationRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Publish one validation-passed Knowledge Source snapshot."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        publication = store.publish_knowledge_source(
+            source_id=source_id,
+            validation_id=request.validation_id,
+            change_note=request.change_note,
+            actor=request.actor,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Knowledge Source Publication Validation not found: "
+                f"{source_id}/{request.validation_id}"
+            ),
+        ) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return publication.model_dump(mode="json")
+
+
+@router.get("/config/knowledge-sources/{source_id}/publication-validations")
+def list_knowledge_source_publication_validations(
+    source_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """List Source-level publication smoke validations."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        validations = store.list_knowledge_source_publication_validations(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return {
+        "data": [validation.model_dump(mode="json") for validation in validations],
+        "meta": {"total": len(validations)},
+    }
+
+
+@router.get("/config/knowledge-sources/{source_id}/publications")
+def list_knowledge_source_publications(
+    source_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """List immutable Knowledge Source publication records."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        publications = store.list_knowledge_source_publications(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return {
+        "data": [publication.model_dump(mode="json") for publication in publications],
+        "meta": {"total": len(publications)},
+    }
+
+
 @router.get("/config/agents")
 def list_config_agents(app_request: Request) -> dict[str, Any]:
     """List Agent identities managed by the local configuration store."""
@@ -528,6 +641,11 @@ def bind_knowledge_source_to_draft(
         raise HTTPException(
             status_code=404,
             detail=f"Knowledge Source not found: {request.source_id}",
+        )
+    if source.published_snapshot_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Knowledge Source must be published before binding.",
         )
     if request.failure_mode not in {"required", "advisory"}:
         raise HTTPException(status_code=400, detail="failure_mode must be required or advisory.")
@@ -669,6 +787,11 @@ def validate_config_draft(
     config_store = _get_configuration_store(app_request)
     draft = _require_draft(config_store, agent_id, draft_id)
     package_dir = compile_draft_agent(draft, config_store.root_dir / "compiled")
+    manifest = load_agent_manifest(package_dir / "agent.yaml")
+    resolved_knowledge_bindings = _resolve_draft_knowledge_bindings(
+        config_store,
+        manifest,
+    )
     run_store = _get_run_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
     try:
@@ -679,6 +802,8 @@ def validate_config_draft(
             approved=request.approved,
             run_id=run_id,
             store=run_store,
+            manifest=manifest,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
             run_purpose=RunPurpose.VALIDATION,
             agent_id=agent_id,
             draft_id=draft_id,
@@ -698,6 +823,7 @@ def validate_config_draft(
         status=detail.outcome.value,
         created_at=_now(),
         summary=result.final_output[:500],
+        resolved_knowledge_bindings=resolved_knowledge_bindings,
     )
     config_store.record_validation(
         agent_id=agent_id,
@@ -735,7 +861,11 @@ def publish_config_draft(
     validation_run_id = request.validation_run_id or _latest_validation_run_id(draft)
     if validation_run_id is None:
         raise HTTPException(status_code=400, detail="A validation run is required before publish.")
-    if validation_run_id not in {record.run_id for record in draft.validation_records}:
+    validation_record = next(
+        (record for record in draft.validation_records if record.run_id == validation_run_id),
+        None,
+    )
+    if validation_record is None:
         raise HTTPException(
             status_code=400,
             detail=f"Validation run is not recorded for this draft: {validation_run_id}",
@@ -745,6 +875,7 @@ def publish_config_draft(
         draft_id=draft_id,
         validation_run_id=validation_run_id,
         actor=request.actor,
+        resolved_knowledge_bindings=validation_record.resolved_knowledge_bindings,
     )
     return _version_payload(version)
 
@@ -853,6 +984,11 @@ def _version_payload(version: Any) -> dict[str, Any]:
         "purpose": version.purpose,
         "published_at": version.published_at,
         "published_by": version.published_by,
+        "resolved_knowledge_bindings": (
+            version.resolved_knowledge_bindings.model_dump(mode="json")
+            if version.resolved_knowledge_bindings is not None
+            else None
+        ),
         "operation_audit": [
             operation.model_dump(mode="json") for operation in version.operation_audit
         ],
@@ -867,6 +1003,9 @@ def _knowledge_source_payload(
     payload = source.model_dump(mode="json")
     payload["document_count"] = len(documents)
     payload["ready_document_count"] = sum(1 for document in documents if document.state == "ready")
+    payload["publication_count"] = len(
+        store.list_knowledge_source_publications(source.source_id)
+    )
     return payload
 
 
@@ -892,20 +1031,14 @@ def _bind_source_in_agent_yaml(
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
 
-    # Remove legacy inline knowledge section when migrating to
-    # knowledge_sources + knowledge_bindings.
+    # Shared Source bindings reference Configuration Store state. They do not
+    # copy provider params into the Agent Contract.
     raw.pop("knowledge", None)
+    raw.pop("knowledge_sources", None)
 
-    knowledge_sources = raw.setdefault("knowledge_sources", [])
-    if not isinstance(knowledge_sources, list):
-        raise HTTPException(status_code=400, detail="knowledge_sources must be a list.")
-    source_entry = {
-        "source_id": source.source_id,
-        "name": source.name,
-        "provider": source.provider,
-        "params": dict(source.params),
-    }
-    _upsert_by_key(knowledge_sources, "source_id", source.source_id, source_entry)
+    package_knowledge_sources = raw.setdefault("package_knowledge_sources", [])
+    if not isinstance(package_knowledge_sources, list):
+        raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
 
     knowledge_bindings = raw.setdefault("knowledge_bindings", [])
     if not isinstance(knowledge_bindings, list):
@@ -913,7 +1046,7 @@ def _bind_source_in_agent_yaml(
     binding_id = request.binding_id or f"{source.source_id}_binding"
     binding_entry: dict[str, Any] = {
         "binding_id": binding_id,
-        "source_id": source.source_id,
+        "source_ref": {"scope": "shared", "source_id": source.source_id},
         "failure_mode": request.failure_mode,
         "fusion_weight": request.fusion_weight,
     }
@@ -935,29 +1068,20 @@ def _unbind_source_in_agent_yaml(
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
 
+    raw.pop("knowledge", None)
+    raw.pop("knowledge_sources", None)
+    package_knowledge_sources = raw.setdefault("package_knowledge_sources", [])
+    if not isinstance(package_knowledge_sources, list):
+        raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
+
     knowledge_bindings = raw.get("knowledge_bindings", [])
     if not isinstance(knowledge_bindings, list):
         raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
 
-    source_id_to_remove = None
-    for binding in knowledge_bindings:
+    for binding in list(knowledge_bindings):
         if isinstance(binding, dict) and binding.get("binding_id") == binding_id:
-            source_id_to_remove = binding.get("source_id")
             knowledge_bindings.remove(binding)
             break
-
-    if source_id_to_remove is not None:
-        is_still_referenced = any(
-            isinstance(b, dict) and b.get("source_id") == source_id_to_remove
-            for b in knowledge_bindings
-        )
-        if not is_still_referenced:
-            knowledge_sources = raw.get("knowledge_sources", [])
-            if isinstance(knowledge_sources, list):
-                for source in knowledge_sources:
-                    if isinstance(source, dict) and source.get("source_id") == source_id_to_remove:
-                        knowledge_sources.remove(source)
-                        break
 
     return cast(str, yaml.safe_dump(raw, sort_keys=False))
 
@@ -986,6 +1110,18 @@ def _latest_validation_run_id(draft: DraftAgent) -> str | None:
     if not draft.validation_records:
         return None
     return draft.validation_records[-1].run_id
+
+
+def _resolve_draft_knowledge_bindings(
+    store: LocalAgentConfigurationStore,
+    manifest: Any,
+) -> ResolvedKnowledgeBindingSet:
+    has_shared_binding = any(
+        binding.source_ref.scope == "shared" for binding in manifest.knowledge_bindings
+    )
+    if has_shared_binding:
+        return ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
+    return PackageKnowledgeBindingResolver().resolve(manifest)
 
 
 def _require_draft(

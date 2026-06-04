@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
@@ -30,7 +30,12 @@ class KnowledgeConfig(FrozenModel):
         return freeze_value(value)
 
 
-class KnowledgeSourceConfig(FrozenModel):
+class KnowledgeSourceReferenceConfig(FrozenModel):
+    scope: Literal["package", "shared"]
+    source_id: str
+
+
+class PackageKnowledgeSourceConfig(FrozenModel):
     source_id: str
     name: str
     provider: str
@@ -44,7 +49,7 @@ class KnowledgeSourceConfig(FrozenModel):
 
 class KnowledgeBindingConfig(FrozenModel):
     binding_id: str
-    source_id: str
+    source_ref: KnowledgeSourceReferenceConfig
     alias: str | None = None
     failure_mode: str = "required"
     fusion_weight: float = 1.0
@@ -162,7 +167,7 @@ class AgentManifest(FrozenModel):
     name: str
     purpose: str
     workflow: WorkflowConfig
-    knowledge_sources: tuple[KnowledgeSourceConfig, ...]
+    package_knowledge_sources: tuple[PackageKnowledgeSourceConfig, ...]
     knowledge_bindings: tuple[KnowledgeBindingConfig, ...]
     retrieval: RetrievalConfig
     model: ModelConfig

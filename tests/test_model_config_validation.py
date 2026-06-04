@@ -19,7 +19,7 @@ purpose: "Test model config."
 workflow:
   runtime: langgraph
   template: enterprise_qa
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
     provider: local_markdown
@@ -27,7 +27,9 @@ knowledge_sources:
       path: ./knowledge
 knowledge_bindings:
   - binding_id: kb_local
-    source_id: ks_local
+    source_ref:
+      scope: package
+      source_id: ks_local
 retrieval:
   strategy: single_step
   top_k: 2
@@ -87,7 +89,7 @@ workflow:
   checkpointer:
     provider: sqlite
     uri: memory
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
     provider: local_markdown
@@ -95,7 +97,9 @@ knowledge_sources:
       path: ./knowledge
 knowledge_bindings:
   - binding_id: kb_local
-    source_id: ks_local
+    source_ref:
+      scope: package
+      source_id: ks_local
 retrieval:
   strategy: single_step
   top_k: 2

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import ResolvedKnowledgeBindingSet
 
 
 DEFAULT_PUBLISHED_AGENTS: dict[str, Path] = {}
@@ -22,6 +23,7 @@ class PublishedAgent:
     agent_version_id: str | None = None
     source_draft_id: str | None = None
     validation_run_id: str | None = None
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
     source: str = "configuration"
 
 
@@ -102,6 +104,7 @@ class PublishedAgentRegistry:
             agent_version_id=version.version_id,
             source_draft_id=version.source_draft_id,
             validation_run_id=version.validation_run_id,
+            resolved_knowledge_bindings=version.resolved_knowledge_bindings,
             source="configuration_store",
         )
 

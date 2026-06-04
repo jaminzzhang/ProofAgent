@@ -1,0 +1,186 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from proof_agent.bootstrap.knowledge_resolution import (
+    ConfigurationStoreKnowledgeBindingResolver,
+    PackageKnowledgeBindingResolver,
+)
+from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import KnowledgeSourceSnapshotManifest
+from proof_agent.errors import ProofAgentError
+
+
+def test_package_resolver_resolves_package_source(tmp_path: Path) -> None:
+    agent_yaml = _write_agent_manifest(tmp_path, source_ref_scope="package")
+
+    resolved = PackageKnowledgeBindingResolver().resolve(load_agent_manifest(agent_yaml))
+
+    binding = resolved.bindings[0]
+    assert binding.binding_id == "kb_local"
+    assert binding.source_scope == "package"
+    assert binding.source_id == "ks_local"
+    assert binding.source_version_id == "package"
+    assert binding.provider == "local_markdown"
+    assert binding.provider_params["path"] == (tmp_path / "knowledge").resolve()
+    assert binding.alias == "policy_docs"
+    assert binding.failure_mode == "required"
+    assert binding.fusion_weight == 1.25
+    assert binding.top_k == 2
+
+
+def test_package_resolver_rejects_shared_source_ref(tmp_path: Path) -> None:
+    agent_yaml = _write_agent_manifest(
+        tmp_path,
+        source_ref_scope="shared",
+        package_sources_yaml="package_knowledge_sources: []",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        PackageKnowledgeBindingResolver().resolve(load_agent_manifest(agent_yaml))
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "Configuration Store resolver" in exc.value.fix
+
+
+def test_configuration_store_resolver_rejects_unpublished_source(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_knowledge_source(
+        source_id="ks_local",
+        name="Policy Knowledge",
+        provider="local_index",
+        params={"ingestion_model": {"provider": "deterministic", "name": "routing"}},
+        actor="operator",
+    )
+    manifest = load_agent_manifest(
+        _write_agent_manifest(
+            tmp_path,
+            source_ref_scope="shared",
+            package_sources_yaml="package_knowledge_sources: []",
+        )
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "published" in exc.value.message
+
+
+def test_configuration_store_resolver_maps_published_local_index_snapshot(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    source = store.create_knowledge_source(
+        source_id="ks_local",
+        name="Policy Knowledge",
+        provider="local_index",
+        params={
+            "ingestion_model": {"provider": "deterministic", "name": "routing"},
+            "document_selection_budget": 6,
+        },
+        actor="operator",
+    )
+    assert source.source_draft_version_id is not None
+    snapshot = KnowledgeSourceSnapshotManifest(
+        schema_version="local_index.snapshot.v2",
+        snapshot_id="kssnapshot_001",
+        source_id=source.source_id,
+        state="READY",
+        validation_level="foundation",
+        source_draft_version_id=source.source_draft_version_id,
+        candidate_digest="digest",
+        foundation_validation_id="ksvalidation_001",
+        documents=(),
+        created_at="2026-06-04T00:00:00Z",
+        created_by="operator",
+    )
+    store._write_knowledge_source_snapshot(snapshot)
+    store._write_knowledge_source(source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id}))
+    manifest = load_agent_manifest(
+        _write_agent_manifest(
+            tmp_path,
+            source_ref_scope="shared",
+            package_sources_yaml="package_knowledge_sources: []",
+        )
+    )
+
+    resolved = ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
+
+    binding = resolved.bindings[0]
+    assert binding.source_scope == "shared"
+    assert binding.source_id == "ks_local"
+    assert binding.source_version_id == snapshot.snapshot_id
+    assert binding.provider == "local_index"
+    assert binding.provider_params["snapshot_path"] == (
+        store.root_dir
+        / "knowledge_sources"
+        / "ks_local"
+        / "snapshots"
+        / snapshot.snapshot_id
+    )
+    assert binding.provider_params["artifact_root"] == store.root_dir
+    assert binding.provider_params["routing_model"] == {
+        "provider": "deterministic",
+        "name": "routing",
+    }
+    assert binding.provider_params["document_selection_budget"] == 6
+
+
+def _write_agent_manifest(
+    tmp_path: Path,
+    *,
+    source_ref_scope: str,
+    package_sources_yaml: str | None = None,
+) -> Path:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    if package_sources_yaml is None:
+        package_sources_yaml = """
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+"""
+    agent_yaml.write_text(
+        f"""
+name: resolver_test
+purpose: "Resolve Knowledge bindings."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+{package_sources_yaml}
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: {source_ref_scope}
+      source_id: ks_local
+    alias: policy_docs
+    failure_mode: required
+    fusion_weight: 1.25
+    top_k: 2
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+    return agent_yaml

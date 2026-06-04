@@ -87,6 +87,43 @@ def test_inspect_governance_receipt(tmp_path: Path) -> None:
     assert "Final Outcome: ANSWERED_WITH_CITATIONS" in result.output
 
 
+def test_config_reset_local_store_deletes_only_config_dir(tmp_path: Path) -> None:
+    config_dir = tmp_path / "runs" / "config"
+    history_dir = tmp_path / "runs" / "history"
+    latest_dir = tmp_path / "runs" / "latest"
+    config_dir.mkdir(parents=True)
+    history_dir.mkdir(parents=True)
+    latest_dir.mkdir(parents=True)
+    (config_dir / "source.json").write_text("{}", encoding="utf-8")
+    (history_dir / "trace.jsonl").write_text("{}", encoding="utf-8")
+    (latest_dir / "governance_receipt.md").write_text("# receipt", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "config-reset",
+            "--scope",
+            "local-store",
+            "--config-dir",
+            str(config_dir),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert not config_dir.exists()
+    assert history_dir.exists()
+    assert latest_dir.exists()
+    assert "cleared local configuration store" in result.output
+
+
+def test_config_reset_requires_explicit_scope(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["config-reset", "--config-dir", str(tmp_path / "config")])
+
+    assert result.exit_code != 0
+    assert "local-store" in result.output
+
+
 def test_knowledge_worker_prints_diagnostics_before_task_outcome(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

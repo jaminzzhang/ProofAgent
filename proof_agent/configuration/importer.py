@@ -14,7 +14,7 @@ BASIC_UI_TOP_LEVEL_FIELDS = {
     "name",
     "purpose",
     "workflow",
-    "knowledge_sources",
+    "package_knowledge_sources",
     "knowledge_bindings",
     "retrieval",
     "model",

@@ -14,13 +14,12 @@ from proof_agent.capabilities.knowledge.blended import (
 from proof_agent.contracts import (
     EvidenceChunk,
     EvidenceStatus,
-    KnowledgeBindingConfig,
-    KnowledgeSourceConfig,
     ModelMessage,
     ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelRole,
+    ResolvedKnowledgeBinding,
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.knowledge.retrieval_service import (
@@ -1102,14 +1101,12 @@ def _bound(
     keywords: tuple[str, ...] = (),
 ) -> BoundKnowledgeProvider:
     return BoundKnowledgeProvider(
-        source=KnowledgeSourceConfig(
-            source_id=source_id,
-            name=source_id,
-            provider=provider.provider_name,
-        ),
-        binding=KnowledgeBindingConfig(
+        resolved=ResolvedKnowledgeBinding(
             binding_id=binding_id,
+            source_scope="package",
             source_id=source_id,
+            source_version_id="package",
+            provider=provider.provider_name,
             failure_mode=failure_mode,
             fusion_weight=fusion_weight,
             routing_metadata={"keywords": keywords},

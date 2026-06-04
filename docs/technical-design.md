@@ -591,6 +591,8 @@ Current baseline:
 - shared Control Plane Knowledge Retrieval Service for Enterprise QA and Controlled ReAct.
 - deterministic binding metadata routing for single-step, reviewed/fallback, and planner/evaluator-backed agentic retrieval.
 - binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and provider-call trace summaries for blended retrieval.
+- explicit `package_knowledge_sources[]` plus `knowledge_bindings[].source_ref` Agent Contract shape.
+- Configuration Store Source publication validation and Published Agent binding resolution for shared `local_index` Sources.
 
 Knowledge Hub target shape:
 - Knowledge Sources own provider configuration and publication lifecycle.
@@ -600,7 +602,7 @@ Knowledge Hub target shape:
 
 Agent package deterministic shape:
 ```yaml
-knowledge_sources:
+package_knowledge_sources:
   - source_id: enterprise_qa_knowledge
     name: Enterprise QA Knowledge
     provider: local_markdown
@@ -609,7 +611,9 @@ knowledge_sources:
 
 knowledge_bindings:
   - binding_id: enterprise_qa_knowledge_binding
-    source_id: enterprise_qa_knowledge
+    source_ref:
+      scope: package
+      source_id: enterprise_qa_knowledge
 
 retrieval:
   strategy: single_step
@@ -626,7 +630,8 @@ Knowledge Hub V1 provider set:
 
 Rules:
 - Knowledge Provider Adapters retrieve one selected source and return candidate `EvidenceChunk` objects only.
-- Provider-specific config lives in Knowledge Sources, not Agent Draft provider params.
+- Provider-specific config lives in package-local Knowledge Sources or Configuration Store Knowledge Sources, not in shared Agent binding entries.
+- Dashboard-managed shared Source bindings use `source_ref: {scope: shared, source_id: ...}` and do not copy provider params into the Agent Contract.
 - Retrieval orchestration policy lives under the required top-level `retrieval` section and the Control Plane Knowledge Retrieval Service.
 - `top_k` and `min_score` belong to `retrieval`, not provider params.
 - Control Plane evidence evaluation creates accepted or rejected evidence.
@@ -654,8 +659,9 @@ Local Index strategy:
 - Recoverable artifact-build failures persist bounded retry state with 30-second then 120-second backoff. Artifact-key contention defers without consuming the retry budget.
 - Source claim concurrency is configured through `params.worker_concurrency`, defaults to `2`, and is bounded from `1` through `8`.
 - The snapshot-freeze foundation derives a mutable Candidate Knowledge Source Snapshot from READY active document revisions and a lightweight Source Draft version token. It persists `foundation` freeze-readiness validation, freezes an immutable `local_index.snapshot.v2` manifest of revision artifact references without copying artifacts or rebuilding a merged index, and atomically advances `latest_snapshot_id`.
-- A foundation-validated frozen snapshot is for preview and explicitly configured runtime development only. It does not advance `published_snapshot_id`, imply production publication readiness, automatically change Agent binding behavior, or authorize production Published Agent binding. The formal Source publication slice owns that production guard.
-- Remaining Knowledge Hub gaps include the formal Source publication API, continuous worker polling, batch-upload APIs, routing metadata editing, and hierarchical routing beyond the bounded first `100` candidates.
+- Source publication validation runs a smoke retrieval against the latest frozen snapshot and persists a passed `KnowledgeSourcePublicationValidation`. Publishing that validation creates an immutable publication record and advances `published_snapshot_id`.
+- Dashboard-managed Draft Agents may bind only published shared Sources. Agent validation resolves shared bindings to a `ResolvedKnowledgeBindingSet`, and Published Agent Versions persist that resolved set so production runs use the vetted snapshot path.
+- Remaining Knowledge Hub gaps include continuous worker polling, batch-upload APIs, routing metadata editing, trusted `http_json`, and hierarchical routing beyond the bounded first `100` candidates.
 - The later batch-upload contract accepts at most 50 files, atomically reserves capacity for the full batch before staging bytes, then validates each staged file independently and asynchronously.
 
 Remote adapter strategy:
@@ -672,8 +678,8 @@ Implementation sequence:
 5. Add the Local Index ingestion worker foundation; the current slice stages and validates quarantined uploads, promotes accepted document revisions, builds immutable revision artifacts, persists bounded retries, and exposes one-shot CLI plus status APIs.
 6. Add the Local Index snapshot-freeze foundation; the current slice derives candidate snapshots, persists foundation validation, freezes immutable `local_index.snapshot.v2` manifests, advances the preview-only latest snapshot pointer, and exposes management APIs.
 7. Add `local_index.snapshot.v2` multi-document runtime routing; the current runtime validates the immutable manifest, routes over bounded trace-safe document projections, loads selected revision artifacts read-only, fails closed on selected-document errors, and records one-shot routing summaries through the Control Plane.
-8. Add formal Source publication, then continuous worker polling and atomic batch upload.
-9. Add the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
+8. Source publication and production binding resolution are implemented for local Configuration Store Sources; the current slice validates publication smoke retrieval, publishes Source snapshots, rejects unpublished shared Source bindings, and persists resolved bindings on Published Agent Versions.
+9. Add continuous worker polling, atomic batch upload, and the trusted `http_json` remote adapter with default Remote Retrieval Protocol support and bounded declarative request and response mappings.
 10. Add contract, loader, provider, retrieval service, ReAct, trace, receipt, and regression tests before removing legacy compatibility assumptions from documentation examples.
 
 ## 15. Model Providers

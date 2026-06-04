@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from proof_agent.bootstrap import compose_harness_invocation
+from proof_agent.contracts import ResolvedKnowledgeBinding, ResolvedKnowledgeBindingSet
 from proof_agent.control.workflow.templates import resolve_workflow_template
 from proof_agent.errors import ProofAgentError
 
@@ -63,7 +64,7 @@ purpose: "Blend two knowledge sources."
 workflow:
   runtime: langgraph
   template: enterprise_qa
-knowledge_sources:
+package_knowledge_sources:
   - source_id: ks_alpha
     name: Alpha Knowledge
     provider: local_markdown
@@ -76,10 +77,14 @@ knowledge_sources:
       path: ./knowledge_two
 knowledge_bindings:
   - binding_id: kb_alpha
-    source_id: ks_alpha
+    source_ref:
+      scope: package
+      source_id: ks_alpha
     fusion_weight: 1.0
   - binding_id: kb_beta
-    source_id: ks_beta
+    source_ref:
+      scope: package
+      source_id: ks_beta
     fusion_weight: 1.0
 retrieval:
   strategy: single_step
@@ -109,3 +114,66 @@ audit:
     assert {chunk.binding_id for chunk in chunks} == {"kb_alpha", "kb_beta"}
     assert all(chunk.fusion_rank is not None for chunk in chunks)
     assert all(chunk.admission_score is not None for chunk in chunks)
+
+
+def test_compose_harness_invocation_accepts_precomputed_resolved_bindings(
+    tmp_path: Path,
+) -> None:
+    source_one = tmp_path / "knowledge_one"
+    source_one.mkdir()
+    (source_one / "alpha.md").write_text("# Alpha\nAlpha travel meals need receipts.\n", encoding="utf-8")
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: precomputed_qa
+purpose: "Use precomputed resolved Knowledge bindings."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources: []
+knowledge_bindings:
+  - binding_id: kb_alpha
+    source_ref:
+      scope: shared
+      source_id: ks_alpha
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+    resolved = ResolvedKnowledgeBindingSet(
+        bindings=(
+            ResolvedKnowledgeBinding(
+                binding_id="kb_alpha",
+                source_scope="shared",
+                source_id="ks_alpha",
+                source_version_id="snapshot_001",
+                provider="local_markdown",
+                provider_params={"path": source_one},
+                failure_mode="required",
+                fusion_weight=1.0,
+            ),
+        )
+    )
+
+    invocation = compose_harness_invocation(
+        agent_yaml,
+        resolved_knowledge_bindings=resolved,
+    )
+
+    assert invocation.resolved_knowledge_bindings == resolved
+    assert invocation.knowledge_provider.provider_name == "local_markdown"

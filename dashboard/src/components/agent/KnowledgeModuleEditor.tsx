@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
 import { KnowledgeSource } from '../../api/types'
 import { KNOWLEDGE_FIELDS } from './module-configs/knowledge'
@@ -32,40 +32,32 @@ export function KnowledgeModuleEditor({
   busy,
   knowledgeSourceError,
 }: KnowledgeModuleEditorProps) {
+  const publishedSources = useMemo(
+    () => knowledgeSources.filter((source) => Boolean(source.published_snapshot_id)),
+    [knowledgeSources],
+  )
+  const unpublishedCount = knowledgeSources.length - publishedSources.length
   // Bind form state
-  const [selectedSourceId, setSelectedSourceId] = useState<string>(knowledgeSources[0]?.source_id || '')
+  const [selectedSourceId, setSelectedSourceId] = useState<string>('')
   const [bindingAlias, setBindingAlias] = useState('')
   const [bindingFailureMode, setBindingFailureMode] = useState<'required' | 'advisory'>('required')
   const [bindingFusionWeight, setBindingFusionWeight] = useState('1.0')
   const [bindingTopK, setBindingTopK] = useState('')
 
-  // Parse bindings from YAML
-  const bindingsYaml = extractAgentYamlSection(agentYaml, 'knowledge_bindings') || ''
-  
-  // A simple regex parser to extract binding_id and source_id for display
-  const parsedBindings: { binding_id: string; source_id: string; alias: string; failure_mode: string; fusion_weight: string }[] = []
-  
-  const blocks = bindingsYaml.split('- binding_id:').slice(1)
-  blocks.forEach(block => {
-    const bindingIdMatch = block.match(/^\s*([^\s\n]+)/)
-    const sourceMatch = block.match(/source_id:\s*([^\s\n]+)/)
-    const aliasMatch = block.match(/alias:\s*([^\s\n]+)/)
-    const failureModeMatch = block.match(/failure_mode:\s*([^\s\n]+)/)
-    const weightMatch = block.match(/fusion_weight:\s*([^\s\n]+)/)
-
-    if (sourceMatch && bindingIdMatch) {
-      parsedBindings.push({
-        binding_id: bindingIdMatch[1].replace(/['"]/g, ''),
-        source_id: sourceMatch[1].replace(/['"]/g, ''),
-        alias: aliasMatch ? aliasMatch[1].replace(/['"]/g, '') : '',
-        failure_mode: failureModeMatch ? failureModeMatch[1].replace(/['"]/g, '') : 'required',
-        fusion_weight: weightMatch ? weightMatch[1].replace(/['"]/g, '') : '1.0'
-      })
+  useEffect(() => {
+    if (publishedSources.length === 0) {
+      setSelectedSourceId('')
+      return
     }
-  })
+    if (!publishedSources.some((source) => source.source_id === selectedSourceId)) {
+      setSelectedSourceId(publishedSources[0].source_id)
+    }
+  }, [publishedSources, selectedSourceId])
+
+  const parsedBindings = parseKnowledgeBindings(agentYaml)
 
   async function handleBind() {
-    const sourceId = selectedSourceId || knowledgeSources[0]?.source_id
+    const sourceId = selectedSourceId || publishedSources[0]?.source_id
     if (!sourceId) return
 
     const payload: Parameters<typeof onBindSource>[0] = {
@@ -163,9 +155,14 @@ export function KnowledgeModuleEditor({
             </p>
           </div>
           <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
-            {knowledgeSources.length} available
+            {publishedSources.length} published available
           </span>
         </div>
+        {unpublishedCount > 0 && (
+          <p className="mb-4 text-xs text-[var(--text-muted)]">
+            {unpublishedCount} unpublished Source{unpublishedCount === 1 ? '' : 's'} hidden until publication.
+          </p>
+        )}
 
         {knowledgeSourceError && (
           <div className="mb-4 rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
@@ -173,8 +170,8 @@ export function KnowledgeModuleEditor({
           </div>
         )}
 
-        {knowledgeSources.length === 0 ? (
-          <EmptyState message="No shared Knowledge Sources exist globally. Create one in /knowledge first." />
+        {publishedSources.length === 0 ? (
+          <EmptyState message="No published shared Knowledge Sources are available. Publish one in Knowledge Hub first." />
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
             <div>
@@ -186,7 +183,7 @@ export function KnowledgeModuleEditor({
                 onChange={(event) => setSelectedSourceId(event.target.value)}
                 className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
               >
-                {knowledgeSources.map((source) => (
+                {publishedSources.map((source) => (
                   <option key={source.source_id} value={source.source_id}>
                     {source.name} ({source.provider})
                   </option>
@@ -320,4 +317,39 @@ export function KnowledgeModuleEditor({
       </div>
     </div>
   )
+}
+
+interface ParsedKnowledgeBinding {
+  binding_id: string
+  source_id: string
+  alias: string
+  failure_mode: string
+  fusion_weight: string
+}
+
+function parseKnowledgeBindings(agentYaml: string): ParsedKnowledgeBinding[] {
+  const bindingsYaml = extractAgentYamlSection(agentYaml, 'knowledge_bindings') || ''
+  return bindingsYaml
+    .split(/\n\s*-\s*binding_id:/)
+    .slice(1)
+    .map((block) => {
+      const bindingIdMatch = block.match(/^\s*([^\s\n]+)/)
+      const sourceRefMatch = block.match(/source_ref:\s*\n(?:\s+[^\n]*\n)*?\s+source_id:\s*([^\s\n]+)/)
+      const aliasMatch = block.match(/alias:\s*([^\s\n]+)/)
+      const failureModeMatch = block.match(/failure_mode:\s*([^\s\n]+)/)
+      const weightMatch = block.match(/fusion_weight:\s*([^\s\n]+)/)
+      if (!bindingIdMatch || !sourceRefMatch) return null
+      return {
+        binding_id: unquoteYamlScalar(bindingIdMatch[1]),
+        source_id: unquoteYamlScalar(sourceRefMatch[1]),
+        alias: aliasMatch ? unquoteYamlScalar(aliasMatch[1]) : '',
+        failure_mode: failureModeMatch ? unquoteYamlScalar(failureModeMatch[1]) : 'required',
+        fusion_weight: weightMatch ? unquoteYamlScalar(weightMatch[1]) : '1.0',
+      }
+    })
+    .filter((binding): binding is ParsedKnowledgeBinding => Boolean(binding))
+}
+
+function unquoteYamlScalar(value: string): string {
+  return value.replace(/['"]/g, '')
 }

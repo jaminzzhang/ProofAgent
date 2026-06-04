@@ -6,9 +6,17 @@ from uuid import uuid4
 
 from langgraph.checkpoint.memory import MemorySaver
 
+from proof_agent.bootstrap.knowledge_resolution import KnowledgeBindingResolver
 from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.contracts import AgentManifest, ContextAdmission, ReceiptOutcome, RunPurpose, RunResult
+from proof_agent.contracts import (
+    AgentManifest,
+    ContextAdmission,
+    ReceiptOutcome,
+    ResolvedKnowledgeBindingSet,
+    RunPurpose,
+    RunResult,
+)
 from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.control.workflow.harness_helpers import emit_model_error, finalize_run, is_model_error
 from proof_agent.errors import ProofAgentError
@@ -29,6 +37,8 @@ def run_with_langgraph(
     store: RunStore | None = None,
     checkpointer: Any | None = None,
     manifest: AgentManifest | None = None,
+    knowledge_binding_resolver: KnowledgeBindingResolver | None = None,
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     agent_id: str | None = None,
     agent_version_id: str | None = None,
@@ -61,7 +71,12 @@ def run_with_langgraph(
             payload=context_admission_payload(conversation_context),
         )
     try:
-        invocation = compose_harness_invocation(agent_yaml, manifest=resolved_manifest)
+        invocation = compose_harness_invocation(
+            agent_yaml,
+            manifest=resolved_manifest,
+            knowledge_binding_resolver=knowledge_binding_resolver,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
+        )
     except Exception as exc:
         if is_model_error(exc):
             emit_model_error(

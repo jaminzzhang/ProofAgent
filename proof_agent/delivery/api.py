@@ -99,6 +99,7 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
         agent_id=published_agent.agent_id,
         agent_version_id=published_agent.agent_version_id,
         draft_id=published_agent.source_draft_id,
+        resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
     )
 
     return _run_response(
@@ -201,6 +202,7 @@ def create_conversation_run(
         agent_id=published_agent.agent_id,
         agent_version_id=published_agent.agent_version_id,
         draft_id=published_agent.source_draft_id,
+        resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
     )
     governance_details = _governance_projection(
         detail,
@@ -249,6 +251,7 @@ def _execute_published_agent_run(
     agent_id: str | None = None,
     agent_version_id: str | None = None,
     draft_id: str | None = None,
+    resolved_knowledge_bindings: Any | None = None,
 ) -> tuple[Any, Any, AgentManifest]:
     store = _get_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
@@ -263,6 +266,7 @@ def _execute_published_agent_run(
             run_id=run_id,
             store=store,
             manifest=manifest,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
             agent_id=agent_id,
             agent_version_id=agent_version_id,
             draft_id=draft_id,
