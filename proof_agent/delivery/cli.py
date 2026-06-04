@@ -131,6 +131,29 @@ def compare(agent_yaml: str, question: str = typer.Option(..., "--question")) ->
     typer.echo(f"Harness RAG: {harness.outcome} - {harness.message}")
 
 
+@app.command("config-reset")
+def config_reset(
+    scope: str | None = typer.Option(None, "--scope"),
+    config_dir: str = typer.Option("runs/config", "--config-dir"),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Clear generated local Configuration Store state."""
+
+    if scope != "local-store":
+        typer.echo("Supported reset scope: local-store", err=True)
+        raise typer.Exit(code=2)
+    if not yes:
+        typer.echo("Pass --yes to clear the local Configuration Store.", err=True)
+        raise typer.Exit(code=2)
+
+    path = Path(config_dir)
+    if path.exists():
+        import shutil
+
+        shutil.rmtree(path)
+    typer.echo(f"cleared local configuration store: {path}")
+
+
 @app.command()
 def server(
     port: int = typer.Option(8000, "--port", help="Port to serve the API on"),
