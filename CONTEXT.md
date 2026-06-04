@@ -891,12 +891,16 @@ The shared-asset API under `/api/config/knowledge-sources` for listing, creating
 _Avoid_: Dashboard observability API, Agent Draft provider params, execution endpoint
 
 **Agent Knowledge Binding Configuration API**:
-The Agent Draft configuration boundary that stores `knowledge_bindings[]` plus Agent-level blended-retrieval settings and resolves published snapshot or configuration versions during Agent publication. It stores binding intent only and never owns Knowledge Source provider parameters.
+The Agent Draft configuration boundary that stores `knowledge_bindings[]` with shared Agent Knowledge Source References plus Agent-level blended-retrieval settings, then resolves published snapshot or configuration versions during Agent validation and publication. It stores binding intent only and never owns Knowledge Source provider parameters.
 _Avoid_: Inline provider config, Source lifecycle API, latest-at-runtime lookup
 
 **Direct Knowledge Contract Migration**:
-The one-time breaking cutover from inline Agent `knowledge.provider + params` configuration to Source-owned provider configuration plus Agent `knowledge_bindings[]`. Because no Agent deployment compatibility is required, loader, Dashboard, examples, fixtures, and tests migrate together and the new loader rejects the legacy inline shape.
+The one-time breaking cutover from inline Agent `knowledge.provider + params` configuration and ambiguous Agent `knowledge_sources[]` to explicit package-local `package_knowledge_sources[]` plus Agent `knowledge_bindings[]` with Agent Knowledge Source References. Because no Agent deployment compatibility is required, loader, Dashboard, examples, fixtures, and tests migrate together and the new loader rejects the legacy inline and ambiguous shared-provider shapes.
 _Avoid_: Legacy dual-read path, automatic compatibility Source creation, mixed contract versions
+
+**Local Configuration Store Reset**:
+The development-environment cleanup action that clears generated local Agent Configuration Store state, including Draft Agents, Published Agent Versions, Knowledge Sources, local-index artifacts, snapshots, and compiled configuration packages, without deleting source-controlled examples, tests, documentation, or retained run audit history.
+_Avoid_: Source migration, production data deletion, RunStore audit purge, fixture cleanup
 
 **Sidebar Navigation Section**:
 The two top-level sections in the Dashboard Shell sidebar: MONITORING for observability views (Overview, Runs, Handoffs, Approvals) and CONFIGURATION for design-time views (Agents, Policies, Knowledge Sources, Tools). Each section groups related navigation items under a visible header.
@@ -971,8 +975,20 @@ The trace-safe result summary for one provider call: success or failure, latency
 _Avoid_: Complete remote response, raw document content, secret-bearing diagnostics
 
 **Agent Knowledge Binding**:
-The Agent-specific configuration that authorizes and parameterizes how a Draft Agent or Published Agent Version may use a Knowledge Source without selecting that source's Knowledge Provider.
+The Agent-specific configuration that authorizes and parameterizes how a Draft Agent, Published Agent Version, or Package-Local Agent execution may use a Knowledge Source through an Agent Knowledge Source Reference without selecting that source's Knowledge Provider.
 _Avoid_: Knowledge Source, Knowledge Provider configuration, global retrieval defaults
+
+**Agent Knowledge Source Reference**:
+The explicit target inside one Agent Knowledge Binding that names whether the binding resolves to a Package-Local Knowledge Source or to a published shared Knowledge Source. It removes implicit lookup rules between package execution and Knowledge Hub execution.
+_Avoid_: Provider params, Source Draft copy, runtime latest lookup, Structured Remote Source Reference
+
+**Package-Local Knowledge Source**:
+The Knowledge Source definition carried in `package_knowledge_sources[]` inside a standalone Agent Package for deterministic demos, local development fixtures, or package-scoped execution outside the Dashboard Configuration Store. It is resolved by the same Knowledge Binding Resolver as shared Sources, but it is not a reusable Knowledge Hub asset and is not published through Knowledge Source Publication.
+_Avoid_: Shared Knowledge Source, legacy inline provider config, Dashboard-managed Source Draft
+
+**Knowledge Binding Resolver**:
+The composition boundary that turns Agent Knowledge Binding intent plus Agent Knowledge Source References into one Resolved Knowledge Binding Set before governed execution. It resolves Package-Local Knowledge Sources from standalone packages and published shared Knowledge Sources from the Configuration Store, keeping provider parameters out of Dashboard-managed Agent Drafts while preserving standalone Agent Package execution.
+_Avoid_: Runtime latest lookup, direct Source Draft provider copy, loader compatibility shim
 
 **Draft Knowledge Binding Resolution**:
 The Draft Agent behavior that resolves an unpinned Agent Knowledge Binding to the latest published Knowledge Source snapshot or configuration version while showing the currently resolved version in Dashboard.
@@ -983,8 +999,8 @@ The immutable Published Agent Version record of each Agent Knowledge Binding's r
 _Avoid_: Latest-at-runtime lookup, mutable Agent version, source publication side effect
 
 **Resolved Knowledge Binding Set**:
-The execution-time collection of Published Knowledge Binding Resolution records used by a governed Agent run. It includes immutable source snapshot or configuration version references plus resolved binding settings, not Draft Agent provider parameters.
-_Avoid_: Draft binding intent, latest Source lookup, inline provider configuration
+The execution-time collection of resolved Agent Knowledge Bindings used by a governed Agent run. For shared Knowledge Sources it includes immutable source snapshot or configuration version references plus resolved binding settings; for Package-Local Knowledge Sources it includes package-scoped provider configuration. Dashboard-managed Draft Agent provider parameters never appear here as mutable Source Draft copies.
+_Avoid_: Draft binding intent, latest Source lookup, inline provider configuration, ambiguous source lookup
 
 **Knowledge Binding Upgrade Available**:
 The Dashboard-visible condition where a Knowledge Source has a newer published snapshot or configuration version than the one resolved by a Draft Agent or Published Agent Version. Applying the upgrade updates a Draft Agent and requires Agent Validation Run plus Agent Publication for a new Published Agent Version.
