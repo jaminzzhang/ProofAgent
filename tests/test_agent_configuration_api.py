@@ -751,27 +751,18 @@ def test_legacy_knowledge_source_providers_are_rejected(tmp_path: Path) -> None:
         assert response.json()["detail"] == f"Unsupported knowledge provider: {provider}"
 
 
-def test_bind_shared_knowledge_source_to_agent_draft(tmp_path: Path) -> None:
+def test_bind_shared_knowledge_source_to_agent_draft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = _client(tmp_path)
     draft = _import_enterprise_qa(client)
-    created = client.post(
-        "/api/config/knowledge-sources",
-        json={
-            "source_id": "ks_local_markdown",
-            "name": "Local Markdown Policies",
-            "provider": "local_markdown",
-            "params": {
-                "path": "./knowledge",
-            },
-            "actor": "operator",
-        },
-    )
-    assert created.status_code == 200
+    _publish_local_index_source(client, monkeypatch)
 
     bound = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
         json={
-            "source_id": "ks_local_markdown",
+            "source_id": "ks_local_index",
             "alias": "policies",
             "failure_mode": "advisory",
             "fusion_weight": 0.75,
@@ -785,12 +776,13 @@ def test_bind_shared_knowledge_source_to_agent_draft(tmp_path: Path) -> None:
 
     assert bound.status_code == 200
     parsed = yaml.safe_load(bound.json()["agent_yaml"])
-    assert any(
-        source["source_id"] == "ks_local_markdown" and source["provider"] == "local_markdown"
-        for source in parsed["knowledge_sources"]
+    assert "knowledge_sources" not in parsed
+    assert all(
+        source["source_id"] != "ks_local_index"
+        for source in parsed["package_knowledge_sources"]
     )
     assert any(
-        binding["source_id"] == "ks_local_markdown"
+        binding["source_ref"] == {"scope": "shared", "source_id": "ks_local_index"}
         and binding["alias"] == "policies"
         and binding["failure_mode"] == "advisory"
         and binding["fusion_weight"] == 0.75
@@ -798,6 +790,62 @@ def test_bind_shared_knowledge_source_to_agent_draft(tmp_path: Path) -> None:
         for binding in parsed["knowledge_bindings"]
     )
     assert loaded.json()["agent_yaml"] == bound.json()["agent_yaml"]
+
+
+def test_bind_unpublished_knowledge_source_to_agent_draft_is_rejected(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    _create_local_index_source(client)
+
+    bound = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
+        json={"source_id": "ks_local_index", "actor": "operator"},
+    )
+
+    assert bound.status_code == 400
+    assert "published" in bound.text
+
+
+def _publish_local_index_source(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        local_store_module,
+        "validate_local_index_publication_smoke",
+        lambda **_: LocalIndexPublicationSmokeResult(candidate_count=1, citation_count=1),
+    )
+    _create_local_index_source(
+        client,
+        params={"ingestion_model": {"provider": "deterministic", "name": "routing"}},
+    )
+    _write_compatible_ready_document(client)
+    foundation = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
+        json={"actor": "validator"},
+    )
+    assert foundation.status_code == 200
+    frozen = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
+        json={"validation_id": foundation.json()["validation_id"], "actor": "operator"},
+    )
+    assert frozen.status_code == 200
+    validation = client.post(
+        "/api/config/knowledge-sources/ks_local_index/publication/validate",
+        json={"smoke_query": "What does the policy require?", "actor": "validator"},
+    )
+    assert validation.status_code == 200
+    published = client.post(
+        "/api/config/knowledge-sources/ks_local_index/publication/publish",
+        json={
+            "validation_id": validation.json()["validation_id"],
+            "change_note": "Ready for Agent binding.",
+            "actor": "operator",
+        },
+    )
+    assert published.status_code == 200
 
 
 def test_import_agent_package_creates_draft_and_list_entry(tmp_path: Path) -> None:

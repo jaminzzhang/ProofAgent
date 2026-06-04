@@ -642,6 +642,11 @@ def bind_knowledge_source_to_draft(
             status_code=404,
             detail=f"Knowledge Source not found: {request.source_id}",
         )
+    if source.published_snapshot_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Knowledge Source must be published before binding.",
+        )
     if request.failure_mode not in {"required", "advisory"}:
         raise HTTPException(status_code=400, detail="failure_mode must be required or advisory.")
     if request.fusion_weight <= 0:
@@ -1026,20 +1031,14 @@ def _bind_source_in_agent_yaml(
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
 
-    # Remove legacy inline knowledge section when migrating to
-    # knowledge_sources + knowledge_bindings.
+    # Shared Source bindings reference Configuration Store state. They do not
+    # copy provider params into the Agent Contract.
     raw.pop("knowledge", None)
+    raw.pop("knowledge_sources", None)
 
-    knowledge_sources = raw.setdefault("knowledge_sources", [])
-    if not isinstance(knowledge_sources, list):
-        raise HTTPException(status_code=400, detail="knowledge_sources must be a list.")
-    source_entry = {
-        "source_id": source.source_id,
-        "name": source.name,
-        "provider": source.provider,
-        "params": dict(source.params),
-    }
-    _upsert_by_key(knowledge_sources, "source_id", source.source_id, source_entry)
+    package_knowledge_sources = raw.setdefault("package_knowledge_sources", [])
+    if not isinstance(package_knowledge_sources, list):
+        raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
 
     knowledge_bindings = raw.setdefault("knowledge_bindings", [])
     if not isinstance(knowledge_bindings, list):
@@ -1047,7 +1046,7 @@ def _bind_source_in_agent_yaml(
     binding_id = request.binding_id or f"{source.source_id}_binding"
     binding_entry: dict[str, Any] = {
         "binding_id": binding_id,
-        "source_id": source.source_id,
+        "source_ref": {"scope": "shared", "source_id": source.source_id},
         "failure_mode": request.failure_mode,
         "fusion_weight": request.fusion_weight,
     }
@@ -1069,29 +1068,20 @@ def _unbind_source_in_agent_yaml(
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
 
+    raw.pop("knowledge", None)
+    raw.pop("knowledge_sources", None)
+    package_knowledge_sources = raw.setdefault("package_knowledge_sources", [])
+    if not isinstance(package_knowledge_sources, list):
+        raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
+
     knowledge_bindings = raw.get("knowledge_bindings", [])
     if not isinstance(knowledge_bindings, list):
         raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
 
-    source_id_to_remove = None
-    for binding in knowledge_bindings:
+    for binding in list(knowledge_bindings):
         if isinstance(binding, dict) and binding.get("binding_id") == binding_id:
-            source_id_to_remove = binding.get("source_id")
             knowledge_bindings.remove(binding)
             break
-
-    if source_id_to_remove is not None:
-        is_still_referenced = any(
-            isinstance(b, dict) and b.get("source_id") == source_id_to_remove
-            for b in knowledge_bindings
-        )
-        if not is_still_referenced:
-            knowledge_sources = raw.get("knowledge_sources", [])
-            if isinstance(knowledge_sources, list):
-                for source in knowledge_sources:
-                    if isinstance(source, dict) and source.get("source_id") == source_id_to_remove:
-                        knowledge_sources.remove(source)
-                        break
 
     return cast(str, yaml.safe_dump(raw, sort_keys=False))
 
