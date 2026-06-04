@@ -250,8 +250,76 @@ export interface KnowledgeSource {
   params: Record<string, unknown>
   created_at: string
   updated_at: string
+  source_draft_version_id?: string | null
+  latest_snapshot_id?: string | null
+  published_snapshot_id?: string | null
+  publication_count?: number
   document_count: number
   ready_document_count: number
+}
+
+export interface KnowledgeSourceSnapshotDocument {
+  document_id: string
+  revision_id: string
+  filename: string
+  content_type: string
+  content_hash: string
+  artifact_path: string
+  routing_metadata: Record<string, unknown>
+}
+
+export interface CandidateKnowledgeSourceSnapshot {
+  source_id: string
+  source_draft_version_id: string
+  candidate_digest: string
+  included_documents: KnowledgeSourceSnapshotDocument[]
+  queued_document_count: number
+  processing_document_count: number
+  failed_document_count: number
+  archived_document_count: number
+  required_reingestion_count: number
+}
+
+export interface KnowledgeSourceSnapshotManifest {
+  schema_version: 'local_index.snapshot.v2'
+  snapshot_id: string
+  source_id: string
+  state: 'READY'
+  validation_level: 'foundation'
+  source_draft_version_id: string
+  candidate_digest: string
+  foundation_validation_id: string
+  documents: KnowledgeSourceSnapshotDocument[]
+  created_at: string
+  created_by: string
+}
+
+export interface KnowledgeSourcePublicationValidation {
+  validation_id: string
+  source_id: string
+  snapshot_id: string
+  source_draft_version_id: string
+  candidate_digest: string
+  status: 'passed'
+  smoke_query: string
+  candidate_count: number
+  citation_count: number
+  created_at: string
+  created_by: string
+}
+
+export interface KnowledgeSourcePublicationRecord {
+  publication_id: string
+  source_id: string
+  snapshot_id: string
+  source_draft_version_id: string
+  validation_id: string
+  change_note: string
+  published_at: string
+  published_by: string
+  document_count: number
+  smoke_query: string
+  smoke_result_summary: Record<string, unknown>
 }
 
 export interface KnowledgeDocument {
@@ -280,6 +348,13 @@ export interface KnowledgeSourcesResponse {
 
 export interface KnowledgeDocumentsResponse {
   data: KnowledgeDocument[]
+  meta: {
+    total: number
+  }
+}
+
+export interface KnowledgeSourcePublicationsResponse {
+  data: KnowledgeSourcePublicationRecord[]
   meta: {
     total: number
   }

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchKnowledgeSources } from '../../api/client'
+import { createKnowledgeSource, fetchKnowledgeSources } from '../../api/client'
 import { KnowledgePage } from '../KnowledgePage'
 
 vi.mock('../../api/client', () => ({
@@ -25,9 +25,17 @@ describe('KnowledgePage', () => {
           source_id: 'ks_local_index',
           name: 'Local Index Policies',
           provider: 'local_index',
-          params: { index_path: './data/indexes/policies' },
+          params: {
+            ingestion_model: { provider: 'deterministic', name: 'routing' },
+            document_selection_budget: 8,
+            worker_concurrency: 2,
+          },
           created_at: '2026-05-31T00:00:00Z',
           updated_at: '2026-05-31T00:00:00Z',
+          source_draft_version_id: 'ksdraft_1',
+          latest_snapshot_id: null,
+          published_snapshot_id: 'kssnapshot_1',
+          publication_count: 1,
           document_count: 2,
           ready_document_count: 1,
         },
@@ -43,6 +51,70 @@ describe('KnowledgePage', () => {
 
     expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
     expect(screen.getByText('1 / 2 ready')).toBeInTheDocument()
+    expect(screen.getByText('published')).toBeInTheDocument()
+  })
+
+  it('does not render the legacy index path input', async () => {
+    vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
+
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Knowledge Sources')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/Index Path/i)).not.toBeInTheDocument()
+  })
+
+  it('creates local index sources with ingestion params instead of index_path', async () => {
+    vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(createKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_policies',
+      name: 'Policy Source',
+      provider: 'local_index',
+      params: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: null,
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 0,
+      ready_document_count: 0,
+    })
+
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Knowledge Sources')
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Policy Source' } })
+    fireEvent.change(screen.getByLabelText('Source ID'), { target: { value: 'ks_policies' } })
+    fireEvent.change(screen.getByLabelText('Ingestion Provider'), { target: { value: 'openai' } })
+    fireEvent.change(screen.getByLabelText('Ingestion Model'), { target: { value: 'gpt-4.1-mini' } })
+    fireEvent.change(screen.getByLabelText('API Key Env'), { target: { value: 'OPENAI_API_KEY' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Source' }))
+
+    await waitFor(() => {
+      expect(createKnowledgeSource).toHaveBeenCalledWith({
+        source_id: 'ks_policies',
+        name: 'Policy Source',
+        provider: 'local_index',
+        params: {
+          ingestion_model: {
+            provider: 'openai',
+            name: 'gpt-4.1-mini',
+            params: { api_key_env: 'OPENAI_API_KEY' },
+          },
+          document_selection_budget: 8,
+          worker_concurrency: 2,
+        },
+        actor: 'dashboard',
+      })
+    })
   })
 
   it('shows an error state when knowledge sources cannot load', async () => {
