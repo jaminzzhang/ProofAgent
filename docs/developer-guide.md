@@ -169,7 +169,7 @@ workflow:
   runtime: langgraph
   template: enterprise_qa
 
-knowledge_sources:
+package_knowledge_sources:
   - source_id: enterprise_qa_knowledge
     name: Enterprise QA Knowledge
     provider: local_markdown
@@ -178,7 +178,9 @@ knowledge_sources:
 
 knowledge_bindings:
   - binding_id: enterprise_qa_knowledge_binding
-    source_id: enterprise_qa_knowledge
+    source_ref:
+      scope: package
+      source_id: enterprise_qa_knowledge
 
 retrieval:
   strategy: single_step
@@ -207,11 +209,12 @@ Current v1 config constraints:
 - `workflow.runtime` must be `langgraph`.
 - `workflow.template` must be `enterprise_qa` or `react_enterprise_qa`.
 - target Knowledge Hub V1 providers are `local_markdown`, `local_index`, and trusted remote adapters such as `http_json`; `pageindex` and `local_vector` are outside the target provider set.
-- `knowledge_bindings[]` may bind one or more declared Source ids; provider params stay Source-owned.
+- package-local providers are declared under `package_knowledge_sources[]`; shared Dashboard-managed Sources stay in the Configuration Store.
+- `knowledge_bindings[]` must use `source_ref.scope` plus `source_ref.source_id`; shared bindings require a published Knowledge Source and do not copy provider params into Agent YAML.
 - `retrieval.strategy` supports `single_step` and `agentic`.
 - `memory.provider` must be `session`.
 - `model.provider` supports `deterministic`, `openai_compatible`, `openai`, `deepseek`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
-- `policy.file`, `tools.file`, and provider-specific paths under `knowledge_sources[].params` must exist.
+- `policy.file`, `tools.file`, and provider-specific paths under `package_knowledge_sources[].params` must exist.
 - The parent directories of `audit.trace_path` and `audit.receipt_path` must be writable.
 
 Controlled ReAct adds these sections to `agent.yaml`:
@@ -332,13 +335,12 @@ Remote model smoke checks are opt-in. They are not part of the deterministic dem
 
 Knowledge Hub separates local indexed knowledge from remote retrieval adapters while Proof Agent keeps the Control Envelope, policy decisions, evidence evaluation, and final answer validation.
 
-For Local Index routing development, create a `local_index` Knowledge Source through Knowledge Hub
-ingestion. Local index revision artifacts are built before Source publication. The registered
-runtime can explicitly consume a READY development-stage `local_index.snapshot.v2` manifest and
-rejects the historical single-artifact `params.index_path` configuration:
+For standalone package development, a package-local `local_index` Source can explicitly consume a
+READY `local_index.snapshot.v2` manifest. The registered runtime rejects the historical
+single-artifact `params.index_path` configuration:
 
 ```yaml
-knowledge_sources:
+package_knowledge_sources:
   - source_id: enterprise_policy
     name: Enterprise Policy Knowledge
     provider: local_index
@@ -355,7 +357,9 @@ knowledge_sources:
 
 knowledge_bindings:
   - binding_id: enterprise_policy_binding
-    source_id: enterprise_policy
+    source_ref:
+      scope: package
+      source_id: enterprise_policy
 
 retrieval:
   strategy: agentic
@@ -416,6 +420,35 @@ to Source-owned routing-model calls.
 
 ### Running Local Index Ingestion
 
+The production loop for a Dashboard-managed Local Index Source is:
+
+1. Create a `local_index` Knowledge Source in the Dashboard Knowledge Hub or through `POST /api/config/knowledge-sources`.
+2. Upload Markdown or text-based PDF documents in the Source detail workspace.
+3. Run `knowledge-worker --once` until quarantined uploads and ingestion jobs become ready.
+4. Read, validate, and freeze the candidate snapshot.
+5. Validate Source publication with a smoke query.
+6. Publish the passed Source validation.
+7. Bind the published shared Source from the Agent Knowledge module.
+8. Validate and publish the Agent.
+
+An API-created Source uses Source-owned ingestion params, for example:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/config/knowledge-sources \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source_id":"enterprise_policy",
+    "name":"Enterprise Policy",
+    "provider":"local_index",
+    "params":{
+      "ingestion_model":{"provider":"openai_compatible","name":"gpt-4o-mini","params":{"api_key_env":"OPENAI_COMPATIBLE_API_KEY","base_url_env":"OPENAI_COMPATIBLE_BASE_URL"}},
+      "document_selection_budget":8,
+      "worker_concurrency":2
+    },
+    "actor":"operator"
+  }'
+```
+
 The Local Index ingestion foundation stages uploads into quarantine, validates and parses them
 asynchronously, promotes accepted document revisions, and builds immutable revision artifacts.
 Run one bounded worker iteration with:
@@ -452,13 +485,40 @@ an immutable `local_index.snapshot.v2` manifest of reusable revision artifacts. 
 the preview-only `latest_snapshot_id`; it does not copy artifact directories, rebuild a merged
 index, or advance `published_snapshot_id`.
 
-A foundation-validated frozen snapshot is not a production publication. It can be used by an
-explicitly configured runtime path for development, but it does not automatically change Agent
-binding behavior and must not be attached to a production Published Agent. The formal Source
-publication slice adds the production binding guard, then remaining operational slices add
-continuous worker polling and batch-upload APIs. The later batch-upload contract accepts at most
-50 files, reserves full-batch capacity atomically before staging any bytes, then validates each
-staged file independently and asynchronously.
+A foundation-validated frozen snapshot is not a production publication. To publish it for shared
+Agent binding, run Source-level smoke validation and then publish the passed validation:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/config/knowledge-sources/enterprise_policy/publication/validate \
+  -H 'Content-Type: application/json' \
+  -d '{"smoke_query":"What does the policy require?","actor":"operator"}'
+
+curl -X POST http://127.0.0.1:8000/api/config/knowledge-sources/enterprise_policy/publication/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"validation_id":"kspubval_...","change_note":"Ready for Agent binding.","actor":"operator"}'
+```
+
+Publishing advances `published_snapshot_id` and records an immutable publication. Dashboard
+binding then writes only an explicit shared Source reference into the Draft Agent contract:
+
+```yaml
+package_knowledge_sources: []
+
+knowledge_bindings:
+  - binding_id: enterprise_policy_binding
+    source_ref:
+      scope: shared
+      source_id: enterprise_policy
+    failure_mode: required
+    fusion_weight: 1
+```
+
+Validate the Draft Agent after binding and publish the Agent only from a passed validation run.
+The Agent publication persists the resolved Knowledge Binding Set, including the snapshot path and
+artifact root selected by Source publication, so production runs do not re-resolve mutable draft
+state. Remaining operational slices add continuous worker polling and batch-upload APIs. The later
+batch-upload contract accepts at most 50 files, reserves full-batch capacity atomically before
+staging any bytes, then validates each staged file independently and asynchronously.
 
 For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
 
@@ -561,7 +621,7 @@ When extending a new model provider:
 ### Knowledge
 Current v1 binds one or more Knowledge Sources. A local Markdown Source looks like this:
 ```yaml
-knowledge_sources:
+package_knowledge_sources:
   - source_id: local_policy_docs
     name: Local Policy Docs
     provider: local_markdown
@@ -570,7 +630,9 @@ knowledge_sources:
 
 knowledge_bindings:
   - binding_id: local_policy_docs_binding
-    source_id: local_policy_docs
+    source_ref:
+      scope: package
+      source_id: local_policy_docs
 
 retrieval:
   strategy: single_step
@@ -580,8 +642,8 @@ retrieval:
 
 When extending local indexed knowledge or remote retrieval:
 - Provider Adapter must return candidate `EvidenceChunk`.
-- Provider-specific config belongs to Knowledge Sources or the Dashboard Knowledge Source store.
-- Agents bind shared Sources through `knowledge_bindings[]`; they do not own provider credentials or ingestion settings.
+- Provider-specific config belongs to package-local Knowledge Sources or the Dashboard Knowledge Source store.
+- Agents bind package-local or shared Sources through `knowledge_bindings[].source_ref`; they do not own shared provider credentials or ingestion settings.
 - `top_k` and `min_score` belong under `retrieval`.
 - Retrieval cannot determine the final answer.
 - Whether evidence is sufficient is determined by evaluators, PolicyEngine, and validators.
@@ -681,7 +743,7 @@ When a Skill is imported, it should be registered or compiled into the existing 
 
 Recommended process:
 1. Copy the Agent package from `examples/insurance_customer_service/`.
-2. Modify `name`, `purpose`, `knowledge_sources[]`, `knowledge_bindings[]`, `retrieval`, `model`, `audit` in `agent.yaml`.
+2. Modify `name`, `purpose`, `package_knowledge_sources[]`, `knowledge_bindings[].source_ref`, `retrieval`, `model`, `audit` in `agent.yaml`.
 3. Replace the business knowledge Markdown under `knowledge/`.
 4. Modify `policy.yaml` to define answering, tool, memory, and model call policies.
 5. Modify `tools.yaml`, registering only the tools this Agent needs.
