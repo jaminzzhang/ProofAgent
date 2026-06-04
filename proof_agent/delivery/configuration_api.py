@@ -140,6 +140,25 @@ class KnowledgeSourceSnapshotFreezeRequest(BaseModel):
     actor: str = "local-user"
 
 
+class KnowledgeSourcePublicationValidationRequest(BaseModel):
+    """Request body for Source-level publication smoke validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    smoke_query: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class KnowledgeSourcePublicationRequest(BaseModel):
+    """Request body for publishing one validated Knowledge Source snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    validation_id: str = Field(min_length=1)
+    change_note: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
 class KnowledgeBindingAttachRequest(BaseModel):
     """Request body for binding a shared Knowledge Source into a Draft Agent."""
 
@@ -430,6 +449,95 @@ def get_knowledge_source_snapshot(
             detail=f"Knowledge Source Snapshot not found: {source_id}/{snapshot_id}",
         )
     return snapshot.model_dump(mode="json")
+
+
+@router.post("/config/knowledge-sources/{source_id}/publication/validate")
+def validate_knowledge_source_publication(
+    source_id: str,
+    request: KnowledgeSourcePublicationValidationRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Run Source-level smoke retrieval and persist a passed publication validation."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        validation = store.validate_local_index_source_publication(
+            source_id=source_id,
+            smoke_query=request.smoke_query,
+            actor=request.actor,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return validation.model_dump(mode="json")
+
+
+@router.post("/config/knowledge-sources/{source_id}/publication/publish")
+def publish_knowledge_source(
+    source_id: str,
+    request: KnowledgeSourcePublicationRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Publish one validation-passed Knowledge Source snapshot."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        publication = store.publish_knowledge_source(
+            source_id=source_id,
+            validation_id=request.validation_id,
+            change_note=request.change_note,
+            actor=request.actor,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Knowledge Source Publication Validation not found: "
+                f"{source_id}/{request.validation_id}"
+            ),
+        ) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return publication.model_dump(mode="json")
+
+
+@router.get("/config/knowledge-sources/{source_id}/publication-validations")
+def list_knowledge_source_publication_validations(
+    source_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """List Source-level publication smoke validations."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        validations = store.list_knowledge_source_publication_validations(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return {
+        "data": [validation.model_dump(mode="json") for validation in validations],
+        "meta": {"total": len(validations)},
+    }
+
+
+@router.get("/config/knowledge-sources/{source_id}/publications")
+def list_knowledge_source_publications(
+    source_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """List immutable Knowledge Source publication records."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        publications = store.list_knowledge_source_publications(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return {
+        "data": [publication.model_dump(mode="json") for publication in publications],
+        "meta": {"total": len(publications)},
+    }
 
 
 @router.get("/config/agents")
@@ -867,6 +975,9 @@ def _knowledge_source_payload(
     payload = source.model_dump(mode="json")
     payload["document_count"] = len(documents)
     payload["ready_document_count"] = sum(1 for document in documents if document.state == "ready")
+    payload["publication_count"] = len(
+        store.list_knowledge_source_publications(source.source_id)
+    )
     return payload
 
 

@@ -17,6 +17,9 @@ from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     local_index_artifact_metadata,
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.control.knowledge.source_publication import (
+    LocalIndexPublicationSmokeResult,
+)
 from proof_agent.contracts import (
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
@@ -226,6 +229,58 @@ def test_candidate_validation_and_freeze_management_api_lifecycle(tmp_path: Path
     assert detail.json() == frozen.json()
     assert source.json()["latest_snapshot_id"] == frozen.json()["snapshot_id"]
     assert source.json()["published_snapshot_id"] is None
+
+
+def test_source_publication_validation_and_publish_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        local_store_module,
+        "validate_local_index_publication_smoke",
+        lambda **_: LocalIndexPublicationSmokeResult(candidate_count=1, citation_count=1),
+    )
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+    _write_compatible_ready_document(client)
+    foundation = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
+        json={"actor": "validator"},
+    )
+    frozen = client.post(
+        "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
+        json={"validation_id": foundation.json()["validation_id"], "actor": "operator"},
+    )
+
+    validation = client.post(
+        "/api/config/knowledge-sources/ks_local_index/publication/validate",
+        json={"smoke_query": "What does the policy require?", "actor": "validator"},
+    )
+    published = client.post(
+        "/api/config/knowledge-sources/ks_local_index/publication/publish",
+        json={
+            "validation_id": validation.json()["validation_id"],
+            "change_note": "Initial production publication.",
+            "actor": "operator",
+        },
+    )
+    source = client.get("/api/config/knowledge-sources/ks_local_index")
+    validations = client.get(
+        "/api/config/knowledge-sources/ks_local_index/publication-validations"
+    )
+    publications = client.get("/api/config/knowledge-sources/ks_local_index/publications")
+
+    assert frozen.status_code == 200
+    assert validation.status_code == 200
+    assert validation.json()["status"] == "passed"
+    assert validation.json()["snapshot_id"] == frozen.json()["snapshot_id"]
+    assert published.status_code == 200
+    assert published.json()["snapshot_id"] == frozen.json()["snapshot_id"]
+    assert published.json()["change_note"] == "Initial production publication."
+    assert source.json()["published_snapshot_id"] == frozen.json()["snapshot_id"]
+    assert source.json()["publication_count"] == 1
+    assert validations.json() == {"data": [validation.json()], "meta": {"total": 1}}
+    assert publications.json() == {"data": [published.json()], "meta": {"total": 1}}
 
 
 @pytest.mark.parametrize(
