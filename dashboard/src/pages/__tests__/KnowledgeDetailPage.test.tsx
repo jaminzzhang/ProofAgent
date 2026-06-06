@@ -290,6 +290,42 @@ describe('KnowledgeDetailPage', () => {
     expect(uploadKnowledgeDocument).not.toHaveBeenCalled()
   })
 
+  it('summarizes source-owned model connection configuration', async () => {
+    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_local_index',
+      name: 'Local Index Policies',
+      provider: 'local_index',
+      lifecycle_state: 'ACTIVE',
+      params: {
+        ingestion_model: {
+          model_source: 'shared',
+          connection_id: 'model_ingestion',
+        },
+        routing_model: {
+          model_source: 'custom',
+          provider: 'deepseek',
+          name: 'deepseek-chat',
+        },
+        document_selection_budget: 8,
+        worker_concurrency: 2,
+      },
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: 'kssnapshot_1',
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 1,
+      ready_document_count: 1,
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
+    expect(screen.getByText('shared:model_ingestion')).toBeInTheDocument()
+    expect(screen.getByText('custom:deepseek/deepseek-chat')).toBeInTheDocument()
+  })
+
   it('uploads selected documents as one batch', async () => {
     renderPage()
 

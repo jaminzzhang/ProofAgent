@@ -3,19 +3,21 @@ import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createKnowledgeSource, fetchKnowledgeSources } from '../../api/client'
+import { createKnowledgeSource, fetchKnowledgeSources, fetchModelConnections } from '../../api/client'
 import { KnowledgePage } from '../KnowledgePage'
 
 vi.mock('../../api/client', () => ({
   createKnowledgeSource: vi.fn(),
   fetchKnowledgeDocuments: vi.fn(),
   fetchKnowledgeSources: vi.fn(),
+  fetchModelConnections: vi.fn(),
   uploadKnowledgeDocument: vi.fn(),
 }))
 
 describe('KnowledgePage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
   })
 
   it('renders shared knowledge sources from the configuration API', async () => {
@@ -115,7 +117,7 @@ describe('KnowledgePage', () => {
     fireEvent.change(screen.getByLabelText('Source ID'), { target: { value: 'ks_policies' } })
     fireEvent.change(screen.getByLabelText('Ingestion Provider'), { target: { value: 'openai' } })
     fireEvent.change(screen.getByLabelText('Ingestion Model'), { target: { value: 'gpt-4.1-mini' } })
-    fireEvent.change(screen.getByLabelText('API Key Env'), { target: { value: 'OPENAI_API_KEY' } })
+    fireEvent.change(screen.getByLabelText('Ingestion Credential Env'), { target: { value: 'OPENAI_API_KEY' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create Source' }))
 
     await waitFor(() => {
@@ -125,9 +127,103 @@ describe('KnowledgePage', () => {
         provider: 'local_index',
         params: {
           ingestion_model: {
+            model_source: 'custom',
             provider: 'openai',
             name: 'gpt-4.1-mini',
-            params: { api_key_env: 'OPENAI_API_KEY' },
+            credential_ref: { type: 'env', name: 'OPENAI_API_KEY' },
+          },
+          routing_model: {
+            model_source: 'custom',
+            provider: 'deterministic',
+            name: 'routing',
+          },
+          document_selection_budget: 8,
+          worker_concurrency: 2,
+        },
+        actor: 'dashboard',
+      })
+    })
+  })
+
+  it('creates local index sources with shared ingestion and routing model connections', async () => {
+    vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchModelConnections).mockResolvedValue({
+      data: [
+        {
+          connection_id: 'model_local_index',
+          display_name: 'Local Index Model',
+          description: '',
+          tags: [],
+          provider: 'deepseek',
+          model_identifier: 'deepseek-chat',
+          base_url: 'https://api.deepseek.com',
+          credential_ref: { type: 'env', name: 'DEEPSEEK_API_KEY' },
+          organization_env: null,
+          project_env: null,
+          timeout_seconds: 20,
+          lifecycle_state: 'ACTIVE',
+          created_at: '2026-06-07T00:00:00Z',
+          updated_at: '2026-06-07T00:00:00Z',
+          reference_summary: {
+            connection_id: 'model_local_index',
+            draft_agent_reference_count: 0,
+            published_agent_version_reference_count: 0,
+            knowledge_source_reference_count: 0,
+            in_flight_operation_count: 0,
+            audit_retention_blocked: false,
+          },
+          last_validation: null,
+          last_smoke_test: null,
+        },
+      ],
+      meta: { total: 1 },
+    })
+    vi.mocked(createKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_policies',
+      name: 'Policy Source',
+      provider: 'local_index',
+      lifecycle_state: 'ACTIVE',
+      params: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: null,
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 0,
+      ready_document_count: 0,
+    })
+
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Knowledge Sources')
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Policy Source' } })
+    fireEvent.change(screen.getByLabelText('Source ID'), { target: { value: 'ks_policies' } })
+    fireEvent.change(screen.getByLabelText('Ingestion Model Source'), {
+      target: { value: 'shared:model_local_index' },
+    })
+    fireEvent.change(screen.getByLabelText('Routing Model Source'), {
+      target: { value: 'shared:model_local_index' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Source' }))
+
+    await waitFor(() => {
+      expect(createKnowledgeSource).toHaveBeenCalledWith({
+        source_id: 'ks_policies',
+        name: 'Policy Source',
+        provider: 'local_index',
+        params: {
+          ingestion_model: {
+            model_source: 'shared',
+            connection_id: 'model_local_index',
+          },
+          routing_model: {
+            model_source: 'shared',
+            connection_id: 'model_local_index',
           },
           document_selection_budget: 8,
           worker_concurrency: 2,

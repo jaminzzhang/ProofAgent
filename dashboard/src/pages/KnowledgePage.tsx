@@ -3,13 +3,15 @@ import { Link } from 'react-router-dom'
 import {
   createKnowledgeSource,
   fetchKnowledgeSources,
+  fetchModelConnections,
 } from '../api/client'
-import type { KnowledgeSource } from '../api/types'
+import type { SharedModelConnection, KnowledgeSource } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 
 export function KnowledgePage() {
   const [sources, setSources] = useState<readonly KnowledgeSource[]>([])
+  const [modelConnections, setModelConnections] = useState<readonly SharedModelConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
@@ -20,6 +22,13 @@ export function KnowledgePage() {
   const [ingestionProvider, setIngestionProvider] = useState('deterministic')
   const [ingestionModelName, setIngestionModelName] = useState('routing')
   const [credentialEnv, setCredentialEnv] = useState('')
+  const [ingestionModelSource, setIngestionModelSource] = useState('custom')
+  const [ingestionConnectionId, setIngestionConnectionId] = useState('')
+  const [routingModelSource, setRoutingModelSource] = useState('custom')
+  const [routingConnectionId, setRoutingConnectionId] = useState('')
+  const [routingProvider, setRoutingProvider] = useState('deterministic')
+  const [routingModelName, setRoutingModelName] = useState('routing')
+  const [routingCredentialEnv, setRoutingCredentialEnv] = useState('')
   const [documentSelectionBudget, setDocumentSelectionBudget] = useState('8')
   const [workerConcurrency, setWorkerConcurrency] = useState('2')
   const [remoteEndpoint, setRemoteEndpoint] = useState('')
@@ -31,8 +40,12 @@ export function KnowledgePage() {
   const [remoteCitationPointer, setRemoteCitationPointer] = useState('/citation')
 
   async function loadSources() {
-    const { data } = await fetchKnowledgeSources()
-    setSources(data)
+    const [{ data: sources }, { data: connections }] = await Promise.all([
+      fetchKnowledgeSources(),
+      fetchModelConnections().catch(() => ({ data: [], meta: { total: 0 } })),
+    ])
+    setSources(sources)
+    setModelConnections(connections)
   }
 
   useEffect(() => {
@@ -40,9 +53,13 @@ export function KnowledgePage() {
 
     async function load() {
       try {
-        const { data } = await fetchKnowledgeSources()
+        const [{ data }, { data: connections }] = await Promise.all([
+          fetchKnowledgeSources(),
+          fetchModelConnections().catch(() => ({ data: [], meta: { total: 0 } })),
+        ])
         if (!cancelled) {
           setSources(data)
+          setModelConnections(connections)
           setError(null)
         }
       } catch {
@@ -77,6 +94,13 @@ export function KnowledgePage() {
           ingestionProvider,
           ingestionModelName,
           credentialEnv,
+          ingestionModelSource,
+          ingestionConnectionId,
+          routingModelSource,
+          routingConnectionId,
+          routingProvider,
+          routingModelName,
+          routingCredentialEnv,
           documentSelectionBudget,
           workerConcurrency,
         }),
@@ -126,9 +150,40 @@ export function KnowledgePage() {
           <TextField label="Source ID" value={sourceId} onChange={setSourceId} placeholder="ks_policies" />
           {sourceProvider === 'local_index' ? (
             <>
-              <TextField label="Ingestion Provider" value={ingestionProvider} onChange={setIngestionProvider} />
-              <TextField label="Ingestion Model" value={ingestionModelName} onChange={setIngestionModelName} />
-              <TextField label="API Key Env" value={credentialEnv} onChange={setCredentialEnv} placeholder="OPENAI_API_KEY" />
+              <ModelSourceSelector
+                label="Ingestion Model Source"
+                value={modelSourceValue(ingestionModelSource, ingestionConnectionId)}
+                connections={modelConnections}
+                onChange={(value) => {
+                  const parsed = parseModelSourceValue(value)
+                  setIngestionModelSource(parsed.modelSource)
+                  setIngestionConnectionId(parsed.connectionId)
+                }}
+              />
+              {ingestionModelSource === 'custom' && (
+                <>
+                  <TextField label="Ingestion Provider" value={ingestionProvider} onChange={setIngestionProvider} />
+                  <TextField label="Ingestion Model" value={ingestionModelName} onChange={setIngestionModelName} />
+                  <TextField label="Ingestion Credential Env" value={credentialEnv} onChange={setCredentialEnv} placeholder="OPENAI_API_KEY" />
+                </>
+              )}
+              <ModelSourceSelector
+                label="Routing Model Source"
+                value={modelSourceValue(routingModelSource, routingConnectionId)}
+                connections={modelConnections}
+                onChange={(value) => {
+                  const parsed = parseModelSourceValue(value)
+                  setRoutingModelSource(parsed.modelSource)
+                  setRoutingConnectionId(parsed.connectionId)
+                }}
+              />
+              {routingModelSource === 'custom' && (
+                <>
+                  <TextField label="Routing Provider" value={routingProvider} onChange={setRoutingProvider} />
+                  <TextField label="Routing Model" value={routingModelName} onChange={setRoutingModelName} />
+                  <TextField label="Routing Credential Env" value={routingCredentialEnv} onChange={setRoutingCredentialEnv} placeholder="OPENAI_API_KEY" />
+                </>
+              )}
               <NumberField label="Document Selection Budget" value={documentSelectionBudget} onChange={setDocumentSelectionBudget} min={1} />
               <NumberField label="Worker Concurrency" value={workerConcurrency} onChange={setWorkerConcurrency} min={1} />
             </>
@@ -151,6 +206,12 @@ export function KnowledgePage() {
               sourceProvider,
               ingestionProvider,
               ingestionModelName,
+              ingestionModelSource,
+              ingestionConnectionId,
+              routingModelSource,
+              routingConnectionId,
+              routingProvider,
+              routingModelName,
               remoteEndpoint,
             })}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
@@ -291,27 +352,107 @@ function NumberField({
   )
 }
 
+function ModelSourceSelector({
+  label,
+  value,
+  connections,
+  onChange,
+}: {
+  label: string
+  value: string
+  connections: readonly SharedModelConnection[]
+  onChange: (value: string) => void
+}) {
+  const activeConnections = connections.filter((connection) => connection.lifecycle_state === 'ACTIVE')
+  return (
+    <SelectField
+      label={label}
+      value={value}
+      onChange={onChange}
+      options={[
+        ...activeConnections.map((connection) => ({
+          value: `shared:${connection.connection_id}`,
+          label: connection.display_name,
+        })),
+        { value: 'custom', label: 'Custom' },
+      ]}
+    />
+  )
+}
+
 function localIndexParams({
   ingestionProvider,
   ingestionModelName,
   credentialEnv,
+  ingestionModelSource,
+  ingestionConnectionId,
+  routingModelSource,
+  routingConnectionId,
+  routingProvider,
+  routingModelName,
+  routingCredentialEnv,
   documentSelectionBudget,
   workerConcurrency,
 }: {
   ingestionProvider: string
   ingestionModelName: string
   credentialEnv: string
+  ingestionModelSource: string
+  ingestionConnectionId: string
+  routingModelSource: string
+  routingConnectionId: string
+  routingProvider: string
+  routingModelName: string
+  routingCredentialEnv: string
   documentSelectionBudget: string
   workerConcurrency: string
 }): Record<string, unknown> {
   return {
-    ingestion_model: {
+    ingestion_model: sourceOwnedModelConfig({
+      modelSource: ingestionModelSource,
+      connectionId: ingestionConnectionId,
       provider: ingestionProvider,
-      name: ingestionModelName,
-      params: credentialEnv ? { api_key_env: credentialEnv } : {},
-    },
+      modelName: ingestionModelName,
+      credentialEnv,
+    }),
+    routing_model: sourceOwnedModelConfig({
+      modelSource: routingModelSource,
+      connectionId: routingConnectionId,
+      provider: routingProvider,
+      modelName: routingModelName,
+      credentialEnv: routingCredentialEnv,
+    }),
     document_selection_budget: positiveNumber(documentSelectionBudget, 8),
     worker_concurrency: positiveNumber(workerConcurrency, 2),
+  }
+}
+
+function sourceOwnedModelConfig({
+  modelSource,
+  connectionId,
+  provider,
+  modelName,
+  credentialEnv,
+}: {
+  modelSource: string
+  connectionId: string
+  provider: string
+  modelName: string
+  credentialEnv: string
+}): Record<string, unknown> {
+  if (modelSource === 'shared') {
+    return {
+      model_source: 'shared',
+      connection_id: connectionId,
+    }
+  }
+  return {
+    model_source: 'custom',
+    provider,
+    name: modelName,
+    ...(credentialEnv.trim()
+      ? { credential_ref: { type: 'env', name: credentialEnv.trim() } }
+      : {}),
   }
 }
 
@@ -357,15 +498,44 @@ function sourceFormReady({
   sourceProvider,
   ingestionProvider,
   ingestionModelName,
+  ingestionModelSource,
+  ingestionConnectionId,
+  routingModelSource,
+  routingConnectionId,
+  routingProvider,
+  routingModelName,
   remoteEndpoint,
 }: {
   sourceProvider: 'local_index' | 'http_json'
   ingestionProvider: string
   ingestionModelName: string
+  ingestionModelSource: string
+  ingestionConnectionId: string
+  routingModelSource: string
+  routingConnectionId: string
+  routingProvider: string
+  routingModelName: string
   remoteEndpoint: string
 }): boolean {
   if (sourceProvider === 'http_json') return Boolean(remoteEndpoint.trim())
-  return Boolean(ingestionProvider.trim() && ingestionModelName.trim())
+  const ingestionReady = ingestionModelSource === 'shared'
+    ? Boolean(ingestionConnectionId)
+    : Boolean(ingestionProvider.trim() && ingestionModelName.trim())
+  const routingReady = routingModelSource === 'shared'
+    ? Boolean(routingConnectionId)
+    : Boolean(routingProvider.trim() && routingModelName.trim())
+  return ingestionReady && routingReady
+}
+
+function parseModelSourceValue(value: string): { modelSource: string; connectionId: string } {
+  if (value.startsWith('shared:')) {
+    return { modelSource: 'shared', connectionId: value.slice('shared:'.length) }
+  }
+  return { modelSource: 'custom', connectionId: '' }
+}
+
+function modelSourceValue(modelSource: string, connectionId: string): string {
+  return modelSource === 'shared' && connectionId ? `shared:${connectionId}` : 'custom'
 }
 
 function positiveNumber(value: string, fallback: number): number {

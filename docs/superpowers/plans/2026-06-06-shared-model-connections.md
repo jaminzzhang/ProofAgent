@@ -1096,7 +1096,7 @@ git commit -m "feat: select shared model connections in agents"
 - Modify: `dashboard/src/pages/__tests__/KnowledgePage.test.tsx`
 - Modify: `dashboard/src/pages/__tests__/KnowledgeDetailPage.test.tsx`
 
-- [ ] **Step 1: Write failing Knowledge UI tests**
+- [x] **Step 1: Write failing Knowledge UI tests**
 
 Test:
 
@@ -1106,7 +1106,7 @@ Test:
 - Archived connections are hidden for new Source configuration and warn for existing references.
 - Custom source config can be saved as shared and optionally switched.
 
-- [ ] **Step 2: Run frontend tests and verify RED**
+- [x] **Step 2: Run frontend tests and verify RED**
 
 Run:
 
@@ -1116,13 +1116,13 @@ cd dashboard && npm test -- src/pages/__tests__/KnowledgePage.test.tsx src/pages
 
 Expected: fail.
 
-- [ ] **Step 3: Implement source-owned selectors**
+- [x] **Step 3: Implement source-owned selectors**
 
 Fetch Shared Model Connections in Knowledge pages.
 
 Keep ingestion/routing usage params in Knowledge Source provider config.
 
-- [ ] **Step 4: Run frontend tests and verify GREEN**
+- [x] **Step 4: Run frontend tests and verify GREEN**
 
 Run:
 
@@ -1132,7 +1132,7 @@ cd dashboard && npm test -- src/pages/__tests__/KnowledgePage.test.tsx src/pages
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dashboard/src/pages/KnowledgePage.tsx dashboard/src/pages/KnowledgeDetailPage.tsx dashboard/src/pages/__tests__/KnowledgePage.test.tsx dashboard/src/pages/__tests__/KnowledgeDetailPage.test.tsx

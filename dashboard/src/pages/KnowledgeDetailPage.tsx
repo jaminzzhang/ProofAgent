@@ -395,6 +395,12 @@ export function KnowledgeDetailPage() {
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">Provider</h3>
+        {isLocalIndexSource && (
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <InlineMetric label="Ingestion Model" value={sourceOwnedModelSummary(source.params.ingestion_model)} />
+            <InlineMetric label="Routing Model" value={sourceOwnedModelSummary(source.params.routing_model)} />
+          </div>
+        )}
         <pre className="mt-3 overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-xs text-[var(--text-secondary)]">
           {JSON.stringify(source.params, null, 2)}
         </pre>
@@ -638,6 +644,17 @@ function totalReferences(eligibility: KnowledgeSourceDeletionEligibility | null)
     + summary.ingestion_job_count
     + (summary.audit_retention_blocked ? 1 : 0)
   )
+}
+
+function sourceOwnedModelSummary(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '-'
+  const config = value as Record<string, unknown>
+  if (config.model_source === 'shared' && typeof config.connection_id === 'string') {
+    return `shared:${config.connection_id}`
+  }
+  const provider = typeof config.provider === 'string' ? config.provider : 'custom'
+  const name = typeof config.name === 'string' ? config.name : 'model'
+  return `custom:${provider}/${name}`
 }
 
 function routingMetadataText(value: unknown): string {
