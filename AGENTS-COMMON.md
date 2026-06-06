@@ -115,6 +115,30 @@ cd chat && npm test
 
 The Dashboard dev server runs on port 5173 by default. The Chat dev server runs on port 5174 by default. Both expect the API server on `127.0.0.1:8000`. Use `/operator` for Assisted QA Chat and `/customer` for Customer Service Chat.
 
+To restart the local API, Dashboard, and Chat surfaces on their expected ports:
+
+```bash
+# stop any existing listeners first
+lsof -tiTCP:8000 -sTCP:LISTEN | xargs kill
+lsof -tiTCP:5173 -sTCP:LISTEN | xargs kill
+lsof -tiTCP:5174 -sTCP:LISTEN | xargs kill
+
+# restart the backend API
+uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
+
+# in a second terminal, restart the Dashboard
+cd dashboard && npm run dev -- --host 127.0.0.1 --port 5173
+
+# in a third terminal, restart the Unified Chat
+cd chat && npm install && npm run dev -- --host 127.0.0.1 --port 5174
+```
+
+Expected local URLs after restart:
+
+- API: `http://127.0.0.1:8000/api/health`
+- Dashboard: `http://127.0.0.1:5173/`
+- Chat: `http://127.0.0.1:5174/operator` or `http://127.0.0.1:5174/customer`
+
 For documentation-only edits, at minimum run:
 
 ```bash

@@ -123,7 +123,7 @@ Core boundaries:
 | Entry | CLI, Docker demo, Run Execution API, Dashboard API |
 | Workflow template | `enterprise_qa`, `react_enterprise_qa` |
 | Runtime config | `workflow.runtime: langgraph`; Enterprise QA and Controlled ReAct Enterprise QA run through LangGraph `StateGraph` templates using composed Harness dependencies |
-| Knowledge | Source-owned Knowledge Sources plus Agent `knowledge_bindings[]`; `local_markdown` for deterministic/dev fixtures, `local_index` for published local indexes, and trusted remote adapters such as `http_json` |
+| Knowledge | Source-owned Knowledge Sources plus Agent `knowledge_bindings[]`; `local_markdown` for deterministic/dev fixtures, `local_index` for published local indexes, and trusted remote adapters such as `http_json`; shared Sources use `ACTIVE` / `ARCHIVED` lifecycle management |
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
 | Model | `deterministic`, `openai_compatible`, `openai`, and `deepseek` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
 | Policy | `before_retrieval`, `before_retrieval_plan`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
@@ -210,7 +210,7 @@ Current v1 config constraints:
 - `workflow.template` must be `enterprise_qa` or `react_enterprise_qa`.
 - target Knowledge Hub V1 providers are `local_markdown`, `local_index`, and trusted remote adapters such as `http_json`; `pageindex` and `local_vector` are outside the target provider set.
 - package-local providers are declared under `package_knowledge_sources[]`; shared Dashboard-managed Sources stay in the Configuration Store.
-- `knowledge_bindings[]` must use `source_ref.scope` plus `source_ref.source_id`; shared bindings require a published Knowledge Source and do not copy provider params into Agent YAML.
+- `knowledge_bindings[]` must use `source_ref.scope` plus `source_ref.source_id`; shared bindings require an active published Knowledge Source and do not copy provider params into Agent YAML.
 - `retrieval.strategy` supports `single_step` and `agentic`.
 - `memory.provider` must be `session`.
 - `model.provider` supports `deterministic`, `openai_compatible`, `openai`, `deepseek`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
@@ -533,6 +533,41 @@ path and artifact root or the remote provider configuration version selected by 
 publication, so production runs do not re-resolve mutable draft state. Batch upload accepts at most
 50 files, reserves full-batch capacity atomically before publishing quarantine records, then
 validates each staged file independently and asynchronously.
+
+### Knowledge Source Lifecycle
+
+Every Dashboard-managed Knowledge Source has a required `lifecycle_state` of `ACTIVE` or
+`ARCHIVED`. Archive is the normal delete-like action: it preserves documents, snapshots,
+publications, Published Agent Version pinning, and configuration audit while blocking document
+uploads, routing metadata edits, candidate freeze, Source publication, new Agent binding, Draft
+validation, and Draft publication against that shared Source.
+
+Archive and restore are explicit lifecycle routes:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/config/knowledge-sources/enterprise_policy/archive \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"Retired policy corpus.","actor":"operator"}'
+
+curl -X POST http://127.0.0.1:8000/api/config/knowledge-sources/enterprise_policy/restore \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"Policy corpus is maintained again.","actor":"operator"}'
+```
+
+Physical deletion is only for archived empty Sources. Check blockers first, then delete only when
+`eligible` is true:
+
+```bash
+curl http://127.0.0.1:8000/api/config/knowledge-sources/enterprise_policy/deletion-eligibility
+
+curl -X DELETE http://127.0.0.1:8000/api/config/knowledge-sources/enterprise_policy \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"Mistaken empty Source.","actor":"operator"}'
+```
+
+Deletion writes a root-level configuration audit record before removing the Source directory. Local
+Configuration Store Source JSON without `lifecycle_state` is invalid; reset and rebuild generated
+local configuration data instead of relying on compatibility fallback.
 
 For remote knowledge, use a trusted remote adapter such as `http_json`. The preferred path is the default Remote Retrieval Protocol: Proof Agent sends a static-endpoint POST JSON body with `query` and `top_k`, and the remote endpoint returns `protocol_version: proof-agent.remote-retrieval.v1` plus a `results[]` array containing `content`, numeric `score`, and either `citation` or `source_ref`. Non-standard APIs may use bounded declarative request and response mappings; mappings cannot execute code, build dynamic URLs, or bypass evidence admission.
 

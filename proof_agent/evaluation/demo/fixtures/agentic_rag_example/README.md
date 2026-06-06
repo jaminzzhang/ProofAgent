@@ -33,8 +33,9 @@ Key components in `agent.yaml`:
 
 ### Knowledge Source
 ```yaml
-knowledge_sources:
+package_knowledge_sources:
   - source_id: enterprise_qa_knowledge
+    name: Enterprise QA Knowledge
     provider: local_index  # Uses TreeIndex
     params:
       snapshot_path: ./config/knowledge_sources/enterprise_qa_knowledge/snapshots/kssnapshot_example
@@ -46,13 +47,20 @@ knowledge_sources:
       routing_model:     # For tree traversal during retrieval
         provider: openai_compatible
         name: gpt-4o-mini
+knowledge_bindings:
+  - binding_id: enterprise_qa_knowledge_binding
+    source_ref:
+      scope: package
+      source_id: enterprise_qa_knowledge
+    failure_mode: required
 ```
 
 The registered runtime config is v2-only. Before running this illustrative package, an operator
 must freeze a READY `local_index.snapshot.v2` manifest at `snapshot_path`. Historical
 `params.index_path` runtime config is rejected. This fixture is for routing development; a
-foundation-frozen snapshot must not be attached to a production Published Agent until the formal
-Source publication slice adds the production binding guard.
+Dashboard-managed production Agent binds a shared Source only after Knowledge Source Publication
+while the Source is `ACTIVE`. Archiving a shared Source blocks new bindings and Draft publication
+without changing existing Published Agent Versions that already captured resolved bindings.
 
 ### Retrieval Strategy
 ```yaml
@@ -104,7 +112,7 @@ provider.build_index(documents)
 
 ```bash
 proof-agent run \
-  --agent proof_agent/evaluation/demo/fixtures/agentic_rag_example/agent.yaml \
+  proof_agent/evaluation/demo/fixtures/agentic_rag_example/agent.yaml \
   --question "What are the requirements for travel meal reimbursement?"
 ```
 
@@ -184,5 +192,6 @@ If you're migrating from the removed `pageindex` provider, see:
 ## References
 
 - [ADR-0015: Agentic RAG Architecture](../../../docs/adr/0015-agentic-rag-with-retrieval-planner-and-local-tree-index.md)
+- [ADR-0019: Knowledge Source Lifecycle Management](../../../docs/adr/0019-knowledge-source-lifecycle-management.md)
 - [RetrievalPlanner Source](../../../proof_agent/control/workflow/retrieval_planner.py)
 - [LocalIndexProvider Source](../../../proof_agent/capabilities/knowledge/local_index.py)

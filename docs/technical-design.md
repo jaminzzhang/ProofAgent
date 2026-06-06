@@ -593,9 +593,11 @@ Current baseline:
 - binding-level provider coordination, required/advisory failure handling, exact deduplication, WRRF ordering, no-evidence reason codes, and provider-call trace summaries for blended retrieval.
 - explicit `package_knowledge_sources[]` plus `knowledge_bindings[].source_ref` Agent Contract shape.
 - Configuration Store Source publication validation and Published Agent binding resolution for shared `local_index` snapshots and shared `http_json` remote configuration versions.
+- Configuration Store Source lifecycle management with required `lifecycle_state`, archive, restore, deletion eligibility, narrow physical deletion, and global configuration audit for deletion records.
 
 Knowledge Hub target shape:
 - Knowledge Sources own provider configuration and publication lifecycle.
+- Knowledge Sources expose exactly `ACTIVE` or `ARCHIVED`; physical deletion is a guarded removal operation, not a visible Source state.
 - Draft Agents store Agent Knowledge Bindings, not provider credentials or endpoints.
 - Published Agent Versions execute with a Resolved Knowledge Binding Set pinned to source snapshot or configuration versions.
 - Knowledge Retrieval Service in the Control Plane owns source routing, provider coordination, cross-source fusion, citation enforcement, and evidence admission for both Enterprise QA and Controlled ReAct workflows.
@@ -632,6 +634,10 @@ Rules:
 - Knowledge Provider Adapters retrieve one selected source and return candidate `EvidenceChunk` objects only.
 - Provider-specific config lives in package-local Knowledge Sources or Configuration Store Knowledge Sources, not in shared Agent binding entries.
 - Dashboard-managed shared Source bindings use `source_ref: {scope: shared, source_id: ...}` and do not copy provider params into the Agent Contract.
+- Dashboard-managed shared Source bindings require an active published Source. Archived shared Sources are excluded from new binding and rejected during validation and publication resolution.
+- Archive is the default delete-like Source action. It blocks Source writes and new Agent binding while preserving documents, snapshots, publications, audit, and pinned Published Agent Version execution.
+- Physical Source deletion is allowed only for archived empty Sources with no Draft Agent bindings, Published Agent Version references, publications, snapshots, managed documents, quarantined uploads, ingestion jobs, or audit-retention blocker. The deletion audit is written outside the Source directory before removal.
+- Local Configuration Store data missing `KnowledgeSource.lifecycle_state` is invalid and must be reset/rebuilt rather than silently upgraded in place.
 - Retrieval orchestration policy lives under the required top-level `retrieval` section and the Control Plane Knowledge Retrieval Service.
 - `top_k` and `min_score` belong to `retrieval`, not provider params.
 - Control Plane evidence evaluation creates accepted or rejected evidence.
@@ -661,7 +667,7 @@ Local Index strategy:
 - The snapshot-freeze foundation derives a mutable Candidate Knowledge Source Snapshot from READY active document revisions and a lightweight Source Draft version token. It persists `foundation` freeze-readiness validation, freezes an immutable `local_index.snapshot.v2` manifest of revision artifact references without copying artifacts or rebuilding a merged index, and atomically advances `latest_snapshot_id`.
 - Dashboard and API operators may edit the allowlisted routing-only fields `title`, `description`, `tags`, `document_type`, and `business_category` on managed Knowledge Documents. Edits advance the Source Draft version and candidate digest without reingesting the document or rebuilding immutable revision artifacts.
 - Source publication validation records an explicit published resource. `local_index` runs smoke retrieval against the latest frozen snapshot and publishes a `local_index_snapshot`; `http_json` runs smoke retrieval against the remote adapter configuration and publishes a `remote_config`. Publishing either validation creates an immutable publication record and advances the legacy `published_snapshot_id` pointer to the published resource id.
-- Dashboard-managed Draft Agents may bind only published shared Sources. Agent validation resolves shared bindings to a `ResolvedKnowledgeBindingSet`, and Published Agent Versions persist that resolved set so production runs use the vetted snapshot path or remote provider configuration version.
+- Dashboard-managed Draft Agents may bind only active published shared Sources. Agent validation resolves shared bindings to a `ResolvedKnowledgeBindingSet`, and Published Agent Versions persist that resolved set so production runs use the vetted snapshot path or remote provider configuration version. Agent publication rejects missing, incomplete, source-mismatched, or archived resolved shared bindings.
 - Remaining Knowledge Hub gaps include richer remote retrieval preview/health-check UX and hierarchical routing beyond the bounded first `100` candidates.
 
 Remote adapter strategy:
