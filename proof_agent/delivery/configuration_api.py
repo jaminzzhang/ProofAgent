@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,13 +31,17 @@ from proof_agent.contracts import (
     AgentValidationRecord,
     ContractBundle,
     DraftAgent,
+    EnvironmentModelCredentialReference,
     KnowledgeDocument,
     KnowledgeIngestionJob,
     KnowledgeSource,
     KnowledgeSourceLifecycleState,
+    ModelConnectionSmokeTestRecord,
+    ModelConnectionValidationRecord,
     QuarantinedKnowledgeUpload,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
+    SharedModelConnection,
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.storage.run_store import RunStore
@@ -50,6 +55,11 @@ SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS = {
     "local_markdown",
     "local_index",
     "remote_search",
+}
+SUPPORTED_SHARED_MODEL_CONNECTION_PROVIDERS = {
+    "openai",
+    "openai_compatible",
+    "deepseek",
 }
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
@@ -120,6 +130,88 @@ class KnowledgeSourceCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     provider: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "local-user"
+
+
+class ModelCredentialReferenceRequest(BaseModel):
+    """Secret-safe model credential reference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = "env"
+    name: str = Field(min_length=1)
+
+
+class ModelConnectionCreateRequest(BaseModel):
+    """Request body for creating a Shared Model Connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: str | None = None
+    display_name: str = Field(min_length=1)
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    provider: str = Field(min_length=1)
+    model_identifier: str = Field(min_length=1)
+    base_url: str | None = None
+    credential_ref: ModelCredentialReferenceRequest
+    organization_env: str | None = None
+    project_env: str | None = None
+    timeout_seconds: float | None = None
+    actor: str = "local-user"
+
+
+class ModelConnectionUpdateRequest(BaseModel):
+    """Request body for updating a Shared Model Connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    provider: str | None = None
+    model_identifier: str | None = None
+    base_url: str | None = None
+    credential_ref: ModelCredentialReferenceRequest | None = None
+    organization_env: str | None = None
+    project_env: str | None = None
+    timeout_seconds: float | None = None
+    confirm_impact: bool = False
+    actor: str = "local-user"
+
+
+class ModelConnectionArchiveRequest(BaseModel):
+    """Request body for archiving a Shared Model Connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class ModelConnectionRestoreRequest(BaseModel):
+    """Request body for restoring a Shared Model Connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = None
+    actor: str = "local-user"
+
+
+class ModelConnectionPhysicalDeleteRequest(BaseModel):
+    """Request body for permanently deleting a Shared Model Connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class ModelConnectionValidationRequest(BaseModel):
+    """Request body for validating a Shared Model Connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
     actor: str = "local-user"
 
 
@@ -248,6 +340,226 @@ class KnowledgeBindingDetachRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     actor: str = "local-user"
+
+
+@router.get("/config/model-connections")
+def list_model_connections(app_request: Request) -> dict[str, Any]:
+    """List Shared Model Connections managed by the local configuration store."""
+
+    store = _get_configuration_store(app_request)
+    data = [
+        _model_connection_payload(store, connection)
+        for connection in store.list_model_connections()
+    ]
+    return {"data": data, "meta": {"total": len(data)}}
+
+
+@router.post("/config/model-connections")
+def create_model_connection(
+    request: ModelConnectionCreateRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Create a Shared Model Connection with environment credential references."""
+
+    _require_supported_shared_model_provider(request.provider)
+    store = _get_configuration_store(app_request)
+    try:
+        connection = store.create_model_connection(
+            connection_id=_model_connection_id(request.connection_id)
+            if request.connection_id
+            else None,
+            display_name=request.display_name,
+            description=request.description,
+            tags=tuple(request.tags),
+            provider=request.provider,
+            model_identifier=request.model_identifier,
+            base_url=request.base_url,
+            credential_ref=_credential_ref(request.credential_ref),
+            organization_env=request.organization_env,
+            project_env=request.project_env,
+            timeout_seconds=request.timeout_seconds,
+            actor=request.actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _model_connection_payload(store, connection)
+
+
+@router.get("/config/model-connections/{connection_id}")
+def get_model_connection(connection_id: str, app_request: Request) -> dict[str, Any]:
+    """Return one Shared Model Connection."""
+
+    store = _get_configuration_store(app_request)
+    connection = _require_model_connection(store, connection_id)
+    return _model_connection_payload(store, connection)
+
+
+@router.patch("/config/model-connections/{connection_id}")
+def update_model_connection(
+    connection_id: str,
+    request: ModelConnectionUpdateRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Update one Shared Model Connection."""
+
+    if request.provider is not None:
+        _require_supported_shared_model_provider(request.provider)
+    store = _get_configuration_store(app_request)
+    _require_model_connection(store, connection_id)
+    _require_model_connection_update_impact_confirmation(
+        store,
+        connection_id=connection_id,
+        request=request,
+    )
+    try:
+        connection = store.update_model_connection(
+            connection_id=connection_id,
+            actor=request.actor,
+            display_name=request.display_name,
+            description=request.description,
+            tags=tuple(request.tags) if request.tags is not None else None,
+            provider=request.provider,
+            model_identifier=request.model_identifier,
+            base_url=request.base_url,
+            credential_ref=(
+                _credential_ref(request.credential_ref)
+                if request.credential_ref is not None
+                else None
+            ),
+            organization_env=request.organization_env,
+            project_env=request.project_env,
+            timeout_seconds=request.timeout_seconds,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _model_connection_payload(store, connection)
+
+
+@router.post("/config/model-connections/{connection_id}/archive")
+def archive_model_connection(
+    connection_id: str,
+    request: ModelConnectionArchiveRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Archive a Shared Model Connection without deleting retained state."""
+
+    store = _get_configuration_store(app_request)
+    _require_model_connection(store, connection_id)
+    try:
+        connection = store.archive_model_connection(
+            connection_id=connection_id,
+            actor=request.actor,
+            reason=request.reason,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _model_connection_payload(store, connection)
+
+
+@router.post("/config/model-connections/{connection_id}/restore")
+def restore_model_connection(
+    connection_id: str,
+    request: ModelConnectionRestoreRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Restore an archived Shared Model Connection."""
+
+    store = _get_configuration_store(app_request)
+    _require_model_connection(store, connection_id)
+    try:
+        connection = store.restore_model_connection(
+            connection_id=connection_id,
+            actor=request.actor,
+            reason=request.reason,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _model_connection_payload(store, connection)
+
+
+@router.get("/config/model-connections/{connection_id}/references")
+def get_model_connection_references(
+    connection_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Return configuration references for one Shared Model Connection."""
+
+    store = _get_configuration_store(app_request)
+    _require_model_connection(store, connection_id)
+    try:
+        summary = store.get_model_connection_reference_summary(connection_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return summary.model_dump(mode="json")
+
+
+@router.get("/config/model-connections/{connection_id}/deletion-eligibility")
+def get_model_connection_deletion_eligibility(
+    connection_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Return physical-deletion eligibility and blockers for one model connection."""
+
+    store = _get_configuration_store(app_request)
+    _require_model_connection(store, connection_id)
+    try:
+        eligibility = store.get_model_connection_deletion_eligibility(connection_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return eligibility.model_dump(mode="json")
+
+
+@router.delete("/config/model-connections/{connection_id}")
+def physically_delete_model_connection(
+    connection_id: str,
+    request: ModelConnectionPhysicalDeleteRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Permanently delete an eligible archived Shared Model Connection."""
+
+    store = _get_configuration_store(app_request)
+    _require_model_connection(store, connection_id)
+    try:
+        eligibility = store.physically_delete_model_connection(
+            connection_id=connection_id,
+            actor=request.actor,
+            reason=request.reason,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return eligibility.model_dump(mode="json")
+
+
+@router.post("/config/model-connections/{connection_id}/validate")
+def validate_model_connection(
+    connection_id: str,
+    request: ModelConnectionValidationRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Run local secret-safe validation for a Shared Model Connection."""
+
+    store = _get_configuration_store(app_request)
+    connection = _require_model_connection(store, connection_id)
+    record = _model_connection_validation_record(connection, actor=request.actor)
+    store.record_model_connection_validation(record)
+    return record.model_dump(mode="json")
+
+
+@router.post("/config/model-connections/{connection_id}/smoke-test")
+def smoke_test_model_connection(
+    connection_id: str,
+    request: ModelConnectionValidationRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Run a manual smoke test for a Shared Model Connection."""
+
+    store = _get_configuration_store(app_request)
+    connection = _require_model_connection(store, connection_id)
+    record = _model_connection_smoke_test_record(connection, actor=request.actor)
+    store.record_model_connection_smoke_test(record)
+    return record.model_dump(mode="json")
 
 
 @router.get("/config/knowledge-sources")
@@ -1226,6 +1538,21 @@ def _version_payload(version: Any) -> dict[str, Any]:
     }
 
 
+def _model_connection_payload(
+    store: LocalAgentConfigurationStore,
+    connection: SharedModelConnection,
+) -> dict[str, Any]:
+    payload = connection.model_dump(mode="json")
+    payload["reference_summary"] = store.get_model_connection_reference_summary(
+        connection.connection_id
+    ).model_dump(mode="json")
+    validations = store.list_model_connection_validation_records(connection.connection_id)
+    smoke_tests = store.list_model_connection_smoke_test_records(connection.connection_id)
+    payload["last_validation"] = validations[-1].model_dump(mode="json") if validations else None
+    payload["last_smoke_test"] = smoke_tests[-1].model_dump(mode="json") if smoke_tests else None
+    return payload
+
+
 def _knowledge_source_payload(
     store: LocalAgentConfigurationStore,
     source: KnowledgeSource,
@@ -1234,9 +1561,7 @@ def _knowledge_source_payload(
     payload = source.model_dump(mode="json")
     payload["document_count"] = len(documents)
     payload["ready_document_count"] = sum(1 for document in documents if document.state == "ready")
-    payload["publication_count"] = len(
-        store.list_knowledge_source_publications(source.source_id)
-    )
+    payload["publication_count"] = len(store.list_knowledge_source_publications(source.source_id))
     return payload
 
 
@@ -1379,6 +1704,22 @@ def _require_knowledge_source(
     return source
 
 
+def _require_model_connection(
+    store: LocalAgentConfigurationStore,
+    connection_id: str,
+) -> SharedModelConnection:
+    try:
+        connection = store.get_model_connection(connection_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    if connection is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Shared Model Connection not found: {connection_id}",
+        )
+    return connection
+
+
 def _require_active_knowledge_source(
     store: LocalAgentConfigurationStore,
     source_id: str,
@@ -1413,6 +1754,147 @@ def _source_id(value: str) -> str:
     if not normalized.startswith("ks_"):
         normalized = f"ks_{normalized}"
     return normalized
+
+
+def _model_connection_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower().replace("-", "_"))
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        normalized = f"model_{uuid4().hex[:8]}"
+    if not normalized.startswith("model_"):
+        normalized = f"model_{normalized}"
+    return normalized
+
+
+def _credential_ref(
+    request: ModelCredentialReferenceRequest,
+) -> EnvironmentModelCredentialReference:
+    if request.type != "env":
+        raise HTTPException(
+            status_code=400,
+            detail="Only env model credential references are supported.",
+        )
+    return EnvironmentModelCredentialReference(name=request.name)
+
+
+def _require_supported_shared_model_provider(provider: str) -> None:
+    if provider not in SUPPORTED_SHARED_MODEL_CONNECTION_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported model provider: {provider}",
+        )
+
+
+def _require_model_connection_update_impact_confirmation(
+    store: LocalAgentConfigurationStore,
+    *,
+    connection_id: str,
+    request: ModelConnectionUpdateRequest,
+) -> None:
+    high_impact_fields = {
+        "provider": request.provider,
+        "model_identifier": request.model_identifier,
+        "base_url": request.base_url,
+        "credential_ref": request.credential_ref,
+        "organization_env": request.organization_env,
+        "project_env": request.project_env,
+    }
+    changed_high_impact_fields = tuple(
+        field for field, value in high_impact_fields.items() if value is not None
+    )
+    if not changed_high_impact_fields or request.confirm_impact:
+        return
+    summary = store.get_model_connection_reference_summary(connection_id)
+    total_references = (
+        summary.draft_agent_reference_count
+        + summary.published_agent_version_reference_count
+        + summary.knowledge_source_reference_count
+    )
+    if not total_references:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "requires_impact_review": True,
+            "changed_fields": list(changed_high_impact_fields),
+            "reference_summary": summary.model_dump(mode="json"),
+        },
+    )
+
+
+def _model_connection_validation_record(
+    connection: SharedModelConnection,
+    *,
+    actor: str,
+) -> ModelConnectionValidationRecord:
+    missing_env_vars = _missing_model_connection_env_vars(connection)
+    return ModelConnectionValidationRecord(
+        validation_id=f"modelvalidation_{uuid4().hex[:8]}",
+        connection_id=connection.connection_id,
+        status="failed" if missing_env_vars else "passed",
+        created_at=_now(),
+        created_by=actor,
+        provider=connection.provider,
+        model_identifier=connection.model_identifier,
+        credential_ref=connection.credential_ref,
+        checked_env_vars=_model_connection_env_vars(connection),
+        missing_env_vars=missing_env_vars,
+        error_code="missing_env_var" if missing_env_vars else None,
+        message=(
+            "Credential environment variable is missing."
+            if missing_env_vars
+            else "Model connection validation passed."
+        ),
+    )
+
+
+def _model_connection_smoke_test_record(
+    connection: SharedModelConnection,
+    *,
+    actor: str,
+) -> ModelConnectionSmokeTestRecord:
+    missing_env_vars = _missing_model_connection_env_vars(connection)
+    if missing_env_vars:
+        return ModelConnectionSmokeTestRecord(
+            smoke_test_id=f"modelsmoke_{uuid4().hex[:8]}",
+            connection_id=connection.connection_id,
+            status="failed",
+            created_at=_now(),
+            created_by=actor,
+            provider=connection.provider,
+            model_identifier=connection.model_identifier,
+            credential_ref=connection.credential_ref,
+            request_sent=False,
+            error_code="missing_env_var",
+            message="Credential environment variable is missing; remote smoke test was not sent.",
+        )
+    return ModelConnectionSmokeTestRecord(
+        smoke_test_id=f"modelsmoke_{uuid4().hex[:8]}",
+        connection_id=connection.connection_id,
+        status="skipped",
+        created_at=_now(),
+        created_by=actor,
+        provider=connection.provider,
+        model_identifier=connection.model_identifier,
+        credential_ref=connection.credential_ref,
+        request_sent=False,
+        message="Remote smoke test adapter is not enabled in local configuration API.",
+    )
+
+
+def _model_connection_env_vars(connection: SharedModelConnection) -> tuple[str, ...]:
+    env_vars = [connection.credential_ref.name]
+    if connection.organization_env is not None:
+        env_vars.append(connection.organization_env)
+    if connection.project_env is not None:
+        env_vars.append(connection.project_env)
+    return tuple(env_vars)
+
+
+def _missing_model_connection_env_vars(connection: SharedModelConnection) -> tuple[str, ...]:
+    return tuple(
+        env_var for env_var in _model_connection_env_vars(connection) if not os.getenv(env_var)
+    )
 
 
 def _decode_upload_content(content_base64: str) -> bytes:

@@ -472,7 +472,7 @@ uv run --extra dev python -m pytest tests/test_model_connection_store.py -q
 
 Expected: pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add proof_agent/configuration/local_store.py tests/test_model_connection_store.py
@@ -487,7 +487,7 @@ git commit -m "feat: persist shared model connections"
 - Modify: `proof_agent/delivery/configuration_api.py`
 - Create: `tests/test_model_connection_api.py`
 
-- [ ] **Step 1: Write failing API tests for collection routes**
+- [x] **Step 1: Write failing API tests for collection routes**
 
 Cover:
 
@@ -510,7 +510,7 @@ Expected create payload:
 }
 ```
 
-- [ ] **Step 2: Write failing API tests for detail and update**
+- [x] **Step 2: Write failing API tests for detail and update**
 
 Cover:
 
@@ -526,7 +526,7 @@ If using one-step update, require request field:
 
 for high-impact changes with existing references.
 
-- [ ] **Step 3: Write failing lifecycle and deletion tests**
+- [x] **Step 3: Write failing lifecycle and deletion tests**
 
 Cover:
 
@@ -536,7 +536,7 @@ Cover:
 - physical delete blocked while active
 - physical delete blocked with references
 
-- [ ] **Step 4: Write failing validation and smoke-test tests**
+- [x] **Step 4: Write failing validation and smoke-test tests**
 
 Cover:
 
@@ -547,7 +547,7 @@ Cover:
 
 Use monkeypatch/mocks; do not require real network.
 
-- [ ] **Step 5: Run tests and verify RED**
+- [x] **Step 5: Run tests and verify RED**
 
 Run:
 
@@ -557,7 +557,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_model_connectio
 
 Expected: fail because routes do not exist.
 
-- [ ] **Step 6: Implement routes under `/api/config/model-connections`**
+- [x] **Step 6: Implement routes under `/api/config/model-connections`**
 
 Add request models with `extra="forbid"`.
 
@@ -575,7 +575,7 @@ Routes:
 - `POST /config/model-connections/{connection_id}/validate`
 - `POST /config/model-connections/{connection_id}/smoke-test`
 
-- [ ] **Step 7: Run tests and verify GREEN**
+- [x] **Step 7: Run tests and verify GREEN**
 
 Run:
 
@@ -585,7 +585,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_model_connectio
 
 Expected: pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add proof_agent/delivery/configuration_api.py tests/test_model_connection_api.py
