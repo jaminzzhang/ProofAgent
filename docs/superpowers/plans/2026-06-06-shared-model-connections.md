@@ -964,7 +964,7 @@ git commit -m "feat: add models workspace"
 - Create: `dashboard/src/pages/__tests__/ModelConnectionDetailPage.test.tsx`
 - Modify: `dashboard/src/router.tsx`
 
-- [ ] **Step 1: Write failing detail tests**
+- [x] **Step 1: Write failing detail tests**
 
 Test tabs:
 
@@ -981,7 +981,7 @@ Test Archive/Restore and Delete eligibility controls.
 
 Test Test tab can run local validation and manual smoke test.
 
-- [ ] **Step 2: Run frontend tests and verify RED**
+- [x] **Step 2: Run frontend tests and verify RED**
 
 Run:
 
@@ -991,7 +991,7 @@ cd dashboard && npm test -- src/pages/__tests__/ModelConnectionDetailPage.test.t
 
 Expected: fail.
 
-- [ ] **Step 3: Implement detail page**
+- [x] **Step 3: Implement detail page**
 
 Use four lightweight tabs:
 
@@ -1002,7 +1002,7 @@ Use four lightweight tabs:
 
 Never render raw API key fields.
 
-- [ ] **Step 4: Run frontend tests and verify GREEN**
+- [x] **Step 4: Run frontend tests and verify GREEN**
 
 Run:
 
@@ -1012,7 +1012,7 @@ cd dashboard && npm test -- src/pages/__tests__/ModelConnectionDetailPage.test.t
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dashboard/src/pages/ModelConnectionDetailPage.tsx dashboard/src/pages/__tests__/ModelConnectionDetailPage.test.tsx dashboard/src/router.tsx
