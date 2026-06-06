@@ -39,9 +39,10 @@ review:
   subagent:
     provider: deterministic
     name: harness-review-demo
-    timeout_seconds: 5
-    max_output_tokens: 500
     fail_closed: true
+    params:
+      timeout_seconds: 5
+      max_output_tokens: 500
 
 response:
   include_reasoning_summary: false

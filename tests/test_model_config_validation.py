@@ -74,6 +74,56 @@ def test_openai_compatible_model_config_loads_with_params(tmp_path: Path) -> Non
         manifest.model.params["max_output_tokens"] = 100
 
 
+def test_shared_model_source_config_loads_with_usage_params(tmp_path: Path) -> None:
+    manifest = load_agent_manifest(
+        _write_manifest(
+            tmp_path,
+            """
+  model_source: shared
+  connection_id: model_deepseek_default
+  params:
+    temperature: 0
+    max_output_tokens: 800
+    timeout_seconds: 20
+""",
+        )
+    )
+
+    assert manifest.model.model_source == "shared"
+    assert manifest.model.connection_id == "model_deepseek_default"
+    assert manifest.model.provider is None
+    assert manifest.model.name is None
+    assert manifest.model.params["timeout_seconds"] == 20
+
+
+def test_custom_model_source_config_loads_with_environment_credential_ref(
+    tmp_path: Path,
+) -> None:
+    manifest = load_agent_manifest(
+        _write_manifest(
+            tmp_path,
+            """
+  model_source: custom
+  provider: deepseek
+  name: deepseek-chat
+  base_url: https://api.deepseek.com
+  credential_ref:
+    type: env
+    name: DEEPSEEK_API_KEY
+  params:
+    temperature: 0
+""",
+        )
+    )
+
+    assert manifest.model.model_source == "custom"
+    assert manifest.model.provider == "deepseek"
+    assert manifest.model.name == "deepseek-chat"
+    assert manifest.model.base_url == "https://api.deepseek.com"
+    assert manifest.model.credential_ref is not None
+    assert manifest.model.credential_ref.name == "DEEPSEEK_API_KEY"
+
+
 def test_deepseek_model_provider_loads_for_all_model_roles(tmp_path: Path) -> None:
     (tmp_path / "knowledge").mkdir()
     (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
@@ -126,11 +176,11 @@ review:
   subagent:
     provider: deepseek
     name: deepseek-v4-flash
-    timeout_seconds: 20
-    max_output_tokens: 400
     fail_closed: true
     params:
       api_key_env: DEEPSEEK_API_KEY
+      timeout_seconds: 20
+      max_output_tokens: 400
 policy:
   file: ./policy.yaml
 tools:
@@ -153,6 +203,70 @@ audit:
     assert manifest.review is not None
     assert manifest.review.subagent is not None
     assert manifest.review.subagent.provider == "deepseek"
+    assert manifest.review.subagent.params["timeout_seconds"] == 20
+    assert manifest.review.subagent.params["max_output_tokens"] == 400
+
+
+def test_reviewer_top_level_model_usage_fields_are_rejected(tmp_path: Path) -> None:
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: reviewer_cleanup_test
+purpose: "Test reviewer model usage cleanup."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: answer-demo
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: planner-demo
+review:
+  mode: auto
+  subagent:
+    provider: deterministic
+    name: reviewer-demo
+    timeout_seconds: 5
+    max_output_tokens: 500
+    fail_closed: true
+policy:
+  file: ./policy.yaml
+tools:
+  file: ./tools.yaml
+memory:
+  provider: session
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "review.subagent.params.timeout_seconds" in exc.value.fix
+    assert "review.subagent.params.max_output_tokens" in exc.value.fix
 
 
 def test_model_config_rejects_secret_looking_params(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from proof_agent.contracts import (
     MemoryScopeConfig,
     MemoryScopesConfig,
     ModelConfig,
+    ModelCredentialReferenceConfig,
     PackageKnowledgeSourceConfig,
     PolicyConfig,
     ReActConfig,
@@ -75,11 +76,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             planner_model=_model_config_from_mapping(retrieval.get("planner_model")),
             evaluator_model=_model_config_from_mapping(retrieval.get("evaluator_model")),
         ),
-        model=ModelConfig(
-            provider=model["provider"],
-            name=model["name"],
-            params=model.get("params", {}),
-        ),
+        model=_required_model_config_from_mapping(model, field_name="model"),
         policy=PolicyConfig(file=resolve_path(base_dir, policy["file"])),
         tools=ToolsConfig(file=resolve_path(base_dir, tools["file"])),
         customer=_customer_config_from_mapping(raw.get("customer"), base_dir=base_dir),
@@ -153,10 +150,32 @@ def _model_config_from_mapping(raw: Any) -> ModelConfig | None:
         return None
     if not isinstance(raw, dict):
         raise TypeError("retrieval.planner_model must be a mapping")
+    return _required_model_config_from_mapping(raw, field_name="retrieval.planner_model")
+
+
+def _required_model_config_from_mapping(raw: Any, *, field_name: str) -> ModelConfig:
+    if not isinstance(raw, dict):
+        raise TypeError(f"{field_name} must be a mapping")
+    model_source = raw.get("model_source", "inline")
     return ModelConfig(
-        provider=raw["provider"],
-        name=raw["name"],
+        model_source=model_source,
+        provider=raw.get("provider"),
+        name=raw.get("name"),
+        connection_id=raw.get("connection_id"),
+        base_url=raw.get("base_url"),
+        credential_ref=_model_credential_ref_from_mapping(raw.get("credential_ref")),
         params=raw.get("params", {}),
+    )
+
+
+def _model_credential_ref_from_mapping(raw: Any) -> ModelCredentialReferenceConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("credential_ref must be a mapping")
+    return ModelCredentialReferenceConfig(
+        type=raw.get("type", "env"),
+        name=raw["name"],
     )
 
 
@@ -215,14 +234,19 @@ def _react_config_from_mapping(raw: Any) -> ReActConfig | None:
     planner = raw["planner"]
     if not isinstance(planner, dict):
         raise TypeError("react.planner must be a mapping")
+    planner_config = _required_model_config_from_mapping(planner, field_name="react.planner")
     return ReActConfig(
         max_steps=raw["max_steps"],
         max_tool_calls=raw.get("max_tool_calls", 1),
         record_reasoning_summary=raw.get("record_reasoning_summary", True),
         planner=ReActPlannerConfig(
-            provider=planner["provider"],
-            name=planner["name"],
-            params=planner.get("params", {}),
+            model_source=planner_config.model_source,
+            provider=planner_config.provider,
+            name=planner_config.name,
+            connection_id=planner_config.connection_id,
+            base_url=planner_config.base_url,
+            credential_ref=planner_config.credential_ref,
+            params=planner_config.params,
         ),
     )
 
@@ -243,13 +267,16 @@ def _review_subagent_config_from_mapping(raw: Any) -> ReviewSubagentConfig | Non
         return None
     if not isinstance(raw, dict):
         raise TypeError("review.subagent must be a mapping")
+    model_config = _required_model_config_from_mapping(raw, field_name="review.subagent")
     return ReviewSubagentConfig(
-        provider=raw["provider"],
-        name=raw["name"],
-        timeout_seconds=raw.get("timeout_seconds", 5.0),
-        max_output_tokens=raw.get("max_output_tokens", 500),
+        model_source=model_config.model_source,
+        provider=model_config.provider,
+        name=model_config.name,
+        connection_id=model_config.connection_id,
+        base_url=model_config.base_url,
+        credential_ref=model_config.credential_ref,
         fail_closed=raw.get("fail_closed", True),
-        params=raw.get("params", {}),
+        params=model_config.params,
     )
 
 

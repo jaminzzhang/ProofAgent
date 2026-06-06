@@ -125,7 +125,7 @@ V1 does not include:
 - Modify: `proof_agent/contracts/__init__.py`
 - Create: `tests/test_model_connection_contracts.py`
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 Add tests for:
 
@@ -162,7 +162,7 @@ Also test:
 - `SharedModelConnectionDeletionEligibility` serializes blockers.
 - `ModelConnectionValidationRecord` and `ModelConnectionSmokeTestRecord` do not contain raw response text or raw credentials.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -172,7 +172,7 @@ uv run --extra dev python -m pytest tests/test_model_connection_contracts.py -q
 
 Expected: fail because contracts do not exist.
 
-- [ ] **Step 3: Implement contracts**
+- [x] **Step 3: Implement contracts**
 
 Add:
 
@@ -206,7 +206,7 @@ class SharedModelConnection(FrozenModel):
 
 Add reference summary, deletion eligibility, validation, and smoke-test records. Export them from `proof_agent/contracts/__init__.py`.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -216,7 +216,7 @@ uv run --extra dev python -m pytest tests/test_model_connection_contracts.py -q
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add proof_agent/contracts/agent_configuration.py proof_agent/contracts/__init__.py tests/test_model_connection_contracts.py
@@ -237,7 +237,7 @@ git commit -m "feat: add shared model connection contracts"
 - Modify: `examples/insurance_customer_service/agent.yaml`
 - Modify: `proof_agent/evaluation/demo/fixtures/**/agent*.yaml`
 
-- [ ] **Step 1: Write failing loader tests for shared model source**
+- [x] **Step 1: Write failing loader tests for shared model source**
 
 Add a manifest fixture with:
 
@@ -259,7 +259,7 @@ assert manifest.model.connection_id == "model_deepseek_default"
 assert manifest.model.params["max_output_tokens"] == 800
 ```
 
-- [ ] **Step 2: Write failing loader tests for custom model source**
+- [x] **Step 2: Write failing loader tests for custom model source**
 
 Add:
 
@@ -278,7 +278,7 @@ model:
 
 Assert provider/name/base URL/credential reference are parsed and frozen.
 
-- [ ] **Step 3: Write failing reviewer cleanup tests**
+- [x] **Step 3: Write failing reviewer cleanup tests**
 
 Add a valid reviewer shape:
 
@@ -315,7 +315,7 @@ review:
 
 Expected: `ProofAgentError` with a fix mentioning `review.subagent.params.timeout_seconds` and `review.subagent.params.max_output_tokens`.
 
-- [ ] **Step 4: Run tests and verify RED**
+- [x] **Step 4: Run tests and verify RED**
 
 Run:
 
@@ -325,7 +325,7 @@ uv run --extra dev python -m pytest tests/test_model_config_validation.py tests/
 
 Expected: fail on new shapes.
 
-- [ ] **Step 5: Implement model-source contracts**
+- [x] **Step 5: Implement model-source contracts**
 
 Keep legacy standalone inline shape supported:
 
@@ -342,7 +342,7 @@ Add discriminated support for:
 
 Do not require all demo fixtures to use shared connections.
 
-- [ ] **Step 6: Implement reviewer cleanup**
+- [x] **Step 6: Implement reviewer cleanup**
 
 Move `ReviewSubagentConfig.timeout_seconds` and `max_output_tokens` into `params`.
 
@@ -350,7 +350,7 @@ Keep `fail_closed` top-level.
 
 Update runtime code that reads reviewer timeout/max output tokens to use params.
 
-- [ ] **Step 7: Update YAML fixtures**
+- [x] **Step 7: Update YAML fixtures**
 
 For every existing `review.subagent.timeout_seconds` and `review.subagent.max_output_tokens`, move values under:
 
@@ -364,7 +364,7 @@ review:
 
 Do not change deterministic provider/name unless required by tests.
 
-- [ ] **Step 8: Run tests and verify GREEN**
+- [x] **Step 8: Run tests and verify GREEN**
 
 Run:
 

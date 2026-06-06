@@ -62,9 +62,18 @@ class KnowledgeBindingConfig(FrozenModel):
         return freeze_value(value)
 
 
-class ModelConfig(FrozenModel):
-    provider: str
+class ModelCredentialReferenceConfig(FrozenModel):
+    type: Literal["env"] = "env"
     name: str
+
+
+class ModelConfig(FrozenModel):
+    model_source: Literal["inline", "shared", "custom"] = "inline"
+    provider: str | None = None
+    name: str | None = None
+    connection_id: str | None = None
+    base_url: str | None = None
+    credential_ref: ModelCredentialReferenceConfig | None = None
     params: Mapping[str, Any] = Field(default_factory=FrozenDict)
 
     @field_validator("params", mode="after")
@@ -74,8 +83,12 @@ class ModelConfig(FrozenModel):
 
 
 class ReActPlannerConfig(FrozenModel):
-    provider: str
-    name: str
+    model_source: Literal["inline", "shared", "custom"] = "inline"
+    provider: str | None = None
+    name: str | None = None
+    connection_id: str | None = None
+    base_url: str | None = None
+    credential_ref: ModelCredentialReferenceConfig | None = None
     params: Mapping[str, Any] = Field(default_factory=FrozenDict)
 
     @field_validator("params", mode="after")
@@ -92,10 +105,12 @@ class ReActConfig(FrozenModel):
 
 
 class ReviewSubagentConfig(FrozenModel):
-    provider: str
-    name: str
-    timeout_seconds: float = 5.0
-    max_output_tokens: int = 500
+    model_source: Literal["inline", "shared", "custom"] = "inline"
+    provider: str | None = None
+    name: str | None = None
+    connection_id: str | None = None
+    base_url: str | None = None
+    credential_ref: ModelCredentialReferenceConfig | None = None
     fail_closed: bool = True
     params: Mapping[str, Any] = Field(default_factory=FrozenDict)
 

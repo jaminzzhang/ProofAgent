@@ -24,6 +24,7 @@ from proof_agent.contracts import (
     allowed_review_decisions_for,
 )
 from proof_agent.contracts.manifest import ModelConfig
+from proof_agent.errors import ProofAgentError
 
 
 class HarnessReviewSubagent(Protocol):
@@ -106,9 +107,7 @@ class DeterministicHarnessReviewSubagent:
         if decision == PolicyDecisionType.ALLOW:
             return f"Deterministic review allows {action.action_type.value} at {point.value}."
         if decision == PolicyDecisionType.REQUIRE_APPROVAL:
-            return (
-                "Deterministic review requires approval for medium-risk tool access."
-            )
+            return "Deterministic review requires approval for medium-risk tool access."
         return f"Deterministic review denies unsupported action at {point.value}."
 
     def _confidence(self, decision: PolicyDecisionType) -> float:
@@ -127,6 +126,12 @@ class LLMHarnessReviewSubagent:
         model_provider: ModelProvider | None = None,
     ) -> None:
         self.config = config
+        if config.provider is None or config.name is None:
+            raise ProofAgentError(
+                "PA_MODEL_001",
+                "review.subagent shared model source has not been resolved",
+                "Resolve the Shared Model Connection before constructing an LLM review subagent.",
+            )
         self.model_provider = model_provider or resolve_provider(
             ModelConfig(
                 provider=config.provider,
@@ -171,8 +176,18 @@ class LLMHarnessReviewSubagent:
                     ),
                 ),
             ),
-            max_output_tokens=self.config.max_output_tokens,
-            timeout_seconds=int(self.config.timeout_seconds),
+            max_output_tokens=_positive_int_param(
+                self.config.params,
+                "max_output_tokens",
+                default=500,
+            ),
+            timeout_seconds=int(
+                _positive_number_param(
+                    self.config.params,
+                    "timeout_seconds",
+                    default=5,
+                )
+            ),
             response_format="json",
             stream=False,
             metadata={
@@ -187,10 +202,7 @@ class LLMHarnessReviewSubagent:
             enforcement_point=point,
             action=action,
         )
-        if (
-            decision.enforcement_point != point
-            or decision.subject_action_id != action.action_id
-        ):
+        if decision.enforcement_point != point or decision.subject_action_id != action.action_id:
             raise ModelOutputNormalizationError(
                 role="harness_review",
                 error_code="model_output_contract_validation_failed",
@@ -201,23 +213,47 @@ class LLMHarnessReviewSubagent:
             raise ModelOutputNormalizationError(
                 role="harness_review",
                 error_code="model_output_contract_validation_failed",
-                message=(
-                    "suggested_decision is not allowed for the current "
-                    "enforcement point."
-                ),
+                message=("suggested_decision is not allowed for the current enforcement point."),
                 raw_content_length=len(response.content),
             )
-        return decision.model_copy(
-            update={"review_id": f"review.{action.action_id}.{point.value}"}
+        return decision.model_copy(update={"review_id": f"review.{action.action_id}.{point.value}"})
+
+
+def _positive_int_param(
+    params: Mapping[str, Any],
+    key: str,
+    *,
+    default: int,
+) -> int:
+    value = params.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"review.subagent.params.{key} must be a positive integer",
+            f"Set review.subagent.params.{key} to a positive integer.",
         )
+    return value
+
+
+def _positive_number_param(
+    params: Mapping[str, Any],
+    key: str,
+    *,
+    default: int,
+) -> int | float:
+    value = params.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"review.subagent.params.{key} must be a positive number",
+            f"Set review.subagent.params.{key} to a positive number.",
+        )
+    return value
 
 
 def _json_contract_fallback(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {
-            str(key): _json_contract_fallback(item)
-            for key, item in value.items()
-        }
+        return {str(key): _json_contract_fallback(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
         return [_json_contract_fallback(item) for item in value]
     return value

@@ -86,7 +86,6 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
     required_nested = {
         "workflow": {"runtime", "template"},
         "retrieval": {"strategy"},
-        "model": {"provider", "name"},
         "policy": {"file"},
         "tools": {"file"},
         "memory": {"provider"},
@@ -109,6 +108,33 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
                 f"Add {section}.{', '.join(missing_nested)} to {manifest_path}",
                 artifact_path=manifest_path,
             )
+
+    _require_model_source_shape(raw.get("model"), "model", manifest_path=manifest_path)
+    react = raw.get("react")
+    if isinstance(react, Mapping) and "planner" in react:
+        _require_model_source_shape(
+            react.get("planner"), "react.planner", manifest_path=manifest_path
+        )
+    review = raw.get("review")
+    if isinstance(review, Mapping) and "subagent" in review:
+        subagent = review.get("subagent")
+        if isinstance(subagent, Mapping):
+            old_reviewer_fields = sorted(
+                field for field in ("timeout_seconds", "max_output_tokens") if field in subagent
+            )
+            if old_reviewer_fields:
+                raise ProofAgentError(
+                    "PA_CONFIG_001",
+                    "review.subagent model usage fields moved under review.subagent.params",
+                    (
+                        "Move review.subagent.timeout_seconds to "
+                        "review.subagent.params.timeout_seconds and "
+                        "review.subagent.max_output_tokens to "
+                        "review.subagent.params.max_output_tokens."
+                    ),
+                    artifact_path=manifest_path,
+                )
+        _require_model_source_shape(subagent, "review.subagent", manifest_path=manifest_path)
 
     _require_sequence_of_mappings(raw, "package_knowledge_sources", manifest_path=manifest_path)
     _require_sequence_of_mappings(raw, "knowledge_bindings", manifest_path=manifest_path)
@@ -144,6 +170,59 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
             )
 
 
+def _require_model_source_shape(
+    value: Any,
+    field_name: str,
+    *,
+    manifest_path: Path,
+) -> None:
+    if not isinstance(value, Mapping):
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"{field_name} must be a mapping",
+            f"Use mapping fields for {field_name} in {manifest_path}",
+            artifact_path=manifest_path,
+        )
+    model_source = value.get("model_source", "inline")
+    if model_source not in {"inline", "shared", "custom"}:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"{field_name}.model_source must be shared or custom when set",
+            f"Use {field_name}.model_source: shared or custom, or omit it for inline provider/name config.",
+            artifact_path=manifest_path,
+        )
+    if model_source == "shared":
+        if not value.get("connection_id"):
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"{field_name}.connection_id is required for shared model source",
+                f"Set {field_name}.connection_id to a Shared Model Connection id.",
+                artifact_path=manifest_path,
+            )
+        return
+    missing = sorted(key for key in ("provider", "name") if not value.get(key))
+    if missing:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"missing {field_name}.{', '.join(missing)}",
+            f"Add {field_name}.{', '.join(missing)} to {manifest_path}",
+            artifact_path=manifest_path,
+        )
+    if model_source == "custom":
+        credential_ref = value.get("credential_ref")
+        if (
+            not isinstance(credential_ref, Mapping)
+            or credential_ref.get("type", "env") != "env"
+            or not credential_ref.get("name")
+        ):
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"{field_name}.credential_ref with type env and name is required for custom model source",
+                f"Set {field_name}.credential_ref.type: env and {field_name}.credential_ref.name.",
+                artifact_path=manifest_path,
+            )
+
+
 def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     """Validate the supported v1 runtime envelope and local file dependencies."""
 
@@ -167,13 +246,7 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     _validate_knowledge_sources_and_bindings(manifest, manifest_path=manifest_path)
     _reject_secret_knowledge_params(manifest, manifest_path=manifest_path)
     _validate_retrieval_config(manifest, manifest_path=manifest_path)
-    if manifest.model.provider not in SUPPORTED_MODEL_PROVIDERS:
-        raise ProofAgentError(
-            "PA_MODEL_001",
-            f"unsupported model provider: {manifest.model.provider}",
-            f"Supported providers: {', '.join(sorted(SUPPORTED_MODEL_PROVIDERS))}.",
-            artifact_path=manifest_path,
-        )
+    _validate_model_role_config(manifest.model, "model", manifest_path=manifest_path)
     _reject_secret_model_params(manifest, manifest_path=manifest_path)
     if manifest.memory.provider not in {"session", "local", "mem0"}:
         raise ProofAgentError(
@@ -319,13 +392,22 @@ def _validate_memory_config(manifest: AgentManifest, *, manifest_path: Path) -> 
 
 
 def _reject_secret_model_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    forbidden = sorted(key for key in manifest.model.params if _is_forbidden_model_param(str(key)))
-    if forbidden:
-        raise ProofAgentError(
-            "PA_SECRET_001",
-            f"model.params contains secret-bearing field(s): {', '.join(forbidden)}",
-            "Store secrets in environment variables and reference only *_env names in agent.yaml.",
-            artifact_path=manifest_path,
+    _reject_secret_model_role_params(
+        manifest.model,
+        "model",
+        manifest_path=manifest_path,
+    )
+    if manifest.react is not None:
+        _reject_secret_model_role_params(
+            manifest.react.planner,
+            "react.planner",
+            manifest_path=manifest_path,
+        )
+    if manifest.review is not None and manifest.review.subagent is not None:
+        _reject_secret_model_role_params(
+            manifest.review.subagent,
+            "review.subagent",
+            manifest_path=manifest_path,
         )
 
 
@@ -354,21 +436,11 @@ def _validate_react_config(manifest: AgentManifest, *, manifest_path: Path) -> N
             "Set react.max_tool_calls to 0 or 1.",
             artifact_path=manifest_path,
         )
-    if react.planner.provider not in SUPPORTED_MODEL_PROVIDERS:
-        raise ProofAgentError(
-            "PA_MODEL_001",
-            f"unsupported react.planner.provider: {react.planner.provider}",
-            f"Supported providers: {', '.join(sorted(SUPPORTED_MODEL_PROVIDERS))}.",
-            artifact_path=manifest_path,
-        )
-    forbidden = sorted(key for key in react.planner.params if _is_forbidden_model_param(str(key)))
-    if forbidden:
-        raise ProofAgentError(
-            "PA_SECRET_001",
-            f"react.planner.params contains secret-bearing field(s): {', '.join(forbidden)}",
-            "Store secrets in environment variables and reference only *_env names in agent.yaml.",
-            artifact_path=manifest_path,
-        )
+    _validate_model_role_config(
+        react.planner,
+        "react.planner",
+        manifest_path=manifest_path,
+    )
 
 
 def _validate_review_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
@@ -386,33 +458,29 @@ def _validate_review_config(manifest: AgentManifest, *, manifest_path: Path) -> 
         raise ProofAgentError(
             "PA_CONFIG_002",
             "review.subagent is required when review.mode is auto",
-            "Add review.subagent provider and name fields to agent.yaml.",
+            "Add review.subagent model source fields to agent.yaml.",
             artifact_path=manifest_path,
         )
     if review.subagent is None:
         return
     subagent = review.subagent
-    if subagent.provider not in SUPPORTED_MODEL_PROVIDERS:
-        raise ProofAgentError(
-            "PA_MODEL_001",
-            f"unsupported review.subagent.provider: {subagent.provider}",
-            f"Supported providers: {', '.join(sorted(SUPPORTED_MODEL_PROVIDERS))}.",
-            artifact_path=manifest_path,
-        )
-    if subagent.timeout_seconds <= 0:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "review.subagent.timeout_seconds must be greater than 0",
-            "Set review.subagent.timeout_seconds to a positive number.",
-            artifact_path=manifest_path,
-        )
-    if subagent.max_output_tokens <= 0:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "review.subagent.max_output_tokens must be greater than 0",
-            "Set review.subagent.max_output_tokens to a positive integer.",
-            artifact_path=manifest_path,
-        )
+    _validate_model_role_config(
+        subagent,
+        "review.subagent",
+        manifest_path=manifest_path,
+    )
+    _validate_optional_positive_number_param(
+        subagent.params,
+        "timeout_seconds",
+        "review.subagent.params",
+        manifest_path=manifest_path,
+    )
+    _validate_optional_positive_int_param(
+        subagent.params,
+        "max_output_tokens",
+        "review.subagent.params",
+        manifest_path=manifest_path,
+    )
     if not subagent.fail_closed:
         raise ProofAgentError(
             "PA_CONFIG_002",
@@ -420,12 +488,103 @@ def _validate_review_config(manifest: AgentManifest, *, manifest_path: Path) -> 
             "Set review.subagent.fail_closed to true.",
             artifact_path=manifest_path,
         )
-    forbidden = sorted(key for key in subagent.params if _is_forbidden_model_param(str(key)))
+
+
+def _validate_model_role_config(
+    config: Any,
+    field_prefix: str,
+    *,
+    manifest_path: Path,
+) -> None:
+    model_source = getattr(config, "model_source", "inline")
+    if model_source == "shared":
+        if not getattr(config, "connection_id", None):
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"{field_prefix}.connection_id is required for shared model source",
+                f"Set {field_prefix}.connection_id to a Shared Model Connection id.",
+                artifact_path=manifest_path,
+            )
+        return
+    provider = getattr(config, "provider", None)
+    name = getattr(config, "name", None)
+    if not provider or not name:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"{field_prefix}.provider and {field_prefix}.name are required",
+            f"Set {field_prefix}.provider and {field_prefix}.name.",
+            artifact_path=manifest_path,
+        )
+    if provider not in SUPPORTED_MODEL_PROVIDERS:
+        raise ProofAgentError(
+            "PA_MODEL_001",
+            f"unsupported {field_prefix}.provider: {provider}",
+            f"Supported providers: {', '.join(sorted(SUPPORTED_MODEL_PROVIDERS))}.",
+            artifact_path=manifest_path,
+        )
+    if model_source == "custom":
+        credential_ref = getattr(config, "credential_ref", None)
+        if credential_ref is None or not credential_ref.name:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"{field_prefix}.credential_ref is required for custom model source",
+                f"Set {field_prefix}.credential_ref.type: env and {field_prefix}.credential_ref.name.",
+                artifact_path=manifest_path,
+            )
+
+
+def _reject_secret_model_role_params(
+    config: Any,
+    field_prefix: str,
+    *,
+    manifest_path: Path,
+) -> None:
+    forbidden = sorted(
+        key for key in getattr(config, "params", {}) if _is_forbidden_model_param(str(key))
+    )
     if forbidden:
         raise ProofAgentError(
             "PA_SECRET_001",
-            f"review.subagent.params contains secret-bearing field(s): {', '.join(forbidden)}",
+            f"{field_prefix}.params contains secret-bearing field(s): {', '.join(forbidden)}",
             "Store secrets in environment variables and reference only *_env names in agent.yaml.",
+            artifact_path=manifest_path,
+        )
+
+
+def _validate_optional_positive_number_param(
+    params: Mapping[str, Any],
+    key: str,
+    field_prefix: str,
+    *,
+    manifest_path: Path,
+) -> None:
+    value = params.get(key)
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"{field_prefix}.{key} must be greater than 0",
+            f"Set {field_prefix}.{key} to a positive number.",
+            artifact_path=manifest_path,
+        )
+
+
+def _validate_optional_positive_int_param(
+    params: Mapping[str, Any],
+    key: str,
+    field_prefix: str,
+    *,
+    manifest_path: Path,
+) -> None:
+    value = params.get(key)
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"{field_prefix}.{key} must be greater than 0",
+            f"Set {field_prefix}.{key} to a positive integer.",
             artifact_path=manifest_path,
         )
 
@@ -648,8 +807,10 @@ def _validate_http_json_provider_params(
                 manifest_path,
             )
         for key, value in response_mapping.items():
-            if not isinstance(key, str) or not isinstance(value, str) or (
-                value and not value.startswith("/")
+            if (
+                not isinstance(key, str)
+                or not isinstance(value, str)
+                or (value and not value.startswith("/"))
             ):
                 raise _invalid_http_json_param(
                     f"{field_prefix}.response_mapping values must be JSON Pointer strings.",

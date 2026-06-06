@@ -204,9 +204,11 @@ def test_llm_harness_review_subagent_uses_json_contract(
         config=ReviewSubagentConfig(
             provider="openai_compatible",
             name="reviewer-test",
-            timeout_seconds=5,
-            max_output_tokens=500,
             fail_closed=True,
+            params={
+                "timeout_seconds": 5,
+                "max_output_tokens": 500,
+            },
         ),
         model_provider=provider,
     )

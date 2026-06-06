@@ -44,12 +44,12 @@ review:
   subagent:
     provider: deepseek
     name: deepseek-v4-flash
-    timeout_seconds: 10
-    max_output_tokens: 500
     fail_closed: true
     params:
       api_key_env: DEEPSEEK_API_KEY
       temperature: 0
+      timeout_seconds: 10
+      max_output_tokens: 500
 
 response:
   include_reasoning_summary: false
