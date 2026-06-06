@@ -34,6 +34,18 @@ class KnowledgeSourceLifecycleState(str, Enum):
     ARCHIVED = "ARCHIVED"
 
 
+class SharedModelConnectionLifecycleState(str, Enum):
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class EnvironmentModelCredentialReference(FrozenModel):
+    """Secret-safe environment-variable pointer for model provider credentials."""
+
+    type: Literal["env"] = "env"
+    name: str
+
+
 class ContractBundle(FrozenModel):
     """Reviewable Agent Package contract files preserved for Contract View."""
 
@@ -134,6 +146,84 @@ class ActiveAgentVersion(FrozenModel):
     activated_at: str
     activated_by: str
     rollback_from_version_id: str | None = None
+
+
+class SharedModelConnection(FrozenModel):
+    """Reusable live model connection configuration."""
+
+    connection_id: str
+    display_name: str
+    description: str = ""
+    tags: tuple[str, ...] = Field(default_factory=tuple)
+    provider: str
+    model_identifier: str
+    base_url: str | None = None
+    credential_ref: EnvironmentModelCredentialReference
+    organization_env: str | None = None
+    project_env: str | None = None
+    timeout_seconds: float | None = None
+    lifecycle_state: SharedModelConnectionLifecycleState
+    created_at: str
+    updated_at: str
+
+    @field_validator("tags", mode="after")
+    @classmethod
+    def freeze_tags(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class SharedModelConnectionReferenceSummary(FrozenModel):
+    """Configuration reference counts for a Shared Model Connection."""
+
+    connection_id: str
+    draft_agent_reference_count: int
+    published_agent_version_reference_count: int
+    knowledge_source_reference_count: int
+    in_flight_operation_count: int = 0
+    audit_retention_blocked: bool = False
+
+
+class SharedModelConnectionDeletionEligibility(FrozenModel):
+    """Physical-deletion guard result for a Shared Model Connection."""
+
+    connection_id: str
+    eligible: bool
+    lifecycle_state: SharedModelConnectionLifecycleState
+    reference_summary: SharedModelConnectionReferenceSummary
+    blockers: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class ModelConnectionValidationRecord(FrozenModel):
+    """Trace-safe local validation result for a model connection."""
+
+    validation_id: str
+    connection_id: str
+    status: Literal["passed", "failed"]
+    created_at: str
+    created_by: str
+    provider: str
+    model_identifier: str
+    credential_ref: EnvironmentModelCredentialReference
+    checked_env_vars: tuple[str, ...] = Field(default_factory=tuple)
+    missing_env_vars: tuple[str, ...] = Field(default_factory=tuple)
+    error_code: str | None = None
+    message: str = ""
+
+
+class ModelConnectionSmokeTestRecord(FrozenModel):
+    """Trace-safe manual remote smoke-test result for a model connection."""
+
+    smoke_test_id: str
+    connection_id: str
+    status: Literal["passed", "failed", "skipped"]
+    created_at: str
+    created_by: str
+    provider: str
+    model_identifier: str
+    credential_ref: EnvironmentModelCredentialReference
+    request_sent: bool
+    error_code: str | None = None
+    message: str = ""
 
 
 class KnowledgeSource(FrozenModel):
