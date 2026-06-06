@@ -1,7 +1,14 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import {
+  archiveModelConnection,
   archiveKnowledgeSource,
   bindKnowledgeSourceToDraft,
+  createModelConnection,
+  deleteModelConnection,
+  fetchModelConnection,
+  fetchModelConnectionDeletionEligibility,
+  fetchModelConnectionReferences,
+  fetchModelConnections,
   createKnowledgeSource,
   fetchConfigAgents,
   fetchKnowledgeSourceDeletionEligibility,
@@ -11,12 +18,16 @@ import {
   permanentlyDeleteKnowledgeSource,
   publishConfigDraft,
   restoreKnowledgeSource,
+  restoreModelConnection,
   rollbackConfigVersion,
+  smokeTestModelConnection,
+  updateModelConnection,
   updateConfigDraftContract,
   updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocument,
   uploadKnowledgeDocuments,
   validateConfigDraft,
+  validateModelConnection,
   fetchHandoffs,
 } from './client'
 
@@ -254,6 +265,189 @@ test('knowledge source lifecycle methods use archive restore eligibility and del
       actor: 'dashboard',
     }),
   })
+})
+
+test('model connection client methods use shared model endpoints', async () => {
+  const connection = {
+    connection_id: 'model_deepseek_default',
+    display_name: 'DeepSeek Default',
+    provider: 'deepseek',
+    model_identifier: 'deepseek-chat',
+    lifecycle_state: 'ACTIVE',
+    credential_ref: { type: 'env', name: 'DEEPSEEK_API_KEY' },
+    created_at: '2026-06-07T00:00:00Z',
+    updated_at: '2026-06-07T00:00:00Z',
+    tags: [],
+    reference_summary: {
+      connection_id: 'model_deepseek_default',
+      draft_agent_reference_count: 0,
+      published_agent_version_reference_count: 0,
+      knowledge_source_reference_count: 0,
+      in_flight_operation_count: 0,
+      audit_retention_blocked: false,
+    },
+    last_validation: null,
+    last_smoke_test: null,
+  }
+  const eligibility = {
+    connection_id: 'model_deepseek_default',
+    eligible: true,
+    lifecycle_state: 'ARCHIVED',
+    reference_summary: connection.reference_summary,
+    blockers: [],
+  }
+  const validation = {
+    validation_id: 'modelvalidation_1',
+    connection_id: 'model_deepseek_default',
+    status: 'passed',
+    created_at: '2026-06-07T00:00:00Z',
+    created_by: 'dashboard',
+    provider: 'deepseek',
+    model_identifier: 'deepseek-chat',
+    credential_ref: { type: 'env', name: 'DEEPSEEK_API_KEY' },
+    checked_env_vars: ['DEEPSEEK_API_KEY'],
+    missing_env_vars: [],
+    error_code: null,
+    message: 'ok',
+  }
+  const smokeTest = {
+    smoke_test_id: 'modelsmoke_1',
+    connection_id: 'model_deepseek_default',
+    status: 'skipped',
+    created_at: '2026-06-07T00:00:00Z',
+    created_by: 'dashboard',
+    provider: 'deepseek',
+    model_identifier: 'deepseek-chat',
+    credential_ref: { type: 'env', name: 'DEEPSEEK_API_KEY' },
+    request_sent: false,
+    error_code: null,
+    message: 'skipped',
+  }
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [connection], meta: { total: 1 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(connection), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(connection), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ ...connection, display_name: 'DeepSeek Production' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ ...connection, lifecycle_state: 'ARCHIVED' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(connection), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(connection.reference_summary), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(eligibility), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(eligibility), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(validation), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(smokeTest), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+  await fetchModelConnections()
+  await createModelConnection({
+    connection_id: 'model_deepseek_default',
+    display_name: 'DeepSeek Default',
+    provider: 'deepseek',
+    model_identifier: 'deepseek-chat',
+    base_url: 'https://api.deepseek.com',
+    credential_ref: { type: 'env', name: 'DEEPSEEK_API_KEY' },
+    timeout_seconds: 20,
+    actor: 'dashboard',
+  })
+  await fetchModelConnection('model_deepseek_default')
+  await updateModelConnection('model_deepseek_default', {
+    display_name: 'DeepSeek Production',
+    confirm_impact: true,
+    actor: 'dashboard',
+  })
+  await archiveModelConnection('model_deepseek_default', {
+    reason: 'Retire stale default',
+    actor: 'dashboard',
+  })
+  await restoreModelConnection('model_deepseek_default', { actor: 'dashboard' })
+  await fetchModelConnectionReferences('model_deepseek_default')
+  await fetchModelConnectionDeletionEligibility('model_deepseek_default')
+  await deleteModelConnection('model_deepseek_default', {
+    reason: 'No references remain',
+    actor: 'dashboard',
+  })
+  await validateModelConnection('model_deepseek_default', { actor: 'dashboard' })
+  await smokeTestModelConnection('model_deepseek_default', { actor: 'dashboard' })
+
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/config/model-connections')
+  expect(fetchMock.mock.calls[1][0]).toBe('/api/config/model-connections')
+  expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' })
+  expect(fetchMock.mock.calls[2][0]).toBe('/api/config/model-connections/model_deepseek_default')
+  expect(fetchMock.mock.calls[3][0]).toBe('/api/config/model-connections/model_deepseek_default')
+  expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'PATCH' })
+  expect(fetchMock.mock.calls[4][0]).toBe(
+    '/api/config/model-connections/model_deepseek_default/archive',
+  )
+  expect(fetchMock.mock.calls[5][0]).toBe(
+    '/api/config/model-connections/model_deepseek_default/restore',
+  )
+  expect(fetchMock.mock.calls[6][0]).toBe(
+    '/api/config/model-connections/model_deepseek_default/references',
+  )
+  expect(fetchMock.mock.calls[7][0]).toBe(
+    '/api/config/model-connections/model_deepseek_default/deletion-eligibility',
+  )
+  expect(fetchMock.mock.calls[8][0]).toBe('/api/config/model-connections/model_deepseek_default')
+  expect(fetchMock.mock.calls[8][1]).toMatchObject({ method: 'DELETE' })
+  expect(fetchMock.mock.calls[9][0]).toBe(
+    '/api/config/model-connections/model_deepseek_default/validate',
+  )
+  expect(fetchMock.mock.calls[10][0]).toBe(
+    '/api/config/model-connections/model_deepseek_default/smoke-test',
+  )
 })
 
 test('bindKnowledgeSourceToDraft posts a shared source binding request', async () => {

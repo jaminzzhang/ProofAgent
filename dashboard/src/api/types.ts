@@ -246,6 +246,86 @@ export interface ConfigVersionsResponse {
   }
 }
 
+export type SharedModelConnectionLifecycleState = 'ACTIVE' | 'ARCHIVED'
+
+export interface EnvironmentModelCredentialReference {
+  type: 'env'
+  name: string
+}
+
+export interface SharedModelConnectionReferenceSummary {
+  connection_id: string
+  draft_agent_reference_count: number
+  published_agent_version_reference_count: number
+  knowledge_source_reference_count: number
+  in_flight_operation_count: number
+  audit_retention_blocked: boolean
+}
+
+export interface ModelConnectionValidationRecord {
+  validation_id: string
+  connection_id: string
+  status: 'passed' | 'failed'
+  created_at: string
+  created_by: string
+  provider: string
+  model_identifier: string
+  credential_ref: EnvironmentModelCredentialReference
+  checked_env_vars: string[]
+  missing_env_vars: string[]
+  error_code: string | null
+  message: string
+}
+
+export interface ModelConnectionSmokeTestRecord {
+  smoke_test_id: string
+  connection_id: string
+  status: 'passed' | 'failed' | 'skipped'
+  created_at: string
+  created_by: string
+  provider: string
+  model_identifier: string
+  credential_ref: EnvironmentModelCredentialReference
+  request_sent: boolean
+  error_code: string | null
+  message: string
+}
+
+export interface SharedModelConnection {
+  connection_id: string
+  display_name: string
+  description: string
+  tags: string[]
+  provider: string
+  model_identifier: string
+  base_url: string | null
+  credential_ref: EnvironmentModelCredentialReference
+  organization_env: string | null
+  project_env: string | null
+  timeout_seconds: number | null
+  lifecycle_state: SharedModelConnectionLifecycleState
+  created_at: string
+  updated_at: string
+  reference_summary: SharedModelConnectionReferenceSummary
+  last_validation: ModelConnectionValidationRecord | null
+  last_smoke_test: ModelConnectionSmokeTestRecord | null
+}
+
+export interface SharedModelConnectionDeletionEligibility {
+  connection_id: string
+  eligible: boolean
+  lifecycle_state: SharedModelConnectionLifecycleState
+  reference_summary: SharedModelConnectionReferenceSummary
+  blockers: string[]
+}
+
+export interface ModelConnectionsResponse {
+  data: SharedModelConnection[]
+  meta: {
+    total: number
+  }
+}
+
 export interface KnowledgeSource {
   source_id: string
   name: string

@@ -854,7 +854,7 @@ git commit -m "feat: support source-owned model connections"
 - Modify: `dashboard/src/api/client.ts`
 - Modify: `dashboard/src/api/client.test.ts`
 
-- [ ] **Step 1: Write failing client tests**
+- [x] **Step 1: Write failing client tests**
 
 Add tests for:
 
@@ -872,7 +872,7 @@ Add tests for:
 
 Assert URLs use `/api/config/model-connections`.
 
-- [ ] **Step 2: Run frontend tests and verify RED**
+- [x] **Step 2: Run frontend tests and verify RED**
 
 Run:
 
@@ -882,11 +882,11 @@ cd dashboard && npm test -- src/api/client.test.ts
 
 Expected: fail because functions do not exist.
 
-- [ ] **Step 3: Implement types and client calls**
+- [x] **Step 3: Implement types and client calls**
 
 Add TypeScript interfaces matching backend DTOs. Do not include raw credential value fields.
 
-- [ ] **Step 4: Run frontend tests and verify GREEN**
+- [x] **Step 4: Run frontend tests and verify GREEN**
 
 Run:
 
@@ -896,7 +896,7 @@ cd dashboard && npm test -- src/api/client.test.ts
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dashboard/src/api/types.ts dashboard/src/api/client.ts dashboard/src/api/client.test.ts

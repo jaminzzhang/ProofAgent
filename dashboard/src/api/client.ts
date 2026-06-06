@@ -17,11 +17,17 @@ import type {
   KnowledgeSourcePublicationsResponse,
   KnowledgeSourcesResponse,
   KnowledgeUploadsResponse,
+  ModelConnectionSmokeTestRecord,
+  ModelConnectionValidationRecord,
+  ModelConnectionsResponse,
   PublishedAgentVersion,
   QuarantinedKnowledgeUpload,
   RunDetail,
   RunPurposeFilter,
   RunsListResponse,
+  SharedModelConnection,
+  SharedModelConnectionDeletionEligibility,
+  SharedModelConnectionReferenceSummary,
   StatsResponse,
 } from './types'
 
@@ -80,6 +86,139 @@ export function fetchConfigAgents(): Promise<ConfigAgentsResponse> {
 
 export function fetchKnowledgeSources(): Promise<KnowledgeSourcesResponse> {
   return fetchJson<KnowledgeSourcesResponse>(`${BASE}/config/knowledge-sources`)
+}
+
+export function fetchModelConnections(): Promise<ModelConnectionsResponse> {
+  return fetchJson<ModelConnectionsResponse>(`${BASE}/config/model-connections`)
+}
+
+export function createModelConnection(payload: {
+  connection_id?: string | null
+  display_name: string
+  description?: string
+  tags?: string[]
+  provider: string
+  model_identifier: string
+  base_url?: string | null
+  credential_ref: { type: 'env'; name: string }
+  organization_env?: string | null
+  project_env?: string | null
+  timeout_seconds?: number | null
+  actor?: string
+}): Promise<SharedModelConnection> {
+  return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchModelConnection(connectionId: string): Promise<SharedModelConnection> {
+  return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}`)
+}
+
+export function updateModelConnection(
+  connectionId: string,
+  payload: {
+    display_name?: string | null
+    description?: string | null
+    tags?: string[] | null
+    provider?: string | null
+    model_identifier?: string | null
+    base_url?: string | null
+    credential_ref?: { type: 'env'; name: string } | null
+    organization_env?: string | null
+    project_env?: string | null
+    timeout_seconds?: number | null
+    confirm_impact?: boolean
+    actor?: string
+  },
+): Promise<SharedModelConnection> {
+  return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function archiveModelConnection(
+  connectionId: string,
+  payload: { reason: string; actor?: string },
+): Promise<SharedModelConnection> {
+  return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function restoreModelConnection(
+  connectionId: string,
+  payload: { reason?: string | null; actor?: string } = {},
+): Promise<SharedModelConnection> {
+  return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchModelConnectionReferences(
+  connectionId: string,
+): Promise<SharedModelConnectionReferenceSummary> {
+  return fetchJson<SharedModelConnectionReferenceSummary>(
+    `${BASE}/config/model-connections/${connectionId}/references`,
+  )
+}
+
+export function fetchModelConnectionDeletionEligibility(
+  connectionId: string,
+): Promise<SharedModelConnectionDeletionEligibility> {
+  return fetchJson<SharedModelConnectionDeletionEligibility>(
+    `${BASE}/config/model-connections/${connectionId}/deletion-eligibility`,
+  )
+}
+
+export function deleteModelConnection(
+  connectionId: string,
+  payload: { reason: string; actor?: string },
+): Promise<SharedModelConnectionDeletionEligibility> {
+  return fetchJson<SharedModelConnectionDeletionEligibility>(
+    `${BASE}/config/model-connections/${connectionId}`,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function validateModelConnection(
+  connectionId: string,
+  payload: { actor?: string } = {},
+): Promise<ModelConnectionValidationRecord> {
+  return fetchJson<ModelConnectionValidationRecord>(
+    `${BASE}/config/model-connections/${connectionId}/validate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function smokeTestModelConnection(
+  connectionId: string,
+  payload: { actor?: string } = {},
+): Promise<ModelConnectionSmokeTestRecord> {
+  return fetchJson<ModelConnectionSmokeTestRecord>(
+    `${BASE}/config/model-connections/${connectionId}/smoke-test`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
 }
 
 export function fetchKnowledgeSource(sourceId: string): Promise<KnowledgeSource> {
