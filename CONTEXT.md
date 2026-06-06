@@ -90,6 +90,70 @@ _Avoid_: Business Agent AI Core, model self-approval
 The shared capability registry that resolves model providers for final answers, planning, and Harness review roles.
 _Avoid_: Role-specific provider registry
 
+**Shared Model Connection**:
+A reusable live model connection configuration that Agents and Knowledge Sources can reference for real model calls without duplicating provider, model identifier, endpoint, or credential reference.
+_Avoid_: Model Provider Registry entry, Agent-only model settings, prompt model alias, role tuning parameters
+
+**Shared Model Connection Lifecycle**:
+The Active, Archived, and deletion-eligible states for a Shared Model Connection; archived connections cannot be newly selected or used for new production publication, but existing live references may continue resolving until explicitly changed.
+_Avoid_: Published model version, silent hard delete, immutable model release
+
+**Model Connection Impact Review**:
+The pre-save Dashboard review that shows which Draft Agents, Published Agents, and Knowledge Sources will be affected by a Shared Model Connection change because those references resolve live.
+_Avoid_: Agent republish gate, hidden model update, immutable dependency review
+
+**Models Workspace**:
+The Dashboard configuration workspace for administering Shared Model Connections as reusable model access assets.
+_Avoid_: Provider model catalog, Agent Model module, runtime model endpoint
+
+**Model Connection Configuration API**:
+The Agent Configuration API resource family for creating, updating, testing, archiving, restoring, and reference-checking Shared Model Connections.
+_Avoid_: Dashboard read API, provider model inventory API, direct model execution API
+
+**Model Credential Reference**:
+A secret-safe pointer from a Shared Model Connection to the credential material needed for provider authentication, such as an environment variable name or future secret-store reference.
+_Avoid_: Raw API key, stored provider secret, exported credential value
+
+**Environment Model Credential Reference**:
+The V1 Model Credential Reference type that stores an environment variable name for provider authentication while keeping the credential value outside Proof Agent configuration.
+_Avoid_: Dashboard-stored API key, local secret vault, exported credential material
+
+**Model Connection Parameters**:
+The provider, model identifier, endpoint, credential reference, provider account scope, and default timeout values that define how Proof Agent connects to a Shared Model Connection.
+_Avoid_: Model Usage Parameters, Agent role tuning, Knowledge retrieval tuning
+
+**Model Usage Parameters**:
+The call-site settings that define how an Agent role or Knowledge Source uses a selected Shared Model Connection for a specific purpose, such as temperature, output token limits, timeout overrides, retrieval `top_k`, or source-level routing and ingestion tuning.
+_Avoid_: Model Connection Parameters, provider credential, shared endpoint setting
+
+**Model Connection Resolution Record**:
+A trace-safe audit fact that records which Shared Model Connection values and call-specific usage parameters were resolved for one model call without pinning future runs to that connection state.
+_Avoid_: Published model snapshot, raw credential record, hidden provider state
+
+**Model Connection Resolution Failure**:
+A fail-closed condition where a Shared Model Connection or custom model configuration cannot resolve its provider, model identifier, endpoint, credential reference, or supported adapter for a model call.
+_Avoid_: Silent fallback model, deterministic fallback, best-effort provider rewrite
+
+**Model Connection Validation**:
+A local configuration check that verifies a Shared Model Connection or custom model configuration is structurally valid and can resolve required credential references without calling a remote provider.
+_Avoid_: Remote model call, Agent Validation Run, hidden connectivity check
+
+**Model Connection Smoke Test**:
+A manually triggered remote provider probe for a Shared Model Connection or custom model configuration that records trace-safe success or failure facts without becoming a default CI, demo, or publication gate.
+_Avoid_: Automatic network dependency, stored prompt transcript, production run
+
+**Shared Model Connection Provider Set**:
+The supported provider names for Shared Model Connections are derived from the Model Provider Registry, while the Models Workspace may expose only providers with production-ready connection forms as selectable creation options.
+_Avoid_: Frontend-only provider list, separate model provider registry, placeholder provider as ready integration
+
+**Knowledge Source Model Connection Configuration**:
+The Source-owned selection of Shared Model Connections used by a Knowledge Source for ingestion, routing, or other source-level model calls, with source-specific usage parameters configured on the Knowledge Source.
+_Avoid_: Agent Knowledge Binding model override, copied provider credentials, per-Agent index model setting
+
+**Knowledge Source Custom Model Configuration**:
+A Knowledge Source-owned model configuration entered directly for ingestion, routing, or another source-level model purpose instead of selecting a Shared Model Connection, using the same secret-safe credential reference rules.
+_Avoid_: Agent Knowledge Binding model override, Shared Model Connection, raw API key configuration
+
 **Named OpenAI-Compatible Model Provider**:
 A first-class Model Provider name that resolves through the OpenAI-compatible adapter while carrying provider-specific defaults such as API key environment variable and base URL.
 _Avoid_: Generic OpenAI-compatible example, provider-specific control plane
@@ -129,6 +193,14 @@ _Avoid_: Unbounded extra_body passthrough, provider-specific hidden reasoning mo
 **Model Role Configuration**:
 The Agent-specific configuration for each model call role, including final answer generation, ReAct planning, and Harness review assistance.
 _Avoid_: Single global Agent model, hidden model reuse, provider-native agent config
+
+**Agent Model Connection Binding**:
+The Agent-specific selection that maps one model call role, such as Answer, Planner, or Reviewer, to a live Shared Model Connection while preserving role-specific usage parameters, governance, and validation behavior.
+_Avoid_: Single global Agent model connection, copied provider credentials, provider-native agent config
+
+**Agent Custom Model Configuration**:
+An Agent-owned model configuration entered directly for one model call role instead of selecting a Shared Model Connection, using the same secret-safe credential reference rules.
+_Avoid_: Shared Model Connection, raw API key configuration, provider model catalog entry
 
 **Harness-Normalized Model Output**:
 Model output parsed into Proof Agent contracts before it can affect workflow, review, tool, or answer behavior.
@@ -1884,6 +1956,9 @@ _Avoid_: Evidence content dump
 - "Review model" could mean the final answer model or a separate control-plane reviewer. Resolved: **Review Subagent Config** is independent from final answer `model`.
 - "AI core capability" could mean business answer generation, ReAct planning, or Harness review. Resolved: use **Business Agent AI Core** for business-facing AI and **Harness Decision Assistance** for control-facing AI.
 - "Agent model configuration" could mean one shared model for every role or role-specific model settings. Resolved: use **Model Role Configuration**; UI may offer reuse shortcuts, but the Agent Contract stores distinct final, planner, and reviewer role settings.
+- "Dashboard Models" could mean a provider model catalog, reusable connection assets, or Agent-only model fields. Resolved: use **Models Workspace** for administering live **Shared Model Connections**; Agent roles and Knowledge Sources may select a shared connection or use custom model configuration.
+- "Shared model versioning" could mean pinning model connections into Published Agent Versions or resolving them live. Resolved per ADR-0020: **Shared Model Connections** are live references, and **Model Connection Impact Review**, configuration audit, **Model Connection Resolution Record**, and fail-closed resolution provide accountability instead of publication pinning.
+- "Reviewer model parameters" could mean reviewer-specific top-level fields or the same role usage shape used by Answer and Planner. Resolved: use **Model Usage Parameters** under `review.subagent.params` for timeout, maximum output tokens, temperature, and similar model-call settings; migrate directly without dual-reading old top-level reviewer usage fields.
 - "Separate model provider" could mean separate provider registries or separate configured instances. Resolved: **Business Agent AI Core** and **Harness Decision Assistance** share the **Model Provider Registry** but remain separate configured instances.
 - "`ai_core` configuration" could mean a new top-level Agent Contract field or the existing role-specific model fields. Resolved: keep role-specific `model`, `react.planner`, and `review.subagent` fields.
 - "Planner provider" or "review provider" could mean role-specific provider names. Resolved: provider names identify external model channels; role semantics come from the Agent Contract section.
