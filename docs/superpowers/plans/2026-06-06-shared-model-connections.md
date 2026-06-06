@@ -1221,7 +1221,7 @@ git commit -m "docs: document shared model connections"
 **Files:**
 - No source changes expected unless failures expose bugs.
 
-- [ ] **Step 1: Run targeted backend tests**
+- [x] **Step 1: Run targeted backend tests**
 
 Run:
 
@@ -1231,7 +1231,7 @@ uv run --extra dev python -m pytest tests/test_model_connection_contracts.py tes
 
 Expected: pass.
 
-- [ ] **Step 2: Run broader backend tests touched by model config**
+- [x] **Step 2: Run broader backend tests touched by model config**
 
 Run:
 
@@ -1241,7 +1241,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_agent_configura
 
 Expected: pass.
 
-- [ ] **Step 3: Run frontend tests**
+- [x] **Step 3: Run frontend tests**
 
 Run:
 
@@ -1251,7 +1251,7 @@ cd dashboard && npm test
 
 Expected: pass.
 
-- [ ] **Step 4: Run frontend build**
+- [x] **Step 4: Run frontend build**
 
 Run:
 
@@ -1261,7 +1261,7 @@ cd dashboard && npm run build
 
 Expected: pass.
 
-- [ ] **Step 5: Run deterministic demo**
+- [x] **Step 5: Run deterministic demo**
 
 Run:
 
@@ -1296,7 +1296,11 @@ Verify:
 - Agent Model module shared/custom selector writes expected YAML.
 - Knowledge Source model selector stays Source-owned.
 
-- [ ] **Step 7: Final diff check**
+Status: blocked in this Codex environment. Starting the Dashboard dev server failed inside the
+sandbox with `EPERM`, and the required escalation was automatically rejected by the app usage
+limit. Do this manual UI smoke check in a local browser when the server can be started.
+
+- [x] **Step 7: Final diff check**
 
 Run:
 
