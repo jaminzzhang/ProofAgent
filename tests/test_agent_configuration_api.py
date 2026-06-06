@@ -264,6 +264,168 @@ def test_create_local_index_knowledge_source_and_stage_quarantined_upload(tmp_pa
     assert uploads.json()["data"][0]["filename"] == "travel-policy.pdf"
 
 
+def test_knowledge_source_lifecycle_routes_archive_restore_eligibility_and_delete(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+
+    missing_reason = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"actor": "operator"},
+    )
+    blank_reason = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": " ", "actor": "operator"},
+    )
+    active_eligibility = client.get(
+        "/api/config/knowledge-sources/ks_local_index/deletion-eligibility"
+    )
+    active_delete = client.request(
+        "DELETE",
+        "/api/config/knowledge-sources/ks_local_index",
+        json={"reason": "Created by mistake.", "actor": "operator"},
+    )
+    archived = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": "No longer maintained.", "actor": "operator"},
+    )
+    archived_eligibility = client.get(
+        "/api/config/knowledge-sources/ks_local_index/deletion-eligibility"
+    )
+    restored = client.post(
+        "/api/config/knowledge-sources/ks_local_index/restore",
+        json={"reason": "Needed again.", "actor": "operator"},
+    )
+    archived_again = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": "Created by mistake.", "actor": "operator"},
+    )
+    deleted = client.request(
+        "DELETE",
+        "/api/config/knowledge-sources/ks_local_index",
+        json={"reason": "Created by mistake.", "actor": "operator"},
+    )
+
+    assert missing_reason.status_code == 422
+    assert blank_reason.status_code == 400
+    assert blank_reason.json()["detail"]["code"] == "PA_CONFIG_001"
+    assert active_eligibility.status_code == 200
+    assert active_eligibility.json()["eligible"] is False
+    assert active_eligibility.json()["blockers"] == ["source_not_archived"]
+    assert active_delete.status_code == 400
+    assert active_delete.json()["detail"]["code"] == "PA_CONFIG_002"
+    assert archived.status_code == 200
+    assert archived.json()["lifecycle_state"] == "ARCHIVED"
+    assert archived_eligibility.status_code == 200
+    assert archived_eligibility.json()["eligible"] is True
+    assert archived_eligibility.json()["blockers"] == []
+    assert restored.status_code == 200
+    assert restored.json()["lifecycle_state"] == "ACTIVE"
+    assert archived_again.status_code == 200
+    assert archived_again.json()["lifecycle_state"] == "ARCHIVED"
+    assert deleted.status_code == 200
+    assert deleted.json()["eligible"] is True
+    assert client.get("/api/config/knowledge-sources/ks_local_index").status_code == 404
+
+
+def test_knowledge_source_routes_map_invalid_source_id_to_structured_error(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+
+    detail = client.get("/api/config/knowledge-sources/%20bad")
+    documents = client.get("/api/config/knowledge-sources/%20bad/documents")
+
+    assert detail.status_code == 400
+    assert detail.json()["detail"]["code"] == "PA_CONFIG_001"
+    assert documents.status_code == 400
+    assert documents.json()["detail"]["code"] == "PA_CONFIG_001"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    (
+        (
+            "POST",
+            "/api/config/knowledge-sources/ks_local_index/documents",
+            {
+                "filename": "policy.md",
+                "content_type": "text/markdown",
+                "content_base64": base64.b64encode(b"# Policy\n").decode("ascii"),
+                "actor": "operator",
+            },
+        ),
+        (
+            "POST",
+            "/api/config/knowledge-sources/ks_local_index/documents/batch",
+            {
+                "documents": [
+                    {
+                        "filename": "policy.md",
+                        "content_type": "text/markdown",
+                        "content_base64": base64.b64encode(b"# Policy\n").decode("ascii"),
+                    }
+                ],
+                "actor": "operator",
+            },
+        ),
+        (
+            "PATCH",
+            "/api/config/knowledge-sources/ks_local_index/documents/doc_missing/routing-metadata",
+            {"routing_metadata": {"title": "Policy"}, "actor": "operator"},
+        ),
+        (
+            "GET",
+            "/api/config/knowledge-sources/ks_local_index/candidate-snapshot",
+            None,
+        ),
+        (
+            "POST",
+            "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
+            {"actor": "validator"},
+        ),
+        (
+            "POST",
+            "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
+            {"validation_id": "ksvalidation_missing", "actor": "operator"},
+        ),
+        (
+            "POST",
+            "/api/config/knowledge-sources/ks_local_index/publication/validate",
+            {"smoke_query": "policy", "actor": "validator"},
+        ),
+        (
+            "POST",
+            "/api/config/knowledge-sources/ks_local_index/publication/publish",
+            {
+                "validation_id": "kspubval_missing",
+                "change_note": "Publish policy.",
+                "actor": "operator",
+            },
+        ),
+    ),
+)
+def test_archived_knowledge_source_rejects_publication_bound_routes(
+    tmp_path: Path,
+    method: str,
+    path: str,
+    payload: dict[str, object] | None,
+) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+    archived = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": "No longer maintained.", "actor": "operator"},
+    )
+    assert archived.status_code == 200
+
+    response = client.request(method, path, json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Knowledge Source is archived."
+
+
 def test_candidate_validation_and_freeze_management_api_lifecycle(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _create_local_index_source(client)
@@ -1053,6 +1215,113 @@ def test_bind_unpublished_knowledge_source_to_agent_draft_is_rejected(
 
     assert bound.status_code == 400
     assert "published" in bound.text
+
+
+def test_bind_archived_knowledge_source_to_agent_draft_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    _publish_local_index_source(client, monkeypatch)
+    archived = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": "No longer maintained.", "actor": "operator"},
+    )
+
+    bound = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
+        json={"source_id": "ks_local_index", "actor": "operator"},
+    )
+
+    assert archived.status_code == 200
+    assert bound.status_code == 400
+    assert bound.json()["detail"] == "Knowledge Source is archived."
+
+
+def test_validate_draft_with_archived_shared_source_returns_structured_400(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    _publish_local_index_source(client, monkeypatch)
+    contract = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    ).json()
+    raw_agent_yaml = yaml.safe_load(contract["agent_yaml"])
+    raw_agent_yaml["package_knowledge_sources"] = []
+    raw_agent_yaml["knowledge_bindings"] = [
+        {
+            "binding_id": "kb_shared",
+            "source_ref": {"scope": "shared", "source_id": "ks_local_index"},
+            "failure_mode": "required",
+            "fusion_weight": 1.0,
+        }
+    ]
+    updated_contract = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
+        json={
+            "agent_yaml": yaml.safe_dump(raw_agent_yaml, sort_keys=False),
+            "actor": "workflow-editor",
+        },
+    )
+    archived = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": "No longer maintained.", "actor": "operator"},
+    )
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={"question": "Can I use this source?", "actor": "validator"},
+    )
+
+    assert updated_contract.status_code == 200
+    assert archived.status_code == 200
+    assert validation.status_code == 400
+    assert validation.json()["detail"]["code"] == "PA_CONFIG_002"
+    assert "archived" in validation.json()["detail"]["message"]
+
+
+def test_update_contract_view_rejects_archived_shared_source_binding_without_persisting(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    created = _create_local_index_source(client)
+    archived = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": "No longer maintained.", "actor": "operator"},
+    )
+    contract = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    ).json()
+    raw_agent_yaml = yaml.safe_load(contract["agent_yaml"])
+    raw_agent_yaml["package_knowledge_sources"] = []
+    raw_agent_yaml["knowledge_bindings"] = [
+        {
+            "binding_id": "kb_archived_raw",
+            "source_ref": {"scope": "shared", "source_id": "ks_local_index"},
+            "failure_mode": "required",
+            "fusion_weight": 1.0,
+        }
+    ]
+    updated_yaml = yaml.safe_dump(raw_agent_yaml, sort_keys=False)
+
+    updated = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
+        json={"agent_yaml": updated_yaml, "actor": "workflow-editor"},
+    )
+    loaded = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    )
+
+    assert created["lifecycle_state"] == "ACTIVE"
+    assert archived.status_code == 200
+    assert updated.status_code == 400
+    assert updated.json()["detail"]["code"] == "PA_CONFIG_002"
+    assert "archived" in updated.json()["detail"]["message"]
+    assert "kb_archived_raw" not in loaded.json()["agent_yaml"]
 
 
 def _publish_local_index_source(

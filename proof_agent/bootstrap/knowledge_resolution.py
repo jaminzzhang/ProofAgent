@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from proof_agent.contracts import (
     AgentManifest,
     KnowledgeSource,
+    KnowledgeSourceLifecycleState,
     KnowledgeSourcePublicationRecord,
     KnowledgeSourceSnapshotManifest,
 )
@@ -75,6 +76,12 @@ class ConfigurationStoreKnowledgeBindingResolver:
                     "PA_CONFIG_002",
                     f"shared Knowledge Source not found: {ref.source_id}",
                     "Create and publish the shared Knowledge Source before binding it.",
+                )
+            if source.lifecycle_state is KnowledgeSourceLifecycleState.ARCHIVED:
+                raise ProofAgentError(
+                    "PA_CONFIG_002",
+                    f"shared Knowledge Source is archived: {ref.source_id}",
+                    "Restore the Knowledge Source or unbind it from the Draft Agent.",
                 )
             if source.published_snapshot_id is None:
                 raise ProofAgentError(

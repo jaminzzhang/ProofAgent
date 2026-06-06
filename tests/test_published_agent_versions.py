@@ -6,7 +6,12 @@ from fastapi.testclient import TestClient
 
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import ResolvedKnowledgeBinding, ResolvedKnowledgeBindingSet
+from proof_agent.contracts import (
+    ContractBundle,
+    KnowledgeSourceSnapshotManifest,
+    ResolvedKnowledgeBinding,
+    ResolvedKnowledgeBindingSet,
+)
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.observability.api.app import create_app
 
@@ -141,6 +146,82 @@ def test_published_agent_version_persists_resolved_knowledge_bindings(
         Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         store=store,
         actor="test-user",
+    )
+    source = store.create_knowledge_source(
+        source_id="ks_policy",
+        name="Policies",
+        provider="local_index",
+        params={
+            "ingestion_model": {"provider": "deterministic", "name": "routing"},
+            "document_selection_budget": 8,
+        },
+        actor="test-user",
+    )
+    snapshot = KnowledgeSourceSnapshotManifest(
+        schema_version="local_index.snapshot.v2",
+        snapshot_id="kssnapshot_001",
+        source_id=source.source_id,
+        state="READY",
+        validation_level="foundation",
+        source_draft_version_id=source.source_draft_version_id or "ksdraft_fixture",
+        candidate_digest="digest_001",
+        foundation_validation_id="ksvalidation_001",
+        documents=(),
+        created_at="2026-06-05T00:00:00Z",
+        created_by="test-user",
+    )
+    store._write_knowledge_source_snapshot(snapshot)
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id})
+    )
+    draft = store.update_draft(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        actor="test-user",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+purpose: "Answer enterprise knowledge questions only when evidence supports the answer."
+
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+
+package_knowledge_sources: []
+
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+
+model:
+  provider: deterministic
+  name: demo
+
+policy:
+  file: ./policy.yaml
+
+tools:
+  file: ./tools.yaml
+
+memory:
+  provider: session
+
+audit:
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md
+""",
+            policy_yaml=draft.contract_bundle.policy_yaml,
+            tools_yaml=draft.contract_bundle.tools_yaml,
+            extra_files=draft.contract_bundle.extra_files,
+            advanced_fields=draft.contract_bundle.advanced_fields,
+        ),
     )
     resolved_bindings = ResolvedKnowledgeBindingSet(
         bindings=(

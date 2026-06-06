@@ -33,6 +33,7 @@ from proof_agent.contracts import (
     KnowledgeDocument,
     KnowledgeIngestionJob,
     KnowledgeSource,
+    KnowledgeSourceLifecycleState,
     QuarantinedKnowledgeUpload,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
@@ -119,6 +120,33 @@ class KnowledgeSourceCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     provider: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "local-user"
+
+
+class KnowledgeSourceArchiveRequest(BaseModel):
+    """Request body for archiving a reusable Knowledge Source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class KnowledgeSourceRestoreRequest(BaseModel):
+    """Request body for restoring an archived reusable Knowledge Source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = None
+    actor: str = "local-user"
+
+
+class KnowledgeSourcePhysicalDeleteRequest(BaseModel):
+    """Request body for permanently deleting an eligible archived Knowledge Source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1)
     actor: str = "local-user"
 
 
@@ -266,10 +294,87 @@ def get_knowledge_source(source_id: str, app_request: Request) -> dict[str, Any]
     """Return one Knowledge Source with document counts."""
 
     store = _get_configuration_store(app_request)
-    source = store.get_knowledge_source(source_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    source = _require_knowledge_source(store, source_id)
     return _knowledge_source_payload(store, source)
+
+
+@router.post("/config/knowledge-sources/{source_id}/archive")
+def archive_knowledge_source(
+    source_id: str,
+    request: KnowledgeSourceArchiveRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Archive a reusable Knowledge Source without deleting retained state."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        source = store.archive_knowledge_source(
+            source_id=source_id,
+            actor=request.actor,
+            reason=request.reason,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _knowledge_source_payload(store, source)
+
+
+@router.post("/config/knowledge-sources/{source_id}/restore")
+def restore_knowledge_source(
+    source_id: str,
+    request: KnowledgeSourceRestoreRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Restore an archived reusable Knowledge Source to active state."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        source = store.restore_knowledge_source(
+            source_id=source_id,
+            actor=request.actor,
+            reason=request.reason,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _knowledge_source_payload(store, source)
+
+
+@router.get("/config/knowledge-sources/{source_id}/deletion-eligibility")
+def get_knowledge_source_deletion_eligibility(
+    source_id: str,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Return physical-deletion eligibility and blockers for one Knowledge Source."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        eligibility = store.get_knowledge_source_deletion_eligibility(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return eligibility.model_dump(mode="json")
+
+
+@router.delete("/config/knowledge-sources/{source_id}")
+def physically_delete_knowledge_source(
+    source_id: str,
+    request: KnowledgeSourcePhysicalDeleteRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Permanently delete an eligible empty archived Knowledge Source."""
+
+    store = _get_configuration_store(app_request)
+    _require_knowledge_source(store, source_id)
+    try:
+        eligibility = store.physically_delete_knowledge_source(
+            source_id=source_id,
+            actor=request.actor,
+            reason=request.reason,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return eligibility.model_dump(mode="json")
 
 
 @router.get("/config/knowledge-sources/{source_id}/documents")
@@ -277,9 +382,7 @@ def list_knowledge_source_documents(source_id: str, app_request: Request) -> dic
     """List managed documents for one Knowledge Source."""
 
     store = _get_configuration_store(app_request)
-    source = store.get_knowledge_source(source_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    _require_knowledge_source(store, source_id)
     documents = store.list_knowledge_documents(source_id)
     return {
         "data": [_knowledge_document_payload(document) for document in documents],
@@ -296,9 +399,7 @@ def upload_knowledge_source_document(
     """Stage one upload for asynchronous validation and Local Index ingestion."""
 
     store = _get_configuration_store(app_request)
-    source = store.get_knowledge_source(source_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    source = _require_active_knowledge_source(store, source_id)
     if source.provider != "local_index":
         raise HTTPException(
             status_code=400,
@@ -329,6 +430,7 @@ def update_knowledge_source_document_routing_metadata(
     """Update routing-only metadata for one managed Knowledge Document."""
 
     store = _get_configuration_store(app_request)
+    _require_active_knowledge_source(store, source_id)
     try:
         document = store.update_knowledge_document_routing_metadata(
             source_id=source_id,
@@ -355,9 +457,7 @@ def upload_knowledge_source_document_batch(
     """Stage one upload batch for asynchronous validation and Local Index ingestion."""
 
     store = _get_configuration_store(app_request)
-    source = store.get_knowledge_source(source_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    source = _require_active_knowledge_source(store, source_id)
     if source.provider != "local_index":
         raise HTTPException(
             status_code=400,
@@ -461,7 +561,7 @@ def get_candidate_knowledge_source_snapshot(
     """Return the current derived Local Index candidate snapshot."""
 
     store = _get_configuration_store(app_request)
-    _require_knowledge_source(store, source_id)
+    _require_active_knowledge_source(store, source_id)
     try:
         candidate = store.get_candidate_knowledge_source_snapshot(source_id)
     except ProofAgentError as exc:
@@ -478,7 +578,7 @@ def validate_candidate_knowledge_source_snapshot_foundation(
     """Persist a minimal freeze-readiness validation for the current candidate."""
 
     store = _get_configuration_store(app_request)
-    _require_knowledge_source(store, source_id)
+    _require_active_knowledge_source(store, source_id)
     try:
         validation = store.validate_candidate_knowledge_source_snapshot_foundation(
             source_id=source_id,
@@ -498,7 +598,7 @@ def freeze_candidate_knowledge_source_snapshot(
     """Freeze one foundation-validated Local Index snapshot manifest."""
 
     store = _get_configuration_store(app_request)
-    _require_knowledge_source(store, source_id)
+    _require_active_knowledge_source(store, source_id)
     try:
         snapshot = store.freeze_candidate_knowledge_source_snapshot(
             source_id=source_id,
@@ -568,7 +668,7 @@ def validate_knowledge_source_publication(
     """Run Source-level smoke retrieval and persist a passed publication validation."""
 
     store = _get_configuration_store(app_request)
-    source = _require_knowledge_source(store, source_id)
+    source = _require_active_knowledge_source(store, source_id)
     try:
         if source.provider == "local_index":
             validation = store.validate_local_index_source_publication(
@@ -602,7 +702,7 @@ def publish_knowledge_source(
     """Publish one validation-passed Knowledge Source resource."""
 
     store = _get_configuration_store(app_request)
-    _require_knowledge_source(store, source_id)
+    _require_active_knowledge_source(store, source_id)
     try:
         publication = store.publish_knowledge_source(
             source_id=source_id,
@@ -752,12 +852,7 @@ def bind_knowledge_source_to_draft(
 
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
-    source = store.get_knowledge_source(request.source_id)
-    if source is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Knowledge Source not found: {request.source_id}",
-        )
+    source = _require_active_knowledge_source(store, request.source_id)
     if source.published_snapshot_id is None:
         raise HTTPException(
             status_code=400,
@@ -873,7 +968,8 @@ def update_config_draft_contract(
     candidate = _draft_with_contract_bundle(draft, bundle)
     try:
         package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
-        load_agent_manifest(package_dir / "agent.yaml")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        _resolve_draft_knowledge_bindings(store, manifest)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
@@ -902,12 +998,20 @@ def validate_config_draft(
 
     config_store = _get_configuration_store(app_request)
     draft = _require_draft(config_store, agent_id, draft_id)
-    package_dir = compile_draft_agent(draft, config_store.root_dir / "compiled")
-    manifest = load_agent_manifest(package_dir / "agent.yaml")
-    resolved_knowledge_bindings = _resolve_draft_knowledge_bindings(
-        config_store,
-        manifest,
-    )
+    try:
+        package_dir = compile_draft_agent(draft, config_store.root_dir / "compiled")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        resolved_knowledge_bindings = _resolve_draft_knowledge_bindings(
+            config_store,
+            manifest,
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
+        ) from exc
     run_store = _get_run_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
     try:
@@ -986,13 +1090,24 @@ def publish_config_draft(
             status_code=400,
             detail=f"Validation run is not recorded for this draft: {validation_run_id}",
         )
-    version = store.publish_version(
-        agent_id=agent_id,
-        draft_id=draft_id,
-        validation_run_id=validation_run_id,
-        actor=request.actor,
-        resolved_knowledge_bindings=validation_record.resolved_knowledge_bindings,
-    )
+    try:
+        package_dir = compile_draft_agent(draft, store.root_dir / "compiled_publication")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        _resolve_draft_knowledge_bindings(store, manifest)
+        version = store.publish_version(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            validation_run_id=validation_run_id,
+            actor=request.actor,
+            resolved_knowledge_bindings=validation_record.resolved_knowledge_bindings,
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
+        ) from exc
     return _version_payload(version)
 
 
@@ -1255,9 +1370,22 @@ def _require_knowledge_source(
     store: LocalAgentConfigurationStore,
     source_id: str,
 ) -> KnowledgeSource:
-    source = store.get_knowledge_source(source_id)
+    try:
+        source = store.get_knowledge_source(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
     if source is None:
         raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
+    return source
+
+
+def _require_active_knowledge_source(
+    store: LocalAgentConfigurationStore,
+    source_id: str,
+) -> KnowledgeSource:
+    source = _require_knowledge_source(store, source_id)
+    if source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE:
+        raise HTTPException(status_code=400, detail="Knowledge Source is archived.")
     return source
 
 
