@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindKnowledgeSourceToDraft,
+  createModelConnection,
   fetchKnowledgeSources,
   fetchModelConnections,
   validateConfigDraft,
@@ -15,6 +16,7 @@ import { AgentDetailPage } from '../AgentDetailPage'
 vi.mock('../../api/client', () => ({
   bindKnowledgeSourceToDraft: vi.fn(),
   chatUrl: (path: string) => `http://localhost:5174${path}`,
+  createModelConnection: vi.fn(),
   fetchKnowledgeSources: vi.fn(),
   fetchModelConnections: vi.fn(),
   publishConfigDraft: vi.fn(),
@@ -94,6 +96,7 @@ describe('AgentDetailPage', () => {
     vi.clearAllMocks()
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(createModelConnection).mockRejectedValue(new Error('not mocked'))
     mockDraft = {
       agent_id: 'agent-1',
       draft_id: 'draft-1',

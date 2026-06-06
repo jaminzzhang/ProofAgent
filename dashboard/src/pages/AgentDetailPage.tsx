@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import {
   bindKnowledgeSourceToDraft,
   chatUrl,
+  createModelConnection,
   fetchKnowledgeSources,
   fetchModelConnections,
   publishConfigDraft,
@@ -329,6 +330,11 @@ export function AgentDetailPage() {
           modelConnections={modelConnections}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onModelConfigChange={(path, value) => setAgentYaml((current: string) => replaceAgentYamlMapping(current, path, value))}
+          onCreateSharedModelConnection={async (payload) => {
+            const connection = await createModelConnection(payload)
+            setModelConnections((current) => [...current, connection])
+            return connection
+          }}
           onSave={saveWorkflow}
           busy={busy === 'workflow'}
         />

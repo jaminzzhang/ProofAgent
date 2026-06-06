@@ -221,6 +221,48 @@ review:
     expect(screen.getByRole('option', { name: 'Active DeepSeek' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Archived DeepSeek (archived)' })).toBeInTheDocument()
   })
+
+  it('creates a shared connection from custom role fields and switches after confirmation', async () => {
+    const onCreateSharedModelConnection = vi.fn().mockResolvedValue(
+      modelConnection({
+        connection_id: 'model_created',
+        display_name: 'Answer Model Shared',
+      }),
+    )
+    const onModelConfigChange = vi.fn()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    render(
+      <ModelModuleEditor
+        agentYaml={AGENT_YAML}
+        modelConnections={[]}
+        onFieldChange={vi.fn()}
+        onModelConfigChange={onModelConfigChange}
+        onCreateSharedModelConnection={onCreateSharedModelConnection}
+        onSave={vi.fn()}
+        busy={false}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save As Shared' }))
+
+    expect(onCreateSharedModelConnection).toHaveBeenCalledWith({
+      display_name: 'Primary Model Settings Shared Model',
+      provider: 'deepseek',
+      model_identifier: 'deepseek-chat',
+      credential_ref: { type: 'env', name: '' },
+      timeout_seconds: undefined,
+      actor: 'dashboard',
+    })
+    await screen.findByText('Created shared model connection model_created.')
+    expect(onModelConfigChange).toHaveBeenCalledWith(
+      ['model'],
+      expect.objectContaining({
+        model_source: 'shared',
+        connection_id: 'model_created',
+      }),
+    )
+  })
 })
 
 function modelConnection(overrides: Partial<SharedModelConnection> = {}): SharedModelConnection {

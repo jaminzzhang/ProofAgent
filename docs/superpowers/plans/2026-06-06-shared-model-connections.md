@@ -1029,7 +1029,7 @@ git commit -m "feat: add model connection detail workspace"
 - Modify: `dashboard/src/pages/__tests__/AgentDetailPage.test.tsx`
 - Modify: `dashboard/src/components/__tests__/agent/ModuleEditor.test.tsx` if affected
 
-Progress note: Agent roles can now select active Shared Model Connections or Custom config, existing archived references render a warning, and Reviewer usage fields write under `review.subagent.params`. The save-as-shared entry point remains.
+Progress note: Agent roles can now select active Shared Model Connections or Custom config, existing archived references render a warning, Reviewer usage fields write under `review.subagent.params`, and custom role config can be saved as a Shared Model Connection.
 
 - [x] **Step 1: Write failing Agent UI tests**
 
@@ -1065,7 +1065,7 @@ Keep role-specific usage parameters close to each role.
 
 Do not store raw credential values.
 
-- [ ] **Step 5: Implement save-as-shared entry point**
+- [x] **Step 5: Implement save-as-shared entry point**
 
 For custom role config, add a clear action that creates a Shared Model Connection from connection fields and then asks the user whether to switch the current role to it.
 
@@ -1079,7 +1079,7 @@ cd dashboard && npm test -- src/pages/__tests__/AgentDetailPage.test.tsx
 
 Expected: pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add dashboard/src/components/agent/ModelModuleEditor.tsx dashboard/src/pages/AgentDetailPage.tsx dashboard/src/pages/__tests__/AgentDetailPage.test.tsx

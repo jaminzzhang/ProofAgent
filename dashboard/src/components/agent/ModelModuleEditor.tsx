@@ -11,6 +11,15 @@ interface ModelModuleEditorProps {
   modelConnections?: readonly SharedModelConnection[]
   onFieldChange: (path: string[], value: string) => void
   onModelConfigChange?: (path: string[], value: AgentYamlMapping) => void
+  onCreateSharedModelConnection?: (payload: {
+    display_name: string
+    provider: string
+    model_identifier: string
+    base_url?: string | null
+    credential_ref: { type: 'env'; name: string }
+    timeout_seconds?: number | null
+    actor?: string
+  }) => Promise<SharedModelConnection>
   onSave: () => void
   busy: boolean
 }
@@ -52,11 +61,15 @@ export function ModelModuleEditor({
   modelConnections = [],
   onFieldChange,
   onModelConfigChange,
+  onCreateSharedModelConnection,
   onSave,
   busy,
 }: ModelModuleEditorProps) {
   const [strategy, setStrategy] = useState<'unified' | 'role-specific'>('unified')
   const [showYaml, setShowYaml] = useState(false)
+  const [localStatus, setLocalStatus] = useState<string | null>(null)
+  const [localError, setLocalError] = useState<string | null>(null)
+  const [creatingShared, setCreatingShared] = useState<string | null>(null)
 
   const sectionYaml = [
     extractAgentYamlSection(agentYaml, 'model'),
@@ -83,6 +96,24 @@ export function ModelModuleEditor({
     onFieldChange(['model', ...subPath], value)
     onFieldChange(['react', 'planner', ...subPath], value)
     onFieldChange(['review', 'subagent', ...subPath], value)
+  }
+
+  async function handleSaveAsShared(role: ModelRole) {
+    if (!onCreateSharedModelConnection) return
+    setCreatingShared(role.title)
+    setLocalStatus(null)
+    setLocalError(null)
+    try {
+      const connection = await onCreateSharedModelConnection(sharedConnectionPayload(agentYaml, role))
+      setLocalStatus(`Created shared model connection ${connection.connection_id}.`)
+      if (window.confirm('Switch this role to the new Shared Model Connection?')) {
+        applyModelConfig(role.basePath, modelConfigForSource(agentYaml, role, `shared:${connection.connection_id}`))
+      }
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Unable to create shared model connection.')
+    } finally {
+      setCreatingShared(null)
+    }
   }
 
   return (
@@ -153,6 +184,12 @@ export function ModelModuleEditor({
             unified
             onSourceChange={handleUnifiedSourceChange}
             onFieldChange={handleUnifiedFieldChange}
+            onSaveAsShared={() => handleSaveAsShared({
+              title: 'Primary Model Settings',
+              sourceLabel: 'Primary Model Source',
+              basePath: ['model'],
+            })}
+            creatingShared={creatingShared === 'Primary Model Settings'}
           />
         ) : (
           <div className="space-y-6">
@@ -162,6 +199,8 @@ export function ModelModuleEditor({
               modelConnections={modelConnections}
               onSourceChange={(value) => handleSourceChange(ANSWER_ROLE, value)}
               onFieldChange={(path, value) => onFieldChange(path, value)}
+              onSaveAsShared={() => handleSaveAsShared(ANSWER_ROLE)}
+              creatingShared={creatingShared === ANSWER_ROLE.title}
             />
             <ModelRoleCard
               role={PLANNER_ROLE}
@@ -169,6 +208,8 @@ export function ModelModuleEditor({
               modelConnections={modelConnections}
               onSourceChange={(value) => handleSourceChange(PLANNER_ROLE, value)}
               onFieldChange={(path, value) => onFieldChange(path, value)}
+              onSaveAsShared={() => handleSaveAsShared(PLANNER_ROLE)}
+              creatingShared={creatingShared === PLANNER_ROLE.title}
             />
             <ModelRoleCard
               role={REVIEWER_ROLE}
@@ -176,6 +217,8 @@ export function ModelModuleEditor({
               modelConnections={modelConnections}
               onSourceChange={(value) => handleSourceChange(REVIEWER_ROLE, value)}
               onFieldChange={(path, value) => onFieldChange(path, value)}
+              onSaveAsShared={() => handleSaveAsShared(REVIEWER_ROLE)}
+              creatingShared={creatingShared === REVIEWER_ROLE.title}
               extraFields={
                 <div className="grid gap-4 md:grid-cols-2">
                   <SelectField
@@ -199,6 +242,17 @@ export function ModelModuleEditor({
                 </div>
               }
             />
+          </div>
+        )}
+
+        {localStatus && (
+          <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 px-4 py-3 text-sm text-[var(--success)]">
+            {localStatus}
+          </div>
+        )}
+        {localError && (
+          <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-4 py-3 text-sm text-[var(--danger)]">
+            {localError}
           </div>
         )}
 
@@ -242,6 +296,8 @@ function ModelRoleCard({
   extraFields,
   onSourceChange,
   onFieldChange,
+  onSaveAsShared,
+  creatingShared = false,
 }: {
   role: ModelRole
   agentYaml: string
@@ -250,6 +306,8 @@ function ModelRoleCard({
   extraFields?: React.ReactNode
   onSourceChange: (value: string) => void
   onFieldChange: (path: string[], value: string) => void
+  onSaveAsShared?: () => void
+  creatingShared?: boolean
 }) {
   const customSelected = currentModelSource(agentYaml, role.basePath) !== 'shared'
   const basePath = unified ? ['model'] : role.basePath
@@ -261,6 +319,8 @@ function ModelRoleCard({
   const labelPrefix = unified ? '' : role.title.replace(' Model', '')
   const provider = readAgentYamlField(agentYaml, [...basePath, 'provider'])
   const modelName = readAgentYamlField(agentYaml, [...basePath, 'name'])
+  const effectiveProvider = provider || MODEL_PROVIDER_OPTIONS[0]
+  const effectiveModelName = modelName || 'deepseek-chat'
   const credentialName = readAgentYamlField(agentYaml, [...basePath, 'credential_ref', 'name'])
     || readAgentYamlField(agentYaml, [...basePath, 'params', 'api_key_env'])
   const baseUrl = readAgentYamlField(agentYaml, [...basePath, 'base_url'])
@@ -297,7 +357,7 @@ function ModelRoleCard({
           <>
             <SelectField
               label={`${labelPrefix ? `${labelPrefix} ` : ''}Provider`}
-              value={provider || MODEL_PROVIDER_OPTIONS[0]}
+              value={effectiveProvider}
               onChange={(value) => onFieldChange([...basePath, 'provider'], value)}
               options={MODEL_PROVIDER_OPTIONS.map((option) => ({ value: option, label: option }))}
             />
@@ -319,6 +379,17 @@ function ModelRoleCard({
               onChange={(value) => onFieldChange([...basePath, 'base_url'], value)}
               placeholder="https://api.deepseek.com"
             />
+            {onSaveAsShared && (
+              <div className="flex items-end">
+                <button
+                  onClick={onSaveAsShared}
+                  disabled={creatingShared || !effectiveProvider || !effectiveModelName}
+                  className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+                >
+                  {creatingShared ? 'Creating...' : 'Save As Shared'}
+                </button>
+              </div>
+            )}
           </>
         )}
         <TextField
@@ -368,6 +439,24 @@ function modelConfigForSource(agentYaml: string, role: ModelRole, sourceValue: s
     },
     ...(role.reviewer ? { fail_closed: readAgentYamlField(agentYaml, ['review', 'subagent', 'fail_closed']) || 'true' } : {}),
     ...(Object.keys(params).length > 0 ? { params } : {}),
+  }
+}
+
+function sharedConnectionPayload(agentYaml: string, role: ModelRole) {
+  const provider = readAgentYamlField(agentYaml, [...role.basePath, 'provider']) || 'deepseek'
+  const modelIdentifier = readAgentYamlField(agentYaml, [...role.basePath, 'name']) || 'deepseek-chat'
+  const baseUrl = readAgentYamlField(agentYaml, [...role.basePath, 'base_url'])
+  const credentialEnv = readAgentYamlField(agentYaml, [...role.basePath, 'credential_ref', 'name'])
+    || readAgentYamlField(agentYaml, [...role.basePath, 'params', 'api_key_env'])
+  const timeoutSeconds = readAgentYamlField(agentYaml, [...role.basePath, 'params', 'timeout_seconds'])
+  return {
+    display_name: `${role.title} Shared Model`,
+    provider,
+    model_identifier: modelIdentifier,
+    ...(baseUrl ? { base_url: baseUrl } : {}),
+    credential_ref: { type: 'env' as const, name: credentialEnv },
+    timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : undefined,
+    actor: 'dashboard',
   }
 }
 
