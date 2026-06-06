@@ -15,6 +15,7 @@ from typing import Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
+import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.validation import validate_secret_safe_params
 from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider
@@ -43,8 +44,11 @@ from proof_agent.contracts import (
     KnowledgeDocument,
     KnowledgeIngestionJob,
     KnowledgeSource,
+    KnowledgeSourceDeletionEligibility,
+    KnowledgeSourceLifecycleState,
     KnowledgeSourcePublicationRecord,
     KnowledgeSourcePublicationValidation,
+    KnowledgeSourceReferenceSummary,
     KnowledgeSourceSnapshotDocument,
     KnowledgeSourceSnapshotManifest,
     PublishedAgentVersion,
@@ -101,23 +105,28 @@ class LocalAgentConfigurationStore:
         contract_bundle: ContractBundle,
         actor: str,
     ) -> DraftAgent:
-        now = _now()
-        draft = DraftAgent(
-            agent_id=agent_id,
-            draft_id=f"draft_{uuid4().hex[:8]}",
-            display_name=display_name,
-            purpose=purpose,
-            contract_bundle=contract_bundle,
-            created_at=now,
-            updated_at=now,
-            created_by=actor,
-            updated_by=actor,
-            operation_audit=(
-                _audit(ConfigurationOperation.IMPORTED, actor=actor, summary="Created draft."),
-            ),
-        )
-        self._write_draft(draft)
-        return draft
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            now = _now()
+            draft = DraftAgent(
+                agent_id=agent_id,
+                draft_id=f"draft_{uuid4().hex[:8]}",
+                display_name=display_name,
+                purpose=purpose,
+                contract_bundle=contract_bundle,
+                created_at=now,
+                updated_at=now,
+                created_by=actor,
+                updated_by=actor,
+                operation_audit=(
+                    _audit(
+                        ConfigurationOperation.IMPORTED,
+                        actor=actor,
+                        summary="Created draft.",
+                    ),
+                ),
+            )
+            self._write_draft(draft)
+            return draft
 
     def get_draft(self, agent_id: str, draft_id: str) -> DraftAgent | None:
         path = self._draft_path(agent_id, draft_id)
@@ -153,26 +162,27 @@ class LocalAgentConfigurationStore:
         purpose: str | None = None,
         contract_bundle: ContractBundle | None = None,
     ) -> DraftAgent:
-        existing = self._require_draft(agent_id, draft_id)
-        updated = DraftAgent(
-            agent_id=existing.agent_id,
-            draft_id=existing.draft_id,
-            display_name=display_name if display_name is not None else existing.display_name,
-            purpose=purpose if purpose is not None else existing.purpose,
-            contract_bundle=contract_bundle or existing.contract_bundle,
-            created_at=existing.created_at,
-            updated_at=_now(),
-            created_by=existing.created_by,
-            updated_by=actor,
-            version_id=existing.version_id,
-            validation_records=existing.validation_records,
-            operation_audit=(
-                *existing.operation_audit,
-                _audit(ConfigurationOperation.UPDATED, actor=actor, summary="Updated draft."),
-            ),
-        )
-        self._write_draft(updated)
-        return updated
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            existing = self._require_draft(agent_id, draft_id)
+            updated = DraftAgent(
+                agent_id=existing.agent_id,
+                draft_id=existing.draft_id,
+                display_name=display_name if display_name is not None else existing.display_name,
+                purpose=purpose if purpose is not None else existing.purpose,
+                contract_bundle=contract_bundle or existing.contract_bundle,
+                created_at=existing.created_at,
+                updated_at=_now(),
+                created_by=existing.created_by,
+                updated_by=actor,
+                version_id=existing.version_id,
+                validation_records=existing.validation_records,
+                operation_audit=(
+                    *existing.operation_audit,
+                    _audit(ConfigurationOperation.UPDATED, actor=actor, summary="Updated draft."),
+                ),
+            )
+            self._write_draft(updated)
+            return updated
 
     def publish_version(
         self,
@@ -183,36 +193,50 @@ class LocalAgentConfigurationStore:
         actor: str,
         resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
     ) -> PublishedAgentVersion:
-        draft = self._require_draft(agent_id, draft_id)
-        version = PublishedAgentVersion(
-            agent_id=agent_id,
-            version_id=f"version_{uuid4().hex[:8]}",
-            source_draft_id=draft_id,
-            validation_run_id=validation_run_id,
-            display_name=draft.display_name,
-            purpose=draft.purpose,
-            contract_bundle=draft.contract_bundle,
-            published_at=_now(),
-            published_by=actor,
-            resolved_knowledge_bindings=resolved_knowledge_bindings,
-            operation_audit=(
-                _audit(
-                    ConfigurationOperation.PUBLISHED,
-                    actor=actor,
-                    summary=f"Published draft {draft_id}.",
-                    metadata={"validation_run_id": validation_run_id},
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            draft = self._require_draft(agent_id, draft_id)
+            if resolved_knowledge_bindings is not None:
+                _require_resolved_shared_bindings_cover_draft(
+                    draft.contract_bundle.agent_yaml,
+                    resolved_knowledge_bindings,
+                )
+                self._require_resolved_shared_knowledge_sources_active_unlocked(
+                    resolved_knowledge_bindings
+                )
+            elif _has_shared_knowledge_source_bindings(draft.contract_bundle.agent_yaml):
+                raise _knowledge_source_lifecycle_conflict(
+                    "Published Agent Version requires resolved shared Knowledge Source bindings. "
+                    "Revalidate the Draft Agent before publishing."
+                )
+            version = PublishedAgentVersion(
+                agent_id=agent_id,
+                version_id=f"version_{uuid4().hex[:8]}",
+                source_draft_id=draft_id,
+                validation_run_id=validation_run_id,
+                display_name=draft.display_name,
+                purpose=draft.purpose,
+                contract_bundle=draft.contract_bundle,
+                published_at=_now(),
+                published_by=actor,
+                resolved_knowledge_bindings=resolved_knowledge_bindings,
+                operation_audit=(
+                    _audit(
+                        ConfigurationOperation.PUBLISHED,
+                        actor=actor,
+                        summary=f"Published draft {draft_id}.",
+                        metadata={"validation_run_id": validation_run_id},
+                    ),
                 ),
-            ),
-        )
-        self._write_version(version)
-        active = ActiveAgentVersion(
-            agent_id=agent_id,
-            version_id=version.version_id,
-            activated_at=version.published_at,
-            activated_by=actor,
-        )
-        self._write_active_version(active)
-        return version
+            )
+            self._write_version(version)
+            active = ActiveAgentVersion(
+                agent_id=agent_id,
+                version_id=version.version_id,
+                activated_at=version.published_at,
+                activated_by=actor,
+            )
+            self._write_active_version(active)
+            return version
 
     def record_validation(
         self,
@@ -222,31 +246,32 @@ class LocalAgentConfigurationStore:
         record: AgentValidationRecord,
         actor: str,
     ) -> DraftAgent:
-        existing = self._require_draft(agent_id, draft_id)
-        updated = DraftAgent(
-            agent_id=existing.agent_id,
-            draft_id=existing.draft_id,
-            display_name=existing.display_name,
-            purpose=existing.purpose,
-            contract_bundle=existing.contract_bundle,
-            created_at=existing.created_at,
-            updated_at=_now(),
-            created_by=existing.created_by,
-            updated_by=actor,
-            version_id=existing.version_id,
-            validation_records=(*existing.validation_records, record),
-            operation_audit=(
-                *existing.operation_audit,
-                _audit(
-                    ConfigurationOperation.VALIDATED,
-                    actor=actor,
-                    summary=f"Validated draft {draft_id}.",
-                    metadata={"run_id": record.run_id, "status": record.status},
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            existing = self._require_draft(agent_id, draft_id)
+            updated = DraftAgent(
+                agent_id=existing.agent_id,
+                draft_id=existing.draft_id,
+                display_name=existing.display_name,
+                purpose=existing.purpose,
+                contract_bundle=existing.contract_bundle,
+                created_at=existing.created_at,
+                updated_at=_now(),
+                created_by=existing.created_by,
+                updated_by=actor,
+                version_id=existing.version_id,
+                validation_records=(*existing.validation_records, record),
+                operation_audit=(
+                    *existing.operation_audit,
+                    _audit(
+                        ConfigurationOperation.VALIDATED,
+                        actor=actor,
+                        summary=f"Validated draft {draft_id}.",
+                        metadata={"run_id": record.run_id, "status": record.status},
+                    ),
                 ),
-            ),
-        )
-        self._write_draft(updated)
-        return updated
+            )
+            self._write_draft(updated)
+            return updated
 
     def get_version(self, agent_id: str, version_id: str) -> PublishedAgentVersion | None:
         path = self._version_path(agent_id, version_id) / "publication.json"
@@ -314,6 +339,7 @@ class LocalAgentConfigurationStore:
                 source_id=source_id,
                 name=name,
                 provider=provider,
+                lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
                 params=params,
                 created_at=now,
                 updated_at=now,
@@ -329,7 +355,7 @@ class LocalAgentConfigurationStore:
         return KnowledgeSource.model_validate(_read_json(path))
 
     def list_knowledge_sources(self) -> list[KnowledgeSource]:
-        sources_root = self._root_dir / "knowledge_sources"
+        sources_root = self._knowledge_sources_root()
         if not sources_root.exists():
             return []
         sources = []
@@ -341,6 +367,165 @@ class LocalAgentConfigurationStore:
                 sources.append(source)
         return sorted(sources, key=lambda source: source.name)
 
+    def get_knowledge_source_reference_summary(
+        self,
+        source_id: str,
+    ) -> KnowledgeSourceReferenceSummary:
+        return self._get_knowledge_source_reference_summary_unlocked(source_id)
+
+    def _get_knowledge_source_reference_summary_unlocked(
+        self,
+        source_id: str,
+    ) -> KnowledgeSourceReferenceSummary:
+        self._require_knowledge_source(source_id)
+        draft_agent_binding_count = sum(
+            _count_shared_knowledge_source_bindings(
+                draft.contract_bundle.agent_yaml,
+                source_id=source_id,
+            )
+            for draft in self.list_drafts()
+        )
+        published_agent_version_count = 0
+        agents_root = self._root_dir / "agents"
+        if agents_root.exists():
+            for agent_dir in agents_root.iterdir():
+                if not agent_dir.is_dir():
+                    continue
+                for version in self.list_versions(agent_dir.name):
+                    resolved = version.resolved_knowledge_bindings
+                    if resolved is None:
+                        continue
+                    if any(
+                        binding.source_scope == "shared" and binding.source_id == source_id
+                        for binding in resolved.bindings
+                    ):
+                        published_agent_version_count += 1
+
+        return KnowledgeSourceReferenceSummary(
+            source_id=source_id,
+            draft_agent_binding_count=draft_agent_binding_count,
+            published_agent_version_count=published_agent_version_count,
+            publication_count=len(self.list_knowledge_source_publications(source_id)),
+            snapshot_count=len(self.list_knowledge_source_snapshots(source_id)),
+            document_count=len(self.list_knowledge_documents(source_id)),
+            quarantined_upload_count=len(self.list_quarantined_knowledge_uploads(source_id)),
+            ingestion_job_count=len(self.list_knowledge_ingestion_jobs(source_id)),
+            audit_retention_blocked=False,
+        )
+
+    def record_configuration_operation(self, audit: ConfigurationOperationAudit) -> None:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._record_configuration_operation_unlocked(audit)
+
+    def archive_knowledge_source(
+        self,
+        *,
+        source_id: str,
+        actor: str,
+        reason: str,
+    ) -> KnowledgeSource:
+        reason = reason.strip()
+        if not reason:
+            raise _knowledge_source_reason_required("archive")
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._require_knowledge_source(source_id)
+            if source.lifecycle_state is KnowledgeSourceLifecycleState.ARCHIVED:
+                raise _knowledge_source_lifecycle_conflict(
+                    f"Knowledge Source {source_id} is already archived."
+                )
+            archived = source.model_copy(
+                update={
+                    "lifecycle_state": KnowledgeSourceLifecycleState.ARCHIVED,
+                    "updated_at": _now(),
+                }
+            )
+            self._write_knowledge_source(archived)
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.ARCHIVED,
+                    actor=actor,
+                    summary=f"Archived Knowledge Source {source_id}.",
+                    metadata={"source_id": source_id, "reason": reason},
+                )
+            )
+            return archived
+
+    def restore_knowledge_source(
+        self,
+        *,
+        source_id: str,
+        actor: str,
+        reason: str | None = None,
+    ) -> KnowledgeSource:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._require_knowledge_source(source_id)
+            if source.lifecycle_state is not KnowledgeSourceLifecycleState.ARCHIVED:
+                raise _knowledge_source_lifecycle_conflict(
+                    f"Knowledge Source {source_id} is not archived."
+                )
+            restored = source.model_copy(
+                update={
+                    "lifecycle_state": KnowledgeSourceLifecycleState.ACTIVE,
+                    "updated_at": _now(),
+                }
+            )
+            self._write_knowledge_source(restored)
+            metadata = {"source_id": source_id}
+            if reason is not None and reason.strip():
+                metadata["reason"] = reason.strip()
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.RESTORED,
+                    actor=actor,
+                    summary=f"Restored Knowledge Source {source_id}.",
+                    metadata=metadata,
+                )
+            )
+            return restored
+
+    def get_knowledge_source_deletion_eligibility(
+        self,
+        source_id: str,
+    ) -> KnowledgeSourceDeletionEligibility:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            return self._get_knowledge_source_deletion_eligibility_unlocked(source_id)
+
+    def physically_delete_knowledge_source(
+        self,
+        *,
+        source_id: str,
+        actor: str,
+        reason: str,
+    ) -> KnowledgeSourceDeletionEligibility:
+        reason = reason.strip()
+        if not reason:
+            raise _knowledge_source_reason_required("physical deletion")
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            eligibility = self._get_knowledge_source_deletion_eligibility_unlocked(source_id)
+            if not eligibility.eligible:
+                blocker_summary = ", ".join(eligibility.blockers)
+                raise _knowledge_source_lifecycle_conflict(
+                    f"Knowledge Source {source_id} is not eligible for physical deletion: "
+                    f"{blocker_summary}."
+                )
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.PHYSICAL_DELETED,
+                    actor=actor,
+                    summary=f"Physically deleted Knowledge Source {source_id}.",
+                    metadata={
+                        "source_id": source_id,
+                        "reason": reason,
+                        "blockers": list(eligibility.blockers),
+                        "reference_summary": eligibility.reference_summary.model_dump(
+                            mode="json"
+                        ),
+                    },
+                )
+            )
+            shutil.rmtree(self._knowledge_source_root(source_id))
+            return eligibility
+
     def get_candidate_knowledge_source_snapshot(
         self,
         source_id: str,
@@ -348,6 +533,7 @@ class LocalAgentConfigurationStore:
         """Return the derived mutable READY-revision projection for snapshot freeze."""
 
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_active_knowledge_source_unlocked(source_id)
             source = self._normalized_local_index_source_unlocked(source_id)
             return self._candidate_knowledge_source_snapshot_unlocked(source)
 
@@ -360,6 +546,7 @@ class LocalAgentConfigurationStore:
         """Persist one passed minimum validation record for the current candidate."""
 
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_active_knowledge_source_unlocked(source_id)
             source = self._normalized_local_index_source_unlocked(source_id)
             candidate = self._candidate_knowledge_source_snapshot_unlocked(source)
             self._require_foundation_candidate_artifacts_unlocked(candidate)
@@ -388,6 +575,7 @@ class LocalAgentConfigurationStore:
         """Freeze one unchanged foundation-validated candidate for preview development."""
 
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_active_knowledge_source_unlocked(source_id)
             source = self._normalized_local_index_source_unlocked(source_id)
             validation = self._require_foundation_knowledge_source_validation_for_freeze(
                 source_id=source_id,
@@ -535,6 +723,7 @@ class LocalAgentConfigurationStore:
                 "Provide a smoke_query that should retrieve cited evidence from the Source.",
             )
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_active_knowledge_source_unlocked(source_id)
             source = self._normalized_local_index_source_unlocked(source_id)
             snapshot = self._require_latest_publication_snapshot_unlocked(source)
             candidate = self._candidate_knowledge_source_snapshot_unlocked(source)
@@ -564,6 +753,7 @@ class LocalAgentConfigurationStore:
             )
 
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_active_knowledge_source_unlocked(source_id)
             current_source = self._normalized_local_index_source_unlocked(source_id)
             current_snapshot = self._require_latest_publication_snapshot_unlocked(current_source)
             current_candidate = self._candidate_knowledge_source_snapshot_unlocked(current_source)
@@ -608,6 +798,7 @@ class LocalAgentConfigurationStore:
                 "Provide a smoke_query that should retrieve cited evidence from the Source.",
             )
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_active_knowledge_source_unlocked(source_id)
             source = self._normalized_http_json_source_unlocked(source_id)
             config_digest = _remote_knowledge_source_config_digest(source)
             resource_id = _remote_knowledge_source_config_resource_id(
@@ -636,6 +827,7 @@ class LocalAgentConfigurationStore:
             )
 
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_active_knowledge_source_unlocked(source_id)
             current_source = self._normalized_http_json_source_unlocked(source_id)
             current_digest = _remote_knowledge_source_config_digest(current_source)
             current_resource_id = _remote_knowledge_source_config_resource_id(
@@ -698,7 +890,7 @@ class LocalAgentConfigurationStore:
                 "Provide a concise change_note explaining what is being published.",
             )
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
-            source = self._require_knowledge_source(source_id)
+            source = self._require_active_knowledge_source_unlocked(source_id)
             validation = self._require_knowledge_source_publication_validation(
                 source_id=source.source_id,
                 validation_id=validation_id,
@@ -926,7 +1118,7 @@ class LocalAgentConfigurationStore:
             )
 
         with locked(self._store_lock_path(), timeout_seconds=lock_timeout_seconds):
-            self._require_knowledge_source(source_id)
+            self._require_active_knowledge_source_unlocked(source_id)
             if self._count_reserved_knowledge_document_slots_unlocked(source_id) + len(
                 uploads
             ) > KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY:
@@ -1000,10 +1192,10 @@ class LocalAgentConfigurationStore:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
             _require_owned_processing_claim(upload, claim_token=claim_token)
+            source = self._require_active_knowledge_source_unlocked(source_id)
             if self._upload_promotion_marker_path(source_id, upload_id).exists():
                 return self._repair_accepted_upload_projection_unlocked(upload)
 
-            source = self._require_knowledge_source(source_id)
             validate_secret_safe_params(
                 source.params,
                 field_prefix=f"knowledge_sources[{source_id}].params",
@@ -1114,6 +1306,7 @@ class LocalAgentConfigurationStore:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
             _require_owned_processing_claim(upload, claim_token=claim_token)
+            self._require_active_knowledge_source_unlocked(source_id)
             renewed = upload.model_copy(update=_renewed_claim_updates(lease_seconds=lease_seconds))
             self._write_quarantined_knowledge_upload(renewed)
             return renewed
@@ -1175,6 +1368,7 @@ class LocalAgentConfigurationStore:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             job = self._require_knowledge_ingestion_job(source_id, job_id)
             _require_owned_processing_claim(job, claim_token=claim_token)
+            self._require_active_knowledge_source_unlocked(source_id)
             renewed = job.model_copy(update=_renewed_claim_updates(lease_seconds=lease_seconds))
             self._write_knowledge_ingestion_job(renewed)
             return renewed
@@ -1195,6 +1389,7 @@ class LocalAgentConfigurationStore:
                 job_id=job_id,
                 claim_token=claim_token,
             )
+            self._require_active_knowledge_source_unlocked(source_id)
             now = _now()
             completed = job.model_copy(
                 update={
@@ -1237,6 +1432,7 @@ class LocalAgentConfigurationStore:
                 job_id=job_id,
                 claim_token=claim_token,
             )
+            self._require_active_knowledge_source_unlocked(source_id)
             now = datetime.now(UTC)
             deferred = job.model_copy(
                 update={
@@ -1274,6 +1470,7 @@ class LocalAgentConfigurationStore:
                 job_id=job_id,
                 claim_token=claim_token,
             )
+            self._require_active_knowledge_source_unlocked(source_id)
             now = datetime.now(UTC)
             safe_message = _operator_error_message(error_message)
             auto_retry_count = job.auto_retry_count + 1
@@ -1333,6 +1530,7 @@ class LocalAgentConfigurationStore:
                 job_id=job_id,
                 claim_token=claim_token,
             )
+            self._require_active_knowledge_source_unlocked(source_id)
             return self._fail_knowledge_ingestion_job_unlocked(
                 job=job,
                 document=document,
@@ -1369,42 +1567,42 @@ class LocalAgentConfigurationStore:
         error_message: str | None = None,
         actor: str,
     ) -> KnowledgeDocument:
-        if self.get_knowledge_source(source_id) is None:
-            raise KeyError(f"Knowledge Source not found: {source_id}")
-        now = _now()
-        document_id = f"doc_{uuid4().hex[:8]}"
-        revision_id = f"rev_{uuid4().hex[:8]}"
-        safe_filename = _safe_filename(filename)
-        storage_path = (
-            Path("knowledge_sources")
-            / source_id
-            / "documents"
-            / document_id
-            / "revisions"
-            / revision_id
-            / safe_filename
-        )
-        original_path = self._root_dir / storage_path
-        original_path.parent.mkdir(parents=True, exist_ok=True)
-        original_path.write_bytes(content)
-        document = KnowledgeDocument(
-            document_id=document_id,
-            source_id=source_id,
-            revision_id=revision_id,
-            filename=safe_filename,
-            content_type=content_type,
-            content_hash=hashlib.sha256(content).hexdigest(),
-            size_bytes=len(content),
-            state=state,
-            storage_path=storage_path.as_posix(),
-            provider_document_id=provider_document_id,
-            error_code=error_code,
-            error_message=error_message,
-            created_at=now,
-            updated_at=now,
-        )
-        self._write_knowledge_document(document)
-        return document
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_active_knowledge_source_unlocked(source_id)
+            now = _now()
+            document_id = f"doc_{uuid4().hex[:8]}"
+            revision_id = f"rev_{uuid4().hex[:8]}"
+            safe_filename = _safe_filename(filename)
+            storage_path = (
+                Path("knowledge_sources")
+                / source_id
+                / "documents"
+                / document_id
+                / "revisions"
+                / revision_id
+                / safe_filename
+            )
+            original_path = self._root_dir / storage_path
+            original_path.parent.mkdir(parents=True, exist_ok=True)
+            original_path.write_bytes(content)
+            document = KnowledgeDocument(
+                document_id=document_id,
+                source_id=source_id,
+                revision_id=revision_id,
+                filename=safe_filename,
+                content_type=content_type,
+                content_hash=hashlib.sha256(content).hexdigest(),
+                size_bytes=len(content),
+                state=state,
+                storage_path=storage_path.as_posix(),
+                provider_document_id=provider_document_id,
+                error_code=error_code,
+                error_message=error_message,
+                created_at=now,
+                updated_at=now,
+            )
+            self._write_knowledge_document(document)
+            return document
 
     def get_knowledge_document(
         self,
@@ -1418,7 +1616,7 @@ class LocalAgentConfigurationStore:
         return KnowledgeDocument.model_validate(_read_json(path))
 
     def list_knowledge_documents(self, source_id: str) -> list[KnowledgeDocument]:
-        documents_root = self._root_dir / "knowledge_sources" / source_id / "documents"
+        documents_root = self._knowledge_source_root(source_id) / "documents"
         if not documents_root.exists():
             return []
         documents = []
@@ -1445,7 +1643,7 @@ class LocalAgentConfigurationStore:
         """Update operator-managed routing metadata for one Knowledge Document."""
 
         with locked(self._store_lock_path(), timeout_seconds=lock_timeout_seconds):
-            source = self._require_knowledge_source(source_id)
+            source = self._require_active_knowledge_source_unlocked(source_id)
             if source.provider != "local_index":
                 raise _invalid_routing_metadata(
                     "Knowledge Document Routing Metadata editing requires a local_index Source."
@@ -1475,6 +1673,70 @@ class LocalAgentConfigurationStore:
         if source is None:
             raise KeyError(f"Knowledge Source not found: {source_id}")
         return source
+
+    def _require_active_knowledge_source_unlocked(self, source_id: str) -> KnowledgeSource:
+        source = self._require_knowledge_source(source_id)
+        if source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE:
+            raise _knowledge_source_lifecycle_conflict(
+                f"Knowledge Source {source_id} is archived."
+            )
+        return source
+
+    def _require_resolved_shared_knowledge_sources_active_unlocked(
+        self,
+        resolved_knowledge_bindings: ResolvedKnowledgeBindingSet,
+    ) -> None:
+        for binding in resolved_knowledge_bindings.bindings:
+            if binding.source_scope != "shared":
+                continue
+            source = self.get_knowledge_source(binding.source_id)
+            if source is None:
+                raise _knowledge_source_lifecycle_conflict(
+                    f"Knowledge Source {binding.source_id} is missing."
+                )
+            if source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE:
+                raise _knowledge_source_lifecycle_conflict(
+                    f"Knowledge Source {binding.source_id} is archived."
+                )
+            published_resource_id = source.published_snapshot_id
+            if published_resource_id is None:
+                raise _knowledge_source_lifecycle_conflict(
+                    f"Knowledge Source {binding.source_id} is not published."
+                )
+            if binding.provider != source.provider:
+                raise _knowledge_source_lifecycle_conflict(
+                    "Published Agent Version requires resolved shared Knowledge Source bindings. "
+                    "Revalidate the Draft Agent before publishing."
+                )
+            if binding.source_version_id != published_resource_id:
+                raise _knowledge_source_lifecycle_conflict(
+                    "Published Agent Version requires resolved shared Knowledge Source bindings. "
+                    "Revalidate the Draft Agent before publishing."
+                )
+            if source.provider == "local_index":
+                snapshot = self.get_knowledge_source_snapshot(
+                    source_id=source.source_id,
+                    snapshot_id=published_resource_id,
+                )
+                if snapshot is None:
+                    raise _knowledge_source_lifecycle_conflict(
+                        f"published Knowledge Source snapshot is missing: {source.source_id}"
+                    )
+                continue
+            if source.provider == "http_json":
+                has_publication = any(
+                    publication.resource_kind == "remote_config"
+                    and publication.resource_id == published_resource_id
+                    for publication in self.list_knowledge_source_publications(source.source_id)
+                )
+                if not has_publication:
+                    raise _knowledge_source_lifecycle_conflict(
+                        f"published remote Knowledge Source config is missing: {source.source_id}"
+                    )
+                continue
+            raise _knowledge_source_lifecycle_conflict(
+                f"published shared provider is not supported: {source.provider}"
+            )
 
     def _require_quarantined_knowledge_upload(
         self,
@@ -1582,6 +1844,8 @@ class LocalAgentConfigurationStore:
         source_limits: dict[str, int] = {}
         for source in self.list_knowledge_sources():
             if source_id is not None and source.source_id != source_id:
+                continue
+            if source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE:
                 continue
             try:
                 source_limits[source.source_id] = _knowledge_source_worker_concurrency(
@@ -2125,17 +2389,91 @@ class LocalAgentConfigurationStore:
     def _active_version_path(self, agent_id: str) -> Path:
         return self._root_dir / "agents" / agent_id / "active_version.json"
 
+    def _knowledge_sources_root(self) -> Path:
+        return self._root_dir / "knowledge_sources"
+
+    def _knowledge_source_root(self, source_id: str) -> Path:
+        raw_source_id = source_id.strip()
+        source_path = Path(raw_source_id)
+        if (
+            not raw_source_id
+            or raw_source_id != source_id
+            or raw_source_id in {".", ".."}
+            or source_path.is_absolute()
+            or len(source_path.parts) != 1
+            or "/" in raw_source_id
+            or "\\" in raw_source_id
+        ):
+            raise _invalid_knowledge_source_id(source_id)
+
+        sources_root = self._knowledge_sources_root().resolve()
+        source_root = (sources_root / raw_source_id).resolve()
+        try:
+            source_root.relative_to(sources_root)
+        except ValueError as exc:
+            raise _invalid_knowledge_source_id(source_id) from exc
+        return source_root
+
     def _knowledge_source_path(self, source_id: str) -> Path:
-        return self._root_dir / "knowledge_sources" / source_id / "source.json"
+        return self._knowledge_source_root(source_id) / "source.json"
+
+    def _configuration_audit_root(self) -> Path:
+        return self._root_dir / "configuration_audit"
+
+    def _configuration_audit_path(self, operation_id: str) -> Path:
+        raw_operation_id = operation_id.strip()
+        operation_path = Path(raw_operation_id)
+        if (
+            not raw_operation_id
+            or raw_operation_id != operation_id
+            or raw_operation_id in {".", ".."}
+            or operation_path.is_absolute()
+            or len(operation_path.parts) != 1
+            or "/" in raw_operation_id
+            or "\\" in raw_operation_id
+        ):
+            raise _invalid_configuration_operation_id(operation_id)
+
+        audit_root = self._configuration_audit_root().resolve()
+        audit_path = (audit_root / f"{raw_operation_id}.json").resolve()
+        try:
+            audit_path.relative_to(audit_root)
+        except ValueError as exc:
+            raise _invalid_configuration_operation_id(operation_id) from exc
+        return audit_path
+
+    def _record_configuration_operation_unlocked(
+        self,
+        audit: ConfigurationOperationAudit,
+    ) -> None:
+        _write_json_atomic(
+            self._configuration_audit_path(audit.operation_id),
+            audit.model_dump(mode="json"),
+        )
+
+    def _get_knowledge_source_deletion_eligibility_unlocked(
+        self,
+        source_id: str,
+    ) -> KnowledgeSourceDeletionEligibility:
+        source = self._require_knowledge_source(source_id)
+        summary = self._get_knowledge_source_reference_summary_unlocked(source_id)
+        blockers = _knowledge_source_deletion_blockers(source, summary)
+        return KnowledgeSourceDeletionEligibility(
+            source_id=source_id,
+            eligible=not blockers,
+            lifecycle_state=source.lifecycle_state,
+            reference_summary=summary,
+            blockers=blockers,
+        )
 
     def _quarantined_knowledge_uploads_root(self, source_id: str) -> Path:
-        return self._root_dir / "knowledge_sources" / source_id / "quarantined_uploads"
+        return self._knowledge_source_root(source_id) / "quarantined_uploads"
 
     def _quarantined_knowledge_upload_path(self, source_id: str, upload_id: str) -> Path:
         return self._quarantined_knowledge_uploads_root(source_id) / upload_id / "upload.json"
 
     def _knowledge_ingestion_jobs_root(self, source_id: str) -> Path:
-        return self._root_dir / "knowledge_sources" / source_id / "ingestion_jobs"
+        return self._knowledge_source_root(source_id) / "ingestion_jobs"
 
     def _knowledge_ingestion_job_path(self, source_id: str, job_id: str) -> Path:
         return self._knowledge_ingestion_jobs_root(source_id) / job_id / "job.json"
@@ -2146,20 +2484,13 @@ class LocalAgentConfigurationStore:
         validation_id: str,
     ) -> Path:
         return (
-            self._root_dir
-            / "knowledge_sources"
-            / source_id
+            self._knowledge_source_root(source_id)
             / "snapshot_validations"
             / f"{validation_id}.json"
         )
 
     def _knowledge_source_publication_validations_root(self, source_id: str) -> Path:
-        return (
-            self._root_dir
-            / "knowledge_sources"
-            / source_id
-            / "publication_validations"
-        )
+        return self._knowledge_source_root(source_id) / "publication_validations"
 
     def _knowledge_source_publication_validation_path(
         self,
@@ -2171,22 +2502,20 @@ class LocalAgentConfigurationStore:
         )
 
     def _knowledge_source_publications_root(self, source_id: str) -> Path:
-        return self._root_dir / "knowledge_sources" / source_id / "publications"
+        return self._knowledge_source_root(source_id) / "publications"
 
     def _knowledge_source_publication_path(self, source_id: str, publication_id: str) -> Path:
         return self._knowledge_source_publications_root(source_id) / f"{publication_id}.json"
 
     def _knowledge_source_snapshots_root(self, source_id: str) -> Path:
-        return self._root_dir / "knowledge_sources" / source_id / "snapshots"
+        return self._knowledge_source_root(source_id) / "snapshots"
 
     def _knowledge_source_snapshot_path(self, source_id: str, snapshot_id: str) -> Path:
         return self._knowledge_source_snapshots_root(source_id) / snapshot_id / "snapshot.json"
 
     def _upload_promotion_marker_path(self, source_id: str, upload_id: str) -> Path:
         return (
-            self._root_dir
-            / "knowledge_sources"
-            / source_id
+            self._knowledge_source_root(source_id)
             / "upload_promotions"
             / f"{upload_id}.json"
         )
@@ -2196,9 +2525,7 @@ class LocalAgentConfigurationStore:
 
     def _knowledge_document_path(self, source_id: str, document_id: str) -> Path:
         return (
-            self._root_dir
-            / "knowledge_sources"
-            / source_id
+            self._knowledge_source_root(source_id)
             / "documents"
             / document_id
             / "document.json"
@@ -2321,6 +2648,79 @@ def _audit(
         summary=summary,
         metadata=metadata or {},
     )
+
+
+def _count_shared_knowledge_source_bindings(agent_yaml: str, *, source_id: str) -> int:
+    raw = yaml.safe_load(agent_yaml) or {}
+    if not isinstance(raw, Mapping):
+        return 0
+    knowledge_bindings = raw.get("knowledge_bindings")
+    if not isinstance(knowledge_bindings, list):
+        return 0
+    count = 0
+    for binding in knowledge_bindings:
+        if not isinstance(binding, Mapping):
+            continue
+        source_ref = binding.get("source_ref")
+        if not isinstance(source_ref, Mapping):
+            continue
+        if source_ref.get("scope") == "shared" and source_ref.get("source_id") == source_id:
+            count += 1
+    return count
+
+
+def _has_shared_knowledge_source_bindings(agent_yaml: str) -> bool:
+    return bool(_shared_knowledge_binding_sources(agent_yaml))
+
+
+def _require_resolved_shared_bindings_cover_draft(
+    agent_yaml: str,
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet,
+) -> None:
+    expected = _shared_knowledge_binding_sources(agent_yaml)
+    resolved = {
+        binding.binding_id: binding.source_id
+        for binding in resolved_knowledge_bindings.bindings
+        if binding.source_scope == "shared"
+    }
+    if not expected and not resolved:
+        return
+    unresolved = sorted(
+        binding_id
+        for binding_id, source_id in expected.items()
+        if resolved.get(binding_id) != source_id
+    )
+    unexpected = sorted(set(resolved) - set(expected))
+    if unresolved or unexpected:
+        raise _knowledge_source_lifecycle_conflict(
+            "Published Agent Version requires resolved shared Knowledge Source bindings. "
+            "Revalidate the Draft Agent before publishing."
+        )
+
+
+def _shared_knowledge_binding_ids(agent_yaml: str) -> set[str]:
+    return set(_shared_knowledge_binding_sources(agent_yaml))
+
+
+def _shared_knowledge_binding_sources(agent_yaml: str) -> dict[str, str]:
+    raw = yaml.safe_load(agent_yaml) or {}
+    if not isinstance(raw, Mapping):
+        return {}
+    knowledge_bindings = raw.get("knowledge_bindings")
+    if not isinstance(knowledge_bindings, list):
+        return {}
+    binding_sources: dict[str, str] = {}
+    for binding in knowledge_bindings:
+        if not isinstance(binding, Mapping):
+            continue
+        source_ref = binding.get("source_ref")
+        if not isinstance(source_ref, Mapping):
+            continue
+        binding_id = binding.get("binding_id")
+        source_id = source_ref.get("source_id")
+        if source_ref.get("scope") == "shared" and isinstance(binding_id, str):
+            binding_sources[binding_id] = source_id if isinstance(source_id, str) else ""
+    return binding_sources
 
 
 def _now() -> str:
@@ -2570,12 +2970,70 @@ def _snapshot_freeze_conflict(message: str) -> ProofAgentError:
     )
 
 
+def _knowledge_source_reason_required(operation: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        f"Knowledge Source {operation} reason is required.",
+        f"Provide a concise reason for the Knowledge Source {operation} operation.",
+    )
+
+
+def _knowledge_source_lifecycle_conflict(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_002",
+        message,
+        "Refresh the Knowledge Source lifecycle state and retry.",
+    )
+
+
+def _invalid_knowledge_source_id(source_id: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        f"Knowledge Source source_id is invalid: {source_id!r}.",
+        "Use a non-empty Source id without path separators, '.' or '..'.",
+    )
+
+
+def _invalid_configuration_operation_id(operation_id: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        f"Configuration operation_id is invalid: {operation_id!r}.",
+        "Use a non-empty operation id without path separators, '.' or '..'.",
+    )
+
+
 def _knowledge_publication_conflict(message: str) -> ProofAgentError:
     return ProofAgentError(
         "PA_CONFIG_002",
         message,
         "Refresh the Knowledge Source publication state and retry.",
     )
+
+
+def _knowledge_source_deletion_blockers(
+    source: KnowledgeSource,
+    summary: KnowledgeSourceReferenceSummary,
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if source.lifecycle_state is not KnowledgeSourceLifecycleState.ARCHIVED:
+        blockers.append("source_not_archived")
+    if summary.draft_agent_binding_count:
+        blockers.append("draft_agent_bindings")
+    if summary.published_agent_version_count:
+        blockers.append("published_agent_versions")
+    if summary.publication_count:
+        blockers.append("publications")
+    if summary.snapshot_count:
+        blockers.append("snapshots")
+    if summary.document_count:
+        blockers.append("documents")
+    if summary.quarantined_upload_count:
+        blockers.append("quarantined_uploads")
+    if summary.ingestion_job_count:
+        blockers.append("ingestion_jobs")
+    if summary.audit_retention_blocked:
+        blockers.append("audit_retention")
+    return tuple(blockers)
 
 
 def _new_claim_updates(

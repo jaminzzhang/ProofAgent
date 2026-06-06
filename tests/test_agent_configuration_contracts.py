@@ -18,8 +18,11 @@ from proof_agent.contracts import (
     KnowledgeDocument,
     KnowledgeIngestionJob,
     KnowledgeSource,
+    KnowledgeSourceDeletionEligibility,
+    KnowledgeSourceLifecycleState,
     KnowledgeSourceSnapshotDocument,
     KnowledgeSourceSnapshotManifest,
+    KnowledgeSourceReferenceSummary,
     QuarantinedKnowledgeUpload,
     PublishedAgentVersion,
     ToolSource,
@@ -112,6 +115,7 @@ def test_sources_are_reusable_assets_not_agent_bindings() -> None:
         source_id="ks_local_docs",
         name="Local Docs",
         provider="local_markdown",
+        lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
         params={"path": "./knowledge"},
         created_at="2026-05-27T00:00:00Z",
         updated_at="2026-05-27T00:00:00Z",
@@ -136,6 +140,7 @@ def test_knowledge_snapshot_contracts_are_frozen_and_json_serializable() -> None
         source_id="ks_policy",
         name="Policy",
         provider="local_index",
+        lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
         params={},
         created_at="2026-06-02T00:00:00Z",
         updated_at="2026-06-02T00:00:00Z",
@@ -232,6 +237,93 @@ def test_configuration_operation_audit_is_json_serializable() -> None:
         payload["metadata"]["source_path"]
         == "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"
     )
+
+
+def test_knowledge_source_requires_lifecycle_state() -> None:
+    payload = {
+        "source_id": "ks_policy",
+        "name": "Policy",
+        "provider": "local_index",
+        "params": {},
+        "created_at": "2026-06-02T00:00:00Z",
+        "updated_at": "2026-06-02T00:00:00Z",
+    }
+
+    with pytest.raises(ValidationError):
+        KnowledgeSource.model_validate(payload)
+
+
+def test_knowledge_source_accepts_active_lifecycle_state() -> None:
+    source = KnowledgeSource.model_validate(
+        {
+            "source_id": "ks_policy",
+            "name": "Policy",
+            "provider": "local_index",
+            "lifecycle_state": "ACTIVE",
+            "params": {},
+            "created_at": "2026-06-02T00:00:00Z",
+            "updated_at": "2026-06-02T00:00:00Z",
+        }
+    )
+
+    assert source.lifecycle_state is KnowledgeSourceLifecycleState.ACTIVE
+
+
+def test_knowledge_source_reference_summary_is_json_serializable() -> None:
+    summary = KnowledgeSourceReferenceSummary(
+        source_id="ks_policy",
+        draft_agent_binding_count=1,
+        published_agent_version_count=2,
+        publication_count=3,
+        snapshot_count=4,
+        document_count=5,
+        quarantined_upload_count=6,
+        ingestion_job_count=7,
+    )
+
+    payload = summary.model_dump(mode="json")
+
+    assert payload == {
+        "source_id": "ks_policy",
+        "draft_agent_binding_count": 1,
+        "published_agent_version_count": 2,
+        "publication_count": 3,
+        "snapshot_count": 4,
+        "document_count": 5,
+        "quarantined_upload_count": 6,
+        "ingestion_job_count": 7,
+        "audit_retention_blocked": False,
+    }
+
+
+def test_knowledge_source_deletion_eligibility_is_json_serializable() -> None:
+    summary = KnowledgeSourceReferenceSummary(
+        source_id="ks_policy",
+        draft_agent_binding_count=0,
+        published_agent_version_count=1,
+        publication_count=1,
+        snapshot_count=2,
+        document_count=3,
+        quarantined_upload_count=0,
+        ingestion_job_count=0,
+        audit_retention_blocked=True,
+    )
+    eligibility = KnowledgeSourceDeletionEligibility(
+        source_id="ks_policy",
+        eligible=False,
+        lifecycle_state=KnowledgeSourceLifecycleState.ARCHIVED,
+        reference_summary=summary,
+        blockers=("published_agent_versions", "audit_retention"),
+    )
+
+    payload = eligibility.model_dump(mode="json")
+
+    assert payload["lifecycle_state"] == "ARCHIVED"
+    assert payload["blockers"] == ["published_agent_versions", "audit_retention"]
+    assert payload["reference_summary"]["document_count"] == 3
+    assert ConfigurationOperation.ARCHIVED.value == "archived"
+    assert ConfigurationOperation.RESTORED.value == "restored"
+    assert ConfigurationOperation.PHYSICAL_DELETED.value == "physical_deleted"
 
 
 def test_configuration_contracts_are_frozen() -> None:

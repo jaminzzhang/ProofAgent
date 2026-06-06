@@ -5,8 +5,30 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import ContractBundle
+import pytest
+from pydantic import ValidationError
+
+from proof_agent.capabilities.knowledge.ingestion import ParsedKnowledgeDocument, ParserMetadata
+from proof_agent.configuration.file_locking import locked as file_locked
+from proof_agent.configuration.local_store import (
+    KnowledgeUploadStagingInput,
+    LocalAgentConfigurationStore,
+)
+from proof_agent.contracts import (
+    AgentValidationRecord,
+    ConfigurationOperation,
+    ConfigurationOperationAudit,
+    ContractBundle,
+    KnowledgeArtifactBuildSpec,
+    KnowledgeIngestionJob,
+    KnowledgeSource,
+    KnowledgeSourceLifecycleState,
+    KnowledgeSourcePublicationRecord,
+    KnowledgeSourceSnapshotManifest,
+    ResolvedKnowledgeBinding,
+    ResolvedKnowledgeBindingSet,
+)
+from proof_agent.errors import ProofAgentError
 
 
 def _bundle(name: str = "enterprise_qa") -> ContractBundle:
@@ -15,6 +37,106 @@ def _bundle(name: str = "enterprise_qa") -> ContractBundle:
         policy_yaml="rules: []\n",
         tools_yaml="tools: {}\n",
     )
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _create_source(
+    store: LocalAgentConfigurationStore,
+    *,
+    source_id: str = "ks_policy",
+) -> KnowledgeSource:
+    return store.create_knowledge_source(
+        source_id=source_id,
+        name="Policies",
+        provider="local_index",
+        params={"index_path": "./indexes/policies"},
+        actor="operator",
+    )
+
+
+def _publish_source_fixture(
+    store: LocalAgentConfigurationStore,
+    source: KnowledgeSource,
+    *,
+    snapshot_id: str = "kssnapshot_001",
+) -> KnowledgeSource:
+    source_draft_version_id = source.source_draft_version_id or "ksdraft_fixture"
+    snapshot = KnowledgeSourceSnapshotManifest(
+        schema_version="local_index.snapshot.v2",
+        snapshot_id=snapshot_id,
+        source_id=source.source_id,
+        state="READY",
+        validation_level="foundation",
+        source_draft_version_id=source_draft_version_id,
+        candidate_digest=f"digest_{snapshot_id}",
+        foundation_validation_id=f"ksvalidation_{snapshot_id}",
+        documents=(),
+        created_at="2026-06-05T00:00:00Z",
+        created_by="operator",
+    )
+    publication = KnowledgeSourcePublicationRecord(
+        publication_id=f"kspub_{snapshot_id}",
+        source_id=source.source_id,
+        resource_kind="local_index_snapshot",
+        resource_id=snapshot.snapshot_id,
+        snapshot_id=snapshot.snapshot_id,
+        source_draft_version_id=source_draft_version_id,
+        validation_id=f"kspubval_{snapshot_id}",
+        change_note="Fixture publication.",
+        published_at="2026-06-05T00:01:00Z",
+        published_by="publisher",
+        document_count=0,
+        smoke_query="policy",
+        smoke_result_summary={"candidate_count": 0, "citation_count": 0},
+    )
+    store._write_knowledge_source_snapshot(snapshot)
+    store._write_knowledge_source_publication(publication)
+    published = source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id})
+    store._write_knowledge_source(published)
+    return published
+
+
+def _configuration_audit_payloads(root: Path) -> list[dict[str, object]]:
+    audit_root = root / "configuration_audit"
+    return [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(audit_root.glob("*.json"))
+    ]
+
+
+def _parsed_markdown_document() -> ParsedKnowledgeDocument:
+    return ParsedKnowledgeDocument(
+        text="# Policy\n",
+        page_count=None,
+        parser_metadata=ParserMetadata(
+            adapter="markdown",
+            adapter_contract_version="test",
+            library_version=None,
+            fingerprint_identity="markdown:test",
+        ),
+    )
+
+
+def _stage_and_claim_upload(
+    store: LocalAgentConfigurationStore,
+    source_id: str,
+) -> tuple[str, str]:
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id=source_id,
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy\n",
+        actor="operator",
+    )
+    claimed = store.claim_next_quarantined_knowledge_upload(source_id=source_id)
+    assert claimed is not None
+    assert claimed.claim_token is not None
+    assert claimed.upload_id == upload.upload_id
+    return upload.upload_id, claimed.claim_token
 
 
 def test_create_update_and_list_draft_agents(tmp_path: Path) -> None:
@@ -77,6 +199,391 @@ def test_publish_creates_immutable_version_and_active_pointer(tmp_path: Path) ->
     assert json.loads((version_dir / "publication.json").read_text(encoding="utf-8"))[
         "validation_run_id"
     ] == "run_validation_001"
+
+
+def test_publish_version_rejects_archived_resolved_shared_source_inside_store_lock(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="local-user",
+    )
+    source = _create_source(store)
+    store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+                bindings=(
+                    ResolvedKnowledgeBinding(
+                        binding_id="kb_policy",
+                        source_scope="shared",
+                        source_id=source.source_id,
+                        source_version_id="kssnapshot_001",
+                        provider="local_index",
+                    ),
+                )
+            ),
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "archived" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+    assert store.get_active_version(draft.agent_id) is None
+
+
+def test_publish_version_rejects_shared_source_draft_without_resolved_bindings(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="ks_policy",
+        name="Policies",
+        provider="local_index",
+        params={"index_path": "./indexes/policies"},
+        actor="operator",
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "Revalidate" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+
+
+def test_publish_version_rejects_incomplete_resolved_shared_bindings(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="ks_policy",
+        name="Policies",
+        provider="local_index",
+        params={"index_path": "./indexes/policies"},
+        actor="operator",
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(bindings=()),
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "Revalidate" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+
+
+def test_publish_version_rejects_resolved_shared_binding_source_mismatch(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="ks_policy",
+        name="Policies",
+        provider="local_index",
+        params={"index_path": "./indexes/policies"},
+        actor="operator",
+    )
+    store.create_knowledge_source(
+        source_id="ks_other",
+        name="Other",
+        provider="local_index",
+        params={"index_path": "./indexes/other"},
+        actor="operator",
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+                bindings=(
+                    ResolvedKnowledgeBinding(
+                        binding_id="kb_policy",
+                        source_scope="shared",
+                        source_id="ks_other",
+                        source_version_id="kssnapshot_001",
+                        provider="local_index",
+                    ),
+                )
+            ),
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "Revalidate" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+
+
+def test_publish_version_rejects_unpublished_resolved_shared_source(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+                bindings=(
+                    ResolvedKnowledgeBinding(
+                        binding_id="kb_policy",
+                        source_scope="shared",
+                        source_id=source.source_id,
+                        source_version_id="kssnapshot_001",
+                        provider="local_index",
+                    ),
+                )
+            ),
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "not published" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+
+
+@pytest.mark.parametrize("source_version_id", ["", "kssnapshot_bogus"])
+def test_publish_version_rejects_resolved_shared_binding_version_mismatch(
+    tmp_path: Path,
+    source_version_id: str,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _publish_source_fixture(store, _create_source(store))
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+                bindings=(
+                    ResolvedKnowledgeBinding(
+                        binding_id="kb_policy",
+                        source_scope="shared",
+                        source_id=source.source_id,
+                        source_version_id=source_version_id,
+                        provider="local_index",
+                    ),
+                )
+            ),
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "Revalidate" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+
+
+def test_publish_version_rejects_resolved_shared_binding_provider_mismatch(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _publish_source_fixture(store, _create_source(store))
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+                bindings=(
+                    ResolvedKnowledgeBinding(
+                        binding_id="kb_policy",
+                        source_scope="shared",
+                        source_id=source.source_id,
+                        source_version_id=source.published_snapshot_id or "",
+                        provider="http_json",
+                    ),
+                )
+            ),
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "Revalidate" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+
+
+def test_publish_version_rejects_unexpected_resolved_shared_binding(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _publish_source_fixture(store, _create_source(store))
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=_bundle(),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+                bindings=(
+                    ResolvedKnowledgeBinding(
+                        binding_id="kb_policy",
+                        source_scope="shared",
+                        source_id=source.source_id,
+                        source_version_id=source.published_snapshot_id or "",
+                        provider="local_index",
+                    ),
+                )
+            ),
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "Revalidate" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
 
 
 def test_rollback_changes_active_pointer_without_mutating_versions(tmp_path: Path) -> None:
@@ -154,6 +661,7 @@ def test_create_list_and_store_knowledge_source_documents(tmp_path: Path) -> Non
     documents = store.list_knowledge_documents(source.source_id)
 
     assert loaded == source
+    assert source.lifecycle_state is KnowledgeSourceLifecycleState.ACTIVE
     assert store.list_knowledge_sources() == [source]
     assert documents == [document]
     assert document.document_id.startswith("doc_")
@@ -163,3 +671,859 @@ def test_create_list_and_store_knowledge_source_documents(tmp_path: Path) -> Non
     assert document.content_hash
     assert document.provider_document_id is None
     assert store.knowledge_document_original_path(document).read_bytes() == b"%PDF-1.4\nsample"
+
+
+def test_create_knowledge_source_sets_active_lifecycle_state(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+
+    source = store.create_knowledge_source(
+        source_id="ks_policy",
+        name="Policies",
+        provider="local_markdown",
+        params={"path": "./knowledge"},
+        actor="operator",
+    )
+
+    assert source.lifecycle_state is KnowledgeSourceLifecycleState.ACTIVE
+
+
+def test_reading_legacy_source_without_lifecycle_state_fails(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source_dir = tmp_path / "knowledge_sources" / "ks_legacy"
+    source_dir.mkdir(parents=True)
+    (source_dir / "source.json").write_text(
+        json.dumps(
+            {
+                "source_id": "ks_legacy",
+                "name": "Legacy",
+                "provider": "local_markdown",
+                "params": {},
+                "created_at": "2026-06-05T00:00:00Z",
+                "updated_at": "2026-06-05T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError):
+        store.get_knowledge_source("ks_legacy")
+
+
+def test_get_knowledge_source_reference_summary_counts_persisted_references(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = store.create_knowledge_source(
+        source_id="ks_policy",
+        name="Policies",
+        provider="local_index",
+        params={"index_path": "./indexes/policies"},
+        actor="operator",
+    )
+    assert source.source_draft_version_id is not None
+    source = _publish_source_fixture(store, source)
+    _publish_source_fixture(
+        store,
+        _create_source(store, source_id="ks_other"),
+        snapshot_id="kssnapshot_other",
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+  - binding_id: kb_package_ignored
+    source_ref:
+      scope: package
+      source_id: ks_policy
+  - binding_id: kb_other_ignored
+    source_ref:
+      scope: shared
+      source_id: ks_other
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="operator",
+    )
+    store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_001",
+        actor="publisher",
+        resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+            bindings=(
+                ResolvedKnowledgeBinding(
+                    binding_id="kb_policy",
+                    source_scope="shared",
+                    source_id=source.source_id,
+                    source_version_id="kssnapshot_001",
+                    provider="local_index",
+                ),
+                ResolvedKnowledgeBinding(
+                    binding_id="kb_package_same_id_ignored",
+                    source_scope="package",
+                    source_id=source.source_id,
+                    source_version_id="package_source_001",
+                    provider="local_index",
+                ),
+                ResolvedKnowledgeBinding(
+                    binding_id="kb_other_ignored",
+                    source_scope="shared",
+                    source_id="ks_other",
+                    source_version_id="kssnapshot_other",
+                    provider="local_index",
+                ),
+            )
+        ),
+    )
+    document = store.add_knowledge_document(
+        source_id=source.source_id,
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy",
+        state="queued",
+        actor="operator",
+    )
+    store.stage_quarantined_knowledge_upload(
+        source_id=source.source_id,
+        filename="draft.md",
+        content_type="text/markdown",
+        content=b"# Draft",
+        actor="operator",
+    )
+    job = KnowledgeIngestionJob(
+        job_id="job_001",
+        source_id=source.source_id,
+        document_id=document.document_id,
+        revision_id=document.revision_id,
+        state="queued",
+        ingestion_config_fingerprint="fingerprint_001",
+        artifact_build_spec=KnowledgeArtifactBuildSpec(
+            provider="local_index",
+            engine_name="test-engine",
+            engine_version="1",
+            parser_fingerprint_identity="parser-v1",
+            content_hash=document.content_hash,
+            parsed_text_sha256="parsed_text_sha256",
+        ),
+        created_at="2026-06-05T00:02:00Z",
+        updated_at="2026-06-05T00:02:00Z",
+    )
+    _write_json(
+        tmp_path
+        / "knowledge_sources"
+        / source.source_id
+        / "ingestion_jobs"
+        / job.job_id
+        / "job.json",
+        job.model_dump(mode="json"),
+    )
+
+    summary = store.get_knowledge_source_reference_summary(source.source_id)
+
+    assert summary.source_id == source.source_id
+    assert summary.draft_agent_binding_count == 1
+    assert summary.published_agent_version_count == 1
+    assert summary.publication_count == 1
+    assert summary.snapshot_count == 1
+    assert summary.document_count == 1
+    assert summary.quarantined_upload_count == 1
+    assert summary.ingestion_job_count == 1
+    assert summary.audit_retention_blocked is False
+
+
+def test_record_configuration_operation_writes_global_audit_file(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    audit = ConfigurationOperationAudit(
+        operation_id="op_physical_delete_001",
+        operation=ConfigurationOperation.PHYSICAL_DELETED,
+        actor="operator",
+        created_at="2026-06-05T00:00:00Z",
+        summary="Recorded physical deletion decision.",
+        metadata={"source_id": "ks_policy"},
+    )
+
+    store.record_configuration_operation(audit)
+
+    audit_path = tmp_path / "configuration_audit" / "op_physical_delete_001.json"
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert payload == audit.model_dump(mode="json")
+
+
+def test_record_configuration_operation_rejects_escaped_operation_id(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    sentinel = outside_dir / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    audit = ConfigurationOperationAudit(
+        operation_id="../outside/escaped",
+        operation=ConfigurationOperation.PHYSICAL_DELETED,
+        actor="operator",
+        created_at="2026-06-05T00:00:00Z",
+        summary="Attempt escaped audit write.",
+        metadata={"source_id": "ks_policy"},
+    )
+
+    with pytest.raises(ProofAgentError) as invalid_audit:
+        store.record_configuration_operation(audit)
+
+    assert invalid_audit.value.code == "PA_CONFIG_001"
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert not (outside_dir / "escaped.json").exists()
+
+
+def test_blocker_producing_mutations_acquire_store_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    source = _publish_source_fixture(store, source)
+    expected_lock_path = tmp_path / ".locks" / "store.lock"
+    lock_calls: list[Path] = []
+
+    def tracking_locked(path: Path, *, timeout_seconds: float) -> object:
+        lock_calls.append(path)
+        return file_locked(path, timeout_seconds=timeout_seconds)
+
+    def assert_locked_once() -> None:
+        assert lock_calls == [expected_lock_path]
+        lock_calls.clear()
+
+    monkeypatch.setattr("proof_agent.configuration.local_store.locked", tracking_locked)
+
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="operator",
+    )
+    assert_locked_once()
+
+    store.update_draft(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        actor="operator",
+        contract_bundle=_bundle("enterprise_qa_v2"),
+    )
+    assert_locked_once()
+
+    store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_001",
+        actor="publisher",
+    )
+    assert_locked_once()
+
+    store.record_validation(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        actor="validator",
+        record=AgentValidationRecord(
+            validation_id="validation_001",
+            draft_id=draft.draft_id,
+            run_id="run_validation_001",
+            status="passed",
+            created_at="2026-06-05T00:00:00Z",
+        ),
+    )
+    assert_locked_once()
+
+    store.add_knowledge_document(
+        source_id=source.source_id,
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy",
+        state="queued",
+        actor="operator",
+    )
+    assert_locked_once()
+
+
+def test_archive_source_requires_reason_and_does_not_change_draft_version(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+
+    with pytest.raises(ProofAgentError) as missing_reason:
+        store.archive_knowledge_source(
+            source_id=source.source_id,
+            actor="operator",
+            reason="",
+        )
+
+    assert missing_reason.value.code == "PA_CONFIG_001"
+
+    archived = store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    assert archived.lifecycle_state is KnowledgeSourceLifecycleState.ARCHIVED
+    assert archived.source_draft_version_id == source.source_draft_version_id
+
+    with pytest.raises(ProofAgentError) as already_archived:
+        store.archive_knowledge_source(
+            source_id=source.source_id,
+            actor="operator",
+            reason="Second archive attempt.",
+        )
+
+    assert already_archived.value.code == "PA_CONFIG_002"
+    audit_payloads = _configuration_audit_payloads(tmp_path)
+    assert any(
+        payload["operation"] == ConfigurationOperation.ARCHIVED.value
+        and payload["metadata"] == {
+            "source_id": source.source_id,
+            "reason": "No longer maintained.",
+        }
+        for payload in audit_payloads
+    )
+
+
+def test_restore_source_keeps_draft_version_and_requires_archived_state(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+
+    with pytest.raises(ProofAgentError) as active_restore:
+        store.restore_knowledge_source(source_id=source.source_id, actor="operator")
+
+    assert active_restore.value.code == "PA_CONFIG_002"
+    archived = store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    restored = store.restore_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="Needed again.",
+    )
+
+    assert restored.lifecycle_state is KnowledgeSourceLifecycleState.ACTIVE
+    assert restored.source_draft_version_id == archived.source_draft_version_id
+    audit_payloads = _configuration_audit_payloads(tmp_path)
+    assert any(
+        payload["operation"] == ConfigurationOperation.RESTORED.value
+        and payload["metadata"] == {
+            "source_id": source.source_id,
+            "reason": "Needed again.",
+        }
+        for payload in audit_payloads
+    )
+
+
+@pytest.mark.parametrize(
+    "operation_name",
+    (
+        "stage_upload_batch",
+        "add_document",
+        "update_routing_metadata",
+        "validate_candidate_snapshot_foundation",
+        "freeze_candidate_snapshot",
+        "validate_publication",
+        "publish_source",
+    ),
+)
+def test_archived_source_rejects_direct_publication_bound_mutations(
+    tmp_path: Path,
+    operation_name: str,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        if operation_name == "stage_upload_batch":
+            store.stage_quarantined_knowledge_upload_batch(
+                source_id=source.source_id,
+                uploads=(
+                    KnowledgeUploadStagingInput(
+                        filename="policy.md",
+                        content_type="text/markdown",
+                        content=b"# Policy\n",
+                    ),
+                ),
+                actor="operator",
+            )
+        elif operation_name == "add_document":
+            store.add_knowledge_document(
+                source_id=source.source_id,
+                filename="policy.md",
+                content_type="text/markdown",
+                content=b"# Policy\n",
+                state="queued",
+                actor="operator",
+            )
+        elif operation_name == "update_routing_metadata":
+            store.update_knowledge_document_routing_metadata(
+                source_id=source.source_id,
+                document_id="doc_missing",
+                routing_metadata={"title": "Policy"},
+                actor="operator",
+            )
+        elif operation_name == "validate_candidate_snapshot_foundation":
+            store.validate_candidate_knowledge_source_snapshot_foundation(
+                source_id=source.source_id,
+                actor="validator",
+            )
+        elif operation_name == "freeze_candidate_snapshot":
+            store.freeze_candidate_knowledge_source_snapshot(
+                source_id=source.source_id,
+                validation_id="ksvalidation_missing",
+                actor="operator",
+            )
+        elif operation_name == "validate_publication":
+            store.validate_local_index_source_publication(
+                source_id=source.source_id,
+                smoke_query="policy",
+                actor="validator",
+            )
+        elif operation_name == "publish_source":
+            store.publish_knowledge_source(
+                source_id=source.source_id,
+                validation_id="kspubval_missing",
+                change_note="Publish policy.",
+                actor="operator",
+            )
+        else:  # pragma: no cover - parametrization guard
+            raise AssertionError(f"Unknown operation: {operation_name}")
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "archived" in blocked.value.message
+
+
+def test_archived_source_worker_tasks_are_not_claimed(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    upload_source = _create_source(store, source_id="ks_upload")
+    store.stage_quarantined_knowledge_upload(
+        source_id=upload_source.source_id,
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy\n",
+        actor="operator",
+    )
+    store.archive_knowledge_source(
+        source_id=upload_source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+    job_source = _create_source(store, source_id="ks_job")
+    upload_id, claim_token = _stage_and_claim_upload(store, job_source.source_id)
+    _, job = store.accept_quarantined_knowledge_upload(
+        source_id=job_source.source_id,
+        upload_id=upload_id,
+        parsed_document=_parsed_markdown_document(),
+        claim_token=claim_token,
+    )
+    store.archive_knowledge_source(
+        source_id=job_source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    upload_claim = store.claim_next_quarantined_knowledge_upload(
+        source_id=upload_source.source_id
+    )
+    job_claim = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    unified_claim = store.claim_next_knowledge_worker_task()
+
+    assert upload_claim is None
+    assert job_claim is None
+    assert unified_claim.task is None
+
+
+def test_archived_source_rejects_accepting_claimed_upload(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    upload_id, claim_token = _stage_and_claim_upload(store, source.source_id)
+    store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.accept_quarantined_knowledge_upload(
+            source_id=source.source_id,
+            upload_id=upload_id,
+            parsed_document=_parsed_markdown_document(),
+            claim_token=claim_token,
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "archived" in blocked.value.message
+    assert store.list_knowledge_documents(source.source_id) == []
+    assert store.list_knowledge_ingestion_jobs(source.source_id) == []
+
+
+def test_archived_source_rejects_renewing_claimed_upload(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    upload_id, claim_token = _stage_and_claim_upload(store, source.source_id)
+    store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.renew_quarantined_knowledge_upload_claim(
+            source_id=source.source_id,
+            upload_id=upload_id,
+            claim_token=claim_token,
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "archived" in blocked.value.message
+
+
+def test_archived_source_rejects_completing_claimed_ingestion_job_without_draft_advance(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    upload_id, upload_claim_token = _stage_and_claim_upload(store, source.source_id)
+    document, job = store.accept_quarantined_knowledge_upload(
+        source_id=source.source_id,
+        upload_id=upload_id,
+        parsed_document=_parsed_markdown_document(),
+        claim_token=upload_claim_token,
+    )
+    claimed_job = store.claim_next_knowledge_ingestion_job(source_id=source.source_id)
+    assert claimed_job is not None
+    assert claimed_job.claim_token is not None
+    before_archive = store.get_knowledge_source(source.source_id)
+    assert before_archive is not None
+    source_draft_version_id = before_archive.source_draft_version_id
+    store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.complete_knowledge_ingestion_job(
+            source_id=source.source_id,
+            job_id=job.job_id,
+            claim_token=claimed_job.claim_token,
+            artifact_path="knowledge_artifacts/content/config",
+        )
+
+    stored_source = store.get_knowledge_source(source.source_id)
+    stored_document = store.get_knowledge_document(
+        source_id=source.source_id,
+        document_id=document.document_id,
+    )
+    stored_job = store.get_knowledge_ingestion_job(
+        source_id=source.source_id,
+        job_id=job.job_id,
+    )
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "archived" in blocked.value.message
+    assert stored_source is not None
+    assert stored_source.source_draft_version_id == source_draft_version_id
+    assert stored_document is not None
+    assert stored_document.state == "processing"
+    assert stored_document.artifact_path is None
+    assert stored_job is not None
+    assert stored_job.state == "processing"
+    assert stored_job.artifact_path is None
+
+
+def test_physical_deletion_rejects_active_source(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+
+    with pytest.raises(ProofAgentError) as missing_reason:
+        store.physically_delete_knowledge_source(
+            source_id=source.source_id,
+            actor="operator",
+            reason=" ",
+        )
+
+    assert missing_reason.value.code == "PA_CONFIG_001"
+    eligibility = store.get_knowledge_source_deletion_eligibility(source.source_id)
+    assert eligibility.eligible is False
+    assert eligibility.blockers == ("source_not_archived",)
+
+    with pytest.raises(ProofAgentError) as active_delete:
+        store.physically_delete_knowledge_source(
+            source_id=source.source_id,
+            actor="operator",
+            reason="Created by mistake.",
+        )
+
+    assert active_delete.value.code == "PA_CONFIG_002"
+    assert store.get_knowledge_source(source.source_id) == source
+
+
+def test_physical_deletion_rejects_archived_source_with_reference_blockers(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    source = _publish_source_fixture(store, source)
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: enterprise_qa
+knowledge_bindings:
+  - binding_id: kb_policy
+    source_ref:
+      scope: shared
+      source_id: ks_policy
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: {}\n",
+        ),
+        actor="operator",
+    )
+    store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_001",
+        actor="publisher",
+        resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+            bindings=(
+                ResolvedKnowledgeBinding(
+                    binding_id="kb_policy",
+                    source_scope="shared",
+                    source_id=source.source_id,
+                    source_version_id="kssnapshot_001",
+                    provider="local_index",
+                ),
+            )
+        ),
+    )
+    document = store.add_knowledge_document(
+        source_id=source.source_id,
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy",
+        state="queued",
+        actor="operator",
+    )
+    store.stage_quarantined_knowledge_upload(
+        source_id=source.source_id,
+        filename="draft.md",
+        content_type="text/markdown",
+        content=b"# Draft",
+        actor="operator",
+    )
+    job = KnowledgeIngestionJob(
+        job_id="job_001",
+        source_id=source.source_id,
+        document_id=document.document_id,
+        revision_id=document.revision_id,
+        state="queued",
+        ingestion_config_fingerprint="fingerprint_001",
+        artifact_build_spec=KnowledgeArtifactBuildSpec(
+            provider="local_index",
+            engine_name="test-engine",
+            engine_version="1",
+            parser_fingerprint_identity="parser-v1",
+            content_hash=document.content_hash,
+            parsed_text_sha256="parsed_text_sha256",
+        ),
+        created_at="2026-06-05T00:02:00Z",
+        updated_at="2026-06-05T00:02:00Z",
+    )
+    _write_json(
+        tmp_path
+        / "knowledge_sources"
+        / source.source_id
+        / "ingestion_jobs"
+        / job.job_id
+        / "job.json",
+        job.model_dump(mode="json"),
+    )
+    store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="No longer maintained.",
+    )
+
+    eligibility = store.get_knowledge_source_deletion_eligibility(source.source_id)
+
+    assert eligibility.eligible is False
+    assert eligibility.blockers == (
+        "draft_agent_bindings",
+        "published_agent_versions",
+        "publications",
+        "snapshots",
+        "documents",
+        "quarantined_uploads",
+        "ingestion_jobs",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked_delete:
+        store.physically_delete_knowledge_source(
+            source_id=source.source_id,
+            actor="operator",
+            reason="Created by mistake.",
+        )
+
+    assert blocked_delete.value.code == "PA_CONFIG_002"
+    assert store.get_knowledge_source(source.source_id) is not None
+
+
+def test_physical_deletion_rejects_escaped_source_id_without_deleting_outside(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    (tmp_path / "knowledge_sources").mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    sentinel = outside_dir / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    _write_json(
+        outside_dir / "source.json",
+        {
+            "source_id": "../outside",
+            "name": "Escaped Source",
+            "provider": "local_index",
+            "lifecycle_state": KnowledgeSourceLifecycleState.ARCHIVED.value,
+            "params": {"index_path": "./indexes/policies"},
+            "created_at": "2026-06-05T00:00:00Z",
+            "updated_at": "2026-06-05T00:00:00Z",
+            "source_draft_version_id": "ksdraft_escaped",
+        },
+    )
+
+    with pytest.raises(ProofAgentError) as invalid_delete:
+        store.physically_delete_knowledge_source(
+            source_id="../outside",
+            actor="operator",
+            reason="Created by mistake.",
+        )
+
+    assert invalid_delete.value.code == "PA_CONFIG_001"
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+    with pytest.raises(ProofAgentError) as invalid_eligibility:
+        store.get_knowledge_source_deletion_eligibility("../outside")
+
+    assert invalid_eligibility.value.code == "PA_CONFIG_001"
+
+
+def test_physical_deletion_removes_empty_archived_source_and_keeps_global_audit(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="Created by mistake.",
+    )
+    source_dir = tmp_path / "knowledge_sources" / source.source_id
+
+    deleted_eligibility = store.physically_delete_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="Created by mistake.",
+    )
+
+    assert deleted_eligibility.eligible is True
+    assert deleted_eligibility.blockers == ()
+    assert deleted_eligibility.lifecycle_state is KnowledgeSourceLifecycleState.ARCHIVED
+    assert not source_dir.exists()
+    assert store.get_knowledge_source(source.source_id) is None
+
+    physical_delete_audits = [
+        payload
+        for payload in _configuration_audit_payloads(tmp_path)
+        if payload["operation"] == ConfigurationOperation.PHYSICAL_DELETED.value
+    ]
+    assert len(physical_delete_audits) == 1
+    assert physical_delete_audits[0]["metadata"] == {
+        "source_id": source.source_id,
+        "reason": "Created by mistake.",
+        "blockers": [],
+        "reference_summary": {
+            "source_id": source.source_id,
+            "draft_agent_binding_count": 0,
+            "published_agent_version_count": 0,
+            "publication_count": 0,
+            "snapshot_count": 0,
+            "document_count": 0,
+            "quarantined_upload_count": 0,
+            "ingestion_job_count": 0,
+            "audit_retention_blocked": False,
+        },
+    }
+
+
+def test_physical_deletion_writes_global_audit_before_removing_source_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    source = _create_source(store)
+    store.archive_knowledge_source(
+        source_id=source.source_id,
+        actor="operator",
+        reason="Created by mistake.",
+    )
+    source_dir = tmp_path / "knowledge_sources" / source.source_id
+
+    class RmtreeSentinel(Exception):
+        pass
+
+    def fake_rmtree(path: str | Path, *args: object, **kwargs: object) -> None:
+        assert Path(path) == source_dir
+        physical_delete_audits = [
+            payload
+            for payload in _configuration_audit_payloads(tmp_path)
+            if payload["operation"] == ConfigurationOperation.PHYSICAL_DELETED.value
+        ]
+        assert len(physical_delete_audits) == 1
+        raise RmtreeSentinel
+
+    monkeypatch.setattr("proof_agent.configuration.local_store.shutil.rmtree", fake_rmtree)
+
+    with pytest.raises(RmtreeSentinel):
+        store.physically_delete_knowledge_source(
+            source_id=source.source_id,
+            actor="operator",
+            reason="Created by mistake.",
+        )
+
+    assert source_dir.exists()

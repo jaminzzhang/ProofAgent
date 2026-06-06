@@ -24,6 +24,14 @@ class ConfigurationOperation(str, Enum):
     VALIDATED = "validated"
     PUBLISHED = "published"
     ROLLED_BACK = "rolled_back"
+    ARCHIVED = "archived"
+    RESTORED = "restored"
+    PHYSICAL_DELETED = "physical_deleted"
+
+
+class KnowledgeSourceLifecycleState(str, Enum):
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
 
 
 class ContractBundle(FrozenModel):
@@ -134,6 +142,7 @@ class KnowledgeSource(FrozenModel):
     source_id: str
     name: str
     provider: str
+    lifecycle_state: KnowledgeSourceLifecycleState
     params: Mapping[str, Any] = Field(default_factory=FrozenDict)
     created_at: str
     updated_at: str
@@ -149,6 +158,30 @@ class KnowledgeSource(FrozenModel):
     @field_serializer("params")
     def serialize_params(self, value: Mapping[str, Any]) -> dict[str, Any]:
         return cast(dict[str, Any], _jsonable(value))
+
+
+class KnowledgeSourceReferenceSummary(FrozenModel):
+    """Reference counts used to explain archive impact and deletion eligibility."""
+
+    source_id: str
+    draft_agent_binding_count: int
+    published_agent_version_count: int
+    publication_count: int
+    snapshot_count: int
+    document_count: int
+    quarantined_upload_count: int
+    ingestion_job_count: int
+    audit_retention_blocked: bool = False
+
+
+class KnowledgeSourceDeletionEligibility(FrozenModel):
+    """Deletion guard result for a reusable Knowledge Source."""
+
+    source_id: str
+    eligible: bool
+    lifecycle_state: KnowledgeSourceLifecycleState
+    reference_summary: KnowledgeSourceReferenceSummary
+    blockers: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class KnowledgeSourceSnapshotDocument(FrozenModel):
