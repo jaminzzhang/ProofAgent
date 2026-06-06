@@ -40,6 +40,7 @@ from proof_agent.contracts import (
     ContractBundle,
     DraftAgent,
     FoundationKnowledgeSourceValidation,
+    EnvironmentModelCredentialReference,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
@@ -54,6 +55,12 @@ from proof_agent.contracts import (
     PublishedAgentVersion,
     QuarantinedKnowledgeUpload,
     ResolvedKnowledgeBindingSet,
+    ModelConnectionSmokeTestRecord,
+    ModelConnectionValidationRecord,
+    SharedModelConnection,
+    SharedModelConnectionDeletionEligibility,
+    SharedModelConnectionLifecycleState,
+    SharedModelConnectionReferenceSummary,
 )
 from proof_agent.configuration.file_locking import locked, store_lock_path
 from proof_agent.contracts.manifest import KnowledgeConfig
@@ -317,6 +324,271 @@ class LocalAgentConfigurationStore:
         self._write_active_version(active)
         return active
 
+    def create_model_connection(
+        self,
+        *,
+        display_name: str,
+        provider: str,
+        model_identifier: str,
+        credential_ref: EnvironmentModelCredentialReference,
+        actor: str,
+        connection_id: str | None = None,
+        description: str = "",
+        tags: tuple[str, ...] = (),
+        base_url: str | None = None,
+        organization_env: str | None = None,
+        project_env: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> SharedModelConnection:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            resolved_connection_id = connection_id or f"model_{uuid4().hex[:8]}"
+            if self.get_model_connection(resolved_connection_id) is not None:
+                raise ValueError(
+                    f"Shared Model Connection already exists: {resolved_connection_id}"
+                )
+            now = _now()
+            connection = SharedModelConnection(
+                connection_id=resolved_connection_id,
+                display_name=display_name,
+                description=description,
+                tags=tags,
+                provider=provider,
+                model_identifier=model_identifier,
+                base_url=base_url,
+                credential_ref=credential_ref,
+                organization_env=organization_env,
+                project_env=project_env,
+                timeout_seconds=timeout_seconds,
+                lifecycle_state=SharedModelConnectionLifecycleState.ACTIVE,
+                created_at=now,
+                updated_at=now,
+            )
+            self._write_model_connection(connection)
+            return connection
+
+    def get_model_connection(self, connection_id: str) -> SharedModelConnection | None:
+        path = self._model_connection_path(connection_id)
+        if not path.exists():
+            return None
+        return SharedModelConnection.model_validate(_read_json(path))
+
+    def list_model_connections(self) -> list[SharedModelConnection]:
+        connections_root = self._model_connections_root()
+        if not connections_root.exists():
+            return []
+        connections = []
+        for connection_dir in connections_root.iterdir():
+            if not connection_dir.is_dir():
+                continue
+            connection = self.get_model_connection(connection_dir.name)
+            if connection is not None:
+                connections.append(connection)
+        return sorted(connections, key=lambda connection: connection.created_at)
+
+    def update_model_connection(
+        self,
+        *,
+        connection_id: str,
+        actor: str,
+        display_name: str | None = None,
+        description: str | None = None,
+        tags: tuple[str, ...] | None = None,
+        provider: str | None = None,
+        model_identifier: str | None = None,
+        base_url: str | None = None,
+        credential_ref: EnvironmentModelCredentialReference | None = None,
+        organization_env: str | None = None,
+        project_env: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> SharedModelConnection:
+        del actor
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            existing = self._require_model_connection(connection_id)
+            updated = existing.model_copy(
+                update={
+                    "display_name": display_name
+                    if display_name is not None
+                    else existing.display_name,
+                    "description": description if description is not None else existing.description,
+                    "tags": tags if tags is not None else existing.tags,
+                    "provider": provider if provider is not None else existing.provider,
+                    "model_identifier": model_identifier
+                    if model_identifier is not None
+                    else existing.model_identifier,
+                    "base_url": base_url if base_url is not None else existing.base_url,
+                    "credential_ref": credential_ref
+                    if credential_ref is not None
+                    else existing.credential_ref,
+                    "organization_env": organization_env
+                    if organization_env is not None
+                    else existing.organization_env,
+                    "project_env": project_env if project_env is not None else existing.project_env,
+                    "timeout_seconds": timeout_seconds
+                    if timeout_seconds is not None
+                    else existing.timeout_seconds,
+                    "updated_at": _now(),
+                }
+            )
+            self._write_model_connection(updated)
+            return updated
+
+    def archive_model_connection(
+        self,
+        *,
+        connection_id: str,
+        actor: str,
+        reason: str,
+    ) -> SharedModelConnection:
+        reason = reason.strip()
+        if not reason:
+            raise _model_connection_reason_required("archive")
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            connection = self._require_model_connection(connection_id)
+            if connection.lifecycle_state is SharedModelConnectionLifecycleState.ARCHIVED:
+                raise _model_connection_lifecycle_conflict(
+                    f"Shared Model Connection {connection_id} is already archived."
+                )
+            archived = connection.model_copy(
+                update={
+                    "lifecycle_state": SharedModelConnectionLifecycleState.ARCHIVED,
+                    "updated_at": _now(),
+                }
+            )
+            self._write_model_connection(archived)
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.ARCHIVED,
+                    actor=actor,
+                    summary=f"Archived Shared Model Connection {connection_id}.",
+                    metadata={"connection_id": connection_id, "reason": reason},
+                )
+            )
+            return archived
+
+    def restore_model_connection(
+        self,
+        *,
+        connection_id: str,
+        actor: str,
+        reason: str | None = None,
+    ) -> SharedModelConnection:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            connection = self._require_model_connection(connection_id)
+            if connection.lifecycle_state is not SharedModelConnectionLifecycleState.ARCHIVED:
+                raise _model_connection_lifecycle_conflict(
+                    f"Shared Model Connection {connection_id} is not archived."
+                )
+            restored = connection.model_copy(
+                update={
+                    "lifecycle_state": SharedModelConnectionLifecycleState.ACTIVE,
+                    "updated_at": _now(),
+                }
+            )
+            self._write_model_connection(restored)
+            metadata = {"connection_id": connection_id}
+            if reason is not None and reason.strip():
+                metadata["reason"] = reason.strip()
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.RESTORED,
+                    actor=actor,
+                    summary=f"Restored Shared Model Connection {connection_id}.",
+                    metadata=metadata,
+                )
+            )
+            return restored
+
+    def get_model_connection_reference_summary(
+        self,
+        connection_id: str,
+    ) -> SharedModelConnectionReferenceSummary:
+        return self._get_model_connection_reference_summary_unlocked(connection_id)
+
+    def get_model_connection_deletion_eligibility(
+        self,
+        connection_id: str,
+    ) -> SharedModelConnectionDeletionEligibility:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            return self._get_model_connection_deletion_eligibility_unlocked(connection_id)
+
+    def physically_delete_model_connection(
+        self,
+        *,
+        connection_id: str,
+        actor: str,
+        reason: str,
+    ) -> SharedModelConnectionDeletionEligibility:
+        reason = reason.strip()
+        if not reason:
+            raise _model_connection_reason_required("physical deletion")
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            eligibility = self._get_model_connection_deletion_eligibility_unlocked(connection_id)
+            if not eligibility.eligible:
+                blocker_summary = ", ".join(eligibility.blockers)
+                raise _model_connection_lifecycle_conflict(
+                    f"Shared Model Connection {connection_id} is not eligible for "
+                    f"physical deletion: {blocker_summary}."
+                )
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.PHYSICAL_DELETED,
+                    actor=actor,
+                    summary=f"Physically deleted Shared Model Connection {connection_id}.",
+                    metadata={
+                        "connection_id": connection_id,
+                        "reason": reason,
+                        "blockers": list(eligibility.blockers),
+                        "reference_summary": eligibility.reference_summary.model_dump(mode="json"),
+                    },
+                )
+            )
+            shutil.rmtree(self._model_connection_root(connection_id))
+            return eligibility
+
+    def record_model_connection_validation(
+        self,
+        record: ModelConnectionValidationRecord,
+    ) -> None:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_model_connection(record.connection_id)
+            self._write_model_connection_validation(record)
+
+    def list_model_connection_validation_records(
+        self,
+        connection_id: str,
+    ) -> list[ModelConnectionValidationRecord]:
+        self._require_model_connection(connection_id)
+        records_root = self._model_connection_validation_records_root(connection_id)
+        if not records_root.exists():
+            return []
+        records = [
+            ModelConnectionValidationRecord.model_validate(_read_json(path))
+            for path in records_root.glob("*.json")
+        ]
+        return sorted(records, key=lambda record: record.created_at)
+
+    def record_model_connection_smoke_test(
+        self,
+        record: ModelConnectionSmokeTestRecord,
+    ) -> None:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_model_connection(record.connection_id)
+            self._write_model_connection_smoke_test(record)
+
+    def list_model_connection_smoke_test_records(
+        self,
+        connection_id: str,
+    ) -> list[ModelConnectionSmokeTestRecord]:
+        self._require_model_connection(connection_id)
+        records_root = self._model_connection_smoke_tests_root(connection_id)
+        if not records_root.exists():
+            return []
+        records = [
+            ModelConnectionSmokeTestRecord.model_validate(_read_json(path))
+            for path in records_root.glob("*.json")
+        ]
+        return sorted(records, key=lambda record: record.created_at)
+
     def create_knowledge_source(
         self,
         *,
@@ -517,9 +789,7 @@ class LocalAgentConfigurationStore:
                         "source_id": source_id,
                         "reason": reason,
                         "blockers": list(eligibility.blockers),
-                        "reference_summary": eligibility.reference_summary.model_dump(
-                            mode="json"
-                        ),
+                        "reference_summary": eligibility.reference_summary.model_dump(mode="json"),
                     },
                 )
             )
@@ -868,7 +1138,9 @@ class LocalAgentConfigurationStore:
         publications = []
         for path in publications_root.glob("*.json"):
             try:
-                publications.append(KnowledgeSourcePublicationRecord.model_validate(_read_json(path)))
+                publications.append(
+                    KnowledgeSourcePublicationRecord.model_validate(_read_json(path))
+                )
             except (OSError, json.JSONDecodeError, ValidationError) as exc:
                 raise _knowledge_publication_conflict(
                     "Knowledge Source Publication record is malformed."
@@ -1119,9 +1391,10 @@ class LocalAgentConfigurationStore:
 
         with locked(self._store_lock_path(), timeout_seconds=lock_timeout_seconds):
             self._require_active_knowledge_source_unlocked(source_id)
-            if self._count_reserved_knowledge_document_slots_unlocked(source_id) + len(
-                uploads
-            ) > KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY:
+            if (
+                self._count_reserved_knowledge_document_slots_unlocked(source_id) + len(uploads)
+                > KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY
+            ):
                 raise _knowledge_document_capacity_exceeded(source_id)
 
             batch_started_at = datetime.now(UTC)
@@ -1677,9 +1950,7 @@ class LocalAgentConfigurationStore:
     def _require_active_knowledge_source_unlocked(self, source_id: str) -> KnowledgeSource:
         source = self._require_knowledge_source(source_id)
         if source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE:
-            raise _knowledge_source_lifecycle_conflict(
-                f"Knowledge Source {source_id} is archived."
-            )
+            raise _knowledge_source_lifecycle_conflict(f"Knowledge Source {source_id} is archived.")
         return source
 
     def _require_resolved_shared_knowledge_sources_active_unlocked(
@@ -2392,6 +2663,56 @@ class LocalAgentConfigurationStore:
     def _knowledge_sources_root(self) -> Path:
         return self._root_dir / "knowledge_sources"
 
+    def _model_connections_root(self) -> Path:
+        return self._root_dir / "model_connections"
+
+    def _model_connection_root(self, connection_id: str) -> Path:
+        raw_connection_id = connection_id.strip()
+        connection_path = Path(raw_connection_id)
+        if (
+            not raw_connection_id
+            or raw_connection_id != connection_id
+            or raw_connection_id in {".", ".."}
+            or connection_path.is_absolute()
+            or len(connection_path.parts) != 1
+            or "/" in raw_connection_id
+            or "\\" in raw_connection_id
+        ):
+            raise _invalid_model_connection_id(connection_id)
+
+        connections_root = self._model_connections_root().resolve()
+        connection_root = (connections_root / raw_connection_id).resolve()
+        try:
+            connection_root.relative_to(connections_root)
+        except ValueError as exc:
+            raise _invalid_model_connection_id(connection_id) from exc
+        return connection_root
+
+    def _model_connection_path(self, connection_id: str) -> Path:
+        return self._model_connection_root(connection_id) / "connection.json"
+
+    def _model_connection_validation_records_root(self, connection_id: str) -> Path:
+        return self._model_connection_root(connection_id) / "validation_records"
+
+    def _model_connection_validation_record_path(
+        self,
+        connection_id: str,
+        validation_id: str,
+    ) -> Path:
+        return (
+            self._model_connection_validation_records_root(connection_id) / f"{validation_id}.json"
+        )
+
+    def _model_connection_smoke_tests_root(self, connection_id: str) -> Path:
+        return self._model_connection_root(connection_id) / "smoke_tests"
+
+    def _model_connection_smoke_test_path(
+        self,
+        connection_id: str,
+        smoke_test_id: str,
+    ) -> Path:
+        return self._model_connection_smoke_tests_root(connection_id) / f"{smoke_test_id}.json"
+
     def _knowledge_source_root(self, source_id: str) -> Path:
         raw_source_id = source_id.strip()
         source_path = Path(raw_source_id)
@@ -2449,6 +2770,62 @@ class LocalAgentConfigurationStore:
         _write_json_atomic(
             self._configuration_audit_path(audit.operation_id),
             audit.model_dump(mode="json"),
+        )
+
+    def _require_model_connection(self, connection_id: str) -> SharedModelConnection:
+        connection = self.get_model_connection(connection_id)
+        if connection is None:
+            raise KeyError(f"Shared Model Connection not found: {connection_id}")
+        return connection
+
+    def _get_model_connection_reference_summary_unlocked(
+        self,
+        connection_id: str,
+    ) -> SharedModelConnectionReferenceSummary:
+        self._require_model_connection(connection_id)
+        draft_agent_reference_count = sum(
+            _count_shared_model_connection_refs(
+                draft.contract_bundle.agent_yaml,
+                connection_id=connection_id,
+            )
+            for draft in self.list_drafts()
+        )
+        published_agent_version_reference_count = 0
+        agents_root = self._root_dir / "agents"
+        if agents_root.exists():
+            for agent_dir in agents_root.iterdir():
+                if not agent_dir.is_dir():
+                    continue
+                for version in self.list_versions(agent_dir.name):
+                    if _count_shared_model_connection_refs(
+                        version.contract_bundle.agent_yaml,
+                        connection_id=connection_id,
+                    ):
+                        published_agent_version_reference_count += 1
+        knowledge_source_reference_count = sum(
+            _count_shared_model_connection_refs(source.params, connection_id=connection_id)
+            for source in self.list_knowledge_sources()
+        )
+        return SharedModelConnectionReferenceSummary(
+            connection_id=connection_id,
+            draft_agent_reference_count=draft_agent_reference_count,
+            published_agent_version_reference_count=published_agent_version_reference_count,
+            knowledge_source_reference_count=knowledge_source_reference_count,
+        )
+
+    def _get_model_connection_deletion_eligibility_unlocked(
+        self,
+        connection_id: str,
+    ) -> SharedModelConnectionDeletionEligibility:
+        connection = self._require_model_connection(connection_id)
+        summary = self._get_model_connection_reference_summary_unlocked(connection_id)
+        blockers = _model_connection_deletion_blockers(connection, summary)
+        return SharedModelConnectionDeletionEligibility(
+            connection_id=connection_id,
+            eligible=not blockers,
+            lifecycle_state=connection.lifecycle_state,
+            reference_summary=summary,
+            blockers=blockers,
         )
 
     def _get_knowledge_source_deletion_eligibility_unlocked(
@@ -2514,22 +2891,13 @@ class LocalAgentConfigurationStore:
         return self._knowledge_source_snapshots_root(source_id) / snapshot_id / "snapshot.json"
 
     def _upload_promotion_marker_path(self, source_id: str, upload_id: str) -> Path:
-        return (
-            self._knowledge_source_root(source_id)
-            / "upload_promotions"
-            / f"{upload_id}.json"
-        )
+        return self._knowledge_source_root(source_id) / "upload_promotions" / f"{upload_id}.json"
 
     def _store_lock_path(self) -> Path:
         return store_lock_path(self._root_dir)
 
     def _knowledge_document_path(self, source_id: str, document_id: str) -> Path:
-        return (
-            self._knowledge_source_root(source_id)
-            / "documents"
-            / document_id
-            / "document.json"
-        )
+        return self._knowledge_source_root(source_id) / "documents" / document_id / "document.json"
 
     def _write_draft(self, draft: DraftAgent) -> None:
         _write_json(self._draft_path(draft.agent_id, draft.draft_id), draft.model_dump(mode="json"))
@@ -2554,6 +2922,36 @@ class LocalAgentConfigurationStore:
         _write_json_atomic(
             self._knowledge_source_path(source.source_id),
             source.model_dump(mode="json"),
+        )
+
+    def _write_model_connection(self, connection: SharedModelConnection) -> None:
+        _write_json_atomic(
+            self._model_connection_path(connection.connection_id),
+            connection.model_dump(mode="json"),
+        )
+
+    def _write_model_connection_validation(
+        self,
+        record: ModelConnectionValidationRecord,
+    ) -> None:
+        _write_json_atomic(
+            self._model_connection_validation_record_path(
+                record.connection_id,
+                record.validation_id,
+            ),
+            record.model_dump(mode="json"),
+        )
+
+    def _write_model_connection_smoke_test(
+        self,
+        record: ModelConnectionSmokeTestRecord,
+    ) -> None:
+        _write_json_atomic(
+            self._model_connection_smoke_test_path(
+                record.connection_id,
+                record.smoke_test_id,
+            ),
+            record.model_dump(mode="json"),
         )
 
     def _write_knowledge_document(self, document: KnowledgeDocument) -> None:
@@ -2667,6 +3065,29 @@ def _count_shared_knowledge_source_bindings(agent_yaml: str, *, source_id: str) 
         if source_ref.get("scope") == "shared" and source_ref.get("source_id") == source_id:
             count += 1
     return count
+
+
+def _count_shared_model_connection_refs(value: Any, *, connection_id: str) -> int:
+    if isinstance(value, str):
+        try:
+            parsed = yaml.safe_load(value) or {}
+        except yaml.YAMLError:
+            return 0
+        if parsed == value:
+            return 0
+        return _count_shared_model_connection_refs(parsed, connection_id=connection_id)
+    if isinstance(value, Mapping):
+        count = 0
+        if value.get("model_source") == "shared" and value.get("connection_id") == connection_id:
+            count += 1
+        for item in value.values():
+            count += _count_shared_model_connection_refs(item, connection_id=connection_id)
+        return count
+    if isinstance(value, list | tuple):
+        return sum(
+            _count_shared_model_connection_refs(item, connection_id=connection_id) for item in value
+        )
+    return 0
 
 
 def _has_shared_knowledge_source_bindings(agent_yaml: str) -> bool:
@@ -2843,7 +3264,9 @@ def _normalize_knowledge_document_routing_metadata(
 
 def _normalize_routing_metadata_scalar(key: str, value: Any) -> str | None:
     if not isinstance(value, str):
-        raise _invalid_routing_metadata(f"Knowledge Document Routing Metadata field {key} must be a string.")
+        raise _invalid_routing_metadata(
+            f"Knowledge Document Routing Metadata field {key} must be a string."
+        )
     stripped = value.strip()
     if not stripped:
         return None
@@ -2852,7 +3275,9 @@ def _normalize_routing_metadata_scalar(key: str, value: Any) -> str | None:
 
 def _normalize_routing_metadata_tags(value: Any) -> list[str] | None:
     if not isinstance(value, list | tuple):
-        raise _invalid_routing_metadata("Knowledge Document Routing Metadata field tags must be a list of strings.")
+        raise _invalid_routing_metadata(
+            "Knowledge Document Routing Metadata field tags must be a list of strings."
+        )
     tags: list[str] = []
     seen: set[str] = set()
     for item in value:
@@ -2986,11 +3411,35 @@ def _knowledge_source_lifecycle_conflict(message: str) -> ProofAgentError:
     )
 
 
+def _model_connection_reason_required(operation: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        f"Shared Model Connection {operation} reason is required.",
+        f"Provide a concise reason for the Shared Model Connection {operation} operation.",
+    )
+
+
+def _model_connection_lifecycle_conflict(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_002",
+        message,
+        "Refresh the Shared Model Connection lifecycle state and retry.",
+    )
+
+
 def _invalid_knowledge_source_id(source_id: str) -> ProofAgentError:
     return ProofAgentError(
         "PA_CONFIG_001",
         f"Knowledge Source source_id is invalid: {source_id!r}.",
         "Use a non-empty Source id without path separators, '.' or '..'.",
+    )
+
+
+def _invalid_model_connection_id(connection_id: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        f"Shared Model Connection connection_id is invalid: {connection_id!r}.",
+        "Use a non-empty connection id without path separators, '.' or '..'.",
     )
 
 
@@ -3031,6 +3480,26 @@ def _knowledge_source_deletion_blockers(
         blockers.append("quarantined_uploads")
     if summary.ingestion_job_count:
         blockers.append("ingestion_jobs")
+    if summary.audit_retention_blocked:
+        blockers.append("audit_retention")
+    return tuple(blockers)
+
+
+def _model_connection_deletion_blockers(
+    connection: SharedModelConnection,
+    summary: SharedModelConnectionReferenceSummary,
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if connection.lifecycle_state is not SharedModelConnectionLifecycleState.ARCHIVED:
+        blockers.append("connection_not_archived")
+    if summary.draft_agent_reference_count:
+        blockers.append("draft_agent_references")
+    if summary.published_agent_version_reference_count:
+        blockers.append("published_agent_versions")
+    if summary.knowledge_source_reference_count:
+        blockers.append("knowledge_sources")
+    if summary.in_flight_operation_count:
+        blockers.append("in_flight_operations")
     if summary.audit_retention_blocked:
         blockers.append("audit_retention")
     return tuple(blockers)

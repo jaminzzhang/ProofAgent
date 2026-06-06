@@ -374,7 +374,7 @@ uv run --extra dev python -m pytest tests/test_model_config_validation.py tests/
 
 Expected: pass.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add proof_agent/contracts/manifest.py proof_agent/bootstrap/manifest.py proof_agent/bootstrap/validation.py tests/test_model_config_validation.py tests/test_config_loader.py tests/test_review_subagent.py examples proof_agent/evaluation/demo/fixtures
@@ -389,7 +389,7 @@ git commit -m "feat: add model source config shapes"
 - Modify: `proof_agent/configuration/local_store.py`
 - Create: `tests/test_model_connection_store.py`
 
-- [ ] **Step 1: Write failing store tests for create/list/get**
+- [x] **Step 1: Write failing store tests for create/list/get**
 
 Test that `create_model_connection()`:
 
@@ -399,7 +399,7 @@ Test that `create_model_connection()`:
 - Rejects unsafe identifier characters.
 - Persists and reads back JSON.
 
-- [ ] **Step 2: Write failing lifecycle tests**
+- [x] **Step 2: Write failing lifecycle tests**
 
 Test:
 
@@ -409,7 +409,7 @@ Test:
 - Physical deletion requires archived lifecycle and zero references.
 - Deletion writes root-level configuration audit before removing storage.
 
-- [ ] **Step 3: Write failing reference summary tests**
+- [x] **Step 3: Write failing reference summary tests**
 
 Create Draft Agent, Published Agent Version, and Knowledge Source fixture records that reference `model_deepseek_default`.
 
@@ -424,7 +424,7 @@ assert summary.knowledge_source_reference_count == 1
 
 Reference summary scans configuration references only, not run history.
 
-- [ ] **Step 4: Run tests and verify RED**
+- [x] **Step 4: Run tests and verify RED**
 
 Run:
 
@@ -434,7 +434,7 @@ uv run --extra dev python -m pytest tests/test_model_connection_store.py -q
 
 Expected: fail because store methods do not exist.
 
-- [ ] **Step 5: Implement storage layout**
+- [x] **Step 5: Implement storage layout**
 
 Use a focused directory:
 
@@ -446,7 +446,7 @@ runs/config/model_connections/{connection_id}/smoke_tests/{smoke_test_id}.json
 
 Keep writes deterministic and secret-safe.
 
-- [ ] **Step 6: Implement lifecycle and deletion eligibility**
+- [x] **Step 6: Implement lifecycle and deletion eligibility**
 
 Add:
 
@@ -462,7 +462,7 @@ Add:
 
 High-impact update metadata should identify changed high-impact fields for later API/UI impact review.
 
-- [ ] **Step 7: Run tests and verify GREEN**
+- [x] **Step 7: Run tests and verify GREEN**
 
 Run:
 
