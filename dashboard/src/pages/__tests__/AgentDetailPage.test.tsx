@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindKnowledgeSourceToDraft,
   fetchKnowledgeSources,
+  fetchModelConnections,
   validateConfigDraft,
 } from '../../api/client'
 import type { DraftValidationResponse } from '../../api/types'
@@ -15,6 +16,7 @@ vi.mock('../../api/client', () => ({
   bindKnowledgeSourceToDraft: vi.fn(),
   chatUrl: (path: string) => `http://localhost:5174${path}`,
   fetchKnowledgeSources: vi.fn(),
+  fetchModelConnections: vi.fn(),
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
   updateConfigDraft: vi.fn(),
@@ -91,6 +93,7 @@ describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
     mockDraft = {
       agent_id: 'agent-1',
       draft_id: 'draft-1',
@@ -265,5 +268,64 @@ describe('AgentDetailPage', () => {
       })
     })
     expect(refreshDraft).toHaveBeenCalled()
+  })
+
+  it('loads shared model connections for the Model module selector', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: `name: insurance
+model:
+  provider: deepseek
+  name: deepseek-chat
+react:
+  planner:
+    provider: deepseek
+    name: deepseek-chat
+review:
+  subagent:
+    provider: deepseek
+    name: deepseek-chat
+    fail_closed: true
+`,
+    }
+    vi.mocked(fetchModelConnections).mockResolvedValue({
+      data: [
+        {
+          connection_id: 'model_deepseek_default',
+          display_name: 'DeepSeek Default',
+          description: '',
+          tags: [],
+          provider: 'deepseek',
+          model_identifier: 'deepseek-chat',
+          base_url: 'https://api.deepseek.com',
+          credential_ref: { type: 'env', name: 'DEEPSEEK_API_KEY' },
+          organization_env: null,
+          project_env: null,
+          timeout_seconds: 20,
+          lifecycle_state: 'ACTIVE',
+          created_at: '2026-06-07T00:00:00Z',
+          updated_at: '2026-06-07T00:00:00Z',
+          reference_summary: {
+            connection_id: 'model_deepseek_default',
+            draft_agent_reference_count: 0,
+            published_agent_version_reference_count: 0,
+            knowledge_source_reference_count: 0,
+            in_flight_operation_count: 0,
+            audit_retention_blocked: false,
+          },
+          last_validation: null,
+          last_smoke_test: null,
+        },
+      ],
+      meta: { total: 1 },
+    })
+
+    renderPage()
+    fireEvent.click(screen.getByText('Model'))
+
+    await waitFor(() => {
+      expect(fetchModelConnections).toHaveBeenCalled()
+    })
+    expect(screen.getByRole('option', { name: 'DeepSeek Default' })).toBeInTheDocument()
   })
 })

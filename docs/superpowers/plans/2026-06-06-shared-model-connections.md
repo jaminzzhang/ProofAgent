@@ -1029,7 +1029,9 @@ git commit -m "feat: add model connection detail workspace"
 - Modify: `dashboard/src/pages/__tests__/AgentDetailPage.test.tsx`
 - Modify: `dashboard/src/components/__tests__/agent/ModuleEditor.test.tsx` if affected
 
-- [ ] **Step 1: Write failing Agent UI tests**
+Progress note: Agent roles can now select active Shared Model Connections or Custom config, existing archived references render a warning, and Reviewer usage fields write under `review.subagent.params`. The save-as-shared entry point remains.
+
+- [x] **Step 1: Write failing Agent UI tests**
 
 Test:
 
@@ -1041,7 +1043,7 @@ Test:
 - Reviewer usage fields write into `review.subagent.params`.
 - Unified Setup applies selected shared connection or custom values to all three roles.
 
-- [ ] **Step 2: Run frontend tests and verify RED**
+- [x] **Step 2: Run frontend tests and verify RED**
 
 Run:
 
@@ -1051,13 +1053,13 @@ cd dashboard && npm test -- src/pages/__tests__/AgentDetailPage.test.tsx
 
 Expected: fail.
 
-- [ ] **Step 3: Load model connections in AgentDetailPage**
+- [x] **Step 3: Load model connections in AgentDetailPage**
 
 Fetch `/api/config/model-connections` alongside Knowledge Sources.
 
 Pass connections into `ModelModuleEditor`.
 
-- [ ] **Step 4: Implement shared/custom selector**
+- [x] **Step 4: Implement shared/custom selector**
 
 Keep role-specific usage parameters close to each role.
 
@@ -1067,7 +1069,7 @@ Do not store raw credential values.
 
 For custom role config, add a clear action that creates a Shared Model Connection from connection fields and then asks the user whether to switch the current role to it.
 
-- [ ] **Step 6: Run frontend tests and verify GREEN**
+- [x] **Step 6: Run frontend tests and verify GREEN**
 
 Run:
 

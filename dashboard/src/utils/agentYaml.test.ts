@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { updateAgentYamlField } from './agentYaml'
+import { replaceAgentYamlMapping, updateAgentYamlField } from './agentYaml'
 
 const AGENT_YAML = `name: insurance_customer_service
 purpose: "Provide customer service."
@@ -49,5 +49,39 @@ policy:
   params:
     api_key_env: DEEPSEEK_API_KEY
 policy:`)
+  })
+
+  it('replaces one mapping block without preserving stale sibling keys', () => {
+    const updated = replaceAgentYamlMapping(
+      `name: model_test
+model:
+  provider: deepseek
+  name: deepseek-chat
+  params:
+    temperature: 0
+    timeout_seconds: 30
+policy:
+  file: ./policy.yaml
+`,
+      ['model'],
+      {
+        model_source: 'shared',
+        connection_id: 'model_deepseek_default',
+        params: {
+          temperature: '0',
+          timeout_seconds: '5',
+        },
+      },
+    )
+
+    expect(updated).toContain(`model:
+  model_source: shared
+  connection_id: model_deepseek_default
+  params:
+    temperature: 0
+    timeout_seconds: 5
+policy:`)
+    expect(updated).not.toContain('provider: deepseek')
+    expect(updated).not.toContain('name: deepseek-chat')
   })
 })

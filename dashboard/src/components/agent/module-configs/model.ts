@@ -24,7 +24,7 @@ export const MODEL_FIELDS = [
   { label: 'Reviewer API Key Env', path: ['review', 'subagent', 'params', 'api_key_env'], input: 'text' as const, description: 'Environment variable name only; DeepSeek defaults to DEEPSEEK_API_KEY', placeholder: 'DEEPSEEK_API_KEY' },
   { label: 'Reviewer Base URL Env', path: ['review', 'subagent', 'params', 'base_url_env'], input: 'text' as const, description: 'Optional proxy/base URL environment variable', placeholder: 'DEEPSEEK_BASE_URL' },
   { label: 'Reviewer Temperature', path: ['review', 'subagent', 'params', 'temperature'], input: 'number' as const, description: 'Optional provider temperature for review' },
-  { label: 'Reviewer Max Output Tokens', path: ['review', 'subagent', 'max_output_tokens'], input: 'number' as const },
-  { label: 'Review Timeout (s)', path: ['review', 'subagent', 'timeout_seconds'], input: 'number' as const },
+  { label: 'Reviewer Max Output Tokens', path: ['review', 'subagent', 'params', 'max_output_tokens'], input: 'number' as const },
+  { label: 'Review Timeout (s)', path: ['review', 'subagent', 'params', 'timeout_seconds'], input: 'number' as const },
   { label: 'Review Fail Closed', path: ['review', 'subagent', 'fail_closed'], input: 'select' as const, options: ['true'] },
 ]

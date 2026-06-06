@@ -4,6 +4,7 @@ import {
   bindKnowledgeSourceToDraft,
   chatUrl,
   fetchKnowledgeSources,
+  fetchModelConnections,
   publishConfigDraft,
   rollbackConfigVersion,
   unbindKnowledgeSourceFromDraft,
@@ -11,7 +12,7 @@ import {
   updateConfigDraftContract,
   validateConfigDraft,
 } from '../api/client'
-import type { KnowledgeSource } from '../api/types'
+import type { SharedModelConnection, KnowledgeSource } from '../api/types'
 import { CodeBlock } from '../components/CodeBlock'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
@@ -30,7 +31,11 @@ import { MEMORY_FIELDS } from '../components/agent/module-configs/memory'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
 import { useConfigVersions } from '../hooks/useConfigVersions'
-import { extractAgentYamlSection, updateAgentYamlField } from '../utils/agentYaml'
+import {
+  extractAgentYamlSection,
+  replaceAgentYamlMapping,
+  updateAgentYamlField,
+} from '../utils/agentYaml'
 
 type Tab = 'general' | 'workflow' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
 
@@ -53,6 +58,8 @@ export function AgentDetailPage() {
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([])
   const [knowledgeSourcesLoaded, setKnowledgeSourcesLoaded] = useState(false)
   const [knowledgeSourceError, setKnowledgeSourceError] = useState<string | null>(null)
+  const [modelConnections, setModelConnections] = useState<SharedModelConnection[]>([])
+  const [modelConnectionsLoaded, setModelConnectionsLoaded] = useState(false)
 
   useEffect(() => {
     if (draft) {
@@ -83,6 +90,25 @@ export function AgentDetailPage() {
       mounted = false
     }
   }, [activeTab, knowledgeSourcesLoaded])
+
+  useEffect(() => {
+    if (activeTab !== 'model' || modelConnectionsLoaded) return
+    let mounted = true
+    fetchModelConnections()
+      .then((response) => {
+        if (!mounted) return
+        setModelConnections(response.data)
+        setModelConnectionsLoaded(true)
+      })
+      .catch(() => {
+        if (!mounted) return
+        setModelConnections([])
+        setModelConnectionsLoaded(true)
+      })
+    return () => {
+      mounted = false
+    }
+  }, [activeTab, modelConnectionsLoaded])
 
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
   const isCustomerFacing = Boolean(extractAgentYamlSection(agentYaml, 'customer'))
@@ -300,7 +326,9 @@ export function AgentDetailPage() {
       {activeTab === 'model' && (
         <ModelModuleEditor
           agentYaml={agentYaml}
+          modelConnections={modelConnections}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+          onModelConfigChange={(path, value) => setAgentYaml((current: string) => replaceAgentYamlMapping(current, path, value))}
           onSave={saveWorkflow}
           busy={busy === 'workflow'}
         />

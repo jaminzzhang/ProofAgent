@@ -12,6 +12,39 @@ export function updateAgentYamlField(
   return lines.join('\n')
 }
 
+export type AgentYamlMappingValue =
+  | string
+  | number
+  | boolean
+  | null
+  | AgentYamlMapping
+
+export interface AgentYamlMapping {
+  [key: string]: AgentYamlMappingValue
+}
+
+export function replaceAgentYamlMapping(
+  agentYaml: string,
+  path: string[],
+  value: AgentYamlMapping,
+): string {
+  const lines = agentYaml.split('\n')
+  const lineIndex = findYamlPathLineIndex(lines, path)
+  const rendered = renderYamlMapping(path[path.length - 1], value, (path.length - 1) * 2)
+
+  if (lineIndex === -1) {
+    if (path.length === 1) {
+      return [...trimTrailingEmptyLines(lines), ...rendered].join('\n')
+    }
+    return updateAgentYamlField(agentYaml, path, '').split('\n').join('\n')
+  }
+
+  const indent = (path.length - 1) * 2
+  const end = findBlockEnd(lines, lineIndex, indent)
+  lines.splice(lineIndex, end - lineIndex, ...rendered)
+  return lines.join('\n')
+}
+
 function insertYamlPath(lines: string[], path: string[], value: string): string[] {
   if (path.length === 0) return lines
 
@@ -39,6 +72,36 @@ function insertYamlPath(lines: string[], path: string[], value: string): string[
   }
 
   return lines
+}
+
+function renderYamlMapping(key: string, value: AgentYamlMapping, indent: number): string[] {
+  return [`${' '.repeat(indent)}${key}:`, ...renderYamlObject(value, indent + 2)]
+}
+
+function renderYamlObject(value: AgentYamlMapping, indent: number): string[] {
+  const lines: string[] = []
+  for (const [key, item] of Object.entries(value)) {
+    if (item === undefined || item === null || item === '') continue
+    if (isPlainObject(item)) {
+      const childLines = renderYamlObject(item, indent + 2)
+      if (childLines.length === 0) continue
+      lines.push(`${' '.repeat(indent)}${key}:`)
+      lines.push(...childLines)
+    } else {
+      lines.push(`${' '.repeat(indent)}${key}: ${formatYamlValue(String(item))}`)
+    }
+  }
+  return lines
+}
+
+function isPlainObject(value: unknown): value is AgentYamlMapping {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function trimTrailingEmptyLines(lines: string[]): string[] {
+  const copy = [...lines]
+  while (copy.length > 0 && copy[copy.length - 1] === '') copy.pop()
+  return copy
 }
 
 export function readAgentYamlField(agentYaml: string, path: string[]): string {

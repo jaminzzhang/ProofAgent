@@ -54,8 +54,8 @@ describe('module configuration field options', () => {
       'review.subagent.params.api_key_env',
       'review.subagent.params.base_url_env',
       'review.subagent.params.temperature',
-      'review.subagent.max_output_tokens',
-      'review.subagent.timeout_seconds',
+      'review.subagent.params.max_output_tokens',
+      'review.subagent.params.timeout_seconds',
     ]))
   })
 })

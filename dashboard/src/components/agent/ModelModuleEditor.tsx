@@ -1,147 +1,88 @@
 import { useState } from 'react'
+import type { AgentYamlMapping } from '../../utils/agentYaml'
 import { CodeBlock } from '../CodeBlock'
+import type { SharedModelConnection } from '../../api/types'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
 
 const MODEL_PROVIDER_OPTIONS = ['deterministic', 'openai_compatible', 'openai', 'deepseek', 'azure_openai', 'anthropic']
 
 interface ModelModuleEditorProps {
   agentYaml: string
+  modelConnections?: readonly SharedModelConnection[]
   onFieldChange: (path: string[], value: string) => void
+  onModelConfigChange?: (path: string[], value: AgentYamlMapping) => void
   onSave: () => void
   busy: boolean
 }
 
-interface FieldDef {
-  label: string
-  input: 'text' | 'number' | 'select'
-  options?: string[]
-  placeholder?: string
-  description?: string
+interface ModelRole {
+  title: string
+  sourceLabel: string
+  basePath: string[]
+  subtitle?: string
+  reviewer?: boolean
 }
 
-const COMMON_MODEL_FIELDS: Record<string, FieldDef> = {
-  provider: { label: 'Provider', input: 'select', options: MODEL_PROVIDER_OPTIONS },
-  name: { label: 'Model Name', input: 'text', placeholder: 'deepseek-v4-flash' },
-  api_key_env: { label: 'API Key Env', input: 'text', placeholder: 'DEEPSEEK_API_KEY', description: 'Environment variable for API key' },
-  base_url_env: { label: 'Base URL Env', input: 'text', placeholder: 'DEEPSEEK_BASE_URL' },
-  temperature: { label: 'Temperature', input: 'number' },
-  max_output_tokens: { label: 'Max Output Tokens', input: 'number' },
-  timeout_seconds: { label: 'Timeout (s)', input: 'number' }
+const ANSWER_ROLE: ModelRole = {
+  title: 'Answer Model',
+  sourceLabel: 'Answer Model Source',
+  basePath: ['model'],
+  subtitle: 'Final answer generation model',
 }
+
+const PLANNER_ROLE: ModelRole = {
+  title: 'Planner Model',
+  sourceLabel: 'Planner Model Source',
+  basePath: ['react', 'planner'],
+  subtitle: 'ReAct reasoning and tool planning model',
+}
+
+const REVIEWER_ROLE: ModelRole = {
+  title: 'Reviewer Model',
+  sourceLabel: 'Reviewer Model Source',
+  basePath: ['review', 'subagent'],
+  subtitle: 'Harness review subagent model',
+  reviewer: true,
+}
+
+const ROLE_PATHS = [ANSWER_ROLE.basePath, PLANNER_ROLE.basePath, REVIEWER_ROLE.basePath]
 
 export function ModelModuleEditor({
   agentYaml,
+  modelConnections = [],
   onFieldChange,
+  onModelConfigChange,
   onSave,
   busy,
 }: ModelModuleEditorProps) {
   const [strategy, setStrategy] = useState<'unified' | 'role-specific'>('unified')
   const [showYaml, setShowYaml] = useState(false)
 
-  const sectionYaml = extractAgentYamlSection(agentYaml, 'model') + '\n' + extractAgentYamlSection(agentYaml, 'react') + '\n' + extractAgentYamlSection(agentYaml, 'review')
+  const sectionYaml = [
+    extractAgentYamlSection(agentYaml, 'model'),
+    extractAgentYamlSection(agentYaml, 'react'),
+    extractAgentYamlSection(agentYaml, 'review'),
+  ].filter(Boolean).join('\n')
 
-  const handleUnifiedChange = (subPath: string[], value: string) => {
-    // Determine the three paths
-    // Answer
-    const answerPath = ['model', ...subPath]
-    // Planner
-    const plannerPath = ['react', 'planner', ...subPath]
-    // Reviewer
-    const reviewerPath = ['review', 'subagent', ...subPath]
-    
-    // Call sequentially (React state functional updaters will handle this gracefully)
-    onFieldChange(answerPath, value)
-    onFieldChange(plannerPath, value)
-    onFieldChange(reviewerPath, value)
+  function applyModelConfig(path: string[], value: AgentYamlMapping) {
+    onModelConfigChange?.(path, value)
   }
 
-  const renderModelFields = (basePath: string[], isUnified: boolean, title: string, subtitle?: string, extraFields?: React.ReactNode) => {
-    const getPath = (key: string) => {
-      if (key === 'provider' || key === 'name') return [...basePath, key]
-      return [...basePath, 'params', key]
+  function handleSourceChange(role: ModelRole, value: string) {
+    const nextConfig = modelConfigForSource(agentYaml, role, value)
+    applyModelConfig(role.basePath, nextConfig)
+  }
+
+  function handleUnifiedSourceChange(value: string) {
+    for (const role of [ANSWER_ROLE, PLANNER_ROLE, REVIEWER_ROLE]) {
+      applyModelConfig(role.basePath, modelConfigForSource(agentYaml, role, value))
     }
-    
-    // For Reviewer: Max output tokens and timeout are sometimes outside params or inside. Wait, looking at model.ts:
-    // Reviewer Max Output Tokens is ['review', 'subagent', 'max_output_tokens'] (outside params!)
-    // Let's use specific hardcoded paths for each if needed, but for Unified it's tricky if paths diverge.
-    // In model.ts:
-    // Answer: model.params.max_output_tokens
-    // Planner: react.planner.params.max_output_tokens
-    // Reviewer: review.subagent.max_output_tokens (Wait, is this a typo in model.ts or YAML contract?)
-    // In ProofAgent CONTEXT, Reviewer subagent might just have max_output_tokens natively. Let's stick to the paths defined in model.ts.
-    
-    return (
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 mb-4 shadow-sm">
-        <h4 className="text-sm font-bold uppercase tracking-wider text-[var(--text-primary)] mb-1">{title}</h4>
-        {subtitle && <p className="text-xs text-[var(--text-muted)] mb-4">{subtitle}</p>}
-        {extraFields && <div className="mb-4">{extraFields}</div>}
-        <div className="grid gap-4 md:grid-cols-2">
-          {Object.entries(COMMON_MODEL_FIELDS).map(([key, def]) => {
-            // Path resolution
-            let resolvedPath = [...basePath]
-            if (key === 'provider' || key === 'name') {
-              resolvedPath.push(key)
-            } else {
-              // Handle the Reviewer divergence for timeout and max_tokens
-              if (basePath[0] === 'review' && (key === 'max_output_tokens' || key === 'timeout_seconds')) {
-                resolvedPath.push(key)
-              } else {
-                resolvedPath.push('params', key)
-              }
-            }
+  }
 
-            const val = readAgentYamlField(agentYaml, resolvedPath)
-
-            return (
-              <label key={key} className="block">
-                <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                  {def.label}
-                </span>
-                {def.description && (
-                  <span className="block text-xs text-[var(--text-muted)] mb-2">{def.description}</span>
-                )}
-                {def.input === 'select' && def.options ? (
-                  <select
-                    value={val}
-                    onChange={(e) => isUnified ? handleUnifiedChange(key === 'provider' || key === 'name' ? [key] : (key === 'max_output_tokens' || key === 'timeout_seconds') ? ['params', key] : ['params', key], e.target.value) : onFieldChange(resolvedPath, e.target.value)}
-                    className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                  >
-                    {def.options.map((opt) => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type={def.input}
-                    value={val}
-                    placeholder={def.placeholder}
-                    onChange={(e) => {
-                      if (isUnified) {
-                        // For unified change, we need to map the subpath carefully
-                        if (key === 'provider' || key === 'name') {
-                          handleUnifiedChange([key], e.target.value)
-                        } else if (key === 'max_output_tokens' || key === 'timeout_seconds') {
-                          // The tricky part: Reviewer uses direct keys, Answer/Planner use params.key
-                          // We must explicitly call onFieldChange for the 3 roles because handleUnifiedChange assumes consistent subpath
-                          onFieldChange(['model', 'params', key], e.target.value)
-                          onFieldChange(['react', 'planner', 'params', key], e.target.value)
-                          onFieldChange(['review', 'subagent', key], e.target.value)
-                        } else {
-                          handleUnifiedChange(['params', key], e.target.value)
-                        }
-                      } else {
-                        onFieldChange(resolvedPath, e.target.value)
-                      }
-                    }}
-                    className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                  />
-                )}
-              </label>
-            )
-          })}
-        </div>
-      </div>
-    )
+  function handleUnifiedFieldChange(subPath: string[], value: string) {
+    onFieldChange(['model', ...subPath], value)
+    onFieldChange(['react', 'planner', ...subPath], value)
+    onFieldChange(['review', 'subagent', ...subPath], value)
   }
 
   return (
@@ -199,88 +140,329 @@ export function ModelModuleEditor({
       )}
 
       <div className="p-5 space-y-6">
-        {/* Model Configurations */}
         {strategy === 'unified' ? (
-          renderModelFields(
-            ['model'], 
-            true, 
-            'Primary Model Settings', 
-            'These settings will be applied to the Answer, Planner, and Reviewer roles simultaneously.'
-          )
+          <ModelRoleCard
+            role={{
+              title: 'Primary Model Settings',
+              sourceLabel: 'Primary Model Source',
+              basePath: ['model'],
+              subtitle: 'These settings apply to Answer, Planner, and Reviewer roles.',
+            }}
+            agentYaml={agentYaml}
+            modelConnections={modelConnections}
+            unified
+            onSourceChange={handleUnifiedSourceChange}
+            onFieldChange={handleUnifiedFieldChange}
+          />
         ) : (
           <div className="space-y-6">
-            {renderModelFields(['model'], false, 'Answer Model', 'Final answer generation model')}
-            {renderModelFields(['react', 'planner'], false, 'Planner Model', 'ReAct reasoning and tool planning model')}
-            {renderModelFields(
-              ['review', 'subagent'], 
-              false, 
-              'Reviewer Model', 
-              'Harness review subagent model',
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">Review Mode</span>
-                  <select
-                    value={readAgentYamlField(agentYaml, ['review', 'mode'])}
-                    onChange={(e) => onFieldChange(['review', 'mode'], e.target.value)}
-                    className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                  >
-                    <option value="rules_only">Rules Only</option>
-                    <option value="auto">Auto (LLM Subagent)</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">Fail Closed</span>
-                  <select
-                    value={readAgentYamlField(agentYaml, ['review', 'subagent', 'fail_closed'])}
-                    onChange={(e) => onFieldChange(['review', 'subagent', 'fail_closed'], e.target.value)}
-                    className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                  >
-                    <option value="true">true</option>
-                    <option value="false">false</option>
-                  </select>
-                </label>
-              </div>
-            )}
+            <ModelRoleCard
+              role={ANSWER_ROLE}
+              agentYaml={agentYaml}
+              modelConnections={modelConnections}
+              onSourceChange={(value) => handleSourceChange(ANSWER_ROLE, value)}
+              onFieldChange={(path, value) => onFieldChange(path, value)}
+            />
+            <ModelRoleCard
+              role={PLANNER_ROLE}
+              agentYaml={agentYaml}
+              modelConnections={modelConnections}
+              onSourceChange={(value) => handleSourceChange(PLANNER_ROLE, value)}
+              onFieldChange={(path, value) => onFieldChange(path, value)}
+            />
+            <ModelRoleCard
+              role={REVIEWER_ROLE}
+              agentYaml={agentYaml}
+              modelConnections={modelConnections}
+              onSourceChange={(value) => handleSourceChange(REVIEWER_ROLE, value)}
+              onFieldChange={(path, value) => onFieldChange(path, value)}
+              extraFields={
+                <div className="grid gap-4 md:grid-cols-2">
+                  <SelectField
+                    label="Review Mode"
+                    value={readAgentYamlField(agentYaml, ['review', 'mode']) || 'rules_only'}
+                    onChange={(value) => onFieldChange(['review', 'mode'], value)}
+                    options={[
+                      { value: 'rules_only', label: 'Rules Only' },
+                      { value: 'auto', label: 'Auto' },
+                    ]}
+                  />
+                  <SelectField
+                    label="Fail Closed"
+                    value={readAgentYamlField(agentYaml, ['review', 'subagent', 'fail_closed']) || 'true'}
+                    onChange={(value) => onFieldChange(['review', 'subagent', 'fail_closed'], value)}
+                    options={[
+                      { value: 'true', label: 'true' },
+                      { value: 'false', label: 'false' },
+                    ]}
+                  />
+                </div>
+              }
+            />
           </div>
         )}
 
-        {/* ReAct Execution Controls */}
         <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm mt-8">
           <h4 className="text-sm font-bold uppercase tracking-wider text-[var(--text-primary)] mb-1">ReAct Execution Controls</h4>
           <p className="text-xs text-[var(--text-muted)] mb-4">Bounds and settings for the ReAct planning loop</p>
           <div className="grid gap-4 md:grid-cols-3">
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">Max ReAct Steps</span>
-              <input
-                type="number"
-                value={readAgentYamlField(agentYaml, ['react', 'max_steps'])}
-                onChange={(e) => onFieldChange(['react', 'max_steps'], e.target.value)}
-                className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-              />
-            </label>
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">Max Tool Calls</span>
-              <input
-                type="number"
-                value={readAgentYamlField(agentYaml, ['react', 'max_tool_calls'])}
-                onChange={(e) => onFieldChange(['react', 'max_tool_calls'], e.target.value)}
-                className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-              />
-            </label>
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">Record Reasoning</span>
-              <select
-                value={readAgentYamlField(agentYaml, ['react', 'record_reasoning_summary'])}
-                onChange={(e) => onFieldChange(['react', 'record_reasoning_summary'], e.target.value)}
-                className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-              >
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
-            </label>
+            <TextField
+              type="number"
+              label="Max ReAct Steps"
+              value={readAgentYamlField(agentYaml, ['react', 'max_steps'])}
+              onChange={(value) => onFieldChange(['react', 'max_steps'], value)}
+            />
+            <TextField
+              type="number"
+              label="Max Tool Calls"
+              value={readAgentYamlField(agentYaml, ['react', 'max_tool_calls'])}
+              onChange={(value) => onFieldChange(['react', 'max_tool_calls'], value)}
+            />
+            <SelectField
+              label="Record Reasoning"
+              value={readAgentYamlField(agentYaml, ['react', 'record_reasoning_summary']) || 'true'}
+              onChange={(value) => onFieldChange(['react', 'record_reasoning_summary'], value)}
+              options={[
+                { value: 'true', label: 'true' },
+                { value: 'false', label: 'false' },
+              ]}
+            />
           </div>
         </div>
       </div>
     </div>
+  )
+}
+
+function ModelRoleCard({
+  role,
+  agentYaml,
+  modelConnections,
+  unified = false,
+  extraFields,
+  onSourceChange,
+  onFieldChange,
+}: {
+  role: ModelRole
+  agentYaml: string
+  modelConnections: readonly SharedModelConnection[]
+  unified?: boolean
+  extraFields?: React.ReactNode
+  onSourceChange: (value: string) => void
+  onFieldChange: (path: string[], value: string) => void
+}) {
+  const customSelected = currentModelSource(agentYaml, role.basePath) !== 'shared'
+  const basePath = unified ? ['model'] : role.basePath
+  const currentConnectionId = currentSharedConnectionId(agentYaml, role.basePath)
+  const selectableConnections = selectableModelConnections(modelConnections, currentConnectionId)
+  const currentConnection = currentConnectionId
+    ? modelConnections.find((connection) => connection.connection_id === currentConnectionId)
+    : undefined
+  const labelPrefix = unified ? '' : role.title.replace(' Model', '')
+  const provider = readAgentYamlField(agentYaml, [...basePath, 'provider'])
+  const modelName = readAgentYamlField(agentYaml, [...basePath, 'name'])
+  const credentialName = readAgentYamlField(agentYaml, [...basePath, 'credential_ref', 'name'])
+    || readAgentYamlField(agentYaml, [...basePath, 'params', 'api_key_env'])
+  const baseUrl = readAgentYamlField(agentYaml, [...basePath, 'base_url'])
+  const temperaturePath = [...basePath, 'params', 'temperature']
+  const maxOutputPath = [...basePath, 'params', 'max_output_tokens']
+  const timeoutPath = [...basePath, 'params', 'timeout_seconds']
+
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 mb-4 shadow-sm">
+      <h4 className="text-sm font-bold uppercase tracking-wider text-[var(--text-primary)] mb-1">{role.title}</h4>
+      {role.subtitle && <p className="text-xs text-[var(--text-muted)] mb-4">{role.subtitle}</p>}
+      {extraFields && <div className="mb-4">{extraFields}</div>}
+      <div className="grid gap-4 md:grid-cols-2">
+        <SelectField
+          label={role.sourceLabel}
+          value={currentModelSourceValue(agentYaml, role.basePath)}
+          onChange={onSourceChange}
+          options={[
+            ...selectableConnections.map((connection) => ({
+              value: `shared:${connection.connection_id}`,
+              label: connection.lifecycle_state === 'ARCHIVED'
+                ? `${connection.display_name} (archived)`
+                : connection.display_name,
+            })),
+            { value: 'custom', label: 'Custom' },
+          ]}
+        />
+        {currentConnection?.lifecycle_state === 'ARCHIVED' && (
+          <div className="self-end rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs font-medium text-[var(--warning)]">
+            Archived connection is already referenced.
+          </div>
+        )}
+        {customSelected && (
+          <>
+            <SelectField
+              label={`${labelPrefix ? `${labelPrefix} ` : ''}Provider`}
+              value={provider || MODEL_PROVIDER_OPTIONS[0]}
+              onChange={(value) => onFieldChange([...basePath, 'provider'], value)}
+              options={MODEL_PROVIDER_OPTIONS.map((option) => ({ value: option, label: option }))}
+            />
+            <TextField
+              label={`${labelPrefix ? `${labelPrefix} ` : ''}Model Name`}
+              value={modelName}
+              onChange={(value) => onFieldChange([...basePath, 'name'], value)}
+              placeholder="deepseek-chat"
+            />
+            <TextField
+              label={`${labelPrefix ? `${labelPrefix} ` : ''}Credential Env`}
+              value={credentialName}
+              onChange={(value) => onFieldChange([...basePath, 'credential_ref', 'name'], value)}
+              placeholder="DEEPSEEK_API_KEY"
+            />
+            <TextField
+              label={`${labelPrefix ? `${labelPrefix} ` : ''}Base URL`}
+              value={baseUrl}
+              onChange={(value) => onFieldChange([...basePath, 'base_url'], value)}
+              placeholder="https://api.deepseek.com"
+            />
+          </>
+        )}
+        <TextField
+          type="number"
+          label={`${labelPrefix ? `${labelPrefix} ` : ''}Temperature`}
+          value={readAgentYamlField(agentYaml, temperaturePath)}
+          onChange={(value) => onFieldChange(temperaturePath, value)}
+        />
+        <TextField
+          type="number"
+          label={`${labelPrefix ? `${labelPrefix} ` : ''}Max Output Tokens`}
+          value={readAgentYamlField(agentYaml, maxOutputPath)}
+          onChange={(value) => onFieldChange(maxOutputPath, value)}
+        />
+        <TextField
+          type="number"
+          label={`${labelPrefix ? `${labelPrefix} ` : ''}Timeout (s)`}
+          value={readAgentYamlField(agentYaml, timeoutPath)}
+          onChange={(value) => onFieldChange(timeoutPath, value)}
+        />
+      </div>
+    </div>
+  )
+}
+
+function modelConfigForSource(agentYaml: string, role: ModelRole, sourceValue: string): AgentYamlMapping {
+  const params = usageParams(agentYaml, role.basePath)
+  if (sourceValue.startsWith('shared:')) {
+    return {
+      model_source: 'shared',
+      connection_id: sourceValue.slice('shared:'.length),
+      ...(role.reviewer ? { fail_closed: readAgentYamlField(agentYaml, ['review', 'subagent', 'fail_closed']) || 'true' } : {}),
+      ...(Object.keys(params).length > 0 ? { params } : {}),
+    }
+  }
+  return {
+    model_source: 'custom',
+    provider: readAgentYamlField(agentYaml, [...role.basePath, 'provider']) || 'deepseek',
+    name: readAgentYamlField(agentYaml, [...role.basePath, 'name']) || 'deepseek-chat',
+    ...(readAgentYamlField(agentYaml, [...role.basePath, 'base_url'])
+      ? { base_url: readAgentYamlField(agentYaml, [...role.basePath, 'base_url']) }
+      : {}),
+    credential_ref: {
+      type: 'env',
+      name: readAgentYamlField(agentYaml, [...role.basePath, 'credential_ref', 'name'])
+        || readAgentYamlField(agentYaml, [...role.basePath, 'params', 'api_key_env']),
+    },
+    ...(role.reviewer ? { fail_closed: readAgentYamlField(agentYaml, ['review', 'subagent', 'fail_closed']) || 'true' } : {}),
+    ...(Object.keys(params).length > 0 ? { params } : {}),
+  }
+}
+
+function usageParams(agentYaml: string, basePath: string[]): AgentYamlMapping {
+  const params: AgentYamlMapping = {}
+  for (const key of ['temperature', 'max_output_tokens', 'timeout_seconds']) {
+    const value = readAgentYamlField(agentYaml, [...basePath, 'params', key])
+    if (value !== '') params[key] = value
+  }
+  return params
+}
+
+function currentModelSource(agentYaml: string, basePath: string[]): string {
+  return readAgentYamlField(agentYaml, [...basePath, 'model_source']) || 'custom'
+}
+
+function currentModelSourceValue(agentYaml: string, basePath: string[]): string {
+  if (currentModelSource(agentYaml, basePath) === 'shared') {
+    const connectionId = currentSharedConnectionId(agentYaml, basePath)
+    return connectionId ? `shared:${connectionId}` : 'custom'
+  }
+  return 'custom'
+}
+
+function currentSharedConnectionId(agentYaml: string, basePath: string[]): string {
+  return readAgentYamlField(agentYaml, [...basePath, 'connection_id'])
+}
+
+function selectableModelConnections(
+  modelConnections: readonly SharedModelConnection[],
+  currentConnectionId: string,
+): readonly SharedModelConnection[] {
+  return modelConnections.filter(
+    (connection) =>
+      connection.lifecycle_state === 'ACTIVE'
+      || (Boolean(currentConnectionId) && connection.connection_id === currentConnectionId),
+  )
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  type?: 'text' | 'number'
+}) {
+  return (
+    <label className="block">
+      <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+        {label}
+      </span>
+      <input
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+      />
+    </label>
+  )
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <label className="block">
+      <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
   )
 }
