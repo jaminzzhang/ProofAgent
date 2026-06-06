@@ -33,10 +33,12 @@ export function KnowledgeModuleEditor({
   knowledgeSourceError,
 }: KnowledgeModuleEditorProps) {
   const publishedSources = useMemo(
-    () => knowledgeSources.filter((source) => Boolean(source.published_snapshot_id)),
+    () => knowledgeSources.filter((source) => (
+      source.lifecycle_state === 'ACTIVE' && Boolean(source.published_snapshot_id)
+    )),
     [knowledgeSources],
   )
-  const unpublishedCount = knowledgeSources.length - publishedSources.length
+  const unavailableCount = knowledgeSources.length - publishedSources.length
   // Bind form state
   const [selectedSourceId, setSelectedSourceId] = useState<string>('')
   const [bindingAlias, setBindingAlias] = useState('')
@@ -158,9 +160,9 @@ export function KnowledgeModuleEditor({
             {publishedSources.length} published available
           </span>
         </div>
-        {unpublishedCount > 0 && (
+        {unavailableCount > 0 && (
           <p className="mb-4 text-xs text-[var(--text-muted)]">
-            {unpublishedCount} unpublished Source{unpublishedCount === 1 ? '' : 's'} hidden until publication.
+            {unavailableCount} unavailable Source{unavailableCount === 1 ? '' : 's'} hidden until active and published.
           </p>
         )}
 
@@ -250,7 +252,7 @@ export function KnowledgeModuleEditor({
             <div className="lg:col-span-2 flex justify-end mt-2">
               <button
                 onClick={handleBind}
-                disabled={busy || !selectedSourceId}
+                disabled={busy || publishedSources.length === 0}
                 className="rounded-md bg-[var(--accent)] px-6 py-2 text-sm font-medium text-[var(--accent-fg)] hover:opacity-80 disabled:opacity-50 transition-all"
               >
                 {busy ? 'Binding...' : 'Bind Source'}

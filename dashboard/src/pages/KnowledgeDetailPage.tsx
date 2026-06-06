@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
+  archiveKnowledgeSource,
   fetchCandidateKnowledgeSourceSnapshot,
   fetchKnowledgeDocuments,
   fetchKnowledgeSource,
+  fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSourcePublications,
+  permanentlyDeleteKnowledgeSource,
   publishKnowledgeSource,
+  restoreKnowledgeSource,
   updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocuments,
   validateKnowledgeSourcePublication,
@@ -14,6 +18,7 @@ import type {
   CandidateKnowledgeSourceSnapshot,
   KnowledgeDocument,
   KnowledgeSource,
+  KnowledgeSourceDeletionEligibility,
   KnowledgeSourcePublicationRecord,
   KnowledgeSourcePublicationValidation,
 } from '../api/types'
@@ -38,13 +43,18 @@ const emptyRoutingForm: RoutingFormState = {
 
 export function KnowledgeDetailPage() {
   const { sourceId } = useParams<{ sourceId: string }>()
+  const navigate = useNavigate()
   const [source, setSource] = useState<KnowledgeSource | null>(null)
   const [documents, setDocuments] = useState<readonly KnowledgeDocument[]>([])
   const [candidate, setCandidate] = useState<CandidateKnowledgeSourceSnapshot | null>(null)
   const [publications, setPublications] = useState<readonly KnowledgeSourcePublicationRecord[]>([])
+  const [deletionEligibility, setDeletionEligibility] = useState<KnowledgeSourceDeletionEligibility | null>(null)
   const [lastValidation, setLastValidation] = useState<KnowledgeSourcePublicationValidation | null>(null)
   const [smokeQuery, setSmokeQuery] = useState('')
   const [changeNote, setChangeNote] = useState('')
+  const [archiveReason, setArchiveReason] = useState('')
+  const [restoreReason, setRestoreReason] = useState('')
+  const [deleteReason, setDeleteReason] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
@@ -61,7 +71,16 @@ export function KnowledgeDetailPage() {
     setSource(sourceResponse)
     setDocuments(documentsResponse.data)
     setPublications(publicationsResponse.data)
-    if (sourceResponse.provider !== 'local_index') {
+    if (sourceResponse.lifecycle_state === 'ARCHIVED') {
+      try {
+        setDeletionEligibility(await fetchKnowledgeSourceDeletionEligibility(id))
+      } catch {
+        setDeletionEligibility(null)
+      }
+    } else {
+      setDeletionEligibility(null)
+    }
+    if (sourceResponse.provider !== 'local_index' || sourceResponse.lifecycle_state === 'ARCHIVED') {
       setCandidate(null)
       return
     }
@@ -94,7 +113,7 @@ export function KnowledgeDetailPage() {
 
   async function uploadDocuments(fileList: FileList | null) {
     const files = Array.from(fileList ?? [])
-    if (files.length === 0 || !sourceId) return
+    if (files.length === 0 || !sourceId || source?.lifecycle_state === 'ARCHIVED') return
     setBusy('upload')
     setError(null)
     setStatus(null)
@@ -118,6 +137,7 @@ export function KnowledgeDetailPage() {
   }
 
   function openRoutingEditor(document: KnowledgeDocument) {
+    if (source?.lifecycle_state === 'ARCHIVED') return
     setEditingRoutingDocumentId(document.document_id)
     setStatus(null)
     setRoutingForm({
@@ -130,7 +150,7 @@ export function KnowledgeDetailPage() {
   }
 
   async function saveRoutingMetadata(document: KnowledgeDocument) {
-    if (!sourceId) return
+    if (!sourceId || source?.lifecycle_state === 'ARCHIVED') return
     setBusy(`routing:${document.document_id}`)
     setError(null)
     setStatus(null)
@@ -150,7 +170,7 @@ export function KnowledgeDetailPage() {
   }
 
   async function validatePublication() {
-    if (!sourceId || !smokeQuery.trim()) return
+    if (!sourceId || !smokeQuery.trim() || source?.lifecycle_state === 'ARCHIVED') return
     setBusy('validate')
     setError(null)
     setStatus(null)
@@ -169,7 +189,7 @@ export function KnowledgeDetailPage() {
   }
 
   async function publishSource() {
-    if (!sourceId || !lastValidation || !changeNote.trim()) return
+    if (!sourceId || !lastValidation || !changeNote.trim() || source?.lifecycle_state === 'ARCHIVED') return
     setBusy('publish')
     setError(null)
     setStatus(null)
@@ -189,11 +209,72 @@ export function KnowledgeDetailPage() {
     }
   }
 
+  async function archiveSource() {
+    if (!sourceId || !archiveReason.trim()) return
+    setBusy('archive')
+    setError(null)
+    setStatus(null)
+    try {
+      await archiveKnowledgeSource(sourceId, {
+        reason: archiveReason.trim(),
+        actor: 'dashboard',
+      })
+      setArchiveReason('')
+      setLastValidation(null)
+      setStatus('Knowledge Source archived.')
+      await loadWorkspace(sourceId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to archive source.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function restoreSource() {
+    if (!sourceId) return
+    setBusy('restore')
+    setError(null)
+    setStatus(null)
+    try {
+      await restoreKnowledgeSource(sourceId, {
+        reason: restoreReason.trim() || null,
+        actor: 'dashboard',
+      })
+      setRestoreReason('')
+      setDeleteReason('')
+      setStatus('Knowledge Source restored.')
+      await loadWorkspace(sourceId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to restore source.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function deleteSource() {
+    if (!sourceId || !deleteReason.trim() || !deletionEligibility?.eligible) return
+    setBusy('delete')
+    setError(null)
+    setStatus(null)
+    try {
+      await permanentlyDeleteKnowledgeSource(sourceId, {
+        reason: deleteReason.trim(),
+        actor: 'dashboard',
+      })
+      navigate('/knowledge')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to permanently delete source.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   if (loading) return <div className="flex justify-center py-12"><LoadingSpinner /></div>
   if (error && !source) return <div className="text-sm text-[var(--danger)]">{error}</div>
   if (!source) return <div className="text-sm text-[var(--text-muted)]">Knowledge Source not found.</div>
   const isLocalIndexSource = source.provider === 'local_index'
   const supportsPublication = source.provider === 'local_index' || source.provider === 'http_json'
+  const isArchived = source.lifecycle_state === 'ARCHIVED'
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -209,10 +290,107 @@ export function KnowledgeDetailPage() {
       </div>
 
       <section className="grid gap-4 md:grid-cols-4">
+        <Metric label="Lifecycle" value={source.lifecycle_state === 'ACTIVE' ? 'active' : 'archived'} />
         <Metric label="Provider" value={source.provider} />
         <Metric label="Documents" value={`${source.ready_document_count} / ${source.document_count} ready`} />
-        <Metric label="Latest Snapshot" value={source.latest_snapshot_id ?? '-'} />
         <Metric label={isLocalIndexSource ? 'Published Snapshot' : 'Published Resource'} value={source.published_snapshot_id ?? '-'} />
+      </section>
+
+      <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">Lifecycle</h3>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              {isArchived
+                ? 'Archived sources keep history and references readable while blocking new writes.'
+                : 'Active sources can receive documents, routing updates, validations, publications, and Agent bindings.'}
+            </p>
+          </div>
+          <span className={`rounded-md px-2 py-1 text-xs font-medium ${isArchived ? 'bg-[var(--bg-base)] text-[var(--text-muted)]' : 'bg-[var(--success)]/10 text-[var(--success)]'}`}>
+            {isArchived ? 'archived' : 'active'}
+          </span>
+        </div>
+
+        {isArchived ? (
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <label className="block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Restore Reason</span>
+              <input
+                value={restoreReason}
+                onChange={(event) => setRestoreReason(event.target.value)}
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+              />
+            </label>
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => void restoreSource()}
+                disabled={busy === 'restore'}
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+              >
+                {busy === 'restore' ? 'Restoring...' : 'Restore Source'}
+              </button>
+            </div>
+
+            <div className="lg:col-span-2 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-4">
+              <div className="grid gap-3 text-sm md:grid-cols-3">
+                <InlineMetric label="Deletion Eligibility" value={deletionEligibility?.eligible ? 'eligible' : 'blocked'} />
+                <InlineMetric label="References" value={String(totalReferences(deletionEligibility))} />
+                <InlineMetric label="Blockers" value={deletionEligibility?.blockers.length ? String(deletionEligibility.blockers.length) : '0'} />
+              </div>
+              {deletionEligibility?.blockers.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {deletionEligibility.blockers.map((blocker) => (
+                    <span key={blocker} className="rounded-md border border-[var(--border)] px-2 py-1 font-mono text-xs text-[var(--text-muted)]">
+                      {blocker}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <label className="block">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Permanent Delete Reason</span>
+                  <input
+                    value={deleteReason}
+                    onChange={(event) => setDeleteReason(event.target.value)}
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    onClick={() => void deleteSource()}
+                    disabled={busy === 'delete' || !deletionEligibility?.eligible || !deleteReason.trim()}
+                    className="w-full rounded-md border border-[var(--danger)]/50 bg-[var(--danger)]/10 px-4 py-2 text-sm font-medium text-[var(--danger)] hover:bg-[var(--danger)]/15 disabled:opacity-50"
+                  >
+                    {busy === 'delete' ? 'Deleting...' : 'Permanently Delete'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <label className="block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Archive Reason</span>
+              <input
+                value={archiveReason}
+                onChange={(event) => setArchiveReason(event.target.value)}
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+              />
+            </label>
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => void archiveSource()}
+                disabled={busy === 'archive' || !archiveReason.trim()}
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+              >
+                {busy === 'archive' ? 'Archiving...' : 'Archive Source'}
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
@@ -229,13 +407,13 @@ export function KnowledgeDetailPage() {
             <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">Documents</h3>
             <p className="mt-1 text-sm text-[var(--text-muted)]">Uploaded documents are validated before they can enter a Local Index snapshot.</p>
           </div>
-          <label className="cursor-pointer rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]">
+          <label className={`cursor-pointer rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] ${isArchived ? 'cursor-not-allowed opacity-50' : ''}`}>
             {busy === 'upload' ? 'Uploading...' : 'Upload Documents'}
             <input
               type="file"
               multiple
               accept=".pdf,.md,.markdown,application/pdf,text/markdown,text/plain"
-              disabled={busy === 'upload'}
+              disabled={busy === 'upload' || isArchived}
               onChange={(event) => void uploadDocuments(event.target.files)}
               className="hidden"
             />
@@ -258,7 +436,8 @@ export function KnowledgeDetailPage() {
                   <button
                     type="button"
                     onClick={() => openRoutingEditor(document)}
-                    className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                    disabled={isArchived}
+                    className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
                   >
                     Edit Routing
                   </button>
@@ -371,7 +550,7 @@ export function KnowledgeDetailPage() {
           <div className="flex items-end">
             <button
               onClick={validatePublication}
-              disabled={busy === 'validate' || !smokeQuery.trim()}
+              disabled={busy === 'validate' || !smokeQuery.trim() || isArchived}
               className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
             >
               {busy === 'validate' ? 'Validating...' : 'Validate Publication'}
@@ -388,7 +567,7 @@ export function KnowledgeDetailPage() {
           <div className="flex items-end">
             <button
               onClick={publishSource}
-              disabled={busy === 'publish' || !lastValidation || !changeNote.trim()}
+              disabled={busy === 'publish' || !lastValidation || !changeNote.trim() || isArchived}
               className="w-full rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-fg)] hover:opacity-90 disabled:opacity-50"
             >
               {busy === 'publish' ? 'Publishing...' : 'Publish Source'}
@@ -434,6 +613,30 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
       <div className="mt-2 truncate text-sm font-medium text-[var(--text-primary)]">{value}</div>
     </div>
+  )
+}
+
+function InlineMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
+      <div className="mt-1 truncate text-sm font-medium text-[var(--text-primary)]">{value}</div>
+    </div>
+  )
+}
+
+function totalReferences(eligibility: KnowledgeSourceDeletionEligibility | null): number {
+  if (!eligibility) return 0
+  const summary = eligibility.reference_summary
+  return (
+    summary.draft_agent_binding_count
+    + summary.published_agent_version_count
+    + summary.publication_count
+    + summary.snapshot_count
+    + summary.document_count
+    + summary.quarantined_upload_count
+    + summary.ingestion_job_count
+    + (summary.audit_retention_blocked ? 1 : 0)
   )
 }
 

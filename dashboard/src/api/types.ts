@@ -163,6 +163,9 @@ export type ConfigurationOperation =
   | 'validated'
   | 'published'
   | 'rolled_back'
+  | 'archived'
+  | 'restored'
+  | 'physical_deleted'
 
 export interface ConfigurationOperationAudit {
   operation_id: string
@@ -247,6 +250,7 @@ export interface KnowledgeSource {
   source_id: string
   name: string
   provider: string
+  lifecycle_state: KnowledgeSourceLifecycleState
   params: Record<string, unknown>
   created_at: string
   updated_at: string
@@ -256,6 +260,28 @@ export interface KnowledgeSource {
   publication_count?: number
   document_count: number
   ready_document_count: number
+}
+
+export type KnowledgeSourceLifecycleState = 'ACTIVE' | 'ARCHIVED'
+
+export interface KnowledgeSourceReferenceSummary {
+  source_id: string
+  draft_agent_binding_count: number
+  published_agent_version_count: number
+  publication_count: number
+  snapshot_count: number
+  document_count: number
+  quarantined_upload_count: number
+  ingestion_job_count: number
+  audit_retention_blocked: boolean
+}
+
+export interface KnowledgeSourceDeletionEligibility {
+  source_id: string
+  eligible: boolean
+  lifecycle_state: KnowledgeSourceLifecycleState
+  reference_summary: KnowledgeSourceReferenceSummary
+  blockers: string[]
 }
 
 export interface KnowledgeSourceSnapshotDocument {

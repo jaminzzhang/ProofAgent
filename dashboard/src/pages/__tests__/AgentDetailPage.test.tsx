@@ -187,6 +187,7 @@ describe('AgentDetailPage', () => {
           source_id: 'ks_published',
           name: 'Shared Published Policies',
           provider: 'local_index',
+          lifecycle_state: 'ACTIVE',
           params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
           created_at: '2026-05-31T00:00:00Z',
           updated_at: '2026-05-31T00:00:00Z',
@@ -201,6 +202,7 @@ describe('AgentDetailPage', () => {
           source_id: 'ks_unpublished',
           name: 'Draft Policies',
           provider: 'local_index',
+          lifecycle_state: 'ACTIVE',
           params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
           created_at: '2026-05-31T00:00:00Z',
           updated_at: '2026-05-31T00:00:00Z',
@@ -211,8 +213,23 @@ describe('AgentDetailPage', () => {
           document_count: 1,
           ready_document_count: 1,
         },
+        {
+          source_id: 'ks_archived_published',
+          name: 'Archived Published Policies',
+          provider: 'local_index',
+          lifecycle_state: 'ARCHIVED',
+          params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
+          created_at: '2026-05-31T00:00:00Z',
+          updated_at: '2026-05-31T00:00:00Z',
+          source_draft_version_id: 'ksdraft_3',
+          latest_snapshot_id: 'kssnapshot_3',
+          published_snapshot_id: 'kssnapshot_3',
+          publication_count: 1,
+          document_count: 1,
+          ready_document_count: 1,
+        },
       ],
-      meta: { total: 2 },
+      meta: { total: 3 },
     })
     vi.mocked(bindKnowledgeSourceToDraft).mockResolvedValue({
       ...mockContract,
@@ -234,6 +251,7 @@ describe('AgentDetailPage', () => {
     fireEvent.click(screen.getByText('Knowledge'))
     expect(await screen.findByText(/Shared Published Policies/)).toBeInTheDocument()
     expect(screen.queryByRole('option', { name: /Draft Policies/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Archived Published Policies/ })).not.toBeInTheDocument()
     expect(screen.getByText('1 published available')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Bind Source' }))
 

@@ -4,11 +4,15 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  archiveKnowledgeSource,
   fetchCandidateKnowledgeSourceSnapshot,
   fetchKnowledgeDocuments,
   fetchKnowledgeSource,
+  fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSourcePublications,
+  permanentlyDeleteKnowledgeSource,
   publishKnowledgeSource,
+  restoreKnowledgeSource,
   updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocument,
   uploadKnowledgeDocuments,
@@ -17,11 +21,15 @@ import {
 import { KnowledgeDetailPage } from '../KnowledgeDetailPage'
 
 vi.mock('../../api/client', () => ({
+  archiveKnowledgeSource: vi.fn(),
   fetchCandidateKnowledgeSourceSnapshot: vi.fn(),
   fetchKnowledgeDocuments: vi.fn(),
   fetchKnowledgeSource: vi.fn(),
+  fetchKnowledgeSourceDeletionEligibility: vi.fn(),
   fetchKnowledgeSourcePublications: vi.fn(),
+  permanentlyDeleteKnowledgeSource: vi.fn(),
   publishKnowledgeSource: vi.fn(),
+  restoreKnowledgeSource: vi.fn(),
   updateKnowledgeDocumentRoutingMetadata: vi.fn(),
   uploadKnowledgeDocument: vi.fn(),
   uploadKnowledgeDocuments: vi.fn(),
@@ -45,6 +53,7 @@ describe('KnowledgeDetailPage', () => {
       source_id: 'ks_local_index',
       name: 'Local Index Policies',
       provider: 'local_index',
+      lifecycle_state: 'ACTIVE',
       params: {
         ingestion_model: { provider: 'deterministic', name: 'routing' },
         document_selection_budget: 8,
@@ -103,6 +112,70 @@ describe('KnowledgeDetailPage', () => {
       required_reingestion_count: 0,
     })
     vi.mocked(fetchKnowledgeSourcePublications).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchKnowledgeSourceDeletionEligibility).mockResolvedValue({
+      source_id: 'ks_local_index',
+      eligible: false,
+      lifecycle_state: 'ARCHIVED',
+      reference_summary: {
+        source_id: 'ks_local_index',
+        draft_agent_binding_count: 0,
+        published_agent_version_count: 0,
+        publication_count: 0,
+        snapshot_count: 0,
+        document_count: 1,
+        quarantined_upload_count: 0,
+        ingestion_job_count: 0,
+        audit_retention_blocked: false,
+      },
+      blockers: ['documents'],
+    })
+    vi.mocked(archiveKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_local_index',
+      name: 'Local Index Policies',
+      provider: 'local_index',
+      lifecycle_state: 'ARCHIVED',
+      params: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T03:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: 'kssnapshot_1',
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 1,
+      ready_document_count: 1,
+    })
+    vi.mocked(restoreKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_local_index',
+      name: 'Local Index Policies',
+      provider: 'local_index',
+      lifecycle_state: 'ACTIVE',
+      params: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T04:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: 'kssnapshot_1',
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 1,
+      ready_document_count: 1,
+    })
+    vi.mocked(permanentlyDeleteKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_local_index',
+      eligible: true,
+      lifecycle_state: 'ARCHIVED',
+      reference_summary: {
+        source_id: 'ks_local_index',
+        draft_agent_binding_count: 0,
+        published_agent_version_count: 0,
+        publication_count: 0,
+        snapshot_count: 0,
+        document_count: 0,
+        quarantined_upload_count: 0,
+        ingestion_job_count: 0,
+        audit_retention_blocked: false,
+      },
+      blockers: [],
+    })
     vi.mocked(validateKnowledgeSourcePublication).mockResolvedValue({
       validation_id: 'kspubval_1',
       source_id: 'ks_local_index',
@@ -294,6 +367,7 @@ describe('KnowledgeDetailPage', () => {
       source_id: 'ks_local_index',
       name: 'Remote Policies',
       provider: 'http_json',
+      lifecycle_state: 'ACTIVE',
       params: {
         endpoint: 'https://knowledge.example/retrieve',
         top_k: 5,
@@ -315,5 +389,123 @@ describe('KnowledgeDetailPage', () => {
     expect(screen.queryByLabelText('Upload Documents')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Validate Publication' })).toBeInTheDocument()
     expect(fetchCandidateKnowledgeSourceSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('archives an active source with a reason', async () => {
+    renderPage()
+
+    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Archive Reason'), {
+      target: { value: 'Retire stale policies' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Source' }))
+
+    await waitFor(() => {
+      expect(archiveKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
+        reason: 'Retire stale policies',
+        actor: 'dashboard',
+      })
+    })
+    expect(await screen.findByText('Knowledge Source archived.')).toBeInTheDocument()
+  })
+
+  it('shows restore and deletion controls for archived sources', async () => {
+    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_local_index',
+      name: 'Archived Policies',
+      provider: 'local_index',
+      lifecycle_state: 'ARCHIVED',
+      params: {
+        ingestion_model: { provider: 'deterministic', name: 'routing' },
+        document_selection_budget: 8,
+        worker_concurrency: 2,
+      },
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: 'kssnapshot_1',
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 1,
+      ready_document_count: 1,
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('Archived Policies')).toBeInTheDocument()
+    expect(fetchKnowledgeSourceDeletionEligibility).toHaveBeenCalledWith('ks_local_index')
+    expect(screen.getByRole('button', { name: 'Validate Publication' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Edit Routing' })).toBeDisabled()
+    expect(screen.getByText('documents')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Restore Reason'), {
+      target: { value: 'Need this source again' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Source' }))
+
+    await waitFor(() => {
+      expect(restoreKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
+        reason: 'Need this source again',
+        actor: 'dashboard',
+      })
+    })
+  })
+
+  it('permanently deletes an archived source only when eligible and reason is provided', async () => {
+    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_local_index',
+      name: 'Archived Policies',
+      provider: 'http_json',
+      lifecycle_state: 'ARCHIVED',
+      params: {
+        endpoint: 'https://knowledge.example/retrieve',
+        top_k: 5,
+      },
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: null,
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 0,
+      ready_document_count: 0,
+    })
+    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchKnowledgeSourceDeletionEligibility).mockResolvedValue({
+      source_id: 'ks_local_index',
+      eligible: true,
+      lifecycle_state: 'ARCHIVED',
+      reference_summary: {
+        source_id: 'ks_local_index',
+        draft_agent_binding_count: 0,
+        published_agent_version_count: 0,
+        publication_count: 0,
+        snapshot_count: 0,
+        document_count: 0,
+        quarantined_upload_count: 0,
+        ingestion_job_count: 0,
+        audit_retention_blocked: false,
+      },
+      blockers: [],
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('Archived Policies')).toBeInTheDocument()
+    const deleteButton = screen.getByRole('button', { name: 'Permanently Delete' })
+    expect(deleteButton).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Permanent Delete Reason'), {
+      target: { value: 'Empty archived fixture' },
+    })
+    expect(deleteButton).toBeEnabled()
+    fireEvent.click(deleteButton)
+
+    await waitFor(() => {
+      expect(permanentlyDeleteKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
+        reason: 'Empty archived fixture',
+        actor: 'dashboard',
+      })
+    })
   })
 })

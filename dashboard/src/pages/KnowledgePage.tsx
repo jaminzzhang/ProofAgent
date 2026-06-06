@@ -181,12 +181,15 @@ export function KnowledgePage() {
             <Link
               key={source.source_id}
               to={`/knowledge/${source.source_id}`}
-              className="grid gap-3 px-5 py-4 transition-colors hover:bg-[var(--bg-hover)] md:grid-cols-[1fr_auto_auto_auto]"
+              className={`grid gap-3 px-5 py-4 transition-colors hover:bg-[var(--bg-hover)] md:grid-cols-[1fr_auto_auto_auto_auto] ${source.lifecycle_state === 'ARCHIVED' ? 'opacity-75' : ''}`}
             >
               <div className="min-w-0">
                 <div className="truncate font-medium text-[var(--text-primary)]">{source.name}</div>
                 <div className="mt-1 truncate font-mono text-xs text-[var(--text-muted)]">{source.source_id}</div>
               </div>
+              <span className={`self-center rounded-md px-2 py-0.5 text-xs font-medium ${source.lifecycle_state === 'ACTIVE' ? 'bg-[var(--success)]/10 text-[var(--success)]' : 'bg-[var(--bg-base)] text-[var(--text-muted)]'}`}>
+                {source.lifecycle_state === 'ACTIVE' ? 'active' : 'archived'}
+              </span>
               <span className="self-center rounded-md bg-[var(--bg-base)] px-2 py-0.5 text-xs font-mono text-[var(--text-secondary)]">
                 {source.provider}
               </span>

@@ -1,12 +1,16 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import {
+  archiveKnowledgeSource,
   bindKnowledgeSourceToDraft,
   createKnowledgeSource,
   fetchConfigAgents,
+  fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSources,
   fetchRuns,
   importConfigAgent,
+  permanentlyDeleteKnowledgeSource,
   publishConfigDraft,
+  restoreKnowledgeSource,
   rollbackConfigVersion,
   updateConfigDraftContract,
   updateKnowledgeDocumentRoutingMetadata,
@@ -101,7 +105,15 @@ test('knowledge source client methods use shared source endpoints', async () => 
     source_id: 'ks_local_index',
     name: 'Local Index Policies',
     provider: 'local_index',
-    params: { index_path: './data/indexes/policies' },
+    params: {
+      ingestion_model: {
+        provider: 'openai_compatible',
+        name: 'gpt-4o-mini',
+        params: { api_key_env: 'OPENAI_API_KEY' },
+      },
+      document_selection_budget: 8,
+      worker_concurrency: 2,
+    },
     actor: 'dashboard',
   })
   await uploadKnowledgeDocument('ks_local_index', {
@@ -138,6 +150,110 @@ test('knowledge source client methods use shared source endpoints', async () => 
     '/api/config/knowledge-sources/ks_local_index/documents/doc_1/routing-metadata',
   )
   expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: 'PATCH' })
+})
+
+test('knowledge source lifecycle methods use archive restore eligibility and delete endpoints', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ source_id: 'ks_local_index', lifecycle_state: 'ARCHIVED' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ source_id: 'ks_local_index', lifecycle_state: 'ACTIVE' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        source_id: 'ks_local_index',
+        eligible: true,
+        lifecycle_state: 'ARCHIVED',
+        reference_summary: {
+          source_id: 'ks_local_index',
+          draft_agent_binding_count: 0,
+          published_agent_version_count: 0,
+          publication_count: 0,
+          snapshot_count: 0,
+          document_count: 0,
+          quarantined_upload_count: 0,
+          ingestion_job_count: 0,
+          audit_retention_blocked: false,
+        },
+        blockers: [],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        source_id: 'ks_local_index',
+        eligible: true,
+        lifecycle_state: 'ARCHIVED',
+        reference_summary: {
+          source_id: 'ks_local_index',
+          draft_agent_binding_count: 0,
+          published_agent_version_count: 0,
+          publication_count: 0,
+          snapshot_count: 0,
+          document_count: 0,
+          quarantined_upload_count: 0,
+          ingestion_job_count: 0,
+          audit_retention_blocked: false,
+        },
+        blockers: [],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+  await archiveKnowledgeSource('ks_local_index', {
+    reason: 'Retire stale index',
+    actor: 'dashboard',
+  })
+  await restoreKnowledgeSource('ks_local_index', {
+    reason: 'Reopened',
+    actor: 'dashboard',
+  })
+  await fetchKnowledgeSourceDeletionEligibility('ks_local_index')
+  await permanentlyDeleteKnowledgeSource('ks_local_index', {
+    reason: 'Empty archived test fixture',
+    actor: 'dashboard',
+  })
+
+  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/config/knowledge-sources/ks_local_index/archive', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      reason: 'Retire stale index',
+      actor: 'dashboard',
+    }),
+  })
+  expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/config/knowledge-sources/ks_local_index/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      reason: 'Reopened',
+      actor: 'dashboard',
+    }),
+  })
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    '/api/config/knowledge-sources/ks_local_index/deletion-eligibility',
+    undefined,
+  )
+  expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/config/knowledge-sources/ks_local_index', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      reason: 'Empty archived test fixture',
+      actor: 'dashboard',
+    }),
+  })
 })
 
 test('bindKnowledgeSourceToDraft posts a shared source binding request', async () => {

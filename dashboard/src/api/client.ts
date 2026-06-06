@@ -11,6 +11,7 @@ import type {
   KnowledgeDocument,
   KnowledgeDocumentsResponse,
   KnowledgeSource,
+  KnowledgeSourceDeletionEligibility,
   KnowledgeSourcePublicationRecord,
   KnowledgeSourcePublicationValidation,
   KnowledgeSourcePublicationsResponse,
@@ -94,6 +95,47 @@ export function createKnowledgeSource(payload: {
 }): Promise<KnowledgeSource> {
   return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function archiveKnowledgeSource(
+  sourceId: string,
+  payload: { reason: string; actor?: string },
+): Promise<KnowledgeSource> {
+  return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function restoreKnowledgeSource(
+  sourceId: string,
+  payload: { reason?: string | null; actor?: string } = {},
+): Promise<KnowledgeSource> {
+  return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchKnowledgeSourceDeletionEligibility(
+  sourceId: string,
+): Promise<KnowledgeSourceDeletionEligibility> {
+  return fetchJson<KnowledgeSourceDeletionEligibility>(
+    `${BASE}/config/knowledge-sources/${sourceId}/deletion-eligibility`,
+  )
+}
+
+export function permanentlyDeleteKnowledgeSource(
+  sourceId: string,
+  payload: { reason: string; actor?: string },
+): Promise<KnowledgeSourceDeletionEligibility> {
+  return fetchJson<KnowledgeSourceDeletionEligibility>(`${BASE}/config/knowledge-sources/${sourceId}`, {
+    method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })

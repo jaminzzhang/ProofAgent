@@ -25,6 +25,7 @@ describe('KnowledgePage', () => {
           source_id: 'ks_local_index',
           name: 'Local Index Policies',
           provider: 'local_index',
+          lifecycle_state: 'ACTIVE',
           params: {
             ingestion_model: { provider: 'deterministic', name: 'routing' },
             document_selection_budget: 8,
@@ -39,8 +40,23 @@ describe('KnowledgePage', () => {
           document_count: 2,
           ready_document_count: 1,
         },
+        {
+          source_id: 'ks_archived',
+          name: 'Archived Policies',
+          provider: 'http_json',
+          lifecycle_state: 'ARCHIVED',
+          params: { endpoint: 'https://knowledge.example/retrieve' },
+          created_at: '2026-05-31T00:00:00Z',
+          updated_at: '2026-05-31T00:00:00Z',
+          source_draft_version_id: 'ksdraft_2',
+          latest_snapshot_id: null,
+          published_snapshot_id: null,
+          publication_count: 0,
+          document_count: 0,
+          ready_document_count: 0,
+        },
       ],
-      meta: { total: 1 },
+      meta: { total: 2 },
     })
 
     render(
@@ -50,6 +66,9 @@ describe('KnowledgePage', () => {
     )
 
     expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
+    expect(screen.getByText('Archived Policies')).toBeInTheDocument()
+    expect(screen.getByText('active')).toBeInTheDocument()
+    expect(screen.getByText('archived')).toBeInTheDocument()
     expect(screen.getByText('1 / 2 ready')).toBeInTheDocument()
     expect(screen.getByText('published')).toBeInTheDocument()
   })
@@ -73,6 +92,7 @@ describe('KnowledgePage', () => {
       source_id: 'ks_policies',
       name: 'Policy Source',
       provider: 'local_index',
+      lifecycle_state: 'ACTIVE',
       params: {},
       created_at: '2026-05-31T00:00:00Z',
       updated_at: '2026-05-31T00:00:00Z',
@@ -123,6 +143,7 @@ describe('KnowledgePage', () => {
       source_id: 'ks_remote',
       name: 'Remote Policies',
       provider: 'http_json',
+      lifecycle_state: 'ACTIVE',
       params: {},
       created_at: '2026-05-31T00:00:00Z',
       updated_at: '2026-05-31T00:00:00Z',
