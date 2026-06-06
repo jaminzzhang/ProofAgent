@@ -202,6 +202,7 @@ class LocalAgentConfigurationStore:
     ) -> PublishedAgentVersion:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             draft = self._require_draft(agent_id, draft_id)
+            self._require_shared_model_connections_active_unlocked(draft.contract_bundle.agent_yaml)
             if resolved_knowledge_bindings is not None:
                 _require_resolved_shared_bindings_cover_draft(
                     draft.contract_bundle.agent_yaml,
@@ -1163,6 +1164,7 @@ class LocalAgentConfigurationStore:
             )
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             source = self._require_active_knowledge_source_unlocked(source_id)
+            self._require_shared_model_connections_active_unlocked(source.params)
             validation = self._require_knowledge_source_publication_validation(
                 source_id=source.source_id,
                 validation_id=validation_id,
@@ -2778,6 +2780,18 @@ class LocalAgentConfigurationStore:
             raise KeyError(f"Shared Model Connection not found: {connection_id}")
         return connection
 
+    def _require_shared_model_connections_active_unlocked(self, value: Any) -> None:
+        for connection_id in sorted(_shared_model_connection_ids(value)):
+            connection = self.get_model_connection(connection_id)
+            if connection is None:
+                raise _model_connection_lifecycle_conflict(
+                    f"Shared Model Connection is missing: {connection_id}."
+                )
+            if connection.lifecycle_state is SharedModelConnectionLifecycleState.ARCHIVED:
+                raise _model_connection_lifecycle_conflict(
+                    f"Shared Model Connection is archived: {connection_id}."
+                )
+
     def _get_model_connection_reference_summary_unlocked(
         self,
         connection_id: str,
@@ -3068,26 +3082,31 @@ def _count_shared_knowledge_source_bindings(agent_yaml: str, *, source_id: str) 
 
 
 def _count_shared_model_connection_refs(value: Any, *, connection_id: str) -> int:
+    return sum(1 for item in _shared_model_connection_ids(value) if item == connection_id)
+
+
+def _shared_model_connection_ids(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         try:
             parsed = yaml.safe_load(value) or {}
         except yaml.YAMLError:
-            return 0
+            return ()
         if parsed == value:
-            return 0
-        return _count_shared_model_connection_refs(parsed, connection_id=connection_id)
+            return ()
+        return _shared_model_connection_ids(parsed)
     if isinstance(value, Mapping):
-        count = 0
-        if value.get("model_source") == "shared" and value.get("connection_id") == connection_id:
-            count += 1
+        connection_ids: list[str] = []
+        if value.get("model_source") == "shared" and isinstance(value.get("connection_id"), str):
+            connection_ids.append(value["connection_id"])
         for item in value.values():
-            count += _count_shared_model_connection_refs(item, connection_id=connection_id)
-        return count
+            connection_ids.extend(_shared_model_connection_ids(item))
+        return tuple(connection_ids)
     if isinstance(value, list | tuple):
-        return sum(
-            _count_shared_model_connection_refs(item, connection_id=connection_id) for item in value
-        )
-    return 0
+        connection_ids: list[str] = []
+        for item in value:
+            connection_ids.extend(_shared_model_connection_ids(item))
+        return tuple(connection_ids)
+    return ()
 
 
 def _has_shared_knowledge_source_bindings(agent_yaml: str) -> bool:

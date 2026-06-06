@@ -18,6 +18,7 @@ from proof_agent.control.knowledge.source_publication import (
     LocalIndexPublicationSmokeResult,
 )
 from proof_agent.contracts import (
+    EnvironmentModelCredentialReference,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
@@ -206,6 +207,48 @@ def test_reusing_publication_validation_conflicts(tmp_path: Path) -> None:
     assert "already been published" in exc.value.message
 
 
+def test_publish_rejects_archived_source_owned_model_connection(tmp_path: Path) -> None:
+    store, validation = _store_with_passed_publication_validation(tmp_path)
+    store.create_model_connection(
+        connection_id="model_archived_routing",
+        display_name="Archived Routing",
+        provider="deterministic",
+        model_identifier="routing",
+        credential_ref=EnvironmentModelCredentialReference(name="DEMO_MODEL_KEY"),
+        actor="operator",
+    )
+    store.archive_model_connection(
+        connection_id="model_archived_routing",
+        actor="operator",
+        reason="Archive before publication.",
+    )
+    source = store.get_knowledge_source("ks_policy")
+    assert source is not None
+    store._write_knowledge_source(
+        source.model_copy(
+            update={
+                "params": {
+                    "routing_model": {
+                        "model_source": "shared",
+                        "connection_id": "model_archived_routing",
+                    }
+                }
+            }
+        )
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.publish_knowledge_source(
+            source_id="ks_policy",
+            validation_id=validation.validation_id,
+            change_note="Publish with archived model.",
+            actor="operator",
+        )
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "model_archived_routing" in exc.value.message
+
+
 def _store_with_passed_publication_validation(
     tmp_path: Path,
 ) -> tuple[LocalAgentConfigurationStore, KnowledgeSourcePublicationValidation]:
@@ -276,8 +319,7 @@ def _write_compatible_ready_document(
         size_bytes=10,
         state="ready",
         storage_path=(
-            "knowledge_sources/ks_policy/documents/doc_policy/"
-            "revisions/rev_policy/original.bin"
+            "knowledge_sources/ks_policy/documents/doc_policy/revisions/rev_policy/original.bin"
         ),
         ingestion_job_id="job_policy",
         artifact_path="artifacts/doc_policy/fingerprint",

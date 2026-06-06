@@ -173,6 +173,7 @@ def test_model_connection_reference_summary_counts_configuration_references(
 ) -> None:
     store = LocalAgentConfigurationStore(tmp_path)
     _create_connection(store)
+    _create_connection(store, connection_id="other_model")
     draft = store.create_draft(
         agent_id="enterprise_qa",
         display_name="Enterprise QA",

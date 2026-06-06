@@ -665,7 +665,7 @@ Return both:
 - `ModelConnectionResolutionRecord` for trace/audit.
 - warnings such as archived connection.
 
-- [ ] **Step 5: Wire runtime paths**
+- [x] **Step 5: Wire runtime paths**
 
 Update model provider creation paths so final answer, ReAct planner, reviewer, retrieval planner/evaluator, ingestion, and routing use resolved model configs.
 
@@ -675,7 +675,7 @@ Keep deterministic demo working without configuration store.
 
 Emit before or alongside `model_request` events. Keep payload free of raw credentials and raw provider responses.
 
-- [ ] **Step 7: Run tests and verify GREEN**
+- [x] **Step 7: Run tests and verify GREEN**
 
 Run:
 
@@ -685,7 +685,7 @@ uv run --extra dev python -m pytest tests/test_model_connection_resolution.py te
 
 Expected: pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add proof_agent/bootstrap/model_resolution.py proof_agent/bootstrap/composition.py proof_agent/runtime/langgraph_runner.py proof_agent/observability/audit tests/test_model_connection_resolution.py tests/test_trace_model_events.py tests/test_receipt_model_usage.py
@@ -702,6 +702,8 @@ git commit -m "feat: resolve live model connections at runtime"
 - Modify: `tests/test_agent_configuration_api.py`
 - Modify: `tests/test_knowledge_source_publication.py`
 - Modify: `tests/test_model_connection_store.py`
+
+Progress note: Agent and Knowledge Source publication now reject missing or archived Shared Model Connection references. Validation-time publish-blocking warning metadata remains to be implemented.
 
 - [ ] **Step 1: Write failing Agent publication guard tests**
 

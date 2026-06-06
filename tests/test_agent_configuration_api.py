@@ -22,6 +22,9 @@ from proof_agent.control.knowledge.source_publication import (
     LocalIndexPublicationSmokeResult,
 )
 from proof_agent.contracts import (
+    AgentValidationRecord,
+    ContractBundle,
+    EnvironmentModelCredentialReference,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
@@ -329,6 +332,90 @@ def test_knowledge_source_lifecycle_routes_archive_restore_eligibility_and_delet
     assert client.get("/api/config/knowledge-sources/ks_local_index").status_code == 404
 
 
+def test_publish_draft_rejects_archived_shared_model_connection(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    store = _configuration_store(client)
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    store.create_model_connection(
+        connection_id="model_archived_answer",
+        display_name="Archived Answer",
+        provider="deterministic",
+        model_identifier="demo",
+        credential_ref=EnvironmentModelCredentialReference(name="DEMO_MODEL_KEY"),
+        actor="operator",
+    )
+    store.archive_model_connection(
+        connection_id="model_archived_answer",
+        actor="operator",
+        reason="Archive before publication.",
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer questions.",
+        contract_bundle=ContractBundle(
+            agent_yaml=f"""
+name: enterprise_qa
+purpose: "Answer questions."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: {tmp_path / "knowledge"}
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  model_source: shared
+  connection_id: model_archived_answer
+policy:
+  file: {tmp_path / "policy.yaml"}
+tools:
+  file: {tmp_path / "tools.yaml"}
+memory:
+  provider: session
+audit:
+  trace_path: {tmp_path / "runs" / "trace.jsonl"}
+  receipt_path: {tmp_path / "runs" / "governance_receipt.md"}
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: []\n",
+        ),
+        actor="operator",
+    )
+    store.record_validation(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        actor="validator",
+        record=AgentValidationRecord(
+            validation_id="validation_001",
+            draft_id=draft.draft_id,
+            run_id="run_validation_001",
+            status="passed",
+            created_at="2026-06-07T00:00:00Z",
+        ),
+    )
+
+    response = client.post(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/publish",
+        json={"validation_run_id": "run_validation_001", "actor": "publisher"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "PA_CONFIG_002"
+    assert "model_archived_answer" in response.json()["detail"]["message"]
+
+
 def test_knowledge_source_routes_map_invalid_source_id_to_structured_error(
     tmp_path: Path,
 ) -> None:
@@ -493,9 +580,7 @@ def test_source_publication_validation_and_publish_api(
         },
     )
     source = client.get("/api/config/knowledge-sources/ks_local_index")
-    validations = client.get(
-        "/api/config/knowledge-sources/ks_local_index/publication-validations"
-    )
+    validations = client.get("/api/config/knowledge-sources/ks_local_index/publication-validations")
     publications = client.get("/api/config/knowledge-sources/ks_local_index/publications")
 
     assert frozen.status_code == 200
@@ -789,9 +874,10 @@ def test_update_document_routing_metadata_updates_candidate_snapshot(tmp_path: P
         "document_type": "policy",
     }
     assert candidate.status_code == 200
-    assert candidate.json()["included_documents"][0]["routing_metadata"] == updated.json()[
-        "routing_metadata"
-    ]
+    assert (
+        candidate.json()["included_documents"][0]["routing_metadata"]
+        == updated.json()["routing_metadata"]
+    )
 
 
 def test_update_document_routing_metadata_rejects_unknown_field(tmp_path: Path) -> None:
@@ -1187,8 +1273,7 @@ def test_bind_shared_knowledge_source_to_agent_draft(
     parsed = yaml.safe_load(bound.json()["agent_yaml"])
     assert "knowledge_sources" not in parsed
     assert all(
-        source["source_id"] != "ks_local_index"
-        for source in parsed["package_knowledge_sources"]
+        source["source_id"] != "ks_local_index" for source in parsed["package_knowledge_sources"]
     )
     assert any(
         binding["source_ref"] == {"scope": "shared", "source_id": "ks_local_index"}
