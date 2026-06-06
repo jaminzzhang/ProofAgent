@@ -913,7 +913,7 @@ git commit -m "feat: add model connection api client"
 - Create: `dashboard/src/pages/ModelsPage.tsx`
 - Create: `dashboard/src/pages/__tests__/ModelsPage.test.tsx`
 
-- [ ] **Step 1: Write failing page tests**
+- [x] **Step 1: Write failing page tests**
 
 Test:
 
@@ -922,7 +922,7 @@ Test:
 - Filters exist for provider, lifecycle, referenced/unreferenced, smoke-test status, and text search.
 - Create form supports OpenAI, OpenAI-compatible, and DeepSeek options only in V1.
 
-- [ ] **Step 2: Run frontend tests and verify RED**
+- [x] **Step 2: Run frontend tests and verify RED**
 
 Run:
 
@@ -932,13 +932,13 @@ cd dashboard && npm test -- src/pages/__tests__/ModelsPage.test.tsx
 
 Expected: fail.
 
-- [ ] **Step 3: Implement ModelsPage**
+- [x] **Step 3: Implement ModelsPage**
 
 Keep it operational and dense. Do not create a marketing page.
 
 Use cards only for the create panel if needed; the list should be a scan-friendly table or row list.
 
-- [ ] **Step 4: Run frontend tests and verify GREEN**
+- [x] **Step 4: Run frontend tests and verify GREEN**
 
 Run:
 
@@ -948,7 +948,7 @@ cd dashboard && npm test -- src/pages/__tests__/ModelsPage.test.tsx
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dashboard/src/components/Sidebar.tsx dashboard/src/router.tsx dashboard/src/pages/ModelsPage.tsx dashboard/src/pages/__tests__/ModelsPage.test.tsx

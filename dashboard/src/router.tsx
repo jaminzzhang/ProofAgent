@@ -9,6 +9,7 @@ import { PoliciesPage } from './pages/PoliciesPage'
 import { ToolsPage } from './pages/ToolsPage'
 import { KnowledgePage } from './pages/KnowledgePage'
 import { KnowledgeDetailPage } from './pages/KnowledgeDetailPage'
+import { ModelsPage } from './pages/ModelsPage'
 
 export { Routes, Route }
 
@@ -22,6 +23,7 @@ export function AppRoutes() {
       <Route path="/tools" element={<ToolsPage />} />
       <Route path="/knowledge" element={<KnowledgePage />} />
       <Route path="/knowledge/:sourceId" element={<KnowledgeDetailPage />} />
+      <Route path="/models" element={<ModelsPage />} />
       <Route path="/runs" element={<RunsListPage />} />
       <Route path="/handoffs" element={<HandoffsPage />} />
       <Route path="/runs/:runId" element={<RunDetailPage />} />
