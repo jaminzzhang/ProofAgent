@@ -703,9 +703,9 @@ git commit -m "feat: resolve live model connections at runtime"
 - Modify: `tests/test_knowledge_source_publication.py`
 - Modify: `tests/test_model_connection_store.py`
 
-Progress note: Agent and Knowledge Source publication now reject missing or archived Shared Model Connection references. Validation-time publish-blocking warning metadata remains to be implemented.
+Progress note: Agent and Knowledge Source publication now reject missing or archived Shared Model Connection references. Agent validation records publish-blocking warning metadata for archived Shared Model Connection references.
 
-- [ ] **Step 1: Write failing Agent publication guard tests**
+- [x] **Step 1: Write failing Agent publication guard tests**
 
 Create a Draft Agent referencing an archived Shared Model Connection.
 
@@ -714,13 +714,13 @@ Assert:
 - Validation endpoint can run and returns publish-blocking warning metadata.
 - Publication endpoint rejects with actionable error until connection is active or reference changes.
 
-- [ ] **Step 2: Write failing Knowledge publication guard tests**
+- [x] **Step 2: Write failing Knowledge publication guard tests**
 
 Create a Knowledge Source with ingestion/routing shared connection archived.
 
 Assert new production-bound Source publication is blocked while existing source runtime config remains readable.
 
-- [ ] **Step 3: Run tests and verify RED**
+- [x] **Step 3: Run tests and verify RED**
 
 Run:
 
@@ -730,7 +730,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_agent_configura
 
 Expected: fail.
 
-- [ ] **Step 4: Implement guards**
+- [x] **Step 4: Implement guards**
 
 At validation:
 
@@ -747,7 +747,7 @@ At Knowledge Source publication:
 
 Existing Published Agent execution should not be blocked solely because the live connection is archived.
 
-- [ ] **Step 5: Run tests and verify GREEN**
+- [x] **Step 5: Run tests and verify GREEN**
 
 Run:
 
@@ -757,7 +757,7 @@ uv run --extra dashboard --extra dev python -m pytest tests/test_agent_configura
 
 Expected: pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add proof_agent/delivery/configuration_api.py proof_agent/configuration/local_store.py tests/test_agent_configuration_api.py tests/test_knowledge_source_publication.py tests/test_model_connection_store.py
@@ -778,7 +778,7 @@ git commit -m "feat: enforce model connection lifecycle guards"
 - Modify: `tests/test_knowledge_ingestion_worker.py`
 - Modify: `tests/test_local_index_provider.py`
 
-- [ ] **Step 1: Write failing Knowledge Source config tests**
+- [x] **Step 1: Write failing Knowledge Source config tests**
 
 For `local_index` create/update payloads, support:
 
@@ -806,11 +806,11 @@ For `local_index` create/update payloads, support:
 
 Assert Knowledge Source stores source-owned model config and Agent Knowledge Bindings cannot override it.
 
-- [ ] **Step 2: Write failing ingestion/routing resolver tests**
+- [x] **Step 2: Write failing ingestion/routing resolver tests**
 
 Assert ingestion and routing resolve the model connection before model calls and record connection resolution.
 
-- [ ] **Step 3: Run tests and verify RED**
+- [x] **Step 3: Run tests and verify RED**
 
 Run:
 
@@ -820,15 +820,15 @@ uv run --extra dev python -m pytest tests/test_knowledge_ingestion_store.py test
 
 Expected: fail.
 
-- [ ] **Step 4: Implement source-owned model config parsing**
+- [x] **Step 4: Implement source-owned model config parsing**
 
 Normalize existing local index params so old simple `ingestion_model.provider/name/params` fixtures migrate to `model_source: custom` or remain accepted only if they are standalone fixture-compatible. Avoid Agent Binding overrides.
 
-- [ ] **Step 5: Wire ingestion and routing runtime**
+- [x] **Step 5: Wire ingestion and routing runtime**
 
 Use `resolve_model_role_config()` or a source-level wrapper before constructing `ProofAgentLLM` for ingestion/routing.
 
-- [ ] **Step 6: Run tests and verify GREEN**
+- [x] **Step 6: Run tests and verify GREEN**
 
 Run:
 
@@ -838,7 +838,7 @@ uv run --extra dev python -m pytest tests/test_knowledge_ingestion_store.py test
 
 Expected: pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add proof_agent/delivery/configuration_api.py proof_agent/configuration/local_store.py proof_agent/capabilities/knowledge tests/test_knowledge_ingestion_store.py tests/test_knowledge_ingestion_worker.py tests/test_local_index_provider.py
@@ -1207,7 +1207,7 @@ git diff --check
 
 Expected: no whitespace errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/technical-design.md docs/developer-guide.md docs/development-progress.md

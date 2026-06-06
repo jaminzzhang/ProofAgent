@@ -22,7 +22,6 @@ from proof_agent.control.knowledge.source_publication import (
     LocalIndexPublicationSmokeResult,
 )
 from proof_agent.contracts import (
-    AgentValidationRecord,
     ContractBundle,
     EnvironmentModelCredentialReference,
     KnowledgeArtifactBuildSpec,
@@ -332,9 +331,13 @@ def test_knowledge_source_lifecycle_routes_archive_restore_eligibility_and_delet
     assert client.get("/api/config/knowledge-sources/ks_local_index").status_code == 404
 
 
-def test_publish_draft_rejects_archived_shared_model_connection(tmp_path: Path) -> None:
+def test_validation_warns_and_publish_rejects_archived_shared_model_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = _client(tmp_path)
     store = _configuration_store(client)
+    monkeypatch.setenv("DEMO_MODEL_KEY", "demo-key")
     (tmp_path / "knowledge").mkdir()
     (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
     (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
@@ -393,22 +396,42 @@ audit:
         ),
         actor="operator",
     )
-    store.record_validation(
-        agent_id=draft.agent_id,
-        draft_id=draft.draft_id,
-        actor="validator",
-        record=AgentValidationRecord(
-            validation_id="validation_001",
-            draft_id=draft.draft_id,
-            run_id="run_validation_001",
-            status="passed",
-            created_at="2026-06-07T00:00:00Z",
-        ),
+    validation = client.post(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/validate",
+        json={"question": "What is the policy?", "actor": "validator"},
+    )
+
+    assert validation.status_code == 200
+    validation_body = validation.json()
+    assert validation_body["warnings"] == [
+        {
+            "code": "model_connection_archived",
+            "connection_id": "model_archived_answer",
+            "role": "final_answer",
+            "message": "Shared Model Connection is archived: model_archived_answer.",
+        }
+    ]
+    assert validation_body["publish_blockers"] == [
+        {
+            "code": "archived_model_connection",
+            "connection_id": "model_archived_answer",
+            "role": "final_answer",
+            "message": (
+                "Publish is blocked while Shared Model Connection "
+                "model_archived_answer is archived."
+            ),
+        }
+    ]
+    loaded = client.get(f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}")
+    assert loaded.json()["validation_records"][0]["warnings"] == validation_body["warnings"]
+    assert (
+        loaded.json()["validation_records"][0]["publish_blockers"]
+        == validation_body["publish_blockers"]
     )
 
     response = client.post(
         f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/publish",
-        json={"validation_run_id": "run_validation_001", "actor": "publisher"},
+        json={"validation_run_id": validation_body["run_id"], "actor": "publisher"},
     )
 
     assert response.status_code == 400

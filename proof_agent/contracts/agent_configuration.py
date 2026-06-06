@@ -75,7 +75,22 @@ class AgentValidationRecord(FrozenModel):
     created_at: str
     summary: str = ""
     errors: tuple[str, ...] = Field(default_factory=tuple)
+    warnings: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
+    publish_blockers: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
+
+    @field_validator("warnings", "publish_blockers", mode="after")
+    @classmethod
+    def freeze_mapping_tuples(
+        cls, value: tuple[Mapping[str, Any], ...]
+    ) -> tuple[Mapping[str, Any], ...]:
+        return tuple(cast(Mapping[str, Any], freeze_value(item)) for item in value)
+
+    @field_serializer("warnings", "publish_blockers")
+    def serialize_mapping_tuples(
+        self, value: tuple[Mapping[str, Any], ...]
+    ) -> tuple[dict[str, Any], ...]:
+        return tuple(cast(dict[str, Any], _jsonable(item)) for item in value)
 
 
 class ConfigurationOperationAudit(FrozenModel):

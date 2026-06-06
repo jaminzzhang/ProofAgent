@@ -1349,6 +1349,7 @@ def validate_config_draft(
     detail = run_store.get_run_detail(run_id)
     if detail is None:
         raise HTTPException(status_code=500, detail="Validation run artifacts were not persisted.")
+    warnings, publish_blockers = _validation_model_connection_warnings(detail.trace_events)
     record = AgentValidationRecord(
         validation_id=f"validation_{uuid4().hex[:8]}",
         draft_id=draft_id,
@@ -1356,6 +1357,8 @@ def validate_config_draft(
         status=detail.outcome.value,
         created_at=_now(),
         summary=result.final_output[:500],
+        warnings=warnings,
+        publish_blockers=publish_blockers,
         resolved_knowledge_bindings=resolved_knowledge_bindings,
     )
     config_store.record_validation(
@@ -1372,12 +1375,64 @@ def validate_config_draft(
         "run_purpose": detail.run_purpose.value,
         "agent_id": detail.agent_id,
         "draft_id": detail.draft_id,
+        "warnings": list(warnings),
+        "publish_blockers": list(publish_blockers),
         "links": {
             "run_detail": f"/api/runs/{detail.run_id}",
             "trace": f"/api/runs/{detail.run_id}/trace",
             "receipt": f"/api/runs/{detail.run_id}/receipt",
         },
     }
+
+
+def _validation_model_connection_warnings(
+    trace_events: tuple[dict[str, Any], ...],
+) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+    warnings: list[dict[str, Any]] = []
+    publish_blockers: list[dict[str, Any]] = []
+    seen_connections: set[tuple[str | None, str | None]] = set()
+    for event in trace_events:
+        if event.get("event_type") != "model_connection_resolution":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        event_warnings = payload.get("warnings")
+        if not isinstance(event_warnings, list | tuple):
+            continue
+        if "connection_archived" not in event_warnings:
+            continue
+        connection_id = payload.get("connection_id")
+        role = payload.get("role")
+        key = (
+            connection_id if isinstance(connection_id, str) else None,
+            role if isinstance(role, str) else None,
+        )
+        if key in seen_connections:
+            continue
+        seen_connections.add(key)
+        if not isinstance(connection_id, str) or not isinstance(role, str):
+            continue
+        warnings.append(
+            {
+                "code": "model_connection_archived",
+                "connection_id": connection_id,
+                "role": role,
+                "message": f"Shared Model Connection is archived: {connection_id}.",
+            }
+        )
+        publish_blockers.append(
+            {
+                "code": "archived_model_connection",
+                "connection_id": connection_id,
+                "role": role,
+                "message": (
+                    "Publish is blocked while Shared Model Connection "
+                    f"{connection_id} is archived."
+                ),
+            }
+        )
+    return tuple(warnings), tuple(publish_blockers)
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/publish")
