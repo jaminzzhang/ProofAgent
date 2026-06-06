@@ -18,7 +18,13 @@ from proof_agent.capabilities.knowledge.ingestion.contracts import (
 )
 from proof_agent.capabilities.knowledge.ingestion.parsers import parse_quarantined_upload
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import KnowledgeArtifactBuildSpec, KnowledgeIngestionJob, ModelConfig
+from proof_agent.bootstrap.model_resolution import resolve_model_role_config
+from proof_agent.contracts import (
+    KnowledgeArtifactBuildSpec,
+    KnowledgeIngestionJob,
+    ModelCallRole,
+    ModelConfig,
+)
 from proof_agent.errors import ProofAgentError
 
 _LOST_OWNERSHIP_ERROR_CODE = "PA_INGESTION_004"
@@ -185,6 +191,12 @@ class KnowledgeIngestionWorker:
         try:
             self._renew_job_claim(job)
             ingestion_model = ingestion_model_config_from_build_spec(job.artifact_build_spec)
+            resolved_ingestion_model = resolve_model_role_config(
+                ingestion_model,
+                role=ModelCallRole.INGESTION,
+                configuration_store=self._store,
+                require_runtime_credentials=True,
+            ).model_config
             document = self._store.get_knowledge_document(
                 source_id=job.source_id,
                 document_id=job.document_id,
@@ -201,7 +213,7 @@ class KnowledgeIngestionWorker:
             self._renew_job_claim(job)
             build_result = self._artifact_builder.build_or_reuse(
                 build_spec=job.artifact_build_spec,
-                ingestion_model=ingestion_model,
+                ingestion_model=resolved_ingestion_model,
                 parsed_text_path=parsed_text_path,
                 ingestion_config_fingerprint=job.ingestion_config_fingerprint,
                 progress_callback=lambda: self._renew_job_claim(job),
@@ -214,7 +226,13 @@ class KnowledgeIngestionWorker:
                 return self._reschedule_job(job, message=exc.message)
             error_code = (
                 "PA_INGESTION_001"
-                if exc.code in {"PA_INGESTION_001", "PA_MODEL_003"}
+                if exc.code
+                in {
+                    "PA_INGESTION_001",
+                    "PA_MODEL_003",
+                    "PA_MODEL_CONNECTION_001",
+                    "PA_MODEL_CONNECTION_002",
+                }
                 else _BUILD_ERROR_CODE
             )
             return self._fail_job(job, error_code=error_code, message=exc.message)

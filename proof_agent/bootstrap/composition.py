@@ -16,6 +16,7 @@ from proof_agent.contracts import (
     AgentManifest,
     ModelCallRole,
     ModelConnectionResolutionRecord,
+    ModelConfig,
     ReActPlannerConfig,
     ResolvedKnowledgeBindingSet,
     ReviewSubagentConfig,
@@ -48,6 +49,8 @@ class HarnessInvocation:
     memory_deny_fields: frozenset[str] = DEFAULT_MEMORY_DENY_FIELDS
     react_planner: ReActPlanner | None = None
     review_subagent: HarnessReviewSubagent | None = None
+    retrieval_planner_model: ModelConfig | None = None
+    retrieval_evaluator_model: ModelConfig | None = None
     model_resolution_records: tuple[ModelConnectionResolutionRecord, ...] = ()
 
     def create_memory(self) -> SessionMemory:
@@ -78,6 +81,26 @@ def compose_harness_invocation(
         require_runtime_credentials=require_runtime_credentials,
     )
     model_resolution_records.append(resolved_answer_model.resolution_record)
+    resolved_retrieval_planner_model = None
+    if resolved_manifest.retrieval.planner_model is not None:
+        resolved = resolve_model_role_config(
+            resolved_manifest.retrieval.planner_model,
+            role=ModelCallRole.RETRIEVAL_PLANNER,
+            configuration_store=configuration_store,
+            require_runtime_credentials=require_runtime_credentials,
+        )
+        resolved_retrieval_planner_model = resolved.model_config
+        model_resolution_records.append(resolved.resolution_record)
+    resolved_retrieval_evaluator_model = None
+    if resolved_manifest.retrieval.evaluator_model is not None:
+        resolved = resolve_model_role_config(
+            resolved_manifest.retrieval.evaluator_model,
+            role=ModelCallRole.RETRIEVAL_EVALUATOR,
+            configuration_store=configuration_store,
+            require_runtime_credentials=require_runtime_credentials,
+        )
+        resolved_retrieval_evaluator_model = resolved.model_config
+        model_resolution_records.append(resolved.resolution_record)
     react_planner = None
     if resolved_manifest.react is not None:
         resolved_planner_model = resolve_model_role_config(
@@ -122,12 +145,17 @@ def compose_harness_invocation(
         policy=PolicyEngine.from_file(resolved_manifest.policy.file),
         knowledge_provider=cast(
             KnowledgeProvider,
-            resolve_blended_knowledge_provider(resolved_bindings),
+            resolve_blended_knowledge_provider(
+                resolved_bindings,
+                configuration_store=configuration_store,
+            ),
         ),
         resolved_knowledge_bindings=resolved_bindings,
         model_provider=resolve_provider(resolved_answer_model.model_config),
         tool_gateway=ToolGateway.from_file(resolved_manifest.tools.file),
         react_planner=react_planner,
         review_subagent=review_subagent,
+        retrieval_planner_model=resolved_retrieval_planner_model,
+        retrieval_evaluator_model=resolved_retrieval_evaluator_model,
         model_resolution_records=tuple(model_resolution_records),
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from proof_agent.capabilities.knowledge.provider import KnowledgeProvider
 from proof_agent.capabilities.knowledge.registry import resolve_knowledge_provider
@@ -11,6 +12,9 @@ from proof_agent.contracts.knowledge_resolution import (
 )
 from proof_agent.contracts.manifest import KnowledgeConfig
 from proof_agent.errors import ProofAgentError
+
+if TYPE_CHECKING:
+    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
 
 @dataclass(frozen=True)
@@ -67,11 +71,14 @@ class BlendedKnowledgeProvider:
 
 def resolve_blended_knowledge_provider(
     resolved_bindings: ResolvedKnowledgeBindingSet,
+    *,
+    configuration_store: LocalAgentConfigurationStore | None = None,
 ) -> BlendedKnowledgeProvider:
     bound_providers: list[BoundKnowledgeProvider] = []
     for resolved in resolved_bindings.bindings:
         provider = resolve_knowledge_provider(
-            KnowledgeConfig(provider=resolved.provider, params=resolved.provider_params)
+            KnowledgeConfig(provider=resolved.provider, params=resolved.provider_params),
+            configuration_store=configuration_store,
         )
         bound_providers.append(BoundKnowledgeProvider(resolved=resolved, provider=provider))
     return BlendedKnowledgeProvider(tuple(bound_providers))

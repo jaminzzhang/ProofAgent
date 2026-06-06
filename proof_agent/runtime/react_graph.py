@@ -80,7 +80,9 @@ def build_react_enterprise_qa_graph(
         if react is None or invocation.react_planner is None:
             return _refusal("ReAct planner is not configured.")
         if should_stop_for_step_budget(step_count, max_steps):
-            return _refusal("The ReAct step budget was exhausted before an answer could be produced.")
+            return _refusal(
+                "The ReAct step budget was exhausted before an answer could be produced."
+            )
 
         try:
             proposal = invocation.react_planner.plan(
@@ -192,8 +194,8 @@ def build_react_enterprise_qa_graph(
                 min_score=manifest.retrieval.min_score,
                 max_steps=manifest.retrieval.max_steps,
                 max_rounds=manifest.retrieval.max_rounds,
-                planner_model=manifest.retrieval.planner_model,
-                evaluator_model=manifest.retrieval.evaluator_model,
+                planner_model=invocation.retrieval_planner_model,
+                evaluator_model=invocation.retrieval_evaluator_model,
                 force_empty=state["question"] == UNSUPPORTED_QUESTION,
             ),
             execution_mode="react_reviewed_retrieval",
@@ -215,10 +217,16 @@ def build_react_enterprise_qa_graph(
         trace.emit(
             "memory_write_decision",
             status="ok" if memory_result.status == "passed" else "blocked",
-            payload={"status": memory_result.status.value, "metadata": dict(memory_result.metadata)},
+            payload={
+                "status": memory_result.status.value,
+                "metadata": dict(memory_result.metadata),
+            },
         )
 
-        if evidence_result.status == "failed" or answer_decision.decision != PolicyDecisionType.ALLOW:
+        if (
+            evidence_result.status == "failed"
+            or answer_decision.decision != PolicyDecisionType.ALLOW
+        ):
             return {
                 "review_results": [step_review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,

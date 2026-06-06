@@ -49,7 +49,7 @@ def build_enterprise_qa_graph(
 
     def retrieve_node(state: HarnessGraphState) -> dict[str, Any]:
         question = state["question"]
-        
+
         if question == TOOL_REQUIRED_QUESTION:
             # Bypass retrieval for tool required question
             return {}
@@ -66,8 +66,8 @@ def build_enterprise_qa_graph(
                 min_score=manifest.retrieval.min_score,
                 max_steps=manifest.retrieval.max_steps,
                 max_rounds=manifest.retrieval.max_rounds,
-                planner_model=manifest.retrieval.planner_model,
-                evaluator_model=manifest.retrieval.evaluator_model,
+                planner_model=invocation.retrieval_planner_model,
+                evaluator_model=invocation.retrieval_evaluator_model,
                 force_empty=question == UNSUPPORTED_QUESTION,
             )
         )
@@ -88,7 +88,10 @@ def build_enterprise_qa_graph(
         trace.emit(
             "memory_write_decision",
             status="ok" if memory_result.status == "passed" else "blocked",
-            payload={"status": memory_result.status.value, "metadata": dict(memory_result.metadata)},
+            payload={
+                "status": memory_result.status.value,
+                "metadata": dict(memory_result.metadata),
+            },
         )
 
         if evidence_result.status == "failed" or answer_decision.decision != "allow":
@@ -113,7 +116,10 @@ def build_enterprise_qa_graph(
             trace.emit(
                 "approval_requested",
                 status="waiting",
-                payload={"tool_name": "customer_lookup", "state": gateway_result.approval_state.state},
+                payload={
+                    "tool_name": "customer_lookup",
+                    "state": gateway_result.approval_state.state,
+                },
             )
             return {
                 "approval_status": "requested",
@@ -147,7 +153,7 @@ def build_enterprise_qa_graph(
         )
         trace.emit("approval_granted", status="ok", payload={"tool_name": "customer_lookup"})
         trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
-        
+
         # Tool question is answered by tool result in the demo
         return {
             "final_output": "Tool execution successful.",
@@ -158,7 +164,7 @@ def build_enterprise_qa_graph(
     def model_node(state: HarnessGraphState) -> dict[str, Any]:
         question = state["question"]
         evidence = tuple(EvidenceChunk.model_validate(chunk) for chunk in state.get("evidence", []))
-        
+
         model_request = build_model_request(
             question=question,
             evidence=evidence,
@@ -176,7 +182,7 @@ def build_enterprise_qa_graph(
                 "stream": model_request.stream,
                 "cost_class": cost_class(invocation.model_provider.provider_name),
                 "question": question,
-                "accepted_evidence_count": len(evidence), # Approximation
+                "accepted_evidence_count": len(evidence),  # Approximation
                 "citations_present": bool(evidence),
             },
         )
@@ -270,12 +276,12 @@ def build_enterprise_qa_graph(
             "model": "model",
         },
     )
-    
+
     def route_after_tool(state: HarnessGraphState) -> str:
         return END
 
     builder.add_conditional_edges("tool", route_after_tool)
-    
+
     def route_after_model(state: HarnessGraphState) -> str:
         return END
 

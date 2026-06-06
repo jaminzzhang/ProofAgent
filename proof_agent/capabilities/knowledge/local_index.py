@@ -7,6 +7,7 @@ TreeIndex for document indexing and retrieval. It supports:
 - Structured retrieval (list_structure, retrieve_at_scope)
 - Integration with Proof Agent's governed ModelProvider protocol
 """
+
 from __future__ import annotations
 
 import json
@@ -14,12 +15,13 @@ import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from llama_index.core import Document, StorageContext, TreeIndex, load_index_from_storage
 from llama_index.core.schema import NodeWithScore
 from pydantic import ValidationError
 
+from proof_agent.bootstrap.model_resolution import resolve_model_role_config
 from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.capabilities.knowledge.contracts import DocumentNode
 from proof_agent.capabilities.knowledge.ingestion.artifacts import (
@@ -38,6 +40,9 @@ from proof_agent.capabilities.models.protocol import ModelProvider
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus, ModelCallRole
 from proof_agent.contracts.manifest import KnowledgeConfig, ModelConfig
 from proof_agent.errors import ProofAgentError
+
+if TYPE_CHECKING:
+    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +113,12 @@ class LocalIndexProvider(KnowledgeProvider):
         self._retrieval_summary: Mapping[str, Any] | None = None
 
     @classmethod
-    def from_config(cls, config: KnowledgeConfig) -> LocalIndexProvider:
+    def from_config(
+        cls,
+        config: KnowledgeConfig,
+        *,
+        configuration_store: LocalAgentConfigurationStore | None = None,
+    ) -> LocalIndexProvider:
         """Create provider from KnowledgeConfig.
 
         Args:
@@ -124,7 +134,13 @@ class LocalIndexProvider(KnowledgeProvider):
         document_selection_budget = _document_selection_budget_from_params(config.params)
         runtime_snapshot = load_ready_snapshot_manifest(snapshot_path, artifact_root=artifact_root)
         routing_config = _routing_model_config_from_params(config.params)
-        routing_provider = resolve_provider(routing_config)
+        resolved_routing = resolve_model_role_config(
+            routing_config,
+            role=ModelCallRole.ROUTING,
+            configuration_store=configuration_store,
+            require_runtime_credentials=True,
+        )
+        routing_provider = resolve_provider(resolved_routing.model_config)
         routing_model = ProofAgentLLM(
             model_provider=routing_provider,
             role=ModelCallRole.ROUTING,
@@ -234,7 +250,9 @@ class LocalIndexProvider(KnowledgeProvider):
                 ),
             )
         except Exception as exc:
-            raise _snapshot_load_failure("Local Index snapshot storage could not be loaded.") from exc
+            raise _snapshot_load_failure(
+                "Local Index snapshot storage could not be loaded."
+            ) from exc
 
         logger.info("Index loaded successfully")
 
@@ -448,7 +466,8 @@ class LocalIndexProvider(KnowledgeProvider):
         # Get all nodes and filter by ref_doc_id
         all_nodes = list(self._index.docstore.docs.values())
         scoped_nodes = [
-            node for node in all_nodes
+            node
+            for node in all_nodes
             if hasattr(node, "ref_doc_id") and node.ref_doc_id == scope_id
         ]
 
@@ -552,10 +571,7 @@ class LocalIndexProvider(KnowledgeProvider):
                 f"knowledge://source/{runtime_snapshot.source_id}"
                 f"/document/{runtime_document.document_id}"
             )
-            citation = (
-                f"{source}/revision/{runtime_document.revision_id}"
-                f"#node={node.id_}"
-            )
+            citation = f"{source}/revision/{runtime_document.revision_id}#node={node.id_}"
             source_id = runtime_snapshot.source_id
             source_version_id = runtime_snapshot.snapshot_id
             document_id = runtime_document.document_id

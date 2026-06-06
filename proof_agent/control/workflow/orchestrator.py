@@ -87,8 +87,8 @@ def run_enterprise_qa(
         min_score=manifest.retrieval.min_score,
         max_steps=manifest.retrieval.max_steps,
         max_rounds=manifest.retrieval.max_rounds,
-        planner_model=manifest.retrieval.planner_model,
-        evaluator_model=manifest.retrieval.evaluator_model,
+        planner_model=invocation.retrieval_planner_model,
+        evaluator_model=invocation.retrieval_evaluator_model,
         force_empty=question == UNSUPPORTED_QUESTION,
     )
 
@@ -166,7 +166,9 @@ def run_enterprise_qa(
                     "role": ModelCallRole.FINAL_ANSWER.value,
                     "response_format": model_request.response_format,
                     "message_count": len(model_request.messages),
-                    "prompt_length": sum(len(message.content) for message in model_request.messages),
+                    "prompt_length": sum(
+                        len(message.content) for message in model_request.messages
+                    ),
                     "system_prompt_length": system_prompt_length(model_request),
                     "estimated_tokens": estimated_tokens,
                     "stream": model_request.stream,
@@ -423,4 +425,3 @@ def _run_agentic_retrieval(
         )
     )
     return result.evidence, result.evidence_result
-

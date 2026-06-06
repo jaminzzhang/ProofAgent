@@ -18,6 +18,7 @@ from proof_agent.capabilities.knowledge.ingestion.worker import (
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
+    EnvironmentModelCredentialReference,
     KnowledgeArtifactBuildSpec,
     KnowledgeIngestionJob,
     ModelConfig,
@@ -559,6 +560,49 @@ def test_worker_uses_queued_job_model_snapshot_after_source_edit(tmp_path: Path)
     ingestion_model = builder.build_calls[0]["ingestion_model"]
     assert isinstance(ingestion_model, ModelConfig)
     assert ingestion_model.name == "gpt-4.1-mini"
+
+
+def test_worker_resolves_shared_ingestion_model_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEMO_MODEL_KEY", "test-key")
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_model_connection(
+        connection_id="model_demo_ingestion",
+        display_name="Demo Ingestion",
+        provider="deterministic",
+        model_identifier="ingestion-model",
+        credential_ref=EnvironmentModelCredentialReference(name="DEMO_MODEL_KEY"),
+        timeout_seconds=17,
+        actor="operator",
+    )
+    _create_source(
+        store,
+        params={
+            "ingestion_model": {
+                "model_source": "shared",
+                "connection_id": "model_demo_ingestion",
+                "params": {"timeout_seconds": 5},
+            }
+        },
+    )
+    _stage_markdown(store)
+    builder = FakeArtifactBuilder()
+    worker = KnowledgeIngestionWorker(store=store, artifact_builder=builder)
+    assert worker.run_once() is not None
+
+    result = worker.run_once()
+
+    assert result is not None
+    assert result.outcome is not None
+    assert result.outcome.state == "ready"
+    ingestion_model = builder.build_calls[0]["ingestion_model"]
+    assert isinstance(ingestion_model, ModelConfig)
+    assert ingestion_model.provider == "deterministic"
+    assert ingestion_model.name == "ingestion-model"
+    assert ingestion_model.params["api_key_env"] == "DEMO_MODEL_KEY"
+    assert ingestion_model.params["timeout_seconds"] == 5
 
 
 def test_worker_processes_older_artifact_job_before_newer_quarantine_upload(

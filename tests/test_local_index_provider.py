@@ -1,4 +1,5 @@
 """Tests for LocalIndexProvider implementation."""
+
 import json
 import tempfile
 from pathlib import Path
@@ -16,7 +17,9 @@ from proof_agent.capabilities.knowledge.local_index_snapshot import (
     LocalIndexRuntimeSnapshot,
 )
 from proof_agent.capabilities.models.llama_index_bridge import ProofAgentLLM
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
+    EnvironmentModelCredentialReference,
     EvidenceChunk,
     EvidenceStatus,
     KnowledgeSourceSnapshotDocument,
@@ -249,8 +252,16 @@ class TestLocalIndexProvider:
             )
 
             documents = [
-                {"doc_id": "doc1", "content": "First document content", "metadata": {"title": "Doc 1"}},
-                {"doc_id": "doc2", "content": "Second document content", "metadata": {"title": "Doc 2"}},
+                {
+                    "doc_id": "doc1",
+                    "content": "First document content",
+                    "metadata": {"title": "Doc 1"},
+                },
+                {
+                    "doc_id": "doc2",
+                    "content": "Second document content",
+                    "metadata": {"title": "Doc 2"},
+                },
             ]
 
             provider.build_index(documents)
@@ -597,6 +608,52 @@ class TestLocalIndexProvider:
         assert provider.routing_model._provider is routing_provider
         assert resolved_configs[0].name == "inherited-model"
 
+    def test_from_config_resolves_shared_routing_model_connection(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DEMO_MODEL_KEY", "test-key")
+        snapshot_path, artifact_root = _write_v2_snapshot(tmp_path)
+        routing_provider = MockModelProvider("routing", "shared-routing")
+        resolved_configs = []
+        monkeypatch.setattr(
+            local_index_module,
+            "resolve_provider",
+            lambda config: resolved_configs.append(config) or routing_provider,
+            raising=False,
+        )
+        store = LocalAgentConfigurationStore(tmp_path / "config")
+        store.create_model_connection(
+            connection_id="model_shared_routing",
+            display_name="Shared Routing",
+            provider="deterministic",
+            model_identifier="shared-routing",
+            credential_ref=EnvironmentModelCredentialReference(name="DEMO_MODEL_KEY"),
+            timeout_seconds=13,
+            actor="operator",
+        )
+        config = KnowledgeConfig(
+            provider="local_index",
+            params={
+                "snapshot_path": snapshot_path,
+                "artifact_root": artifact_root,
+                "routing_model": {
+                    "model_source": "shared",
+                    "connection_id": "model_shared_routing",
+                    "params": {"timeout_seconds": 7},
+                },
+            },
+        )
+
+        provider = LocalIndexProvider.from_config(config, configuration_store=store)
+
+        assert provider.routing_model._provider is routing_provider
+        assert resolved_configs[0].provider == "deterministic"
+        assert resolved_configs[0].name == "shared-routing"
+        assert resolved_configs[0].params["api_key_env"] == "DEMO_MODEL_KEY"
+        assert resolved_configs[0].params["timeout_seconds"] == 7
+
     def test_from_config_rejects_historical_index_path(
         self,
         tmp_path: Path,
@@ -845,9 +902,7 @@ class TestLocalIndexProvider:
         assert exc.value.code == "PA_KNOWLEDGE_002"
         summary = provider.consume_retrieval_summary()
         assert summary is not None
-        assert [item["document_id"] for item in summary["document_candidates"]] == [
-            "doc_policy"
-        ]
+        assert [item["document_id"] for item in summary["document_candidates"]] == ["doc_policy"]
         assert summary["selected_documents"] == []
         assert summary["document_routing"]["routed_candidate_count"] == 1
         assert summary["document_routing"]["selection_reason"] == "routing_model_failed"
@@ -899,9 +954,7 @@ class TestLocalIndexProvider:
         assert exc.value.code == "PA_POLICY_001"
         summary = provider.consume_retrieval_summary()
         assert summary is not None
-        assert [item["document_id"] for item in summary["document_candidates"]] == [
-            "doc_policy"
-        ]
+        assert [item["document_id"] for item in summary["document_candidates"]] == ["doc_policy"]
         assert summary["document_routing"]["error_code"] == "PA_POLICY_001"
 
     def test_runtime_retrieve_normalizes_revision_retrieval_failure(
