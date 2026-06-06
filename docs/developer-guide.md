@@ -125,7 +125,7 @@ Core boundaries:
 | Runtime config | `workflow.runtime: langgraph`; Enterprise QA and Controlled ReAct Enterprise QA run through LangGraph `StateGraph` templates using composed Harness dependencies |
 | Knowledge | Source-owned Knowledge Sources plus Agent `knowledge_bindings[]`; `local_markdown` for deterministic/dev fixtures, `local_index` for published local indexes, and trusted remote adapters such as `http_json`; shared Sources use `ACTIVE` / `ARCHIVED` lifecycle management |
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
-| Model | `deterministic`, `openai_compatible`, `openai`, and `deepseek` implemented; `azure_openai`, `anthropic` are clean-failure placeholders |
+| Model | `deterministic`, `openai_compatible`, `openai`, and `deepseek` implemented; Dashboard-managed Shared Model Connections can be referenced by Agents and Knowledge Sources; `azure_openai`, `anthropic` are clean-failure placeholders |
 | Policy | `before_retrieval`, `before_retrieval_plan`, `before_retrieval_step`, `before_answer`, `before_tool_call`, `before_memory_write`, `before_model_call` |
 | Tools / MCP | ToolGateway, Agent-package local tool handlers, approval state; real MCP transport is the extension direction |
 | Memory | `memory.provider: session`, with sensitive field denylist |
@@ -213,7 +213,9 @@ Current v1 config constraints:
 - `knowledge_bindings[]` must use `source_ref.scope` plus `source_ref.source_id`; shared bindings require an active published Knowledge Source and do not copy provider params into Agent YAML.
 - `retrieval.strategy` supports `single_step` and `agentic`.
 - `memory.provider` must be `session`.
-- `model.provider` supports `deterministic`, `openai_compatible`, `openai`, `deepseek`, `azure_openai`, `anthropic` (Azure and Anthropic are placeholders).
+- `model`, `react.planner`, and `review.subagent` support `model_source: shared`, `model_source: custom`, or legacy inline `provider/name` config. Shared references point at Dashboard-managed Shared Model Connections; custom config stores the connection parameters directly in Agent YAML.
+- Shared Model Connections store reusable connection parameters: display name, provider, model identifier, optional base URL, environment credential reference, optional account-scope env refs, and optional default `timeout_seconds`.
+- Usage parameters such as `temperature`, `max_output_tokens`, `top_k`, document routing budgets, and reviewer controls stay on the Agent role or Knowledge Source. `params.timeout_seconds` on the Agent or Knowledge Source overrides the Shared Model Connection default.
 - `policy.file`, `tools.file`, and provider-specific paths under `package_knowledge_sources[].params` must exist.
 - The parent directories of `audit.trace_path` and `audit.receipt_path` must be writable.
 
@@ -240,9 +242,10 @@ review:
   subagent:
     provider: deterministic
     name: harness-review-demo
-    timeout_seconds: 5
-    max_output_tokens: 500
     fail_closed: true
+    params:
+      timeout_seconds: 5
+      max_output_tokens: 500
 
 response:
   include_reasoning_summary: false
@@ -265,7 +268,38 @@ STOP
 
 The planner proposes actions from this set. The Harness still owns execution, policy, approval, validation, trace, and receipt behavior. Store only audit-safe Reasoning Summary fields; raw chain-of-thought must not be recorded, stored, or exposed.
 
-Remote model configuration must use environment variable names; do not write raw secrets into the YAML:
+Remote model configuration must use environment variable names; do not write raw secrets into YAML or the Dashboard configuration store.
+
+For common models, create a Shared Model Connection in Dashboard Configuration > Models. The connection stores the reusable provider channel and credential reference:
+
+```yaml
+model:
+  model_source: shared
+  connection_id: model_deepseek_default
+  params:
+    temperature: 0
+    max_output_tokens: 800
+    timeout_seconds: 10
+```
+
+For one-off Agent packages, use `model_source: custom` and put the connection parameters directly on the role:
+
+```yaml
+model:
+  model_source: custom
+  provider: deepseek
+  name: deepseek-chat
+  base_url: https://api.deepseek.com
+  credential_ref:
+    type: env
+    name: DEEPSEEK_API_KEY
+  params:
+    temperature: 0
+    max_output_tokens: 800
+```
+
+Legacy inline provider config remains accepted for deterministic fixtures and standalone packages:
+
 ```yaml
 model:
   provider: openai_compatible
@@ -275,56 +309,45 @@ model:
     base_url_env: OPENAI_BASE_URL
     temperature: 0
     max_output_tokens: 800
-    timeout_seconds: 30
 ```
 
-OpenAI-compatible named providers reuse the same adapter with provider-specific defaults:
+`deepseek` defaults to `DEEPSEEK_API_KEY` and `https://api.deepseek.com`; set `base_url` only when routing through a compatible proxy. `base_url` is not a secret and may be stored in clear text.
 
-```yaml
-model:
-  provider: deepseek
-  name: deepseek-v4-flash
-  params:
-    api_key_env: DEEPSEEK_API_KEY
-    temperature: 0
-    max_output_tokens: 800
-```
-
-`deepseek` defaults to `DEEPSEEK_API_KEY` and `https://api.deepseek.com`; set `base_url` or `base_url_env` only when routing through a compatible proxy.
-
-The Dashboard Model Configuration tab can edit the same Agent Contract fields for final answer, ReAct planner, and Harness reviewer roles. Select `deepseek` as the provider, enter the model name such as `deepseek-v4-flash` or `deepseek-v4-pro`, and configure environment variable names such as `DEEPSEEK_API_KEY`; do not enter raw API keys.
+The Dashboard Agent Model module can select a Shared Model Connection from a dropdown or switch a role to Custom Model Configuration. The same module edits final answer, ReAct planner, and Harness reviewer roles. The "Save As Shared" action can promote a custom role configuration into Configuration > Models and then switch the role to the new shared reference.
 
 ### Configuring LLM-Backed Planning And Review
 
-Use the existing provider names to configure each model role. Provider names describe the external model channel; role semantics come from the Agent Contract section.
+Use Shared Model Connections or custom config independently for each model role. Role semantics come from the Agent Contract section; the connection only describes the external model channel.
 
 ```yaml
 model:
-  provider: openai_compatible
-  name: qwen-plus
+  model_source: shared
+  connection_id: model_answer_qwen
   params:
-    api_key_env: OPENAI_COMPATIBLE_API_KEY
-    base_url_env: OPENAI_COMPATIBLE_BASE_URL
+    temperature: 0
 
 react:
   planner:
-    provider: openai_compatible
-    name: qwen-plus
+    model_source: shared
+    connection_id: model_planner_qwen
     params:
-      api_key_env: OPENAI_COMPATIBLE_API_KEY
-      base_url_env: OPENAI_COMPATIBLE_BASE_URL
       temperature: 0
+      timeout_seconds: 15
 
 review:
   mode: auto
   subagent:
-    provider: openai_compatible
-    name: qwen-plus
+    model_source: custom
+    provider: deepseek
+    name: deepseek-chat
+    credential_ref:
+      type: env
+      name: DEEPSEEK_API_KEY
     fail_closed: true
     params:
-      api_key_env: OPENAI_COMPATIBLE_API_KEY
-      base_url_env: OPENAI_COMPATIBLE_BASE_URL
       temperature: 0
+      max_output_tokens: 500
+      timeout_seconds: 10
 ```
 
 Planner and reviewer prompts are Harness Control Prompts maintained by Proof Agent. Agent Contracts configure provider channel, model name, and provider parameters, but do not replace the control prompts in V1.
@@ -349,11 +372,10 @@ package_knowledge_sources:
       artifact_root: ./config
       document_selection_budget: 8
       routing_model:
-        provider: openai_compatible
-        name: gpt-4o-mini
+        model_source: shared
+        connection_id: model_local_index_routing
         params:
-          api_key_env: OPENAI_COMPATIBLE_API_KEY
-          base_url_env: OPENAI_COMPATIBLE_BASE_URL
+          timeout_seconds: 10
 
 knowledge_bindings:
   - binding_id: enterprise_policy_binding
@@ -367,6 +389,8 @@ retrieval:
   min_score: 0.2
   max_rounds: 3
 ```
+
+`ingestion_model` and `routing_model` are Source-owned. Shared Source bindings from Agents cannot override them. If `routing_model` is omitted, runtime inherits `ingestion_model` for routing. `params.timeout_seconds` on either Source-owned model overrides the Shared Model Connection default.
 
 `snapshot_path` points to a directory containing `snapshot.json`. Each document entry references
 one immutable revision artifact by a POSIX-relative path beneath `artifact_root`:
@@ -445,7 +469,8 @@ curl -X POST http://127.0.0.1:8000/api/config/knowledge-sources \
     "name":"Enterprise Policy",
     "provider":"local_index",
     "params":{
-      "ingestion_model":{"provider":"openai_compatible","name":"gpt-4o-mini","params":{"api_key_env":"OPENAI_COMPATIBLE_API_KEY","base_url_env":"OPENAI_COMPATIBLE_BASE_URL"}},
+      "ingestion_model":{"model_source":"shared","connection_id":"model_local_index_ingestion","params":{"timeout_seconds":30}},
+      "routing_model":{"model_source":"custom","provider":"deepseek","name":"deepseek-chat","credential_ref":{"type":"env","name":"DEEPSEEK_API_KEY"},"params":{"timeout_seconds":10}},
       "document_selection_budget":8,
       "worker_concurrency":2
     },
@@ -677,7 +702,16 @@ model:
   name: demo
 ```
 
-Use the OpenAI-compatible provider for remote model validation:
+For remote validation, prefer a Shared Model Connection when the Dashboard Configuration Store is available:
+```yaml
+model:
+  model_source: shared
+  connection_id: model_openai_default
+  params:
+    temperature: 0
+```
+
+Standalone packages can still use the OpenAI-compatible provider inline:
 ```yaml
 model:
   provider: openai_compatible

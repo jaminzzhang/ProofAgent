@@ -192,17 +192,17 @@ Layer boundary rules:
 | Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `server`, continuous `knowledge-worker`, and bounded `knowledge-worker --once` |
 | Docker | `Dockerfile`, `docker-compose.yml` runs demo by default |
 | Contracts | Pydantic v2 frozen models |
-| Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, and `HarnessInvocation` composition |
+| Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, Shared Model Connection resolution, and `HarnessInvocation` composition |
 | Workflow | `control/workflow/` owns Enterprise QA and Controlled ReAct Enterprise QA Harness behavior plus the workflow template registry |
 | Runtime | `runtime/langgraph_runner.py` executes supported `StateGraph` templates through resolved Harness dependencies |
 | Policy | `control/policy/` owns retrieval, ReAct review, answer, tool, memory, and model call enforcement points |
-| Knowledge | `control/knowledge/` owns Control Plane retrieval orchestration; `capabilities/knowledge/` owns Markdown deterministic retrieval, Local Index runtime load, asynchronous Local Index ingestion, and remote adapter boundaries |
-| Model | `capabilities/models/` owns `deterministic`, `openai_compatible`, `openai`, `deepseek`; Azure/Anthropic placeholders |
+| Knowledge | `control/knowledge/` owns Control Plane retrieval orchestration; `capabilities/knowledge/` owns Markdown deterministic retrieval, Local Index runtime load, source-owned ingestion/routing model resolution, asynchronous Local Index ingestion, and remote adapter boundaries |
+| Model | `capabilities/models/` owns `deterministic`, `openai_compatible`, `openai`, `deepseek`; Azure/Anthropic placeholders; Dashboard Configuration > Models owns reusable Shared Model Connections |
 | Tools | `capabilities/tools/` owns ToolGateway, local handler loading, approval state |
 | Memory | `capabilities/memory/` owns session memory with denylist |
 | Validators | `control/validators/` owns schema, evidence, safety, citations, tool result |
-| Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, Model Usage |
-| Storage/API | `observability/storage/` and `observability/api/` own RunStore, FastAPI health/runs/stats routes |
+| Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, Model Usage, and model connection resolution events |
+| Storage/API | `observability/storage/` and `observability/api/` own RunStore, FastAPI health/runs/stats routes; `configuration/local_store.py` and `delivery/configuration_api.py` own Shared Model Connection configuration routes |
 | Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `contracts/customer.py`, and `contracts/handoff.py` own customer-safe projections, the Customer Run Adapter seam, and internal handoff monitoring |
 | Tests/CI | pytest, Ruff, mypy, GitHub Actions |
 
@@ -216,9 +216,9 @@ copy or create Agent package
   -> run deterministic local validation
   -> inspect trace and Governance Receipt
   -> compare Plain RAG vs Harness RAG on unsupported questions
-  -> optionally switch to remote model provider
+  -> optionally switch to a Shared Model Connection or custom remote model provider
   -> package with Docker or Python runtime
-  -> operate through RunStore, Dashboard API, trace, and receipt
+  -> operate through RunStore, Dashboard API, Configuration > Models, trace, and receipt
 ```
 
 Agent package is the developer-facing unit:
@@ -266,12 +266,12 @@ Architecture layer mapping:
 | Architecture layer | Current modules |
 | --- | --- |
 | Delivery / Entry | `delivery/cli.py`, compatibility shim `cli.py`, Docker assets, and the canonical package under `examples/` |
-| Bootstrap / Composition | `bootstrap/`, provider registries, current dependency resolution inside `control/workflow/orchestrator.py` |
+| Bootstrap / Composition | `bootstrap/`, provider registries, Shared Model Connection resolution, current dependency resolution inside `control/workflow/orchestrator.py` |
 | Control Plane | `control/workflow/`, `control/policy/`, `control/validators/`, approval state used by ToolGateway, memory policy checks |
 | Runtime Plane | `runtime/` |
 | Capability Layer | `capabilities/models/`, `capabilities/knowledge/`, `capabilities/memory/`, `capabilities/tools/`, future Skill packs |
 | Contracts & Ports | `contracts/`, provider protocols |
-| Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/` |
+| Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/`, configuration audit records |
 | Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, internal fixtures under `evaluation/demo/fixtures/`, and the canonical public package under `examples/insurance_customer_service/` |
 
 Boundary rules:
@@ -355,9 +355,10 @@ review:
   subagent:
     provider: deterministic
     name: harness-review-demo
-    timeout_seconds: 5
-    max_output_tokens: 500
     fail_closed: true
+    params:
+      timeout_seconds: 5
+      max_output_tokens: 500
 
 response:
   include_reasoning_summary: false
@@ -386,7 +387,41 @@ Proof Agent integrates real LLM behavior through role-specific model calls rathe
 
 Planner and reviewer outputs must satisfy the Model Output JSON Contract. The Harness parses model output into `ReActActionProposal` or `ReviewDecision` before any output can affect workflow routing, policy review, tool execution, or final answer behavior. Provider-native tool calls are not executable control actions in V1; future provider-native payloads must first be converted into Harness-governed action proposals.
 
-OpenAI-compatible example:
+Model role config supports three shapes:
+
+- `model_source: shared` references a live Dashboard-managed Shared Model Connection by `connection_id`.
+- `model_source: custom` stores provider, model name, base URL, and env credential reference directly on the Agent or Knowledge Source.
+- Legacy inline `provider/name/params` remains accepted for deterministic fixtures and standalone packages.
+
+Shared Model Connections are live references, not pinned versions. They store reusable connection parameters: display name, provider, model identifier, optional clear-text `base_url`, environment credential reference, optional account-scope env refs, and optional default `timeout_seconds`. Agent roles and Knowledge Sources keep usage parameters such as `temperature`, `max_output_tokens`, retrieval budgets, routing budgets, and reviewer controls. A role or Source-owned `params.timeout_seconds` overrides the Shared Model Connection default.
+
+Shared reference example:
+```yaml
+model:
+  model_source: shared
+  connection_id: model_deepseek_default
+  params:
+    temperature: 0
+    max_output_tokens: 800
+    timeout_seconds: 10
+```
+
+Custom model example:
+```yaml
+model:
+  model_source: custom
+  provider: deepseek
+  name: deepseek-chat
+  base_url: https://api.deepseek.com
+  credential_ref:
+    type: env
+    name: DEEPSEEK_API_KEY
+  params:
+    temperature: 0
+    max_output_tokens: 800
+```
+
+Legacy OpenAI-compatible example:
 ```yaml
 model:
   provider: openai_compatible
@@ -401,11 +436,15 @@ model:
 
 Config rules:
 - Allow env var names such as `api_key_env`, `base_url_env`, `organization_env`, `project_env`.
+- Allow `credential_ref: {type: env, name: ...}` for shared/custom model source configuration.
 - Reject secret-looking fields such as `api_key`, `authorization`, `bearer`, `password`, `secret`, `access_token`.
 - Unsupported provider fails with `PA_MODEL_001`.
+- Missing shared model connection fails with `PA_MODEL_CONNECTION_001`.
+- Archived shared model connection is allowed for existing runtime resolution with a publish-blocking warning, but production publication fails with `PA_MODEL_CONNECTION_002`.
 - Provider runtime errors should emit `model_error` once trace exists.
 - `react_enterprise_qa` requires the `react` section.
 - `review.mode: auto` requires `review.subagent`.
+- Reviewer model usage settings belong under `review.subagent.params`; old top-level reviewer usage fields are rejected instead of dual-read.
 - Raw chain-of-thought must not be recorded, stored, or exposed; only audit-safe Reasoning Summary fields may enter trace, receipt, RunStore, Dashboard API, Conversation API, or response governance details.
 
 ## 8. Bootstrap / Composition
@@ -443,6 +482,7 @@ Contracts & Ports are the vertical foundation used by Control, Runtime, Capabili
 | `ReviewDecision` | advisory review result; final authority remains with PolicyEngine/Harness |
 | `EvidenceChunk` | retrieved evidence and citation source |
 | `ModelRequest` / `ModelResponse` | provider-neutral model call |
+| `ModelConnectionResolutionRecord` | trace-safe record of shared/custom/inline model source resolution |
 | `ToolRequest` / `ToolResult` | tool request/result semantics |
 | `ApprovalState` | tool approval lifecycle |
 | `TraceEvent` | JSONL event envelope |
@@ -594,6 +634,7 @@ Current baseline:
 - explicit `package_knowledge_sources[]` plus `knowledge_bindings[].source_ref` Agent Contract shape.
 - Configuration Store Source publication validation and Published Agent binding resolution for shared `local_index` snapshots and shared `http_json` remote configuration versions.
 - Configuration Store Source lifecycle management with required `lifecycle_state`, archive, restore, deletion eligibility, narrow physical deletion, and global configuration audit for deletion records.
+- Source-owned `local_index` ingestion and routing model config can reference Shared Model Connections or store custom provider config.
 
 Knowledge Hub target shape:
 - Knowledge Sources own provider configuration and publication lifecycle.
@@ -633,6 +674,8 @@ Knowledge Hub V1 provider set:
 Rules:
 - Knowledge Provider Adapters retrieve one selected source and return candidate `EvidenceChunk` objects only.
 - Provider-specific config lives in package-local Knowledge Sources or Configuration Store Knowledge Sources, not in shared Agent binding entries.
+- Source-owned `ingestion_model` and `routing_model` use the same shared/custom model source shapes as Agent model roles. Agent Knowledge Bindings cannot override them.
+- `routing_model` inherits `ingestion_model` when omitted. Source-owned `params.timeout_seconds` overrides the Shared Model Connection default, while retrieval `top_k` remains on the Agent retrieval policy.
 - Dashboard-managed shared Source bindings use `source_ref: {scope: shared, source_id: ...}` and do not copy provider params into the Agent Contract.
 - Dashboard-managed shared Source bindings require an active published Source. Archived shared Sources are excluded from new binding and rejected during validation and publication resolution.
 - Archive is the default delete-like Source action. It blocks Source writes and new Agent binding while preserving documents, snapshots, publications, audit, and pinned Published Agent Version execution.
@@ -710,10 +753,18 @@ Providers:
 | `azure_openai` | placeholder with clear failure |
 | `anthropic` | placeholder with clear failure |
 
+Shared Model Connection behavior:
+- Configuration > Models is a Dashboard workspace backed by `/api/config/model-connections`.
+- Create/update/archive/restore/delete eligibility, reference summaries, validation records, manual smoke tests, and configuration audit are handled in the Local Agent Configuration Store.
+- Active connections can be newly selected by Agent and Knowledge Source editors. Archived connections remain readable for existing references but are hidden from new selections and block production publication.
+- Shared connection updates affect future resolutions because V1 uses live references rather than published connection versions.
+- No raw API keys are stored. The only credential shape in V1 is an environment credential reference; model smoke tests check whether that environment variable is present without persisting the value.
+
 Trace safety:
 - `model_request` stores provider/model/message counts/prompt lengths/token estimate, not raw prompt.
 - `model_response` stores finish reason/content length/token usage, not raw response.
 - `model_error` stores normalized error class/code/message, not raw provider body or headers.
+- `model_connection_resolution` stores role, model source, connection id when present, provider, model identifier, lifecycle warning, and override metadata, not credentials or raw provider params.
 
 ## 16. Tool Gateway And MCP
 
@@ -937,6 +988,7 @@ context_admission
 model_request
 model_response
 model_error
+model_connection_resolution
 approval_requested
 approval_granted
 approval_denied
@@ -970,6 +1022,7 @@ Receipt sections:
 - tool approval status
 - memory status
 - model usage or model error
+- model connection resolution summary
 - audit artifacts
 - redaction summary
 
@@ -1018,6 +1071,17 @@ Configuration routes:
 | `POST /api/config/agents/{agent_id}/drafts/{draft_id}/validate` | run a Draft Agent as `run_purpose: validation` |
 | `POST /api/config/agents/{agent_id}/drafts/{draft_id}/publish` | publish a validated Draft Agent as an immutable version |
 | `POST /api/config/agents/{agent_id}/versions/{version_id}/rollback` | switch the Active Agent Version pointer |
+| `GET /api/config/model-connections` | list Shared Model Connections for Configuration > Models and selector dropdowns |
+| `POST /api/config/model-connections` | create a Shared Model Connection |
+| `GET /api/config/model-connections/{connection_id}` | read one Shared Model Connection with reference summary |
+| `PATCH /api/config/model-connections/{connection_id}` | update a Shared Model Connection after impact confirmation |
+| `POST /api/config/model-connections/{connection_id}/archive` | archive a connection and block new production references |
+| `POST /api/config/model-connections/{connection_id}/restore` | restore an archived connection |
+| `GET /api/config/model-connections/{connection_id}/references` | summarize Draft Agent, Published Agent Version, and Knowledge Source references |
+| `GET /api/config/model-connections/{connection_id}/deletion-eligibility` | check physical deletion blockers |
+| `POST /api/config/model-connections/{connection_id}/delete` | physically delete only archived unreferenced connections |
+| `POST /api/config/model-connections/{connection_id}/validate` | record credential/config validation without storing secrets |
+| `POST /api/config/model-connections/{connection_id}/smoke-test` | record manual smoke-test status without raw responses |
 | `GET /api/config/knowledge-sources/{source_id}/candidate-snapshot` | read the derived Local Index candidate snapshot |
 | `POST /api/config/knowledge-sources/{source_id}/candidate-snapshot/validate-foundation` | validate candidate freeze readiness |
 | `POST /api/config/knowledge-sources/{source_id}/candidate-snapshot/freeze` | freeze a validated development-stage snapshot manifest |
@@ -1121,6 +1185,9 @@ Dependency rules:
 | `PA_MODEL_002` | Model | provider API error |
 | `PA_MODEL_003` | Model | auth failure or missing API key env |
 | `PA_MODEL_004` | Model | provider timeout |
+| `PA_MODEL_CONNECTION_001` | Model connection | missing shared connection or invalid model source shape |
+| `PA_MODEL_CONNECTION_002` | Model connection | archived shared connection blocks production publication |
+| `PA_MODEL_CONNECTION_CREDENTIAL_MISSING` | Model connection | validation or smoke test cannot find the referenced credential environment variable |
 | `PA_POLICY_001` | Policy | policy file or rule error |
 | `PA_TOOL_001` | Tool | unregistered tool or invalid parameters |
 | `PA_APPROVAL_001` | Approval | invalid approval state |

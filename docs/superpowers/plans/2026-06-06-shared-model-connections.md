@@ -1149,7 +1149,7 @@ git commit -m "feat: select model connections for knowledge sources"
 - Modify: `docs/development-progress.md`
 - Modify: `AGENTS-COMMON.md` only if commands or canonical status change
 
-- [ ] **Step 1: Update technical design**
+- [x] **Step 1: Update technical design**
 
 Document:
 
@@ -1161,7 +1161,7 @@ Document:
 - Reviewer params cleanup
 - Secret boundary
 
-- [ ] **Step 2: Update developer guide**
+- [x] **Step 2: Update developer guide**
 
 Add examples:
 
@@ -1189,7 +1189,7 @@ model:
     temperature: 0
 ```
 
-- [ ] **Step 3: Update progress doc**
+- [x] **Step 3: Update progress doc**
 
 Record what shipped and any known limitations:
 
@@ -1197,7 +1197,7 @@ Record what shipped and any known limitations:
 - No import/export.
 - Azure/Anthropic placeholders not ready in Models Workspace create flow.
 
-- [ ] **Step 4: Run markdown check**
+- [x] **Step 4: Run markdown check**
 
 Run:
 
