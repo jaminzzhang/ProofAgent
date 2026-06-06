@@ -3,7 +3,10 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import EnvironmentModelCredentialReference
 from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 from proof_agent.contracts import TraceEventType
@@ -62,6 +65,53 @@ def test_final_answer_model_trace_includes_role_and_response_format(tmp_path: Pa
     assert model_request["payload"]["response_format"] == "text"
 
 
+def test_shared_model_connection_resolution_trace_is_secret_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEMO_MODEL_KEY", "raw-secret-value")
+    example_dir = tmp_path / "enterprise_qa"
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    raw["model"] = {
+        "model_source": "shared",
+        "connection_id": "model_demo_shared",
+        "params": {"temperature": 0},
+    }
+    manifest_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_model_connection(
+        connection_id="model_demo_shared",
+        display_name="Demo Shared",
+        provider="deterministic",
+        model_identifier="demo",
+        base_url="https://models.example.test/v1",
+        credential_ref=EnvironmentModelCredentialReference(name="DEMO_MODEL_KEY"),
+        actor="operator",
+    )
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+        configuration_store=store,
+    )
+
+    events = _read_events(result.trace_path)
+    resolution = next(
+        event for event in events if event["event_type"] == "model_connection_resolution"
+    )
+    assert resolution["payload"]["connection_id"] == "model_demo_shared"
+    assert resolution["payload"]["provider"] == "deterministic"
+    assert resolution["payload"]["base_url_host"] == "models.example.test"
+    assert resolution["payload"]["credential_ref"] == {
+        "type": "env",
+        "name": "DEMO_MODEL_KEY",
+    }
+    assert "raw-secret-value" not in result.trace_path.read_text(encoding="utf-8")
+
+
 def test_model_error_is_traced_when_provider_resolution_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -70,8 +120,7 @@ def test_model_error_is_traced_when_provider_resolution_fails(
     shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), example_dir)
     manifest_path = example_dir / "agent.yaml"
     manifest_path.write_text(
-        manifest_path
-        .read_text(encoding="utf-8")
+        manifest_path.read_text(encoding="utf-8")
         .replace("provider: deterministic", "provider: openai_compatible")
         .replace("name: demo", "name: gpt-test"),
         encoding="utf-8",

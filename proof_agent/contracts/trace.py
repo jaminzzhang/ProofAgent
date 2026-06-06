@@ -43,6 +43,7 @@ class TraceEventType(str, Enum):
     MEMORY_EXPORT_DECISION = "memory_export_decision"
     MEMORY_DELETE_DECISION = "memory_delete_decision"
     MODEL_REQUEST = "model_request"
+    MODEL_CONNECTION_RESOLUTION = "model_connection_resolution"
     MODEL_RESPONSE = "model_response"
     MODEL_ERROR = "model_error"
     MODEL_OUTPUT_NORMALIZATION_FAILED = "model_output_normalization_failed"

@@ -1336,6 +1336,7 @@ def validate_config_draft(
             store=run_store,
             manifest=manifest,
             resolved_knowledge_bindings=resolved_knowledge_bindings,
+            configuration_store=config_store,
             run_purpose=RunPurpose.VALIDATION,
             agent_id=agent_id,
             draft_id=draft_id,

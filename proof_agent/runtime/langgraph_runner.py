@@ -9,6 +9,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from proof_agent.bootstrap.knowledge_resolution import KnowledgeBindingResolver
 from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
@@ -18,7 +19,11 @@ from proof_agent.contracts import (
     RunResult,
 )
 from proof_agent.contracts.conversation import context_admission_payload
-from proof_agent.control.workflow.harness_helpers import emit_model_error, finalize_run, is_model_error
+from proof_agent.control.workflow.harness_helpers import (
+    emit_model_error,
+    finalize_run,
+    is_model_error,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
@@ -39,6 +44,7 @@ def run_with_langgraph(
     manifest: AgentManifest | None = None,
     knowledge_binding_resolver: KnowledgeBindingResolver | None = None,
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
+    configuration_store: LocalAgentConfigurationStore | None = None,
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     agent_id: str | None = None,
     agent_version_id: str | None = None,
@@ -76,16 +82,23 @@ def run_with_langgraph(
             manifest=resolved_manifest,
             knowledge_binding_resolver=knowledge_binding_resolver,
             resolved_knowledge_bindings=resolved_knowledge_bindings,
+            configuration_store=configuration_store,
         )
     except Exception as exc:
         if is_model_error(exc):
             emit_model_error(
                 trace,
-                resolved_manifest.model.provider,
-                resolved_manifest.model.name,
+                resolved_manifest.model.provider or resolved_manifest.model.connection_id or "",
+                resolved_manifest.model.name or "",
                 exc,
             )
         raise
+    for record in invocation.model_resolution_records:
+        trace.emit(
+            "model_connection_resolution",
+            status="ok",
+            payload=record.model_dump(mode="json"),
+        )
 
     if resolved_manifest.workflow.template == "enterprise_qa":
         builder = build_enterprise_qa_graph(
@@ -101,7 +114,7 @@ def run_with_langgraph(
             approved=approved,
             conversation_context=conversation_context,
         )
-    
+
     if checkpointer is None:
         if (
             resolved_manifest.workflow.checkpointer
@@ -112,6 +125,7 @@ def run_with_langgraph(
             else:
                 from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore[import-not-found]
                 import sqlite3
+
                 conn = sqlite3.connect(
                     (resolved_manifest.workflow.checkpointer.uri or "").replace("sqlite:///", "")
                 )
@@ -120,7 +134,7 @@ def run_with_langgraph(
             checkpointer = MemorySaver()
 
     graph = builder.compile(checkpointer=checkpointer)
-    
+
     state = {
         "run_id": actual_run_id,
         "question": question,

@@ -88,6 +88,7 @@ from proof_agent.contracts.memory import (
 )
 from proof_agent.contracts.model import (
     ModelCallRole,
+    ModelConnectionResolutionRecord,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -182,6 +183,7 @@ __all__ = [
     "ModelCallRole",
     "ModelCredentialReferenceConfig",
     "ModelConnectionSmokeTestRecord",
+    "ModelConnectionResolutionRecord",
     "ModelConnectionValidationRecord",
     "ModelMessage",
     "ModelRequest",

@@ -11,7 +11,15 @@ from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.capabilities.react import ReActPlanner, resolve_react_planner
 from proof_agent.capabilities.review import HarnessReviewSubagent, resolve_review_subagent
 from proof_agent.capabilities.tools.gateway import ToolGateway
-from proof_agent.contracts import AgentManifest, ResolvedKnowledgeBindingSet
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import (
+    AgentManifest,
+    ModelCallRole,
+    ModelConnectionResolutionRecord,
+    ReActPlannerConfig,
+    ResolvedKnowledgeBindingSet,
+    ReviewSubagentConfig,
+)
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.workflow.templates import WorkflowTemplate, resolve_workflow_template
 from proof_agent.bootstrap.loader import load_agent_manifest
@@ -19,6 +27,7 @@ from proof_agent.bootstrap.knowledge_resolution import (
     KnowledgeBindingResolver,
     PackageKnowledgeBindingResolver,
 )
+from proof_agent.bootstrap.model_resolution import resolve_model_role_config
 
 
 DEFAULT_MEMORY_DENY_FIELDS = frozenset({"access_token", "customer_phone", "provider_api_key"})
@@ -39,6 +48,7 @@ class HarnessInvocation:
     memory_deny_fields: frozenset[str] = DEFAULT_MEMORY_DENY_FIELDS
     react_planner: ReActPlanner | None = None
     review_subagent: HarnessReviewSubagent | None = None
+    model_resolution_records: tuple[ModelConnectionResolutionRecord, ...] = ()
 
     def create_memory(self) -> SessionMemory:
         """Create per-run memory with the configured sensitivity boundary."""
@@ -52,21 +62,55 @@ def compose_harness_invocation(
     manifest: AgentManifest | None = None,
     knowledge_binding_resolver: KnowledgeBindingResolver | None = None,
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
+    configuration_store: LocalAgentConfigurationStore | None = None,
+    require_runtime_credentials: bool = True,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
 
     manifest_path = Path(agent_yaml).resolve()
     resolved_manifest = manifest or load_agent_manifest(manifest_path)
     template = resolve_workflow_template(resolved_manifest.workflow.template)
+    model_resolution_records: list[ModelConnectionResolutionRecord] = []
+    resolved_answer_model = resolve_model_role_config(
+        resolved_manifest.model,
+        role=ModelCallRole.FINAL_ANSWER,
+        configuration_store=configuration_store,
+        require_runtime_credentials=require_runtime_credentials,
+    )
+    model_resolution_records.append(resolved_answer_model.resolution_record)
     react_planner = None
     if resolved_manifest.react is not None:
-        react_planner = resolve_react_planner(resolved_manifest.react.planner)
+        resolved_planner_model = resolve_model_role_config(
+            resolved_manifest.react.planner,
+            role=ModelCallRole.REACT_PLANNER,
+            configuration_store=configuration_store,
+            require_runtime_credentials=require_runtime_credentials,
+        )
+        model_resolution_records.append(resolved_planner_model.resolution_record)
+        react_planner = resolve_react_planner(
+            ReActPlannerConfig(
+                provider=resolved_planner_model.model_config.provider,
+                name=resolved_planner_model.model_config.name,
+                params=resolved_planner_model.model_config.params,
+            )
+        )
     review_subagent = None
-    if (
-        resolved_manifest.review is not None
-        and resolved_manifest.review.subagent is not None
-    ):
-        review_subagent = resolve_review_subagent(resolved_manifest.review.subagent)
+    if resolved_manifest.review is not None and resolved_manifest.review.subagent is not None:
+        resolved_review_model = resolve_model_role_config(
+            resolved_manifest.review.subagent,
+            role=ModelCallRole.HARNESS_REVIEW,
+            configuration_store=configuration_store,
+            require_runtime_credentials=require_runtime_credentials,
+        )
+        model_resolution_records.append(resolved_review_model.resolution_record)
+        review_subagent = resolve_review_subagent(
+            ReviewSubagentConfig(
+                provider=resolved_review_model.model_config.provider,
+                name=resolved_review_model.model_config.name,
+                fail_closed=resolved_manifest.review.subagent.fail_closed,
+                params=resolved_review_model.model_config.params,
+            )
+        )
     resolved_bindings = resolved_knowledge_bindings
     if resolved_bindings is None:
         resolver = knowledge_binding_resolver or PackageKnowledgeBindingResolver()
@@ -81,8 +125,9 @@ def compose_harness_invocation(
             resolve_blended_knowledge_provider(resolved_bindings),
         ),
         resolved_knowledge_bindings=resolved_bindings,
-        model_provider=resolve_provider(resolved_manifest.model),
+        model_provider=resolve_provider(resolved_answer_model.model_config),
         tool_gateway=ToolGateway.from_file(resolved_manifest.tools.file),
         react_planner=react_planner,
         review_subagent=review_subagent,
+        model_resolution_records=tuple(model_resolution_records),
     )

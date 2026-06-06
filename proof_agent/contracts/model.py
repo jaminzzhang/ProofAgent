@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_serializer, field_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 
@@ -75,3 +75,26 @@ class ModelResponse(FrozenModel):
     token_usage: TokenUsage | None = None
     finish_reason: str | None = None
     raw_response_id: str | None = None
+
+
+class ModelConnectionResolutionRecord(FrozenModel):
+    """Trace-safe projection of a model connection resolution."""
+
+    role: ModelCallRole
+    model_source: Literal["inline", "shared", "custom"]
+    provider: str
+    model_identifier: str
+    usage_params: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    connection_id: str | None = None
+    base_url_host: str | None = None
+    credential_ref: Mapping[str, str] | None = None
+    warnings: tuple[str, ...] = Field(default_factory=tuple)
+
+    @field_validator("usage_params", mode="after")
+    @classmethod
+    def freeze_usage_params(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("usage_params")
+    def serialize_usage_params(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(value)

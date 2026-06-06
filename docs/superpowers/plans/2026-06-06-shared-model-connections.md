@@ -606,7 +606,7 @@ git commit -m "feat: add model connection configuration api"
 - Modify: `tests/test_trace_model_events.py`
 - Modify: `tests/test_receipt_model_usage.py`
 
-- [ ] **Step 1: Write failing resolver tests**
+- [x] **Step 1: Write failing resolver tests**
 
 Test:
 
@@ -618,7 +618,7 @@ Test:
 - Archived connection resolves with warning metadata, not silent success.
 - Missing env var fails validation/smoke/run resolution where runtime credential presence is required.
 
-- [ ] **Step 2: Write failing trace tests**
+- [x] **Step 2: Write failing trace tests**
 
 Assert a model call emits a trace-safe resolution payload:
 
@@ -635,7 +635,7 @@ Assert a model call emits a trace-safe resolution payload:
 
 No raw credential value appears.
 
-- [ ] **Step 3: Run tests and verify RED**
+- [x] **Step 3: Run tests and verify RED**
 
 Run:
 
@@ -645,7 +645,7 @@ uv run --extra dev python -m pytest tests/test_model_connection_resolution.py te
 
 Expected: fail.
 
-- [ ] **Step 4: Implement resolver**
+- [x] **Step 4: Implement resolver**
 
 Create functions:
 
@@ -671,7 +671,7 @@ Update model provider creation paths so final answer, ReAct planner, reviewer, r
 
 Keep deterministic demo working without configuration store.
 
-- [ ] **Step 6: Emit trace-safe resolution record**
+- [x] **Step 6: Emit trace-safe resolution record**
 
 Emit before or alongside `model_request` events. Keep payload free of raw credentials and raw provider responses.
 
