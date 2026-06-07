@@ -29,7 +29,7 @@ export function ModelsPage() {
   const [provider, setProvider] = useState<ProviderOption>('deepseek')
   const [modelIdentifier, setModelIdentifier] = useState('deepseek-chat')
   const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com')
-  const [credentialEnv, setCredentialEnv] = useState('')
+  const [credentialEnv, setCredentialEnv] = useState('DEEPSEEK_API_KEY')
   const [timeoutSeconds, setTimeoutSeconds] = useState('')
 
   async function loadConnections() {
@@ -104,6 +104,12 @@ export function ModelsPage() {
     }
   }
 
+  const CREDENTIAL_ENV_DEFAULTS: Record<ProviderOption, string> = {
+    deepseek: 'DEEPSEEK_API_KEY',
+    openai: 'OPENAI_API_KEY',
+    openai_compatible: '',
+  }
+
   function updateProvider(nextProvider: string) {
     const typedProvider = nextProvider as ProviderOption
     setProvider(typedProvider)
@@ -117,6 +123,7 @@ export function ModelsPage() {
       setModelIdentifier('')
       setBaseUrl('')
     }
+    setCredentialEnv(CREDENTIAL_ENV_DEFAULTS[typedProvider])
   }
 
   if (loading) return <div className="flex justify-center py-12"><LoadingSpinner /></div>
@@ -139,14 +146,14 @@ export function ModelsPage() {
           />
           <TextField label="Model Identifier" value={modelIdentifier} onChange={setModelIdentifier} />
           <TextField label="Base URL" value={baseUrl} onChange={setBaseUrl} placeholder="https://api.example.com" />
-          <TextField label="Credential Env" value={credentialEnv} onChange={setCredentialEnv} placeholder="DEEPSEEK_API_KEY" />
+          <TextField label="Credential Env" value={credentialEnv} onChange={setCredentialEnv} placeholder={CREDENTIAL_ENV_DEFAULTS[provider] || 'API_KEY'} />
           <NumberField label="Timeout Seconds" value={timeoutSeconds} onChange={setTimeoutSeconds} min={1} />
         </div>
         <div className="mt-4 flex justify-end">
           <button
             onClick={handleCreate}
             disabled={busy === 'create' || !displayName.trim() || !modelIdentifier.trim() || !credentialEnv.trim()}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+            className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === 'create' ? 'Creating...' : 'Create Model'}
           </button>

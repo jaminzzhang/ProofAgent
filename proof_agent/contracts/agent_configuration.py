@@ -247,7 +247,7 @@ class KnowledgeSource(FrozenModel):
     source_id: str
     name: str
     provider: str
-    lifecycle_state: KnowledgeSourceLifecycleState
+    lifecycle_state: KnowledgeSourceLifecycleState = KnowledgeSourceLifecycleState.ACTIVE
     params: Mapping[str, Any] = Field(default_factory=FrozenDict)
     created_at: str
     updated_at: str
