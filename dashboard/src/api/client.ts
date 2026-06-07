@@ -6,12 +6,16 @@ import type {
   ContractBundle,
   DraftAgent,
   DraftValidationResponse,
+  FoundationKnowledgeSourceValidation,
   HandoffsResponse,
   HealthResponse,
   KnowledgeDocument,
   KnowledgeDocumentsResponse,
+  KnowledgeIngestionJob,
+  KnowledgeIngestionJobsResponse,
   KnowledgeSource,
   KnowledgeSourceDeletionEligibility,
+  KnowledgeSourceSnapshotManifest,
   KnowledgeSourcePublicationRecord,
   KnowledgeSourcePublicationValidation,
   KnowledgeSourcePublicationsResponse,
@@ -284,11 +288,66 @@ export function fetchKnowledgeDocuments(sourceId: string): Promise<KnowledgeDocu
   return fetchJson<KnowledgeDocumentsResponse>(`${BASE}/config/knowledge-sources/${sourceId}/documents`)
 }
 
+export function fetchQuarantinedKnowledgeUploads(sourceId: string): Promise<KnowledgeUploadsResponse> {
+  return fetchJson<KnowledgeUploadsResponse>(
+    `${BASE}/config/knowledge-sources/${sourceId}/quarantined-uploads`,
+  )
+}
+
+export function fetchKnowledgeIngestionJobs(sourceId: string): Promise<KnowledgeIngestionJobsResponse> {
+  return fetchJson<KnowledgeIngestionJobsResponse>(
+    `${BASE}/config/knowledge-sources/${sourceId}/ingestion-jobs`,
+  )
+}
+
+export function retryKnowledgeIngestionJob(
+  sourceId: string,
+  jobId: string,
+  payload: { actor?: string },
+): Promise<KnowledgeIngestionJob> {
+  return fetchJson<KnowledgeIngestionJob>(
+    `${BASE}/config/knowledge-sources/${sourceId}/ingestion-jobs/${jobId}/retry`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
 export function fetchCandidateKnowledgeSourceSnapshot(
   sourceId: string,
 ): Promise<CandidateKnowledgeSourceSnapshot> {
   return fetchJson<CandidateKnowledgeSourceSnapshot>(
     `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot`,
+  )
+}
+
+export function validateCandidateKnowledgeSourceSnapshotFoundation(
+  sourceId: string,
+  payload: { actor?: string },
+): Promise<FoundationKnowledgeSourceValidation> {
+  return fetchJson<FoundationKnowledgeSourceValidation>(
+    `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot/validate-foundation`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function freezeCandidateKnowledgeSourceSnapshot(
+  sourceId: string,
+  payload: { validation_id: string; actor?: string },
+): Promise<KnowledgeSourceSnapshotManifest> {
+  return fetchJson<KnowledgeSourceSnapshotManifest>(
+    `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot/freeze`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
   )
 }
 

@@ -11,12 +11,16 @@ import {
   fetchModelConnections,
   createKnowledgeSource,
   fetchConfigAgents,
+  fetchKnowledgeIngestionJobs,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSources,
+  fetchQuarantinedKnowledgeUploads,
+  freezeCandidateKnowledgeSourceSnapshot,
   fetchRuns,
   importConfigAgent,
   permanentlyDeleteKnowledgeSource,
   publishConfigDraft,
+  retryKnowledgeIngestionJob,
   restoreKnowledgeSource,
   restoreModelConnection,
   rollbackConfigVersion,
@@ -26,6 +30,7 @@ import {
   updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocument,
   uploadKnowledgeDocuments,
+  validateCandidateKnowledgeSourceSnapshotFoundation,
   validateConfigDraft,
   validateModelConnection,
   fetchHandoffs,
@@ -105,6 +110,36 @@ test('knowledge source client methods use shared source endpoints', async () => 
       }),
     )
     .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ upload_id: 'upload_1', state: 'queued' }], meta: { total: 1 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ job_id: 'ksjob_1', state: 'processing' }], meta: { total: 1 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ job_id: 'ksjob_1', state: 'queued' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ validation_id: 'ksvalidation_1', status: 'passed' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ snapshot_id: 'kssnapshot_1', state: 'READY' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
       new Response(JSON.stringify({ document_id: 'doc_1', routing_metadata: { title: 'Policy' } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -143,6 +178,14 @@ test('knowledge source client methods use shared source endpoints', async () => 
     ],
     actor: 'dashboard',
   })
+  await fetchQuarantinedKnowledgeUploads('ks_local_index')
+  await fetchKnowledgeIngestionJobs('ks_local_index')
+  await retryKnowledgeIngestionJob('ks_local_index', 'ksjob_1', { actor: 'dashboard' })
+  await validateCandidateKnowledgeSourceSnapshotFoundation('ks_local_index', { actor: 'dashboard' })
+  await freezeCandidateKnowledgeSourceSnapshot('ks_local_index', {
+    validation_id: 'ksvalidation_1',
+    actor: 'dashboard',
+  })
   await updateKnowledgeDocumentRoutingMetadata('ks_local_index', 'doc_1', {
     routing_metadata: { title: 'Policy' },
     actor: 'dashboard',
@@ -158,9 +201,27 @@ test('knowledge source client methods use shared source endpoints', async () => 
   )
   expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' })
   expect(fetchMock.mock.calls[4][0]).toBe(
+    '/api/config/knowledge-sources/ks_local_index/quarantined-uploads',
+  )
+  expect(fetchMock.mock.calls[5][0]).toBe(
+    '/api/config/knowledge-sources/ks_local_index/ingestion-jobs',
+  )
+  expect(fetchMock.mock.calls[6][0]).toBe(
+    '/api/config/knowledge-sources/ks_local_index/ingestion-jobs/ksjob_1/retry',
+  )
+  expect(fetchMock.mock.calls[6][1]).toMatchObject({ method: 'POST' })
+  expect(fetchMock.mock.calls[7][0]).toBe(
+    '/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation',
+  )
+  expect(fetchMock.mock.calls[7][1]).toMatchObject({ method: 'POST' })
+  expect(fetchMock.mock.calls[8][0]).toBe(
+    '/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze',
+  )
+  expect(fetchMock.mock.calls[8][1]).toMatchObject({ method: 'POST' })
+  expect(fetchMock.mock.calls[9][0]).toBe(
     '/api/config/knowledge-sources/ks_local_index/documents/doc_1/routing-metadata',
   )
-  expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: 'PATCH' })
+  expect(fetchMock.mock.calls[9][1]).toMatchObject({ method: 'PATCH' })
 })
 
 test('knowledge source lifecycle methods use archive restore eligibility and delete endpoints', async () => {

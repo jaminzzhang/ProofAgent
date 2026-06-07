@@ -22,6 +22,7 @@ from proof_agent.delivery.published_agents import (
     published_agent_directory_payload,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
@@ -267,6 +268,7 @@ def _execute_published_agent_run(
             store=store,
             manifest=manifest,
             resolved_knowledge_bindings=resolved_knowledge_bindings,
+            configuration_store=_get_configuration_store(app_request),
             agent_id=agent_id,
             agent_version_id=agent_version_id,
             draft_id=draft_id,
@@ -365,6 +367,10 @@ def _get_published_agents(request: Request) -> PublishedAgentRegistry:
 
 def _get_conversation_store(request: Request) -> ConversationStore:
     return cast(ConversationStore, request.app.state.conversation_store)
+
+
+def _get_configuration_store(request: Request) -> LocalAgentConfigurationStore:
+    return cast(LocalAgentConfigurationStore, request.app.state.agent_configuration_store)
 
 
 def _require_conversation(request: Request, conversation_id: str) -> ConversationRecord:

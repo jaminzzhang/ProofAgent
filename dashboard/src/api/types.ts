@@ -400,6 +400,19 @@ export interface KnowledgeSourceSnapshotManifest {
   created_by: string
 }
 
+export interface FoundationKnowledgeSourceValidation {
+  validation_id: string
+  source_id: string
+  source_draft_version_id: string
+  candidate_digest: string
+  validation_level: 'foundation'
+  status: 'passed'
+  document_count: number
+  required_reingestion_count: number
+  created_at: string
+  created_by: string
+}
+
 export interface KnowledgeSourcePublicationValidation {
   validation_id: string
   source_id: string
@@ -474,6 +487,32 @@ export interface QuarantinedKnowledgeUpload {
   updated_at: string
 }
 
+export interface KnowledgeIngestionJob {
+  job_id: string
+  source_id: string
+  document_id: string
+  revision_id: string
+  state: string
+  attempt_count: number
+  auto_retry_count: number
+  max_auto_retries: number
+  ingestion_config_fingerprint: string
+  artifact_build_spec: Record<string, unknown>
+  artifact_path?: string | null
+  claimed_at?: string | null
+  claim_token?: string | null
+  lease_expires_at?: string | null
+  completed_at?: string | null
+  error_code?: string | null
+  error_message?: string | null
+  last_error_code?: string | null
+  last_error_message?: string | null
+  last_failure_classification?: string | null
+  next_attempt_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface KnowledgeSourcesResponse {
   data: KnowledgeSource[]
   meta: {
@@ -490,6 +529,13 @@ export interface KnowledgeDocumentsResponse {
 
 export interface KnowledgeUploadsResponse {
   data: QuarantinedKnowledgeUpload[]
+  meta: {
+    total: number
+  }
+}
+
+export interface KnowledgeIngestionJobsResponse {
+  data: KnowledgeIngestionJob[]
   meta: {
     total: number
   }

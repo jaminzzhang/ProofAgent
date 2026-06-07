@@ -6,16 +6,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   archiveKnowledgeSource,
   fetchCandidateKnowledgeSourceSnapshot,
+  fetchKnowledgeIngestionJobs,
   fetchKnowledgeDocuments,
   fetchKnowledgeSource,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSourcePublications,
+  fetchQuarantinedKnowledgeUploads,
+  freezeCandidateKnowledgeSourceSnapshot,
   permanentlyDeleteKnowledgeSource,
   publishKnowledgeSource,
+  retryKnowledgeIngestionJob,
   restoreKnowledgeSource,
   updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocument,
   uploadKnowledgeDocuments,
+  validateCandidateKnowledgeSourceSnapshotFoundation,
   validateKnowledgeSourcePublication,
 } from '../../api/client'
 import { KnowledgeDetailPage } from '../KnowledgeDetailPage'
@@ -23,16 +28,21 @@ import { KnowledgeDetailPage } from '../KnowledgeDetailPage'
 vi.mock('../../api/client', () => ({
   archiveKnowledgeSource: vi.fn(),
   fetchCandidateKnowledgeSourceSnapshot: vi.fn(),
+  fetchKnowledgeIngestionJobs: vi.fn(),
   fetchKnowledgeDocuments: vi.fn(),
   fetchKnowledgeSource: vi.fn(),
   fetchKnowledgeSourceDeletionEligibility: vi.fn(),
   fetchKnowledgeSourcePublications: vi.fn(),
+  fetchQuarantinedKnowledgeUploads: vi.fn(),
+  freezeCandidateKnowledgeSourceSnapshot: vi.fn(),
   permanentlyDeleteKnowledgeSource: vi.fn(),
   publishKnowledgeSource: vi.fn(),
+  retryKnowledgeIngestionJob: vi.fn(),
   restoreKnowledgeSource: vi.fn(),
   updateKnowledgeDocumentRoutingMetadata: vi.fn(),
   uploadKnowledgeDocument: vi.fn(),
   uploadKnowledgeDocuments: vi.fn(),
+  validateCandidateKnowledgeSourceSnapshotFoundation: vi.fn(),
   validateKnowledgeSourcePublication: vi.fn(),
 }))
 
@@ -89,6 +99,22 @@ describe('KnowledgeDetailPage', () => {
         },
       ],
       meta: { total: 1 },
+    })
+    vi.mocked(fetchQuarantinedKnowledgeUploads).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchKnowledgeIngestionJobs).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(retryKnowledgeIngestionJob).mockResolvedValue({
+      job_id: 'ksjob_1',
+      source_id: 'ks_local_index',
+      document_id: 'ksdoc_1',
+      revision_id: 'ksrev_1',
+      state: 'queued',
+      attempt_count: 1,
+      auto_retry_count: 0,
+      max_auto_retries: 2,
+      ingestion_config_fingerprint: 'fingerprint_1',
+      artifact_build_spec: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:01:00Z',
     })
     vi.mocked(fetchCandidateKnowledgeSourceSnapshot).mockResolvedValue({
       source_id: 'ks_local_index',
@@ -175,6 +201,41 @@ describe('KnowledgeDetailPage', () => {
         audit_retention_blocked: false,
       },
       blockers: [],
+    })
+    vi.mocked(validateCandidateKnowledgeSourceSnapshotFoundation).mockResolvedValue({
+      validation_id: 'ksvalidation_1',
+      source_id: 'ks_local_index',
+      source_draft_version_id: 'ksdraft_1',
+      candidate_digest: 'digest_1',
+      validation_level: 'foundation',
+      status: 'passed',
+      document_count: 1,
+      required_reingestion_count: 0,
+      created_at: '2026-05-31T00:30:00Z',
+      created_by: 'dashboard',
+    })
+    vi.mocked(freezeCandidateKnowledgeSourceSnapshot).mockResolvedValue({
+      schema_version: 'local_index.snapshot.v2',
+      snapshot_id: 'kssnapshot_1',
+      source_id: 'ks_local_index',
+      state: 'READY',
+      validation_level: 'foundation',
+      source_draft_version_id: 'ksdraft_1',
+      candidate_digest: 'digest_1',
+      foundation_validation_id: 'ksvalidation_1',
+      documents: [
+        {
+          document_id: 'doc_1',
+          revision_id: 'rev_1',
+          filename: 'policy.md',
+          content_type: 'text/markdown',
+          content_hash: 'sha256:abc',
+          artifact_path: 'artifacts/policy.json',
+          routing_metadata: {},
+        },
+      ],
+      created_at: '2026-05-31T00:45:00Z',
+      created_by: 'dashboard',
     })
     vi.mocked(validateKnowledgeSourcePublication).mockResolvedValue({
       validation_id: 'kspubval_1',
@@ -266,6 +327,13 @@ describe('KnowledgeDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate Publication' }))
 
     await waitFor(() => {
+      expect(validateCandidateKnowledgeSourceSnapshotFoundation).toHaveBeenCalledWith('ks_local_index', {
+        actor: 'dashboard',
+      })
+      expect(freezeCandidateKnowledgeSourceSnapshot).toHaveBeenCalledWith('ks_local_index', {
+        validation_id: 'ksvalidation_1',
+        actor: 'dashboard',
+      })
       expect(validateKnowledgeSourcePublication).toHaveBeenCalledWith('ks_local_index', {
         smoke_query: 'What does the policy require?',
         actor: 'dashboard',
@@ -357,8 +425,127 @@ describe('KnowledgeDetailPage', () => {
         actor: 'dashboard',
       })
     })
-    expect(await screen.findByText('2 uploads queued.')).toBeInTheDocument()
+    expect(await screen.findByText('2 uploads queued for validation.')).toBeInTheDocument()
     expect(uploadKnowledgeDocument).not.toHaveBeenCalled()
+  })
+
+  it('shows queued upload intake when no managed document exists yet', async () => {
+    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_local_index',
+      name: 'Local Index Policies',
+      provider: 'local_index',
+      lifecycle_state: 'ACTIVE',
+      params: {
+        ingestion_model: { provider: 'deterministic', name: 'routing' },
+        document_selection_budget: 8,
+        worker_concurrency: 2,
+      },
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: null,
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 0,
+      ready_document_count: 0,
+    })
+    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchQuarantinedKnowledgeUploads).mockResolvedValue({
+      data: [
+        {
+          upload_id: 'upload_pending',
+          source_id: 'ks_local_index',
+          filename: 'pending.pdf',
+          content_type: 'application/pdf',
+          size_bytes: 1024,
+          storage_path: 'knowledge_sources/ks_local_index/quarantined_uploads/upload_pending/original-upload.bin',
+          state: 'queued',
+          created_at: '2026-05-31T00:00:00Z',
+          updated_at: '2026-05-31T00:00:00Z',
+        },
+      ],
+      meta: { total: 1 },
+    })
+    vi.mocked(fetchKnowledgeIngestionJobs).mockResolvedValue({
+      data: [
+        {
+          job_id: 'ksjob_1',
+          source_id: 'ks_local_index',
+          document_id: 'ksdoc_1',
+          revision_id: 'ksrev_1',
+          state: 'processing',
+          attempt_count: 1,
+          auto_retry_count: 0,
+          max_auto_retries: 2,
+          ingestion_config_fingerprint: 'fingerprint_1',
+          artifact_build_spec: {},
+          created_at: '2026-05-31T00:00:00Z',
+          updated_at: '2026-05-31T00:00:00Z',
+        },
+      ],
+      meta: { total: 1 },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('No managed documents are ready yet.')).toBeInTheDocument()
+    expect(screen.getByText('Upload Intake')).toBeInTheDocument()
+    expect(screen.getByText('pending.pdf')).toBeInTheDocument()
+    expect(screen.getByText('queued')).toBeInTheDocument()
+    expect(screen.getByText('Ingestion Jobs')).toBeInTheDocument()
+    expect(screen.getByText('ksjob_1')).toBeInTheDocument()
+    expect(screen.getByText('processing')).toBeInTheDocument()
+  })
+
+  it('retries failed ingestion jobs from the documents section', async () => {
+    vi.mocked(fetchKnowledgeIngestionJobs).mockResolvedValue({
+      data: [
+        {
+          job_id: 'ksjob_failed',
+          source_id: 'ks_local_index',
+          document_id: 'ksdoc_1',
+          revision_id: 'ksrev_1',
+          state: 'failed',
+          attempt_count: 1,
+          auto_retry_count: 0,
+          max_auto_retries: 2,
+          ingestion_config_fingerprint: 'fingerprint_1',
+          artifact_build_spec: {},
+          error_code: 'PA_INGESTION_001',
+          error_message: 'Missing model credential environment variable(s): DEEPSEEK_API_KEY',
+          created_at: '2026-05-31T00:00:00Z',
+          updated_at: '2026-05-31T00:00:00Z',
+        },
+      ],
+      meta: { total: 1 },
+    })
+    vi.mocked(retryKnowledgeIngestionJob).mockResolvedValue({
+      job_id: 'ksjob_failed',
+      source_id: 'ks_local_index',
+      document_id: 'ksdoc_1',
+      revision_id: 'ksrev_1',
+      state: 'queued',
+      attempt_count: 1,
+      auto_retry_count: 0,
+      max_auto_retries: 2,
+      ingestion_config_fingerprint: 'fingerprint_1',
+      artifact_build_spec: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:01:00Z',
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('ksjob_failed')).toBeInTheDocument()
+    expect(screen.getByText('Missing model credential environment variable(s): DEEPSEEK_API_KEY')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => {
+      expect(retryKnowledgeIngestionJob).toHaveBeenCalledWith('ks_local_index', 'ksjob_failed', {
+        actor: 'dashboard',
+      })
+    })
+    expect(await screen.findByText('Retry queued for ksjob_failed.')).toBeInTheDocument()
   })
 
   it('edits document routing metadata', async () => {

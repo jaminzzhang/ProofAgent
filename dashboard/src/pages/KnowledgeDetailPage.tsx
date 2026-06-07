@@ -1,26 +1,34 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   archiveKnowledgeSource,
   fetchCandidateKnowledgeSourceSnapshot,
+  fetchKnowledgeIngestionJobs,
   fetchKnowledgeDocuments,
   fetchKnowledgeSource,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSourcePublications,
+  fetchQuarantinedKnowledgeUploads,
+  freezeCandidateKnowledgeSourceSnapshot,
   permanentlyDeleteKnowledgeSource,
   publishKnowledgeSource,
+  retryKnowledgeIngestionJob,
   restoreKnowledgeSource,
   updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocuments,
+  validateCandidateKnowledgeSourceSnapshotFoundation,
   validateKnowledgeSourcePublication,
 } from '../api/client'
 import type {
   CandidateKnowledgeSourceSnapshot,
   KnowledgeDocument,
+  KnowledgeIngestionJob,
   KnowledgeSource,
   KnowledgeSourceDeletionEligibility,
   KnowledgeSourcePublicationRecord,
   KnowledgeSourcePublicationValidation,
+  QuarantinedKnowledgeUpload,
 } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
@@ -46,6 +54,8 @@ export function KnowledgeDetailPage() {
   const navigate = useNavigate()
   const [source, setSource] = useState<KnowledgeSource | null>(null)
   const [documents, setDocuments] = useState<readonly KnowledgeDocument[]>([])
+  const [uploads, setUploads] = useState<readonly QuarantinedKnowledgeUpload[]>([])
+  const [ingestionJobs, setIngestionJobs] = useState<readonly KnowledgeIngestionJob[]>([])
   const [candidate, setCandidate] = useState<CandidateKnowledgeSourceSnapshot | null>(null)
   const [publications, setPublications] = useState<readonly KnowledgeSourcePublicationRecord[]>([])
   const [deletionEligibility, setDeletionEligibility] = useState<KnowledgeSourceDeletionEligibility | null>(null)
@@ -63,13 +73,21 @@ export function KnowledgeDetailPage() {
   const [routingForm, setRoutingForm] = useState<RoutingFormState>(emptyRoutingForm)
 
   async function loadWorkspace(id: string) {
-    const [sourceResponse, documentsResponse, publicationsResponse] = await Promise.all([
-      fetchKnowledgeSource(id),
+    const sourceResponse = await fetchKnowledgeSource(id)
+    const [documentsResponse, publicationsResponse, uploadsResponse, ingestionJobsResponse] = await Promise.all([
       fetchKnowledgeDocuments(id),
       fetchKnowledgeSourcePublications(id),
+      sourceResponse.provider === 'local_index'
+        ? fetchQuarantinedKnowledgeUploads(id)
+        : Promise.resolve({ data: [], meta: { total: 0 } }),
+      sourceResponse.provider === 'local_index'
+        ? fetchKnowledgeIngestionJobs(id)
+        : Promise.resolve({ data: [], meta: { total: 0 } }),
     ])
     setSource(sourceResponse)
     setDocuments(documentsResponse.data)
+    setUploads(uploadsResponse.data)
+    setIngestionJobs(ingestionJobsResponse.data)
     setPublications(publicationsResponse.data)
     if (sourceResponse.lifecycle_state === 'ARCHIVED') {
       try {
@@ -111,6 +129,19 @@ export function KnowledgeDetailPage() {
     return () => { cancelled = true }
   }, [sourceId])
 
+  useEffect(() => {
+    if (!sourceId || source?.provider !== 'local_index' || source.lifecycle_state === 'ARCHIVED') return
+    const hasActiveWork = [...uploads, ...ingestionJobs].some((item) => isActiveKnowledgeTaskState(item.state))
+    if (!hasActiveWork) return
+
+    const interval = window.setInterval(() => {
+      void loadWorkspace(sourceId).catch((err) => {
+        setError(err instanceof Error ? err.message : 'Unable to refresh knowledge source status.')
+      })
+    }, 3000)
+    return () => window.clearInterval(interval)
+  }, [sourceId, source?.provider, source?.lifecycle_state, uploads, ingestionJobs])
+
   async function uploadDocuments(fileList: FileList | null) {
     const files = Array.from(fileList ?? [])
     if (files.length === 0 || !sourceId || source?.lifecycle_state === 'ARCHIVED') return
@@ -127,7 +158,8 @@ export function KnowledgeDetailPage() {
         documents,
         actor: 'dashboard',
       })
-      setStatus(`${response.meta.total} upload${response.meta.total === 1 ? '' : 's'} queued.`)
+      setUploads(response.data)
+      setStatus(`${response.meta.total} upload${response.meta.total === 1 ? '' : 's'} queued for validation.`)
       await loadWorkspace(sourceId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to upload documents.')
@@ -169,18 +201,44 @@ export function KnowledgeDetailPage() {
     }
   }
 
+  async function retryIngestionJob(job: KnowledgeIngestionJob) {
+    if (!sourceId || source?.lifecycle_state === 'ARCHIVED' || job.state !== 'failed') return
+    setBusy(`retry:${job.job_id}`)
+    setError(null)
+    setStatus(null)
+    try {
+      await retryKnowledgeIngestionJob(sourceId, job.job_id, { actor: 'dashboard' })
+      setStatus(`Retry queued for ${job.job_id}.`)
+      await loadWorkspace(sourceId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to retry ingestion job.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function validatePublication() {
     if (!sourceId || !smokeQuery.trim() || source?.lifecycle_state === 'ARCHIVED') return
     setBusy('validate')
     setError(null)
     setStatus(null)
     try {
+      if (source?.provider === 'local_index') {
+        const foundation = await validateCandidateKnowledgeSourceSnapshotFoundation(sourceId, {
+          actor: 'dashboard',
+        })
+        await freezeCandidateKnowledgeSourceSnapshot(sourceId, {
+          validation_id: foundation.validation_id,
+          actor: 'dashboard',
+        })
+      }
       const validation = await validateKnowledgeSourcePublication(sourceId, {
         smoke_query: smokeQuery,
         actor: 'dashboard',
       })
       setLastValidation(validation)
       setStatus(`Validation ${validation.validation_id} passed.`)
+      await loadWorkspace(sourceId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to validate publication.')
     } finally {
@@ -275,6 +333,9 @@ export function KnowledgeDetailPage() {
   const isLocalIndexSource = source.provider === 'local_index'
   const supportsPublication = source.provider === 'local_index' || source.provider === 'http_json'
   const isArchived = source.lifecycle_state === 'ARCHIVED'
+  const activeUploadCount = uploads.filter((upload) => isActiveKnowledgeTaskState(upload.state)).length
+  const activeIngestionJobCount = ingestionJobs.filter((job) => isActiveKnowledgeTaskState(job.state)).length
+  const isUploadStatus = status?.includes('upload') ?? false
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -289,11 +350,15 @@ export function KnowledgeDetailPage() {
         <p className="mt-1 font-mono text-xs text-[var(--text-muted)]">{source.source_id}</p>
       </div>
 
-      <section className="grid gap-4 md:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-5">
         <Metric label="Lifecycle" value={source.lifecycle_state === 'ACTIVE' ? 'active' : 'archived'} />
         <Metric label="Provider" value={source.provider} />
         <Metric label="Documents" value={`${source.ready_document_count} / ${source.document_count} ready`} />
         <Metric label={isLocalIndexSource ? 'Published Snapshot' : 'Published Resource'} value={source.published_snapshot_id ?? '-'} />
+        <Metric
+          label="Intake / Jobs"
+          value={isLocalIndexSource ? `${activeUploadCount} uploads / ${activeIngestionJobCount} jobs active` : '-'}
+        />
       </section>
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
@@ -425,9 +490,14 @@ export function KnowledgeDetailPage() {
             />
           </label>
         </div>
+        {status && isUploadStatus && (
+          <div className="mt-4 rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 px-4 py-3 text-sm text-[var(--success)]">
+            {status}
+          </div>
+        )}
         {documents.length === 0 ? (
           <div className="mt-4">
-            <EmptyState message="No documents uploaded yet." />
+            <EmptyState message="No managed documents are ready yet." />
           </div>
         ) : (
           <div className="mt-4 divide-y divide-[var(--border)] rounded-md border border-[var(--border)]">
@@ -516,6 +586,38 @@ export function KnowledgeDetailPage() {
             ))}
           </div>
         )}
+
+        <KnowledgeTaskList
+          title="Upload Intake"
+          emptyMessage="No upload intake records."
+          items={uploads}
+          getKey={(upload) => upload.upload_id}
+          renderPrimary={(upload) => upload.filename}
+          renderSecondary={(upload) => `${formatBytes(upload.size_bytes)} · ${upload.upload_id}`}
+          renderState={(upload) => upload.state}
+          renderDetail={(upload) => upload.error_message ?? upload.ingestion_job_id ?? upload.promoted_document_id ?? null}
+        />
+
+        <KnowledgeTaskList
+          title="Ingestion Jobs"
+          emptyMessage="No ingestion jobs yet."
+          items={ingestionJobs}
+          getKey={(job) => job.job_id}
+          renderPrimary={(job) => job.job_id}
+          renderSecondary={(job) => `${job.document_id} · ${job.revision_id}`}
+          renderState={(job) => job.state}
+          renderDetail={(job) => job.error_message ?? job.last_error_message ?? job.artifact_path ?? null}
+          renderAction={(job) => job.state === 'failed' ? (
+            <button
+              type="button"
+              onClick={() => void retryIngestionJob(job)}
+              disabled={isArchived || busy === `retry:${job.job_id}`}
+              className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+            >
+              {busy === `retry:${job.job_id}` ? 'Retrying...' : 'Retry'}
+            </button>
+          ) : null}
+        />
       </section>
       )}
 
@@ -599,7 +701,7 @@ export function KnowledgeDetailPage() {
       </section>
       )}
 
-      {status && (
+      {status && !isUploadStatus && (
         <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 px-4 py-3 text-sm text-[var(--success)]">
           {status}
         </div>
@@ -631,6 +733,62 @@ function InlineMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
+function KnowledgeTaskList<T>({
+  title,
+  emptyMessage,
+  items,
+  getKey,
+  renderPrimary,
+  renderSecondary,
+  renderState,
+  renderDetail,
+  renderAction,
+}: {
+  title: string
+  emptyMessage: string
+  items: readonly T[]
+  getKey: (item: T) => string
+  renderPrimary: (item: T) => string
+  renderSecondary: (item: T) => string
+  renderState: (item: T) => string
+  renderDetail: (item: T) => string | null
+  renderAction?: (item: T) => ReactNode
+}) {
+  return (
+    <div className="mt-5">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{title}</div>
+      {items.length === 0 ? (
+        <p className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-3 text-sm text-[var(--text-muted)]">
+          {emptyMessage}
+        </p>
+      ) : (
+        <div className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)]">
+          {items.map((item) => {
+            const state = renderState(item)
+            const detail = renderDetail(item)
+            const action = renderAction?.(item)
+            return (
+              <div key={getKey(item)} className="px-4 py-3 text-sm">
+                <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-center">
+                  <span className="truncate font-medium text-[var(--text-primary)]">{renderPrimary(item)}</span>
+                  <span className="font-mono text-xs text-[var(--text-muted)]">{renderSecondary(item)}</span>
+                  <span className={`text-xs font-medium ${knowledgeTaskStateClassName(state)}`}>
+                    {state}
+                  </span>
+                  {action ? <span className="md:justify-self-end">{action}</span> : null}
+                </div>
+                {detail && (
+                  <p className="mt-2 break-words text-xs text-[var(--text-secondary)]">{detail}</p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function totalReferences(eligibility: KnowledgeSourceDeletionEligibility | null): number {
   if (!eligibility) return 0
   const summary = eligibility.reference_summary
@@ -644,6 +802,18 @@ function totalReferences(eligibility: KnowledgeSourceDeletionEligibility | null)
     + summary.ingestion_job_count
     + (summary.audit_retention_blocked ? 1 : 0)
   )
+}
+
+function isActiveKnowledgeTaskState(state: string): boolean {
+  return ['queued', 'processing', 'retrying'].includes(state.toLowerCase())
+}
+
+function knowledgeTaskStateClassName(state: string): string {
+  const normalized = state.toLowerCase()
+  if (normalized === 'accepted' || normalized === 'ready' || normalized === 'completed') return 'text-[var(--success)]'
+  if (normalized === 'rejected' || normalized === 'failed') return 'text-[var(--danger)]'
+  if (isActiveKnowledgeTaskState(normalized)) return 'text-[var(--accent)]'
+  return 'text-[var(--text-muted)]'
 }
 
 function sourceOwnedModelSummary(value: unknown): string {
