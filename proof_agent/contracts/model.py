@@ -50,7 +50,7 @@ class ModelRequest(FrozenModel):
     model: str
     temperature: float | None = None
     max_output_tokens: int | None = None
-    timeout_seconds: int | None = None
+    timeout_seconds: float | None = None
     stream: bool = False
     response_format: Literal["text", "json"] = "text"
     metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)

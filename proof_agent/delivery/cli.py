@@ -8,21 +8,20 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 from shutil import which
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import typer
 
 from proof_agent import __version__
 from proof_agent.errors import ProofAgentError
-from proof_agent.evaluation.compare.harness_rag import run_harness_rag
-from proof_agent.evaluation.compare.plain_rag import run_plain_rag
+from proof_agent.evaluation.analyzer import analyze_evaluation
 from proof_agent.evaluation.demo.scenarios import (
     DEMO_SCENARIOS,
     REACT_DEMO_SCENARIOS,
     SUPPORTED_QUESTION,
 )
+from proof_agent.evaluation.errors import EvaluationInputError
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.ingestion.worker import (
@@ -31,11 +30,37 @@ if TYPE_CHECKING:
     )
 
 app = typer.Typer(no_args_is_help=True)
+evaluate_app = typer.Typer(no_args_is_help=True)
+app.add_typer(evaluate_app, name="evaluate")
 
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
 REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 PUBLIC_EXAMPLE_PATH = Path("examples/insurance_customer_service/agent.yaml")
 DEV_PROCESS_POLL_SECONDS = 0.5
+
+
+def run_with_langgraph(*args: Any, **kwargs: Any) -> Any:
+    """Lazy wrapper so evaluation CLI commands do not import runtime execution paths."""
+
+    from proof_agent.runtime.langgraph_runner import run_with_langgraph as _run_with_langgraph
+
+    return _run_with_langgraph(*args, **kwargs)
+
+
+def run_harness_rag(*args: Any, **kwargs: Any) -> Any:
+    """Lazy wrapper so non-compare CLI commands do not import runtime execution paths."""
+
+    from proof_agent.evaluation.compare.harness_rag import run_harness_rag as _run_harness_rag
+
+    return _run_harness_rag(*args, **kwargs)
+
+
+def run_plain_rag(*args: Any, **kwargs: Any) -> Any:
+    """Lazy wrapper so non-compare CLI commands do not import compare helpers."""
+
+    from proof_agent.evaluation.compare.plain_rag import run_plain_rag as _run_plain_rag
+
+    return _run_plain_rag(*args, **kwargs)
 
 
 @app.callback()
@@ -172,6 +197,41 @@ def compare(agent_yaml: str, question: str = typer.Option(..., "--question")) ->
     typer.echo(f"Comparing {agent_yaml}: {question}")
     typer.echo(f"Plain RAG: {plain.outcome} - {plain.message}")
     typer.echo(f"Harness RAG: {harness.outcome} - {harness.message}")
+
+
+@evaluate_app.command("analyze")
+def evaluate_analyze(
+    suite: str = typer.Option(..., "--suite", help="Evaluation Suite YAML path"),
+    subjects: str = typer.Option(..., "--subjects", help="Evaluation Subject Manifest YAML path"),
+    output_dir: str = typer.Option(
+        "runs/evaluations",
+        "--output-dir",
+        help="Directory for Evaluation Analysis artifacts",
+    ),
+) -> None:
+    """Analyze completed governed run artifacts without creating Agent runs."""
+
+    try:
+        summary = analyze_evaluation(
+            suite_path=Path(suite),
+            subjects_path=Path(subjects),
+            output_dir=Path(output_dir),
+        )
+    except EvaluationInputError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    if summary.artifact_dir is not None:
+        typer.echo(f"Report: {summary.artifact_dir / 'evaluation_report.md'}")
+        typer.echo(f"Results: {summary.artifact_dir / 'evaluation_results.jsonl'}")
+        typer.echo(f"Receipt: {summary.artifact_dir / 'evaluation_analysis_receipt.md'}")
+    typer.echo(
+        "Governed Resolution Rate: "
+        f"{summary.passed_required_cases}/{summary.total_required_cases} "
+        f"({summary.governed_resolution_rate:.3f})"
+    )
+    if summary.passed_required_cases < summary.total_required_cases:
+        raise typer.Exit(code=1)
 
 
 @app.command("config-reset")

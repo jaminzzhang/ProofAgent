@@ -100,14 +100,14 @@ class ProofAgentLLM(CustomLLM):
     _provider: ModelProvider
     _role: ModelCallRole
     _metadata: LLMMetadata | None
-    _timeout_seconds: int | None
+    _timeout_seconds: float | None
     _progress_callback: Callable[[], None] | None
 
     def __init__(
         self,
         model_provider: ModelProvider,
         role: ModelCallRole,
-        timeout_seconds: int | None = None,
+        timeout_seconds: float | None = None,
         progress_callback: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> None:

@@ -265,7 +265,7 @@ proof_agent/
     validators/
     workflow/
   delivery/         CLI and future execution entry points
-  evaluation/       deterministic demo and Plain RAG vs Harness comparison
+  evaluation/       deterministic demo, Plain RAG comparison, and post-run Evaluation Analyzer
     compare/
     demo/
   observability/    trace, receipt, storage, and Dashboard read API
@@ -288,7 +288,7 @@ Architecture layer mapping:
 | Capability Layer | `capabilities/models/`, `capabilities/knowledge/`, `capabilities/memory/`, `capabilities/tools/`, future Skill packs |
 | Contracts & Ports | `contracts/`, provider protocols |
 | Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/`, configuration audit records |
-| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, internal fixtures under `evaluation/demo/fixtures/`, and the canonical public package under `examples/insurance_customer_service/` |
+| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, internal fixtures under `evaluation/demo/fixtures/`, the canonical public package under `examples/insurance_customer_service/`, and the post-run Evaluation Analyzer described in `docs/evaluation-system.md` |
 
 Boundary rules:
 - `contracts/` cannot import adapter SDKs.
@@ -299,6 +299,8 @@ Boundary rules:
 - `control/validators/` decide whether candidate output may proceed.
 - `observability/audit/` records facts and renders receipts; it does not control workflow.
 - `observability/api/` and `observability/storage/` expose read-only observability and must not create a second execution path.
+- Evaluation Analyzer is post-run analysis only. It reads Evaluation Subject Manifest, Trace, Governance Receipt, run metadata, and audience-safe response projection artifacts; it must not start runs, call models, retrieve knowledge, execute tools, invoke PolicyEngine, or import Runtime/Control Workflow/Capability/Bootstrap execution paths.
+- Evaluation Run Producer is a future helper, separate from Analyzer. It may create sample subjects only through existing execution surfaces and must not own gate logic or evaluation semantics.
 
 ## 7. Agent Contract
 
@@ -980,7 +982,8 @@ ModelResponse.content
   -> final_output or governed refusal
 ```
 
-LLM-as-judge can become a later audited validator. It must not replace deterministic gates.
+LLM-as-judge can become a later audited diagnostic capability. It must not replace deterministic gates or become a V1 release blocker.
+`docs/evaluation-system.md` defines how the post-run Evaluation Analyzer layers deterministic gates, artifact sufficiency, node results, diagnostic judge fields, release thresholds, curation, and evaluation analysis artifacts on top of Trace, Governance Receipt, RunStore metadata, and audience-safe response projections.
 
 ## 19. Trace, Receipt, RunStore
 
@@ -1144,6 +1147,7 @@ CLI commands:
 | `proof-agent doctor` | local, Docker, sample, provider readiness |
 | `proof-agent inspect` | summarize trace or receipt |
 | `proof-agent compare` | Plain RAG vs Harness RAG |
+| `proof-agent evaluate analyze` | planned post-run Evaluation Analyzer over an Evaluation Suite and Evaluation Subject Manifest; does not create Agent runs |
 | `proof-agent dev` | start the local backend API and Knowledge Worker with `.env` loaded |
 | `proof-agent server` | start only the Dashboard API |
 

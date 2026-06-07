@@ -94,13 +94,13 @@ class TestProofAgentLLM:
         llm = ProofAgentLLM(
             model_provider=provider,
             role=ModelCallRole.INGESTION,
-            timeout_seconds=17,
+            timeout_seconds=17.5,
             progress_callback=lambda: progress.append("renewed"),
         )
 
         llm.complete("Summarize")
 
-        assert provider._calls[0].timeout_seconds == 17
+        assert provider._calls[0].timeout_seconds == 17.5
         assert progress == ["renewed", "renewed"]
 
     def test_complete_preserves_token_usage(self) -> None:

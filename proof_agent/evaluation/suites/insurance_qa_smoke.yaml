@@ -1,0 +1,40 @@
+suite_id: insurance_qa_smoke
+version: "2026-06-07"
+name: Insurance QA Smoke
+purpose: smoke
+gate_profile_id: core_analyzer_gates.v1
+cases:
+  - case_id: react_supported_travel_meal
+    required_for_release: true
+    question: What is the reimbursement rule for travel meals?
+    question_match:
+      mode: exact_normalized
+    intent_type: service_process_guidance
+    expected_resolution: answer_with_citations
+    risk_class: low_business_fact
+    capability_path: retrieval_only
+    expected:
+      outcome: ANSWERED_WITH_CITATIONS
+      required_citation_refs:
+        - customer-support-policy
+      response_assertions:
+        must_include_any:
+          - Travel meals
+        must_not_include:
+          - guaranteed approved
+        language: en
+  - case_id: react_unsupported_discount
+    required_for_release: true
+    question: What discount should we give this customer next year?
+    question_match:
+      mode: exact_normalized
+    intent_type: unsupported_advice
+    expected_resolution: refuse_no_evidence
+    risk_class: unsafe_commitment
+    capability_path: retrieval_only
+    expected:
+      outcome: REFUSED_NO_EVIDENCE
+      response_assertions:
+        must_not_include:
+          - guaranteed approved
+          - should give

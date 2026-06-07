@@ -98,6 +98,182 @@ _Avoid_: Autonomous ReAct agent, direct model executor
 The V1 Controlled ReAct Workflow Template for enterprise question answering.
 _Avoid_: Replacing Enterprise QA Template, generic autonomous agent template
 
+**Insurance QA Evaluation Target**:
+A concrete Agent evaluation target that applies the React Enterprise QA Template to the Insurance Service QA Domain and measures both business answer quality and Control Envelope behavior.
+_Avoid_: react-insurance-qa Agent, template-only evaluation, generic QA benchmark
+
+**Evaluation Case**:
+The smallest expected-assertion unit in Evaluation Analysis, applied to one Evaluation Subject and judged against expected business outcome, answer quality, evidence, policy, tool, and audit assertions.
+_Avoid_: Question-only test, raw chat turn, journey-level score
+
+**Evaluation Subject**:
+A safe reference to one completed governed run and its available artifacts, such as trace, receipt, run metadata, and audience-safe response projection.
+_Avoid_: Evaluation Case, question to execute, raw run dump
+
+**Evaluation Subject Manifest**:
+A reviewable index that maps Evaluation Cases or Scenario steps to completed Evaluation Subjects, keeping run references for provenance while making explicit artifact references the Evaluation Analyzer input.
+_Avoid_: Suite file, run command, raw Dashboard export
+
+**Evaluation Response Projection**:
+The audience-safe caller-visible response selected for answer-quality and wording evaluation, distinct from internal trace and receipt artifacts used as audit basis.
+_Avoid_: Raw final_output, trace response, internal audit basis
+
+**Evaluation Subject Export**:
+A generated linked manifest or frozen bundle produced from an observability surface such as Dashboard or RunStore, preserving completed-run artifact references or copies without making that surface an evaluator.
+_Avoid_: Dashboard evaluation, production metric mutation, evaluation execution
+
+**Evaluation Scenario**:
+An ordered group of Evaluation Cases that represents a multi-turn, clarification, approval, retry, or customer journey flow and adds scenario-level assertions across the linked runs.
+_Avoid_: Single run, raw conversation transcript, ungoverned benchmark
+
+**Scenario Governed Resolution**:
+The pass/fail result for an Evaluation Scenario, requiring every scenario step to pass its Evaluation Gates, continuation linkage to be proven, and every scenario-level assertion to pass.
+_Avoid_: Last-run-only success, step-count-weighted pass rate, transcript-level impression
+
+**Governed Resolution Rate**:
+The top-level Agent evaluation metric: the share of Evaluation Cases that reach the correct governed resolution and satisfy required business, evidence, policy, tool, trace, receipt, and redaction assertions.
+_Avoid_: Answer accuracy, chatbot helpfulness score, ungoverned pass rate
+
+**Deterministic Evaluation Gate**:
+A structured must-pass Evaluation Case assertion derived from governed run artifacts, such as outcome, evidence, policy, tool approval, trace, receipt, redaction, and safety facts.
+_Avoid_: LLM judge replacement, subjective quality score, best-effort reviewer opinion
+
+**Control Envelope Coverage Gate**:
+A deterministic Evaluation Gate that verifies the expected capability path emitted the minimum governance events needed to prove it did not bypass the Control Envelope.
+_Avoid_: Required trace event checklist, manual no-bypass review, workflow success
+
+**Response Projection Safety Gate**:
+A deterministic Evaluation Gate that verifies the evaluated caller-visible projection respects its audience boundary and does not expose internal governance, trace, tool, or customer-sensitive details.
+_Avoid_: Redaction check, final-output validator, customer tone score
+
+**Evaluation Node Result**:
+A trace-derived diagnostic result for one stable Control Envelope stage, optionally mapped to a Workflow Template node, explaining observed events, key facts, status, and likely failure ownership without replacing Evaluation Gates.
+_Avoid_: Required trace event list, workflow execution node, runtime graph state
+
+**Evaluation Artifact Sufficiency**:
+The trust label describing whether an Evaluation Subject has enough completed-run artifacts and structured fields for a gate or node result to be assessed without inference.
+_Avoid_: Best-effort compatibility, inferred pass, missing-data warning
+
+**Audited Evaluation Judge**:
+A model or human judge that produces traceable diagnostic scores for answer quality, completeness, expression, and business-step coverage without overriding Deterministic Evaluation Gates.
+_Avoid_: Policy authority, evidence gate replacement, unlogged quality vote
+
+**Evaluation-Safe Judge Projection**:
+The redacted input view for an Audited Evaluation Judge, limited to the question, caller-visible response, expected resolution, taxonomy labels, accepted evidence summaries, safe tool summaries, actual outcome, gate summary, and rubric.
+_Avoid_: Raw trace dump, raw prompt, raw model output, unredacted customer payload
+
+**Judge-Led Diagnostic Scoring**:
+An evaluation mode where an Audited Evaluation Judge leads qualitative scoring and ranking after Deterministic Evaluation Gates have been applied.
+_Avoid_: Judge-led governance, LLM-as-judge release gate, deterministic gate bypass
+
+**Evaluation Quality Score**:
+The Audited Evaluation Judge score for answer correctness, completeness, groundedness clarity, user usefulness, and safe wording, reported after Deterministic Evaluation Gates and never used to override them.
+_Avoid_: Governance pass rate, policy decision, evidence admission score
+
+**Evaluation Release Threshold**:
+The V1 publication bar for an Insurance QA Evaluation Target: complete deterministic safety and governance gate pass, sufficient artifacts, low run error rate, and high overall Governed Resolution Rate.
+_Avoid_: Accuracy-only launch bar, judge-only launch decision, unverifiable quality claim
+
+**Evaluation Suite**:
+A named group of Evaluation Cases or Evaluation Scenarios with a specific operational purpose, such as smoke validation, release gating, safety regression, or production monitoring.
+_Avoid_: Undifferentiated benchmark, one-off question file, mixed release and monitoring sample
+
+**Evaluation Suite Source**:
+The location from which an Evaluation Suite is resolved, with explicit CLI paths taking precedence over built-in framework suites and future Agent-package-owned suites.
+_Avoid_: Demo questions file, hidden default benchmark, dashboard-only suite selection
+
+**Evaluation Curation**:
+The process of turning production samples into formal Evaluation Cases through redaction, deduplication, taxonomy labeling, expected-resolution labeling, evidence or tool-basis annotation, risk classification, and human confirmation; LLM-assisted prelabeling may inform but not replace confirmation for release or safety suites.
+_Avoid_: Raw production replay, judge-only labeling, unreviewed monitoring sample
+
+**Domain Evaluation Reviewer**:
+The curator role that confirms expected business outcome, required business claims, evidence basis, and forbidden claim categories for promoted Evaluation Cases.
+_Avoid_: Judge, Harness reviewer, label preclassifier
+
+**Harness Evaluation Reviewer**:
+The curator role that confirms expected governed resolution, required gates, execution surface, risk class, and policy or tool expectations for promoted Evaluation Cases.
+_Avoid_: Domain reviewer, PolicyEngine, automatic evaluator
+
+**Evaluation Failure Owner**:
+The primary repair ownership label assigned to a failed Evaluation Case, such as knowledge gap, retrieval failure, planning failure, policy failure, tool governance failure, answer generation failure, audit failure, label or curation issue, or judge diagnostic issue.
+_Avoid_: Generic failed test, blame-free untriaged metric, score-only regression
+
+**Evaluation Repair Recommendation**:
+A non-executing repair brief produced for a failed Evaluation Case, naming the suspected root cause, repair action, affected artifact, severity, rerun requirement, and linked trace or receipt references without producing directly applicable changes.
+_Avoid_: Automatic production fix, patch suggestion, self-modifying Agent, unreviewed policy or knowledge change
+
+**Evaluation Artifact Set**:
+The artifacts produced by Evaluation Analysis: a human-readable Evaluation Report, machine-readable per-case Evaluation Result JSONL, and an Evaluation Analysis Receipt that records Agent version, suite version, judge configuration, gate version, sample provenance, and audit basis.
+_Avoid_: Governance Receipt replacement, dashboard-only chart, ad hoc test log
+
+**Evaluation Analysis Receipt**:
+The audit-oriented receipt for one Evaluation Analysis, explaining the suite, subject manifest, artifact sufficiency, gate version, judge mode, provenance, and analysis basis.
+_Avoid_: Governance Receipt, Evaluation Run Receipt, run trace
+
+**Evaluation Analyzer**:
+The post-run evaluation capability that reads existing governed run artifacts and safe response projections to produce Evaluation Artifact Set files without creating Agent runs.
+_Avoid_: Harness runner, evaluation execution path, hidden workflow executor
+
+**Evaluation Run Producer**:
+An optional helper that creates governed run artifacts through existing execution surfaces before Evaluation Analysis, without owning evaluation semantics.
+_Avoid_: Evaluation Analyzer, alternate Harness runtime, dashboard-owned execution
+
+**Scenario Evaluation Analysis**:
+The post-run analysis capability that evaluates an Evaluation Scenario as ordered linked Evaluation Subjects, using only explicit subject references, safe projections, and completed-run artifacts.
+_Avoid_: Scenario execution runner, durable checkpoint resume claim, raw transcript replay
+
+**Scenario Safe Reference**:
+A limited reference from a later Evaluation Scenario step to a prior step's safe projection, such as run id, outcome, final output summary, customer turn id, safe sources, or approval state.
+_Avoid_: Raw trace JSONPath, raw model output reference, arbitrary fixture script
+
+**Evaluation Execution Surface**:
+The execution boundary used for an Evaluation Case or Evaluation Scenario, such as direct Harness execution, Run Execution API conversation execution, or Customer Run API execution.
+_Avoid_: Hidden shortcut, unrecorded API bypass, mixed audience projection
+
+**Evaluation Store**:
+The storage boundary for Evaluation Artifact Set files and linked case run artifacts, separate from ordinary production run history while preserving references to each governed case run.
+_Avoid_: RunStore replacement, production run metric pollution, dashboard-only evaluation cache
+
+**Evaluation Version Boundary**:
+The versioned evaluation context that must be fixed for trustworthy comparison: Agent version, Evaluation Suite version, Evaluation Gate version, Judge Rubric version, and resolved Knowledge Snapshot or Tool Contract versions.
+_Avoid_: Unversioned benchmark trend, silent rubric change, comparing migrated suites as regression
+
+**Evaluation Case Taxonomy**:
+The canonical classification dimensions for Evaluation Cases: user intent type, expected governed resolution, governance risk class, and exercised capability path.
+_Avoid_: Flat question list, ad hoc benchmark category, prompt-only test label
+
+**Evaluation Gate Set**:
+The release-oriented Deterministic Evaluation Gate group for an Evaluation Case: Outcome Gate, Evidence Support Gate, Forbidden Claim Gate, Policy Gate, Tool Governance Gate, Audit Artifact Gate, and Redaction/Safety Gate.
+_Avoid_: Single accuracy check, subjective rubric only, trace-blind benchmark
+
+**Evaluation Gate Profile**:
+A versioned selection of required and diagnostic Evaluation Gates for a Suite purpose, such as smoke, release, safety, or monitoring analysis.
+_Avoid_: Hardcoded gate list, hidden release bar, judge rubric
+
+**Evaluation Gate Automation Level**:
+The implementation maturity label for an Evaluation Gate, distinguishing fully automated structural checks from semi-automated semantic checks that require Audited Evaluation Judge or human diagnostic support.
+_Avoid_: Pretend-complete automation, regex-only semantic judgment, unmarked manual gate
+
+**Evaluation Response Assertion**:
+A limited assertion over the caller-visible response projection, such as required key terms, forbidden wording, or response language, used only as a supplement to artifact-derived Evaluation Gates.
+_Avoid_: Exact answer match, prompt snapshot test, evidence-free quality gate
+
+**Forbidden Claim Category**:
+A semantic risk label for prohibited answer content, such as payment guarantee, approval likelihood, coverage decision, cross-customer disclosure, or process-bypass advice.
+_Avoid_: Forbidden phrase, exact wording assertion, safety score
+
+**Required Business Claim**:
+A case-labeled business fact, process step, limitation, or next action that the evaluated response is expected to cover and ground in accepted evidence or authorized tool results.
+_Avoid_: Keyword assertion, exact answer, judge-only preference
+
+**Evaluation Process Metrics**:
+The trace-derived diagnostic metrics grouped by Control Envelope stage: planning, retrieval, policy and review, tool governance, answer validation, and auditability.
+_Avoid_: Raw LLM logs, one-off latency counters, unstructured debug notes
+
+**Operational Evaluation Metrics**:
+The evaluation-adjacent operating metrics for latency, model token usage, tool and retrieval call counts, approval wait rate, fail-closed rate, run error rate, and cost per resolved case, reported separately from Governed Resolution Rate.
+_Avoid_: Quality score, governance pass rate, hidden launch blocker
+
 **Deterministic ReAct Demo**:
 A no-API-key acceptance path for the React Enterprise QA Template using deterministic planner and review providers.
 _Avoid_: Remote-only ReAct demo, provider-dependent MVP
