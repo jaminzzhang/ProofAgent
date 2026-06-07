@@ -50,11 +50,15 @@ The framework regression demo must run without an LLM API key. It uses internal 
 
 ```bash
 docker compose up
+uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
 uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
 uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
 ```
+
+`proof-agent dev` is the local Dashboard backend path: it loads `.env` and starts
+both the API server and Knowledge Worker so Knowledge uploads can be processed.
 
 The regression demo and canonical package smoke path together must show three visible outcomes:
 

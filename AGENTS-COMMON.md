@@ -95,7 +95,7 @@ uv run --extra dev proof-agent demo
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
 uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
-uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
+uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
 docker compose up
 ```
 
@@ -115,7 +115,21 @@ cd chat && npm test
 
 The Dashboard dev server runs on port 5173 by default. The Chat dev server runs on port 5174 by default. Both expect the API server on `127.0.0.1:8000`. Use `/operator` for Assisted QA Chat and `/customer` for Customer Service Chat.
 
-To restart the local API, Dashboard, and Chat surfaces on their expected ports:
+Default local backend startup is `proof-agent dev`, not `proof-agent server`.
+It loads `.env` through the CLI callback, starts the API server on
+`127.0.0.1:8000`, and starts the continuous Knowledge Worker against
+`runs/config` so Dashboard Knowledge uploads are processed without a separate
+worker terminal. Run it with all backend extras:
+
+```bash
+uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
+```
+
+Use `proof-agent server` only for targeted API-only debugging, and use
+`proof-agent knowledge-worker --once` only for bounded worker tests or manual
+queue drains.
+
+To restart the local backend, Dashboard, and Chat surfaces on their expected ports:
 
 ```bash
 # stop any existing listeners first
@@ -123,8 +137,8 @@ lsof -tiTCP:8000 -sTCP:LISTEN | xargs kill
 lsof -tiTCP:5173 -sTCP:LISTEN | xargs kill
 lsof -tiTCP:5174 -sTCP:LISTEN | xargs kill
 
-# restart the backend API
-uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
+# restart the local backend API and Knowledge Worker
+uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
 
 # in a second terminal, restart the Dashboard
 cd dashboard && npm run dev -- --host 127.0.0.1 --port 5173

@@ -16,6 +16,7 @@ dependencies = [
   "langchain-mcp-adapters>=0.1.0",
   "mcp[cli]>=1.27.0",
   "filelock>=3.29.0,<4",
+  "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]

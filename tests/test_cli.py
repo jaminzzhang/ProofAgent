@@ -38,6 +38,83 @@ def test_doctor_command_exists() -> None:
     assert "Python" in result.output
 
 
+def test_cli_commands_load_local_dotenv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    (tmp_path / ".env").write_text("DEEPSEEK_API_KEY=test-key-from-dotenv\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "deepseek env: DEEPSEEK_API_KEY" in result.output
+
+
+def test_dev_command_supervises_api_and_knowledge_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured_specs = []
+
+    def fake_run_dev_processes(specs):
+        captured_specs.extend(specs)
+
+    monkeypatch.setattr("proof_agent.delivery.cli._run_dev_processes", fake_run_dev_processes)
+
+    result = runner.invoke(
+        app,
+        [
+            "dev",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "--history-dir",
+            str(tmp_path / "history"),
+            "--config-dir",
+            str(tmp_path / "config"),
+            "--worker-poll-interval",
+            "0.25",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Starting Proof Agent local backend dev services" in result.output
+    assert [name for name, _command in captured_specs] == ["api", "knowledge-worker"]
+    assert captured_specs[0][1][-6:] == [
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9000",
+        "--history-dir",
+        str(tmp_path / "history"),
+    ]
+    assert captured_specs[1][1][-4:] == [
+        "--config-dir",
+        str(tmp_path / "config"),
+        "--poll-interval",
+        "0.25",
+    ]
+
+
+def test_dev_command_can_disable_knowledge_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_specs = []
+
+    def fake_run_dev_processes(specs):
+        captured_specs.extend(specs)
+
+    monkeypatch.setattr("proof_agent.delivery.cli._run_dev_processes", fake_run_dev_processes)
+
+    result = runner.invoke(app, ["dev", "--no-worker"])
+
+    assert result.exit_code == 0
+    assert [name for name, _command in captured_specs] == ["api"]
+
+
 def test_compare_command_runs_supplied_manifest(monkeypatch) -> None:
     calls = []
 

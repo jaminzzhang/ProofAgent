@@ -189,7 +189,7 @@ Layer boundary rules:
 
 | Area | Current implementation |
 | --- | --- |
-| Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `server`, continuous `knowledge-worker`, and bounded `knowledge-worker --once` |
+| Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `dev`, `server`, continuous `knowledge-worker`, and bounded `knowledge-worker --once` |
 | Docker | `Dockerfile`, `docker-compose.yml` runs demo by default |
 | Contracts | Pydantic v2 frozen models |
 | Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, Shared Model Connection resolution, and `HarnessInvocation` composition |
@@ -1128,7 +1128,8 @@ CLI commands:
 | `proof-agent doctor` | local, Docker, sample, provider readiness |
 | `proof-agent inspect` | summarize trace or receipt |
 | `proof-agent compare` | Plain RAG vs Harness RAG |
-| `proof-agent server` | start Dashboard API / SPA |
+| `proof-agent dev` | start the local backend API and Knowledge Worker with `.env` loaded |
+| `proof-agent server` | start only the Dashboard API |
 
 Docker:
 - `docker compose up` runs deterministic demo by default.

@@ -1762,6 +1762,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "mcp", extra = ["cli"] },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "typer" },
 ]
@@ -1808,6 +1809,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pypdf", marker = "extra == 'ingestion'", specifier = ">=6.12.2,<7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.0" },
     { name = "typer", specifier = ">=0.12.0" },

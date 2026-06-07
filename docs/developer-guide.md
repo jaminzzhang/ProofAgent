@@ -885,6 +885,15 @@ docker compose up
 
 Dashboard API path:
 ```bash
+uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
+```
+
+The local backend development path loads `.env` before starting child services and
+supervises both the API server and the Knowledge Worker. This is the recommended
+startup path when using the Dashboard Knowledge workspace so uploaded Markdown or
+PDF documents are consumed immediately. For targeted API-only debugging, run:
+
+```bash
 uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
 ```
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import time
 from collections.abc import Iterable
 from pathlib import Path
 from shutil import which
@@ -33,6 +35,47 @@ app = typer.Typer(no_args_is_help=True)
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
 REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 PUBLIC_EXAMPLE_PATH = Path("examples/insurance_customer_service/agent.yaml")
+DEV_PROCESS_POLL_SECONDS = 0.5
+
+
+@app.callback()
+def load_environment() -> None:
+    """Load local environment variables before running any CLI command."""
+
+    _load_local_dotenv()
+
+
+@app.command()
+def dev(
+    port: int = typer.Option(8000, "--port", help="Port to serve the API on"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the API to"),
+    history_dir: str = typer.Option("runs/history", "--history-dir", help="Run history directory"),
+    config_dir: str = typer.Option("runs/config", "--config-dir", help="Local configuration store"),
+    worker_poll_interval_seconds: float = typer.Option(
+        2.0,
+        "--worker-poll-interval",
+        min=0.01,
+        help="Seconds to wait after an idle knowledge worker poll.",
+    ),
+    no_worker: bool = typer.Option(
+        False,
+        "--no-worker",
+        help="Start only the API server. Intended for targeted debugging.",
+    ),
+) -> None:
+    """Start local backend development services."""
+
+    specs = _dev_process_specs(
+        host=host,
+        port=port,
+        history_dir=history_dir,
+        config_dir=config_dir,
+        worker_poll_interval_seconds=worker_poll_interval_seconds,
+        no_worker=no_worker,
+    )
+    typer.echo("Starting Proof Agent local backend dev services")
+    typer.echo("Loaded local .env before spawning dev services.")
+    _run_dev_processes(specs)
 
 
 @app.command()
@@ -163,13 +206,6 @@ def server(
     """Start the Proof Agent API server."""
 
     try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except ImportError:
-        pass  # python-dotenv is optional
-
-    try:
         import uvicorn
     except ImportError:
         typer.echo(
@@ -243,6 +279,100 @@ def knowledge_worker(
 
 def main() -> None:
     app()
+
+
+def _load_local_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv()
+
+
+def _dev_process_specs(
+    *,
+    host: str,
+    port: int,
+    history_dir: str,
+    config_dir: str,
+    worker_poll_interval_seconds: float,
+    no_worker: bool,
+) -> list[tuple[str, list[str]]]:
+    command_prefix = [sys.executable, "-m", "proof_agent.delivery.cli"]
+    specs = [
+        (
+            "api",
+            [
+                *command_prefix,
+                "server",
+                "--host",
+                host,
+                "--port",
+                str(port),
+                "--history-dir",
+                history_dir,
+            ],
+        )
+    ]
+    if not no_worker:
+        specs.append(
+            (
+                "knowledge-worker",
+                [
+                    *command_prefix,
+                    "knowledge-worker",
+                    "--config-dir",
+                    config_dir,
+                    "--poll-interval",
+                    str(worker_poll_interval_seconds),
+                ],
+            )
+        )
+    return specs
+
+
+def _run_dev_processes(specs: list[tuple[str, list[str]]]) -> None:
+    processes: list[tuple[str, subprocess.Popen[bytes]]] = []
+    try:
+        for name, command in specs:
+            typer.echo(f"starting {name}: {' '.join(command)}")
+            processes.append((name, subprocess.Popen(command, env=os.environ.copy())))
+        while True:
+            for name, process in processes:
+                exit_code = process.poll()
+                if exit_code is not None:
+                    typer.echo(f"{name} exited with code {exit_code}", err=exit_code != 0)
+                    _terminate_dev_processes(
+                        [
+                            (other_name, other_process)
+                            for other_name, other_process in processes
+                            if other_process is not process
+                        ]
+                    )
+                    raise typer.Exit(code=exit_code)
+            time.sleep(DEV_PROCESS_POLL_SECONDS)
+    except KeyboardInterrupt:
+        typer.echo("stopping Proof Agent local backend dev services")
+        _terminate_dev_processes(processes)
+        raise typer.Exit(code=0) from None
+    except Exception:
+        _terminate_dev_processes(processes)
+        raise
+
+
+def _terminate_dev_processes(processes: list[tuple[str, subprocess.Popen[bytes]]]) -> None:
+    for _name, process in processes:
+        if process.poll() is None:
+            process.terminate()
+    for name, process in processes:
+        if process.poll() is not None:
+            continue
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            typer.echo(f"forcing {name} to stop", err=True)
+            process.kill()
+            process.wait()
 
 
 def _writable_status(path: Path) -> str:
@@ -322,3 +452,7 @@ def _inspect_receipt(path: Path) -> None:
             break
     typer.echo(f"Final Outcome: {outcome}")
     typer.echo(f"Artifact: {path}")
+
+
+if __name__ == "__main__":
+    main()
