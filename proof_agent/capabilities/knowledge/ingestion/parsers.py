@@ -94,8 +94,8 @@ class PdfKnowledgeDocumentParser:
 
         try:
             reader = PdfReader(path)
-            if reader.is_encrypted:
-                raise _invalid_upload("Encrypted PDF uploads are not supported.")
+            if reader.is_encrypted and not _decrypt_pdf_with_empty_password(reader):
+                raise _invalid_upload("Encrypted PDF uploads require a password and are not supported.")
             page_count = len(reader.pages)
             if page_count > 500:
                 raise _invalid_upload("PDF upload exceeds the 500-page limit.")
@@ -179,6 +179,17 @@ def _read_signature(path: Path) -> bytes:
 
 def _has_unsafe_markdown_signature(content: bytes) -> bool:
     return any(content.startswith(signature) for signature in _UNSAFE_MARKDOWN_SIGNATURES)
+
+
+def _decrypt_pdf_with_empty_password(reader: object) -> bool:
+    try:
+        result = reader.decrypt("")  # type: ignore[attr-defined]
+        if result == 0:
+            return False
+        len(reader.pages)  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    return True
 
 
 def _normalize_text(text: str) -> str:

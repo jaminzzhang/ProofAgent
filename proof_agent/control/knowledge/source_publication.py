@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from proof_agent.contracts import KnowledgeSource, KnowledgeSourceSnapshotManifest
 from proof_agent.contracts.manifest import KnowledgeConfig
@@ -26,6 +27,7 @@ def validate_local_index_publication_smoke(
     snapshot: KnowledgeSourceSnapshotManifest,
     artifact_root: Path,
     smoke_query: str,
+    configuration_store: Any | None = None,
     top_k: int = 3,
 ) -> LocalIndexPublicationSmokeResult:
     query = smoke_query.strip()
@@ -53,7 +55,8 @@ def validate_local_index_publication_smoke(
                 snapshot=snapshot,
                 artifact_root=artifact_root,
             ),
-        )
+        ),
+        configuration_store=configuration_store,
     )
     candidates = provider.retrieve(query, top_k=top_k)
     citation_count = sum(1 for candidate in candidates if candidate.citation)

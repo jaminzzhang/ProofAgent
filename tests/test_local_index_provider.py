@@ -152,7 +152,7 @@ def _write_v2_snapshot(tmp_path: Path) -> tuple[Path, Path]:
     return snapshot_path, artifact_root
 
 
-def _node(node_id: str, content: str, score: float) -> SimpleNamespace:
+def _node(node_id: str, content: str, score: float | None) -> SimpleNamespace:
     return SimpleNamespace(
         node=SimpleNamespace(
             id_=node_id,
@@ -807,6 +807,38 @@ class TestLocalIndexProvider:
         }
         assert str(doc_alpha.artifact_path) not in json.dumps(public_projection)
 
+    def test_runtime_retrieve_accepts_llm_selected_nodes_without_similarity_score(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        document = _runtime_document(tmp_path, "doc_policy")
+        provider = _runtime_provider(tmp_path, documents=(document,))
+        monkeypatch.setattr(
+            local_index_module,
+            "route_snapshot_documents",
+            lambda *args, **kwargs: LocalIndexDocumentRoutingResult(
+                selected_documents=(document,),
+                summary={"document_routing": {"selection_reason": "routing_model_selected"}},
+            ),
+        )
+        monkeypatch.setattr(
+            local_index_module,
+            "_load_runtime_revision_index",
+            lambda *args, **kwargs: object(),
+        )
+        monkeypatch.setattr(
+            local_index_module,
+            "_retrieve_from_runtime_revision",
+            lambda *args, **kwargs: (_node("node_policy", "insurance claim evidence", None),),
+        )
+
+        chunks = provider.retrieve("claim handling", top_k=2)
+
+        assert chunks[0].provider_native_score == 1.0
+        assert chunks[0].admission_score == 1.0
+        assert chunks[0].metadata["score_source"] == "llama_index_selected_node"
+
     def test_runtime_retrieve_empty_selection_exposes_one_shot_summary(
         self,
         tmp_path: Path,
@@ -1020,6 +1052,31 @@ class TestLocalIndexProvider:
 
         assert exc.value.code == "PA_KNOWLEDGE_002"
         assert "private storage failure" not in str(exc.value)
+
+    def test_runtime_revision_retrieval_uses_llm_guided_leaf_selection(self) -> None:
+        calls = []
+
+        class FakeRetriever:
+            def retrieve(self, query: str) -> tuple[SimpleNamespace, ...]:
+                calls.append(("retrieve", query))
+                return (_node("node_policy", "policy evidence", None),)
+
+        class FakeIndex:
+            def as_retriever(self, **kwargs) -> FakeRetriever:
+                calls.append(("as_retriever", kwargs))
+                return FakeRetriever()
+
+        nodes = local_index_module._retrieve_from_runtime_revision(
+            FakeIndex(),
+            query="claim handling",
+            top_k=2,
+        )
+
+        assert nodes[0].node.id_ == "node_policy"
+        assert calls == [
+            ("as_retriever", {"retriever_mode": "select_leaf", "similarity_top_k": 2}),
+            ("retrieve", "claim handling"),
+        ]
 
     def test_runtime_revision_loader_rechecks_artifact_root_containment(
         self,

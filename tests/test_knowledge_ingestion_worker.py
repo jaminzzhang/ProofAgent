@@ -605,6 +605,35 @@ def test_worker_resolves_shared_ingestion_model_connection(
     assert ingestion_model.params["timeout_seconds"] == 5
 
 
+def test_worker_ready_outcome_does_not_report_previous_retry_error(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_source(store, params={"ingestion_model": {"provider": "deterministic", "name": "routing"}})
+    _stage_markdown(store)
+    builder = FakeArtifactBuilder()
+    worker = KnowledgeIngestionWorker(store=store, artifact_builder=builder)
+    assert worker.run_once() is not None
+    job = store.list_knowledge_ingestion_jobs("ks_local_index")[0]
+    claimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert claimed is not None
+    assert claimed.claim_token is not None
+    failed = store.fail_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=claimed.claim_token,
+        error_code="PA_INGESTION_001",
+        error_message="Missing model credential environment variable(s): DEEPSEEK_API_KEY",
+    )
+    store.retry_failed_knowledge_ingestion_job(source_id=failed.source_id, job_id=failed.job_id)
+
+    result = worker.run_once()
+
+    assert result is not None
+    assert result.outcome is not None
+    assert result.outcome.state == "ready"
+    assert result.outcome.error_code is None
+    assert result.outcome.error_message is None
+
+
 def test_worker_processes_older_artifact_job_before_newer_quarantine_upload(
     tmp_path: Path,
 ) -> None:

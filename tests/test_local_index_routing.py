@@ -61,7 +61,11 @@ def _document(
 def _request_payload(model: FakeRoutingModel) -> dict[str, object]:
     assert len(model.requests) == 1
     assert model.requests[0].response_format == "json"
-    return json.loads(model.requests[0].messages[0].content)
+    system_message, user_message = model.requests[0].messages
+    assert system_message.content.count("JSON object") == 1
+    assert "selected_document_ids" in system_message.content
+    assert "Do not echo the input JSON" in system_message.content
+    return json.loads(user_message.content)
 
 
 def test_document_router_sends_only_metadata_matches_when_available() -> None:

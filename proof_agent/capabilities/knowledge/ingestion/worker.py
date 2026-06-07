@@ -355,13 +355,18 @@ def _job_outcome(
     *,
     state: Literal["ready", "deferred", "retry_scheduled", "failed"],
 ) -> KnowledgeWorkerTaskOutcome:
+    error_code = job.error_code
+    error_message = job.error_message
+    if state in {"retry_scheduled", "failed"}:
+        error_code = error_code or job.last_error_code
+        error_message = error_message or job.last_error_message
     return KnowledgeWorkerTaskOutcome(
         kind="artifact_build",
         task_id=job.job_id,
         source_id=job.source_id,
         state=state,
-        error_code=job.error_code or job.last_error_code,
-        error_message=job.error_message or job.last_error_message,
+        error_code=error_code,
+        error_message=error_message,
         artifact_path=job.artifact_path,
     )
 

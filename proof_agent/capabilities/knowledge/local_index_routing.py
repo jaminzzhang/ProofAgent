@@ -115,6 +115,17 @@ def route_snapshot_documents(
     request = ModelRequest(
         messages=(
             ModelMessage(
+                role=ModelRole.SYSTEM,
+                content=(
+                    "You are a document routing classifier. Return only one JSON object, "
+                    "with exactly these keys: selected_document_ids and reason. "
+                    "selected_document_ids must be an array of document_id strings from the "
+                    "provided document_candidates, with at most selection_budget entries. "
+                    "Do not echo the input JSON. Do not add document_candidates, query, or "
+                    "selection_budget to the response."
+                ),
+            ),
+            ModelMessage(
                 role=ModelRole.USER,
                 content=json.dumps(prompt_payload, ensure_ascii=True, sort_keys=True),
             ),

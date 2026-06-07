@@ -68,6 +68,33 @@ def _write_encrypted_pdf(path: Path) -> None:
         writer.write(handle)
 
 
+def _write_empty_password_encrypted_pdf(path: Path) -> None:
+    pypdf, pypdf_generic = _pypdf_modules()
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    page = writer.pages[0]
+    font = pypdf_generic.DictionaryObject(
+        {
+            pypdf_generic.NameObject("/Type"): pypdf_generic.NameObject("/Font"),
+            pypdf_generic.NameObject("/Subtype"): pypdf_generic.NameObject("/Type1"),
+            pypdf_generic.NameObject("/BaseFont"): pypdf_generic.NameObject("/Helvetica"),
+        }
+    )
+    content_stream = pypdf_generic.DecodedStreamObject()
+    content_stream.set_data(b"BT /F1 12 Tf 72 720 Td (Policy text) Tj ET")
+    page[pypdf_generic.NameObject("/Resources")] = pypdf_generic.DictionaryObject(
+        {
+            pypdf_generic.NameObject("/Font"): pypdf_generic.DictionaryObject(
+                {pypdf_generic.NameObject("/F1"): writer._add_object(font)}
+            )
+        }
+    )
+    page[pypdf_generic.NameObject("/Contents")] = writer._add_object(content_stream)
+    writer.encrypt("")
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+
 def _simple_to_unicode_cmap() -> bytes:
     return b"""
 /CIDInit /ProcSet findresource begin
@@ -195,6 +222,21 @@ def test_parse_pdf_rejects_encrypted_pdf(tmp_path: Path) -> None:
         parse_quarantined_upload(path, filename="policy.pdf", content_type="application/pdf")
 
     assert exc.value.code == "PA_INGESTION_002"
+
+
+@requires_pypdf
+def test_parse_pdf_accepts_empty_password_encrypted_pdf(tmp_path: Path) -> None:
+    path = tmp_path / "policy.pdf"
+    _write_empty_password_encrypted_pdf(path)
+
+    parsed = parse_quarantined_upload(
+        path,
+        filename="policy.pdf",
+        content_type="application/pdf",
+    )
+
+    assert "Policy text" in parsed.text
+    assert parsed.page_count == 1
 
 
 @requires_pypdf

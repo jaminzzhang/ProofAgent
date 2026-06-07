@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
 logger = logging.getLogger(__name__)
+UNSCORED_SELECTED_NODE_ADMISSION_SCORE = 1.0
 
 
 class LocalIndexProvider(KnowledgeProvider):
@@ -560,11 +561,17 @@ class LocalIndexProvider(KnowledgeProvider):
             EvidenceChunk with normalized fields
         """
         node = node_with_score.node
-        score = node_with_score.score or 0.0
+        score = (
+            float(node_with_score.score)
+            if node_with_score.score is not None
+            else UNSCORED_SELECTED_NODE_ADMISSION_SCORE
+        )
 
         # Extract metadata
         metadata = node.metadata.copy()
         metadata["node_id"] = node.id_
+        if node_with_score.score is None:
+            metadata["score_source"] = "llama_index_selected_node"
 
         if runtime_snapshot is not None and runtime_document is not None:
             source = (
@@ -651,7 +658,7 @@ def _retrieve_from_runtime_revision(
 ) -> tuple[NodeWithScore, ...]:
     try:
         retriever = index.as_retriever(
-            retriever_mode="all_leaf",
+            retriever_mode="select_leaf",
             similarity_top_k=top_k,
         )
         return tuple(retriever.retrieve(query))

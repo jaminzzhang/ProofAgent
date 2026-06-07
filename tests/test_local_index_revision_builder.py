@@ -40,7 +40,7 @@ from proof_agent.contracts import (
 from proof_agent.errors import ProofAgentError
 
 
-def _model_config(*, timeout_seconds: int | None = None) -> ModelConfig:
+def _model_config(*, timeout_seconds: float | None = None) -> ModelConfig:
     params = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
     return ModelConfig(provider="deterministic", name="ingestion-model", params=params)
 
@@ -69,6 +69,10 @@ def _write_parsed_text(tmp_path: Path, text: str = "# Policy\n") -> Path:
     path = tmp_path / "parsed-text.txt"
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_timeout_seconds_accepts_shared_connection_float_default() -> None:
+    assert builder_module._timeout_seconds(_model_config(timeout_seconds=1.0)) == 1.0
 
 
 def _artifact_path(

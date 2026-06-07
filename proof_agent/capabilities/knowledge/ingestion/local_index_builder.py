@@ -278,21 +278,21 @@ def _resolve_ingestion_provider(model_config: ModelConfig) -> Any:
         ) from exc
 
 
-def _timeout_seconds(model_config: ModelConfig) -> int | None:
+def _timeout_seconds(model_config: ModelConfig) -> float | None:
     timeout_seconds = model_config.params.get("timeout_seconds")
     if timeout_seconds is None:
         return None
     if (
         isinstance(timeout_seconds, bool)
-        or not isinstance(timeout_seconds, int)
+        or not isinstance(timeout_seconds, int | float)
         or timeout_seconds <= 0
     ):
         raise ProofAgentError(
             "PA_INGESTION_001",
-            "Local Index ingestion model params.timeout_seconds must be a positive integer.",
-            "Set params.timeout_seconds to a positive integer number of seconds.",
+            "Local Index ingestion model params.timeout_seconds must be a positive number.",
+            "Set params.timeout_seconds to a positive number of seconds.",
         )
-    return timeout_seconds
+    return float(timeout_seconds)
 
 
 def _read_json_object(path: Path) -> dict[str, Any] | None:

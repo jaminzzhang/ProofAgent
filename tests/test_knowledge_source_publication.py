@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import proof_agent.capabilities.knowledge.http_json as http_json_module
+from proof_agent.capabilities.knowledge.local_index import LocalIndexProvider
 from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     ARTIFACT_META_FILENAME,
     REQUIRED_LLAMA_INDEX_FILES,
@@ -90,6 +92,58 @@ def test_validate_publication_persists_passed_validation(
     assert validation.candidate_count == 1
     assert validation.citation_count == 1
     assert store.list_knowledge_source_publication_validations("ks_policy") == [validation]
+
+
+def test_validate_publication_resolves_shared_routing_model_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store_with_frozen_snapshot(tmp_path)
+    store.create_model_connection(
+        connection_id="model_shared_routing",
+        display_name="Shared Routing",
+        provider="deterministic",
+        model_identifier="shared-routing",
+        credential_ref=EnvironmentModelCredentialReference(name="DEMO_MODEL_KEY"),
+        actor="operator",
+    )
+    source = store.get_knowledge_source("ks_policy")
+    assert source is not None
+    store._write_knowledge_source(
+        source.model_copy(
+            update={
+                "params": {
+                    "routing_model": {
+                        "model_source": "shared",
+                        "connection_id": "model_shared_routing",
+                    }
+                }
+            }
+        )
+    )
+
+    def fake_from_config(cls, config, *, configuration_store=None):
+        assert configuration_store is store
+        assert config.params["routing_model"]["connection_id"] == "model_shared_routing"
+        return SimpleNamespace(
+            retrieve=lambda query, top_k: [
+                SimpleNamespace(
+                    citation="knowledge://source/ks_policy/document/doc_policy/revision/rev_policy#p1"
+                )
+            ]
+        )
+
+    monkeypatch.setattr(LocalIndexProvider, "from_config", classmethod(fake_from_config))
+
+    validation = store.validate_local_index_source_publication(
+        source_id="ks_policy",
+        smoke_query="What does the policy require?",
+        actor="operator",
+    )
+
+    assert validation.status == "passed"
+    assert validation.candidate_count == 1
+    assert validation.citation_count == 1
 
 
 def test_publication_requires_change_note(tmp_path: Path) -> None:

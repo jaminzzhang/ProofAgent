@@ -205,6 +205,23 @@ def test_stage_quarantined_upload_atomically_persists_bytes_and_record(tmp_path:
     assert (uploads_root / first.upload_id / "upload.json").exists()
 
 
+def test_stage_quarantined_upload_preserves_unicode_display_filename(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_local_index_source(store)
+
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="ks_local_index",
+        filename="../../理赔 条款.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.4\nsample",
+        actor="local-user",
+    )
+
+    assert upload.filename == "理赔_条款.pdf"
+    assert "/" not in upload.filename
+    assert "\\" not in upload.filename
+
+
 def test_stage_quarantined_upload_batch_reserves_full_batch_atomically(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1171,6 +1188,58 @@ def test_stale_job_claim_cannot_commit_and_failure_does_not_persist_traceback(
     assert failed.state == "failed"
     assert failed.error_message == "Local Index artifact build failed."
     assert "Traceback" not in failed.error_message
+
+
+def test_retry_failed_ingestion_job_returns_job_and_document_to_queue(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    document, job = _promote_markdown_job(store)
+    claimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert claimed is not None
+    assert claimed.claim_token is not None
+    failed = store.fail_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=claimed.claim_token,
+        error_code="PA_INGESTION_001",
+        error_message="Missing model credential environment variable(s): DEEPSEEK_API_KEY",
+    )
+
+    retried = store.retry_failed_knowledge_ingestion_job(
+        source_id=failed.source_id,
+        job_id=failed.job_id,
+    )
+    projected_document = store.get_knowledge_document(
+        source_id=document.source_id,
+        document_id=document.document_id,
+    )
+    reclaimed = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+
+    assert retried.state == "queued"
+    assert retried.error_code is None
+    assert retried.error_message is None
+    assert retried.completed_at is None
+    assert retried.last_error_code == "PA_INGESTION_001"
+    assert retried.last_error_message == "Missing model credential environment variable(s): DEEPSEEK_API_KEY"
+    assert projected_document is not None
+    assert projected_document.state == "queued"
+    assert projected_document.error_code is None
+    assert projected_document.error_message is None
+    assert reclaimed is not None
+    assert reclaimed.job_id == job.job_id
+
+
+def test_retry_ingestion_job_rejects_non_failed_state(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _, job = _promote_markdown_job(store)
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.retry_failed_knowledge_ingestion_job(
+            source_id=job.source_id,
+            job_id=job.job_id,
+        )
+
+    assert exc.value.code == "PA_INGESTION_004"
+    assert "cannot be retried from state queued" in exc.value.message
 
 
 def test_complete_ingestion_job_rejects_non_processing_state(tmp_path: Path) -> None:
