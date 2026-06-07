@@ -6,8 +6,8 @@ from typing import Any
 from urllib import parse
 from uuid import uuid4
 
-from proof_agent.contracts import AgentManifest
-from proof_agent.control.workflow.templates import resolve_workflow_template
+from proof_agent.contracts import AgentManifest, WorkflowNodePromptConfig
+from proof_agent.control.workflow.templates import WorkflowNodeDescriptor, resolve_workflow_template
 from proof_agent.errors import ProofAgentError
 
 
@@ -163,6 +163,7 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
 
     _require_sequence_of_mappings(raw, "package_knowledge_sources", manifest_path=manifest_path)
     _require_sequence_of_mappings(raw, "knowledge_bindings", manifest_path=manifest_path)
+    _require_workflow_node_context_booleans(raw["workflow"], manifest_path=manifest_path)
     for index, binding in enumerate(raw["knowledge_bindings"]):
         if "source_id" in binding:
             raise ProofAgentError(
@@ -191,6 +192,36 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
                 "PA_CONFIG_001",
                 f"knowledge_bindings[{index}].source_ref.source_id is required",
                 f"Set knowledge_bindings[{index}].source_ref.source_id in {manifest_path}.",
+                artifact_path=manifest_path,
+            )
+
+
+def _require_workflow_node_context_booleans(
+    workflow: Mapping[str, Any],
+    *,
+    manifest_path: Path,
+) -> None:
+    nodes = workflow.get("nodes")
+    if nodes is None:
+        return
+    if not isinstance(nodes, list | tuple):
+        return
+    for index, node in enumerate(nodes):
+        if not isinstance(node, Mapping):
+            continue
+        node_id = str(node.get("node_id", f"workflow.nodes[{index}]"))
+        context = node.get("context")
+        if context is None:
+            continue
+        if not isinstance(context, Mapping):
+            continue
+        for option, value in context.items():
+            if isinstance(value, bool):
+                continue
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"workflow node {node_id} context option {option} must be a boolean",
+                "Use unquoted true or false for workflow node context options.",
                 artifact_path=manifest_path,
             )
 
@@ -414,19 +445,6 @@ def _validate_workflow_node_config(manifest: AgentManifest, *, manifest_path: Pa
             )
         seen_node_ids.add(node_config.node_id)
         node_descriptor = descriptor.node(node_config.node_id)
-        configured_prompt_fields = _configured_workflow_prompt_fields(node_config.prompt)
-        unsupported_prompt_fields = sorted(
-            field
-            for field in configured_prompt_fields
-            if field not in node_descriptor.editable_prompt_fields
-        )
-        if unsupported_prompt_fields:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                f"unsupported prompt field for workflow node {node_config.node_id}: {', '.join(unsupported_prompt_fields)}",
-                f"Use editable Prompt fields: {', '.join(node_descriptor.editable_prompt_fields)}.",
-                artifact_path=manifest_path,
-            )
 
         unsupported_context_options = sorted(
             option
@@ -441,46 +459,12 @@ def _validate_workflow_node_config(manifest: AgentManifest, *, manifest_path: Pa
                 artifact_path=manifest_path,
             )
 
-        total_prompt_chars += _validate_workflow_node_prompt_text(
-            node_config.node_id,
-            node_config.prompt.business_context,
-            "business_context",
-            MAX_WORKFLOW_NODE_BUSINESS_CONTEXT_CHARS,
+        total_prompt_chars += validate_workflow_node_prompt_config(
+            node_id=node_config.node_id,
+            prompt=node_config.prompt,
+            node_descriptor=node_descriptor,
             manifest_path=manifest_path,
         )
-        if len(node_config.prompt.task_instructions) > MAX_WORKFLOW_NODE_INSTRUCTION_COUNT:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                f"workflow node {node_config.node_id} task_instructions has too many items",
-                f"Use at most {MAX_WORKFLOW_NODE_INSTRUCTION_COUNT} task_instructions.",
-                artifact_path=manifest_path,
-            )
-        for instruction in node_config.prompt.task_instructions:
-            total_prompt_chars += _validate_workflow_node_prompt_text(
-                node_config.node_id,
-                instruction,
-                "task_instructions",
-                MAX_WORKFLOW_NODE_INSTRUCTION_CHARS,
-                manifest_path=manifest_path,
-            )
-        if (
-            len(node_config.prompt.output_preferences)
-            > MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT
-        ):
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                f"workflow node {node_config.node_id} output_preferences has too many items",
-                f"Use at most {MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT} output_preferences.",
-                artifact_path=manifest_path,
-            )
-        for preference in node_config.prompt.output_preferences:
-            total_prompt_chars += _validate_workflow_node_prompt_text(
-                node_config.node_id,
-                preference,
-                "output_preferences",
-                MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_CHARS,
-                manifest_path=manifest_path,
-            )
     if total_prompt_chars > MAX_WORKFLOW_NODE_TOTAL_PROMPT_CHARS:
         raise ProofAgentError(
             "PA_CONFIG_002",
@@ -488,6 +472,69 @@ def _validate_workflow_node_config(manifest: AgentManifest, *, manifest_path: Pa
             f"Use at most {MAX_WORKFLOW_NODE_TOTAL_PROMPT_CHARS} total prompt characters.",
             artifact_path=manifest_path,
         )
+
+
+def validate_workflow_node_prompt_config(
+    *,
+    node_id: str,
+    prompt: WorkflowNodePromptConfig,
+    node_descriptor: WorkflowNodeDescriptor,
+    manifest_path: Path | None = None,
+) -> int:
+    """Validate one Workflow Node Prompt against descriptor and safety limits."""
+
+    configured_prompt_fields = _configured_workflow_prompt_fields(prompt)
+    unsupported_prompt_fields = sorted(
+        field
+        for field in configured_prompt_fields
+        if field not in node_descriptor.editable_prompt_fields
+    )
+    if unsupported_prompt_fields:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"unsupported prompt field for workflow node {node_id}: {', '.join(unsupported_prompt_fields)}",
+            f"Use editable Prompt fields: {', '.join(node_descriptor.editable_prompt_fields)}.",
+            artifact_path=manifest_path,
+        )
+
+    prompt_chars = _validate_workflow_node_prompt_text(
+        node_id,
+        prompt.business_context,
+        "business_context",
+        MAX_WORKFLOW_NODE_BUSINESS_CONTEXT_CHARS,
+        manifest_path=manifest_path,
+    )
+    if len(prompt.task_instructions) > MAX_WORKFLOW_NODE_INSTRUCTION_COUNT:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"workflow node {node_id} task_instructions has too many items",
+            f"Use at most {MAX_WORKFLOW_NODE_INSTRUCTION_COUNT} task_instructions.",
+            artifact_path=manifest_path,
+        )
+    for instruction in prompt.task_instructions:
+        prompt_chars += _validate_workflow_node_prompt_text(
+            node_id,
+            instruction,
+            "task_instructions",
+            MAX_WORKFLOW_NODE_INSTRUCTION_CHARS,
+            manifest_path=manifest_path,
+        )
+    if len(prompt.output_preferences) > MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"workflow node {node_id} output_preferences has too many items",
+            f"Use at most {MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT} output_preferences.",
+            artifact_path=manifest_path,
+        )
+    for preference in prompt.output_preferences:
+        prompt_chars += _validate_workflow_node_prompt_text(
+            node_id,
+            preference,
+            "output_preferences",
+            MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_CHARS,
+            manifest_path=manifest_path,
+        )
+    return prompt_chars
 
 
 def _configured_workflow_prompt_fields(prompt: object) -> tuple[str, ...]:
@@ -507,7 +554,7 @@ def _validate_workflow_node_prompt_text(
     field_name: str,
     max_chars: int,
     *,
-    manifest_path: Path,
+    manifest_path: Path | None,
 ) -> int:
     if len(value) > max_chars:
         raise ProofAgentError(

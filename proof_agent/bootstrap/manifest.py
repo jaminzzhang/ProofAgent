@@ -255,9 +255,26 @@ def _workflow_node_config_from_mapping(raw: Any) -> WorkflowNodeConfig:
             output_preferences=tuple(prompt.get("output_preferences", ())),
         ),
         context=WorkflowNodeContextConfig(
-            options={str(key): bool(value) for key, value in context.items()},
+            options=_workflow_node_context_options_from_mapping(
+                raw["node_id"],
+                context,
+            ),
         ),
     )
+
+
+def _workflow_node_context_options_from_mapping(
+    node_id: str,
+    context: dict[str, Any],
+) -> dict[str, bool]:
+    options: dict[str, bool] = {}
+    for key, value in context.items():
+        if not isinstance(value, bool):
+            raise TypeError(
+                f"workflow node {node_id} context option {key} must be a boolean"
+            )
+        options[str(key)] = value
+    return options
 
 
 def _react_config_from_mapping(raw: Any) -> ReActConfig | None:

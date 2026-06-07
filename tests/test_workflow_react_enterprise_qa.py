@@ -285,6 +285,79 @@ def test_llm_planner_and_reviewer_calls_emit_safe_model_events(
             assert "content" not in event["payload"]
 
 
+def test_retrieval_review_node_context_reaches_reviewer_model_request(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["react"]["planner"]["provider"] = "openai_compatible"
+    manifest["react"]["planner"]["name"] = "planner-test"
+    manifest["review"]["subagent"]["provider"] = "openai_compatible"
+    manifest["review"]["subagent"]["name"] = "reviewer-test"
+    manifest["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v1"
+    manifest["workflow"]["nodes"] = [
+        {
+            "node_id": "retrieval_review",
+            "prompt": {
+                "business_context": "Reviewer should consider regulator-facing claims context.",
+                "task_instructions": ["Require a retrieval query before allowing retrieval."],
+            },
+            "context": {
+                "include_agent_purpose": True,
+                "include_retrieval_intent": True,
+            },
+        }
+    ]
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    provider = FakeControlPlaneProvider("RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE")
+
+    monkeypatch.setattr(
+        "proof_agent.capabilities.react.planner.resolve_provider",
+        lambda config: provider,
+    )
+    monkeypatch.setattr(
+        "proof_agent.capabilities.review.subagent.resolve_provider",
+        lambda config: provider,
+    )
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    retrieval_review_request = next(
+        request
+        for request in provider.requests
+        if request.metadata["role"] == "harness_review"
+        and request.metadata["enforcement_point"] == "before_retrieval_plan"
+    )
+    user_payload = json.loads(retrieval_review_request.messages[1].content)
+
+    assert (
+        user_payload["context"]["workflow_node_context"]["business_context_addendum"]["text"]
+        == (
+            "Business context:\n"
+            "Reviewer should consider regulator-facing claims context.\n"
+            "Task instructions:\n"
+            "- Require a retrieval query before allowing retrieval."
+        )
+    )
+    assert user_payload["context"]["workflow_node_context"]["structured_control_context"] == {
+        "include_agent_purpose": (
+            "Answer enterprise knowledge questions through a governed ReAct workflow."
+        ),
+        "include_retrieval_intent": "travel meal reimbursement rule",
+    }
+
+
 def test_unknown_tool_proposal_fails_closed_without_raising(
     tmp_path: Path,
     monkeypatch: Any,

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.validation import validate_workflow_node_prompt_config
 from proof_agent.bootstrap.knowledge_resolution import (
     ConfigurationStoreKnowledgeBindingResolver,
     PackageKnowledgeBindingResolver,
@@ -43,6 +44,7 @@ from proof_agent.contracts import (
     ResolvedKnowledgeBindingSet,
     RunPurpose,
     SharedModelConnection,
+    WorkflowNodePromptConfig,
 )
 from proof_agent.control.workflow.node_context import build_workflow_node_context_preview
 from proof_agent.control.workflow.templates import (
@@ -1469,10 +1471,20 @@ def preview_config_draft_workflow_node(
         package_dir = compile_draft_agent(draft, store.root_dir / "compiled_preview")
         manifest = load_agent_manifest(package_dir / "agent.yaml")
         descriptor = resolve_workflow_template(manifest.workflow.template)
+        node_descriptor = descriptor.node(node_id)
+        prompt = WorkflowNodePromptConfig(
+            **_workflow_node_prompt_request_payload(request.prompt)
+        )
+        validate_workflow_node_prompt_config(
+            node_id=node_id,
+            prompt=prompt,
+            node_descriptor=node_descriptor,
+            manifest_path=package_dir / "agent.yaml",
+        )
         return build_workflow_node_context_preview(
             descriptor=descriptor,
             node_id=node_id,
-            prompt=_workflow_node_prompt_request_payload(request.prompt),
+            prompt=prompt,
             context_options=request.context,
             sample_context=_workflow_node_sample_context(manifest),
         )

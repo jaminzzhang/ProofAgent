@@ -32,6 +32,15 @@ def test_enterprise_qa_descriptor_is_read_only_for_prompt_nodes() -> None:
     assert all(not node.editable_prompt_fields for node in descriptor.nodes)
 
 
+def test_non_model_react_nodes_do_not_expose_prompt_editing() -> None:
+    descriptor = resolve_workflow_template("react_enterprise_qa")
+
+    non_model_nodes = [node for node in descriptor.nodes if not node.model_bearing]
+
+    assert non_model_nodes
+    assert all(not node.editable_prompt_fields for node in non_model_nodes)
+
+
 def test_list_workflow_templates_is_json_safe() -> None:
     descriptors = list_workflow_templates()
 

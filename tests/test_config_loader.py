@@ -821,6 +821,24 @@ def test_unknown_workflow_context_option_is_rejected(tmp_path: Path) -> None:
     assert "unsupported context option for workflow node plan" in exc.value.message
 
 
+def test_workflow_node_context_options_reject_string_booleans(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        workflow_extra="""
+  nodes:
+    - node_id: plan
+      context:
+        include_agent_purpose: "false"
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "workflow node plan context option include_agent_purpose must be a boolean" in exc.value.message
+
+
 def test_workflow_node_prompt_rejects_policy_bypass(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,

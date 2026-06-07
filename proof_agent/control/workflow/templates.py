@@ -101,7 +101,6 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 description="Request missing user details before continuing.",
                 predecessors=("plan",),
                 successors=("response",),
-                editable_prompt_fields=EDITABLE_WORKFLOW_PROMPT_FIELDS,
                 context_options=(
                     "include_agent_purpose",
                     "include_recent_conversation_summary",
@@ -144,7 +143,6 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                     "response": "insufficient evidence or blocked retrieval",
                 },
                 governed_handoff_points=("before_retrieval_step", "before_answer"),
-                editable_prompt_fields=EDITABLE_WORKFLOW_PROMPT_FIELDS,
                 context_options=(
                     "include_retrieval_intent",
                     "include_bound_knowledge_sources",
@@ -202,7 +200,6 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 predecessors=("tool_review",),
                 successors=("memory", "response"),
                 governed_handoff_points=("before_tool_call",),
-                editable_prompt_fields=EDITABLE_WORKFLOW_PROMPT_FIELDS,
                 context_options=(
                     "include_tool_contract_summary",
                     "include_approval_state",
@@ -218,7 +215,6 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 predecessors=("retrieval", "tool"),
                 successors=("response",),
                 governed_handoff_points=("before_memory_write",),
-                editable_prompt_fields=EDITABLE_WORKFLOW_PROMPT_FIELDS,
                 context_options=(
                     "include_agent_purpose",
                     "include_memory_scope",
@@ -242,7 +238,6 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                     "tool",
                     "memory",
                 ),
-                editable_prompt_fields=EDITABLE_WORKFLOW_PROMPT_FIELDS,
                 context_options=(
                     "include_agent_purpose",
                     "include_outcome",

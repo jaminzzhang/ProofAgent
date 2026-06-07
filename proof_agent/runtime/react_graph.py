@@ -190,6 +190,7 @@ def build_react_enterprise_qa_graph(
         }
         if node_context is not None:
             context["workflow_node_context_summary"] = node_context["summary"]
+            context["workflow_node_context"] = node_context
         decision, review_event = review_action(
             trace=trace,
             policy=invocation.policy,
@@ -306,7 +307,7 @@ def build_react_enterprise_qa_graph(
         )
         estimated_tokens = invocation.model_provider.estimate_tokens(model_request)
         proposal = _model_action_proposal(state["question"])
-        context = {
+        context: dict[str, Any] = {
             "provider": invocation.model_provider.provider_name,
             "model": invocation.model_provider.model_name,
             "estimated_tokens": estimated_tokens,
@@ -318,6 +319,7 @@ def build_react_enterprise_qa_graph(
         }
         if node_context is not None:
             context["workflow_node_context_summary"] = node_context["summary"]
+            context["workflow_node_context"] = node_context
         decision, review_event = review_action(
             trace=trace,
             policy=invocation.policy,
@@ -410,6 +412,7 @@ def build_react_enterprise_qa_graph(
         }
         if node_context is not None:
             context["workflow_node_context_summary"] = node_context["summary"]
+            context["workflow_node_context"] = node_context
         decision, review_event = review_action(
             trace=trace,
             policy=invocation.policy,
