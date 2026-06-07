@@ -55,6 +55,18 @@ def _import_enterprise_qa(client: TestClient) -> dict:
     return response.json()
 
 
+def _import_react_enterprise_qa(client: TestClient) -> dict:
+    response = client.post(
+        "/api/config/agents/import",
+        json={
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml",
+            "actor": "test-user",
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def test_list_config_agents_empty(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -1653,6 +1665,72 @@ def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
     )
     assert "  top_k: 1" in loaded.json()["agent_yaml"]
+
+
+def test_workflow_template_descriptor_api_lists_react_nodes(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/api/config/workflow-templates/react_enterprise_qa")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["descriptor_version"] == "react_enterprise_qa.v1"
+    assert body["nodes"][0]["node_id"] == "plan"
+    assert body["nodes"][0]["successors"] == [
+        "clarification",
+        "retrieval_review",
+        "tool_review",
+        "response",
+    ]
+
+
+def test_update_workflow_nodes_persists_valid_nodes(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa(client)
+
+    response = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-nodes",
+        json={
+            "actor": "workflow-editor",
+            "template_descriptor_version": "react_enterprise_qa.v1",
+            "nodes": [
+                {
+                    "node_id": "plan",
+                    "prompt": {"business_context": "Insurance servicing context."},
+                    "context": {"include_agent_purpose": True},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    raw = yaml.safe_load(response.json()["agent_yaml"])
+    assert raw["workflow"]["template_descriptor_version"] == "react_enterprise_qa.v1"
+    assert raw["workflow"]["nodes"][0]["node_id"] == "plan"
+    assert raw["workflow"]["nodes"][0]["prompt"]["business_context"] == (
+        "Insurance servicing context."
+    )
+
+
+def test_workflow_node_preview_does_not_create_run(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa(client)
+
+    response = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-nodes/plan/preview",
+        json={
+            "prompt": {"business_context": "Insurance context."},
+            "context": {"include_agent_purpose": True},
+            "actor": "workflow-editor",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["node_id"] == "plan"
+    assert response.json()["structured_control_context"] == {
+        "include_agent_purpose": "Answer enterprise knowledge questions through a governed ReAct workflow."
+    }
+    assert client.get("/api/runs").json()["meta"]["total"] == 0
 
 
 def test_validate_draft_runs_harness_as_validation_run(tmp_path: Path) -> None:

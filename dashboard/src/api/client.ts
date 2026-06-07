@@ -33,6 +33,11 @@ import type {
   SharedModelConnectionDeletionEligibility,
   SharedModelConnectionReferenceSummary,
   StatsResponse,
+  WorkflowNodeConfig,
+  WorkflowNodeContextPreview,
+  WorkflowNodePromptConfig,
+  WorkflowTemplateDescriptor,
+  WorkflowTemplatesResponse,
 } from './types'
 
 const BASE = '/api'
@@ -94,6 +99,53 @@ export function fetchKnowledgeSources(): Promise<KnowledgeSourcesResponse> {
 
 export function fetchModelConnections(): Promise<ModelConnectionsResponse> {
   return fetchJson<ModelConnectionsResponse>(`${BASE}/config/model-connections`)
+}
+
+export function fetchWorkflowTemplates(): Promise<WorkflowTemplatesResponse> {
+  return fetchJson<WorkflowTemplatesResponse>(`${BASE}/config/workflow-templates`)
+}
+
+export function fetchWorkflowTemplate(templateId: string): Promise<WorkflowTemplateDescriptor> {
+  return fetchJson<WorkflowTemplateDescriptor>(`${BASE}/config/workflow-templates/${templateId}`)
+}
+
+export function updateWorkflowNodes(
+  agentId: string,
+  draftId: string,
+  payload: {
+    template_descriptor_version?: string | null
+    nodes: WorkflowNodeConfig[]
+    actor?: string
+  },
+): Promise<ContractBundle> {
+  return fetchJson<ContractBundle>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/workflow-nodes`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function previewWorkflowNodeContext(
+  agentId: string,
+  draftId: string,
+  nodeId: string,
+  payload: {
+    prompt: WorkflowNodePromptConfig
+    context: Record<string, boolean>
+    actor?: string
+  },
+): Promise<WorkflowNodeContextPreview> {
+  return fetchJson<WorkflowNodeContextPreview>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/workflow-nodes/${nodeId}/preview`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
 }
 
 export function createModelConnection(payload: {

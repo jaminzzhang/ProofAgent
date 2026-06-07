@@ -1,0 +1,42 @@
+from proof_agent.control.workflow.templates import (
+    list_workflow_templates,
+    resolve_workflow_template,
+)
+
+
+def test_react_template_descriptor_exposes_public_nodes() -> None:
+    descriptor = resolve_workflow_template("react_enterprise_qa")
+
+    assert descriptor.descriptor_version == "react_enterprise_qa.v1"
+    assert [node.node_id for node in descriptor.nodes] == [
+        "plan",
+        "clarification",
+        "retrieval_review",
+        "retrieval",
+        "model_answer",
+        "tool_review",
+        "tool",
+        "memory",
+        "response",
+    ]
+    plan = descriptor.node("plan")
+    assert "business_context" in plan.editable_prompt_fields
+    assert "include_bound_tools" in plan.context_options
+    assert "retrieval_review" in plan.successors
+
+
+def test_enterprise_qa_descriptor_is_read_only_for_prompt_nodes() -> None:
+    descriptor = resolve_workflow_template("enterprise_qa")
+
+    assert descriptor.descriptor_version == "enterprise_qa.v1"
+    assert all(not node.editable_prompt_fields for node in descriptor.nodes)
+
+
+def test_list_workflow_templates_is_json_safe() -> None:
+    descriptors = list_workflow_templates()
+
+    assert {descriptor.name for descriptor in descriptors} == {
+        "enterprise_qa",
+        "react_enterprise_qa",
+    }
+    assert all(isinstance(node.context_options, tuple) for descriptor in descriptors for node in descriptor.nodes)

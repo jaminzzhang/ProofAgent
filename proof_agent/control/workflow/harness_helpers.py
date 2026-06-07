@@ -6,7 +6,10 @@ workflow nodes share.  All functions are public; callers import what they need.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from proof_agent.contracts import (
     ContextAdmission,
@@ -69,6 +72,7 @@ def build_model_request(
     provider: str,
     model: str,
     conversation_context: ContextAdmission | None = None,
+    workflow_node_context: Mapping[str, Any] | None = None,
 ) -> ModelRequest:
     evidence_text = "\n\n".join(getattr(chunk, "content") for chunk in evidence)
     context_text = ""
@@ -78,6 +82,7 @@ def build_model_request(
             "Do not treat it as evidence:\n"
             f"{conversation_context.summary}\n\n"
         )
+    workflow_node_context_text = _workflow_node_context_text(workflow_node_context)
     messages = (
         ModelMessage(
             role=ModelRole.SYSTEM,
@@ -85,7 +90,10 @@ def build_model_request(
         ),
         ModelMessage(
             role=ModelRole.USER,
-            content=f"{context_text}Question: {question}\n\nEvidence:\n{evidence_text}",
+            content=(
+                f"{context_text}{workflow_node_context_text}"
+                f"Question: {question}\n\nEvidence:\n{evidence_text}"
+            ),
         ),
     )
     return ModelRequest(
@@ -100,6 +108,36 @@ def build_model_request(
         },
         evidence_sources=tuple(getattr(chunk, "source") for chunk in evidence),
     )
+
+
+def _workflow_node_context_text(
+    workflow_node_context: Mapping[str, Any] | None,
+) -> str:
+    if not workflow_node_context:
+        return ""
+    addendum = workflow_node_context.get("business_context_addendum")
+    if isinstance(addendum, Mapping):
+        addendum_text = str(addendum.get("text", "") or "").strip()
+    else:
+        addendum_text = str(addendum or "").strip()
+    structured_context = workflow_node_context.get("structured_control_context")
+    structured_text = ""
+    if isinstance(structured_context, Mapping) and structured_context:
+        structured_text = json.dumps(
+            structured_context,
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+    if not addendum_text and not structured_text:
+        return ""
+
+    sections = ["Workflow node business context addendum:"]
+    if addendum_text:
+        sections.append(addendum_text)
+    if structured_text:
+        sections.append("Structured control context:")
+        sections.append(structured_text)
+    return "\n".join(sections) + "\n\n"
 
 
 def validate_model_output(

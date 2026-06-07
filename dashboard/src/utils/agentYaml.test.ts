@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { replaceAgentYamlMapping, updateAgentYamlField } from './agentYaml'
+import {
+  readWorkflowNodeConfigs,
+  readWorkflowTemplateDescriptorVersion,
+  replaceAgentYamlMapping,
+  replaceWorkflowNodes,
+  updateAgentYamlField,
+} from './agentYaml'
 
 const AGENT_YAML = `name: insurance_customer_service
 purpose: "Provide customer service."
@@ -83,5 +89,71 @@ policy:
 policy:`)
     expect(updated).not.toContain('provider: deepseek')
     expect(updated).not.toContain('name: deepseek-chat')
+  })
+
+  it('replaces workflow node arrays while preserving core workflow settings', () => {
+    const updated = replaceWorkflowNodes(
+      `name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    type: memory
+  nodes:
+    - node_id: plan
+      prompt:
+        business_context: "Old context"
+policy:
+  file: ./policy.yaml
+`,
+      'react_enterprise_qa.v1',
+      [
+        {
+          node_id: 'plan',
+          prompt: {
+            business_context: 'Claims context',
+            task_instructions: ['Prefer retrieval first.'],
+            output_preferences: ['Keep concise.'],
+          },
+          context: {
+            include_agent_purpose: true,
+            include_bound_tools: false,
+          },
+        },
+      ],
+    )
+
+    expect(updated).toContain(`workflow:
+  template_descriptor_version: react_enterprise_qa.v1
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    type: memory
+  nodes:
+    - node_id: plan
+      prompt:
+        business_context: "Claims context"
+        task_instructions:
+          - "Prefer retrieval first."
+        output_preferences:
+          - "Keep concise."
+      context:
+        include_agent_purpose: true
+policy:`)
+    expect(updated).not.toContain('Old context')
+    expect(readWorkflowTemplateDescriptorVersion(updated)).toBe('react_enterprise_qa.v1')
+    expect(readWorkflowNodeConfigs(updated)).toEqual([
+      {
+        node_id: 'plan',
+        prompt: {
+          business_context: 'Claims context',
+          task_instructions: ['Prefer retrieval first.'],
+          output_preferences: ['Keep concise.'],
+        },
+        context: {
+          include_agent_purpose: true,
+        },
+      },
+    ])
   })
 })

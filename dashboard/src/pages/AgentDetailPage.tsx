@@ -4,16 +4,19 @@ import {
   bindKnowledgeSourceToDraft,
   chatUrl,
   createModelConnection,
+  fetchWorkflowTemplate,
   fetchKnowledgeSources,
   fetchModelConnections,
+  previewWorkflowNodeContext,
   publishConfigDraft,
   rollbackConfigVersion,
   unbindKnowledgeSourceFromDraft,
   updateConfigDraft,
   updateConfigDraftContract,
+  updateWorkflowNodes,
   validateConfigDraft,
 } from '../api/client'
-import type { SharedModelConnection, KnowledgeSource } from '../api/types'
+import type { SharedModelConnection, KnowledgeSource, WorkflowTemplateDescriptor } from '../api/types'
 import { CodeBlock } from '../components/CodeBlock'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
@@ -23,8 +26,8 @@ import { ModuleEditor } from '../components/agent/ModuleEditor'
 import { ModelModuleEditor } from '../components/agent/ModelModuleEditor'
 import { KnowledgeModuleEditor } from '../components/agent/KnowledgeModuleEditor'
 import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
+import { WorkflowModuleEditor } from '../components/agent/WorkflowModuleEditor'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
-import { WORKFLOW_FIELDS } from '../components/agent/module-configs/workflow'
 import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
 import { TOOLS_FIELDS } from '../components/agent/module-configs/tools'
 import { POLICY_FIELDS } from '../components/agent/module-configs/policy'
@@ -34,6 +37,7 @@ import { useConfigDraft } from '../hooks/useConfigDraft'
 import { useConfigVersions } from '../hooks/useConfigVersions'
 import {
   extractAgentYamlSection,
+  readAgentYamlField,
   replaceAgentYamlMapping,
   updateAgentYamlField,
 } from '../utils/agentYaml'
@@ -62,6 +66,8 @@ export function AgentDetailPage() {
   const [knowledgeSourceError, setKnowledgeSourceError] = useState<string | null>(null)
   const [modelConnections, setModelConnections] = useState<SharedModelConnection[]>([])
   const [modelConnectionsLoaded, setModelConnectionsLoaded] = useState(false)
+  const [workflowDescriptor, setWorkflowDescriptor] = useState<WorkflowTemplateDescriptor | null>(null)
+  const [workflowDescriptorError, setWorkflowDescriptorError] = useState<string | null>(null)
 
   useEffect(() => {
     if (draft) {
@@ -112,6 +118,37 @@ export function AgentDetailPage() {
     }
   }, [activeTab, modelConnectionsLoaded])
 
+  const workflowTemplateName = useMemo(
+    () => readAgentYamlField(agentYaml, ['workflow', 'template']),
+    [agentYaml],
+  )
+
+  useEffect(() => {
+    if (activeTab !== 'workflow') return
+    if (!workflowTemplateName) {
+      setWorkflowDescriptor(null)
+      setWorkflowDescriptorError('workflow.template is not configured.')
+      return
+    }
+
+    let mounted = true
+    fetchWorkflowTemplate(workflowTemplateName)
+      .then((descriptor) => {
+        if (!mounted) return
+        setWorkflowDescriptor(descriptor)
+        setWorkflowDescriptorError(null)
+      })
+      .catch((err) => {
+        if (!mounted) return
+        setWorkflowDescriptor(null)
+        setWorkflowDescriptorError(err instanceof Error ? err.message : String(err))
+      })
+
+    return () => {
+      mounted = false
+    }
+  }, [activeTab, workflowTemplateName])
+
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
   const isCustomerFacing = Boolean(extractAgentYamlSection(agentYaml, 'customer'))
 
@@ -150,6 +187,30 @@ export function AgentDetailPage() {
       })
       setStatus('Workflow node configuration saved.')
       refresh()
+    })
+  }
+
+  async function saveWorkflowNodes(payload: Parameters<typeof updateWorkflowNodes>[2]) {
+    if (!agentId || !draftId) return
+    await runAction('workflow-nodes', async () => {
+      const updated = await updateWorkflowNodes(agentId, draftId, {
+        ...payload,
+        actor: 'dashboard',
+      })
+      setAgentYaml(updated.agent_yaml)
+      setStatus('Workflow node configuration saved.')
+      refresh()
+    })
+  }
+
+  async function previewWorkflowNode(
+    nodeId: string,
+    payload: Omit<Parameters<typeof previewWorkflowNodeContext>[3], 'actor'>,
+  ) {
+    if (!agentId || !draftId) throw new Error('Draft route is missing.')
+    return previewWorkflowNodeContext(agentId, draftId, nodeId, {
+      ...payload,
+      actor: 'dashboard',
     })
   }
 
@@ -287,15 +348,16 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'workflow' && (
-        <ModuleEditor
-          title="Workflow Configuration"
-          description="Core orchestration and routing configuration"
-          fields={WORKFLOW_FIELDS}
-          yamlSection="workflow"
+        <WorkflowModuleEditor
           agentYaml={agentYaml}
+          descriptor={workflowDescriptor}
+          descriptorError={workflowDescriptorError}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={saveWorkflow}
+          onSaveCore={saveWorkflow}
+          onSaveNodes={saveWorkflowNodes}
+          onPreviewNode={previewWorkflowNode}
           busy={busy === 'workflow'}
+          nodeBusy={busy === 'workflow-nodes'}
         />
       )}
 

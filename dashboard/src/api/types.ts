@@ -157,6 +157,61 @@ export interface ContractBundle {
   advanced_fields: Record<string, unknown>
 }
 
+export interface WorkflowNodeDescriptor {
+  node_id: string
+  label: string
+  description: string
+  predecessors: string[]
+  successors: string[]
+  branch_conditions: Record<string, string>
+  governed_handoff_points: string[]
+  editable_prompt_fields: string[]
+  context_options: string[]
+  input_summary: string
+  output_summary: string
+  model_bearing: boolean
+  required: boolean
+}
+
+export interface WorkflowTemplateDescriptor {
+  name: string
+  description: string
+  descriptor_version: string
+  nodes: WorkflowNodeDescriptor[]
+}
+
+export interface WorkflowTemplatesResponse {
+  data: WorkflowTemplateDescriptor[]
+  meta: {
+    total: number
+  }
+}
+
+export interface WorkflowNodePromptConfig {
+  business_context?: string | null
+  task_instructions: string[]
+  output_preferences: string[]
+}
+
+export interface WorkflowNodeConfig {
+  node_id: string
+  prompt: WorkflowNodePromptConfig
+  context: Record<string, boolean>
+}
+
+export interface WorkflowNodeContextPreview {
+  node_id: string
+  node_label: string
+  harness_control_prompt_summary: string
+  structured_control_context: Record<string, unknown>
+  business_context_addendum: {
+    present: boolean
+    text: string
+    fields: string[]
+  }
+  summary: Record<string, unknown>
+}
+
 export type ConfigurationOperation =
   | 'imported'
   | 'updated'

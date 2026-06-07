@@ -76,6 +76,9 @@ from proof_agent.contracts.manifest import (
     ReviewSubagentConfig,
     ToolsConfig,
     WorkflowConfig,
+    WorkflowNodeConfig,
+    WorkflowNodeContextConfig,
+    WorkflowNodePromptConfig,
 )
 from proof_agent.contracts.memory import (
     MemoryAdmission,
@@ -227,6 +230,9 @@ __all__ = [
     "ValidationResult",
     "ValidationStatus",
     "WorkflowConfig",
+    "WorkflowNodeConfig",
+    "WorkflowNodeContextConfig",
+    "WorkflowNodePromptConfig",
     "WorkflowState",
     "allowed_review_decisions_for",
     "freeze_value",

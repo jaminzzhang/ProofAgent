@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from dataclasses import asdict
 import os
 import re
 from datetime import UTC, datetime
@@ -42,6 +43,11 @@ from proof_agent.contracts import (
     ResolvedKnowledgeBindingSet,
     RunPurpose,
     SharedModelConnection,
+)
+from proof_agent.control.workflow.node_context import build_workflow_node_context_preview
+from proof_agent.control.workflow.templates import (
+    list_workflow_templates,
+    resolve_workflow_template,
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.storage.run_store import RunStore
@@ -91,6 +97,46 @@ class ContractUpdateRequest(BaseModel):
     agent_yaml: str | None = None
     policy_yaml: str | None = None
     tools_yaml: str | None = None
+    actor: str = "local-user"
+
+
+class WorkflowNodePromptRequest(BaseModel):
+    """Request body fragment for node-level business Prompt settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    business_context: str | None = None
+    task_instructions: list[str] = Field(default_factory=list)
+    output_preferences: list[str] = Field(default_factory=list)
+
+
+class WorkflowNodeUpdateItemRequest(BaseModel):
+    """Request body item for one workflow node configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str = Field(min_length=1)
+    prompt: WorkflowNodePromptRequest = Field(default_factory=WorkflowNodePromptRequest)
+    context: dict[str, bool] = Field(default_factory=dict)
+
+
+class WorkflowNodesUpdateRequest(BaseModel):
+    """Request body for replacing Draft Agent workflow node configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_descriptor_version: str | None = None
+    nodes: list[WorkflowNodeUpdateItemRequest]
+    actor: str = "local-user"
+
+
+class WorkflowNodePreviewRequest(BaseModel):
+    """Request body for rendering one redacted Workflow Node Context Preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: WorkflowNodePromptRequest = Field(default_factory=WorkflowNodePromptRequest)
+    context: dict[str, bool] = Field(default_factory=dict)
     actor: str = "local-user"
 
 
@@ -1173,6 +1219,31 @@ def update_config_draft(
     return _draft_payload(draft)
 
 
+@router.get("/config/workflow-templates")
+def list_config_workflow_templates() -> dict[str, Any]:
+    """Return backend-owned Workflow Template Descriptors for Dashboard rendering."""
+
+    descriptors = list_workflow_templates()
+    return {
+        "data": [_workflow_template_payload(descriptor) for descriptor in descriptors],
+        "meta": {"total": len(descriptors)},
+    }
+
+
+@router.get("/config/workflow-templates/{template_id}")
+def get_config_workflow_template(template_id: str) -> dict[str, Any]:
+    """Return one backend-owned Workflow Template Descriptor."""
+
+    try:
+        descriptor = resolve_workflow_template(template_id)
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
+        ) from exc
+    return _workflow_template_payload(descriptor)
+
+
 @router.get("/config/agents/{agent_id}/drafts/{draft_id}/contract")
 def get_config_draft_contract(
     agent_id: str,
@@ -1329,6 +1400,89 @@ def update_config_draft_contract(
         actor=request.actor,
     )
     return updated.contract_bundle.model_dump(mode="json")
+
+
+@router.patch("/config/agents/{agent_id}/drafts/{draft_id}/workflow-nodes")
+def update_config_draft_workflow_nodes(
+    agent_id: str,
+    draft_id: str,
+    request: WorkflowNodesUpdateRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Replace Draft Agent workflow.nodes[] and validate the Agent Contract."""
+
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+    try:
+        raw = yaml.safe_load(draft.contract_bundle.agent_yaml)
+        if not isinstance(raw, dict):
+            raise ValueError("agent_yaml must be a mapping.")
+        workflow = raw.get("workflow")
+        if not isinstance(workflow, dict):
+            raise ValueError("agent_yaml workflow must be a mapping.")
+        if request.template_descriptor_version is not None:
+            workflow["template_descriptor_version"] = request.template_descriptor_version
+        workflow["nodes"] = [_workflow_node_request_payload(item) for item in request.nodes]
+        raw["workflow"] = workflow
+        agent_yaml = yaml.safe_dump(raw, sort_keys=False)
+        bundle = ContractBundle(
+            agent_yaml=agent_yaml,
+            policy_yaml=draft.contract_bundle.policy_yaml,
+            tools_yaml=draft.contract_bundle.tools_yaml,
+            extra_files=draft.contract_bundle.extra_files,
+            advanced_fields=draft.contract_bundle.advanced_fields,
+        )
+        candidate = _draft_with_contract_bundle(draft, bundle)
+        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        _resolve_draft_knowledge_bindings(store, manifest)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
+        ) from exc
+
+    updated = store.update_draft(
+        agent_id=agent_id,
+        draft_id=draft_id,
+        contract_bundle=bundle,
+        actor=request.actor,
+    )
+    return updated.contract_bundle.model_dump(mode="json")
+
+
+@router.post("/config/agents/{agent_id}/drafts/{draft_id}/workflow-nodes/{node_id}/preview")
+def preview_config_draft_workflow_node(
+    agent_id: str,
+    draft_id: str,
+    node_id: str,
+    request: WorkflowNodePreviewRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Render a redacted Workflow Node Context Preview without executing a run."""
+
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+    try:
+        package_dir = compile_draft_agent(draft, store.root_dir / "compiled_preview")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        descriptor = resolve_workflow_template(manifest.workflow.template)
+        return build_workflow_node_context_preview(
+            descriptor=descriptor,
+            node_id=node_id,
+            prompt=_workflow_node_prompt_request_payload(request.prompt),
+            context_options=request.context,
+            sample_context=_workflow_node_sample_context(manifest),
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
+        ) from exc
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/validate")
@@ -1565,6 +1719,50 @@ def _agent_summary_payload(
         "version_count": len(versions),
         "active_version_id": active.version_id if active else None,
         "updated_at": latest_draft.updated_at if latest_draft else None,
+    }
+
+
+def _workflow_template_payload(descriptor: Any) -> dict[str, Any]:
+    payload = asdict(descriptor)
+    payload["nodes"] = [asdict(node) for node in descriptor.nodes]
+    return payload
+
+
+def _workflow_node_request_payload(item: WorkflowNodeUpdateItemRequest) -> dict[str, Any]:
+    payload: dict[str, Any] = {"node_id": item.node_id}
+    prompt = _workflow_node_prompt_request_payload(item.prompt)
+    if prompt:
+        payload["prompt"] = prompt
+    if item.context:
+        payload["context"] = dict(item.context)
+    return payload
+
+
+def _workflow_node_prompt_request_payload(
+    prompt: WorkflowNodePromptRequest,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if prompt.business_context:
+        payload["business_context"] = prompt.business_context
+    if prompt.task_instructions:
+        payload["task_instructions"] = list(prompt.task_instructions)
+    if prompt.output_preferences:
+        payload["output_preferences"] = list(prompt.output_preferences)
+    return payload
+
+
+def _workflow_node_sample_context(manifest: Any) -> dict[str, Any]:
+    return {
+        "agent_purpose": manifest.purpose,
+        "bound_knowledge_sources": [
+            binding.source_ref.source_id for binding in manifest.knowledge_bindings
+        ],
+        "bound_tools": str(manifest.tools.file),
+        "policy_outline": str(manifest.policy.file),
+        "response_disclosure_policy": (
+            manifest.response.model_dump(mode="json") if manifest.response else {}
+        ),
+        "memory_scope": manifest.memory.model_dump(mode="json"),
     }
 
 

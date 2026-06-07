@@ -6,8 +6,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindKnowledgeSourceToDraft,
   createModelConnection,
+  fetchWorkflowTemplate,
   fetchKnowledgeSources,
   fetchModelConnections,
+  previewWorkflowNodeContext,
+  updateWorkflowNodes,
   validateConfigDraft,
 } from '../../api/client'
 import type { DraftValidationResponse } from '../../api/types'
@@ -17,12 +20,15 @@ vi.mock('../../api/client', () => ({
   bindKnowledgeSourceToDraft: vi.fn(),
   chatUrl: (path: string) => `http://localhost:5174${path}`,
   createModelConnection: vi.fn(),
+  fetchWorkflowTemplate: vi.fn(),
   fetchKnowledgeSources: vi.fn(),
   fetchModelConnections: vi.fn(),
+  previewWorkflowNodeContext: vi.fn(),
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
   updateConfigDraft: vi.fn(),
   updateConfigDraftContract: vi.fn(),
+  updateWorkflowNodes: vi.fn(),
   validateConfigDraft: vi.fn(),
 }))
 
@@ -97,6 +103,59 @@ describe('AgentDetailPage', () => {
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(createModelConnection).mockRejectedValue(new Error('not mocked'))
+    vi.mocked(fetchWorkflowTemplate).mockResolvedValue({
+      name: 'react_enterprise_qa',
+      description: 'Controlled ReAct enterprise question answering.',
+      descriptor_version: 'react_enterprise_qa.v1',
+      nodes: [
+        {
+          node_id: 'plan',
+          label: 'Plan',
+          description: 'Propose the next governed action.',
+          predecessors: [],
+          successors: ['response'],
+          branch_conditions: { response: 'STOP' },
+          governed_handoff_points: [],
+          editable_prompt_fields: ['business_context', 'task_instructions', 'output_preferences'],
+          context_options: ['include_agent_purpose'],
+          input_summary: 'Question.',
+          output_summary: 'Action proposal.',
+          model_bearing: true,
+          required: true,
+        },
+        {
+          node_id: 'response',
+          label: 'Response',
+          description: 'Project governed outcome.',
+          predecessors: ['plan'],
+          successors: [],
+          branch_conditions: {},
+          governed_handoff_points: [],
+          editable_prompt_fields: ['business_context', 'task_instructions', 'output_preferences'],
+          context_options: ['include_outcome'],
+          input_summary: 'Outcome.',
+          output_summary: 'Final response.',
+          model_bearing: false,
+          required: true,
+        },
+      ],
+    })
+    vi.mocked(updateWorkflowNodes).mockResolvedValue({
+      ...mockContract,
+      agent_yaml: 'name: insurance\nworkflow:\n  template: react_enterprise_qa\n',
+    })
+    vi.mocked(previewWorkflowNodeContext).mockResolvedValue({
+      node_id: 'plan',
+      node_label: 'Plan',
+      harness_control_prompt_summary: 'Harness control prompt retained.',
+      structured_control_context: { agent_purpose: 'Answer governed insurance questions.' },
+      business_context_addendum: {
+        present: true,
+        text: 'Business Context:\nClaims context',
+        fields: ['business_context'],
+      },
+      summary: { node_id: 'plan', prompt_fields: ['business_context'] },
+    })
     mockDraft = {
       agent_id: 'agent-1',
       draft_id: 'draft-1',
@@ -157,6 +216,70 @@ describe('AgentDetailPage', () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
 
     expect(screen.getByPlaceholderText('Enter a test question...')).toBeInTheDocument()
+  })
+
+  it('loads workflow descriptor and saves node prompt configuration', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: `name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    type: memory
+`,
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+
+    expect(await screen.findByText('Relationship Map')).toBeInTheDocument()
+    expect(screen.getAllByText('Plan').length).toBeGreaterThan(0)
+    fireEvent.change(await screen.findByLabelText('Business Context'), {
+      target: { value: 'Claims context' },
+    })
+    fireEvent.click(screen.getByLabelText('include_agent_purpose'))
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
+
+    await waitFor(() => {
+      expect(previewWorkflowNodeContext).toHaveBeenCalledWith('agent-1', 'draft-1', 'plan', {
+        prompt: {
+          business_context: 'Claims context',
+          task_instructions: [],
+          output_preferences: [],
+        },
+        context: { include_agent_purpose: true },
+        actor: 'dashboard',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Nodes' }))
+
+    await waitFor(() => {
+      expect(updateWorkflowNodes).toHaveBeenCalledWith('agent-1', 'draft-1', {
+        template_descriptor_version: 'react_enterprise_qa.v1',
+        nodes: [
+          {
+            node_id: 'plan',
+            prompt: {
+              business_context: 'Claims context',
+              task_instructions: [],
+              output_preferences: [],
+            },
+            context: { include_agent_purpose: true },
+          },
+          {
+            node_id: 'response',
+            prompt: {
+              business_context: '',
+              task_instructions: [],
+              output_preferences: [],
+            },
+            context: {},
+          },
+        ],
+        actor: 'dashboard',
+      })
+    })
   })
 
   it('shows chat entry actions for the active Published Agent version', () => {

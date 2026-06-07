@@ -17,8 +17,11 @@ import {
   fetchQuarantinedKnowledgeUploads,
   freezeCandidateKnowledgeSourceSnapshot,
   fetchRuns,
+  fetchWorkflowTemplate,
+  fetchWorkflowTemplates,
   importConfigAgent,
   permanentlyDeleteKnowledgeSource,
+  previewWorkflowNodeContext,
   publishConfigDraft,
   retryKnowledgeIngestionJob,
   restoreKnowledgeSource,
@@ -27,6 +30,7 @@ import {
   smokeTestModelConnection,
   updateModelConnection,
   updateConfigDraftContract,
+  updateWorkflowNodes,
   updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocument,
   uploadKnowledgeDocuments,
@@ -81,6 +85,108 @@ test('fetchConfigAgents requests Agent Configuration list', async () => {
   await fetchConfigAgents()
 
   expect(fetchMock).toHaveBeenCalledWith('/api/config/agents', undefined)
+})
+
+test('workflow template client methods use descriptor endpoints', async () => {
+  const descriptor = {
+    name: 'react_enterprise_qa',
+    description: 'Controlled ReAct enterprise question answering.',
+    descriptor_version: 'react_enterprise_qa.v1',
+    nodes: [{ node_id: 'plan', label: 'Plan', successors: ['response'] }],
+  }
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [descriptor], meta: { total: 1 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(descriptor), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+  await fetchWorkflowTemplates()
+  await fetchWorkflowTemplate('react_enterprise_qa')
+
+  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/config/workflow-templates', undefined)
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    '/api/config/workflow-templates/react_enterprise_qa',
+    undefined,
+  )
+})
+
+test('workflow node update and preview use Agent Configuration endpoints', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ agent_yaml: 'name: enterprise_qa' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        node_id: 'plan',
+        node_label: 'Plan',
+        business_context_addendum: { present: true, text: 'Claims context', fields: [] },
+        structured_control_context: {},
+        summary: { node_id: 'plan' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+  const node = {
+    node_id: 'plan',
+    prompt: {
+      business_context: 'Claims context',
+      task_instructions: ['Prefer retrieval first.'],
+      output_preferences: ['Keep concise.'],
+    },
+    context: { include_agent_purpose: true },
+  }
+
+  await updateWorkflowNodes('enterprise_qa', 'draft_1', {
+    template_descriptor_version: 'react_enterprise_qa.v1',
+    nodes: [node],
+    actor: 'dashboard',
+  })
+  await previewWorkflowNodeContext('enterprise_qa', 'draft_1', 'plan', {
+    prompt: node.prompt,
+    context: node.context,
+    actor: 'dashboard',
+  })
+
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    1,
+    '/api/config/agents/enterprise_qa/drafts/draft_1/workflow-nodes',
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template_descriptor_version: 'react_enterprise_qa.v1',
+        nodes: [node],
+        actor: 'dashboard',
+      }),
+    },
+  )
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    '/api/config/agents/enterprise_qa/drafts/draft_1/workflow-nodes/plan/preview',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: node.prompt,
+        context: node.context,
+        actor: 'dashboard',
+      }),
+    },
+  )
 })
 
 test('knowledge source client methods use shared source endpoints', async () => {

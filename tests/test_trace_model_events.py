@@ -14,6 +14,7 @@ from proof_agent.contracts import TraceEventType
 
 def test_trace_event_types_include_react_review_events() -> None:
     values = {event.value for event in TraceEventType}
+    assert "workflow_node_context_applied" in values
     assert "reasoning_summary" in values
     assert "action_proposal" in values
     assert "review_requested" in values

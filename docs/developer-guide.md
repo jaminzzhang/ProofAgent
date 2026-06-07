@@ -219,6 +219,52 @@ Current v1 config constraints:
 - `policy.file`, `tools.file`, and provider-specific paths under `package_knowledge_sources[].params` must exist.
 - The parent directories of `audit.trace_path` and `audit.receipt_path` must be writable.
 
+### Workflow Node Prompt Configuration
+
+`react_enterprise_qa` supports governed node-level business context under
+`workflow.nodes[]`. This is intentionally lightweight: it configures Prompt addenda and
+context inclusion for registered template nodes, while the Harness keeps ownership of
+control prompts, topology, policy gates, validators, tool approval, trace, and receipt.
+
+Example:
+
+```yaml
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  template_descriptor_version: react_enterprise_qa.v1
+  nodes:
+    - node_id: plan
+      prompt:
+        business_context: "Insurance claim servicing context."
+        task_instructions:
+          - "Prefer governed retrieval before final answers."
+        output_preferences:
+          - "Keep summaries concise."
+      context:
+        include_agent_purpose: true
+        include_bound_tools: true
+    - node_id: model_answer
+      prompt:
+        business_context: "Answer as an internal claims quality reviewer."
+      context:
+        include_agent_purpose: true
+        include_evidence_summary: true
+```
+
+Rules:
+
+- `workflow.nodes[]` is accepted only for `react_enterprise_qa`; `enterprise_qa`
+  remains a deterministic read-only baseline.
+- `node_id` must match the backend Workflow Template Descriptor.
+- Prompt fields are limited to `business_context`, `task_instructions`, and
+  `output_preferences`.
+- Context options must be allowlisted by the descriptor for that node.
+- Node Prompt text is appended as Business Context Addendum. It never replaces the
+  Harness-owned system/control prompt.
+- Trace events record only summary metadata such as configured fields, selected context
+  options, counts, and redaction status.
+
 Controlled ReAct adds these sections to `agent.yaml`:
 
 ```yaml

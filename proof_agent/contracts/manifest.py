@@ -14,10 +14,34 @@ class CheckpointerConfig(FrozenModel):
     uri: str | None = None
 
 
+class WorkflowNodePromptConfig(FrozenModel):
+    business_context: str = ""
+    task_instructions: tuple[str, ...] = Field(default_factory=tuple)
+    output_preferences: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class WorkflowNodeContextConfig(FrozenModel):
+    options: Mapping[str, bool] = Field(default_factory=FrozenDict)
+
+    @field_validator("options", mode="after")
+    @classmethod
+    def freeze_options(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class WorkflowNodeConfig(FrozenModel):
+    node_id: str
+    prompt: WorkflowNodePromptConfig = Field(default_factory=WorkflowNodePromptConfig)
+    context: WorkflowNodeContextConfig = Field(default_factory=WorkflowNodeContextConfig)
+
+
 class WorkflowConfig(FrozenModel):
     runtime: str
     template: str
     checkpointer: CheckpointerConfig | None = None
+    template_descriptor_version: str | None = None
+    nodes: tuple[WorkflowNodeConfig, ...] = Field(default_factory=tuple)
+
 
 
 class KnowledgeConfig(FrozenModel):

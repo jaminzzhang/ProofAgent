@@ -24,6 +24,9 @@ from proof_agent.contracts import (
     ReviewSubagentConfig,
     ToolsConfig,
     WorkflowConfig,
+    WorkflowNodeConfig,
+    WorkflowNodeContextConfig,
+    WorkflowNodePromptConfig,
 )
 from proof_agent.contracts.manifest import CheckpointerConfig
 
@@ -56,6 +59,11 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             runtime=workflow["runtime"],
             template=workflow["template"],
             checkpointer=_checkpointer_config_from_mapping(workflow.get("checkpointer")),
+            template_descriptor_version=workflow.get("template_descriptor_version"),
+            nodes=tuple(
+                _workflow_node_config_from_mapping(item)
+                for item in workflow.get("nodes", ())
+            ),
         ),
         package_knowledge_sources=tuple(
             _package_knowledge_source_config_from_mapping(item, base_dir=base_dir)
@@ -223,6 +231,32 @@ def _checkpointer_config_from_mapping(raw: Any) -> CheckpointerConfig | None:
     return CheckpointerConfig(
         provider=raw["provider"],
         uri=raw.get("uri"),
+    )
+
+
+def _workflow_node_config_from_mapping(raw: Any) -> WorkflowNodeConfig:
+    if not isinstance(raw, dict):
+        raise TypeError("workflow.nodes entries must be mappings")
+    prompt = raw.get("prompt", {})
+    if prompt is None:
+        prompt = {}
+    if not isinstance(prompt, dict):
+        raise TypeError("workflow.nodes[].prompt must be a mapping")
+    context = raw.get("context", {})
+    if context is None:
+        context = {}
+    if not isinstance(context, dict):
+        raise TypeError("workflow.nodes[].context must be a mapping")
+    return WorkflowNodeConfig(
+        node_id=raw["node_id"],
+        prompt=WorkflowNodePromptConfig(
+            business_context=prompt.get("business_context", ""),
+            task_instructions=tuple(prompt.get("task_instructions", ())),
+            output_preferences=tuple(prompt.get("output_preferences", ())),
+        ),
+        context=WorkflowNodeContextConfig(
+            options={str(key): bool(value) for key, value in context.items()},
+        ),
     )
 
 

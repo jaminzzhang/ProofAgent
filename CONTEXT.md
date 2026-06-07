@@ -46,13 +46,49 @@ _Avoid_: Framework-owned business tool registry, ungoverned function call
 A reusable governed flow shape for a class of Agents, such as enterprise question answering.
 _Avoid_: One-off orchestrator branch, runtime graph
 
+**Workflow Template Descriptor**:
+The backend-owned, read-only description of a registered Workflow Template's nodes, branch relationships, governed handoff points, editable Prompt fields, and allowed context options used by Dashboard to render Workflow Relationship Map and Workflow Node Panel.
+_Avoid_: Frontend-hardcoded workflow graph, Agent-authored node registry, runtime graph source of truth
+
+**Workflow Template Descriptor Version**:
+The immutable version identifier for the Workflow Template Descriptor used to validate, render, publish, and later explain a Published Agent Version's Workflow Node Prompt Configuration.
+_Avoid_: Latest template lookup for historical runs, mutable Dashboard graph version, frontend descriptor version
+
 **Workflow Template Node Configuration**:
 The editable per-node settings exposed by a registered Workflow Template while preserving the template's governed node types, ordering constraints, and Control Envelope semantics.
 _Avoid_: Free-form runtime graph editing, arbitrary node creation, prompt-defined workflow
 
+**Workflow Node Prompt Configuration**:
+The Agent-owner-editable business Prompt and structured context settings attached to a registered Workflow Template node so Proof Agent can provide fuller task context while preserving Harness-owned control prompts, node order, policy gates, validators, and trace semantics.
+_Avoid_: Prompt-defined workflow, raw chain-of-thought instruction, hidden policy override, arbitrary node prompt
+
+**Business Context Addendum**:
+The runtime injection form of Workflow Node Prompt Configuration appended to a governed node's structured model context after Proof Agent's Harness-owned control prompt and Structured Control Context, without replacing JSON contracts, action sets, policy authority, validators, or Tool Gateway behavior.
+_Avoid_: System prompt override, developer prompt override, control prompt replacement, policy bypass context
+
 **Workflow Node Panel**:
 The first UI representation of Workflow Template Node Configuration as an ordered, expandable node list rather than a drag-and-drop canvas.
 _Avoid_: Free-form workflow canvas, runtime graph layout, node layout source of truth
+
+**Workflow Relationship Map**:
+The Dashboard-visible, read-only representation of a Workflow Template's node order, branch conditions, predecessor and successor relationships, and governed handoff points so Agent owners can understand how node Prompt configuration affects surrounding execution context.
+_Avoid_: Editable runtime graph, drag-and-drop edge editor, hidden workflow source of truth
+
+**Workflow Node Context Preview**:
+The Dashboard configuration preview that renders a redacted, length-bounded sample of Harness Control Prompt summary, selected Structured Control Context, and Business Context Addendum for one Workflow Template node without calling a model, executing a tool, or writing run trace.
+_Avoid_: Test run, model preview call, raw prompt dump, execution simulation
+
+**Workflow Node Prompt Validation**:
+The Draft Agent and Agent Validation Run checks that ensure Workflow Node Prompt Configuration references only registered node ids, editable Prompt fields, allowed context options, safe bounded text, and runtime assembly paths that cannot replace Harness-owned control prompts or bypass governance.
+_Avoid_: Prompt lint only, optional UI warning, runtime-only prompt repair
+
+**Model-Bearing Workflow Node**:
+A Workflow Template node whose governed execution includes a model call, so its Business Context Addendum may enter that node's Harness-normalized model request as structured context after the Harness-owned control prompt.
+_Avoid_: Any node with text settings, direct prompt executor, model-owned policy node
+
+**Non-Model Governed Node**:
+A Workflow Template node that does not directly call a model, where Workflow Node Prompt Configuration can only affect adjacent reviewed context summaries, deterministic wording preferences, or trace-safe configuration summaries without changing retrieval, tool, memory, policy, validator, or response execution logic.
+_Avoid_: Hidden model call, prompt-driven tool execution, prompt-driven retrieval behavior
 
 **Controlled ReAct Workflow**:
 A Workflow Template where a model proposes reasoning steps and action proposals, while the Control Envelope governs whether each step may execute.

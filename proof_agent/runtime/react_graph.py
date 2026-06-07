@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import operator
+from collections.abc import Mapping
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -33,6 +34,10 @@ from proof_agent.control.workflow.harness_helpers import (
     model_response_payload,
     system_prompt_length,
     validate_model_output,
+)
+from proof_agent.control.workflow.node_context import (
+    build_workflow_node_context_preview,
+    workflow_node_context_summary,
 )
 from proof_agent.control.workflow.react_enterprise_qa import (
     clarification_message,
@@ -73,7 +78,48 @@ def build_react_enterprise_qa_graph(
     max_steps = react.max_steps if react is not None else 0
     max_tool_calls = react.max_tool_calls if react is not None else 0
     auto_review_enabled = bool(manifest.review and manifest.review.mode == "auto")
+    workflow_node_configs = {node.node_id: node for node in manifest.workflow.nodes}
     _wrap_control_plane_model_providers(invocation, trace)
+
+    def configured_node_context(
+        node_id: str,
+        state: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        config = workflow_node_configs.get(node_id)
+        if config is None:
+            return None
+        preview = build_workflow_node_context_preview(
+            descriptor=invocation.template,
+            node_id=node_id,
+            prompt=config.prompt,
+            context_options=config.context.options,
+            sample_context=_workflow_node_runtime_sample_context(
+                invocation=invocation,
+                state=state,
+                conversation_context=conversation_context,
+            ),
+        )
+        summary = workflow_node_context_summary(preview)
+        if _workflow_node_summary_has_context(summary):
+            descriptor_node = invocation.template.node(node_id)
+            trace.emit(
+                "workflow_node_context_applied",
+                status="ok",
+                payload={
+                    **summary,
+                    "node_label": descriptor_node.label,
+                    "model_bearing": descriptor_node.model_bearing,
+                    "template_descriptor_version": (
+                        manifest.workflow.template_descriptor_version
+                        or invocation.template.descriptor_version
+                    ),
+                },
+            )
+        return {
+            "business_context_addendum": preview["business_context_addendum"],
+            "structured_control_context": preview["structured_control_context"],
+            "summary": summary,
+        }
 
     def plan_node(state: ReActGraphState) -> dict[str, Any]:
         step_count = int(state.get("step_count", 0))
@@ -85,10 +131,12 @@ def build_react_enterprise_qa_graph(
             )
 
         try:
+            node_context = configured_node_context("plan", state)
             proposal = invocation.react_planner.plan(
                 question=state["question"],
                 system_prompt="Use governed ReAct planning without raw chain-of-thought.",
                 context_summary="",
+                workflow_node_context=node_context,
             )
         except ModelOutputNormalizationError as exc:
             trace.emit(
@@ -111,6 +159,7 @@ def build_react_enterprise_qa_graph(
 
     def clarify_node(state: ReActGraphState) -> dict[str, Any]:
         proposal = _proposal_from_state(state)
+        configured_node_context("clarification", state)
         message = clarification_message(proposal)
         trace.emit(
             "clarification_requested",
@@ -120,14 +169,17 @@ def build_react_enterprise_qa_graph(
                 "missing_fields": list(proposal.parameters.get("missing_fields", ())),
             },
         )
-        return {
+        result = {
             "governance_refusal": ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION,
             "governance_message": message,
             "final_output": message,
         }
+        configured_node_context("response", {**state, **result})
+        return result
 
     def review_retrieval_plan_node(state: ReActGraphState) -> dict[str, Any]:
         proposal = _proposal_from_state(state)
+        node_context = configured_node_context("retrieval_review", state)
         context = {
             "question": state["question"],
             "query": proposal.parameters.get("query", state["question"]),
@@ -136,6 +188,8 @@ def build_react_enterprise_qa_graph(
             "top_k": manifest.retrieval.top_k,
             "review_fallback_decision": PolicyDecisionType.DENY.value,
         }
+        if node_context is not None:
+            context["workflow_node_context_summary"] = node_context["summary"]
         decision, review_event = review_action(
             trace=trace,
             policy=invocation.policy,
@@ -155,6 +209,7 @@ def build_react_enterprise_qa_graph(
 
     def retrieval_node(state: ReActGraphState) -> dict[str, Any]:
         proposal = _proposal_from_state(state)
+        configured_node_context("retrieval", state)
         retrieval_query = str(proposal.parameters.get("query") or state["question"])
         step_proposal = _retrieval_step_action_proposal(retrieval_query)
         step_context = {
@@ -213,6 +268,7 @@ def build_react_enterprise_qa_graph(
         emit_policy_decision(trace, answer_decision)
 
         memory = invocation.create_memory()
+        configured_node_context("memory", state)
         memory_result = memory.write({"summary": f"Question: {state['question']}"})
         trace.emit(
             "memory_write_decision",
@@ -239,12 +295,14 @@ def build_react_enterprise_qa_graph(
 
     def model_node(state: ReActGraphState) -> dict[str, Any]:
         evidence = tuple(EvidenceChunk.model_validate(chunk) for chunk in state.get("evidence", []))
+        node_context = configured_node_context("model_answer", state)
         model_request = build_model_request(
             question=state["question"],
             evidence=evidence,
             provider=invocation.model_provider.provider_name,
             model=invocation.model_provider.model_name,
             conversation_context=conversation_context,
+            workflow_node_context=node_context,
         )
         estimated_tokens = invocation.model_provider.estimate_tokens(model_request)
         proposal = _model_action_proposal(state["question"])
@@ -258,6 +316,8 @@ def build_react_enterprise_qa_graph(
             "accepted_evidence_count": len(evidence),
             "citations_present": bool(evidence),
         }
+        if node_context is not None:
+            context["workflow_node_context_summary"] = node_context["summary"]
         decision, review_event = review_action(
             trace=trace,
             policy=invocation.policy,
@@ -319,17 +379,21 @@ def build_react_enterprise_qa_graph(
                 },
             )
         if any(validation.status == "failed" for validation in validation_results):
-            return {
+            result = {
                 "review_results": [review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot answer because the model output failed validation.",
             }
-        return {
+            configured_node_context("response", {**state, **result})
+            return result
+        result = {
             "review_results": [review_event],
             "final_output": model_response.content,
             "governance_refusal": outcome,
             "governance_message": model_response.content,
         }
+        configured_node_context("response", {**state, **result})
+        return result
 
     def review_tool_node(state: ReActGraphState) -> dict[str, Any]:
         proposal = _proposal_from_state(state)
@@ -338,11 +402,14 @@ def build_react_enterprise_qa_graph(
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot run the requested tool because the tool call budget is exhausted.",
             }
+        node_context = configured_node_context("tool_review", state)
         context = {
             "tool_name": proposal.target_tool_name,
             "risk_level": proposal.risk_level,
             "parameters": dict(proposal.parameters),
         }
+        if node_context is not None:
+            context["workflow_node_context_summary"] = node_context["summary"]
         decision, review_event = review_action(
             trace=trace,
             policy=invocation.policy,
@@ -366,6 +433,7 @@ def build_react_enterprise_qa_graph(
 
     def tool_node(state: ReActGraphState) -> dict[str, Any]:
         proposal = _proposal_from_state(state)
+        configured_node_context("tool", state)
         tool_name = proposal.target_tool_name or ""
         parameters = dict(proposal.parameters)
         tool_policy_decision = PolicyDecisionType(
@@ -388,10 +456,12 @@ def build_react_enterprise_qa_graph(
                 status="waiting",
                 payload={"tool_name": tool_name, "state": gateway_result.approval_state.state},
             )
-            return {
+            result = {
                 "governance_refusal": ReceiptOutcome.WAITING_FOR_APPROVAL,
                 "governance_message": f"Waiting for approval before {tool_name} can execute.",
             }
+            configured_node_context("response", {**state, **result})
+            return result
         if tool_policy_decision == PolicyDecisionType.REQUIRE_APPROVAL and approved is False:
             denied = create_approval_state(
                 run_id=trace.run_id,
@@ -405,10 +475,12 @@ def build_react_enterprise_qa_graph(
                 status="blocked",
                 payload={"tool_name": denied.tool_name, "state": denied.state.value},
             )
-            return {
+            result = {
                 "governance_refusal": ReceiptOutcome.TOOL_APPROVAL_DENIED,
                 "governance_message": f"The {tool_name} tool was not run because approval was denied.",
             }
+            configured_node_context("response", {**state, **result})
+            return result
 
         gateway_result = _request_tool_or_refuse(
             invocation=invocation,
@@ -423,11 +495,13 @@ def build_react_enterprise_qa_graph(
         trace.emit("approval_granted", status="ok", payload={"tool_name": tool_name})
         trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
         message = "Customer policy status is active according to the approved mock lookup."
-        return {
+        result = {
             "final_output": message,
             "governance_refusal": ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             "governance_message": message,
         }
+        configured_node_context("response", {**state, **result})
+        return result
 
     def route_after_plan(state: ReActGraphState) -> str:
         if state.get("governance_refusal"):
@@ -744,6 +818,85 @@ def _reasoning_summary_state_dict(proposal: ReActActionProposal) -> dict[str, An
         "risk_flags": list(summary.risk_flags),
         "required_evidence": list(summary.required_evidence),
     }
+
+
+def _workflow_node_runtime_sample_context(
+    *,
+    invocation: HarnessInvocation,
+    state: Mapping[str, Any],
+    conversation_context: ContextAdmission | None,
+) -> dict[str, Any]:
+    manifest = invocation.manifest
+    proposal: ReActActionProposal | None = None
+    if state.get("action") is not None:
+        proposal = ReActActionProposal.model_validate(state["action"])
+    evidence = list(state.get("evidence", []))
+    outcome = state.get("governance_refusal")
+    recent_conversation_summary = ""
+    if conversation_context is not None and conversation_context.admitted:
+        recent_conversation_summary = conversation_context.summary
+    return {
+        "agent_purpose": manifest.purpose,
+        "recent_conversation_summary": recent_conversation_summary,
+        "bound_knowledge_sources": [
+            binding.source_ref.source_id for binding in manifest.knowledge_bindings
+        ],
+        "bound_tools": str(manifest.tools.file),
+        "policy_outline": str(manifest.policy.file),
+        "missing_field_schema": (
+            list(proposal.parameters.get("missing_fields", ()))
+            if proposal is not None
+            else []
+        ),
+        "retrieval_intent": (
+            proposal.parameters.get("query", state.get("question", ""))
+            if proposal is not None
+            else state.get("question", "")
+        ),
+        "source_routing_metadata": [
+            dict(item.get("metadata", {})) for item in evidence if isinstance(item, dict)
+        ],
+        "evidence_summary": [
+            {
+                "source": item.get("source"),
+                "citation": item.get("citation"),
+                "status": item.get("status"),
+            }
+            for item in evidence
+            if isinstance(item, dict)
+        ],
+        "citation_requirements": "Final answers must be grounded in accepted evidence citations.",
+        "response_disclosure_policy": (
+            manifest.response.model_dump(mode="json") if manifest.response else {}
+        ),
+        "tool_proposal": (
+            {
+                "tool_name": proposal.target_tool_name,
+                "risk_level": proposal.risk_level,
+                "parameters": dict(proposal.parameters),
+            }
+            if proposal is not None and proposal.target_tool_name
+            else {}
+        ),
+        "tool_contract_summary": str(manifest.tools.file),
+        "approval_requirements": "Medium-risk tool access requires Harness approval.",
+        "approval_state": state.get("tool_policy_decision") or "",
+        "parameter_bounds": dict(proposal.parameters) if proposal is not None else {},
+        "memory_scope": manifest.memory.model_dump(mode="json"),
+        "memory_denylist_summary": sorted(invocation.memory_deny_fields),
+        "outcome": outcome.value if isinstance(outcome, ReceiptOutcome) else str(outcome or ""),
+        "governance_summary": list(state.get("review_results", [])),
+    }
+
+
+def _workflow_node_summary_has_context(summary: dict[str, Any]) -> bool:
+    return bool(
+        summary.get("prompt_fields")
+        or summary.get("context_options")
+        or summary.get("business_context_length", 0)
+        or summary.get("task_instruction_count", 0)
+        or summary.get("output_preference_count", 0)
+    )
 
 
 def _jsonable(value: Any) -> Any:

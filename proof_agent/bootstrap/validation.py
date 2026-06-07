@@ -7,6 +7,7 @@ from urllib import parse
 from uuid import uuid4
 
 from proof_agent.contracts import AgentManifest
+from proof_agent.control.workflow.templates import resolve_workflow_template
 from proof_agent.errors import ProofAgentError
 
 
@@ -35,6 +36,30 @@ SUPPORTED_MODEL_PROVIDERS = {
     "anthropic",
 }
 SUPPORTED_CHECKPOINTER_PROVIDERS = {"sqlite"}
+MAX_WORKFLOW_NODE_BUSINESS_CONTEXT_CHARS = 2000
+MAX_WORKFLOW_NODE_INSTRUCTION_COUNT = 10
+MAX_WORKFLOW_NODE_INSTRUCTION_CHARS = 500
+MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT = 10
+MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_CHARS = 300
+MAX_WORKFLOW_NODE_TOTAL_PROMPT_CHARS = 12000
+FORBIDDEN_WORKFLOW_NODE_PROMPT_PHRASES = (
+    "system_prompt",
+    "developer_prompt",
+    "ignore policy",
+    "bypass approval",
+    "reveal chain-of-thought",
+    "ignore evidence",
+    "call tool directly",
+    "override validator",
+)
+FORBIDDEN_WORKFLOW_NODE_PROMPT_SECRET_PARTS = (
+    "api_key",
+    "authorization",
+    "bearer",
+    "password",
+    "secret",
+    "access_token",
+)
 FORBIDDEN_KNOWLEDGE_PARAM_PARTS = (
     "api_key",
     "authorization",
@@ -241,6 +266,7 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
             artifact_path=manifest_path,
         )
     _validate_checkpointer_config(manifest, manifest_path=manifest_path)
+    _validate_workflow_node_config(manifest, manifest_path=manifest_path)
     _validate_react_config(manifest, manifest_path=manifest_path)
     _validate_review_config(manifest, manifest_path=manifest_path)
     _validate_knowledge_sources_and_bindings(manifest, manifest_path=manifest_path)
@@ -350,6 +376,165 @@ def _validate_checkpointer_config(manifest: AgentManifest, *, manifest_path: Pat
             f"Supported workflow checkpointer providers: {', '.join(sorted(SUPPORTED_CHECKPOINTER_PROVIDERS))}.",
             artifact_path=manifest_path,
         )
+
+
+def _validate_workflow_node_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    nodes = manifest.workflow.nodes
+    if not nodes:
+        return
+    if manifest.workflow.template != "react_enterprise_qa":
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "workflow.nodes is only supported for react_enterprise_qa",
+            "Remove workflow.nodes or set workflow.template: react_enterprise_qa.",
+            artifact_path=manifest_path,
+        )
+
+    descriptor = resolve_workflow_template(manifest.workflow.template)
+    if (
+        manifest.workflow.template_descriptor_version is not None
+        and manifest.workflow.template_descriptor_version != descriptor.descriptor_version
+    ):
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "workflow.template_descriptor_version does not match registered template descriptor",
+            f"Set workflow.template_descriptor_version to {descriptor.descriptor_version}.",
+            artifact_path=manifest_path,
+        )
+
+    seen_node_ids: set[str] = set()
+    total_prompt_chars = 0
+    for node_config in nodes:
+        if node_config.node_id in seen_node_ids:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"duplicate workflow node_id: {node_config.node_id}",
+                "Use each workflow.nodes[].node_id at most once.",
+                artifact_path=manifest_path,
+            )
+        seen_node_ids.add(node_config.node_id)
+        node_descriptor = descriptor.node(node_config.node_id)
+        configured_prompt_fields = _configured_workflow_prompt_fields(node_config.prompt)
+        unsupported_prompt_fields = sorted(
+            field
+            for field in configured_prompt_fields
+            if field not in node_descriptor.editable_prompt_fields
+        )
+        if unsupported_prompt_fields:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"unsupported prompt field for workflow node {node_config.node_id}: {', '.join(unsupported_prompt_fields)}",
+                f"Use editable Prompt fields: {', '.join(node_descriptor.editable_prompt_fields)}.",
+                artifact_path=manifest_path,
+            )
+
+        unsupported_context_options = sorted(
+            option
+            for option in node_config.context.options
+            if option not in node_descriptor.context_options
+        )
+        if unsupported_context_options:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"unsupported context option for workflow node {node_config.node_id}: {', '.join(unsupported_context_options)}",
+                f"Use context options: {', '.join(node_descriptor.context_options)}.",
+                artifact_path=manifest_path,
+            )
+
+        total_prompt_chars += _validate_workflow_node_prompt_text(
+            node_config.node_id,
+            node_config.prompt.business_context,
+            "business_context",
+            MAX_WORKFLOW_NODE_BUSINESS_CONTEXT_CHARS,
+            manifest_path=manifest_path,
+        )
+        if len(node_config.prompt.task_instructions) > MAX_WORKFLOW_NODE_INSTRUCTION_COUNT:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"workflow node {node_config.node_id} task_instructions has too many items",
+                f"Use at most {MAX_WORKFLOW_NODE_INSTRUCTION_COUNT} task_instructions.",
+                artifact_path=manifest_path,
+            )
+        for instruction in node_config.prompt.task_instructions:
+            total_prompt_chars += _validate_workflow_node_prompt_text(
+                node_config.node_id,
+                instruction,
+                "task_instructions",
+                MAX_WORKFLOW_NODE_INSTRUCTION_CHARS,
+                manifest_path=manifest_path,
+            )
+        if (
+            len(node_config.prompt.output_preferences)
+            > MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT
+        ):
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"workflow node {node_config.node_id} output_preferences has too many items",
+                f"Use at most {MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT} output_preferences.",
+                artifact_path=manifest_path,
+            )
+        for preference in node_config.prompt.output_preferences:
+            total_prompt_chars += _validate_workflow_node_prompt_text(
+                node_config.node_id,
+                preference,
+                "output_preferences",
+                MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_CHARS,
+                manifest_path=manifest_path,
+            )
+    if total_prompt_chars > MAX_WORKFLOW_NODE_TOTAL_PROMPT_CHARS:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "workflow node prompt text exceeds total size limit",
+            f"Use at most {MAX_WORKFLOW_NODE_TOTAL_PROMPT_CHARS} total prompt characters.",
+            artifact_path=manifest_path,
+        )
+
+
+def _configured_workflow_prompt_fields(prompt: object) -> tuple[str, ...]:
+    fields: list[str] = []
+    if getattr(prompt, "business_context", ""):
+        fields.append("business_context")
+    if getattr(prompt, "task_instructions", ()):
+        fields.append("task_instructions")
+    if getattr(prompt, "output_preferences", ()):
+        fields.append("output_preferences")
+    return tuple(fields)
+
+
+def _validate_workflow_node_prompt_text(
+    node_id: str,
+    value: str,
+    field_name: str,
+    max_chars: int,
+    *,
+    manifest_path: Path,
+) -> int:
+    if len(value) > max_chars:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"workflow node {node_id} {field_name} exceeds size limit",
+            f"Use at most {max_chars} characters for {field_name}.",
+            artifact_path=manifest_path,
+        )
+    normalized = value.lower()
+    if any(phrase in normalized for phrase in FORBIDDEN_WORKFLOW_NODE_PROMPT_PHRASES):
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "workflow node prompt contains forbidden governance override language",
+            (
+                "Remove instructions that override Harness prompts, policy, approval, "
+                "evidence, validators, tools, or chain-of-thought boundaries."
+            ),
+            artifact_path=manifest_path,
+        )
+    if any(part in normalized for part in FORBIDDEN_WORKFLOW_NODE_PROMPT_SECRET_PARTS):
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "workflow node prompt contains secret-looking text",
+            "Remove secrets and credential-like values from workflow node Prompt configuration.",
+            artifact_path=manifest_path,
+        )
+    return len(value)
 
 
 def _validate_memory_config(manifest: AgentManifest, *, manifest_path: Path) -> None:

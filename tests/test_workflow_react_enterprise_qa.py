@@ -33,6 +33,15 @@ def _event_types(events: list[dict[str, Any]]) -> list[str]:
     return [event["event_type"] for event in events]
 
 
+def _final_answer_model_request(events: list[dict[str, Any]]) -> dict[str, Any]:
+    return next(
+        event
+        for event in events
+        if event["event_type"] == "model_request"
+        and event["payload"].get("role") == "final_answer"
+    )
+
+
 def test_supported_travel_meal_question_answers_with_react_review_trace(
     tmp_path: Path,
 ) -> None:
@@ -65,6 +74,81 @@ def test_supported_travel_meal_question_answers_with_react_review_trace(
     assert event_types.count("policy_decision") == 4
     assert "model_request" in event_types
     assert "model_response" in event_types
+
+
+def test_workflow_node_context_extends_model_prompt_without_replacing_system_prompt(
+    tmp_path: Path,
+) -> None:
+    baseline = run_with_langgraph(
+        REACT_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "baseline",
+    )
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v1"
+    manifest["workflow"]["nodes"] = [
+        {
+            "node_id": "plan",
+            "prompt": {
+                "business_context": "Insurance claim context for regulated advisors.",
+            },
+            "context": {"include_agent_purpose": True},
+        },
+        {
+            "node_id": "model_answer",
+            "prompt": {
+                "business_context": "Answer as an internal claims quality reviewer.",
+                "task_instructions": ["Keep the answer anchored to accepted evidence."],
+            },
+            "context": {
+                "include_agent_purpose": True,
+                "include_evidence_summary": True,
+            },
+        },
+    ]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    configured = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "configured",
+    )
+
+    assert configured.outcome == "ANSWERED_WITH_CITATIONS"
+    baseline_events = _trace_events(baseline.trace_path)
+    configured_events = _trace_events(configured.trace_path)
+    baseline_answer_request = _final_answer_model_request(baseline_events)
+    configured_answer_request = _final_answer_model_request(configured_events)
+
+    assert configured_answer_request["payload"]["system_prompt_length"] == (
+        baseline_answer_request["payload"]["system_prompt_length"]
+    )
+    assert configured_answer_request["payload"]["prompt_length"] > (
+        baseline_answer_request["payload"]["prompt_length"]
+    )
+
+    context_events = [
+        event
+        for event in configured_events
+        if event["event_type"] == "workflow_node_context_applied"
+    ]
+    assert {event["payload"]["node_id"] for event in context_events} >= {
+        "plan",
+        "model_answer",
+    }
+    model_answer_context = next(
+        event for event in context_events if event["payload"]["node_id"] == "model_answer"
+    )
+    assert model_answer_context["payload"]["prompt_fields"] == [
+        "business_context",
+        "task_instructions",
+    ]
+    trace_text = configured.trace_path.read_text(encoding="utf-8")
+    assert "Answer as an internal claims quality reviewer." not in trace_text
+    assert "Keep the answer anchored to accepted evidence." not in trace_text
 
 
 def test_unsupported_discount_question_refuses_without_evidence(tmp_path: Path) -> None:
