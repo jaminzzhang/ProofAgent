@@ -10,7 +10,8 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 2. `technical-design.md` — authoritative architecture and implementation boundaries.
 3. `feasibility-analysis.md` — feasibility, audience, stack options, and risks.
 4. `developer-guide.md` — developer workflow for building, configuring, deploying, and managing governed Agents.
-5. `development-progress.md` — current codebase status; useful, but always verify against the code.
+5. `evaluation-system.md` — V1 Agent evaluation metrics, deterministic gates, judge diagnostics, suites, thresholds, curation, and artifacts.
+6. `development-progress.md` — current codebase status; useful, but always verify against the code.
 
 
 
@@ -31,6 +32,12 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | Document | Purpose |
 | --- | --- |
 | `developer-guide.md` | Quick Start, architecture module overview, configuration, development, deployment, and management steps for AI Agent owners |
+
+## Evaluation
+
+| Document | Purpose |
+| --- | --- |
+| `evaluation-system.md` | Governed Agent evaluation model, including Governed Resolution Rate, deterministic gates, judge-led diagnostic scoring, release thresholds, and production curation |
 
 ## Examples
 

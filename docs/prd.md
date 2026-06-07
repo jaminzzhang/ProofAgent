@@ -94,6 +94,7 @@ These are directions for platform evolution but must be added gradually after th
 - Remote model paths cannot bypass policies, evidence, validators, traces, and receipts.
 - The Tool Gateway can prove that tool governance semantics remain consistent before and after real MCP integration.
 - The Dashboard API can query execution history based on run artifacts, rather than spawning a separate execution semantic.
+- The evaluation system measures Governed Resolution Rate through deterministic gates, while LLM or human judges remain diagnostic and cannot replace governance validators.
 - Documentation system is clear: AI reads `docs/README.md` first; architecture reads `docs/technical-design.md` first.
 
 ## 7. Evolution Roadmap

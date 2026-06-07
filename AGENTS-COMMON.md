@@ -59,9 +59,10 @@ Read these before planning or changing behavior:
 2. `docs/README.md` — documentation routing.
 3. `docs/technical-design.md` — authoritative architecture, module boundaries, contracts, provider strategy, error codes, trace events, and roadmap.
 4. `docs/developer-guide.md` — user-facing Agent owner workflow, setup, configuration, deployment, and operations.
-5. `docs/development-progress.md` — current/historical implementation snapshot; useful but may be stale, so verify against code.
-6. `docs/adr/` — architectural decision records.
-7. `docs/concepts/` — normative concept contracts for Control Envelope, Agent Contract, Policy Engine, Approval State, Trace Events, Governance Receipt, and Trust Boundaries.
+5. `docs/evaluation-system.md` — V1 Agent evaluation metrics, deterministic gates, judge diagnostics, suites, thresholds, curation, and artifacts.
+6. `docs/development-progress.md` — current/historical implementation snapshot; useful but may be stale, so verify against code.
+7. `docs/adr/` — architectural decision records.
+8. `docs/concepts/` — normative concept contracts for Control Envelope, Agent Contract, Policy Engine, Approval State, Trace Events, Governance Receipt, and Trust Boundaries.
 
 Documentation is bilingual. English docs live under `docs/`; Chinese translations live under `docs/zh/` with the same structure. **Only update English docs during development; Chinese translations are synced at release time.**
 
