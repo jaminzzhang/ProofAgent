@@ -81,9 +81,9 @@ vi.mock('../../hooks/useConfigVersions', () => ({
   }),
 }))
 
-function renderPage() {
+function renderPage(initialEntry = '/agents/agent-1/drafts/draft-1') {
   render(
-    <MemoryRouter initialEntries={['/agents/agent-1/drafts/draft-1']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
         <Route path="/agents/:agentId/drafts/:draftId" element={<AgentDetailPage />} />
       </Routes>
@@ -151,6 +151,12 @@ describe('AgentDetailPage', () => {
     resolveValidation(validationResponse)
 
     await waitFor(() => expect(refreshDraft).toHaveBeenCalled())
+  })
+
+  it('restores the Validate & Test module from the route query', () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
+
+    expect(screen.getByPlaceholderText('Enter a test question...')).toBeInTheDocument()
   })
 
   it('shows chat entry actions for the active Published Agent version', () => {

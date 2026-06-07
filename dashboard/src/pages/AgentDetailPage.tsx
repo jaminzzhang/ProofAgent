@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import {
   bindKnowledgeSourceToDraft,
   chatUrl,
@@ -42,6 +42,7 @@ type Tab = 'general' | 'workflow' | 'knowledge' | 'tools' | 'policy' | 'model' |
 
 export function AgentDetailPage() {
   const { agentId, draftId } = useParams<{ agentId: string; draftId: string }>()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { draft, contract, loading, error, refresh } = useConfigDraft(agentId, draftId)
   const {
     versions,
@@ -49,7 +50,7 @@ export function AgentDetailPage() {
     loading: versionsLoading,
     refresh: refreshVersions,
   } = useConfigVersions(agentId)
-  const [activeTab, setActiveTab] = useState<Tab>('general')
+  const activeTab = agentDetailTab(searchParams.get('tab'))
   const [displayName, setDisplayName] = useState('')
   const [purpose, setPurpose] = useState('')
   const [agentYaml, setAgentYaml] = useState('')
@@ -215,13 +216,26 @@ export function AgentDetailPage() {
   if (error) return <div className="text-[var(--danger)] text-sm">{error}</div>
   if (!draft || !contract) return <div className="text-[var(--text-muted)] text-sm">Draft not found.</div>
 
+  function setActiveTab(moduleId: string) {
+    const nextTab = agentDetailTab(moduleId)
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextTab === 'general') {
+        next.delete('tab')
+      } else {
+        next.set('tab', nextTab)
+      }
+      return next
+    })
+  }
+
   return (
     <AgentDetailShell
       agentName={displayName}
       modules={CONFIGURE_MODULES}
       lifecycle={LIFECYCLE_TABS}
       activeModule={activeTab}
-      onModuleChange={(moduleId) => setActiveTab(moduleId as Tab)}
+      onModuleChange={setActiveTab}
     >
       {activeTab === 'general' && (
         <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
@@ -484,4 +498,22 @@ export function AgentDetailPage() {
       )}
     </AgentDetailShell>
   )
+}
+
+function agentDetailTab(value: string | null): Tab {
+  const tabs: Tab[] = [
+    'general',
+    'workflow',
+    'knowledge',
+    'tools',
+    'policy',
+    'model',
+    'memory',
+    'response',
+    'validate',
+    'versions',
+    'contract',
+    'monitor',
+  ]
+  return value && tabs.includes(value as Tab) ? (value as Tab) : 'general'
 }

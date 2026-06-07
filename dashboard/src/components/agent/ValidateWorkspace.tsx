@@ -68,7 +68,11 @@ export function ValidateWorkspace({
 
           {validationRecords.length > 0 && (
             <div className="mt-4 border border-[var(--border)] rounded-md overflow-hidden">
-              <ValidationRecordRow record={validationRecords[validationRecords.length - 1]} />
+              <ValidationRecordRow
+                record={validationRecords[validationRecords.length - 1]}
+                agentId={agentId}
+                draftId={draftId}
+              />
             </div>
           )}
         </div>
@@ -82,7 +86,12 @@ export function ValidateWorkspace({
           ) : (
             <div className="divide-y divide-[var(--border)]">
               {[...validationRecords].reverse().map((record) => (
-                <ValidationRecordRow key={record.validation_id} record={record} />
+                <ValidationRecordRow
+                  key={record.validation_id}
+                  record={record}
+                  agentId={agentId}
+                  draftId={draftId}
+                />
               ))}
             </div>
           )}
@@ -92,7 +101,16 @@ export function ValidateWorkspace({
   )
 }
 
-function ValidationRecordRow({ record }: { record: AgentValidationRecord }) {
+function ValidationRecordRow({
+  record,
+  agentId,
+  draftId,
+}: {
+  record: AgentValidationRecord
+  agentId: string
+  draftId: string
+}) {
+  const returnTo = `/agents/${agentId}/drafts/${draftId}?tab=validate`
   return (
     <div className="px-4 py-3 flex items-center gap-4">
       <div className="flex-1 min-w-0">
@@ -102,6 +120,10 @@ function ValidationRecordRow({ record }: { record: AgentValidationRecord }) {
           </span>
           <Link
             to={`/runs/${record.run_id}`}
+            state={{
+              returnTo,
+              returnLabel: 'Back to Agent Draft',
+            }}
             className="font-mono text-xs text-[var(--accent)] hover:underline truncate"
           >
             {record.run_id}

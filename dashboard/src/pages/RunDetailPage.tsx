@@ -1,4 +1,4 @@
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { useRunDetail } from '../hooks/useRunDetail'
 import { OutcomeBadge } from '../components/OutcomeBadge'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
@@ -14,6 +14,7 @@ type Tab = 'receipt' | 'approval' | 'timeline' | 'evidence' | 'model' | 'governa
 
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>()
+  const location = useLocation()
   const { detail, loading, error } = useRunDetail(runId)
   const [activeTab, setActiveTab] = useState<Tab>('receipt')
 
@@ -21,6 +22,9 @@ export function RunDetailPage() {
   if (error) return <div className="text-[var(--danger)] text-sm">{error}</div>
   if (!detail) return <div className="text-[var(--text-muted)] text-sm">Run not found.</div>
 
+  const returnState = runDetailReturnState(location.state)
+  const returnTo = returnState?.returnTo ?? '/runs'
+  const returnLabel = returnState?.returnLabel ?? 'Back to Runs'
   const needsApproval = detail.outcome === 'WAITING_FOR_APPROVAL' || detail.approval_state
 
   const tabs: { key: Tab; label: string }[] = [
@@ -46,8 +50,8 @@ export function RunDetailPage() {
       <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
         <div className="flex justify-between items-start mb-4">
           <div>
-            <Link to="/runs" className="text-xs font-medium tracking-wide text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors uppercase">
-              &larr; Back to Runs
+            <Link to={returnTo} className="text-xs font-medium tracking-wide text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors uppercase">
+              &larr; {returnLabel}
             </Link>
             <h2 className="text-xl font-semibold mt-3 text-[var(--text-primary)] tracking-tight">Run: <span className="font-mono text-lg font-normal text-[var(--text-secondary)]">{detail.run_id}</span></h2>
           </div>
@@ -94,6 +98,18 @@ export function RunDetailPage() {
       </div>
     </div>
   )
+}
+
+function runDetailReturnState(
+  state: unknown,
+): { returnTo: string; returnLabel?: string } | null {
+  if (!state || typeof state !== 'object') return null
+  const value = state as { returnTo?: unknown; returnLabel?: unknown }
+  if (typeof value.returnTo !== 'string' || !value.returnTo.startsWith('/')) return null
+  return {
+    returnTo: value.returnTo,
+    returnLabel: typeof value.returnLabel === 'string' ? value.returnLabel : undefined,
+  }
 }
 
 function hasGovernanceDetails(details?: GovernanceDetails | null): boolean {
