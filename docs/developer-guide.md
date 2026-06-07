@@ -63,6 +63,10 @@ uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
 ```
 
 The Dashboard API reads the existing run history. It is not a secondary execution path for the Agent.
+When the local configuration store is empty, `proof-agent server` and `proof-agent dev`
+seed it with the canonical `insurance_customer_service` Agent as an active Published
+Agent Version. This makes Dashboard configuration, `/operator`, and `/customer`
+usable immediately while preserving explicit empty stores in tests and controlled deployments.
 
 Run the customer journey acceptance suite:
 
@@ -937,7 +941,10 @@ uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
 The local backend development path loads `.env` before starting child services and
 supervises both the API server and the Knowledge Worker. This is the recommended
 startup path when using the Dashboard Knowledge workspace so uploaded Markdown or
-PDF documents are consumed immediately. For targeted API-only debugging, run:
+PDF documents are consumed immediately. The API server and worker share the same
+`--config-dir`; on an empty store, the API seeds and publishes the canonical
+Insurance Customer Service Agent for local Dashboard and Chat workflows. For
+targeted API-only debugging, run:
 
 ```bash
 uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000

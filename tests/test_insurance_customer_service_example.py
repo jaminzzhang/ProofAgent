@@ -12,10 +12,15 @@ def test_insurance_customer_service_manifest_loads() -> None:
     assert manifest.workflow.template == "react_enterprise_qa"
 
 
-def test_insurance_customer_service_template_is_not_application_facing_by_default() -> None:
+def test_insurance_customer_service_is_customer_facing_by_default() -> None:
     registry = PublishedAgentRegistry()
 
-    assert registry.resolve("insurance_customer_service") is None
+    agent = registry.resolve_customer_facing("insurance_customer_service")
+
+    assert agent is not None
+    assert agent.customer_facing
+    assert agent.manifest_path == Path("examples/insurance_customer_service/agent.yaml")
+    assert agent.source == "configured"
 
 
 def test_published_insurance_customer_service_resolves_from_configuration_store(

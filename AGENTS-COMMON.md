@@ -120,7 +120,10 @@ Default local backend startup is `proof-agent dev`, not `proof-agent server`.
 It loads `.env` through the CLI callback, starts the API server on
 `127.0.0.1:8000`, and starts the continuous Knowledge Worker against
 `runs/config` so Dashboard Knowledge uploads are processed without a separate
-worker terminal. Run it with all backend extras:
+worker terminal. On an empty local Configuration Store, it also imports and
+publishes `examples/insurance_customer_service/agent.yaml` so Dashboard
+configuration, `/operator`, and `/customer` have an immediate closed-loop Agent.
+Run it with all backend extras:
 
 ```bash
 uv run --extra dashboard --extra ingestion --extra tree proof-agent dev

@@ -262,6 +262,12 @@ def server(
     port: int = typer.Option(8000, "--port", help="Port to serve the API on"),
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     history_dir: str = typer.Option("runs/history", "--history-dir", help="Run history directory"),
+    config_dir: str = typer.Option("runs/config", "--config-dir", help="Local configuration store"),
+    seed_example_agent: bool = typer.Option(
+        True,
+        "--seed-example-agent/--no-seed-example-agent",
+        help="Import and publish the canonical Insurance Customer Service Agent when absent.",
+    ),
 ) -> None:
     """Start the Proof Agent API server."""
 
@@ -274,8 +280,17 @@ def server(
         raise typer.Exit(code=1) from None
 
     from proof_agent.observability.api.app import create_app
+    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
-    app = create_app(history_dir=Path(history_dir))
+    configuration_store = LocalAgentConfigurationStore(Path(config_dir))
+    if seed_example_agent and _seed_default_dev_agent(configuration_store):
+        typer.echo("Seeded local configuration with insurance_customer_service.")
+
+    app = create_app(
+        history_dir=Path(history_dir),
+        agent_configuration_store=configuration_store,
+        agent_configuration_dir=Path(config_dir),
+    )
     typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
     typer.echo("To start the frontends in development mode, run:")
     typer.echo("  Dashboard: cd dashboard && npm run dev (port 5173)")
@@ -343,10 +358,12 @@ def main() -> None:
 
 def _load_local_dotenv() -> None:
     try:
+        from dotenv import find_dotenv
         from dotenv import load_dotenv
     except ImportError:
         return
-    load_dotenv()
+    dotenv_path = find_dotenv(usecwd=True)
+    load_dotenv(dotenv_path if dotenv_path else None)
 
 
 def _dev_process_specs(
@@ -371,6 +388,8 @@ def _dev_process_specs(
                 str(port),
                 "--history-dir",
                 history_dir,
+                "--config-dir",
+                config_dir,
             ],
         )
     ]
@@ -418,6 +437,27 @@ def _run_dev_processes(specs: list[tuple[str, list[str]]]) -> None:
     except Exception:
         _terminate_dev_processes(processes)
         raise
+
+
+def _seed_default_dev_agent(store: Any) -> bool:
+    """Publish the canonical customer-facing example into an empty local workspace."""
+
+    agent_id = "insurance_customer_service"
+    if store.get_active_version(agent_id) is not None:
+        return False
+    if not PUBLIC_EXAMPLE_PATH.exists():
+        return False
+
+    from proof_agent.configuration.importer import import_agent_package
+
+    draft = import_agent_package(PUBLIC_EXAMPLE_PATH, store=store, actor="proof-agent-dev")
+    store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="local_dev_seed",
+        actor="proof-agent-dev",
+    )
+    return True
 
 
 def _terminate_dev_processes(processes: list[tuple[str, subprocess.Popen[bytes]]]) -> None:

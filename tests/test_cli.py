@@ -8,7 +8,9 @@ from proof_agent.capabilities.knowledge.ingestion.worker import (
     KnowledgeWorkerResult,
     KnowledgeWorkerTaskOutcome,
 )
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.delivery.cli import app
+from proof_agent.delivery.cli import _seed_default_dev_agent
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.compare.result import RagResult
 
@@ -83,13 +85,15 @@ def test_dev_command_supervises_api_and_knowledge_worker(
     assert result.exit_code == 0
     assert "Starting Proof Agent local backend dev services" in result.output
     assert [name for name, _command in captured_specs] == ["api", "knowledge-worker"]
-    assert captured_specs[0][1][-6:] == [
+    assert captured_specs[0][1][-8:] == [
         "--host",
         "0.0.0.0",
         "--port",
         "9000",
         "--history-dir",
         str(tmp_path / "history"),
+        "--config-dir",
+        str(tmp_path / "config"),
     ]
     assert captured_specs[1][1][-4:] == [
         "--config-dir",
@@ -113,6 +117,29 @@ def test_dev_command_can_disable_knowledge_worker(
 
     assert result.exit_code == 0
     assert [name for name, _command in captured_specs] == ["api"]
+
+
+def test_seed_default_dev_agent_publishes_insurance_customer_service(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+
+    seeded = _seed_default_dev_agent(store)
+
+    assert seeded is True
+    active = store.get_active_version("insurance_customer_service")
+    assert active is not None
+    version = store.get_version("insurance_customer_service", active.version_id)
+    assert version is not None
+    assert version.validation_run_id == "local_dev_seed"
+
+
+def test_seed_default_dev_agent_is_idempotent(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    assert _seed_default_dev_agent(store) is True
+
+    seeded_again = _seed_default_dev_agent(store)
+
+    assert seeded_again is False
+    assert len(store.list_versions("insurance_customer_service")) == 1
 
 
 def test_compare_command_runs_supplied_manifest(monkeypatch) -> None:

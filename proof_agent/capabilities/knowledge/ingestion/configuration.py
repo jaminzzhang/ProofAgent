@@ -38,9 +38,12 @@ def ingestion_model_config_from_build_spec(spec: KnowledgeArtifactBuildSpec) -> 
         field_prefix="artifact_build_spec.declared_ingestion_model",
     )
     try:
-        return ModelConfig.model_validate(declared_model)
+        config = ModelConfig.model_validate(declared_model)
     except ValidationError as exc:
         raise _invalid_ingestion_model() from exc
+    if config.model_source != "shared" and (not config.provider or not config.name):
+        raise _invalid_ingestion_model()
+    return config
 
 
 def _invalid_ingestion_model() -> ProofAgentError:

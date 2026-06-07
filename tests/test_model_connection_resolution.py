@@ -163,7 +163,10 @@ def test_archived_shared_model_connection_resolves_with_warning(
     )
 
 
-def test_missing_runtime_credential_env_raises_resolution_failure(tmp_path: Path) -> None:
+def test_missing_runtime_credential_env_raises_resolution_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     store = _store_with_connection(tmp_path)
 
     with pytest.raises(ProofAgentError) as exc:

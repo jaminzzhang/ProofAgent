@@ -59,6 +59,9 @@ uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
 
 `proof-agent dev` is the local Dashboard backend path: it loads `.env` and starts
 both the API server and Knowledge Worker so Knowledge uploads can be processed.
+On an empty local configuration store, it also imports and publishes the canonical
+`insurance_customer_service` Agent so Dashboard configuration, operator chat, and
+customer chat have an immediate closed-loop example.
 
 The regression demo and canonical package smoke path together must show three visible outcomes:
 
