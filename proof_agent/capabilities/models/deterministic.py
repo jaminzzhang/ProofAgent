@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from proof_agent.contracts import ModelRequest, ModelResponse
 from proof_agent.contracts.manifest import ModelConfig
+from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.demo.deterministic_provider import DeterministicProvider
 
 
@@ -12,6 +13,12 @@ class DeterministicModelProvider:
 
     @classmethod
     def from_config(cls, model_config: ModelConfig) -> DeterministicModelProvider:
+        if model_config.name is None:
+            raise ProofAgentError(
+                "PA_MODEL_001",
+                "deterministic model config requires a model name.",
+                "Resolve shared/custom model configuration before constructing the provider.",
+            )
         return cls(model_config.name)
 
     @property

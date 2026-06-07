@@ -45,6 +45,12 @@ class OpenAICompatibleModelProvider:
 
     @classmethod
     def from_config(cls, model_config: ModelConfig) -> OpenAICompatibleModelProvider:
+        if model_config.provider is None or model_config.name is None:
+            raise ProofAgentError(
+                "PA_MODEL_001",
+                "openai_compatible model config requires provider and name.",
+                "Resolve shared/custom model configuration before constructing the provider.",
+            )
         params = dict(model_config.params)
         allowed = {
             "api_key_env",

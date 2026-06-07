@@ -73,7 +73,12 @@ def run_enterprise_qa(
         invocation = compose_harness_invocation(agent_yaml, manifest=manifest)
     except Exception as exc:
         if is_model_error(exc):
-            emit_model_error(trace, manifest.model.provider, manifest.model.name, exc)
+            emit_model_error(
+                trace,
+                manifest.model.provider or "unresolved",
+                manifest.model.name or "unresolved",
+                exc,
+            )
         raise
 
     # Retrieval is still policy-gated even in the deterministic local demo.

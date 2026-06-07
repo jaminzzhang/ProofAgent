@@ -3102,10 +3102,10 @@ def _shared_model_connection_ids(value: Any) -> tuple[str, ...]:
             connection_ids.extend(_shared_model_connection_ids(item))
         return tuple(connection_ids)
     if isinstance(value, list | tuple):
-        connection_ids: list[str] = []
+        nested_connection_ids: list[str] = []
         for item in value:
-            connection_ids.extend(_shared_model_connection_ids(item))
-        return tuple(connection_ids)
+            nested_connection_ids.extend(_shared_model_connection_ids(item))
+        return tuple(nested_connection_ids)
     return ()
 
 
