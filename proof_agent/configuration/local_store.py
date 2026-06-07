@@ -1009,6 +1009,7 @@ class LocalAgentConfigurationStore:
             snapshot=snapshot,
             artifact_root=self._root_dir,
             smoke_query=smoke_query,
+            configuration_store=self,
         )
         if smoke_result.candidate_count <= 0:
             raise ProofAgentError(
@@ -1815,6 +1816,52 @@ class LocalAgentConfigurationStore:
                 auto_retry_count=job.auto_retry_count,
                 completed_at=_now(),
             )
+
+    def retry_failed_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+    ) -> KnowledgeIngestionJob:
+        """Return one failed artifact-build job to the worker queue for manual retry."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job = self._require_knowledge_ingestion_job(source_id, job_id)
+            document = self.get_knowledge_document(
+                source_id=source_id,
+                document_id=job.document_id,
+            )
+            if document is None:
+                raise _invalid_ingestion_transition(
+                    f"Knowledge ingestion job {job_id} is missing its document projection."
+                )
+            self._require_active_knowledge_source_unlocked(source_id)
+            if job.state != "failed":
+                raise _knowledge_ingestion_retry_conflict(job_id=job_id, state=job.state)
+            now = _now()
+            retried = job.model_copy(
+                update={
+                    "state": "queued",
+                    "completed_at": None,
+                    "error_code": None,
+                    "error_message": None,
+                    "next_attempt_at": None,
+                    **_cleared_claim_updates(),
+                    "updated_at": now,
+                }
+            )
+            projected_document = document.model_copy(
+                update={
+                    "state": "queued",
+                    "error_code": None,
+                    "error_message": None,
+                    "updated_at": now,
+                }
+            )
+            self._write_knowledge_document(projected_document)
+            self._write_knowledge_ingestion_job(retried)
+            self._advance_source_draft_version_unlocked(source_id, updated_at=now)
+            return retried
 
     def claim_next_knowledge_worker_task(
         self,
@@ -3213,8 +3260,11 @@ def _timestamp(value: datetime) -> str:
 
 
 def _safe_filename(filename: str) -> str:
-    name = Path(filename).name.strip() or "document"
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+    raw_name = str(filename).replace("\\", "/")
+    name = Path(raw_name).name.strip() or "document"
+    name = re.sub(r'[\x00-\x1f\x7f/\\:*?"<>|]+', "_", name)
+    name = re.sub(r"\s+", "_", name).strip() or "document"
+    return name
 
 
 def _knowledge_source_worker_concurrency(params: Mapping[str, Any]) -> int:
@@ -3395,6 +3445,14 @@ def _invalid_ingestion_transition(message: str) -> ProofAgentError:
         "PA_INGESTION_004",
         message,
         "Retry the operation after refreshing the persisted knowledge ingestion state.",
+    )
+
+
+def _knowledge_ingestion_retry_conflict(*, job_id: str, state: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_INGESTION_004",
+        f"Knowledge ingestion job {job_id} cannot be retried from state {state}.",
+        "Retry only failed ingestion jobs after correcting the underlying configuration.",
     )
 
 

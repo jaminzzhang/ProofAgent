@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
+import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { SharedModelConnection } from '../../../api/types'
+import { updateAgentYamlField } from '../../../utils/agentYaml'
 import { ModelModuleEditor } from '../../agent/ModelModuleEditor'
 
 const AGENT_YAML = `name: enterprise_qa
@@ -262,6 +264,85 @@ review:
         connection_id: 'model_created',
       }),
     )
+  })
+
+  it('shows shared connection defaults when role params are omitted', () => {
+    render(
+      <ModelModuleEditor
+        agentYaml={`name: enterprise_qa
+model:
+  model_source: shared
+  connection_id: model_deepseek_default
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  record_reasoning_summary: true
+  planner:
+    model_source: shared
+    connection_id: model_deepseek_default
+review:
+  mode: auto
+  subagent:
+    model_source: shared
+    connection_id: model_deepseek_default
+    fail_closed: true
+`}
+        modelConnections={[modelConnection({ timeout_seconds: 20 })]}
+        onFieldChange={vi.fn()}
+        onModelConfigChange={vi.fn()}
+        onSave={vi.fn()}
+        busy={false}
+      />,
+    )
+
+    expect(screen.getByLabelText('Temperature')).toHaveValue(0)
+    expect(screen.getByLabelText('Max Output Tokens')).toHaveValue(800)
+    expect(screen.getByLabelText('Timeout (s)')).toHaveValue(20)
+  })
+
+  it('keeps unified usage control edits visible for shared model roles without params', () => {
+    function StatefulEditor() {
+      const [yaml, setYaml] = useState(`name: enterprise_qa
+model:
+  model_source: shared
+  connection_id: model_deepseek_default
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  record_reasoning_summary: true
+  planner:
+    model_source: shared
+    connection_id: model_deepseek_default
+review:
+  mode: auto
+  subagent:
+    model_source: shared
+    connection_id: model_deepseek_default
+    fail_closed: true
+`)
+      return (
+        <ModelModuleEditor
+          agentYaml={yaml}
+          modelConnections={[modelConnection({ timeout_seconds: 20 })]}
+          onFieldChange={(path, value) => {
+            setYaml((current) => updateAgentYamlField(current, path, value))
+          }}
+          onModelConfigChange={vi.fn()}
+          onSave={vi.fn()}
+          busy={false}
+        />
+      )
+    }
+
+    render(<StatefulEditor />)
+
+    fireEvent.change(screen.getByLabelText('Temperature'), { target: { value: '0.2' } })
+    fireEvent.change(screen.getByLabelText('Max Output Tokens'), { target: { value: '900' } })
+    fireEvent.change(screen.getByLabelText('Timeout (s)'), { target: { value: '25' } })
+
+    expect(screen.getByLabelText('Temperature')).toHaveValue(0.2)
+    expect(screen.getByLabelText('Max Output Tokens')).toHaveValue(900)
+    expect(screen.getByLabelText('Timeout (s)')).toHaveValue(25)
   })
 })
 

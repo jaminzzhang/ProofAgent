@@ -242,6 +242,14 @@ class KnowledgeSourcePhysicalDeleteRequest(BaseModel):
     actor: str = "local-user"
 
 
+class KnowledgeIngestionRetryRequest(BaseModel):
+    """Request body for manually retrying a failed Knowledge Ingestion Job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor: str = "local-user"
+
+
 class KnowledgeDocumentUploadRequest(BaseModel):
     """JSON/base64 upload for Dashboard-managed knowledge documents."""
 
@@ -862,6 +870,30 @@ def get_knowledge_ingestion_job(
             status_code=404,
             detail=f"Knowledge Ingestion Job not found: {source_id}/{job_id}",
         )
+    return _knowledge_ingestion_job_payload(job)
+
+
+@router.post("/config/knowledge-sources/{source_id}/ingestion-jobs/{job_id}/retry")
+def retry_knowledge_ingestion_job(
+    source_id: str,
+    job_id: str,
+    request: KnowledgeIngestionRetryRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Return one failed artifact-build job to the worker queue."""
+
+    store = _get_configuration_store(app_request)
+    _require_active_knowledge_source(store, source_id)
+    if store.get_knowledge_ingestion_job(source_id=source_id, job_id=job_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Ingestion Job not found: {source_id}/{job_id}",
+        )
+    try:
+        job = store.retry_failed_knowledge_ingestion_job(source_id=source_id, job_id=job_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    _ = request.actor
     return _knowledge_ingestion_job_payload(job)
 
 

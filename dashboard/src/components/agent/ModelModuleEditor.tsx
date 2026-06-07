@@ -5,6 +5,9 @@ import type { SharedModelConnection } from '../../api/types'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
 
 const MODEL_PROVIDER_OPTIONS = ['deterministic', 'openai_compatible', 'openai', 'deepseek', 'azure_openai', 'anthropic']
+const DEFAULT_TEMPERATURE = '0'
+const DEFAULT_MAX_OUTPUT_TOKENS = '800'
+const DEFAULT_TIMEOUT_SECONDS = '20'
 
 interface ModelModuleEditorProps {
   agentYaml: string
@@ -324,9 +327,10 @@ function ModelRoleCard({
   const credentialName = readAgentYamlField(agentYaml, [...basePath, 'credential_ref', 'name'])
     || readAgentYamlField(agentYaml, [...basePath, 'params', 'api_key_env'])
   const baseUrl = readAgentYamlField(agentYaml, [...basePath, 'base_url'])
-  const temperaturePath = [...basePath, 'params', 'temperature']
-  const maxOutputPath = [...basePath, 'params', 'max_output_tokens']
-  const timeoutPath = [...basePath, 'params', 'timeout_seconds']
+  const temperaturePath = fieldPath(basePath, unified, ['params', 'temperature'])
+  const maxOutputPath = fieldPath(basePath, unified, ['params', 'max_output_tokens'])
+  const timeoutPath = fieldPath(basePath, unified, ['params', 'timeout_seconds'])
+  const timeoutDefault = currentConnection?.timeout_seconds?.toString() ?? DEFAULT_TIMEOUT_SECONDS
 
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 mb-4 shadow-sm">
@@ -358,25 +362,25 @@ function ModelRoleCard({
             <SelectField
               label={`${labelPrefix ? `${labelPrefix} ` : ''}Provider`}
               value={effectiveProvider}
-              onChange={(value) => onFieldChange([...basePath, 'provider'], value)}
+              onChange={(value) => onFieldChange(fieldPath(basePath, unified, ['provider']), value)}
               options={MODEL_PROVIDER_OPTIONS.map((option) => ({ value: option, label: option }))}
             />
             <TextField
               label={`${labelPrefix ? `${labelPrefix} ` : ''}Model Name`}
               value={modelName}
-              onChange={(value) => onFieldChange([...basePath, 'name'], value)}
+              onChange={(value) => onFieldChange(fieldPath(basePath, unified, ['name']), value)}
               placeholder="deepseek-chat"
             />
             <TextField
               label={`${labelPrefix ? `${labelPrefix} ` : ''}Credential Env`}
               value={credentialName}
-              onChange={(value) => onFieldChange([...basePath, 'credential_ref', 'name'], value)}
+              onChange={(value) => onFieldChange(fieldPath(basePath, unified, ['credential_ref', 'name']), value)}
               placeholder="DEEPSEEK_API_KEY"
             />
             <TextField
               label={`${labelPrefix ? `${labelPrefix} ` : ''}Base URL`}
               value={baseUrl}
-              onChange={(value) => onFieldChange([...basePath, 'base_url'], value)}
+              onChange={(value) => onFieldChange(fieldPath(basePath, unified, ['base_url']), value)}
               placeholder="https://api.deepseek.com"
             />
             {onSaveAsShared && (
@@ -395,24 +399,33 @@ function ModelRoleCard({
         <TextField
           type="number"
           label={`${labelPrefix ? `${labelPrefix} ` : ''}Temperature`}
-          value={readAgentYamlField(agentYaml, temperaturePath)}
+          value={usageControlValue(agentYaml, [...basePath, 'params', 'temperature'], DEFAULT_TEMPERATURE)}
           onChange={(value) => onFieldChange(temperaturePath, value)}
         />
         <TextField
           type="number"
           label={`${labelPrefix ? `${labelPrefix} ` : ''}Max Output Tokens`}
-          value={readAgentYamlField(agentYaml, maxOutputPath)}
+          value={usageControlValue(agentYaml, [...basePath, 'params', 'max_output_tokens'], DEFAULT_MAX_OUTPUT_TOKENS)}
           onChange={(value) => onFieldChange(maxOutputPath, value)}
         />
         <TextField
           type="number"
           label={`${labelPrefix ? `${labelPrefix} ` : ''}Timeout (s)`}
-          value={readAgentYamlField(agentYaml, timeoutPath)}
+          value={usageControlValue(agentYaml, [...basePath, 'params', 'timeout_seconds'], timeoutDefault)}
           onChange={(value) => onFieldChange(timeoutPath, value)}
         />
       </div>
     </div>
   )
+}
+
+function fieldPath(basePath: string[], unified: boolean, suffix: string[]): string[] {
+  return unified ? suffix : [...basePath, ...suffix]
+}
+
+function usageControlValue(agentYaml: string, path: string[], fallback: string): string {
+  const value = readAgentYamlField(agentYaml, path)
+  return value === '' ? fallback : value
 }
 
 function modelConfigForSource(agentYaml: string, role: ModelRole, sourceValue: string): AgentYamlMapping {

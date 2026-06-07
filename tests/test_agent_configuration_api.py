@@ -266,6 +266,23 @@ def test_create_local_index_knowledge_source_and_stage_quarantined_upload(tmp_pa
     assert uploads.json()["data"][0]["filename"] == "travel-policy.pdf"
 
 
+def test_stage_quarantined_upload_preserves_unicode_filename(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(client)
+
+    uploaded = _upload(
+        client,
+        filename="../理赔 条款.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.4\nsample",
+    )
+    uploads = client.get("/api/config/knowledge-sources/ks_local_index/quarantined-uploads")
+
+    assert uploaded.status_code == 200
+    assert uploaded.json()["filename"] == "理赔_条款.pdf"
+    assert uploads.json()["data"][0]["filename"] == "理赔_条款.pdf"
+
+
 def test_knowledge_source_lifecycle_routes_archive_restore_eligibility_and_delete(
     tmp_path: Path,
 ) -> None:
@@ -1064,6 +1081,109 @@ def test_quarantine_and_job_read_endpoints_return_persisted_state(tmp_path: Path
     assert jobs.json()["data"][0]["state"] == "queued"
     assert job_detail.status_code == 200
     assert job_detail.json()["job_id"] == job.job_id
+
+
+def test_retry_failed_ingestion_job_endpoint_returns_job_to_queue(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(
+        client,
+        params={
+            "ingestion_model": {
+                "provider": "deterministic",
+                "name": "ingestion-model",
+            }
+        },
+    )
+    uploaded = _upload(client).json()
+    store = _configuration_store(client)
+    upload = store.get_quarantined_knowledge_upload(
+        source_id="ks_local_index",
+        upload_id=uploaded["upload_id"],
+    )
+    assert upload is not None
+    claimed_upload = store.claim_next_quarantined_knowledge_upload()
+    assert claimed_upload is not None
+    assert claimed_upload.claim_token is not None
+    parsed = parse_quarantined_upload(
+        store.quarantined_knowledge_upload_bytes_path(upload),
+        filename=upload.filename,
+        content_type=upload.content_type,
+    )
+    document, job = store.accept_quarantined_knowledge_upload(
+        source_id=upload.source_id,
+        upload_id=upload.upload_id,
+        parsed_document=parsed,
+        claim_token=claimed_upload.claim_token,
+    )
+    claimed_job = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
+    assert claimed_job is not None
+    assert claimed_job.claim_token is not None
+    store.fail_knowledge_ingestion_job(
+        source_id=job.source_id,
+        job_id=job.job_id,
+        claim_token=claimed_job.claim_token,
+        error_code="PA_INGESTION_001",
+        error_message="Missing model credential environment variable(s): DEEPSEEK_API_KEY",
+    )
+
+    response = client.post(
+        f"/api/config/knowledge-sources/ks_local_index/ingestion-jobs/{job.job_id}/retry",
+        json={"actor": "dashboard"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "queued"
+    assert response.json()["error_code"] is None
+    updated_document = store.get_knowledge_document(
+        source_id=document.source_id,
+        document_id=document.document_id,
+    )
+    assert updated_document is not None
+    assert updated_document.state == "queued"
+    assert updated_document.error_code is None
+
+
+def test_retry_ingestion_job_endpoint_rejects_non_failed_job(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_local_index_source(
+        client,
+        params={
+            "ingestion_model": {
+                "provider": "deterministic",
+                "name": "ingestion-model",
+            }
+        },
+    )
+    uploaded = _upload(client).json()
+    store = _configuration_store(client)
+    upload = store.get_quarantined_knowledge_upload(
+        source_id="ks_local_index",
+        upload_id=uploaded["upload_id"],
+    )
+    assert upload is not None
+    claimed_upload = store.claim_next_quarantined_knowledge_upload()
+    assert claimed_upload is not None
+    assert claimed_upload.claim_token is not None
+    parsed = parse_quarantined_upload(
+        store.quarantined_knowledge_upload_bytes_path(upload),
+        filename=upload.filename,
+        content_type=upload.content_type,
+    )
+    _, job = store.accept_quarantined_knowledge_upload(
+        source_id=upload.source_id,
+        upload_id=upload.upload_id,
+        parsed_document=parsed,
+        claim_token=claimed_upload.claim_token,
+    )
+
+    response = client.post(
+        f"/api/config/knowledge-sources/ks_local_index/ingestion-jobs/{job.job_id}/retry",
+        json={"actor": "dashboard"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "PA_INGESTION_004"
+    assert "cannot be retried from state queued" in response.json()["detail"]["message"]
 
 
 @pytest.mark.parametrize(

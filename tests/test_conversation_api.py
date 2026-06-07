@@ -2,7 +2,10 @@ from pathlib import Path
 import shutil
 
 from fastapi.testclient import TestClient
+import pytest
+import yaml
 
+from proof_agent.contracts import EnvironmentModelCredentialReference
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.api.app import create_app
@@ -49,6 +52,44 @@ def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
     return manifest_path
 
 
+def _client_with_shared_model_published_agent(tmp_path: Path) -> TestClient:
+    agent_dir = tmp_path / "enterprise_qa_shared_model"
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    raw["model"] = {
+        "model_source": "shared",
+        "connection_id": "model_demo_shared",
+        "params": {"temperature": 0},
+    }
+    manifest_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_model_connection(
+        connection_id="model_demo_shared",
+        display_name="Demo Shared",
+        provider="deterministic",
+        model_identifier="demo",
+        credential_ref=EnvironmentModelCredentialReference(name="DEMO_MODEL_KEY"),
+        actor="operator",
+    )
+    draft = import_agent_package(manifest_path, store=store, actor="test-user")
+    store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation",
+        actor="test-user",
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={},
+        agent_configuration_store=store,
+    )
+    return TestClient(app)
+
+
 def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
     client = _client(tmp_path)
     created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
@@ -87,6 +128,27 @@ def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
     assert len(timeline["turns"]) == 2
     assert timeline["turns"][0]["run_id"] == first_body["run_id"]
     assert timeline["turns"][1]["run_id"] == second_body["run_id"]
+
+
+def test_conversation_run_resolves_shared_model_connection_from_configuration_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEMO_MODEL_KEY", "test-key")
+    client = _client_with_shared_model_published_agent(tmp_path)
+    created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    assert created.status_code == 200
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "What is the reimbursement rule for travel meals?"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_id"] == "enterprise_qa"
+    assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
 
 
 def test_conversation_run_omits_governance_details_by_default(tmp_path: Path) -> None:
