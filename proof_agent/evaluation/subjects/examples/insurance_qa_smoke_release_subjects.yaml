@@ -1,0 +1,39 @@
+manifest_id: insurance_qa_smoke_release_subjects
+version: "2026-06-09"
+suite_id: insurance_qa_smoke
+agent:
+  agent_id: react_enterprise_qa
+  agent_version_id: release_fixture
+subjects:
+  - case_ref:
+      case_id: react_supported_travel_meal
+    run_ref:
+      run_id: release_supported
+      source: fixture
+    artifacts:
+      trace_ref: release_sufficient/run_supported/trace.jsonl
+      trace_sha256: 132b2cfcad2abd6e4e519ab77a60cc1f9c4549218facc0ddfd19c569c4120564
+      receipt_ref: release_sufficient/run_supported/governance_receipt.md
+      receipt_sha256: e1b440685fb012d61b5d0b496d6c7b91355ed0201db64de01c89aa8ac7b6c11d
+    projections:
+      evaluated_response:
+        audience: operator
+        ref: release_sufficient/run_supported/operator_response.txt
+        sha256: 677eeded6243f34f8e45877ea9f3aed55a0c09da33f9d5f61a8444cc885f32ca
+        sensitivity: release_safe
+  - case_ref:
+      case_id: react_unsupported_discount
+    run_ref:
+      run_id: release_unsupported
+      source: fixture
+    artifacts:
+      trace_ref: release_sufficient/run_unsupported/trace.jsonl
+      trace_sha256: c472c4f300d1e149521a4863421c18f6247c57498e5b04685cd2775f7acf0619
+      receipt_ref: release_sufficient/run_unsupported/governance_receipt.md
+      receipt_sha256: a92b7b3c4cd7d893b3b50b700c998b5a6c876781e2ccc9aceffbb2c0c9543723
+    projections:
+      evaluated_response:
+        audience: operator
+        ref: release_sufficient/run_unsupported/operator_response.txt
+        sha256: 099d2ac20099bc3174a29f082b26a36187216f010411b8437f786717f42689d7
+        sensitivity: release_safe

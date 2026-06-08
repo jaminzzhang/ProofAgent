@@ -39,7 +39,117 @@ def test_evaluate_analyze_cli_writes_artifacts_and_returns_one_when_required_cas
     assert not (tmp_path / "runs" / "latest").exists()
 
 
-def _write_cli_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def test_evaluate_analyze_cli_returns_one_when_release_decision_is_blocked(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli.run_with_langgraph",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not create runs")),
+    )
+    suite_path, subjects_path = _write_cli_fixture(tmp_path, include_missing_case=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "analyze",
+            "--suite",
+            str(suite_path),
+            "--subjects",
+            str(subjects_path),
+            "--output-dir",
+            str(tmp_path / "evaluations"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Release Decision: blocked" in result.output
+
+
+def test_evaluate_freeze_bundle_cli_writes_portable_bundle(tmp_path: Path) -> None:
+    suite_path, subjects_path = _write_cli_fixture(tmp_path, include_missing_case=False)
+    output_dir = tmp_path / "bundles"
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "freeze-bundle",
+            "--suite",
+            str(suite_path),
+            "--subjects",
+            str(subjects_path),
+            "--output-dir",
+            str(output_dir),
+            "--bundle-id",
+            "release_bundle",
+            "--version",
+            "2026-06-09",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "evaluation_subjects.yaml" in result.output
+    assert (output_dir / "release_bundle" / "evaluation_suite.yaml").exists()
+    assert (output_dir / "release_bundle" / "evaluation_subjects.yaml").exists()
+    assert (output_dir / "release_bundle" / "bundle_manifest.yaml").exists()
+
+
+def test_evaluate_verify_bundle_cli_reports_integrity_status(tmp_path: Path) -> None:
+    suite_path, subjects_path = _write_cli_fixture(tmp_path, include_missing_case=False)
+    output_dir = tmp_path / "bundles"
+    runner.invoke(
+        app,
+        [
+            "evaluate",
+            "freeze-bundle",
+            "--suite",
+            str(suite_path),
+            "--subjects",
+            str(subjects_path),
+            "--output-dir",
+            str(output_dir),
+            "--bundle-id",
+            "release_bundle",
+            "--version",
+            "2026-06-09",
+        ],
+    )
+
+    passed = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "verify-bundle",
+            str(output_dir / "release_bundle"),
+        ],
+    )
+
+    assert passed.exit_code == 0
+    assert "Bundle Integrity: passed" in passed.output
+
+    response = output_dir / "release_bundle" / "artifacts" / "supported" / "evaluated_response.txt"
+    response.write_text("tampered", encoding="utf-8")
+    failed = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "verify-bundle",
+            str(output_dir / "release_bundle"),
+        ],
+    )
+
+    assert failed.exit_code == 1
+    assert "Bundle Integrity: failed" in failed.output
+    assert "artifacts/supported/evaluated_response.txt" in failed.output
+
+
+def _write_cli_fixture(
+    tmp_path: Path,
+    *,
+    include_missing_case: bool = True,
+) -> tuple[Path, Path]:
     suite_path = tmp_path / "suite.yaml"
     subjects_path = tmp_path / "subjects.yaml"
     run_dir = tmp_path / "runs" / "history" / "run_supported"
@@ -58,8 +168,22 @@ def _write_cli_fixture(tmp_path: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     (run_dir / "operator_response.txt").write_text("Covered by policy.", encoding="utf-8")
-    suite_path.write_text(
+    missing_case = (
         """
+  - case_id: missing
+    question: Missing?
+    intent_type: guidance
+    expected_resolution: refuse_no_evidence
+    risk_class: low
+    capability_path: retrieval_only
+    expected:
+      outcome: REFUSED_NO_EVIDENCE
+"""
+        if include_missing_case
+        else ""
+    )
+    suite_path.write_text(
+        f"""
 suite_id: insurance_qa_smoke
 version: "2026-06-07"
 name: Insurance QA Smoke
@@ -74,14 +198,7 @@ cases:
       outcome: ANSWERED_WITH_CITATIONS
       required_citation_refs:
         - policy
-  - case_id: missing
-    question: Missing?
-    intent_type: guidance
-    expected_resolution: refuse_no_evidence
-    risk_class: low
-    capability_path: retrieval_only
-    expected:
-      outcome: REFUSED_NO_EVIDENCE
+{missing_case.rstrip()}
 """.lstrip(),
         encoding="utf-8",
     )

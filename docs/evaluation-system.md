@@ -130,6 +130,58 @@ Rules:
 - `runs/latest` and mutable endpoints are not valid release/safety subject refs.
 - Inline response text is allowed only for local analysis and must be marked `sensitivity: local_only`.
 
+### Evaluation Subject Export
+
+RunStore-backed Evaluation Subject Export can generate an Evaluation Subject Manifest from completed run artifacts and explicit `case_ref` mappings.
+
+The Dashboard backend exposes:
+
+```text
+POST /api/evaluation/subject-manifests/export
+```
+
+The export endpoint writes manifests under the local run root's `evaluation_subject_exports/` directory. It requires an explicit response projection file for each selected run and declares hashes for trace, receipt, run metadata, and response projection artifacts. Export does not evaluate, create runs, call model providers, or repair Agent configuration.
+
+Release-sufficient example:
+
+```bash
+proof-agent evaluate analyze \
+  --suite smoke \
+  --subjects proof_agent/evaluation/subjects/examples/insurance_qa_smoke_release_subjects.yaml \
+  --output-dir runs/evaluations
+```
+
+### Frozen Subject Bundle
+
+Frozen Subject Bundles copy an Evaluation Suite, Evaluation Subject Manifest, and linked artifacts into a portable archive directory:
+
+```text
+bundles/{bundle_id}/
+  evaluation_suite.yaml
+  evaluation_subjects.yaml
+  bundle_manifest.yaml
+  artifacts/{case_or_step}/...
+```
+
+The bundle writer rewrites artifact refs to local bundle paths and declares observed hashes for trace, receipt, optional run metadata, and evaluated response projection artifacts. Frozen release bundles require file-backed response projections; inline `local_only` response text is rejected.
+
+CLI:
+
+```bash
+proof-agent evaluate freeze-bundle \
+  --suite path/to/evaluation_suite.yaml \
+  --subjects path/to/evaluation_subjects.yaml \
+  --output-dir runs/bundles \
+  --bundle-id release_2026_06_09 \
+  --version 2026-06-09
+```
+
+Integrity verification:
+
+```bash
+proof-agent evaluate verify-bundle runs/bundles/release_2026_06_09
+```
+
 ### Response Projection
 
 The evaluated response must be distinct from internal audit material.
@@ -170,8 +222,11 @@ Analyzer V1 is intentionally small:
 - File-based suite loading.
 - File-based Evaluation Subject Manifest loading.
 - Linked artifact refs, with optional hash validation.
-- No Frozen Subject Bundle support.
-- No Dashboard export.
+- RunStore-backed Evaluation Subject Export for explicit Dashboard selections.
+- Frozen Subject Bundle core and CLI support.
+- Evaluation Store read model and Dashboard read API over analysis artifacts.
+- `run_purpose: evaluation_sample` metadata for future producers.
+- No full Dashboard curation UI or bulk scenario export.
 - No Evaluation Run Producer.
 - No model or human judge execution.
 - No production curation workflow.
@@ -249,7 +304,7 @@ Node Results explain failures and support repair ownership. They do not replace 
 
 ## Scenarios
 
-V1 is scenario-aware but does not fully implement continuation linkage gates.
+V1 is scenario-aware but does not fully implement all continuation linkage gates.
 
 V1 supports:
 
@@ -257,6 +312,20 @@ V1 supports:
 - subject mapping by `scenario_id + scenario_step_id + case_id`
 - per-step case analysis
 - ordered outcome checks
+- deterministic `same_conversation` linkage checks via `run_ref.conversation_id`
+- approval event reference checks through per-step `approval_event_ids`
+
+Example:
+
+```yaml
+scenarios:
+  - scenario_id: approval_required
+    steps:
+      - step_id: first
+        case_id: tool_step
+        approval_event_ids:
+          - evt_approval_1
+```
 - scenario report grouping
 
 Deferred:
@@ -284,6 +353,21 @@ Analyzer V1 hard release checks are deterministic:
 | Run/audit errors | 0 required run errors, trace parse errors, or receipt generation failures. |
 
 Judge quality, latency, token usage, cost, and tool counts are diagnostic in V1.
+
+### Analyzer Release Decision
+
+Analyzer V1 produces a machine-readable `release_decision` on the analysis summary and writes it to the Evaluation Report and Evaluation Analysis Receipt.
+
+The built-in decision profile is `core_analyzer_release.v1`. It is a post-run decision over analysis artifacts only; it does not create runs, repair agents, or call Harness execution surfaces.
+
+`core_analyzer_release.v1` returns `passed` only when all of the following hold:
+
+- required release cases have a 100% pass rate
+- required release subjects have 100% artifact sufficiency, including declared hashes
+- required deterministic gates have a 100% pass rate
+- required scenarios, when present, have a 100% pass rate
+
+Otherwise the decision is `blocked` and includes stable blocking reason strings such as `required_case_pass_rate below release threshold` or `artifact_sufficiency_rate below release threshold`.
 
 ## Failure Ownership
 
@@ -316,6 +400,15 @@ runs/evaluations/{evaluation_analysis_id}/
 
 Evaluation Store does not copy case run artifacts by default. Result rows store artifact refs, hashes when available, safe summaries, gate results, node results, artifact sufficiency, and failure ownership. Full evaluated response text is not stored by default.
 
+Dashboard read APIs:
+
+```text
+GET /api/evaluation/analyses
+GET /api/evaluation/analyses/{analysis_id}/cases
+```
+
+These APIs expose read-only projections over Analyzer artifacts. They do not re-run analysis or load full evaluated response text.
+
 ### Evaluation Analysis Receipt
 
 The receipt records:
@@ -325,6 +418,7 @@ The receipt records:
 - subject manifest id and version
 - gate profile id and version
 - Analyzer version
+- release decision and blocking reasons
 - subject coverage and artifact sufficiency
 - judge mode, usually `none` in V1
 - sample provenance and curation status when present
@@ -345,11 +439,8 @@ When suite, gate profile, subject manifest, or rubric versions change, trend rep
 
 ## Future Work
 
-- Evaluation Subject Export from Dashboard and RunStore.
-- Frozen Subject Bundles for release archive and cross-environment review.
 - Evaluation Run Producer using existing execution surfaces.
-- `run_purpose: evaluation_sample`.
 - Full scenario continuation linkage gates.
 - Audited Evaluation Judge and claim-level support diagnostics.
 - Production curation workflow with Domain Evaluation Reviewer and Harness Evaluation Reviewer confirmation.
-- Dashboard evaluation overview and case drilldown as read-only projections over analysis artifacts.
+- Dashboard UI for evaluation overview, case drilldown, export selection, and curation workflows.

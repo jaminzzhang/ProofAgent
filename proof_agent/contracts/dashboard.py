@@ -22,6 +22,7 @@ class RunPurpose(str, Enum):
 
     PRODUCTION = "production"
     VALIDATION = "validation"
+    EVALUATION_SAMPLE = "evaluation_sample"
 
 
 class RunSummary(FrozenModel):

@@ -4,6 +4,8 @@ from hashlib import sha256
 import pytest
 
 from proof_agent.evaluation.errors import EvaluationInputError
+from proof_agent.contracts import EvaluationReleaseDecisionStatus
+from proof_agent.evaluation.analyzer import analyze_evaluation
 from proof_agent.evaluation.subjects import load_evaluation_subject_manifest
 
 
@@ -120,6 +122,18 @@ def test_subject_loader_reads_example_fixture_manifest() -> None:
     assert manifest.suite_id == "insurance_qa_smoke"
     assert manifest.subjects[0].case_ref.case_id == "react_supported_travel_meal"
     assert manifest.subjects[0].trace.ref.exists()
+
+
+def test_release_sufficient_example_subject_manifest_passes_analyzer(tmp_path: Path) -> None:
+    summary = analyze_evaluation(
+        suite_path="smoke",
+        subjects_path=Path(
+            "proof_agent/evaluation/subjects/examples/insurance_qa_smoke_release_subjects.yaml"
+        ),
+        output_dir=tmp_path / "evaluations",
+    )
+
+    assert summary.release_decision.status == EvaluationReleaseDecisionStatus.PASSED
 
 
 def test_subject_loader_allows_inline_response_text_only_for_local_analysis(

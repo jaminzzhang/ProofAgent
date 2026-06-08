@@ -135,9 +135,20 @@ def test_runs_api_filters_by_run_purpose(tmp_path: Path) -> None:
             run_purpose=RunPurpose.VALIDATION,
         )
     )
+    store.write_run_meta(
+        RunIndex(
+            run_id="run_evaluation_sample",
+            question="Evaluation sample question",
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            created_at="2026-05-10T14:32:22Z",
+            updated_at="2026-05-10T14:32:23Z",
+            run_purpose=RunPurpose.EVALUATION_SAMPLE,
+        )
+    )
 
     default_response = client.get("/api/runs")
     validation_response = client.get("/api/runs?run_purpose=validation")
+    evaluation_sample_response = client.get("/api/runs?run_purpose=evaluation_sample")
     all_response = client.get("/api/runs?run_purpose=all")
 
     assert default_response.status_code == 200
@@ -146,5 +157,8 @@ def test_runs_api_filters_by_run_purpose(tmp_path: Path) -> None:
     assert validation_response.status_code == 200
     assert validation_response.json()["meta"]["total"] == 1
     assert validation_response.json()["data"][0]["run_id"] == "run_validation"
+    assert evaluation_sample_response.status_code == 200
+    assert evaluation_sample_response.json()["meta"]["total"] == 1
+    assert evaluation_sample_response.json()["data"][0]["run_id"] == "run_evaluation_sample"
     assert all_response.status_code == 200
-    assert all_response.json()["meta"]["total"] == 2
+    assert all_response.json()["meta"]["total"] == 3

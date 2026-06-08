@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import typer
 
 from proof_agent import __version__
+from proof_agent.contracts import EvaluationReleaseDecisionStatus
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.analyzer import analyze_evaluation
 from proof_agent.evaluation.demo.scenarios import (
@@ -21,6 +22,10 @@ from proof_agent.evaluation.demo.scenarios import (
     SUPPORTED_QUESTION,
 )
 from proof_agent.evaluation.errors import EvaluationInputError
+from proof_agent.evaluation.frozen_bundles import (
+    freeze_evaluation_subject_bundle,
+    verify_evaluation_subject_bundle,
+)
 from proof_agent.observability.storage.run_store import RunStore
 
 if TYPE_CHECKING:
@@ -230,7 +235,62 @@ def evaluate_analyze(
         f"{summary.passed_required_cases}/{summary.total_required_cases} "
         f"({summary.governed_resolution_rate:.3f})"
     )
-    if summary.passed_required_cases < summary.total_required_cases:
+    typer.echo(f"Release Decision: {summary.release_decision.status.value}")
+    if summary.release_decision.blocking_reasons:
+        typer.echo(
+            "Release Blocking Reasons: "
+            + ", ".join(summary.release_decision.blocking_reasons)
+        )
+    if summary.release_decision.status == EvaluationReleaseDecisionStatus.BLOCKED:
+        raise typer.Exit(code=1)
+
+
+@evaluate_app.command("freeze-bundle")
+def evaluate_freeze_bundle(
+    suite: str = typer.Option(..., "--suite", help="Evaluation Suite YAML path"),
+    subjects: str = typer.Option(..., "--subjects", help="Evaluation Subject Manifest YAML path"),
+    output_dir: str = typer.Option(..., "--output-dir", help="Directory for frozen bundles"),
+    bundle_id: str = typer.Option(..., "--bundle-id", help="Frozen bundle id"),
+    version: str = typer.Option(..., "--version", help="Frozen bundle version"),
+) -> None:
+    """Freeze evaluation inputs into a portable post-run subject bundle."""
+
+    try:
+        bundle = freeze_evaluation_subject_bundle(
+            suite_path=Path(suite),
+            subjects_path=Path(subjects),
+            output_dir=Path(output_dir),
+            bundle_id=bundle_id,
+            version=version,
+        )
+    except EvaluationInputError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo(f"Bundle: {bundle.bundle_dir}")
+    typer.echo(f"Suite: {bundle.suite_path}")
+    typer.echo(f"Subjects: {bundle.subject_manifest_path}")
+    typer.echo(f"Manifest: {bundle.bundle_manifest_path}")
+    typer.echo(f"Artifacts: {bundle.artifact_count}")
+
+
+@evaluate_app.command("verify-bundle")
+def evaluate_verify_bundle(
+    bundle_dir: str = typer.Argument(..., help="Frozen Evaluation Subject Bundle directory"),
+) -> None:
+    """Verify hashes for a frozen post-run subject bundle."""
+
+    try:
+        verification = verify_evaluation_subject_bundle(Path(bundle_dir))
+    except EvaluationInputError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo(f"Bundle Integrity: {verification.status}")
+    typer.echo(f"Checked Artifacts: {verification.checked_artifact_count}")
+    if verification.missing_artifacts:
+        typer.echo("Missing Artifacts: " + ", ".join(verification.missing_artifacts))
+    if verification.mismatched_artifacts:
+        typer.echo("Mismatched Artifacts: " + ", ".join(verification.mismatched_artifacts))
+    if verification.status == "failed":
         raise typer.Exit(code=1)
 
 

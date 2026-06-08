@@ -1,0 +1,2 @@
+{"event_type":"policy_decision","status":"ok"}
+{"event_type":"final_output","status":"ok","payload":{"outcome":"REFUSED_NO_EVIDENCE"}}

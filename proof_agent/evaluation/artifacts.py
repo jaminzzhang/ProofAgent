@@ -35,6 +35,7 @@ def _report_markdown(summary: EvaluationAnalysisSummary) -> str:
         f"- scenario_governed_resolution_rate: {summary.scenario_governed_resolution_rate:.3f}",
         f"- subject_coverage_rate: {summary.subject_coverage_rate:.3f}",
         f"- artifact_sufficiency_rate: {summary.artifact_sufficiency_rate:.3f}",
+        f"- release_decision: {summary.release_decision.status.value}",
         "",
         "## Case Results",
         "",
@@ -76,6 +77,13 @@ def _analysis_receipt_markdown(summary: EvaluationAnalysisSummary) -> str:
         f"subject_manifest_version: {summary.subject_manifest_version}",
         f"gate_profile_id: {summary.gate_profile_id}",
         f"judge_mode: {summary.judge_mode}",
+        f"release_decision: {summary.release_decision.status.value}",
+        "release_blocking_reasons: "
+        + (
+            ", ".join(summary.release_decision.blocking_reasons)
+            if summary.release_decision.blocking_reasons
+            else "none"
+        ),
         f"governed_resolution_rate: {summary.governed_resolution_rate:.3f}",
         f"scenario_governed_resolution_rate: {summary.scenario_governed_resolution_rate:.3f}",
         f"subject_coverage_rate: {summary.subject_coverage_rate:.3f}",

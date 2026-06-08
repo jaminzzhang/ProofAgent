@@ -16,6 +16,7 @@ class EvaluationTraceEvent:
     status: str | None
     payload: Mapping[str, Any]
     redaction: Mapping[str, Any]
+    event_id: str | None = None
     run_id: str | None = None
     sequence: int | None = None
 
@@ -69,6 +70,7 @@ def _read_trace(path: Path) -> tuple[EvaluationTraceEvent, ...]:
                 status=_optional_str(raw.get("status")),
                 payload=_mapping(raw.get("payload")),
                 redaction=_mapping(raw.get("redaction")),
+                event_id=_optional_str(raw.get("event_id")),
                 run_id=_optional_str(raw.get("run_id")),
                 sequence=_optional_int(raw.get("sequence")),
             )

@@ -7,8 +7,14 @@ from typing import cast
 from fastapi import Request
 
 from proof_agent.observability.storage.run_store import RunStore
+from proof_agent.evaluation.store import EvaluationStore
 
 
 def get_store(request: Request) -> RunStore:
     """Retrieve the shared RunStore from application state."""
     return cast(RunStore, request.app.state.store)
+
+
+def get_evaluation_store(request: Request) -> EvaluationStore:
+    """Retrieve the shared EvaluationStore from application state."""
+    return cast(EvaluationStore, request.app.state.evaluation_store)

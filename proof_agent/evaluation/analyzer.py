@@ -17,8 +17,11 @@ from proof_agent.contracts import (
     EvaluationGateResult,
     EvaluationGateStatus,
     EvaluationNodeResult,
+    EvaluationReleaseDecision,
+    EvaluationReleaseDecisionStatus,
     EvaluationResponseProjectionSummary,
     EvaluationScenario,
+    EvaluationScenarioLinkageMode,
     EvaluationScenarioResult,
     EvaluationScenarioStep,
     EvaluationSubject,
@@ -78,6 +81,11 @@ def analyze_evaluation(
     passed_required_scenarios = sum(
         1 for result in required_scenarios if result.status == EvaluationGateStatus.PASSED
     )
+    required_scenario_rate = (
+        _rate(passed_required_scenarios, len(required_scenarios))
+        if required_scenarios
+        else None
+    )
     artifact_sufficient = sum(
         1
         for result in case_results
@@ -100,9 +108,10 @@ def analyze_evaluation(
         deterministic_gate_pass_rate=_deterministic_gate_pass_rate(case_results),
         case_results=case_results,
         scenario_results=scenario_results,
-        scenario_governed_resolution_rate=_rate(
-            passed_required_scenarios,
-            len(required_scenarios),
+        scenario_governed_resolution_rate=required_scenario_rate or 0.0,
+        release_decision=_release_decision(
+            required_results=required_results,
+            required_scenario_results=required_scenarios,
         ),
         warnings=warnings,
         agent=dict(manifest.agent),
@@ -195,12 +204,25 @@ def _analyze_scenario(
         for step, result in zip(scenario.steps, step_results, strict=True)
         if result.status == EvaluationGateStatus.FAILED
     )
+    linkage_status, linkage_reason = _scenario_linkage_status(
+        scenario,
+        subject_by_ref=subject_by_ref,
+    )
+    approval_linkage_status, approval_linkage_reason = _scenario_approval_linkage_status(
+        scenario,
+        subject_by_ref=subject_by_ref,
+    )
     order_matches = (
         not expected_ordered_outcomes or expected_ordered_outcomes == actual_ordered_outcomes
     )
     status = (
         EvaluationGateStatus.PASSED
-        if not failed_step_ids and order_matches
+        if (
+            not failed_step_ids
+            and order_matches
+            and linkage_status == EvaluationGateStatus.PASSED
+            and approval_linkage_status == EvaluationGateStatus.PASSED
+        )
         else EvaluationGateStatus.FAILED
     )
     return EvaluationScenarioResult(
@@ -210,7 +232,92 @@ def _analyze_scenario(
         actual_ordered_outcomes=actual_ordered_outcomes,
         step_results=step_results,
         failed_step_ids=failed_step_ids,
+        linkage_status=linkage_status,
+        linkage_reason=linkage_reason,
+        approval_linkage_status=approval_linkage_status,
+        approval_linkage_reason=approval_linkage_reason,
     )
+
+
+def _scenario_linkage_status(
+    scenario: EvaluationScenario,
+    *,
+    subject_by_ref: dict[SubjectKey, EvaluationSubject],
+) -> tuple[EvaluationGateStatus, str | None]:
+    if scenario.linkage.mode == EvaluationScenarioLinkageMode.NONE:
+        return EvaluationGateStatus.PASSED, None
+    subjects = tuple(subject_by_ref.get(_step_key(scenario, step)) for step in scenario.steps)
+    if any(subject is None for subject in subjects):
+        return (
+            EvaluationGateStatus.FAILED,
+            "scenario linkage could not be evaluated because one or more step subjects were missing",
+        )
+    if scenario.linkage.mode == EvaluationScenarioLinkageMode.SAME_CONVERSATION:
+        conversation_ids = tuple(
+            subject.run_ref.conversation_id
+            for subject in subjects
+            if subject is not None and subject.run_ref is not None
+        )
+        if len(conversation_ids) != len(subjects) or any(
+            conversation_id is None for conversation_id in conversation_ids
+        ):
+            return (
+                EvaluationGateStatus.FAILED,
+                "same conversation linkage requires every scenario step subject to declare run_ref.conversation_id",
+            )
+        if len(set(conversation_ids)) != 1:
+            return (
+                EvaluationGateStatus.FAILED,
+                "same conversation linkage expected one shared conversation_id",
+            )
+        return EvaluationGateStatus.PASSED, "same conversation linkage matched"
+    return (
+        EvaluationGateStatus.FAILED,
+        f"scenario linkage mode is not implemented: {scenario.linkage.mode.value}",
+    )
+
+
+def _scenario_approval_linkage_status(
+    scenario: EvaluationScenario,
+    *,
+    subject_by_ref: dict[SubjectKey, EvaluationSubject],
+) -> tuple[EvaluationGateStatus, str | None]:
+    expected_by_step = {
+        step.step_id: step.approval_event_ids
+        for step in scenario.steps
+        if step.approval_event_ids
+    }
+    if not expected_by_step:
+        return EvaluationGateStatus.PASSED, None
+    missing_refs: list[str] = []
+    for step in scenario.steps:
+        expected = expected_by_step.get(step.step_id)
+        if not expected:
+            continue
+        subject = subject_by_ref.get(_step_key(scenario, step))
+        if subject is None:
+            missing_refs.extend(expected)
+            continue
+        artifacts = read_evaluation_artifacts(subject)
+        observed = {
+            event.event_id
+            for event in artifacts.trace_events
+            if event.event_type
+            in {
+                "approval_requested",
+                "approval_granted",
+                "approval_denied",
+                "approval_timeout",
+            }
+            and event.event_id is not None
+        }
+        missing_refs.extend(ref for ref in expected if ref not in observed)
+    if missing_refs:
+        return (
+            EvaluationGateStatus.FAILED,
+            "missing approval event refs: " + ", ".join(sorted(missing_refs)),
+        )
+    return EvaluationGateStatus.PASSED, "approval event references matched"
 
 
 def _analyze_scenario_step(
@@ -342,6 +449,65 @@ def _deterministic_gate_pass_rate(case_results: tuple[EvaluationCaseResult, ...]
     ]
     passed = sum(1 for gate in deterministic_gates if gate.status == EvaluationGateStatus.PASSED)
     return _rate(passed, len(deterministic_gates))
+
+
+def _release_decision(
+    *,
+    required_results: tuple[EvaluationCaseResult, ...],
+    required_scenario_results: tuple[EvaluationScenarioResult, ...],
+) -> EvaluationReleaseDecision:
+    required_case_pass_rate = _rate(
+        sum(1 for result in required_results if result.status == EvaluationGateStatus.PASSED),
+        len(required_results),
+    )
+    required_artifact_sufficiency_rate = _rate(
+        sum(
+            1
+            for result in required_results
+            if result.artifact_sufficiency == EvaluationArtifactSufficiencyStatus.SUFFICIENT
+        ),
+        len(required_results),
+    )
+    required_deterministic_gate_pass_rate = _deterministic_gate_pass_rate(required_results)
+    required_scenario_pass_rate = (
+        _rate(
+            sum(
+                1
+                for result in required_scenario_results
+                if result.status == EvaluationGateStatus.PASSED
+            ),
+            len(required_scenario_results),
+        )
+        if required_scenario_results
+        else None
+    )
+
+    blocking_reasons: list[str] = []
+    if not required_results:
+        blocking_reasons.append("no required release cases declared")
+    else:
+        if required_case_pass_rate < 1.0:
+            blocking_reasons.append("required_case_pass_rate below release threshold")
+        if required_artifact_sufficiency_rate < 1.0:
+            blocking_reasons.append("artifact_sufficiency_rate below release threshold")
+        if required_deterministic_gate_pass_rate < 1.0:
+            blocking_reasons.append("deterministic_gate_pass_rate below release threshold")
+    if required_scenario_pass_rate is not None and required_scenario_pass_rate < 1.0:
+        blocking_reasons.append("scenario_pass_rate below release threshold")
+
+    return EvaluationReleaseDecision(
+        status=(
+            EvaluationReleaseDecisionStatus.BLOCKED
+            if blocking_reasons
+            else EvaluationReleaseDecisionStatus.PASSED
+        ),
+        required_case_pass_rate=required_case_pass_rate,
+        required_artifact_sufficiency_rate=required_artifact_sufficiency_rate,
+        required_deterministic_gate_pass_rate=required_deterministic_gate_pass_rate,
+        required_scenario_pass_rate=required_scenario_pass_rate,
+        scenario_pass_threshold=1.0 if required_scenario_results else None,
+        blocking_reasons=tuple(blocking_reasons),
+    )
 
 
 def _rate(numerator: int, denominator: int) -> float:

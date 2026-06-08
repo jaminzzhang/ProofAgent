@@ -66,6 +66,12 @@ class EvaluationNodeStage(str, Enum):
     AUDIT_PROJECTION = "audit_projection"
 
 
+class EvaluationScenarioLinkageMode(str, Enum):
+    NONE = "none"
+    SAME_CONVERSATION = "same_conversation"
+    SAME_CONTINUATION_GROUP = "same_continuation_group"
+
+
 class EvaluationFailureOwner(str, Enum):
     KNOWLEDGE_GAP = "knowledge_gap"
     RETRIEVAL_FAILURE = "retrieval_failure"
@@ -82,6 +88,11 @@ class EvaluationResponseProjectionAudience(str, Enum):
     OPERATOR = "operator"
     CUSTOMER = "customer"
     DIRECT = "direct"
+
+
+class EvaluationReleaseDecisionStatus(str, Enum):
+    PASSED = "passed"
+    BLOCKED = "blocked"
 
 
 class EvaluationResponseAssertions(FrozenModel):
@@ -129,6 +140,11 @@ class EvaluationCase(FrozenModel):
 class EvaluationScenarioStep(FrozenModel):
     step_id: str
     case_id: str
+    approval_event_ids: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class EvaluationScenarioLinkage(FrozenModel):
+    mode: EvaluationScenarioLinkageMode = EvaluationScenarioLinkageMode.NONE
 
 
 class EvaluationScenario(FrozenModel):
@@ -136,6 +152,7 @@ class EvaluationScenario(FrozenModel):
     steps: tuple[EvaluationScenarioStep, ...]
     expected_ordered_outcomes: tuple[ReceiptOutcome, ...] = Field(default_factory=tuple)
     required_for_release: bool = True
+    linkage: EvaluationScenarioLinkage = Field(default_factory=EvaluationScenarioLinkage)
 
 
 class EvaluationSuite(FrozenModel):
@@ -188,6 +205,51 @@ class EvaluationSubject(FrozenModel):
     @classmethod
     def freeze_metadata(cls, value: Any) -> Any:
         return freeze_value(value)
+
+
+class EvaluationSubjectExportSelection(FrozenModel):
+    case_ref: EvaluationCaseRef
+    run_id: str
+    response_projection_ref: Path
+    response_projection_audience: EvaluationResponseProjectionAudience
+    response_projection_sensitivity: Literal["local_only", "release_safe"] = "release_safe"
+    execution_surface: EvaluationExecutionSurface = EvaluationExecutionSurface.RUN_EXECUTION_API
+
+
+class EvaluationFrozenSubjectBundle(FrozenModel):
+    bundle_id: str
+    version: str
+    suite_id: str
+    suite_version: str
+    subject_manifest_id: str
+    subject_manifest_version: str
+    bundle_dir: Path
+    suite_path: Path
+    subject_manifest_path: Path
+    bundle_manifest_path: Path
+    artifact_count: int
+
+
+class EvaluationFrozenBundleVerification(FrozenModel):
+    bundle_id: str
+    status: Literal["passed", "failed"]
+    checked_artifact_count: int
+    missing_artifacts: tuple[str, ...] = Field(default_factory=tuple)
+    mismatched_artifacts: tuple[str, ...] = Field(default_factory=tuple)
+    suite_id: str | None = None
+    subject_manifest_id: str | None = None
+
+
+class EvaluationAnalysisRecord(FrozenModel):
+    analysis_id: str
+    suite_id: str
+    subject_manifest_id: str
+    release_decision_status: EvaluationReleaseDecisionStatus | None = None
+    governed_resolution_rate: float = 0.0
+    artifact_sufficiency_rate: float = 0.0
+    failed_case_count: int = 0
+    total_case_count: int = 0
+    artifact_dir: Path
 
 
 class EvaluationSubjectManifest(FrozenModel):
@@ -280,6 +342,24 @@ class EvaluationScenarioResult(FrozenModel):
     actual_ordered_outcomes: tuple[str, ...] = Field(default_factory=tuple)
     step_results: tuple[EvaluationCaseResult, ...] = Field(default_factory=tuple)
     failed_step_ids: tuple[str, ...] = Field(default_factory=tuple)
+    linkage_status: EvaluationGateStatus = EvaluationGateStatus.PASSED
+    linkage_reason: str | None = None
+    approval_linkage_status: EvaluationGateStatus = EvaluationGateStatus.PASSED
+    approval_linkage_reason: str | None = None
+
+
+class EvaluationReleaseDecision(FrozenModel):
+    decision_profile_id: str = "core_analyzer_release.v1"
+    status: EvaluationReleaseDecisionStatus
+    required_case_pass_rate: float
+    required_case_pass_threshold: float = 1.0
+    required_artifact_sufficiency_rate: float
+    artifact_sufficiency_threshold: float = 1.0
+    required_deterministic_gate_pass_rate: float
+    deterministic_gate_pass_threshold: float = 1.0
+    required_scenario_pass_rate: float | None = None
+    scenario_pass_threshold: float | None = None
+    blocking_reasons: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class EvaluationAnalysisSummary(FrozenModel):
@@ -299,6 +379,7 @@ class EvaluationAnalysisSummary(FrozenModel):
     case_results: tuple[EvaluationCaseResult, ...] = Field(default_factory=tuple)
     scenario_results: tuple[EvaluationScenarioResult, ...] = Field(default_factory=tuple)
     scenario_governed_resolution_rate: float = 0.0
+    release_decision: EvaluationReleaseDecision
     warnings: tuple[str, ...] = Field(default_factory=tuple)
     agent: dict[str, Any] = Field(default_factory=dict)
     artifact_dir: Path | None = None

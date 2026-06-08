@@ -21,7 +21,7 @@ def list_runs(
     outcome: str | None = Query(None, description="Filter by receipt outcome"),
     run_purpose: str | None = Query(
         None,
-        description="Filter by run purpose: production, validation, or all",
+        description="Filter by run purpose: production, validation, evaluation_sample, or all",
     ),
     search: str | None = Query(None, description="Search run ID or question text"),
     limit: int = Query(50, ge=1, le=200),

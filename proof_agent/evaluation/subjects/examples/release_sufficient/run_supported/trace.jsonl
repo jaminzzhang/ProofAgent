@@ -1,0 +1,4 @@
+{"event_type":"retrieval_result","status":"ok","payload":{"source_refs":["customer-support-policy"]}}
+{"event_type":"evidence_evaluation","status":"ok","payload":{"metadata":{"accepted_count":1},"accepted_sources":["customer-support-policy"]}}
+{"event_type":"policy_decision","status":"ok"}
+{"event_type":"final_output","status":"ok","payload":{"outcome":"ANSWERED_WITH_CITATIONS"}}

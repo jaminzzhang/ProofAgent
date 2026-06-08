@@ -15,7 +15,8 @@ from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.observability.api.routers import handoffs, health, runs, stats
+from proof_agent.evaluation.store import EvaluationStore
+from proof_agent.observability.api.routers import evaluation, handoffs, health, runs, stats
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.customer_store import CustomerStore
 from proof_agent.observability.storage.run_store import RunStore
@@ -24,6 +25,7 @@ from proof_agent.observability.storage.run_store import RunStore
 def create_app(
     *,
     history_dir: Path = Path("runs/history"),
+    evaluations_dir: Path | None = None,
     runs_dir: Path = Path("runs/latest"),
     conversations_dir: Path = Path("runs/conversations"),
     published_agents: dict[str, Path] | None = None,
@@ -74,6 +76,9 @@ def create_app(
 
     store = RunStore(history_dir)
     application.state.store = store
+    application.state.evaluation_store = EvaluationStore(
+        evaluations_dir or history_dir.parent / "evaluations"
+    )
     application.state.runs_dir = runs_dir
     application.state.conversation_store = ConversationStore(conversations_dir)
     application.state.customer_store = CustomerStore(
@@ -96,6 +101,7 @@ def create_app(
     application.include_router(configuration_router, prefix="/api")
     application.include_router(customer_router, prefix="/api")
     application.include_router(runs.router, prefix="/api")
+    application.include_router(evaluation.router, prefix="/api")
     application.include_router(stats.router, prefix="/api")
     application.include_router(handoffs.router, prefix="/api")
     application.include_router(health.router, prefix="/api")
