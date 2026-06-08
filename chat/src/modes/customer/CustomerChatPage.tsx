@@ -45,6 +45,7 @@ export function CustomerChatPage() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [allowUntrustedWebSupplement, setAllowUntrustedWebSupplement] = useState(false)
 
   const activeMode = useMemo(
     () => CUSTOMER_MODES.find((item) => item.id === mode) ?? CUSTOMER_MODES[0],
@@ -125,7 +126,9 @@ export function CustomerChatPage() {
 
     try {
       const activeConversation = await ensureConversation()
-      const response = await createCustomerRun(activeConversation.conversation_id, trimmed)
+      const response = await createCustomerRun(activeConversation.conversation_id, trimmed, {
+        allowUntrustedWebSupplement,
+      })
       const updated = await fetchCustomerConversation(activeConversation.conversation_id)
       setConversation(updated)
       setTurns(updated.turns.length > 0 ? updated.turns : [responseToTurn(trimmed, response)])
@@ -186,6 +189,10 @@ export function CustomerChatPage() {
       onInputChange={setInput}
       onSubmit={() => void sendQuestion(input)}
       sending={sending}
+      untrustedWebSupplementToggle={{
+        checked: allowUntrustedWebSupplement,
+        onChange: setAllowUntrustedWebSupplement,
+      }}
       placeholder="Ask about a policy, claim, or reimbursement"
       submitLabel="Send"
       emptyTitle="Start a Conversation"

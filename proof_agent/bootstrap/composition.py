@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import cast
 
@@ -152,7 +153,11 @@ def compose_harness_invocation(
         ),
         resolved_knowledge_bindings=resolved_bindings,
         model_provider=resolve_provider(resolved_answer_model.model_config),
-        tool_gateway=ToolGateway.from_file(resolved_manifest.tools.file),
+        tool_gateway=ToolGateway.from_file(
+            resolved_manifest.tools.file,
+            configuration_store=configuration_store,
+            tool_source_env=os.environ,
+        ),
         react_planner=react_planner,
         review_subagent=review_subagent,
         retrieval_planner_model=resolved_retrieval_planner_model,

@@ -10,7 +10,13 @@ from uuid import NAMESPACE_URL, uuid5
 
 import yaml  # type: ignore[import-untyped]
 
+from proof_agent.capabilities.tools.brave_search import (
+    BraveSearchTransport,
+    create_brave_untrusted_web_search_handler,
+)
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import ApprovalState, ApprovalStatus
+from proof_agent.control.tools.untrusted_web import sanitize_web_search_query
 from proof_agent.errors import ProofAgentError
 from proof_agent.capabilities.tools.approval import create_approval_state
 
@@ -29,6 +35,8 @@ class ToolConfig:
 
     name: str
     handler: LocalToolHandler | None
+    built_in_handler: ToolCallable | None
+    tool_source_id: str | None
     risk_level: str
     requires_approval: bool
     read_only: bool
@@ -52,14 +60,30 @@ class ToolGateway:
         self.tools = dict(tools)
 
     @classmethod
-    def from_file(cls, path: str | Path) -> ToolGateway:
+    def from_file(
+        cls,
+        path: str | Path,
+        *,
+        configuration_store: LocalAgentConfigurationStore | None = None,
+        tool_source_env: Mapping[str, str] | None = None,
+        brave_search_transport: BraveSearchTransport | None = None,
+    ) -> ToolGateway:
         tools_path = Path(path)
         raw = yaml.safe_load(tools_path.read_text(encoding="utf-8")) or {}
         configs = {}
         for tool in raw.get("tools", []):
+            tool_source_id = _optional_tool_source_id(tool)
             config = ToolConfig(
                 name=tool["name"],
                 handler=_handler_from_mapping(tool.get("handler"), base_dir=tools_path.parent),
+                built_in_handler=_built_in_handler_from_tool_source(
+                    tool_name=tool["name"],
+                    tool_source_id=tool_source_id,
+                    configuration_store=configuration_store,
+                    tool_source_env=tool_source_env,
+                    brave_search_transport=brave_search_transport,
+                ),
+                tool_source_id=tool_source_id,
                 risk_level=tool["risk_level"],
                 requires_approval=bool(tool.get("requires_approval", False)),
                 read_only=bool(tool.get("read_only", False)),
@@ -93,11 +117,17 @@ class ToolGateway:
         )
         if config.requires_approval and not approved:
             return ToolGatewayResult(approval_state=approval_state, executed=False)
+        execution_parameters, gateway_metadata = _prepare_parameters_for_execution(
+            config,
+            parameters,
+        )
         tool = _load_tool_callable(config)
+        tool_result = dict(tool(execution_parameters))
+        tool_result.update(gateway_metadata)
         return ToolGatewayResult(
             approval_state=approval_state,
             executed=True,
-            result=tool(parameters),
+            result=tool_result,
         )
 
     def _require_tool(self, tool_name: str) -> ToolConfig:
@@ -161,13 +191,87 @@ def _handler_from_mapping(raw: Any, *, base_dir: Path) -> LocalToolHandler | Non
 
 
 def _load_tool_callable(config: ToolConfig) -> ToolCallable:
+    if config.built_in_handler is not None:
+        return config.built_in_handler
     if config.handler is None:
         raise ProofAgentError(
             "PA_TOOL_001",
             f"tool has no local handler: {config.name}",
-            "Add handler: ./module.py:function_name to tools.yaml.",
+            "Add handler: ./module.py:function_name or tool_source_id to tools.yaml.",
         )
     return _load_callable_from_file(config.handler.path, config.handler.function_name)
+
+
+def _optional_tool_source_id(raw: Mapping[str, Any]) -> str | None:
+    value = raw.get("tool_source_id")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "tool_source_id must be a non-empty string.",
+            "Use a Dashboard-managed Tool Source id, such as tool_brave_default.",
+        )
+    return value.strip()
+
+
+def _built_in_handler_from_tool_source(
+    *,
+    tool_name: str,
+    tool_source_id: str | None,
+    configuration_store: LocalAgentConfigurationStore | None,
+    tool_source_env: Mapping[str, str] | None,
+    brave_search_transport: BraveSearchTransport | None,
+) -> ToolCallable | None:
+    if tool_source_id is None:
+        return None
+    if configuration_store is None:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            f"tool_source_id requires a configuration store: {tool_source_id}",
+            "Run with a LocalAgentConfigurationStore or use a local handler.",
+        )
+    source = configuration_store.get_tool_source(tool_source_id)
+    if source is None:
+        raise ProofAgentError(
+            "PA_TOOL_SOURCE_002",
+            f"Tool Source not found: {tool_source_id}",
+            "Create the Tool Source in Dashboard configuration before binding it.",
+        )
+    if tool_name == "untrusted_web_search" and source.provider == "brave_search":
+        return create_brave_untrusted_web_search_handler(
+            source,
+            env=tool_source_env or {},
+            transport=brave_search_transport,
+        )
+    raise ProofAgentError(
+        "PA_TOOL_SOURCE_001",
+        f"Unsupported Tool Source binding: {tool_name} -> {source.provider}",
+        "Use a built-in descriptor that exposes the requested tool contract.",
+    )
+
+
+def _prepare_parameters_for_execution(
+    config: ToolConfig,
+    parameters: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    if config.name != "untrusted_web_search":
+        return parameters, {}
+    raw_query = str(parameters.get("query", ""))
+    context = sanitize_web_search_query(raw_query)
+    if not context.searchable:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "untrusted_web_search query is not safe to search after sanitization.",
+            "Ask a less identifying question or use controlled knowledge instead.",
+        )
+    execution_parameters = dict(parameters)
+    execution_parameters["query"] = context.sanitized_query
+    return execution_parameters, {
+        "sanitized_query": context.sanitized_query,
+        "sanitization_applied": context.sanitization_applied,
+        "sanitization_categories": context.sanitization_categories,
+    }
 
 
 def _load_callable_from_file(path: Path, function_name: str) -> ToolCallable:

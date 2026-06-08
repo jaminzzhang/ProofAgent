@@ -44,6 +44,7 @@ def build_enterprise_qa_graph(
     trace: TraceWriter,
     approved: bool | None = None,
     conversation_context: ContextAdmission | None = None,
+    allow_untrusted_web_supplement: bool = False,
 ) -> StateGraph:  # type: ignore[type-arg]
     manifest = invocation.manifest
 
@@ -95,9 +96,18 @@ def build_enterprise_qa_graph(
         )
 
         if evidence_result.status == "failed" or answer_decision.decision != "allow":
+            web_supplement = _maybe_untrusted_web_supplement(
+                invocation=invocation,
+                trace=trace,
+                question=question,
+                enabled=allow_untrusted_web_supplement,
+            )
+            message = "I cannot answer because the available evidence is insufficient."
+            if web_supplement:
+                message = f"{message}\n\n{web_supplement}"
             return {
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
-                "governance_message": "I cannot answer because the available evidence is insufficient.",
+                "governance_message": message,
             }
 
         return {"evidence": [_evidence_state_dict(chunk) for chunk in evidence]}
@@ -288,6 +298,129 @@ def build_enterprise_qa_graph(
     builder.add_conditional_edges("model", route_after_model)
 
     return builder
+
+
+def _maybe_untrusted_web_supplement(
+    *,
+    invocation: HarnessInvocation,
+    trace: TraceWriter,
+    question: str,
+    enabled: bool,
+) -> str:
+    if not enabled or "untrusted_web_search" not in invocation.tool_gateway.tools:
+        trace.emit(
+            "final_output_disclosure",
+            status="ok",
+            payload={"used_untrusted_web_context": False},
+        )
+        return ""
+
+    decision = invocation.policy.evaluate(
+        "before_tool_call",
+        {
+            "tool_name": "untrusted_web_search",
+            "risk_level": "medium",
+            "read_only": True,
+        },
+    )
+    emit_policy_decision(trace, decision)
+    if decision.decision != "allow":
+        trace.emit(
+            "final_output_disclosure",
+            status="blocked",
+            payload={
+                "used_untrusted_web_context": False,
+                "blocked_by_policy": True,
+                "policy_decision": decision.decision.value,
+            },
+        )
+        return ""
+
+    trace.emit(
+        "tool_request",
+        status="ok",
+        payload={
+            "tool_name": "untrusted_web_search",
+            "risk_level": "medium",
+            "read_only": True,
+        },
+    )
+    try:
+        gateway_result = invocation.tool_gateway.request_tool(
+            tool_name="untrusted_web_search",
+            parameters={"query": question, "max_results": 3},
+            approved=True,
+            run_id=trace.run_id,
+        )
+    except Exception as exc:
+        trace.emit(
+            "tool_result",
+            status="error",
+            payload={
+                "tool_name": "untrusted_web_search",
+                "error_code": getattr(exc, "code", "PA_TOOL_001"),
+                "error_class": exc.__class__.__name__,
+            },
+        )
+        trace.emit(
+            "final_output_disclosure",
+            status="ok",
+            payload={"used_untrusted_web_context": False},
+        )
+        return ""
+
+    tool_result = dict(gateway_result.result or {})
+    trace.emit(
+        "tool_result",
+        status="ok",
+        payload={
+            "tool_name": "untrusted_web_search",
+            "provider": tool_result.get("provider"),
+            "result_count": tool_result.get("result_count", len(tool_result.get("results", ()))),
+            "sanitized_query": tool_result.get("sanitized_query"),
+            "sanitization_applied": tool_result.get("sanitization_applied"),
+            "sanitization_categories": tool_result.get("sanitization_categories", ()),
+            "urls": [
+                result.get("url")
+                for result in tool_result.get("results", [])
+                if isinstance(result, dict)
+            ],
+        },
+    )
+    trace.emit(
+        "final_output_disclosure",
+        status="ok",
+        payload={
+            "used_untrusted_web_context": True,
+            "untrusted_web_disclaimer_present": True,
+        },
+    )
+    return _format_untrusted_web_supplement(tool_result.get("results", ()))
+
+
+def _format_untrusted_web_supplement(results: Any) -> str:
+    if not isinstance(results, list | tuple) or not results:
+        return ""
+    lines = [
+        "Network supplement (untrusted, not verified by controlled knowledge)",
+    ]
+    for item in results[:3]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "Untitled result")
+        snippet = str(item.get("snippet") or "").strip()
+        url = str(item.get("url") or "").strip()
+        line = f"- {title}"
+        if snippet:
+            line = f"{line}: {snippet}"
+        if url:
+            line = f"{line} ({url})"
+        lines.append(line)
+    lines.append(
+        "These public web search summaries may be outdated or inaccurate and cannot support "
+        "enterprise policy, contract, claims, or compliance conclusions."
+    )
+    return "\n".join(lines)
 
 
 def _evidence_state_dict(chunk: EvidenceChunk) -> dict[str, Any]:

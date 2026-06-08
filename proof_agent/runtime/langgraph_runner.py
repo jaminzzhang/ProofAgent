@@ -49,6 +49,7 @@ def run_with_langgraph(
     agent_id: str | None = None,
     agent_version_id: str | None = None,
     draft_id: str | None = None,
+    allow_untrusted_web_supplement: bool = False,
 ) -> RunResult:
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
@@ -106,6 +107,7 @@ def run_with_langgraph(
             trace=trace,
             approved=approved,
             conversation_context=conversation_context,
+            allow_untrusted_web_supplement=allow_untrusted_web_supplement,
         )
     else:
         builder = build_react_enterprise_qa_graph(
@@ -113,6 +115,7 @@ def run_with_langgraph(
             trace=trace,
             approved=approved,
             conversation_context=conversation_context,
+            allow_untrusted_web_supplement=allow_untrusted_web_supplement,
         )
 
     if checkpointer is None:

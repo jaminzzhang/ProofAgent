@@ -34,6 +34,10 @@ _Avoid_: Runtime adapter, provider-native tool schema, prompt instruction
 A reusable tool connection or local tool package that can expose one or more governed Tool Contracts.
 _Avoid_: Tool Contract, Agent Tool Binding, direct model function
 
+**Tool Source Descriptor**:
+The Dashboard-managed plugin-like contract that describes a reusable Tool Source's provider type, configuration schema, credential references, available Tool Contracts, validation behavior, and binding options.
+_Avoid_: Ad hoc tool form, hardcoded Dashboard tool config, executable plugin script
+
 **Agent Tool Binding**:
 The Agent-specific configuration that enables selected Tool Contracts and constrains their proposal scope, approval behavior, call budget, and authorization conditions.
 _Avoid_: Tool Source, ungoverned tool list, provider-native tool call
@@ -41,6 +45,26 @@ _Avoid_: Tool Source, ungoverned tool list, provider-native tool call
 **Local Tool Handler**:
 An Agent-package-owned Python callable referenced from `tools.yaml` for deterministic local demos or fixtures behind Tool Gateway.
 _Avoid_: Framework-owned business tool registry, ungoverned function call
+
+**Untrusted Web Search Tool**:
+A governed Tool Gateway capability that searches the public web to provide realtime external context outside the controlled Knowledge Source boundary.
+_Avoid_: Web Knowledge Source, remote_search provider, uncontrolled browser plugin
+
+**Untrusted Web Context**:
+The non-controlled external context returned by the Untrusted Web Search Tool, explicitly marked as untrusted and kept distinct from Evidence admitted from Knowledge Sources; it cannot establish a governed answered outcome.
+_Avoid_: Accepted Evidence, Candidate Evidence, Knowledge, citation-backed source
+
+**Untrusted Web Supplement**:
+The fixed customer-visible response section that presents Untrusted Web Context with an explicit warning that it is not verified by controlled Knowledge Sources.
+_Avoid_: Sources list, citation section, controlled answer, verified supplement
+
+**Web Search Query Sanitization**:
+The deterministic Harness step that rewrites a proposed web search query by replacing sensitive values with safe placeholders before the Untrusted Web Search Tool can receive it.
+_Avoid_: LLM query rewrite, best-effort masking, user-trust-based redaction
+
+**Search Vendor Adapter**:
+A replaceable provider implementation behind the Untrusted Web Search Tool that normalizes one public search vendor's response into Untrusted Web Context.
+_Avoid_: Knowledge Provider, browser automation, scraping plugin, Search Vendor as Agent capability
 
 **Workflow Template**:
 A reusable governed flow shape for a class of Agents, such as enterprise question answering.

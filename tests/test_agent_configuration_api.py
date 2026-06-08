@@ -76,6 +76,67 @@ def test_list_config_agents_empty(tmp_path: Path) -> None:
     assert response.json() == {"data": [], "meta": {"total": 0}}
 
 
+def test_tool_source_descriptors_include_brave_search(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/api/config/tool-source-descriptors")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data[0]["provider"] == "brave_search"
+    assert data[0]["exposed_tool_contracts"] == ["untrusted_web_search"]
+    assert data[0]["credential_env_vars"] == ["BRAVE_SEARCH_API_KEY"]
+    assert data[0]["supports_validation"] is True
+
+
+def test_tool_source_api_manages_dashboard_connection_lifecycle(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    created = client.post(
+        "/api/config/tool-sources",
+        json={
+            "source_id": "tool_brave_default",
+            "name": "Brave Search Default",
+            "source_type": "search_vendor",
+            "provider": "brave_search",
+            "tool_contract_ids": ["untrusted_web_search"],
+            "credential_env_ref": "BRAVE_SEARCH_API_KEY",
+            "params": {"timeout_seconds": 8, "default_max_results": 3},
+            "actor": "operator",
+        },
+    )
+    listed = client.get("/api/config/tool-sources")
+    updated = client.patch(
+        "/api/config/tool-sources/tool_brave_default",
+        json={
+            "name": "Brave Search Production",
+            "params": {"timeout_seconds": 12, "default_max_results": 4},
+            "actor": "operator",
+        },
+    )
+    archived = client.post(
+        "/api/config/tool-sources/tool_brave_default/archive",
+        json={"reason": "Rotate vendor.", "actor": "operator"},
+    )
+    restored = client.post(
+        "/api/config/tool-sources/tool_brave_default/restore",
+        json={"reason": "Rollback vendor change.", "actor": "operator"},
+    )
+
+    assert created.status_code == 200
+    assert created.json()["credential_env_ref"] == "BRAVE_SEARCH_API_KEY"
+    assert created.json()["config_revision"] == 1
+    assert listed.status_code == 200
+    assert listed.json()["meta"]["total"] == 1
+    assert updated.status_code == 200
+    assert updated.json()["config_revision"] == 2
+    assert updated.json()["params"]["timeout_seconds"] == 12
+    assert archived.status_code == 200
+    assert archived.json()["lifecycle_state"] == "ARCHIVED"
+    assert restored.status_code == 200
+    assert restored.json()["lifecycle_state"] == "ACTIVE"
+
+
 def _create_local_index_source(
     client: TestClient,
     *,

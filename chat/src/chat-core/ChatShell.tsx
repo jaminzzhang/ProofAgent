@@ -27,6 +27,10 @@ interface ChatShellProps {
   renderAssistantMeta?: (turn: ChatTurnView) => ReactNode
   renderAssistantActions?: (turn: ChatTurnView) => ReactNode
   sendingLabel?: ReactNode
+  untrustedWebSupplementToggle?: {
+    checked: boolean
+    onChange: (enabled: boolean) => void
+  }
 }
 
 export function ChatShell({
@@ -48,6 +52,7 @@ export function ChatShell({
   renderAssistantMeta,
   renderAssistantActions,
   sendingLabel,
+  untrustedWebSupplementToggle,
 }: ChatShellProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -135,6 +140,18 @@ export function ChatShell({
           <form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-3 sm:p-4">
             {error && (
               <div className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+            )}
+            {untrustedWebSupplementToggle && (
+              <label className="mb-3 flex w-fit items-center gap-2 text-xs font-medium text-[var(--text-muted)]">
+                <input
+                  type="checkbox"
+                  checked={untrustedWebSupplementToggle.checked}
+                  onChange={(event) => untrustedWebSupplementToggle.onChange(event.target.checked)}
+                  disabled={sending}
+                  className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)]"
+                />
+                <span>Network supplement</span>
+              </label>
             )}
             <div className="flex gap-3">
               <input

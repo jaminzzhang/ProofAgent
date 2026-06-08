@@ -136,6 +136,7 @@ describe('OperatorChatPage', () => {
     })
     expect(mockedCreateOperatorConversationRun).toHaveBeenCalledWith('conv_123', 'What is covered?', {
       includeGovernanceDetails: false,
+      allowUntrustedWebSupplement: false,
     })
   })
 

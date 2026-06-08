@@ -39,6 +39,11 @@ class SharedModelConnectionLifecycleState(str, Enum):
     ARCHIVED = "ARCHIVED"
 
 
+class ToolSourceLifecycleState(str, Enum):
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
 class EnvironmentModelCredentialReference(FrozenModel):
     """Secret-safe environment-variable pointer for model provider credentials."""
 
@@ -514,8 +519,12 @@ class ToolSource(FrozenModel):
     source_id: str
     name: str
     source_type: str
+    provider: str = ""
+    lifecycle_state: ToolSourceLifecycleState = ToolSourceLifecycleState.ACTIVE
     tool_contract_ids: tuple[str, ...] = Field(default_factory=tuple)
+    credential_env_ref: str | None = None
     params: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    config_revision: int = 1
     created_at: str
     updated_at: str
 
@@ -527,3 +536,14 @@ class ToolSource(FrozenModel):
     @field_serializer("params")
     def serialize_params(self, value: Mapping[str, Any]) -> dict[str, Any]:
         return cast(dict[str, Any], _jsonable(value))
+
+
+class ToolSourceDescriptor(FrozenModel):
+    """Trusted descriptor for one reusable Tool Source provider type."""
+
+    provider: str
+    display_name: str
+    description: str = ""
+    exposed_tool_contracts: tuple[str, ...] = Field(default_factory=tuple)
+    credential_env_vars: tuple[str, ...] = Field(default_factory=tuple)
+    supports_validation: bool = False

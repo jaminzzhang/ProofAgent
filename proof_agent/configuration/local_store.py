@@ -61,6 +61,8 @@ from proof_agent.contracts import (
     SharedModelConnectionDeletionEligibility,
     SharedModelConnectionLifecycleState,
     SharedModelConnectionReferenceSummary,
+    ToolSource,
+    ToolSourceLifecycleState,
 )
 from proof_agent.configuration.file_locking import locked, store_lock_path
 from proof_agent.contracts.manifest import KnowledgeConfig
@@ -589,6 +591,167 @@ class LocalAgentConfigurationStore:
             for path in records_root.glob("*.json")
         ]
         return sorted(records, key=lambda record: record.created_at)
+
+    def create_tool_source(
+        self,
+        *,
+        source_id: str,
+        name: str,
+        source_type: str,
+        provider: str,
+        tool_contract_ids: tuple[str, ...],
+        credential_env_ref: str | None,
+        params: Mapping[str, Any],
+        actor: str,
+    ) -> ToolSource:
+        del actor
+        validate_secret_safe_params(
+            params,
+            field_prefix=f"tool_sources[{source_id}].params",
+        )
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            if self.get_tool_source(source_id) is not None:
+                raise ValueError(f"Tool Source already exists: {source_id}")
+            now = _now()
+            source = ToolSource(
+                source_id=source_id,
+                name=name,
+                source_type=source_type,
+                provider=provider,
+                lifecycle_state=ToolSourceLifecycleState.ACTIVE,
+                tool_contract_ids=tool_contract_ids,
+                credential_env_ref=credential_env_ref,
+                params=params,
+                config_revision=1,
+                created_at=now,
+                updated_at=now,
+            )
+            self._write_tool_source(source)
+            return source
+
+    def get_tool_source(self, source_id: str) -> ToolSource | None:
+        path = self._tool_source_path(source_id)
+        if not path.exists():
+            return None
+        return ToolSource.model_validate(_read_json(path))
+
+    def list_tool_sources(self) -> list[ToolSource]:
+        sources_root = self._tool_sources_root()
+        if not sources_root.exists():
+            return []
+        sources = []
+        for source_dir in sources_root.iterdir():
+            if not source_dir.is_dir():
+                continue
+            source = self.get_tool_source(source_dir.name)
+            if source is not None:
+                sources.append(source)
+        return sorted(sources, key=lambda source: source.created_at)
+
+    def update_tool_source(
+        self,
+        *,
+        source_id: str,
+        actor: str,
+        name: str | None = None,
+        source_type: str | None = None,
+        provider: str | None = None,
+        tool_contract_ids: tuple[str, ...] | None = None,
+        credential_env_ref: str | None = None,
+        params: Mapping[str, Any] | None = None,
+    ) -> ToolSource:
+        del actor
+        if params is not None:
+            validate_secret_safe_params(
+                params,
+                field_prefix=f"tool_sources[{source_id}].params",
+            )
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            existing = self._require_tool_source(source_id)
+            updated = existing.model_copy(
+                update={
+                    "name": name if name is not None else existing.name,
+                    "source_type": source_type
+                    if source_type is not None
+                    else existing.source_type,
+                    "provider": provider if provider is not None else existing.provider,
+                    "tool_contract_ids": tool_contract_ids
+                    if tool_contract_ids is not None
+                    else existing.tool_contract_ids,
+                    "credential_env_ref": credential_env_ref
+                    if credential_env_ref is not None
+                    else existing.credential_env_ref,
+                    "params": params if params is not None else existing.params,
+                    "config_revision": existing.config_revision + 1,
+                    "updated_at": _now(),
+                }
+            )
+            self._write_tool_source(updated)
+            return updated
+
+    def archive_tool_source(
+        self,
+        *,
+        source_id: str,
+        actor: str,
+        reason: str,
+    ) -> ToolSource:
+        reason = reason.strip()
+        if not reason:
+            raise _tool_source_reason_required("archive")
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._require_tool_source(source_id)
+            if source.lifecycle_state is ToolSourceLifecycleState.ARCHIVED:
+                raise _tool_source_lifecycle_conflict(
+                    f"Tool Source {source_id} is already archived."
+                )
+            archived = source.model_copy(
+                update={
+                    "lifecycle_state": ToolSourceLifecycleState.ARCHIVED,
+                    "updated_at": _now(),
+                }
+            )
+            self._write_tool_source(archived)
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.ARCHIVED,
+                    actor=actor,
+                    summary=f"Archived Tool Source {source_id}.",
+                    metadata={"source_id": source_id, "reason": reason},
+                )
+            )
+            return archived
+
+    def restore_tool_source(
+        self,
+        *,
+        source_id: str,
+        actor: str,
+        reason: str | None = None,
+    ) -> ToolSource:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._require_tool_source(source_id)
+            if source.lifecycle_state is not ToolSourceLifecycleState.ARCHIVED:
+                raise _tool_source_lifecycle_conflict(f"Tool Source {source_id} is not archived.")
+            restored = source.model_copy(
+                update={
+                    "lifecycle_state": ToolSourceLifecycleState.ACTIVE,
+                    "updated_at": _now(),
+                }
+            )
+            self._write_tool_source(restored)
+            metadata = {"source_id": source_id}
+            if reason is not None and reason.strip():
+                metadata["reason"] = reason.strip()
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.RESTORED,
+                    actor=actor,
+                    summary=f"Restored Tool Source {source_id}.",
+                    metadata=metadata,
+                )
+            )
+            return restored
 
     def create_knowledge_source(
         self,
@@ -2715,6 +2878,9 @@ class LocalAgentConfigurationStore:
     def _model_connections_root(self) -> Path:
         return self._root_dir / "model_connections"
 
+    def _tool_sources_root(self) -> Path:
+        return self._root_dir / "tool_sources"
+
     def _model_connection_root(self, connection_id: str) -> Path:
         raw_connection_id = connection_id.strip()
         connection_path = Path(raw_connection_id)
@@ -2761,6 +2927,31 @@ class LocalAgentConfigurationStore:
         smoke_test_id: str,
     ) -> Path:
         return self._model_connection_smoke_tests_root(connection_id) / f"{smoke_test_id}.json"
+
+    def _tool_source_root(self, source_id: str) -> Path:
+        raw_source_id = source_id.strip()
+        source_path = Path(raw_source_id)
+        if (
+            not raw_source_id
+            or raw_source_id != source_id
+            or raw_source_id in {".", ".."}
+            or source_path.is_absolute()
+            or len(source_path.parts) != 1
+            or "/" in raw_source_id
+            or "\\" in raw_source_id
+        ):
+            raise _invalid_tool_source_id(source_id)
+
+        sources_root = self._tool_sources_root().resolve()
+        source_root = (sources_root / raw_source_id).resolve()
+        try:
+            source_root.relative_to(sources_root)
+        except ValueError as exc:
+            raise _invalid_tool_source_id(source_id) from exc
+        return source_root
+
+    def _tool_source_path(self, source_id: str) -> Path:
+        return self._tool_source_root(source_id) / "source.json"
 
     def _knowledge_source_root(self, source_id: str) -> Path:
         raw_source_id = source_id.strip()
@@ -2826,6 +3017,12 @@ class LocalAgentConfigurationStore:
         if connection is None:
             raise KeyError(f"Shared Model Connection not found: {connection_id}")
         return connection
+
+    def _require_tool_source(self, source_id: str) -> ToolSource:
+        source = self.get_tool_source(source_id)
+        if source is None:
+            raise KeyError(f"Tool Source not found: {source_id}")
+        return source
 
     def _require_shared_model_connections_active_unlocked(self, value: Any) -> None:
         for connection_id in sorted(_shared_model_connection_ids(value)):
@@ -2989,6 +3186,12 @@ class LocalAgentConfigurationStore:
         _write_json_atomic(
             self._model_connection_path(connection.connection_id),
             connection.model_dump(mode="json"),
+        )
+
+    def _write_tool_source(self, source: ToolSource) -> None:
+        _write_json_atomic(
+            self._tool_source_path(source.source_id),
+            source.model_dump(mode="json"),
         )
 
     def _write_model_connection_validation(
@@ -3504,6 +3707,22 @@ def _model_connection_lifecycle_conflict(message: str) -> ProofAgentError:
     )
 
 
+def _tool_source_reason_required(operation: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        f"Tool Source {operation} reason is required.",
+        f"Provide a concise reason for the Tool Source {operation} operation.",
+    )
+
+
+def _tool_source_lifecycle_conflict(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_002",
+        message,
+        "Refresh the Tool Source lifecycle state and retry.",
+    )
+
+
 def _invalid_knowledge_source_id(source_id: str) -> ProofAgentError:
     return ProofAgentError(
         "PA_CONFIG_001",
@@ -3517,6 +3736,14 @@ def _invalid_model_connection_id(connection_id: str) -> ProofAgentError:
         "PA_CONFIG_001",
         f"Shared Model Connection connection_id is invalid: {connection_id!r}.",
         "Use a non-empty connection id without path separators, '.' or '..'.",
+    )
+
+
+def _invalid_tool_source_id(source_id: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_001",
+        f"Tool Source source_id is invalid: {source_id!r}.",
+        "Use a non-empty Source id without path separators, '.' or '..'.",
     )
 
 

@@ -29,6 +29,8 @@ from proof_agent.contracts.agent_configuration import (
     SharedModelConnectionLifecycleState,
     SharedModelConnectionReferenceSummary,
     ToolSource,
+    ToolSourceDescriptor,
+    ToolSourceLifecycleState,
 )
 from proof_agent.contracts.approval import ApprovalState, ApprovalStatus
 from proof_agent.contracts.conversation import (
@@ -149,6 +151,7 @@ from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.run import RunResult, ValidationResult, ValidationStatus, WorkflowState
 from proof_agent.contracts.tool import ToolRequest
 from proof_agent.contracts.trace import TraceEvent, TraceEventType
+from proof_agent.contracts.untrusted_web import UntrustedWebContext, UntrustedWebResult
 
 __all__ = [
     "AgentManifest",
@@ -282,10 +285,14 @@ __all__ = [
     "SharedModelConnectionLifecycleState",
     "SharedModelConnectionReferenceSummary",
     "ToolSource",
+    "ToolSourceDescriptor",
+    "ToolSourceLifecycleState",
     "ToolRequest",
     "ToolsConfig",
     "TraceEvent",
     "TraceEventType",
+    "UntrustedWebContext",
+    "UntrustedWebResult",
     "TokenUsage",
     "ValidationResult",
     "ValidationStatus",

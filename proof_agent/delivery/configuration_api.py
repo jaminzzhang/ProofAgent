@@ -22,6 +22,10 @@ from proof_agent.bootstrap.knowledge_resolution import (
     ConfigurationStoreKnowledgeBindingResolver,
     PackageKnowledgeBindingResolver,
 )
+from proof_agent.capabilities.tools.source_descriptors import (
+    get_tool_source_descriptor,
+    list_tool_source_descriptors,
+)
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import (
@@ -44,6 +48,7 @@ from proof_agent.contracts import (
     ResolvedKnowledgeBindingSet,
     RunPurpose,
     SharedModelConnection,
+    ToolSource,
     WorkflowNodePromptConfig,
 )
 from proof_agent.control.workflow.node_context import build_workflow_node_context_preview
@@ -260,6 +265,53 @@ class ModelConnectionValidationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    actor: str = "local-user"
+
+
+class ToolSourceCreateRequest(BaseModel):
+    """Request body for creating a reusable Tool Source connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str | None = None
+    name: str = Field(min_length=1)
+    source_type: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    tool_contract_ids: list[str] = Field(default_factory=list)
+    credential_env_ref: str | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "local-user"
+
+
+class ToolSourceUpdateRequest(BaseModel):
+    """Request body for updating a reusable Tool Source connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    source_type: str | None = None
+    provider: str | None = None
+    tool_contract_ids: list[str] | None = None
+    credential_env_ref: str | None = None
+    params: dict[str, Any] | None = None
+    actor: str = "local-user"
+
+
+class ToolSourceArchiveRequest(BaseModel):
+    """Request body for archiving a reusable Tool Source connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1)
+    actor: str = "local-user"
+
+
+class ToolSourceRestoreRequest(BaseModel):
+    """Request body for restoring a reusable Tool Source connection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = None
     actor: str = "local-user"
 
 
@@ -616,6 +668,135 @@ def smoke_test_model_connection(
     record = _model_connection_smoke_test_record(connection, actor=request.actor)
     store.record_model_connection_smoke_test(record)
     return record.model_dump(mode="json")
+
+
+@router.get("/config/tool-source-descriptors")
+def list_tool_source_descriptor_payloads() -> dict[str, Any]:
+    """List built-in trusted Tool Source descriptors."""
+
+    data = [
+        descriptor.model_dump(mode="json") for descriptor in list_tool_source_descriptors()
+    ]
+    return {"data": data, "meta": {"total": len(data)}}
+
+
+@router.get("/config/tool-sources")
+def list_tool_sources(app_request: Request) -> dict[str, Any]:
+    """List reusable Tool Sources managed by the local configuration store."""
+
+    store = _get_configuration_store(app_request)
+    data = [_tool_source_payload(source) for source in store.list_tool_sources()]
+    return {"data": data, "meta": {"total": len(data)}}
+
+
+@router.post("/config/tool-sources")
+def create_tool_source(
+    request: ToolSourceCreateRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Create a reusable Tool Source from a trusted built-in descriptor."""
+
+    _require_supported_tool_source_provider(request.provider)
+    store = _get_configuration_store(app_request)
+    try:
+        source = store.create_tool_source(
+            source_id=_tool_source_id(request.source_id or request.name),
+            name=request.name,
+            source_type=request.source_type,
+            provider=request.provider,
+            tool_contract_ids=tuple(request.tool_contract_ids),
+            credential_env_ref=request.credential_env_ref,
+            params=dict(request.params),
+            actor=request.actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _tool_source_payload(source)
+
+
+@router.get("/config/tool-sources/{source_id}")
+def get_tool_source(source_id: str, app_request: Request) -> dict[str, Any]:
+    """Return one reusable Tool Source."""
+
+    store = _get_configuration_store(app_request)
+    source = _require_tool_source(store, source_id)
+    return _tool_source_payload(source)
+
+
+@router.patch("/config/tool-sources/{source_id}")
+def update_tool_source(
+    source_id: str,
+    request: ToolSourceUpdateRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Update one reusable Tool Source live connection."""
+
+    if request.provider is not None:
+        _require_supported_tool_source_provider(request.provider)
+    store = _get_configuration_store(app_request)
+    _require_tool_source(store, source_id)
+    try:
+        source = store.update_tool_source(
+            source_id=source_id,
+            actor=request.actor,
+            name=request.name,
+            source_type=request.source_type,
+            provider=request.provider,
+            tool_contract_ids=(
+                tuple(request.tool_contract_ids)
+                if request.tool_contract_ids is not None
+                else None
+            ),
+            credential_env_ref=request.credential_env_ref,
+            params=dict(request.params) if request.params is not None else None,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _tool_source_payload(source)
+
+
+@router.post("/config/tool-sources/{source_id}/archive")
+def archive_tool_source(
+    source_id: str,
+    request: ToolSourceArchiveRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Archive a reusable Tool Source without deleting retained state."""
+
+    store = _get_configuration_store(app_request)
+    _require_tool_source(store, source_id)
+    try:
+        source = store.archive_tool_source(
+            source_id=source_id,
+            actor=request.actor,
+            reason=request.reason,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _tool_source_payload(source)
+
+
+@router.post("/config/tool-sources/{source_id}/restore")
+def restore_tool_source(
+    source_id: str,
+    request: ToolSourceRestoreRequest,
+    app_request: Request,
+) -> dict[str, Any]:
+    """Restore an archived reusable Tool Source to active state."""
+
+    store = _get_configuration_store(app_request)
+    _require_tool_source(store, source_id)
+    try:
+        source = store.restore_tool_source(
+            source_id=source_id,
+            actor=request.actor,
+            reason=request.reason,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return _tool_source_payload(source)
 
 
 @router.get("/config/knowledge-sources")
@@ -1851,6 +2032,10 @@ def _model_connection_payload(
     return payload
 
 
+def _tool_source_payload(source: ToolSource) -> dict[str, Any]:
+    return source.model_dump(mode="json")
+
+
 def _knowledge_source_payload(
     store: LocalAgentConfigurationStore,
     source: KnowledgeSource,
@@ -2018,6 +2203,19 @@ def _require_model_connection(
     return connection
 
 
+def _require_tool_source(
+    store: LocalAgentConfigurationStore,
+    source_id: str,
+) -> ToolSource:
+    try:
+        source = store.get_tool_source(source_id)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Tool Source not found: {source_id}")
+    return source
+
+
 def _require_active_knowledge_source(
     store: LocalAgentConfigurationStore,
     source_id: str,
@@ -2064,6 +2262,16 @@ def _model_connection_id(value: str) -> str:
     return normalized
 
 
+def _tool_source_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower().replace("-", "_"))
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        normalized = f"tool_{uuid4().hex[:8]}"
+    if not normalized.startswith("tool_"):
+        normalized = f"tool_{normalized}"
+    return normalized
+
+
 def _credential_ref(
     request: ModelCredentialReferenceRequest,
 ) -> EnvironmentModelCredentialReference:
@@ -2081,6 +2289,13 @@ def _require_supported_shared_model_provider(provider: str) -> None:
             status_code=400,
             detail=f"Unsupported model provider: {provider}",
         )
+
+
+def _require_supported_tool_source_provider(provider: str) -> None:
+    try:
+        get_tool_source_descriptor(provider)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
 
 
 def _require_model_connection_update_impact_confirmation(

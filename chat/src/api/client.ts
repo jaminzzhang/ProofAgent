@@ -57,19 +57,24 @@ export function createConversationRun(
   conversationId: string,
   question: string,
   approved?: boolean,
-  includeGovernanceDetails = false
+  includeGovernanceDetails = false,
+  allowUntrustedWebSupplement = false,
 ): Promise<import('./types').ChatRunResponse> {
   const url = `${BASE}/chat/conversations/${conversationId}/runs`
   const body: {
     question: string
     approved?: boolean
     include_governance_details?: boolean
+    allow_untrusted_web_supplement?: boolean
   } = { question }
   if (approved !== undefined) {
     body.approved = approved
   }
   if (includeGovernanceDetails) {
     body.include_governance_details = true
+  }
+  if (allowUntrustedWebSupplement) {
+    body.allow_untrusted_web_supplement = true
   }
 
   const options = {
@@ -85,9 +90,13 @@ export function createConversationRun(
     const fallbackBody: {
       question: string
       approved?: boolean
+      allow_untrusted_web_supplement?: boolean
     } = { question }
     if (approved !== undefined) {
       fallbackBody.approved = approved
+    }
+    if (allowUntrustedWebSupplement) {
+      fallbackBody.allow_untrusted_web_supplement = true
     }
     return fetchJson<import('./types').ChatRunResponse>(url, {
       method: 'POST',

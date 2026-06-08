@@ -31,6 +31,7 @@ _INITIAL_PLANNER_ACTION_TYPE_SET = frozenset(_INITIAL_PLANNER_ACTION_TYPES)
 _MAX_CANONICAL_STRING_LENGTH = 512
 _V1_TOOL_PARAMETER_ALLOWLIST = {
     "customer_lookup": frozenset({"customer_id", "policy_id"}),
+    "untrusted_web_search": frozenset({"query", "max_results"}),
 }
 
 

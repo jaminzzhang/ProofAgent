@@ -113,6 +113,7 @@ describe('CustomerChatPage', () => {
     expect(mockedCreateCustomerRun).toHaveBeenCalledWith(
       'cust_conv_123',
       'What is my policy status?',
+      { allowUntrustedWebSupplement: false },
     )
   })
 

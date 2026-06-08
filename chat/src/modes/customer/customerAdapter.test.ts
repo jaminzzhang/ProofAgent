@@ -39,12 +39,17 @@ test('createCustomerRun submits customer questions through customer run API', as
     }),
   )
 
-  await createCustomerRun('cust_conv_1', 'What is my policy status?')
+  await createCustomerRun('cust_conv_1', 'What is my policy status?', {
+    allowUntrustedWebSupplement: true,
+  })
 
   expect(fetchMock).toHaveBeenCalledWith('/api/customer/conversations/cust_conv_1/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question: 'What is my policy status?' }),
+    body: JSON.stringify({
+      question: 'What is my policy status?',
+      allow_untrusted_web_supplement: true,
+    }),
   })
 })
 

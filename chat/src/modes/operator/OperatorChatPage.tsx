@@ -54,6 +54,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
   const [sending, setSending] = useState(false)
   const [input, setInput] = useState('')
   const [includeGovernanceDetails, setIncludeGovernanceDetails] = useState(false)
+  const [allowUntrustedWebSupplement, setAllowUntrustedWebSupplement] = useState(false)
 
   useEffect(() => {
     if (routeConversationId) {
@@ -124,6 +125,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
 
       const result = await createOperatorConversationRun(activeConversationId!, question, {
         includeGovernanceDetails,
+        allowUntrustedWebSupplement,
       })
       onUpdate?.()
 
@@ -276,6 +278,10 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
       onInputChange={setInput}
       onSubmit={handleSubmit}
       sending={sending}
+      untrustedWebSupplementToggle={{
+        checked: allowUntrustedWebSupplement,
+        onChange: setAllowUntrustedWebSupplement,
+      }}
       placeholder="Type your question for the assistant"
       submitLabel="Ask"
       emptyTitle="Start a Conversation"

@@ -29,6 +29,7 @@ test('createOperatorConversationRun submits through internal chat API with gover
 
   await createOperatorConversationRun('conv_1', 'Question?', {
     includeGovernanceDetails: true,
+    allowUntrustedWebSupplement: true,
   })
 
   expect(fetchMock).toHaveBeenCalledWith('/api/chat/conversations/conv_1/runs', {
@@ -38,6 +39,7 @@ test('createOperatorConversationRun submits through internal chat API with gover
       question: 'Question?',
       approved: undefined,
       include_governance_details: true,
+      allow_untrusted_web_supplement: true,
     }),
   })
 })

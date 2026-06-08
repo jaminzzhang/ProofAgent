@@ -23,6 +23,7 @@ export const deleteOperatorConversation = deleteConversation
 interface OperatorRunOptions {
   approved?: boolean
   includeGovernanceDetails?: boolean
+  allowUntrustedWebSupplement?: boolean
 }
 
 export function createOperatorConversationRun(
@@ -35,6 +36,7 @@ export function createOperatorConversationRun(
     question,
     options.approved,
     options.includeGovernanceDetails ?? false,
+    options.allowUntrustedWebSupplement ?? false,
   )
 }
 

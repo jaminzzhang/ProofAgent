@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, expect, test, vi } from 'vitest'
 
@@ -8,6 +8,37 @@ import { ChatShell } from './ChatShell'
 
 afterEach(() => {
   cleanup()
+})
+
+test('ChatShell renders optional untrusted web supplement toggle', () => {
+  const onToggle = vi.fn()
+
+  render(
+    <ChatShell
+      title="Operator Chat"
+      subtitle="Assisted QA"
+      turns={[]}
+      inputValue=""
+      onInputChange={vi.fn()}
+      onSubmit={vi.fn()}
+      sending={false}
+      placeholder="Ask"
+      submitLabel="Send"
+      emptyTitle="Start"
+      emptyDescription="Ask a question."
+      untrustedWebSupplementToggle={{
+        checked: false,
+        onChange: onToggle,
+      }}
+    />,
+  )
+
+  const toggle = screen.getByRole('checkbox', { name: 'Network supplement' })
+  expect(toggle).not.toBeChecked()
+
+  fireEvent.click(toggle)
+
+  expect(onToggle).toHaveBeenCalledWith(true)
 })
 
 test('ChatShell renders shared conversation flow and mode-specific slots', () => {

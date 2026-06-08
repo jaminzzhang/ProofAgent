@@ -40,6 +40,7 @@ class ChatRunRequest(BaseModel):
     question: str = Field(min_length=1)
     approved: bool | None = None
     include_governance_details: bool = False
+    allow_untrusted_web_supplement: bool = False
 
 
 class ConversationCreateRequest(BaseModel):
@@ -67,6 +68,7 @@ class ConversationRunRequest(BaseModel):
     question: str = Field(min_length=1)
     approved: bool | None = None
     include_governance_details: bool = False
+    allow_untrusted_web_supplement: bool = False
 
 
 @router.get("/chat/agents")
@@ -101,6 +103,7 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
         agent_version_id=published_agent.agent_version_id,
         draft_id=published_agent.source_draft_id,
         resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
+        allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
     )
 
     return _run_response(
@@ -204,6 +207,7 @@ def create_conversation_run(
         agent_version_id=published_agent.agent_version_id,
         draft_id=published_agent.source_draft_id,
         resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
+        allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
     )
     governance_details = _governance_projection(
         detail,
@@ -253,6 +257,7 @@ def _execute_published_agent_run(
     agent_version_id: str | None = None,
     draft_id: str | None = None,
     resolved_knowledge_bindings: Any | None = None,
+    allow_untrusted_web_supplement: bool = False,
 ) -> tuple[Any, Any, AgentManifest]:
     store = _get_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
@@ -272,6 +277,7 @@ def _execute_published_agent_run(
             agent_id=agent_id,
             agent_version_id=agent_version_id,
             draft_id=draft_id,
+            allow_untrusted_web_supplement=allow_untrusted_web_supplement,
         )
     except ProofAgentError as exc:
         raise HTTPException(

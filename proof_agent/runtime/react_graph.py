@@ -48,6 +48,7 @@ from proof_agent.control.workflow.react_enterprise_qa import (
 )
 from proof_agent.evaluation.demo.scenarios import UNSUPPORTED_QUESTION
 from proof_agent.errors import ProofAgentError
+from proof_agent.runtime.graph import _format_untrusted_web_supplement, _maybe_untrusted_web_supplement
 from proof_agent.observability.audit.trace import TraceWriter
 
 
@@ -72,6 +73,7 @@ def build_react_enterprise_qa_graph(
     trace: TraceWriter,
     approved: bool | None = None,
     conversation_context: ContextAdmission | None = None,
+    allow_untrusted_web_supplement: bool = False,
 ) -> StateGraph:  # type: ignore[type-arg]
     manifest = invocation.manifest
     react = manifest.react
@@ -284,10 +286,19 @@ def build_react_enterprise_qa_graph(
             evidence_result.status == "failed"
             or answer_decision.decision != PolicyDecisionType.ALLOW
         ):
+            web_supplement = _maybe_untrusted_web_supplement(
+                invocation=invocation,
+                trace=trace,
+                question=state["question"],
+                enabled=allow_untrusted_web_supplement,
+            )
+            message = "I cannot answer because the available evidence is insufficient."
+            if web_supplement:
+                message = f"{message}\n\n{web_supplement}"
             return {
                 "review_results": [step_review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
-                "governance_message": "I cannot answer because the available evidence is insufficient.",
+                "governance_message": message,
             }
         return {
             "review_results": [step_review_event],
@@ -497,6 +508,30 @@ def build_react_enterprise_qa_graph(
             return gateway_result
         trace.emit("approval_granted", status="ok", payload={"tool_name": tool_name})
         trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
+        if tool_name == "untrusted_web_search":
+            supplement = _format_untrusted_web_supplement(
+                dict(gateway_result.result or {}).get("results", ())
+            )
+            message = (
+                "I cannot answer because the available evidence is insufficient."
+                if not supplement
+                else f"I cannot answer because the available evidence is insufficient.\n\n{supplement}"
+            )
+            trace.emit(
+                "final_output_disclosure",
+                status="ok",
+                payload={
+                    "used_untrusted_web_context": bool(supplement),
+                    "untrusted_web_disclaimer_present": bool(supplement),
+                },
+            )
+            result = {
+                "final_output": message,
+                "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                "governance_message": message,
+            }
+            configured_node_context("response", {**state, **result})
+            return result
         message = "Customer policy status is active according to the approved mock lookup."
         result = {
             "final_output": message,

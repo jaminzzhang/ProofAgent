@@ -37,14 +37,23 @@ export function fetchCustomerConversation(conversationId: string): Promise<Custo
   return fetchJson<CustomerConversation>(`${BASE}/customer/conversations/${conversationId}`)
 }
 
+interface CustomerRunOptions {
+  allowUntrustedWebSupplement?: boolean
+}
+
 export function createCustomerRun(
   conversationId: string,
   question: string,
+  options: CustomerRunOptions = {},
 ): Promise<CustomerRunResponse> {
+  const body: { question: string; allow_untrusted_web_supplement?: boolean } = { question }
+  if (options.allowUntrustedWebSupplement) {
+    body.allow_untrusted_web_supplement = true
+  }
   return fetchJson<CustomerRunResponse>(`${BASE}/customer/conversations/${conversationId}/runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(body),
   })
 }
 
