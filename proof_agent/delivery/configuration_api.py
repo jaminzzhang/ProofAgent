@@ -1607,7 +1607,7 @@ def update_config_draft_workflow_nodes(
             workflow["template_descriptor_version"] = request.template_descriptor_version
         workflow["nodes"] = [_workflow_node_request_payload(item) for item in request.nodes]
         raw["workflow"] = workflow
-        agent_yaml = yaml.safe_dump(raw, sort_keys=False)
+        agent_yaml = _dump_agent_yaml(raw)
         bundle = ContractBundle(
             agent_yaml=agent_yaml,
             policy_yaml=draft.contract_bundle.policy_yaml,
@@ -2095,7 +2095,7 @@ def _bind_source_in_agent_yaml(
         binding_entry["top_k"] = request.top_k
     _upsert_by_key(knowledge_bindings, "binding_id", binding_id, binding_entry)
 
-    return cast(str, yaml.safe_dump(raw, sort_keys=False))
+    return _dump_agent_yaml(raw)
 
 
 def _unbind_source_in_agent_yaml(
@@ -2122,7 +2122,19 @@ def _unbind_source_in_agent_yaml(
             knowledge_bindings.remove(binding)
             break
 
-    return cast(str, yaml.safe_dump(raw, sort_keys=False))
+    return _dump_agent_yaml(raw)
+
+
+def _dump_agent_yaml(raw: dict[str, Any]) -> str:
+    return cast(
+        str,
+        yaml.safe_dump(
+            raw,
+            sort_keys=False,
+            allow_unicode=True,
+            width=1000,
+        ),
+    )
 
 
 def _upsert_by_key(

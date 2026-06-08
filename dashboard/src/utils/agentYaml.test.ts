@@ -156,4 +156,39 @@ policy:`)
       },
     ])
   })
+
+  it('reads workflow nodes from PyYAML sequence indentation returned by the API', () => {
+    const nodes = readWorkflowNodeConfigs(`name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  template_descriptor_version: react_enterprise_qa.v1
+  nodes:
+  - node_id: plan
+    prompt:
+      business_context: "Claims context"
+      task_instructions:
+      - "Prefer retrieval first."
+      output_preferences:
+      - "Keep concise."
+    context:
+      include_agent_purpose: true
+policy:
+  file: ./policy.yaml
+`)
+
+    expect(nodes).toEqual([
+      {
+        node_id: 'plan',
+        prompt: {
+          business_context: 'Claims context',
+          task_instructions: ['Prefer retrieval first.'],
+          output_preferences: ['Keep concise.'],
+        },
+        context: {
+          include_agent_purpose: true,
+        },
+      },
+    ])
+  })
 })

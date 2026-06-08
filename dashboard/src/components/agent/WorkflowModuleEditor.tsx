@@ -83,9 +83,9 @@ export function WorkflowModuleEditor({
 
   const selectedDescriptor = descriptor?.nodes.find((node) => node.node_id === selectedNodeId) ?? null
   const selectedConfig = nodes.find((node) => node.node_id === selectedNodeId) ?? null
-  const canEditSelected = Boolean(
-    selectedDescriptor?.editable_prompt_fields.length || selectedDescriptor?.context_options.length,
-  )
+  const canEditPrompt = Boolean(selectedDescriptor?.editable_prompt_fields.length)
+  const canConfigureContext = Boolean(selectedDescriptor?.context_options.length)
+  const canPreviewSelected = canEditPrompt || canConfigureContext
   const localYaml = descriptor
     ? replaceWorkflowNodes(agentYaml, descriptor.descriptor_version, nodes)
     : agentYaml
@@ -107,7 +107,7 @@ export function WorkflowModuleEditor({
     if (!descriptor) return
     await onSaveNodes({
       template_descriptor_version: descriptor.descriptor_version,
-      nodes,
+      nodes: nodes.map((node) => sanitizeNodeConfigForDescriptor(node, descriptor)),
     })
   }
 
@@ -284,7 +284,7 @@ export function WorkflowModuleEditor({
                 </span>
                 <textarea
                   value={selectedConfig.prompt.business_context ?? ''}
-                  disabled={!canEditSelected}
+                  disabled={!canEditPrompt}
                   onChange={(event) => updateSelectedNode((node) => ({
                     ...node,
                     prompt: { ...node.prompt, business_context: event.target.value },
@@ -301,7 +301,7 @@ export function WorkflowModuleEditor({
                   </span>
                   <textarea
                     value={selectedConfig.prompt.task_instructions.join('\n')}
-                    disabled={!canEditSelected}
+                    disabled={!canEditPrompt}
                     onChange={(event) => updateSelectedNode((node) => ({
                       ...node,
                       prompt: {
@@ -319,7 +319,7 @@ export function WorkflowModuleEditor({
                   </span>
                   <textarea
                     value={selectedConfig.prompt.output_preferences.join('\n')}
-                    disabled={!canEditSelected}
+                    disabled={!canEditPrompt}
                     onChange={(event) => updateSelectedNode((node) => ({
                       ...node,
                       prompt: {
@@ -347,7 +347,7 @@ export function WorkflowModuleEditor({
                         <input
                           type="checkbox"
                           checked={Boolean(selectedConfig.context[option])}
-                          disabled={!canEditSelected}
+                          disabled={!canConfigureContext}
                           onChange={(event) => updateSelectedNode((node) => ({
                             ...node,
                             context: {
@@ -367,7 +367,7 @@ export function WorkflowModuleEditor({
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   onClick={previewSelectedNode}
-                  disabled={previewBusy || !canEditSelected}
+                  disabled={previewBusy || !canPreviewSelected}
                   className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
                 >
                   {previewBusy ? 'Previewing...' : 'Preview Context'}
@@ -467,6 +467,20 @@ function normalizeNodeConfig(node: WorkflowNodeConfig): WorkflowNodeConfig {
     },
     context: node.context ?? {},
   }
+}
+
+function sanitizeNodeConfigForDescriptor(
+  node: WorkflowNodeConfig,
+  descriptor: WorkflowTemplateDescriptor,
+): WorkflowNodeConfig {
+  const nodeDescriptor = descriptor.nodes.find((candidate) => candidate.node_id === node.node_id)
+  if (!nodeDescriptor?.editable_prompt_fields.length) {
+    return {
+      ...node,
+      prompt: emptyNodeConfig(node.node_id).prompt,
+    }
+  }
+  return node
 }
 
 function splitLines(value: string): string[] {

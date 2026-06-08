@@ -33,7 +33,7 @@ const DESCRIPTOR: WorkflowTemplateDescriptor = {
       successors: [],
       branch_conditions: {},
       governed_handoff_points: [],
-      editable_prompt_fields: ['business_context', 'task_instructions', 'output_preferences'],
+      editable_prompt_fields: [],
       context_options: ['include_outcome'],
       input_summary: 'Outcome.',
       output_summary: 'Final response.',
@@ -119,6 +119,61 @@ describe('WorkflowModuleEditor', () => {
               output_preferences: [],
             },
             context: { include_agent_purpose: true },
+          },
+        ]),
+      })
+    })
+  })
+
+  it('does not save prompt fields for nodes that only expose context options', async () => {
+    const saveNodes = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <WorkflowModuleEditor
+        agentYaml={`name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  nodes:
+    - node_id: response
+      prompt:
+        business_context: "Stale response context"
+      context:
+        include_outcome: true
+`}
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveNodes={saveNodes}
+        onPreviewNode={vi.fn()}
+        busy={false}
+        nodeBusy={false}
+      />,
+    )
+
+    const responseNodeButton = screen.getByText('response').closest('button')
+    expect(responseNodeButton).not.toBeNull()
+    fireEvent.click(responseNodeButton!)
+
+    expect(await screen.findByLabelText('Business Context')).toBeDisabled()
+    expect(screen.getByLabelText('Task Instructions')).toBeDisabled()
+    expect(screen.getByLabelText('Output Preferences')).toBeDisabled()
+    expect(screen.getByLabelText('include_outcome')).not.toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Nodes' }))
+
+    await waitFor(() => {
+      expect(saveNodes).toHaveBeenCalledWith({
+        template_descriptor_version: 'react_enterprise_qa.v1',
+        nodes: expect.arrayContaining([
+          {
+            node_id: 'response',
+            prompt: {
+              business_context: '',
+              task_instructions: [],
+              output_preferences: [],
+            },
+            context: { include_outcome: true },
           },
         ]),
       })

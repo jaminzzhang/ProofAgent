@@ -1728,6 +1728,29 @@ def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path
     assert "  top_k: 1" in loaded.json()["agent_yaml"]
 
 
+def test_update_react_contract_view_preserves_reviewer_usage_params(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa(client)
+    contract = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    ).json()
+    raw_agent_yaml = yaml.safe_load(contract["agent_yaml"])
+
+    assert "timeout_seconds" not in raw_agent_yaml["review"]["subagent"]
+    assert "max_output_tokens" not in raw_agent_yaml["review"]["subagent"]
+    assert raw_agent_yaml["review"]["subagent"]["params"]["timeout_seconds"] == 5
+    assert raw_agent_yaml["review"]["subagent"]["params"]["max_output_tokens"] == 500
+
+    updated = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
+        json={"agent_yaml": contract["agent_yaml"], "actor": "workflow-editor"},
+    )
+
+    assert updated.status_code == 200
+
+
 def test_workflow_template_descriptor_api_lists_react_nodes(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -1771,6 +1794,36 @@ def test_update_workflow_nodes_persists_valid_nodes(tmp_path: Path) -> None:
     assert raw["workflow"]["nodes"][0]["prompt"]["business_context"] == (
         "Insurance servicing context."
     )
+
+
+def test_update_workflow_nodes_preserves_unicode_prompt_text(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa(client)
+
+    response = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-nodes",
+        json={
+            "actor": "workflow-editor",
+            "template_descriptor_version": "react_enterprise_qa.v1",
+            "nodes": [
+                {
+                    "node_id": "plan",
+                    "prompt": {
+                        "business_context": "本 Agent 面向保险客户提供只读客服支持。",
+                        "task_instructions": ["中文问题使用中文回答。"],
+                    },
+                    "context": {"include_agent_purpose": True},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    agent_yaml = response.json()["agent_yaml"]
+    assert "本 Agent 面向保险客户提供只读客服支持。" in agent_yaml
+    assert "中文问题使用中文回答。" in agent_yaml
+    assert "\\u672C" not in agent_yaml
+    assert "\\u4E2D" not in agent_yaml
 
 
 def test_workflow_node_preview_does_not_create_run(tmp_path: Path) -> None:

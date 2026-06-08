@@ -72,21 +72,25 @@ export function readWorkflowNodeConfigs(agentYaml: string): AgentYamlWorkflowNod
 
   const nodesEnd = findBlockEnd(lines, nodesIndex, 2)
   const nodes: AgentYamlWorkflowNodeConfig[] = []
+  const itemPattern = /^(\s*)-\s+node_id:\s*(.*)$/
   let index = nodesIndex + 1
   while (index < nodesEnd) {
     const line = lines[index]
-    const match = line.match(/^\s{4}-\s+node_id:\s*(.*)$/)
+    const match = line.match(itemPattern)
     if (!match) {
       index += 1
       continue
     }
 
     const nodeStart = index
+    const nodeIndent = match[1].length
     index += 1
-    while (index < nodesEnd && !/^\s{4}-\s+node_id:\s*/.test(lines[index])) {
+    while (index < nodesEnd) {
+      const nextMatch = lines[index].match(itemPattern)
+      if (nextMatch && nextMatch[1].length === nodeIndent) break
       index += 1
     }
-    nodes.push(parseWorkflowNodeBlock(lines.slice(nodeStart, index), match[1]))
+    nodes.push(parseWorkflowNodeBlock(lines.slice(nodeStart, index), match[2]))
   }
 
   return nodes
@@ -237,6 +241,9 @@ function parseWorkflowNodeBlock(
   blockLines: string[],
   nodeIdValue: string,
 ): AgentYamlWorkflowNodeConfig {
+  const nodeIndent = indentation(blockLines[0] ?? '')
+  const fieldIndent = nodeIndent + 4
+  const listIndent = nodeIndent + 6
   const prompt: AgentYamlWorkflowNodePrompt = {
     business_context: '',
     task_instructions: [],
@@ -246,24 +253,30 @@ function parseWorkflowNodeBlock(
 
   for (let index = 1; index < blockLines.length; index += 1) {
     const line = blockLines[index]
-    const promptScalar = line.match(/^\s{8}business_context:\s*(.*)$/)
+    const promptScalar = line.match(
+      new RegExp(`^\\s{${fieldIndent}}business_context:\\s*(.*)$`),
+    )
     if (promptScalar) {
       prompt.business_context = parseInlineYamlValue(promptScalar[1])
       continue
     }
 
-    const instruction = line.match(/^\s{10}-\s*(.*)$/)
-    if (instruction && isInsideList(blockLines, index, 'task_instructions')) {
+    const instruction = line.match(
+      new RegExp(`^\\s{${fieldIndent},${listIndent}}-\\s*(.*)$`),
+    )
+    if (instruction && isInsideList(blockLines, index, 'task_instructions', fieldIndent)) {
       prompt.task_instructions.push(parseInlineYamlValue(instruction[1]))
       continue
     }
-    if (instruction && isInsideList(blockLines, index, 'output_preferences')) {
+    if (instruction && isInsideList(blockLines, index, 'output_preferences', fieldIndent)) {
       prompt.output_preferences.push(parseInlineYamlValue(instruction[1]))
       continue
     }
 
-    const contextEntry = line.match(/^\s{8}([A-Za-z0-9_]+):\s*(true|false)$/)
-    if (contextEntry && isInsideMapping(blockLines, index, 'context')) {
+    const contextEntry = line.match(
+      new RegExp(`^\\s{${fieldIndent}}([A-Za-z0-9_]+):\\s*(true|false)$`),
+    )
+    if (contextEntry && isInsideMapping(blockLines, index, 'context', nodeIndent + 2)) {
       context[contextEntry[1]] = contextEntry[2] === 'true'
     }
   }
@@ -275,18 +288,28 @@ function parseWorkflowNodeBlock(
   }
 }
 
-function isInsideList(blockLines: string[], index: number, key: string): boolean {
+function isInsideList(
+  blockLines: string[],
+  index: number,
+  key: string,
+  fieldIndent: number,
+): boolean {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    if (/^\s{8}[A-Za-z0-9_]+:/.test(blockLines[cursor])) {
+    if (new RegExp(`^\\s{${fieldIndent}}[A-Za-z0-9_]+:`).test(blockLines[cursor])) {
       return blockLines[cursor].trim() === `${key}:`
     }
   }
   return false
 }
 
-function isInsideMapping(blockLines: string[], index: number, key: string): boolean {
+function isInsideMapping(
+  blockLines: string[],
+  index: number,
+  key: string,
+  sectionIndent: number,
+): boolean {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    if (/^\s{6}[A-Za-z0-9_]+:/.test(blockLines[cursor])) {
+    if (new RegExp(`^\\s{${sectionIndent}}[A-Za-z0-9_]+:`).test(blockLines[cursor])) {
       return blockLines[cursor].trim() === `${key}:`
     }
   }
