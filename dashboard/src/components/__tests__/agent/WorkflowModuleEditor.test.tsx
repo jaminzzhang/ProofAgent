@@ -80,8 +80,12 @@ describe('WorkflowModuleEditor', () => {
       />,
     )
 
-    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
+    expect(screen.getByText('Workflow Path')).toBeInTheDocument()
+    expect(screen.getByText('Entry')).toBeInTheDocument()
+    expect(screen.getAllByText('Terminal').length).toBeGreaterThan(0)
     expect(screen.getByText(/Response \(STOP\)/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Explain Business Context' }))
+    expect(screen.getByText(/Adds domain-specific context/)).toBeInTheDocument()
 
     fireEvent.change(await screen.findByLabelText('Business Context'), {
       target: { value: 'Claims context' },

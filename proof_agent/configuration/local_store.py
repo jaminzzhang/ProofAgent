@@ -788,7 +788,11 @@ class LocalAgentConfigurationStore:
         path = self._knowledge_source_path(source_id)
         if not path.exists():
             return None
-        return KnowledgeSource.model_validate(_read_json(path))
+        payload = _read_json(path)
+        if "lifecycle_state" not in payload:
+            payload["lifecycle_state"] = KnowledgeSourceLifecycleState.ACTIVE.value
+            _write_json_atomic(path, payload)
+        return KnowledgeSource.model_validate(payload)
 
     def list_knowledge_sources(self) -> list[KnowledgeSource]:
         sources_root = self._knowledge_sources_root()

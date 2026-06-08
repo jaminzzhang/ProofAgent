@@ -978,6 +978,14 @@ _Avoid_: Single backend API surface, customer-facing console, ungoverned executi
 A Dashboard Shell information architecture where each Agent detail view combines monitoring, configuration, validation, versioning, and contract inspection for that Agent.
 _Avoid_: Settings-only configuration, detached builder app, global-only run dashboard
 
+**Agent Detail Page**:
+The Agent-focused Focus Mode page opened from the Agents workspace for one Draft Agent, occupying the browser window with Agent-local navigation and the selected Agent sub-area.
+_Avoid_: Detached builder app, second global Dashboard shell, compressed Dashboard content panel, draft-only form page
+
+**Agent Overview**:
+The default Agent Detail Page sub-area that summarises Agent identity, draft/version state, and compact monitoring signals before deeper configuration or lifecycle work.
+_Avoid_: General tab, full Monitor view, configuration-only landing state
+
 **Agent Configuration Workspace**:
 A Dashboard-hosted configuration surface for drafting, validating, testing, and publishing Agent Contracts, Workflow Template settings, Knowledge Provider settings, Tool Contracts, policy, memory, and response disclosure settings.
 _Avoid_: Dashboard API execution path, direct arbitrary manifest execution, prompt-only Agent setup

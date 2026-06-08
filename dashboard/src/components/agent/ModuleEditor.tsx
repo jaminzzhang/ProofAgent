@@ -37,7 +37,7 @@ export function ModuleEditor({
   const sectionYaml = extractAgentYamlSection(agentYaml, yamlSection)
 
   return (
-    <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
+    <div className="border border-[var(--border)] bg-[var(--bg-surface)]">
       <div className="flex items-center justify-between border-b border-[var(--border)] p-5">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
@@ -75,36 +75,51 @@ export function ModuleEditor({
       )}
 
       <div className="p-5">
-        <div className="grid gap-4 md:grid-cols-2">
-          {fields.map((field) => (
-            <label key={field.path.join('.')} className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                {field.label}
-              </span>
-              {field.description && (
-                <span className="block text-xs text-[var(--text-muted)] mb-2">{field.description}</span>
-              )}
-              {field.input === 'select' && field.options ? (
-                <select
-                  value={readAgentYamlField(agentYaml, field.path)}
-                  onChange={(e) => onFieldChange(field.path, e.target.value)}
-                  className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                >
-                  {field.options.map((opt) => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type={field.input}
-                  value={readAgentYamlField(agentYaml, field.path)}
-                  placeholder={field.placeholder}
-                  onChange={(e) => onFieldChange(field.path, e.target.value)}
-                  className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              )}
-            </label>
-          ))}
+        <div className="grid gap-4 xl:grid-cols-2">
+          {fields.map((field) => {
+            const fieldPath = field.path.join('.')
+            const fieldId = `module-field-${fieldPath.replaceAll('.', '-')}`
+
+            return (
+              <div key={fieldPath} className="grid min-w-0 gap-4 border border-[var(--border)] bg-[var(--bg-base)] p-4 md:grid-cols-[minmax(0,1fr)_minmax(220px,280px)]">
+                <div className="min-w-0">
+                  <label
+                    htmlFor={fieldId}
+                    className="block text-sm font-semibold text-[var(--text-primary)]"
+                  >
+                    {field.label}
+                  </label>
+                  {field.description && (
+                    <p className="mt-1 text-sm leading-5 text-[var(--text-secondary)]">{field.description}</p>
+                  )}
+                  <p className="mt-3 break-all font-mono text-xs text-[var(--text-muted)]">{fieldPath}</p>
+                </div>
+                <div className="min-w-0">
+                  {field.input === 'select' && field.options ? (
+                    <select
+                      id={fieldId}
+                      value={readAgentYamlField(agentYaml, field.path)}
+                      onChange={(e) => onFieldChange(field.path, e.target.value)}
+                      className="w-full border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+                    >
+                      {field.options.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id={fieldId}
+                      type={field.input}
+                      value={readAgentYamlField(agentYaml, field.path)}
+                      placeholder={field.placeholder}
+                      onChange={(e) => onFieldChange(field.path, e.target.value)}
+                      className="w-full border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+                    />
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>

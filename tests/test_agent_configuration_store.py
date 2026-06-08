@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from proof_agent.capabilities.knowledge.ingestion import ParsedKnowledgeDocument, ParserMetadata
 from proof_agent.configuration.file_locking import locked as file_locked
@@ -687,7 +686,9 @@ def test_create_knowledge_source_sets_active_lifecycle_state(tmp_path: Path) -> 
     assert source.lifecycle_state is KnowledgeSourceLifecycleState.ACTIVE
 
 
-def test_reading_legacy_source_without_lifecycle_state_fails(tmp_path: Path) -> None:
+def test_reading_legacy_source_without_lifecycle_state_defaults_active_and_persists(
+    tmp_path: Path,
+) -> None:
     store = LocalAgentConfigurationStore(tmp_path)
     source_dir = tmp_path / "knowledge_sources" / "ks_legacy"
     source_dir.mkdir(parents=True)
@@ -705,8 +706,13 @@ def test_reading_legacy_source_without_lifecycle_state_fails(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(ValidationError):
-        store.get_knowledge_source("ks_legacy")
+    source = store.get_knowledge_source("ks_legacy")
+
+    assert source is not None
+    assert source.lifecycle_state is KnowledgeSourceLifecycleState.ACTIVE
+    assert json.loads((source_dir / "source.json").read_text(encoding="utf-8"))[
+        "lifecycle_state"
+    ] == "ACTIVE"
 
 
 def test_get_knowledge_source_reference_summary_counts_persisted_references(

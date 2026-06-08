@@ -39,4 +39,24 @@ describe('ModuleEditor', () => {
     expect(screen.getByLabelText('Case Retention (days)')).toHaveDisplayValue('30')
     expect(screen.getByLabelText('Case Allow Restricted')).toHaveValue('false')
   })
+
+  it('explains each setting with purpose and YAML path', () => {
+    render(
+      <ModuleEditor
+        title="Memory Configuration"
+        description="Memory controls"
+        fields={MEMORY_FIELDS}
+        yamlSection="memory"
+        agentYaml={AGENT_YAML}
+        onFieldChange={vi.fn()}
+        onSave={vi.fn()}
+        busy={false}
+      />,
+    )
+
+    expect(screen.getByText('Memory controls')).toBeInTheDocument()
+    expect(screen.getByText('Controls where admitted memory records are stored between runs.')).toBeInTheDocument()
+    expect(screen.getByText('memory.provider')).toBeInTheDocument()
+    expect(screen.getByText('memory.scopes.case.retention_days')).toBeInTheDocument()
+  })
 })

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindKnowledgeSourceToDraft,
   createModelConnection,
+  fetchRuns,
   fetchWorkflowTemplate,
   fetchKnowledgeSources,
   fetchModelConnections,
@@ -20,6 +21,7 @@ vi.mock('../../api/client', () => ({
   bindKnowledgeSourceToDraft: vi.fn(),
   chatUrl: (path: string) => `http://localhost:5174${path}`,
   createModelConnection: vi.fn(),
+  fetchRuns: vi.fn(),
   fetchWorkflowTemplate: vi.fn(),
   fetchKnowledgeSources: vi.fn(),
   fetchModelConnections: vi.fn(),
@@ -102,6 +104,50 @@ describe('AgentDetailPage', () => {
     vi.clearAllMocks()
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchRuns).mockResolvedValue({
+      data: [
+        {
+          run_id: 'run-production-1',
+          question: 'What documents are required?',
+          outcome: 'ANSWERED_WITH_CITATIONS',
+          run_purpose: 'production',
+          agent_id: 'agent-1',
+          agent_version_id: 'version-1',
+          draft_id: null,
+          created_at: '2026-05-28T02:00:00Z',
+          updated_at: '2026-05-28T02:00:00Z',
+          approval_status: null,
+          error_code: null,
+        },
+        {
+          run_id: 'run-validation-1',
+          question: 'Validation question',
+          outcome: 'REFUSED_NO_EVIDENCE',
+          run_purpose: 'validation',
+          agent_id: 'agent-1',
+          agent_version_id: null,
+          draft_id: 'draft-1',
+          created_at: '2026-05-28T01:00:00Z',
+          updated_at: '2026-05-28T01:00:00Z',
+          approval_status: null,
+          error_code: null,
+        },
+        {
+          run_id: 'run-other-agent',
+          question: 'Other agent question',
+          outcome: 'ANSWERED_WITH_CITATIONS',
+          run_purpose: 'production',
+          agent_id: 'agent-2',
+          agent_version_id: 'version-other',
+          draft_id: null,
+          created_at: '2026-05-28T03:00:00Z',
+          updated_at: '2026-05-28T03:00:00Z',
+          approval_status: null,
+          error_code: null,
+        },
+      ],
+      meta: { total: 3, limit: 50, offset: 0 },
+    })
     vi.mocked(createModelConnection).mockRejectedValue(new Error('not mocked'))
     vi.mocked(fetchWorkflowTemplate).mockResolvedValue({
       name: 'react_enterprise_qa',
@@ -180,6 +226,34 @@ describe('AgentDetailPage', () => {
     mockActiveVersionId = null
   })
 
+  it('opens Agent Overview by default with identity and monitor summary', async () => {
+    mockVersions = [
+      {
+        agent_id: 'agent-1',
+        version_id: 'version-1',
+        source_draft_id: 'draft-1',
+        validation_run_id: 'run-validation-1',
+        display_name: 'Insurance Agent',
+        purpose: 'Answer governed insurance questions.',
+        published_at: '2026-05-28T01:00:00Z',
+        published_by: 'dashboard',
+        operation_audit: [],
+      },
+    ]
+    mockActiveVersionId = 'version-1'
+
+    renderPage()
+
+    expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByText('Agent Overview')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Insurance Agent')).toBeInTheDocument()
+    expect(await screen.findByText('Production Runs')).toBeInTheDocument()
+    expect(screen.getByText('Answered Rate')).toBeInTheDocument()
+    expect(screen.getByText('Recent Agent Runs')).toBeInTheDocument()
+    expect(screen.getByText('What documents are required?')).toBeInTheDocument()
+    expect(screen.queryByText('Other agent question')).not.toBeInTheDocument()
+  })
+
   it('shows validation busy state while a quick test is running', async () => {
     let resolveValidation: (value: DraftValidationResponse) => void = () => {}
     vi.mocked(validateConfigDraft).mockReturnValue(
@@ -232,8 +306,10 @@ workflow:
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
 
-    expect(await screen.findByText('Relationship Map')).toBeInTheDocument()
+    expect(await screen.findByText('Workflow Path')).toBeInTheDocument()
     expect(screen.getAllByText('Plan').length).toBeGreaterThan(0)
+    fireEvent.click(await screen.findByRole('button', { name: 'Explain Business Context' }))
+    expect(screen.getByText(/Adds domain-specific context/)).toBeInTheDocument()
     fireEvent.change(await screen.findByLabelText('Business Context'), {
       target: { value: 'Claims context' },
     })
@@ -302,8 +378,7 @@ workflow:
     ]
     mockActiveVersionId = 'version-1'
 
-    renderPage()
-    fireEvent.click(screen.getByText('Versions'))
+    renderPage('/agents/agent-1/drafts/draft-1?tab=versions')
 
     expect(screen.getByRole('link', { name: 'Open in Operator Chat' })).toHaveAttribute(
       'href',

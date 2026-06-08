@@ -21,7 +21,7 @@ import { CodeBlock } from '../components/CodeBlock'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { AgentDetailShell } from '../components/agent/AgentDetailShell'
-import { AgentMonitor } from '../components/agent/AgentMonitor'
+import { AgentMonitor, AgentMonitorSummary } from '../components/agent/AgentMonitor'
 import { ModuleEditor } from '../components/agent/ModuleEditor'
 import { ModelModuleEditor } from '../components/agent/ModelModuleEditor'
 import { KnowledgeModuleEditor } from '../components/agent/KnowledgeModuleEditor'
@@ -256,7 +256,7 @@ export function AgentDetailPage() {
   }
 
   const CONFIGURE_MODULES = [
-    { id: 'general', label: 'General' },
+    { id: 'general', label: 'Overview' },
     { id: 'workflow', label: 'Workflow' },
     { id: 'knowledge', label: 'Knowledge' },
     { id: 'tools', label: 'Tools' },
@@ -299,51 +299,79 @@ export function AgentDetailPage() {
       onModuleChange={setActiveTab}
     >
       {activeTab === 'general' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <div className="flex items-center justify-between border-b border-[var(--border)] pb-4 mb-4">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              General Configuration
-            </h3>
-            <button
-              onClick={saveBasics}
-              disabled={busy === 'basics'}
-              className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-            >
-              {busy === 'basics' ? 'Saving...' : 'Save'}
-            </button>
-          </div>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                Display Name
-              </label>
-              <input
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-              />
+        <div className="space-y-5">
+          <section className="border border-[var(--border)] bg-[var(--bg-surface)] p-6">
+            <div className="flex flex-col gap-4 border-b border-[var(--border)] pb-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
+                  Agent Overview
+                </h3>
+                <p className="mt-1 text-sm text-[var(--text-muted)]">
+                  Identity, draft status, and recent operating signals for this Agent.
+                </p>
+              </div>
+              <button
+                onClick={saveBasics}
+                disabled={busy === 'basics'}
+                className="w-fit rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+              >
+                {busy === 'basics' ? 'Saving...' : 'Save'}
+              </button>
             </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                Purpose
-              </label>
-              <textarea
-                value={purpose}
-                onChange={(event) => setPurpose(event.target.value)}
-                rows={3}
-                className="w-full resize-none bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-              />
+
+            <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    Display Name
+                  </label>
+                  <input
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    Purpose
+                  </label>
+                  <textarea
+                    value={purpose}
+                    onChange={(event) => setPurpose(event.target.value)}
+                    rows={4}
+                    className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <dl className="grid content-start gap-3 text-sm">
+                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Agent ID</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">{draft.agent_id}</dd>
+                </div>
+                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Draft ID</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">{draft.draft_id}</dd>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                    <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Validations</dt>
+                    <dd className="mt-1 text-lg font-semibold text-[var(--text-primary)]">{draft.validation_records.length}</dd>
+                  </div>
+                  <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                    <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Versions</dt>
+                    <dd className="mt-1 text-lg font-semibold text-[var(--text-primary)]">{versions.length}</dd>
+                  </div>
+                </div>
+                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Active Version</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">{activeVersionId ?? 'Not published'}</dd>
+                </div>
+              </dl>
             </div>
-            <div className="flex gap-2 text-xs font-mono text-[var(--text-muted)]">
-              <span>{draft.agent_id}</span>
-              <span>•</span>
-              <span>{draft.draft_id}</span>
-              <span>•</span>
-              <span>{draft.validation_records.length} validations</span>
-              <span>•</span>
-              <span>{versions.length} versions</span>
-            </div>
-          </div>
+          </section>
+
+          {agentId && <AgentMonitorSummary agentId={agentId} />}
         </div>
       )}
 
