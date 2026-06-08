@@ -190,6 +190,7 @@ Python:
 Frontend:
 
 - Dashboard and Chat use React 19, Vite, React Router, TypeScript, and Tailwind CSS v4.
+- Dashboard and Unified Chat frontend changes must follow `docs/frontend-design-principles.md` before implementation and during review.
 - Keep frontend API types aligned with `proof_agent/contracts/` and API serializers.
 - Preserve the product tone: operational, audit-focused, dense enough for repeated enterprise use.
 
