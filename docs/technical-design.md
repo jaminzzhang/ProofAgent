@@ -383,7 +383,7 @@ response:
   include_review_results: false
 ```
 
-`react` defines planner limits and adapter selection. `review` defines the advisory Harness Review Subagent. `response` caps optional governance details returned by execution APIs; callers may request `include_governance_details`, but the response only includes details allowed by `response.include_reasoning_summary` and `response.include_review_results`.
+`react` defines planner limits and adapter selection. For `react_enterprise_qa_v2`, the same planner configuration also powers Intent Resolution before ReAct planning. `review` defines the advisory Harness Review Subagent. `response` caps optional governance details returned by execution APIs; callers may request `include_governance_details`, but the response only includes details allowed by `response.include_reasoning_summary` and `response.include_review_results`.
 
 The fixed ReAct Action Set is:
 
@@ -460,7 +460,8 @@ Config rules:
 - Missing shared model connection fails with `PA_MODEL_CONNECTION_001`.
 - Archived shared model connection is allowed for existing runtime resolution with a publish-blocking warning, but production publication fails with `PA_MODEL_CONNECTION_002`.
 - Provider runtime errors should emit `model_error` once trace exists.
-- `react_enterprise_qa` requires the `react` section.
+- `react_enterprise_qa` and `react_enterprise_qa_v2` require the `react` section.
+- `react_enterprise_qa_v2` adds Intent Resolution before ReAct planning; it reuses `react.planner` model configuration while emitting a distinct `intent_resolution` model-call role and audit event.
 - `review.mode: auto` requires `review.subagent`.
 - Reviewer model usage settings belong under `review.subagent.params`; old top-level reviewer usage fields are rejected instead of dual-read.
 - Raw chain-of-thought must not be recorded, stored, or exposed; only audit-safe Reasoning Summary fields may enter trace, receipt, RunStore, Dashboard API, Conversation API, or response governance details.

@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from proof_agent.contracts import (
     EnforcementPoint,
+    IntentResolution,
     PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
@@ -32,6 +33,42 @@ def test_react_action_proposal_is_frozen_and_structured() -> None:
 
     assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
     assert proposal.parameters["query"] == "travel meal reimbursement rule"
+
+
+def test_intent_resolution_is_frozen_and_structured() -> None:
+    resolution = IntentResolution(
+        resolution_id="intent_1",
+        user_goal="Understand inpatient reimbursement requirements.",
+        domain_intent="insurance_claim_reimbursement_requirements",
+        known_facts=("The user asks about inpatient reimbursement.",),
+        missing_fields=(),
+        ambiguities=(),
+        risk_flags=(),
+        confidence=0.86,
+        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+    )
+
+    assert resolution.domain_intent == "insurance_claim_reimbursement_requirements"
+    assert resolution.recommended_next_action == ReActActionType.PLAN_RETRIEVAL
+
+    with pytest.raises(ValidationError):
+        resolution.known_facts = ("changed",)  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1, float("nan")])
+def test_intent_resolution_rejects_invalid_confidence(confidence: float) -> None:
+    with pytest.raises(ValidationError):
+        IntentResolution(
+            resolution_id="intent_1",
+            user_goal="Understand inpatient reimbursement requirements.",
+            domain_intent="insurance_claim_reimbursement_requirements",
+            known_facts=("The user asks about inpatient reimbursement.",),
+            missing_fields=(),
+            ambiguities=(),
+            risk_flags=(),
+            confidence=confidence,
+            recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+        )
 
 
 def test_review_decision_is_advisory_policy_shape() -> None:

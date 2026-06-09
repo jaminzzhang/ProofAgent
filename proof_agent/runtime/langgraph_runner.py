@@ -54,11 +54,15 @@ def run_with_langgraph(
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
     resolved_manifest = manifest or load_agent_manifest(agent_yaml)
-    if resolved_manifest.workflow.template not in {"enterprise_qa", "react_enterprise_qa"}:
+    if resolved_manifest.workflow.template not in {
+        "enterprise_qa",
+        "react_enterprise_qa",
+        "react_enterprise_qa_v2",
+    }:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"workflow template is not executable yet: {resolved_manifest.workflow.template}",
-            "Use workflow.template: enterprise_qa or react_enterprise_qa.",
+            "Use workflow.template: enterprise_qa, react_enterprise_qa, or react_enterprise_qa_v2.",
             artifact_path=agent_yaml,
         )
     runs_dir.mkdir(parents=True, exist_ok=True)

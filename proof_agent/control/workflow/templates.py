@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from proof_agent.errors import ProofAgentError
 
@@ -250,6 +250,43 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
         ),
     ),
 }
+
+
+def _react_enterprise_qa_v2_nodes() -> tuple[WorkflowNodeDescriptor, ...]:
+    v1_nodes = TEMPLATES["react_enterprise_qa"].nodes
+    return (
+        WorkflowNodeDescriptor(
+            node_id="intent_resolution",
+            label="Intent Resolution",
+            description="Resolve the user's intent into an audit-safe structured summary.",
+            successors=("plan",),
+            editable_prompt_fields=EDITABLE_WORKFLOW_PROMPT_FIELDS,
+            context_options=(
+                "include_agent_purpose",
+                "include_recent_conversation_summary",
+                "include_bound_knowledge_sources",
+                "include_bound_tools",
+                "include_policy_outline",
+            ),
+            input_summary="User question, Agent purpose, and admitted conversation context.",
+            output_summary="Intent Resolution Contract.",
+            model_bearing=True,
+        ),
+        *(
+            replace(node, predecessors=("intent_resolution",))
+            if node.node_id == "plan"
+            else node
+            for node in v1_nodes
+        ),
+    )
+
+
+TEMPLATES["react_enterprise_qa_v2"] = WorkflowTemplate(
+    name="react_enterprise_qa_v2",
+    description="Controlled ReAct enterprise question answering with Intent Resolution.",
+    descriptor_version="react_enterprise_qa.v2",
+    nodes=_react_enterprise_qa_v2_nodes(),
+)
 
 
 def list_workflow_templates() -> tuple[WorkflowTemplate, ...]:

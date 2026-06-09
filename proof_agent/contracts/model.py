@@ -18,6 +18,7 @@ class ModelRole(str, Enum):
 
 class ModelCallRole(str, Enum):
     FINAL_ANSWER = "final_answer"
+    INTENT_RESOLUTION = "intent_resolution"
     REACT_PLANNER = "react_planner"
     HARNESS_REVIEW = "harness_review"
     RETRIEVAL_PLANNER = "retrieval_planner"

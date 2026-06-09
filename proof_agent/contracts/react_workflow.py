@@ -32,6 +32,20 @@ class ReasoningSummary(FrozenModel):
     required_evidence: tuple[str, ...]
 
 
+class IntentResolution(FrozenModel):
+    """Audit-safe user intent understanding before ReAct action planning."""
+
+    resolution_id: str
+    user_goal: str
+    domain_intent: str
+    known_facts: tuple[str, ...]
+    missing_fields: tuple[str, ...]
+    ambiguities: tuple[str, ...]
+    risk_flags: tuple[str, ...]
+    confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    recommended_next_action: ReActActionType
+
+
 class ReActActionProposal(FrozenModel):
     """Planner-proposed action for Harness and PolicyEngine evaluation."""
 
@@ -69,10 +83,11 @@ class ReviewDecision(FrozenModel):
 class GovernanceDetails(FrozenModel):
     """Supplemental governance projection for ReAct workflow audit views."""
 
+    intent_resolution: Mapping[str, Any] | None = None
     reasoning_summary: Mapping[str, Any] | None = None
     review_results: tuple[Mapping[str, Any], ...] = ()
 
-    @field_validator("reasoning_summary", "review_results", mode="after")
+    @field_validator("intent_resolution", "reasoning_summary", "review_results", mode="after")
     @classmethod
     def freeze_nested_values(cls, value: Any) -> Any:
         return freeze_value(value)

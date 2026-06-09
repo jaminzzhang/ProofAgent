@@ -16,6 +16,7 @@ from proof_agent.contracts import (
     ContextAdmission,
     EnforcementPoint,
     EvidenceChunk,
+    IntentResolution,
     ModelCallRole,
     ModelRequest,
     ModelResponse,
@@ -42,6 +43,7 @@ from proof_agent.control.workflow.node_context import (
 from proof_agent.control.workflow.react_enterprise_qa import (
     clarification_message,
     emit_action_proposal,
+    emit_intent_resolution,
     emit_reasoning_summary,
     review_action,
     should_stop_for_step_budget,
@@ -58,6 +60,7 @@ class ReActGraphState(TypedDict, total=False):
     messages: Annotated[list[Any], operator.add]
     step_count: int
     tool_call_count: int
+    intent_resolution: dict[str, Any] | None
     action: dict[str, Any] | None
     reasoning_summary: dict[str, Any] | None
     review_results: Annotated[list[dict[str, Any]], operator.add]
@@ -81,6 +84,7 @@ def build_react_enterprise_qa_graph(
     max_tool_calls = react.max_tool_calls if react is not None else 0
     auto_review_enabled = bool(manifest.review and manifest.review.mode == "auto")
     workflow_node_configs = {node.node_id: node for node in manifest.workflow.nodes}
+    uses_intent_resolution = invocation.template.descriptor_version == "react_enterprise_qa.v2"
     _wrap_control_plane_model_providers(invocation, trace)
 
     def configured_node_context(
@@ -123,6 +127,33 @@ def build_react_enterprise_qa_graph(
             "summary": summary,
         }
 
+    def intent_resolution_node(state: ReActGraphState) -> dict[str, Any]:
+        if invocation.intent_resolver is None:
+            return _refusal("Intent resolver is not configured.")
+        try:
+            node_context = configured_node_context("intent_resolution", state)
+            resolution = invocation.intent_resolver.resolve(
+                question=state["question"],
+                system_prompt="Resolve user intent without raw chain-of-thought.",
+                context_summary=_conversation_context_summary(conversation_context),
+                workflow_node_context=node_context,
+            )
+        except ModelOutputNormalizationError as exc:
+            trace.emit(
+                "model_output_normalization_failed",
+                status="blocked",
+                payload={
+                    "role": exc.role,
+                    "error_code": exc.error_code,
+                    "raw_content_length": exc.raw_content_length,
+                },
+            )
+            return _refusal(
+                "The intent resolution output failed validation and the run was stopped."
+            )
+        emit_intent_resolution(trace, resolution)
+        return {"intent_resolution": _intent_resolution_state_dict(resolution)}
+
     def plan_node(state: ReActGraphState) -> dict[str, Any]:
         step_count = int(state.get("step_count", 0))
         if react is None or invocation.react_planner is None:
@@ -137,7 +168,7 @@ def build_react_enterprise_qa_graph(
             proposal = invocation.react_planner.plan(
                 question=state["question"],
                 system_prompt="Use governed ReAct planning without raw chain-of-thought.",
-                context_summary="",
+                context_summary=_intent_context_summary(state),
                 workflow_node_context=node_context,
             )
         except ModelOutputNormalizationError as exc:
@@ -563,6 +594,8 @@ def build_react_enterprise_qa_graph(
         return "end" if state.get("governance_refusal") else "tool"
 
     builder = StateGraph(ReActGraphState)
+    if uses_intent_resolution:
+        builder.add_node("intent_resolution", intent_resolution_node)
     builder.add_node("plan", plan_node)
     builder.add_node("clarify", clarify_node)
     builder.add_node("review_retrieval_plan", review_retrieval_plan_node)
@@ -571,7 +604,15 @@ def build_react_enterprise_qa_graph(
     builder.add_node("review_tool", review_tool_node)
     builder.add_node("tool", tool_node)
 
-    builder.add_edge(START, "plan")
+    if uses_intent_resolution:
+        builder.add_edge(START, "intent_resolution")
+        builder.add_conditional_edges(
+            "intent_resolution",
+            lambda state: "end" if state.get("governance_refusal") else "plan",
+            {"plan": "plan", "end": END},
+        )
+    else:
+        builder.add_edge(START, "plan")
     builder.add_conditional_edges(
         "plan",
         route_after_plan,
@@ -680,6 +721,11 @@ def _wrap_control_plane_model_providers(
     invocation: HarnessInvocation,
     trace: TraceWriter,
 ) -> None:
+    _wrap_model_provider_attribute(
+        invocation.intent_resolver,
+        trace=trace,
+        role=ModelCallRole.INTENT_RESOLUTION,
+    )
     _wrap_model_provider_attribute(
         invocation.react_planner,
         trace=trace,
@@ -858,6 +904,40 @@ def _reasoning_summary_state_dict(proposal: ReActActionProposal) -> dict[str, An
     }
 
 
+def _intent_resolution_state_dict(resolution: IntentResolution) -> dict[str, Any]:
+    return {
+        "resolution_id": resolution.resolution_id,
+        "user_goal": resolution.user_goal,
+        "domain_intent": resolution.domain_intent,
+        "known_facts": list(resolution.known_facts),
+        "missing_fields": list(resolution.missing_fields),
+        "ambiguities": list(resolution.ambiguities),
+        "risk_flags": list(resolution.risk_flags),
+        "confidence": resolution.confidence,
+        "recommended_next_action": resolution.recommended_next_action.value,
+    }
+
+
+def _conversation_context_summary(conversation_context: ContextAdmission | None) -> str:
+    if conversation_context is not None and conversation_context.admitted:
+        return conversation_context.summary
+    return ""
+
+
+def _intent_context_summary(state: Mapping[str, Any]) -> str:
+    resolution = state.get("intent_resolution")
+    if not isinstance(resolution, Mapping):
+        return ""
+    return (
+        "Intent Resolution: "
+        f"user_goal={resolution.get('user_goal', '')}; "
+        f"domain_intent={resolution.get('domain_intent', '')}; "
+        f"missing_fields={resolution.get('missing_fields', [])}; "
+        f"ambiguities={resolution.get('ambiguities', [])}; "
+        f"recommended_next_action={resolution.get('recommended_next_action', '')}."
+    )
+
+
 def _workflow_node_runtime_sample_context(
     *,
     invocation: HarnessInvocation,
@@ -875,6 +955,7 @@ def _workflow_node_runtime_sample_context(
         recent_conversation_summary = conversation_context.summary
     return {
         "agent_purpose": manifest.purpose,
+        "intent_resolution": state.get("intent_resolution") or {},
         "recent_conversation_summary": recent_conversation_summary,
         "bound_knowledge_sources": [
             binding.source_ref.source_id for binding in manifest.knowledge_bindings

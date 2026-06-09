@@ -9,6 +9,7 @@ export type ReceiptOutcome =
   | 'FAILED_RECEIPT_UNAVAILABLE'
 
 export interface GovernanceDetails {
+  intent_resolution?: Record<string, unknown> | null
   reasoning_summary?: Record<string, unknown> | null
   review_results?: Record<string, unknown>[]
   clarification_request?: Record<string, unknown> | null

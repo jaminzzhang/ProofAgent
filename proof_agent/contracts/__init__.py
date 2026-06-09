@@ -149,6 +149,7 @@ from proof_agent.contracts.policy import (
 )
 from proof_agent.contracts.react_workflow import (
     GovernanceDetails,
+    IntentResolution,
     ReActActionProposal,
     ReActActionType,
     ReasoningSummary,
@@ -235,6 +236,7 @@ __all__ = [
     "FrozenModel",
     "FoundationKnowledgeSourceValidation",
     "GovernanceDetails",
+    "IntentResolution",
     "HandoffProjection",
     "HandoffReason",
     "KnowledgeConfig",

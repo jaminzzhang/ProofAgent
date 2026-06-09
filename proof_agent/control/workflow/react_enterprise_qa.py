@@ -7,6 +7,7 @@ from proof_agent.capabilities.models.normalization import ModelOutputNormalizati
 from proof_agent.capabilities.review import HarnessReviewSubagent
 from proof_agent.contracts import (
     EnforcementPoint,
+    IntentResolution,
     PolicyDecision,
     ReActActionProposal,
     ReviewDecision,
@@ -33,6 +34,26 @@ def emit_reasoning_summary(trace: TraceWriter, proposal: ReActActionProposal) ->
             "rationale_summary": summary.rationale_summary,
             "risk_flags": list(summary.risk_flags),
             "required_evidence": list(summary.required_evidence),
+        },
+    )
+
+
+def emit_intent_resolution(trace: TraceWriter, resolution: IntentResolution) -> None:
+    """Emit an audit-safe intent summary without raw chain-of-thought."""
+
+    trace.emit(
+        "intent_resolution",
+        status="ok",
+        payload={
+            "resolution_id": resolution.resolution_id,
+            "user_goal": resolution.user_goal,
+            "domain_intent": resolution.domain_intent,
+            "known_facts": list(resolution.known_facts),
+            "missing_fields": list(resolution.missing_fields),
+            "ambiguities": list(resolution.ambiguities),
+            "risk_flags": list(resolution.risk_flags),
+            "confidence": resolution.confidence,
+            "recommended_next_action": resolution.recommended_next_action.value,
         },
     )
 

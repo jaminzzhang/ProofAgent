@@ -70,7 +70,7 @@ memory:
 
 ## ReAct Shape
 
-The `react_enterprise_qa` template adds `react`, `review`, and `response` sections. These sections are part of the Agent Contract, not hidden runtime knobs.
+The `react_enterprise_qa` and `react_enterprise_qa_v2` templates add `react`, `review`, and `response` sections. These sections are part of the Agent Contract, not hidden runtime knobs. V2 adds Intent Resolution before ReAct planning while reusing `react.planner` model configuration.
 
 ```yaml
 name: react_enterprise_qa
@@ -101,16 +101,17 @@ review:
   subagent:
     provider: deterministic
     name: harness-review-demo
-    timeout_seconds: 5
-    max_output_tokens: 500
     fail_closed: true
+    params:
+      timeout_seconds: 5
+      max_output_tokens: 500
 
 response:
   include_reasoning_summary: false
   include_review_results: false
 ```
 
-`workflow.template: react_enterprise_qa` requires a `react` section. `review.mode: auto` requires `review.subagent`. `response` controls what governance details may be returned to API callers; it does not change what the trace records.
+`workflow.template: react_enterprise_qa` and `workflow.template: react_enterprise_qa_v2` require a `react` section. `review.mode: auto` requires `review.subagent`. `response` controls what governance details may be returned to API callers; it does not change what the trace records. For V2, `response.include_reasoning_summary` also allows the internal Intent Resolution summary in operator governance details.
 
 ## Responsibilities
 

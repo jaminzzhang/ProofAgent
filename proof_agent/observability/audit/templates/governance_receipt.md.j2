@@ -9,6 +9,25 @@ Question: {{ question }}
 
 {{ final_outcome }}
 
+{% if intent_resolution_events %}
+## Intent Resolution
+
+{% for event in intent_resolution_events %}
+| Field | Value |
+| --- | --- |
+| Resolution ID | {{ event.payload.resolution_id | default("unknown") }} |
+| User Goal | {{ event.payload.user_goal | default("n/a") }} |
+| Domain Intent | {{ event.payload.domain_intent | default("n/a") }} |
+| Known Facts | {{ event.payload.known_facts | default([]) | join("; ") }} |
+| Missing Fields | {{ event.payload.missing_fields | default([]) | join(", ") }} |
+| Ambiguities | {{ event.payload.ambiguities | default([]) | join("; ") }} |
+| Risk Flags | {{ event.payload.risk_flags | default([]) | join(", ") }} |
+| Confidence | {{ event.payload.confidence | default("n/a") }} |
+| Recommended Next Action | {{ event.payload.recommended_next_action | default("n/a") }} |
+
+{% endfor %}
+{% endif %}
+
 {% if reasoning_summary_events %}
 ## ReAct Reasoning Summary
 

@@ -78,7 +78,12 @@ FORBIDDEN_MODEL_PARAM_PARTS = (
     "access_token",
     "provider_api_key",
 )
-SUPPORTED_WORKFLOW_TEMPLATES = {"enterprise_qa", "react_enterprise_qa"}
+SUPPORTED_WORKFLOW_TEMPLATES = {
+    "enterprise_qa",
+    "react_enterprise_qa",
+    "react_enterprise_qa_v2",
+}
+REACT_WORKFLOW_TEMPLATES = {"react_enterprise_qa", "react_enterprise_qa_v2"}
 
 
 def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> None:
@@ -413,11 +418,11 @@ def _validate_workflow_node_config(manifest: AgentManifest, *, manifest_path: Pa
     nodes = manifest.workflow.nodes
     if not nodes:
         return
-    if manifest.workflow.template != "react_enterprise_qa":
+    if manifest.workflow.template not in REACT_WORKFLOW_TEMPLATES:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "workflow.nodes is only supported for react_enterprise_qa",
-            "Remove workflow.nodes or set workflow.template: react_enterprise_qa.",
+            "workflow.nodes is only supported for ReAct workflow templates",
+            "Remove workflow.nodes or set workflow.template to a ReAct workflow template.",
             artifact_path=manifest_path,
         )
 
@@ -646,11 +651,11 @@ def _reject_secret_model_params(manifest: AgentManifest, *, manifest_path: Path)
 def _validate_react_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
     react = manifest.react
     if react is None:
-        if manifest.workflow.template != "react_enterprise_qa":
+        if manifest.workflow.template not in REACT_WORKFLOW_TEMPLATES:
             return
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "react config is required for react_enterprise_qa",
+            "react config is required for ReAct workflow templates",
             "Add a top-level react section to agent.yaml.",
             artifact_path=manifest_path,
         )

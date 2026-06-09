@@ -114,6 +114,7 @@ function runDetailReturnState(
 
 function hasGovernanceDetails(details?: GovernanceDetails | null): boolean {
   return (
+    Boolean(details?.intent_resolution) ||
     Boolean(details?.reasoning_summary) ||
     Boolean(details?.review_results?.length) ||
     Boolean(details?.clarification_request)
@@ -129,6 +130,17 @@ function GovernanceTab({ details }: { details?: GovernanceDetails | null }) {
 
   return (
     <div className="space-y-4">
+      {visibleDetails.intent_resolution && (
+        <section className="border border-[var(--border)] rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-surface)]">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Intent Resolution</h3>
+          </div>
+          <pre className="max-h-72 overflow-auto bg-[var(--bg-base)] p-4 text-xs leading-relaxed text-[var(--text-secondary)] font-mono whitespace-pre-wrap">
+            {JSON.stringify(visibleDetails.intent_resolution, null, 2)}
+          </pre>
+        </section>
+      )}
+
       <section className="border border-[var(--border)] rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-surface)]">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Reasoning Summary</h3>

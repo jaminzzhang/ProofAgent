@@ -19,6 +19,7 @@ from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+REACT_V2_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml")
 
 
 def _trace_events(path: Path) -> list[dict[str, Any]]:
@@ -74,6 +75,22 @@ def test_supported_travel_meal_question_answers_with_react_review_trace(
     assert event_types.count("policy_decision") == 4
     assert "model_request" in event_types
     assert "model_response" in event_types
+
+
+def test_v2_resolves_intent_before_react_planning(tmp_path: Path) -> None:
+    result = run_with_langgraph(
+        REACT_V2_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "run",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    event_types = _event_types(events)
+    assert event_types.index("intent_resolution") < event_types.index("reasoning_summary")
+    intent_event = next(event for event in events if event["event_type"] == "intent_resolution")
+    assert intent_event["payload"]["recommended_next_action"] == "plan_retrieval"
+    assert intent_event["payload"]["domain_intent"] == "enterprise_policy_question"
 
 
 def test_workflow_node_context_extends_model_prompt_without_replacing_system_prompt(
