@@ -53,13 +53,16 @@ Thumbs.db
 runs/*
 !runs/.gitkeep
 
-# Local git worktrees
+# git
 .worktrees/
+.github/
 
 # Claude Code
 .claude/
 .agents/
 .superpowers/
+.codex/
+.opencode/
 
 # Frontend
 node_modules/
@@ -67,3 +70,11 @@ dist/
 .vite/
 *.tsbuildinfo
 .antigravitycli/
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+e2e/
