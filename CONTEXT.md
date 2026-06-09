@@ -118,9 +118,21 @@ _Avoid_: Hidden model call, prompt-driven tool execution, prompt-driven retrieva
 A Workflow Template where a model proposes reasoning steps and action proposals, while the Control Envelope governs whether each step may execute.
 _Avoid_: Autonomous ReAct agent, direct model executor
 
+**Intent Resolution**:
+The governed understanding step that turns a user turn and admitted conversation context into an audit-safe summary of user goal, domain intent, known facts, missing fields, ambiguities, risk flags, and the recommended next action before ReAct planning.
+_Avoid_: Raw chain-of-thought, hidden thinking, unstructured intent guess
+
+**Intent Resolution Contract**:
+The structured output contract for Intent Resolution, distinct from Reasoning Summary because it describes user intent and ambiguity rather than the rationale for a selected ReAct action.
+_Avoid_: Reused Reasoning Summary, planner scratchpad, free-form intent notes
+
 **React Enterprise QA Template**:
 The V1 Controlled ReAct Workflow Template for enterprise question answering.
 _Avoid_: Replacing Enterprise QA Template, generic autonomous agent template
+
+**React Enterprise QA Template V2**:
+The versioned Controlled ReAct Workflow Template that adds Intent Resolution before ReAct planning while preserving historical interpretation of earlier Published Agent Versions.
+_Avoid_: Runtime feature flag for v1, mutable latest template behavior
 
 **Insurance QA Evaluation Target**:
 A concrete Agent evaluation target that applies the React Enterprise QA Template to the Insurance Service QA Domain and measures both business answer quality and Control Envelope behavior.
@@ -1848,10 +1860,16 @@ _Avoid_: Evidence content dump
 - `before_answer` remains governed primarily by deterministic evidence and citation rules; a **Harness Review Subagent** may advise but cannot replace evidence validation.
 - **Harness Decision Assistance** may advise on `before_answer`, but cannot override failed evidence admission, citation validation, or final output validation.
 - A **Controlled ReAct Workflow** records **Reasoning Summary**, not raw chain-of-thought.
+- **Intent Resolution** records an audit-safe intent summary before ReAct planning; it does not expose raw chain-of-thought.
+- **Intent Resolution Contract** and **Reasoning Summary** are separate audit-safe summaries: the former captures understood user intent, while the latter captures selected ReAct action rationale.
+- **Intent Resolution** may recommend the next action category, but it cannot create executable retrieval plans, tool calls, or final answers; the **ReAct Planner** still emits the governed **ReAct Action Proposal**.
+- V2 **Intent Resolution** requires deterministic contract validation and trace recording, but does not add an independent Auto Review node because executable actions remain governed by existing review and policy nodes.
+- V2 **Intent Resolution** reuses **ReAct Planner Config** for model configuration while remaining a distinct model-call role and audit fact from ReAct planning.
 - A **Controlled ReAct Workflow** records **Action Proposal Event**, **Review Decision Event**, **Review Override Event**, and **Clarification Requested Event** where applicable.
 - `policy_decision` remains the final governance trace event after `PolicyEngine` validation.
 - Backend response settings may expose or hide **Governance Detail Projection**, but trace still records the full audit-safe facts.
 - **Response Detail Policy** sets the maximum **Governance Detail Projection** allowed for an Agent; API requests may request less detail but cannot exceed it.
+- **Intent Resolution** may appear in internal trace, receipt, Dashboard, or operator governance details when allowed by **Response Detail Policy**, but it must not appear in ordinary customer-facing response text.
 - A **Customer-Safe Response Projection** is required for **Customer Service Chat Frontend** responses and must not expose **Governance Detail Projection**, trace links, receipt links, internal policy decisions, review results, or raw tool parameters.
 - A **Customer-Safe Response Projection** must not expose **Customer Escalation Handoff** as an `ESCALATED_TO_HUMAN` customer-visible outcome.
 - A **Customer-Safe Response Projection** may expose **Authorized Tool Result** support only through **Customer-Safe Source Label** values, not through tool names, trace identifiers, receipt identifiers, internal authorization reasons, or raw tool payloads.
@@ -1880,9 +1898,11 @@ _Avoid_: Evidence content dump
 - V1 customer-facing execution may expose **Customer Run Progress State** values but does not stream unvalidated model tokens.
 - V1 **Controlled ReAct Workflow** allows multi-step planning and retrieval, at most one governed tool call, and one final answer generation within a **ReAct Step Budget**.
 - V1 **React Enterprise QA Template** uses **Evidence-First ReAct**: retrieval is the default first executable action, clarification is allowed for underspecified questions, and tool proposals are allowed only when policy permits.
+- **React Enterprise QA Template V2** adds **Intent Resolution** before ReAct planning as a versioned template change, not as a runtime feature flag on earlier template versions.
 - A **Controlled ReAct Workflow** cannot produce a direct final answer before evidence admission.
 - A **Clarification Request** ends the current run with **Waiting For User Clarification** rather than refusal or approval waiting.
 - A **Clarification Continuation Run** is a new governed run linked through the conversation timeline, not a durable checkpoint resume.
+- **Intent Resolution** runs once per governed run; multi-turn intent understanding accumulates through **Controlled Conversation Context** across **Clarification Continuation Run** boundaries.
 - A **Harness Invocation** is assembled before execution and then governed by the **Control Envelope**.
 - An **Assisted QA Chat Frontend** submits questions through the **Run Execution API**.
 - A **Run Execution API** starts a **Published Agent** by agent identifier, not by arbitrary manifest path supplied by the frontend.
@@ -2179,6 +2199,14 @@ _Avoid_: Evidence content dump
 - "Workflow" could mean business flow, runtime graph mechanics, or a hard-coded orchestrator branch. Resolved: use **Workflow Template** for the governed flow shape, and keep runtime mechanics separate.
 - "Workflow node editing" could mean configuring registered template nodes or freely rewriting the runtime graph. Resolved: use **Workflow Template Node Configuration** for editable node settings that compile back to the Agent Contract without changing Harness semantics.
 - "ReAct framework" could mean an autonomous model-driven agent loop or a governed flow shape. Resolved: use **Controlled ReAct Workflow** for the governed Proof Agent version.
+- "Multi-round user intent thinking" could mean exposing raw model thoughts or adding a governed understanding step. Resolved: use **Intent Resolution** as an audit-safe step before ReAct planning.
+- "Intent Resolution rollout" could mean a mutable feature flag on the existing ReAct template or a new template version. Resolved: use **React Enterprise QA Template V2** so historical Published Agent Versions keep stable workflow semantics.
+- "Intent summary" could mean reusing **Reasoning Summary** or creating a separate contract. Resolved: use **Intent Resolution Contract** because user-intent understanding and ReAct action rationale are different audit facts.
+- "Multi-round Intent Resolution" could mean repeated hidden thinking inside one run or governed accumulation across user turns. Resolved: run Intent Resolution once per governed run and accumulate multi-turn understanding through **Controlled Conversation Context** and **Clarification Continuation Run**.
+- "Intent Resolution next action" could mean directly executing retrieval or tools. Resolved: **Intent Resolution** may recommend an action category only; the **ReAct Planner** must still produce the governed **ReAct Action Proposal** before execution can be reviewed.
+- "Intent Resolution review" could mean a new Auto Review enforcement point or deterministic validation only. Resolved: V2 uses deterministic **Intent Resolution Contract** validation and trace recording, while executable actions stay governed by existing ReAct review and `PolicyEngine` nodes.
+- "Intent Resolution model config" could mean introducing a third Agent-owner model role or reusing planner configuration. Resolved: V2 reuses **ReAct Planner Config** but records Intent Resolution as a distinct model-call role and audit fact.
+- "Intent Resolution visibility" could mean showing the understood intent to every user or treating it as governance detail. Resolved: expose it only through internal trace, receipt, Dashboard, or allowed operator **Governance Detail Projection**, never as ordinary customer-facing response text.
 - "`enterprise_qa` with flags" could blur the deterministic baseline with ReAct behavior. Resolved: V1 adds **React Enterprise QA Template** instead of changing the existing template.
 - "Customer service workflow" could mean the existing linear Enterprise QA path or the ReAct path. Resolved: V1 customer-facing automation uses **React Enterprise QA Template**; **Enterprise QA Template** remains the baseline path.
 - "ReAct MVP" could mean requiring a remote LLM. Resolved: V1 requires a **Deterministic ReAct Demo**.

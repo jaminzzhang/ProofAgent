@@ -25,6 +25,18 @@ def test_load_valid_enterprise_qa_manifest() -> None:
     assert manifest.retrieval.min_score == 0.2
 
 
+def test_load_valid_react_enterprise_qa_v2_manifest() -> None:
+    manifest = load_agent_manifest(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml")
+    )
+
+    assert manifest.name == "react_enterprise_qa_v2"
+    assert manifest.workflow.template == "react_enterprise_qa_v2"
+    assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v2"
+    assert manifest.react is not None
+    assert manifest.react.planner.provider == "deterministic"
+
+
 def test_loads_source_owned_knowledge_bindings(tmp_path: Path) -> None:
     agent_yaml = tmp_path / "agent.yaml"
     (tmp_path / "knowledge").mkdir()
@@ -782,7 +794,7 @@ def test_enterprise_template_rejects_workflow_nodes(tmp_path: Path) -> None:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "workflow.nodes is only supported for react_enterprise_qa" in exc.value.message
+    assert "workflow.nodes is only supported for ReAct workflow templates" in exc.value.message
 
 
 def test_unknown_workflow_node_is_rejected(tmp_path: Path) -> None:

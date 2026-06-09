@@ -259,3 +259,23 @@ def test_run_store_extracts_governance_details_for_react_run(tmp_path: Path) -> 
     assert detail is not None
     assert detail.governance_details["reasoning_summary"]
     assert detail.governance_details["review_results"]
+
+
+def test_run_store_extracts_intent_resolution_for_react_v2_run(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "history")
+    run_with_langgraph(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml"),
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "latest",
+        store=store,
+    )
+
+    runs, total = store.list_runs()
+    assert total == 1
+    detail = store.get_run_detail(runs[0].run_id)
+
+    assert detail is not None
+    assert detail.governance_details["intent_resolution"]["domain_intent"] == (
+        "enterprise_policy_question"
+    )
+    assert detail.governance_details["reasoning_summary"]

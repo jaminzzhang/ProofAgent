@@ -53,6 +53,20 @@ def test_receipt_renders_react_review_sections(tmp_path: Path) -> None:
     assert "raw chain-of-thought" not in receipt.lower()
 
 
+def test_receipt_renders_react_v2_intent_resolution(tmp_path: Path) -> None:
+    result = run_with_langgraph(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml"),
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "run",
+    )
+
+    receipt = result.receipt_path.read_text(encoding="utf-8")
+
+    assert "## Intent Resolution" in receipt
+    assert "enterprise_policy_question" in receipt
+    assert "raw chain-of-thought" not in receipt.lower()
+
+
 def test_receipt_renders_actionable_react_clarification(tmp_path: Path) -> None:
     result = run_with_langgraph(
         Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),

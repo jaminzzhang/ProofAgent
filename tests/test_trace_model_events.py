@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import EnvironmentModelCredentialReference
+from proof_agent.contracts import EnvironmentModelCredentialReference, ModelCallRole
 from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 from proof_agent.contracts import TraceEventType
@@ -15,6 +15,7 @@ from proof_agent.contracts import TraceEventType
 def test_trace_event_types_include_react_review_events() -> None:
     values = {event.value for event in TraceEventType}
     assert "workflow_node_context_applied" in values
+    assert "intent_resolution" in values
     assert "reasoning_summary" in values
     assert "action_proposal" in values
     assert "review_requested" in values
@@ -22,6 +23,10 @@ def test_trace_event_types_include_react_review_events() -> None:
     assert "review_error" in values
     assert "review_overridden" in values
     assert "clarification_requested" in values
+
+
+def test_model_call_roles_include_intent_resolution() -> None:
+    assert ModelCallRole.INTENT_RESOLUTION.value == "intent_resolution"
 
 
 def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) -> None:

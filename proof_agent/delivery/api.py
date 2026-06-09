@@ -343,6 +343,7 @@ def _governance_projection(
     allowed: dict[str, Any] = {}
     details = detail.governance_details or {}
     if manifest.response.include_reasoning_summary:
+        allowed["intent_resolution"] = details.get("intent_resolution")
         allowed["reasoning_summary"] = details.get("reasoning_summary")
     if manifest.response.include_review_results:
         allowed["review_results"] = details.get("review_results", [])

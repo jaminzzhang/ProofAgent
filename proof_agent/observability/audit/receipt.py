@@ -55,6 +55,7 @@ def _build_context(
         if event["event_type"] in {"tool_request", "tool_result", "approval_requested"}
     ]
     memory_events = [event for event in events if event["event_type"].startswith("memory_")]
+    intent_resolution_events = _events_by_type(events, {"intent_resolution"})
     reasoning_summary_events = _events_by_type(events, {"reasoning_summary"})
     action_proposal_events = _events_by_type(events, {"action_proposal"})
     review_events = _events_by_type(
@@ -81,6 +82,7 @@ def _build_context(
         "retrieval_events": retrieval_events,
         "tool_events": tool_events,
         "memory_events": memory_events,
+        "intent_resolution_events": intent_resolution_events,
         "reasoning_summary_events": reasoning_summary_events,
         "action_proposal_events": action_proposal_events,
         "review_events": review_events,

@@ -9,7 +9,12 @@ from proof_agent.capabilities.knowledge import KnowledgeProvider
 from proof_agent.capabilities.knowledge.blended import resolve_blended_knowledge_provider
 from proof_agent.capabilities.memory.session import SessionMemory
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
-from proof_agent.capabilities.react import ReActPlanner, resolve_react_planner
+from proof_agent.capabilities.react import (
+    IntentResolver,
+    ReActPlanner,
+    resolve_intent_resolver,
+    resolve_react_planner,
+)
 from proof_agent.capabilities.review import HarnessReviewSubagent, resolve_review_subagent
 from proof_agent.capabilities.tools.gateway import ToolGateway
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
@@ -48,6 +53,7 @@ class HarnessInvocation:
     model_provider: ModelProvider
     tool_gateway: ToolGateway
     memory_deny_fields: frozenset[str] = DEFAULT_MEMORY_DENY_FIELDS
+    intent_resolver: IntentResolver | None = None
     react_planner: ReActPlanner | None = None
     review_subagent: HarnessReviewSubagent | None = None
     retrieval_planner_model: ModelConfig | None = None
@@ -103,6 +109,7 @@ def compose_harness_invocation(
         resolved_retrieval_evaluator_model = resolved.model_config
         model_resolution_records.append(resolved.resolution_record)
     react_planner = None
+    intent_resolver = None
     if resolved_manifest.react is not None:
         resolved_planner_model = resolve_model_role_config(
             resolved_manifest.react.planner,
@@ -118,6 +125,21 @@ def compose_harness_invocation(
                 params=resolved_planner_model.model_config.params,
             )
         )
+        if template.descriptor_version == "react_enterprise_qa.v2":
+            resolved_intent_model = resolve_model_role_config(
+                resolved_manifest.react.planner,
+                role=ModelCallRole.INTENT_RESOLUTION,
+                configuration_store=configuration_store,
+                require_runtime_credentials=require_runtime_credentials,
+            )
+            model_resolution_records.append(resolved_intent_model.resolution_record)
+            intent_resolver = resolve_intent_resolver(
+                ReActPlannerConfig(
+                    provider=resolved_intent_model.model_config.provider,
+                    name=resolved_intent_model.model_config.name,
+                    params=resolved_intent_model.model_config.params,
+                )
+            )
     review_subagent = None
     if resolved_manifest.review is not None and resolved_manifest.review.subagent is not None:
         resolved_review_model = resolve_model_role_config(
@@ -158,6 +180,7 @@ def compose_harness_invocation(
             configuration_store=configuration_store,
             tool_source_env=os.environ,
         ),
+        intent_resolver=intent_resolver,
         react_planner=react_planner,
         review_subagent=review_subagent,
         retrieval_planner_model=resolved_retrieval_planner_model,

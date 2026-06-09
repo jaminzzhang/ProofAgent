@@ -47,5 +47,19 @@ def test_list_workflow_templates_is_json_safe() -> None:
     assert {descriptor.name for descriptor in descriptors} == {
         "enterprise_qa",
         "react_enterprise_qa",
+        "react_enterprise_qa_v2",
     }
-    assert all(isinstance(node.context_options, tuple) for descriptor in descriptors for node in descriptor.nodes)
+    assert all(
+        isinstance(node.context_options, tuple)
+        for descriptor in descriptors
+        for node in descriptor.nodes
+    )
+
+
+def test_react_enterprise_qa_v2_starts_with_intent_resolution() -> None:
+    template = resolve_workflow_template("react_enterprise_qa_v2")
+
+    assert template.descriptor_version == "react_enterprise_qa.v2"
+    assert template.nodes[0].node_id == "intent_resolution"
+    assert template.nodes[0].successors == ("plan",)
+    assert template.node("plan").predecessors == ("intent_resolution",)

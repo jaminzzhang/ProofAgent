@@ -374,6 +374,19 @@ class RunStore:
         payload = event.get("payload", {})
         return dict(payload) if isinstance(payload, dict) else None
 
+    def _extract_intent_resolution(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        event = next(
+            (e for e in reversed(events) if e.get("event_type") == "intent_resolution"),
+            None,
+        )
+        if event is None:
+            return None
+        payload = event.get("payload", {})
+        return dict(payload) if isinstance(payload, dict) else None
+
     def _extract_review_results(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         review_event_types = {"review_decision", "review_error", "review_overridden"}
         results: list[dict[str, Any]] = []
@@ -408,6 +421,10 @@ class RunStore:
         reasoning_summary = self._extract_reasoning_summary(events)
         if reasoning_summary:
             details["reasoning_summary"] = reasoning_summary
+
+        intent_resolution = self._extract_intent_resolution(events)
+        if intent_resolution:
+            details["intent_resolution"] = intent_resolution
 
         review_results = self._extract_review_results(events)
         if review_results:

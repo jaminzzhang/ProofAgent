@@ -159,7 +159,7 @@ export function WorkflowModuleEditor({
           </button>
           <button
             onClick={saveNodes}
-            disabled={nodeBusy || !descriptor || descriptor.name !== 'react_enterprise_qa'}
+            disabled={nodeBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
             {nodeBusy ? 'Saving...' : 'Save Nodes'}

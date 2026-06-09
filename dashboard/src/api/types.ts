@@ -12,6 +12,7 @@ export type RunPurpose = 'production' | 'validation'
 export type RunPurposeFilter = RunPurpose | 'all'
 
 export interface GovernanceDetails {
+  intent_resolution?: Record<string, unknown> | null
   reasoning_summary?: Record<string, unknown> | null
   review_results?: Record<string, unknown>[]
   clarification_request?: Record<string, unknown> | null

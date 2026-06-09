@@ -125,7 +125,7 @@ Core boundaries:
 | Area | v1 status |
 | --- | --- |
 | Entry | CLI, Docker demo, Run Execution API, Dashboard API |
-| Workflow template | `enterprise_qa`, `react_enterprise_qa` |
+| Workflow template | `enterprise_qa`, `react_enterprise_qa`, `react_enterprise_qa_v2` |
 | Runtime config | `workflow.runtime: langgraph`; Enterprise QA and Controlled ReAct Enterprise QA run through LangGraph `StateGraph` templates using composed Harness dependencies |
 | Knowledge | Source-owned Knowledge Sources plus Agent `knowledge_bindings[]`; `local_markdown` for deterministic/dev fixtures, `local_index` for published local indexes, and trusted remote adapters such as `http_json`; shared Sources use `ACTIVE` / `ARCHIVED` lifecycle management |
 | Retrieval | `retrieval.strategy: single_step`, top-k and evidence thresholds |
@@ -211,7 +211,7 @@ audit:
 
 Current v1 config constraints:
 - `workflow.runtime` must be `langgraph`.
-- `workflow.template` must be `enterprise_qa` or `react_enterprise_qa`.
+- `workflow.template` must be `enterprise_qa`, `react_enterprise_qa`, or `react_enterprise_qa_v2`.
 - target Knowledge Hub V1 providers are `local_markdown`, `local_index`, and trusted remote adapters such as `http_json`; `pageindex` and `local_vector` are outside the target provider set.
 - package-local providers are declared under `package_knowledge_sources[]`; shared Dashboard-managed Sources stay in the Configuration Store.
 - `knowledge_bindings[]` must use `source_ref.scope` plus `source_ref.source_id`; shared bindings require an active published Knowledge Source and do not copy provider params into Agent YAML.
@@ -225,7 +225,7 @@ Current v1 config constraints:
 
 ### Workflow Node Prompt Configuration
 
-`react_enterprise_qa` supports governed node-level business context under
+`react_enterprise_qa` and `react_enterprise_qa_v2` support governed node-level business context under
 `workflow.nodes[]`. This is intentionally lightweight: it configures Prompt addenda and
 context inclusion for registered template nodes, while the Harness keeps ownership of
 control prompts, topology, policy gates, validators, tool approval, trace, and receipt.
@@ -302,7 +302,7 @@ response:
   include_review_results: false
 ```
 
-`react_enterprise_qa` requires `react`. `review.mode: auto` requires `review.subagent`. `response` controls optional governance details returned by Run Execution and Conversation APIs; the caller can request `include_governance_details`, but the Agent Contract caps the response through `response.include_reasoning_summary` and `response.include_review_results`.
+`react_enterprise_qa` and `react_enterprise_qa_v2` require `react`. V2 adds Intent Resolution before ReAct planning and records it as governance detail when `response.include_reasoning_summary` allows reasoning details. `review.mode: auto` requires `review.subagent`. `response` controls optional governance details returned by Run Execution and Conversation APIs; the caller can request `include_governance_details`, but the Agent Contract caps the response through `response.include_reasoning_summary` and `response.include_review_results`.
 
 The fixed ReAct Action Set is:
 
