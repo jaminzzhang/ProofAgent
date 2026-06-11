@@ -25,13 +25,6 @@ workflow:
         include_bound_tools: true
         include_policy_outline: true
     - node_id: clarification
-      prompt:
-        business_context: "Clarification gathers the minimum fields needed for institution-scoped insurance work."
-        task_instructions:
-          - "Ask only for missing fields required for retrieval, read-tool permission checks, or answer generation."
-          - "If staff scope is missing but the request is generic, continue as a public knowledge query."
-        output_preferences:
-          - "Keep clarification wording short and staff-facing."
       context:
         include_agent_purpose: true
         include_recent_conversation_summary: true
@@ -50,13 +43,6 @@ workflow:
         include_bound_knowledge_sources: true
         include_policy_outline: true
     - node_id: retrieval
-      prompt:
-        business_context: "Retrieval uses configured insurance business-line knowledge, including short-term accident material in this package."
-        task_instructions:
-          - "Preserve citation and evidence boundaries."
-          - "Prefer business-line-scoped knowledge when routing metadata matches the request."
-        output_preferences:
-          - "Return trace-safe evidence summaries."
       context:
         include_retrieval_intent: true
         include_bound_knowledge_sources: true
@@ -92,39 +78,17 @@ workflow:
         include_policy_outline: true
         include_approval_requirements: true
     - node_id: tool
-      prompt:
-        business_context: "The tool node executes only authorized read tools through Tool Gateway."
-        task_instructions:
-          - "Do not treat model text as tool execution authority."
-          - "Retain only redacted, trace-safe read-result summaries."
-        output_preferences:
-          - "Expose business source categories, not raw payloads."
       context:
         include_tool_contract_summary: true
         include_approval_state: true
         include_parameter_bounds: true
     - node_id: memory
-      prompt:
-        business_context: "Memory is Institution Specialist Case Memory only."
-        task_instructions:
-          - "Store current task focus, clarified filters, business-line scope, and response-format preferences only."
-          - "Do not store policy status, claim status, report values, customer facts, agent facts, raw evidence, or tool payloads."
-        output_preferences:
-          - "Describe memory decisions as current-case context."
       context:
         include_agent_purpose: true
         include_memory_scope: true
         include_memory_denylist_summary: true
         include_recent_conversation_summary: true
     - node_id: response
-      prompt:
-        business_context: "Project the governed result as an Institution Specialist Response Projection, with an External Wording Draft only when customer or agent communication is implied."
-        task_instructions:
-          - "Put the staff-facing answer first."
-          - "Hide internal system names, tool identifiers, tool parameters, policy rule names, review results, trace, and receipt details from external wording drafts."
-          - "State when the answer is based on public knowledge, business records, report data, or mixed sources."
-        output_preferences:
-          - "Use clear sections for staff answer and optional external wording draft."
       context:
         include_agent_purpose: true
         include_outcome: true
