@@ -281,14 +281,14 @@ Architecture layer mapping:
 
 | Architecture layer | Current modules |
 | --- | --- |
-| Delivery / Entry | `delivery/cli.py`, compatibility shim `cli.py`, Docker assets, and the canonical package under `examples/` |
+| Delivery / Entry | `delivery/cli.py`, compatibility shim `cli.py`, Docker assets, and public packages under `examples/` |
 | Bootstrap / Composition | `bootstrap/`, provider registries, Shared Model Connection resolution, current dependency resolution inside `control/workflow/orchestrator.py` |
 | Control Plane | `control/workflow/`, `control/policy/`, `control/validators/`, approval state used by ToolGateway, memory policy checks |
 | Runtime Plane | `runtime/` |
 | Capability Layer | `capabilities/models/`, `capabilities/knowledge/`, `capabilities/memory/`, `capabilities/tools/`, future Skill packs |
 | Contracts & Ports | `contracts/`, provider protocols |
 | Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/`, configuration audit records |
-| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, internal fixtures under `evaluation/demo/fixtures/`, the canonical public package under `examples/insurance_customer_service/`, and the post-run Evaluation Analyzer described in `docs/evaluation-system.md` |
+| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, internal fixtures under `evaluation/demo/fixtures/`, public packages under `examples/insurance_customer_service/` and `examples/institution_insurance_specialist/`, and the post-run Evaluation Analyzer described in `docs/evaluation-system.md` |
 
 Boundary rules:
 - `contracts/` cannot import adapter SDKs.

@@ -59,6 +59,7 @@ Authoritative design doc: `docs/technical-design.md`.
 | Audit | `observability/audit/` owns JSONL trace, ReAct review/reasoning projections, model connection resolution records, redaction, Governance Receipt, model usage section |
 | Storage / API | `observability/storage/` owns RunStore and ConversationStore; `configuration/local_store.py` owns local Agent Configuration state including Shared Model Connections; `observability/api/` owns read-only dashboard routes; Run Execution API starts governed production runs and Agent Configuration API starts governed validation runs through RunStore |
 | Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `observability/api/routers/handoffs.py`, `chat/` customer mode, and `examples/insurance_customer_service/` implement V1 customer-facing automatic replies with the insurance-specific Demo behind a Customer Run Adapter |
+| Institution Specialist | `examples/institution_insurance_specialist/` implements a staff-facing insurance institution specialist Agent Package with Workflow Node Prompt Configuration, short-term insurance-scoped knowledge, and read-only institution business tool fixtures |
 | Evaluation | `evaluation/` owns deterministic demo helpers and Plain RAG vs Harness RAG comparison |
 | Tests | 70 test files and 595 statically detected `test_` functions at last scan |
 

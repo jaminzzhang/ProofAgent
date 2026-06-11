@@ -1,0 +1,206 @@
+name: institution_insurance_specialist
+purpose: "Assist internal insurance institution specialists with governed business consultation, customer or agent question answering, clause interpretation, and authorized read-only report, policy, claim, customer, or agent lookups across configured business lines."
+
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  template_descriptor_version: react_enterprise_qa.v1
+  checkpointer:
+    provider: sqlite
+    uri: memory
+  nodes:
+    - node_id: plan
+      prompt:
+        business_context: "Institution Insurance Specialist planning: create a Dynamic Insurance Business Subplan for any insurance-related staff request while preserving the fixed Controlled ReAct Workflow."
+        task_instructions:
+          - "Treat the baseline intent taxonomy as examples, not a closed list."
+          - "Distinguish Public Insurance Knowledge Query requests from scoped business-record lookups."
+          - "Name missing identifiers, staff scope, report period, or business line before proposing read tools."
+        output_preferences:
+          - "Summarize the business subplan without raw chain-of-thought."
+      context:
+        include_agent_purpose: true
+        include_recent_conversation_summary: true
+        include_bound_knowledge_sources: true
+        include_bound_tools: true
+        include_policy_outline: true
+    - node_id: clarification
+      prompt:
+        business_context: "Clarification gathers the minimum fields needed for institution-scoped insurance work."
+        task_instructions:
+          - "Ask only for missing fields required for retrieval, read-tool permission checks, or answer generation."
+          - "If staff scope is missing but the request is generic, continue as a public knowledge query."
+        output_preferences:
+          - "Keep clarification wording short and staff-facing."
+      context:
+        include_agent_purpose: true
+        include_recent_conversation_summary: true
+        include_missing_field_schema: true
+    - node_id: retrieval_review
+      prompt:
+        business_context: "Retrieval review applies Insurance Source Authority Order before knowledge retrieval."
+        task_instructions:
+          - "Use knowledge for clauses, product terms, procedure explanations, and public business questions."
+          - "Do not treat retrieved documents as a substitute for live current-state records."
+        output_preferences:
+          - "Explain retrieval allow or deny decisions with source-authority context."
+      context:
+        include_agent_purpose: true
+        include_retrieval_intent: true
+        include_bound_knowledge_sources: true
+        include_policy_outline: true
+    - node_id: retrieval
+      prompt:
+        business_context: "Retrieval uses configured insurance business-line knowledge, including short-term accident material in this package."
+        task_instructions:
+          - "Preserve citation and evidence boundaries."
+          - "Prefer business-line-scoped knowledge when routing metadata matches the request."
+        output_preferences:
+          - "Return trace-safe evidence summaries."
+      context:
+        include_retrieval_intent: true
+        include_bound_knowledge_sources: true
+        include_source_routing_metadata: true
+    - node_id: model_answer
+      prompt:
+        business_context: "Model answers should support Institution Specialist Response Projection and optional External Wording Draft preparation."
+        task_instructions:
+          - "Separate current-state facts, rule interpretations, and report metrics."
+          - "Call out unresolved source conflicts instead of reconciling them."
+          - "Avoid transactional commitments or claim outcome guarantees."
+        output_preferences:
+          - "Prefer concise staff-facing conclusions with cited basis."
+      context:
+        include_agent_purpose: true
+        include_recent_conversation_summary: true
+        include_evidence_summary: true
+        include_citation_requirements: true
+        include_response_disclosure_policy: true
+    - node_id: tool_review
+      prompt:
+        business_context: "Tool review permits only Institution Business Read Tool proposals inside Tool Proposal Scope."
+        task_instructions:
+          - "Require Institution staff scope for scoped report, policy, claim, customer, or agent records."
+          - "Reject or clarify Transactional Insurance Operation requests."
+          - "Require stable identifiers or bounded report filters before allowing read tools."
+        output_preferences:
+          - "Keep permission reasoning trace-safe."
+      context:
+        include_agent_purpose: true
+        include_tool_proposal: true
+        include_tool_contract_summary: true
+        include_policy_outline: true
+        include_approval_requirements: true
+    - node_id: tool
+      prompt:
+        business_context: "The tool node executes only authorized read tools through Tool Gateway."
+        task_instructions:
+          - "Do not treat model text as tool execution authority."
+          - "Retain only redacted, trace-safe read-result summaries."
+        output_preferences:
+          - "Expose business source categories, not raw payloads."
+      context:
+        include_tool_contract_summary: true
+        include_approval_state: true
+        include_parameter_bounds: true
+    - node_id: memory
+      prompt:
+        business_context: "Memory is Institution Specialist Case Memory only."
+        task_instructions:
+          - "Store current task focus, clarified filters, business-line scope, and response-format preferences only."
+          - "Do not store policy status, claim status, report values, customer facts, agent facts, raw evidence, or tool payloads."
+        output_preferences:
+          - "Describe memory decisions as current-case context."
+      context:
+        include_agent_purpose: true
+        include_memory_scope: true
+        include_memory_denylist_summary: true
+        include_recent_conversation_summary: true
+    - node_id: response
+      prompt:
+        business_context: "Project the governed result as an Institution Specialist Response Projection, with an External Wording Draft only when customer or agent communication is implied."
+        task_instructions:
+          - "Put the staff-facing answer first."
+          - "Hide internal system names, tool identifiers, tool parameters, policy rule names, review results, trace, and receipt details from external wording drafts."
+          - "State when the answer is based on public knowledge, business records, report data, or mixed sources."
+        output_preferences:
+          - "Use clear sections for staff answer and optional external wording draft."
+      context:
+        include_agent_purpose: true
+        include_outcome: true
+        include_governance_summary: true
+        include_response_disclosure_policy: true
+
+package_knowledge_sources:
+  - source_id: institution_insurance_knowledge
+    name: Institution Insurance Specialist Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+
+knowledge_bindings:
+  - binding_id: short_term_accident_public_knowledge
+    source_ref:
+      scope: package
+      source_id: institution_insurance_knowledge
+    alias: short_term_accident
+    failure_mode: required
+    fusion_weight: 1.0
+    top_k: 3
+    routing_metadata:
+      business_line: short_term_accident
+      audience: institution_specialist
+
+retrieval:
+  strategy: single_step
+  top_k: 3
+  min_score: 0.2
+
+react:
+  max_steps: 5
+  max_tool_calls: 1
+  record_reasoning_summary: true
+  planner:
+    provider: deterministic
+    name: institution-insurance-specialist-planner-demo
+
+review:
+  mode: auto
+  subagent:
+    provider: deterministic
+    name: institution-insurance-specialist-review-demo
+    fail_closed: true
+    params:
+      timeout_seconds: 5
+      max_output_tokens: 500
+
+response:
+  include_reasoning_summary: true
+  include_review_results: true
+
+model:
+  provider: deterministic
+  name: institution-insurance-specialist-demo
+
+policy:
+  file: ./policy.yaml
+
+tools:
+  file: ./tools.yaml
+
+memory:
+  provider: local
+  scopes:
+    case:
+      enabled: true
+      retention_days: 30
+      max_records: 5
+      allow_restricted: false
+    user:
+      enabled: false
+    shared:
+      enabled: false
+
+audit:
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md

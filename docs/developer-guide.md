@@ -18,7 +18,12 @@ questions.yaml      # Optional: Evaluation question set
 expected/           # Optional: Expected trace / receipt examples
 ```
 
-The canonical runnable reference implementation is the [Insurance Customer Service Agent](examples/insurance-customer-service.md), corresponding to `examples/insurance_customer_service/`. The `enterprise_qa` and `react_enterprise_qa` workflow templates remain supported framework contracts and internal regression fixtures.
+The public runnable reference implementations are separate Agent Packages:
+
+- [Insurance Customer Service Agent](examples/insurance-customer-service.md), corresponding to `examples/insurance_customer_service/`, for customer-facing service automation.
+- [Institution Insurance Specialist Agent](examples/institution-insurance-specialist.md), corresponding to `examples/institution_insurance_specialist/`, for staff-facing assisted insurance operations.
+
+The `enterprise_qa` and `react_enterprise_qa` workflow templates remain supported framework contracts and internal regression fixtures.
 
 ## 2. Quick Start
 
@@ -30,6 +35,11 @@ uv run --extra dev proof-agent demo
 Run the canonical Insurance Customer Service Agent:
 ```bash
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
+```
+
+Run the Institution Insurance Specialist Agent:
+```bash
+uv run --extra dev proof-agent run examples/institution_insurance_specialist/agent.yaml --question "For short-term accident claims, what should a branch specialist explain to an agent when the claim is still pending?"
 ```
 
 Run the deterministic Controlled ReAct Enterprise QA demo:
@@ -151,6 +161,24 @@ The v1 deterministic path must always operate without requiring API keys, networ
 - governed knowledge configuration through Knowledge Hub Sources and Agent Knowledge Bindings
 
 Customer-specific policy and claim status require `customer_id` on conversation creation. Anonymous sessions can ask generic policy questions but receive sign-in wording for account data.
+
+### Institution Insurance Specialist
+
+`examples/institution_insurance_specialist/` is a staff-facing assisted-service
+Agent package. It is intentionally decoupled from the customer-facing service
+package: it has no `customer.adapter`, `customers.yaml`, or customer journey
+suite.
+
+It proves:
+
+- governed ReAct node Prompt configuration for insurance specialist work.
+- Dynamic Insurance Business Subplan planning inside the fixed Workflow Template.
+- short-term insurance scope through knowledge and read-only tool bindings.
+- institution report, policy, claim, customer, and agent read-only tools.
+- current-case memory boundaries for staff follow-up context.
+- staff-facing response projection with optional external wording draft.
+
+Short-term insurance is a package scope, not a new Harness topology.
 
 The ReAct deterministic demo adds these expected outcomes:
 
@@ -901,7 +929,7 @@ When a Skill is imported, it should be registered or compiled into the existing 
 ## 9. Developing a New Agent
 
 Recommended process:
-1. Copy the Agent package from `examples/insurance_customer_service/`.
+1. Copy the closest public Agent package, such as `examples/insurance_customer_service/` for customer-facing service or `examples/institution_insurance_specialist/` for staff-facing assisted operations.
 2. Modify `name`, `purpose`, `package_knowledge_sources[]`, `knowledge_bindings[].source_ref`, `retrieval`, `model`, `audit` in `agent.yaml`.
 3. Replace the business knowledge Markdown under `knowledge/`.
 4. Modify `policy.yaml` to define answering, tool, memory, and model call policies.
@@ -915,6 +943,7 @@ Recommended process:
 Suggested validation commands:
 ```bash
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
+uv run --extra dev proof-agent run examples/institution_insurance_specialist/agent.yaml --question "For short-term accident claims, what should a branch specialist explain to an agent when the claim is still pending?"
 uv run --extra dev --extra dashboard proof-agent react-demo
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"

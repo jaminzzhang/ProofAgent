@@ -102,6 +102,18 @@ _Avoid_: Free-form workflow canvas, runtime graph layout, node layout source of 
 The Dashboard-visible, read-only representation of a Workflow Template's node order, branch conditions, predecessor and successor relationships, and governed handoff points so Agent owners can understand how node Prompt configuration affects surrounding execution context.
 _Avoid_: Editable runtime graph, drag-and-drop edge editor, hidden workflow source of truth
 
+**Workflow Control Layer Map**:
+The primary Dashboard workflow view that renders the backend-owned Workflow Relationship Map as the stable Harness execution layer, including registered nodes, predecessor and successor relationships, review gates, tool and retrieval boundaries, and per-node Prompt configuration entry points.
+_Avoid_: Business process diagram only, editable topology, runtime-generated graph source
+
+**Workflow Business Plan Layer**:
+The secondary Dashboard workflow view that renders a Dynamic Insurance Business Subplan as business-facing steps anchored to the Workflow Control Layer Map, showing inferred intent, missing inputs, evidence needs, allowed retrieval, allowed read-tool proposals, source-authority expectations, and response projection needs without becoming a runtime graph.
+_Avoid_: Harness topology replacement, executable BPMN, tool-call transcript, raw chain-of-thought
+
+**Workflow Plan-to-Node Mapping**:
+The Dashboard explanation link between one Dynamic Insurance Business Subplan step and the governed Workflow Template node or nodes that will handle it. A business step may map to several Harness nodes, and a Harness node may support several business steps, but the mapping never creates new execution edges.
+_Avoid_: Edge editor, hidden branch rule, model-controlled workflow rewrite
+
 **Workflow Node Context Preview**:
 The Dashboard configuration preview that renders a redacted, length-bounded sample of Harness Control Prompt summary, selected Structured Control Context, and Business Context Addendum for one Workflow Template node without calling a model, executing a tool, or writing run trace.
 _Avoid_: Test run, model preview call, raw prompt dump, execution simulation
@@ -562,6 +574,14 @@ _Avoid_: Natural-language policy, frontend-only guardrail, prompt instruction
 A customer-facing response shape that exposes only the governed reply, safe source references, clarification needs, or safe follow-up acknowledgement while hiding internal trace, receipt, policy, review, tool, and handoff details. It may differ from the internal run final output when customer-safety wording requires projection.
 _Avoid_: Governance Detail Projection, raw Run Detail, internal audit response
 
+**Institution Specialist Response Projection**:
+An operator-facing assisted-service response shape for Institution Insurance Specialist runs that may include the answer, source basis, missing-information boundaries, authorized-read availability, and safe audit links according to Response Detail Policy.
+_Avoid_: Customer-safe response, raw trace dump, direct external customer wording
+
+**External Wording Draft**:
+An optional staff-reviewed wording suggestion that an Institution Insurance Specialist may adapt for a customer or agent, containing only externally appropriate business explanation and safe source references while hiding internal system names, Tool Contract identifiers, tool parameters, authorization details, policy rule names, review results, trace, and receipt details.
+_Avoid_: Autonomous customer reply, internal operator answer, legal commitment, tool transcript
+
 **Customer-Safe Source Label**:
 A customer-visible source reference that names the business record category or customer-owned record without exposing internal tool names, trace identifiers, receipt identifiers, authorization reasons, or raw payloads.
 _Avoid_: Tool name, trace link, receipt link, raw record payload
@@ -774,6 +794,46 @@ _Avoid_: The framework, generic chatbot
 The V1 customer-facing Published Agent for read-only insurance service automation.
 _Avoid_: Assisted insurance QA example, generic enterprise QA, direct claims decisioning
 
+**Institution Insurance Specialist**:
+The internal insurance institution staff member who uses Assisted Service Mode to answer business consultation, customer or agent questions, policy wording interpretation, report questions, policy lookup, and claim lookup requests across configured insurance business lines.
+_Avoid_: End customer, agent-facing self-service user, customer-service bot persona
+
+**Insurance Business Line Scope**:
+The Agent Package boundary that limits which insurance business line knowledge, Tool Contracts, source systems, report datasets, policy records, and claim records an Institution Insurance Specialist Agent may use for a given deployment.
+_Avoid_: Harness-coded product line, workflow template fork, free-form user-selected data scope
+
+**Read-Only Institution Assistance**:
+An Institution Insurance Specialist Agent scope where the Agent may answer business questions and retrieve authorized business facts for staff, but cannot change insurance business state.
+_Avoid_: Autonomous transaction handling, customer self-service scope, direct policy or claim operations
+
+**Institution Business Read Tool**:
+A governed Tool Contract exposed to an Institution Insurance Specialist Agent for authorized read-only access to report, policy, claim, customer, agent, or business-line records without changing business state.
+_Avoid_: Write tool, transaction tool, generic web search, ungoverned system query
+
+**Institution Authorization Context**:
+The trace-safe institution staff permission summary admitted into an assisted-service Harness run as Structured Control Context, including institution, branch, role, business-line scope, and data-scope constraints used by PolicyEngine and Tool Gateway.
+_Avoid_: Raw staff credential, customer authorization context, prompt-only permission note
+
+**Public Insurance Knowledge Query**:
+A generic insurance question that can be answered from public or enterprise-approved knowledge sources without reading customer, agent, policy, claim, report, or other scoped business records.
+_Avoid_: Business-system lookup, personalized customer answer, scoped report query
+
+**Insurance Specialist Intent Taxonomy**:
+The baseline intent set for Institution Insurance Specialist planning: business consultation or rule basis, customer or agent question answering, policy wording interpretation, report or operating-metric lookup, policy lookup, claim lookup, and mixed multi-step questions that combine clarification, retrieval, and authorized read tools. It is a configuration and evaluation anchor, not a closed list of insurance-related user intents.
+_Avoid_: Free-form planner action space, product-line-specific topology, model-only routing
+
+**Dynamic Insurance Business Subplan**:
+A trace-safe plan artifact produced by the LLM ReAct Planner for insurance-related Institution Insurance Specialist requests, describing inferred business intent, missing information, evidence needs, allowed knowledge retrieval, allowed read-tool proposals, source-authority expectations, and response-shaping needs while still executing through the fixed Controlled ReAct Workflow nodes.
+_Avoid_: Workflow Template topology, executable policy, direct tool execution, raw chain-of-thought
+
+**Unmodeled Insurance Specialist Intent Signal**:
+A trace-safe LLM-classified signal that the user's request may fall outside the Insurance Specialist Intent Taxonomy. It may inform a Dynamic Insurance Business Subplan, clarification, refusal, operator explanation, analytics, or future configuration design, but it does not expand the ReAct Action Set, Tool Proposal Scope, Workflow Template topology, or PolicyEngine authority for the current run.
+_Avoid_: New executable action, automatic tool unlock, hidden topology change, prompt-defined policy
+
+**Insurance Source Authority Order**:
+The business-source precedence used by an Institution Insurance Specialist Agent when sources could conflict: authorized business-system records answer current state, policy wording and operational documents answer rules and interpretation, report systems answer statistical or management metrics with their period and calculation basis, and unresolved conflicts produce an explicit source-conflict answer rather than an invented reconciliation.
+_Avoid_: Prompt-only preference, model arbitration, silent source merging, latest-looking answer
+
 **Assisted Service Mode**:
 An operating mode where the Agent produces governed answer suggestions for human staff rather than directly replying to end customers.
 _Avoid_: Fully autonomous customer service, direct customer chatbot
@@ -906,6 +966,10 @@ _Avoid_: Automatic handoff, hidden retry loop, merged failure
 A customer-service action that changes business state, creates obligations, submits requests, modifies records, or makes payment or coverage commitments.
 _Avoid_: Read-only lookup, policy explanation
 
+**Transactional Insurance Operation**:
+An institution-facing or customer-facing insurance operation that changes business state, creates obligations, submits requests, modifies records, approves or settles claims, changes policy status, adjusts premium or commission, sends outbound messages, or creates external work items.
+_Avoid_: Read-only report lookup, read-only policy lookup, read-only claim lookup, clause interpretation
+
 **Payment Or Coverage Guarantee Request**:
 A customer-facing request that asks the Agent to guarantee claim payment, coverage, reimbursement amount, eligibility, deadline, or service commitment before governed evidence and authorized review support such a claim.
 _Avoid_: Evidence-backed policy explanation, authorized read-only status lookup
@@ -969,6 +1033,10 @@ _Avoid_: Customer-visible memory management, unrestricted memory admin, raw memo
 **Case Focus**:
 The current case's active topics, requested report views, filters, or unresolved areas of interest used for follow-up understanding inside Case Memory.
 _Avoid_: Persistent user interest profile, marketing preference, cross-session behavioral profile
+
+**Institution Specialist Case Memory**:
+Case Memory for an Institution Insurance Specialist run that may retain current task focus, question source, report period, filters, clarified identifiers, business-line scope, and response-format preferences inside the current case or conversation only. It must not become a long-lived source of customer identity facts, agent facts, policy status, claim status, report values, tool payloads, or clause-interpretation conclusions.
+_Avoid_: Staff profile, customer profile, policy or claim source of truth, report cache, tool-result memory
 
 **Persistent User Memory**:
 Long-lived memory about a user or customer that may be reused across conversations only when consent, retention, deletion, redaction, tenant boundary, and policy admission rules are defined.
@@ -2335,6 +2403,7 @@ _Avoid_: Evidence content dump
 - "Test run" could mean a cosmetic frontend preview or a governed pre-publication execution. Resolved: use **Agent Validation Run** for required validation and test execution before **Agent Publication**.
 - "Validation run storage" could mean a separate preview log or ordinary run history. Resolved: store validation artifacts in RunStore and distinguish them with **Run Purpose** metadata.
 - "Workflow builder UI" could mean an ordered node configuration panel or a drag-and-drop canvas. Resolved: first use a **Workflow Node Panel**; any future canvas remains a presentation of Workflow Template Node Configuration, not a new runtime graph source.
+- "Two-layer workflow display" could mean two executable graphs or one governed workflow with a business-plan projection. Resolved: Dashboard uses **Workflow Control Layer Map** for the fixed Harness layer, **Workflow Business Plan Layer** for the Dynamic Insurance Business Subplan, and **Workflow Plan-to-Node Mapping** to explain how business steps are handled without creating new topology.
 - "YAML editor" could mean a second source of truth, an export pane, or a contract-level editor. Resolved: use **Contract View** as an advanced view over the same Draft Agent state, validated before save or publication.
 - "Dashboard API" could mean read-only observability or execution. Resolved: Dashboard and receipt views remain read projections; **Run Execution API** owns run creation.
 - "Management console" could mean internal run observability, Dashboard-hosted Agent configuration, or a full platform administration product. Resolved: V1 keeps an **Internal Governance Dashboard** for observability; Agent configuration belongs in an **Agent Configuration Workspace** hosted by the **Dashboard Shell** with separate configuration APIs; full **Agent Control Platform Console** work is future scope.
@@ -2368,6 +2437,13 @@ _Avoid_: Evidence content dump
 - "Mock customer" could mean a single demo identity or multiple authorization fixtures. Resolved: V1 uses at least two **Mock Customer Persona** fixtures and tests **Cross-Customer Access Attempt** behavior.
 - "Cross-customer access" could mean a normal refusal or an internal security signal. Resolved: V1 returns customer-safe refusal wording and records an internal **Customer Escalation Handoff** for every **Cross-Customer Access Attempt**.
 - "Customer service automation" could mean read-only answers or business-state changes. Resolved: V1 is **Read-Only Customer Service**; state-changing work is a **Transactional Customer Action** and is out of scope.
+- "Institution insurance specialist workflow" could mean a short-term-insurance-only topology or a reusable staff-facing insurance workflow. Resolved: use **Institution Insurance Specialist** as the generic assisted-service user, and constrain short-term insurance deployments through **Insurance Business Line Scope** rather than a Harness-coded workflow fork.
+- "Institution business system access" could mean read-only query support or direct business operations. Resolved: V1 **Read-Only Institution Assistance** may use **Institution Business Read Tool** bindings for reports, policies, claims, customers, agents, and configured business-line records; state-changing work is a **Transactional Insurance Operation** and is out of scope.
+- "Insurance source truth" could mean knowledge documents, report data, business-system records, or the model's synthesized judgment. Resolved: use **Insurance Source Authority Order**; records answer current state, documents answer rules, reports answer metrics, and unresolved conflicts remain explicit instead of being reconciled by the model.
+- "Missing institution authorization context" could mean refusing every request or allowing unrestricted tool lookup. Resolved: without sufficient **Institution Authorization Context**, the Agent may answer a **Public Insurance Knowledge Query** from approved knowledge sources, but must not use **Institution Business Read Tool** bindings for scoped reports, policy records, claim records, customer records, or agent records.
+- "Institution specialist answer shape" could mean one final answer for every audience or separate operator and external-facing views. Resolved: use **Institution Specialist Response Projection** for the staff-facing answer and include an **External Wording Draft** only when the request source or use case is customer or agent communication.
+- "Institution specialist intent routing" could mean a fixed business taxonomy only, unrestricted LLM-defined execution, or dynamic business planning inside a governed workflow. Resolved: use **Insurance Specialist Intent Taxonomy** as a baseline anchor, allow the **LLM ReAct Planner** to create a **Dynamic Insurance Business Subplan** for any insurance-related intent, and keep executable actions, tool scope, Workflow Template topology, and policy authority under the Control Envelope.
+- "Institution specialist memory" could mean current-case follow-up context or a long-lived business fact store. Resolved: use **Institution Specialist Case Memory** for current task focus, clarified identifiers, scoped filters, and response-format preferences only; policy status, claim status, report values, tool payloads, and customer or agent identity facts remain live business records, not memory facts.
 - "Payment guarantee" could mean an ordinary unsupported question or a high-risk service commitment request. Resolved: use **Payment Or Coverage Guarantee Request** and create an internal **Customer Escalation Handoff** while returning customer-safe refusal wording.
 - "Handoff trigger configuration" could mean hard-coded only, business-configurable, or prompt-defined. Resolved: V1 keeps fixed baseline triggers and permits Agent Contract or policy configuration only for enterprise high-value failure scenarios; frontend and prompt-defined triggers are not trusted.
 - "Customer lookup" could mean generic retrieval, authenticated account lookup, or a transaction. Resolved: use **Customer-Specific Read Tool** for authenticated read-only account facts.

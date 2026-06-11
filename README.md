@@ -52,6 +52,7 @@ The framework regression demo must run without an LLM API key. It uses internal 
 docker compose up
 uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
+uv run --extra dev proof-agent run examples/institution_insurance_specialist/agent.yaml --question "For short-term accident claims, what should a branch specialist explain to an agent when the claim is still pending?"
 uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
 uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
@@ -63,7 +64,7 @@ On an empty local configuration store, it also imports and publishes the canonic
 `insurance_customer_service` Agent so Dashboard configuration, operator chat, and
 customer chat have an immediate closed-loop example.
 
-The regression demo and canonical package smoke path together must show three visible outcomes:
+The regression demo and public package smoke paths together must show three visible outcomes:
 
 | Question type | Example | Expected Harness behavior |
 | --- | --- | --- |
@@ -161,12 +162,13 @@ proof_agent/
 - [Trust Boundaries](docs/concepts/trust-boundaries.md)
 - [Launch Script](docs/examples/launch-script.md)
 - [Insurance Customer Service Agent](docs/examples/insurance-customer-service.md)
+- [Institution Insurance Specialist Agent](docs/examples/institution-insurance-specialist.md)
 - [Governance Receipt](docs/examples/governance-receipt.md)
 
 Docs are bilingual: English (default) under `docs/`, Chinese translations under `docs/zh/`.
 
 ## v1 Scope
 
-v1 is intentionally narrow: one canonical Insurance Customer Service Agent package, internal deterministic framework fixtures, local knowledge, optional OpenAI-compatible remote model provider paths, bounded memory, governed tools, validators, JSONL trace, RunStore, Governance Receipt, Dashboard API, Docker Compose, and CI.
+v1 is intentionally narrow: public insurance Agent packages for customer-facing service and staff-facing institution specialist assistance, internal deterministic framework fixtures, local knowledge, optional OpenAI-compatible remote model provider paths, bounded memory, governed tools, validators, JSONL trace, RunStore, Governance Receipt, Dashboard API, Docker Compose, and CI.
 
 Production LangChain/LangGraph adapters, real MCP transport, richer vector providers, Dashboard UI, Approval Console, policy packs, and additional industry templates are vNext.

@@ -52,6 +52,7 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | --- | --- |
 | `examples/launch-script.md` | Demo and evaluation commands |
 | `examples/insurance-customer-service.md` | Customer-facing Insurance Customer Service Agent behavior |
+| `examples/institution-insurance-specialist.md` | Staff-facing Institution Insurance Specialist Agent behavior |
 | `examples/governance-receipt.md` | Example receipt rendering |
 
 ## Bilingual Structure

@@ -31,7 +31,7 @@ The repository contains a Python MVP plus application surfaces:
 - Python package with typed contracts, bootstrap/composition, policy enforcement, LangGraph runtime runner, knowledge providers, model provider boundaries, tool approval gating, bounded memory, trace/audit output, RunStore, ConversationStore, Dashboard API, Run Execution API, comparison utilities, tests, CI, Docker assets, and deterministic examples.
 - Dashboard frontend under `dashboard/` for run history, stats, run detail, timeline, evidence, approval, receipt, and model usage views.
 - Unified Chat frontend under `chat/` for operator-facing Assisted QA Chat and customer-facing Customer Service Chat modes.
-- The canonical example Agent package under `examples/insurance_customer_service/`.
+- Public example Agent packages under `examples/insurance_customer_service/` and `examples/institution_insurance_specialist/`.
 
 The deterministic demo must remain runnable without network access, API keys, or external services. Expected demo outcomes:
 
@@ -94,6 +94,7 @@ uv run --extra dev ruff format proof_agent tests
 uv run --extra dev --extra openai mypy proof_agent
 uv run --extra dev proof-agent demo
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
+uv run --extra dev proof-agent run examples/institution_insurance_specialist/agent.yaml --question "For short-term accident claims, what should a branch specialist explain to an agent when the claim is still pending?"
 uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
 uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
@@ -198,7 +199,7 @@ Markdown:
 
 - Use clear headings, short paragraphs, and tables only when they improve scanability.
 - Keep terminology aligned with `CONTEXT.md`.
-- Configuration examples should stay in YAML or JSON with descriptive file names, such as `examples/insurance_customer_service/agent.yaml`.
+- Configuration examples should stay in YAML or JSON with descriptive file names, such as `examples/insurance_customer_service/agent.yaml` or `examples/institution_insurance_specialist/agent.yaml`.
 
 ## Testing Guidelines
 

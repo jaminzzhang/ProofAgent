@@ -17,7 +17,10 @@ examples/insurance_customer_service/
   expected/               # acceptance fixture notes
 ```
 
-This is the repository's only public Agent package. Framework regression fixtures remain internal under `proof_agent/evaluation/demo/fixtures/`.
+This is a customer-facing public Agent package. The institution-facing specialist
+example lives separately under `examples/institution_insurance_specialist/`.
+Framework regression fixtures remain internal under
+`proof_agent/evaluation/demo/fixtures/`.
 
 The framework-owned Customer Run API stays generic. This package owns the insurance-specific adapter that detects policy/claim status requests, loads mock customer resources, performs resource disambiguation, calls the read-only local tool handlers, and returns a Customer-Safe Response Projection.
 

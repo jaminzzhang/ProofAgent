@@ -10,12 +10,13 @@ Core product judgments:
 - **Deterministic demo is a regression baseline, not the product boundary**: The project is no longer defined as local-first; the local deterministic path is used to prove the governance chain and guarantee testing.
 - **CLI and Docker are the current deployment entry points**: The project is no longer defined as CLI-first; CLI, Docker, and Dashboard APIs are all entry points or observation planes for the controlled Harness.
 
-The long-term vision is an enterprise-grade **Agent Control Platform**. In the current phase, the goal is to solidify the framework's control semantics, contracts, adapter boundaries, and the runnable Insurance Customer Service Agent.
+The long-term vision is an enterprise-grade **Agent Control Platform**. In the current phase, the goal is to solidify the framework's control semantics, contracts, adapter boundaries, and runnable insurance reference Agents.
 
 V1 also introduces an **Autonomous Customer Service Mode** private pilot. This mode keeps Proof Agent positioned as the reusable Controlled Agent Harness Framework while delivering a concrete Insurance Customer Service Agent for direct end-customer automatic replies. The V1 product has two deliverables:
 
 - **Agent Framework Deliverable:** customer contracts, Customer Run API, Customer-Safe Response Projection, read-only authorization boundaries, internal handoff events, and handoff monitor projections.
 - **Insurance Customer Service Agent:** `examples/insurance_customer_service/`, customer Web Chat, deterministic journey suite, and local Markdown knowledge.
+- **Institution Insurance Specialist Agent:** `examples/institution_insurance_specialist/`, staff-facing Assisted Service Mode, Workflow Node Prompt Configuration, short-term insurance-scoped knowledge, and read-only institution business tools.
 
 ## 2. Target Audience
 
@@ -46,7 +47,7 @@ V1 also introduces an **Autonomous Customer Service Mode** private pilot. This m
 
 ## 4. Current MVP Scope
 
-The current runnable MVP exposes the Insurance Customer Service Agent as its canonical public example while keeping deterministic Enterprise QA regression fixtures to prove the complete Harness lifecycle:
+The current runnable MVP exposes separate insurance public examples for customer-facing service and staff-facing institution specialist assistance while keeping deterministic Enterprise QA regression fixtures to prove the complete Harness lifecycle:
 1. Load `agent.yaml`.
 2. Execute policy gates.
 3. Retrieve knowledge and evaluate evidence.
