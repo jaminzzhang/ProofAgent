@@ -52,6 +52,7 @@ export interface RunDetail {
   policy_decisions: PolicyDecision[]
   model_usage: ModelUsage
   approval_state: ApprovalState | null
+  pending_approvals: PendingApproval[]
   governance_details?: GovernanceDetails
 }
 
@@ -107,8 +108,51 @@ export interface ModelUsage {
 export interface ApprovalState {
   state: string
   tool_name?: string
+  approval_id?: string
   event_id?: string
   timestamp?: string
+}
+
+export interface PendingApproval {
+  run_id: string
+  thread_id: string
+  approval_id: string
+  action_id: string
+  tool_name: string
+  parameters: Record<string, unknown>
+  policy_decision: unknown
+  checkpoint_id: string
+  status: string
+  created_at: string
+  expires_at: string
+}
+
+export interface ApprovalQueueItem {
+  run_id: string
+  approval_id: string
+  tool_name: string
+  action_id: string
+  question: string
+  agent_id: string | null
+  agent_version_id: string | null
+  run_purpose: RunPurpose
+  created_at: string
+  expires_at: string
+  expired: boolean
+  parameter_keys: string[]
+  parameter_count: number
+  links: {
+    run_detail: string
+  }
+}
+
+export interface ApprovalsResponse {
+  data: ApprovalQueueItem[]
+  meta: {
+    total: number
+    limit: number
+    offset: number
+  }
 }
 
 export interface StatsResponse {
@@ -214,6 +258,7 @@ export interface WorkflowNodeContextPreview {
 }
 
 export type ConfigurationOperation =
+  | 'created'
   | 'imported'
   | 'updated'
   | 'validated'

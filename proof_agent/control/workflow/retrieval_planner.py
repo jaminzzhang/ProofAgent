@@ -4,8 +4,9 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from proof_agent.contracts import ModelMessage, ModelRequest, ModelRole
 from proof_agent.contracts.evidence import EvidenceChunk
 
@@ -34,6 +35,31 @@ class RetrievalResult:
     total_rounds: int
     final_action: str
     rounds: tuple[RetrievalRound, ...]
+
+
+class RetrievalEvaluationContract(BaseModel):
+    """Typed evaluator response for evidence sufficiency."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sufficient: bool
+    reason: str
+
+
+class RetrievalActionPlanContract(BaseModel):
+    """Typed planner response for the next retrieval action."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["sufficient", "abort", "rewrite"]
+    reason: str = ""
+    new_query: str | None = None
+
+    @model_validator(mode="after")
+    def rewrite_requires_query(self) -> RetrievalActionPlanContract:
+        if self.action == "rewrite" and not (self.new_query and self.new_query.strip()):
+            raise ValueError("rewrite action requires non-empty new_query")
+        return self
 
 
 class RetrievalExecutorProtocol(Protocol):
@@ -127,7 +153,7 @@ class RetrievalPlanner:
             try:
                 evaluation_prompt = self._build_evaluation_prompt(question, all_evidence)
                 evaluation_response = self._generate_text(self.evaluator_model, evaluation_prompt)
-                evaluation = json.loads(evaluation_response)
+                evaluation = _parse_evaluation(evaluation_response)
             except Exception:
                 # Evaluator failure: return accumulated evidence
                 return RetrievalResult(
@@ -140,13 +166,17 @@ class RetrievalPlanner:
             # Generate action plan
             try:
                 action_prompt = self._build_action_prompt(
-                    question, current_query, candidates, evaluation
+                    question, current_query, candidates, evaluation.model_dump()
                 )
                 action_response = self._generate_text(self.planner_model, action_prompt)
-                action_plan = json.loads(action_response)
-                action = action_plan.get("action", "sufficient")
-                reason = action_plan.get("reason", "")
-                new_query = action_plan.get("new_query", "")
+                action_plan = _parse_action_plan(action_response)
+            except _RetrievalPlannerContractInvalid:
+                return RetrievalResult(
+                    evidence=tuple(all_evidence),
+                    total_rounds=round_num,
+                    final_action="contract_invalid",
+                    rounds=tuple(rounds),
+                )
             except Exception:
                 # Planner failure: return accumulated evidence
                 return RetrievalResult(
@@ -161,37 +191,29 @@ class RetrievalPlanner:
                 round_id=round_id,
                 query=current_query,
                 candidates=tuple(candidates),
-                evaluation=evaluation,
-                action=action,
-                reason=reason,
+                evaluation=evaluation.model_dump(),
+                action=action_plan.action,
+                reason=action_plan.reason,
             )
             rounds.append(round_record)
 
             # Check termination conditions
-            if action == "sufficient":
+            if action_plan.action == "sufficient":
                 return RetrievalResult(
                     evidence=tuple(all_evidence),
                     total_rounds=round_num,
                     final_action="sufficient",
                     rounds=tuple(rounds),
                 )
-            elif action == "abort":
+            elif action_plan.action == "abort":
                 return RetrievalResult(
                     evidence=tuple(all_evidence),
                     total_rounds=round_num,
                     final_action="abort",
                     rounds=tuple(rounds),
                 )
-            elif action == "rewrite":
-                current_query = new_query
-            else:
-                # Unknown action: treat as sufficient
-                return RetrievalResult(
-                    evidence=tuple(all_evidence),
-                    total_rounds=round_num,
-                    final_action="sufficient",
-                    rounds=tuple(rounds),
-                )
+            elif action_plan.action == "rewrite":
+                current_query = action_plan.new_query or ""
 
         # Max rounds reached
         return RetrievalResult(
@@ -301,3 +323,20 @@ Guidelines:
         if isinstance(content, str):
             return content
         return str(response)
+
+
+class _RetrievalPlannerContractInvalid(Exception):
+    """Raised when planner JSON is parseable but violates the action contract."""
+
+
+def _parse_evaluation(content: str) -> RetrievalEvaluationContract:
+    raw = json.loads(content)
+    return RetrievalEvaluationContract.model_validate(raw)
+
+
+def _parse_action_plan(content: str) -> RetrievalActionPlanContract:
+    raw = json.loads(content)
+    try:
+        return RetrievalActionPlanContract.model_validate(raw)
+    except ValidationError as exc:
+        raise _RetrievalPlannerContractInvalid(str(exc)) from exc

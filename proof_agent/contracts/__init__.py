@@ -32,7 +32,7 @@ from proof_agent.contracts.agent_configuration import (
     ToolSourceDescriptor,
     ToolSourceLifecycleState,
 )
-from proof_agent.contracts.approval import ApprovalState, ApprovalStatus
+from proof_agent.contracts.approval import ApprovalState, ApprovalStatus, PendingApproval
 from proof_agent.contracts.conversation import (
     ContextAdmission,
     ConversationRecord,
@@ -274,6 +274,7 @@ __all__ = [
     "ModelResponse",
     "ModelRole",
     "PackageKnowledgeSourceConfig",
+    "PendingApproval",
     "PolicyConfig",
     "PolicyDecision",
     "PolicyDecisionType",

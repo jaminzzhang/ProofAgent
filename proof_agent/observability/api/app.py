@@ -16,10 +16,19 @@ from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.evaluation.store import EvaluationStore
-from proof_agent.observability.api.routers import evaluation, handoffs, health, runs, stats
+from proof_agent.observability.api.routers import (
+    approvals,
+    evaluation,
+    handoffs,
+    health,
+    runs,
+    stats,
+)
+from proof_agent.observability.api.operator_identity import LocalOperatorIdentityProvider
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.customer_store import CustomerStore
 from proof_agent.observability.storage.run_store import RunStore
+from proof_agent.runtime.approval_resume import LangGraphApprovalResumeRegistry
 
 
 def create_app(
@@ -92,6 +101,11 @@ def create_app(
         agent_configuration_dir
     )
     application.state.agent_configuration_store = configuration_store
+    application.state.approval_resume_registry = LangGraphApprovalResumeRegistry(
+        history_dir.parent / "approval_resume",
+        configuration_store=configuration_store,
+    )
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
     application.state.published_agents = PublishedAgentRegistry(
         published_agents,
         configuration_store=configuration_store,
@@ -101,6 +115,7 @@ def create_app(
     application.include_router(configuration_router, prefix="/api")
     application.include_router(customer_router, prefix="/api")
     application.include_router(runs.router, prefix="/api")
+    application.include_router(approvals.router, prefix="/api")
     application.include_router(evaluation.router, prefix="/api")
     application.include_router(stats.router, prefix="/api")
     application.include_router(handoffs.router, prefix="/api")

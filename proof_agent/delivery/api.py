@@ -25,6 +25,10 @@ from proof_agent.errors import ProofAgentError
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.run_store import RunStore
+from proof_agent.runtime.approval_resume import (
+    LangGraphApprovalResumeContext,
+    LangGraphApprovalResumeRegistry,
+)
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
@@ -38,7 +42,6 @@ class ChatRunRequest(BaseModel):
 
     agent_id: str = Field(min_length=1)
     question: str = Field(min_length=1)
-    approved: bool | None = None
     include_governance_details: bool = False
     allow_untrusted_web_supplement: bool = False
 
@@ -66,7 +69,6 @@ class ConversationRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1)
-    approved: bool | None = None
     include_governance_details: bool = False
     allow_untrusted_web_supplement: bool = False
 
@@ -98,7 +100,6 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
         app_request=app_request,
         manifest_path=published_agent.manifest_path,
         question=request.question,
-        approved=request.approved,
         agent_id=published_agent.agent_id,
         agent_version_id=published_agent.agent_version_id,
         draft_id=published_agent.source_draft_id,
@@ -201,7 +202,6 @@ def create_conversation_run(
         app_request=app_request,
         manifest_path=published_agent.manifest_path,
         question=request.question,
-        approved=request.approved,
         conversation_context=context_admission,
         agent_id=published_agent.agent_id,
         agent_version_id=published_agent.agent_version_id,
@@ -251,7 +251,6 @@ def _execute_published_agent_run(
     app_request: Request,
     manifest_path: Path,
     question: str,
-    approved: bool | None,
     conversation_context: ContextAdmission | None = None,
     agent_id: str | None = None,
     agent_version_id: str | None = None,
@@ -261,16 +260,18 @@ def _execute_published_agent_run(
 ) -> tuple[Any, Any, AgentManifest]:
     store = _get_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
+    resume_registry = _get_approval_resume_registry(app_request)
+    checkpointer = resume_registry.checkpointer_for(run_id)
     try:
         manifest = load_agent_manifest(manifest_path)
         result = run_with_langgraph(
             manifest_path,
             question=question,
             runs_dir=_get_runs_dir(app_request),
-            approved=approved,
             conversation_context=conversation_context,
             run_id=run_id,
             store=store,
+            checkpointer=checkpointer,
             manifest=manifest,
             resolved_knowledge_bindings=resolved_knowledge_bindings,
             configuration_store=_get_configuration_store(app_request),
@@ -288,6 +289,25 @@ def _execute_published_agent_run(
     detail = store.get_run_detail(run_id)
     if detail is None:
         raise HTTPException(status_code=500, detail="Run artifacts were not persisted.")
+    if detail.pending_approvals:
+        resume_registry.put(
+            LangGraphApprovalResumeContext(
+                agent_yaml=manifest_path,
+                runs_dir=store.history_dir / run_id,
+                run_id=run_id,
+                question=question,
+                checkpointer=checkpointer,
+                manifest=manifest,
+                conversation_context=conversation_context,
+                resolved_knowledge_bindings=resolved_knowledge_bindings,
+                configuration_store=_get_configuration_store(app_request),
+                run_purpose=detail.run_purpose,
+                agent_id=agent_id,
+                agent_version_id=agent_version_id,
+                draft_id=draft_id,
+                allow_untrusted_web_supplement=allow_untrusted_web_supplement,
+            )
+        )
     return result, detail, manifest
 
 
@@ -310,6 +330,7 @@ def _run_response(
         "final_output": final_output or _final_output_from_trace(detail),
         "evidence": list(detail.evidence_chunks),
         "approval_state": detail.approval_state,
+        "pending_approvals": list(detail.pending_approvals),
         "links": {
             "run_detail": f"/api/runs/{detail.run_id}",
             "trace": f"/api/runs/{detail.run_id}/trace",
@@ -378,6 +399,10 @@ def _get_conversation_store(request: Request) -> ConversationStore:
 
 def _get_configuration_store(request: Request) -> LocalAgentConfigurationStore:
     return cast(LocalAgentConfigurationStore, request.app.state.agent_configuration_store)
+
+
+def _get_approval_resume_registry(request: Request) -> LangGraphApprovalResumeRegistry:
+    return cast(LangGraphApprovalResumeRegistry, request.app.state.approval_resume_registry)
 
 
 def _require_conversation(request: Request, conversation_id: str) -> ConversationRecord:

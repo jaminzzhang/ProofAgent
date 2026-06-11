@@ -15,7 +15,6 @@ interface KnowledgeModuleEditorProps {
     failure_mode: 'required' | 'advisory'
     fusion_weight: number
     top_k?: number
-    actor: string
   }) => Promise<void>
   onUnbindSource: (bindingId: string) => Promise<void>
   busy: boolean
@@ -67,7 +66,6 @@ export function KnowledgeModuleEditor({
       alias: bindingAlias,
       failure_mode: bindingFailureMode,
       fusion_weight: Number(bindingFusionWeight) || 1,
-      actor: 'dashboard',
     }
 
     const topK = Number(bindingTopK)

@@ -327,16 +327,12 @@ describe('KnowledgeDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate Publication' }))
 
     await waitFor(() => {
-      expect(validateCandidateKnowledgeSourceSnapshotFoundation).toHaveBeenCalledWith('ks_local_index', {
-        actor: 'dashboard',
-      })
+      expect(validateCandidateKnowledgeSourceSnapshotFoundation).toHaveBeenCalledWith('ks_local_index')
       expect(freezeCandidateKnowledgeSourceSnapshot).toHaveBeenCalledWith('ks_local_index', {
         validation_id: 'ksvalidation_1',
-        actor: 'dashboard',
       })
       expect(validateKnowledgeSourcePublication).toHaveBeenCalledWith('ks_local_index', {
         smoke_query: 'What does the policy require?',
-        actor: 'dashboard',
       })
     })
     expect(await screen.findByText('Validation kspubval_1 passed.')).toBeInTheDocument()
@@ -350,7 +346,6 @@ describe('KnowledgeDetailPage', () => {
       expect(publishKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
         validation_id: 'kspubval_1',
         change_note: 'Ready for Agent binding.',
-        actor: 'dashboard',
       })
     })
     expect(await screen.findByText('Published kspub_1.')).toBeInTheDocument()
@@ -422,7 +417,6 @@ describe('KnowledgeDetailPage', () => {
             content_base64: expect.any(String),
           },
         ],
-        actor: 'dashboard',
       })
     })
     expect(await screen.findByText('2 uploads queued for validation.')).toBeInTheDocument()
@@ -541,9 +535,7 @@ describe('KnowledgeDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
     await waitFor(() => {
-      expect(retryKnowledgeIngestionJob).toHaveBeenCalledWith('ks_local_index', 'ksjob_failed', {
-        actor: 'dashboard',
-      })
+      expect(retryKnowledgeIngestionJob).toHaveBeenCalledWith('ks_local_index', 'ksjob_failed')
     })
     expect(await screen.findByText('Retry queued for ksjob_failed.')).toBeInTheDocument()
   })
@@ -578,7 +570,6 @@ describe('KnowledgeDetailPage', () => {
             tags: ['claims', 'inpatient'],
             document_type: 'policy',
           },
-          actor: 'dashboard',
         },
       )
     })
@@ -626,7 +617,6 @@ describe('KnowledgeDetailPage', () => {
     await waitFor(() => {
       expect(archiveKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
         reason: 'Retire stale policies',
-        actor: 'dashboard',
       })
     })
     expect(await screen.findByText('Knowledge Source archived.')).toBeInTheDocument()
@@ -669,7 +659,6 @@ describe('KnowledgeDetailPage', () => {
     await waitFor(() => {
       expect(restoreKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
         reason: 'Need this source again',
-        actor: 'dashboard',
       })
     })
   })
@@ -727,7 +716,6 @@ describe('KnowledgeDetailPage', () => {
     await waitFor(() => {
       expect(permanentlyDeleteKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
         reason: 'Empty archived fixture',
-        actor: 'dashboard',
       })
     })
   })

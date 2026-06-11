@@ -4,6 +4,7 @@ import operator
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.contracts import (
@@ -11,9 +12,10 @@ from proof_agent.contracts import (
     ContextAdmission,
     EvidenceChunk,
     ModelCallRole,
+    PolicyDecisionType,
     ReceiptOutcome,
 )
-from proof_agent.capabilities.tools.approval import create_approval_state
+from proof_agent.capabilities.tools.approval import create_pending_approval, pending_approval_payload
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
 from proof_agent.control.workflow.harness_helpers import (
     build_model_request,
@@ -42,7 +44,6 @@ class HarnessGraphState(TypedDict):
 def build_enterprise_qa_graph(
     invocation: HarnessInvocation,
     trace: TraceWriter,
-    approved: bool | None = None,
     conversation_context: ContextAdmission | None = None,
     allow_untrusted_web_supplement: bool = False,
 ) -> StateGraph:  # type: ignore[type-arg]
@@ -117,38 +118,46 @@ def build_enterprise_qa_graph(
         if question != TOOL_REQUIRED_QUESTION:
             return {}
 
-        if approved is None:
-            gateway_result = invocation.tool_gateway.request_tool(
-                tool_name="customer_lookup",
-                parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
-                approved=False,
-            )
-            trace.emit(
-                "approval_requested",
-                status="waiting",
-                payload={
+        parameters = {"customer_id": "CUST-001", "policy_id": "POL-001"}
+        gateway_result = invocation.tool_gateway.request_tool(
+            tool_name="customer_lookup",
+            parameters=parameters,
+            approved=False,
+            run_id=trace.run_id,
+        )
+        pending = create_pending_approval(
+            approval_state=gateway_result.approval_state,
+            thread_id=trace.run_id,
+            action_id="act_customer_lookup_1",
+            parameters=parameters,
+            policy_decision=PolicyDecisionType.REQUIRE_APPROVAL,
+            checkpoint_id=f"thread:{trace.run_id}",
+        )
+        approval_decision = interrupt(
+            {
+                "kind": "tool_approval",
+                "approval_requested": {
+                    "approval_id": gateway_result.approval_state.approval_id,
                     "tool_name": "customer_lookup",
-                    "state": gateway_result.approval_state.state,
+                    "state": gateway_result.approval_state.state.value,
                 },
-            )
-            return {
-                "approval_status": "requested",
-                "governance_refusal": ReceiptOutcome.WAITING_FOR_APPROVAL,
-                "governance_message": "Waiting for approval before customer_lookup can execute.",
+                "pending_approval": pending_approval_payload(pending),
             }
-
-        if approved is False:
-            denied = create_approval_state(
-                run_id=trace.run_id,
-                approval_id="appr_customer_lookup",
-                state=ApprovalStatus.DENIED,
-                tool_name="customer_lookup",
-                reason="Approval denied.",
-            )
+        )
+        if not approval_decision.get("approved"):
+            actor = approval_decision.get("actor", "local-user")
             trace.emit(
                 "approval_denied",
                 status="blocked",
-                payload={"tool_name": denied.tool_name, "state": denied.state},
+                payload={
+                    "approval_id": approval_decision.get(
+                        "approval_id",
+                        gateway_result.approval_state.approval_id,
+                    ),
+                    "tool_name": "customer_lookup",
+                    "state": ApprovalStatus.DENIED.value,
+                    "actor": actor,
+                },
             )
             return {
                 "approval_status": "denied",
@@ -158,10 +167,23 @@ def build_enterprise_qa_graph(
 
         gateway_result = invocation.tool_gateway.request_tool(
             tool_name="customer_lookup",
-            parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
+            parameters=parameters,
             approved=True,
+            run_id=trace.run_id,
         )
-        trace.emit("approval_granted", status="ok", payload={"tool_name": "customer_lookup"})
+        trace.emit(
+            "approval_granted",
+            status="ok",
+            payload={
+                "approval_id": approval_decision.get(
+                    "approval_id",
+                    gateway_result.approval_state.approval_id,
+                ),
+                "tool_name": "customer_lookup",
+                "state": ApprovalStatus.GRANTED.value,
+                "actor": approval_decision.get("actor", "local-user"),
+            },
+        )
         trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
 
         # Tool question is answered by tool result in the demo

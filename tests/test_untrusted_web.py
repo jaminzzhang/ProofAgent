@@ -1,3 +1,10 @@
+from pathlib import Path
+import json
+import shutil
+
+from langgraph.checkpoint.memory import MemorySaver
+import yaml
+
 from proof_agent.contracts import (
     ReActActionProposal,
     ReActActionType,
@@ -6,17 +13,19 @@ from proof_agent.contracts import (
     UntrustedWebResult,
 )
 from proof_agent.control.tools.untrusted_web import sanitize_web_search_query
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
-
-from pathlib import Path
-import json
-import shutil
-
-import yaml
+from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_with_langgraph
 
 
 ENTERPRISE_AGENT = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
 REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+
+
+def _events(trace_path: Path) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def test_web_search_query_sanitization_replaces_sensitive_values() -> None:
@@ -244,11 +253,29 @@ def untrusted_web_search(parameters: Mapping[str, Any]) -> dict[str, object]:
         lambda _config: _WebSearchPlanner(),
     )
 
+    checkpointer = MemorySaver()
     result = run_with_langgraph(
         example_dir / "agent.yaml",
         question="Search the web for renewal discounts.",
         runs_dir=tmp_path / "react_tool_runs",
+        run_id="run_untrusted_web_resume",
+        checkpointer=checkpointer,
+    )
+    assert result.outcome == "WAITING_FOR_APPROVAL"
+    pending = next(
+        event
+        for event in _events(result.trace_path)
+        if event["event_type"] == "pending_approval_created"
+    )
+
+    result = resume_langgraph_approval(
+        example_dir / "agent.yaml",
+        question="Search the web for renewal discounts.",
+        runs_dir=tmp_path / "react_tool_runs",
+        run_id="run_untrusted_web_resume",
+        approval_id=pending["payload"]["approval_id"],
         approved=True,
+        checkpointer=checkpointer,
     )
 
     assert result.outcome == "REFUSED_NO_EVIDENCE"

@@ -233,6 +233,71 @@ class TestRetrievalPlanner:
         assert len(result.evidence) == 1
         assert result.final_action == "planner_failure"
 
+    def test_unknown_action_is_contract_invalid_not_sufficient(self):
+        """Test that unknown planner actions fail closed without claiming sufficiency."""
+        evidence = [make_evidence("Evidence", "doc.md", "doc.md:1")]
+        provider = MockKnowledgeProvider([evidence])
+
+        class UnknownActionPlanner:
+            def generate(self, prompt: str) -> str:
+                return """{"action": "teleport", "reason": "unsupported"}"""
+
+        planner = RetrievalPlanner(
+            retrieval_executor=provider,
+            planner_model=UnknownActionPlanner(),
+            evaluator_model=MockEvaluatorModel([{"sufficient": False, "reason": "Need more"}]),
+            max_rounds=3,
+        )
+
+        result = planner.plan_and_retrieve("Test query")
+
+        assert len(result.evidence) == 1
+        assert result.final_action == "contract_invalid"
+        assert len(provider.calls) == 1
+
+    def test_rewrite_action_requires_new_query(self):
+        """Test that rewrite without a query fails closed instead of searching empty text."""
+        evidence = [make_evidence("Evidence", "doc.md", "doc.md:1")]
+        provider = MockKnowledgeProvider([evidence])
+
+        class MissingRewriteQueryPlanner:
+            def generate(self, prompt: str) -> str:
+                return """{"action": "rewrite", "reason": "try again"}"""
+
+        planner = RetrievalPlanner(
+            retrieval_executor=provider,
+            planner_model=MissingRewriteQueryPlanner(),
+            evaluator_model=MockEvaluatorModel([{"sufficient": False, "reason": "Need more"}]),
+            max_rounds=3,
+        )
+
+        result = planner.plan_and_retrieve("Test query")
+
+        assert len(result.evidence) == 1
+        assert result.final_action == "contract_invalid"
+        assert provider.calls == ["Test query"]
+
+    def test_evaluator_output_requires_sufficient_field(self):
+        """Test that evaluator output is contract-validated before action planning."""
+        evidence = [make_evidence("Evidence", "doc.md", "doc.md:1")]
+        provider = MockKnowledgeProvider([evidence])
+
+        class MissingSufficientEvaluator:
+            def generate(self, prompt: str) -> str:
+                return """{"reason": "forgot the verdict"}"""
+
+        planner = RetrievalPlanner(
+            retrieval_executor=provider,
+            planner_model=MockPlannerModel([{"action": "sufficient"}]),
+            evaluator_model=MissingSufficientEvaluator(),
+            max_rounds=3,
+        )
+
+        result = planner.plan_and_retrieve("Test query")
+
+        assert len(result.evidence) == 1
+        assert result.final_action == "evaluator_failure"
+
     def test_provider_timeout_returns_accumulated_evidence(self):
         """Test that provider timeout returns accumulated evidence."""
         evidence1 = [make_evidence("Round 1", "doc1.md", "doc1.md:1")]

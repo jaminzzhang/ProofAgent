@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from enum import Enum
+from typing import Any, cast
 
-from proof_agent.contracts import ApprovalState, ApprovalStatus
+from proof_agent.contracts import ApprovalState, ApprovalStatus, PendingApproval, PolicyDecisionType
 
 
 def create_approval_state(
@@ -30,3 +33,45 @@ def create_approval_state(
         trace_event_id=trace_event_id,
         terminal_trace_event_id=trace_event_id if state != ApprovalStatus.REQUESTED else None,
     )
+
+
+def create_pending_approval(
+    *,
+    approval_state: ApprovalState,
+    thread_id: str,
+    action_id: str,
+    parameters: Mapping[str, Any],
+    policy_decision: PolicyDecisionType,
+    checkpoint_id: str,
+) -> PendingApproval:
+    """Create the durable approval-waiting continuation snapshot."""
+
+    return PendingApproval(
+        run_id=approval_state.run_id,
+        thread_id=thread_id,
+        approval_id=approval_state.approval_id,
+        action_id=action_id,
+        tool_name=approval_state.tool_name,
+        parameters=parameters,
+        policy_decision=policy_decision,
+        checkpoint_id=checkpoint_id,
+        status=approval_state.state,
+        created_at=approval_state.requested_at,
+        expires_at=approval_state.expires_at,
+    )
+
+
+def pending_approval_payload(pending: PendingApproval) -> dict[str, Any]:
+    """Return a plain JSON-compatible PendingApproval payload."""
+
+    return cast(dict[str, Any], _jsonable(pending.model_dump(warnings=False)))
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(item) for item in value]
+    return value

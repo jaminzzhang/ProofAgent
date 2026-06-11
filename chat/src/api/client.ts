@@ -56,46 +56,39 @@ export async function deleteConversation(conversationId: string): Promise<void> 
 export function createConversationRun(
   conversationId: string,
   question: string,
-  approved?: boolean,
-  includeGovernanceDetails = false,
-  allowUntrustedWebSupplement = false,
+  runOptions: {
+    includeGovernanceDetails?: boolean
+    allowUntrustedWebSupplement?: boolean
+  } = {},
 ): Promise<import('./types').ChatRunResponse> {
   const url = `${BASE}/chat/conversations/${conversationId}/runs`
   const body: {
     question: string
-    approved?: boolean
     include_governance_details?: boolean
     allow_untrusted_web_supplement?: boolean
   } = { question }
-  if (approved !== undefined) {
-    body.approved = approved
-  }
-  if (includeGovernanceDetails) {
+  if (runOptions.includeGovernanceDetails) {
     body.include_governance_details = true
   }
-  if (allowUntrustedWebSupplement) {
+  if (runOptions.allowUntrustedWebSupplement) {
     body.allow_untrusted_web_supplement = true
   }
 
-  const options = {
+  const requestOptions = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }
 
-  return fetchJson<import('./types').ChatRunResponse>(url, options).catch((err: unknown) => {
-    if (!includeGovernanceDetails || !isUnsupportedGovernanceDetailsRequest(err)) {
+  return fetchJson<import('./types').ChatRunResponse>(url, requestOptions).catch((err: unknown) => {
+    if (!body.include_governance_details || !isUnsupportedGovernanceDetailsRequest(err)) {
       throw err
     }
     const fallbackBody: {
       question: string
-      approved?: boolean
       allow_untrusted_web_supplement?: boolean
     } = { question }
-    if (approved !== undefined) {
-      fallbackBody.approved = approved
-    }
-    if (allowUntrustedWebSupplement) {
+    if (body.allow_untrusted_web_supplement) {
       fallbackBody.allow_untrusted_web_supplement = true
     }
     return fetchJson<import('./types').ChatRunResponse>(url, {

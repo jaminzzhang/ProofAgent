@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 import yaml  # type: ignore[import-untyped]
 
@@ -57,6 +57,12 @@ from proof_agent.control.workflow.templates import (
     resolve_workflow_template,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.observability.api.dependencies import get_operator_identity
+from proof_agent.observability.api.operator_identity import (
+    OperatorIdentityContext,
+    OperatorPermission,
+    require_operator_permission,
+)
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
@@ -77,13 +83,22 @@ SUPPORTED_SHARED_MODEL_CONNECTION_PROVIDERS = {
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
+def _require_operator(
+    identity: OperatorIdentityContext,
+    permission: OperatorPermission,
+) -> str:
+    """Authorize an operator command and return the audited operator id."""
+
+    require_operator_permission(identity, permission)
+    return identity.operator_id
+
+
 class AgentImportRequest(BaseModel):
     """Request body for importing an existing Agent Package."""
 
     model_config = ConfigDict(extra="forbid")
 
     manifest_path: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class DraftUpdateRequest(BaseModel):
@@ -93,7 +108,6 @@ class DraftUpdateRequest(BaseModel):
 
     display_name: str | None = None
     purpose: str | None = None
-    actor: str = "local-user"
 
 
 class ContractUpdateRequest(BaseModel):
@@ -104,7 +118,6 @@ class ContractUpdateRequest(BaseModel):
     agent_yaml: str | None = None
     policy_yaml: str | None = None
     tools_yaml: str | None = None
-    actor: str = "local-user"
 
 
 class WorkflowNodePromptRequest(BaseModel):
@@ -134,7 +147,6 @@ class WorkflowNodesUpdateRequest(BaseModel):
 
     template_descriptor_version: str | None = None
     nodes: list[WorkflowNodeUpdateItemRequest]
-    actor: str = "local-user"
 
 
 class WorkflowNodePreviewRequest(BaseModel):
@@ -144,7 +156,6 @@ class WorkflowNodePreviewRequest(BaseModel):
 
     prompt: WorkflowNodePromptRequest = Field(default_factory=WorkflowNodePromptRequest)
     context: dict[str, bool] = Field(default_factory=dict)
-    actor: str = "local-user"
 
 
 class DraftValidationRequest(BaseModel):
@@ -153,8 +164,6 @@ class DraftValidationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1)
-    approved: bool | None = None
-    actor: str = "local-user"
 
 
 class DraftPublishRequest(BaseModel):
@@ -163,15 +172,12 @@ class DraftPublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     validation_run_id: str | None = None
-    actor: str = "local-user"
 
 
 class RollbackRequest(BaseModel):
     """Request body for switching the Active Agent Version pointer."""
 
     model_config = ConfigDict(extra="forbid")
-
-    actor: str = "local-user"
 
 
 class KnowledgeSourceCreateRequest(BaseModel):
@@ -183,7 +189,6 @@ class KnowledgeSourceCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     provider: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
-    actor: str = "local-user"
 
 
 class ModelCredentialReferenceRequest(BaseModel):
@@ -211,7 +216,6 @@ class ModelConnectionCreateRequest(BaseModel):
     organization_env: str | None = None
     project_env: str | None = None
     timeout_seconds: float | None = None
-    actor: str = "local-user"
 
 
 class ModelConnectionUpdateRequest(BaseModel):
@@ -230,7 +234,6 @@ class ModelConnectionUpdateRequest(BaseModel):
     project_env: str | None = None
     timeout_seconds: float | None = None
     confirm_impact: bool = False
-    actor: str = "local-user"
 
 
 class ModelConnectionArchiveRequest(BaseModel):
@@ -239,7 +242,6 @@ class ModelConnectionArchiveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class ModelConnectionRestoreRequest(BaseModel):
@@ -248,7 +250,6 @@ class ModelConnectionRestoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str | None = None
-    actor: str = "local-user"
 
 
 class ModelConnectionPhysicalDeleteRequest(BaseModel):
@@ -257,15 +258,12 @@ class ModelConnectionPhysicalDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class ModelConnectionValidationRequest(BaseModel):
     """Request body for validating a Shared Model Connection."""
 
     model_config = ConfigDict(extra="forbid")
-
-    actor: str = "local-user"
 
 
 class ToolSourceCreateRequest(BaseModel):
@@ -280,7 +278,6 @@ class ToolSourceCreateRequest(BaseModel):
     tool_contract_ids: list[str] = Field(default_factory=list)
     credential_env_ref: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
-    actor: str = "local-user"
 
 
 class ToolSourceUpdateRequest(BaseModel):
@@ -294,7 +291,6 @@ class ToolSourceUpdateRequest(BaseModel):
     tool_contract_ids: list[str] | None = None
     credential_env_ref: str | None = None
     params: dict[str, Any] | None = None
-    actor: str = "local-user"
 
 
 class ToolSourceArchiveRequest(BaseModel):
@@ -303,7 +299,6 @@ class ToolSourceArchiveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class ToolSourceRestoreRequest(BaseModel):
@@ -312,7 +307,6 @@ class ToolSourceRestoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str | None = None
-    actor: str = "local-user"
 
 
 class KnowledgeSourceArchiveRequest(BaseModel):
@@ -321,7 +315,6 @@ class KnowledgeSourceArchiveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class KnowledgeSourceRestoreRequest(BaseModel):
@@ -330,7 +323,6 @@ class KnowledgeSourceRestoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str | None = None
-    actor: str = "local-user"
 
 
 class KnowledgeSourcePhysicalDeleteRequest(BaseModel):
@@ -339,15 +331,12 @@ class KnowledgeSourcePhysicalDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class KnowledgeIngestionRetryRequest(BaseModel):
     """Request body for manually retrying a failed Knowledge Ingestion Job."""
 
     model_config = ConfigDict(extra="forbid")
-
-    actor: str = "local-user"
 
 
 class KnowledgeDocumentUploadRequest(BaseModel):
@@ -358,7 +347,6 @@ class KnowledgeDocumentUploadRequest(BaseModel):
     filename: str = Field(min_length=1)
     content_type: str = Field(min_length=1)
     content_base64: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class KnowledgeDocumentBatchUploadItemRequest(BaseModel):
@@ -380,7 +368,6 @@ class KnowledgeDocumentBatchUploadRequest(BaseModel):
         min_length=1,
         max_length=MAX_QUARANTINED_UPLOAD_BATCH_FILES,
     )
-    actor: str = "local-user"
 
 
 class KnowledgeDocumentRoutingMetadataUpdateRequest(BaseModel):
@@ -389,15 +376,12 @@ class KnowledgeDocumentRoutingMetadataUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     routing_metadata: dict[str, Any] = Field(default_factory=dict)
-    actor: str = "local-user"
 
 
 class KnowledgeSourceFoundationValidationRequest(BaseModel):
     """Request body for validating one derived Local Index candidate snapshot."""
 
     model_config = ConfigDict(extra="forbid")
-
-    actor: str = "local-user"
 
 
 class KnowledgeSourceSnapshotFreezeRequest(BaseModel):
@@ -406,7 +390,6 @@ class KnowledgeSourceSnapshotFreezeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     validation_id: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class KnowledgeSourcePublicationValidationRequest(BaseModel):
@@ -415,7 +398,6 @@ class KnowledgeSourcePublicationValidationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     smoke_query: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class KnowledgeSourcePublicationRequest(BaseModel):
@@ -425,7 +407,6 @@ class KnowledgeSourcePublicationRequest(BaseModel):
 
     validation_id: str = Field(min_length=1)
     change_note: str = Field(min_length=1)
-    actor: str = "local-user"
 
 
 class KnowledgeBindingAttachRequest(BaseModel):
@@ -439,7 +420,6 @@ class KnowledgeBindingAttachRequest(BaseModel):
     failure_mode: str = "required"
     fusion_weight: float = 1.0
     top_k: int | None = None
-    actor: str = "local-user"
 
 
 class KnowledgeBindingDetachRequest(BaseModel):
@@ -447,13 +427,15 @@ class KnowledgeBindingDetachRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    actor: str = "local-user"
-
 
 @router.get("/config/model-connections")
-def list_model_connections(app_request: Request) -> dict[str, Any]:
+def list_model_connections(
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List Shared Model Connections managed by the local configuration store."""
 
+    _require_operator(identity, OperatorPermission.MODEL_CONNECTION_VIEW)
     store = _get_configuration_store(app_request)
     data = [
         _model_connection_payload(store, connection)
@@ -466,11 +448,13 @@ def list_model_connections(app_request: Request) -> dict[str, Any]:
 def create_model_connection(
     request: ModelConnectionCreateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Create a Shared Model Connection with environment credential references."""
 
     _require_supported_shared_model_provider(request.provider)
     store = _get_configuration_store(app_request)
+    actor = _require_operator(identity, OperatorPermission.MODEL_CONNECTION_EDIT)
     try:
         connection = store.create_model_connection(
             connection_id=_model_connection_id(request.connection_id)
@@ -486,7 +470,7 @@ def create_model_connection(
             organization_env=request.organization_env,
             project_env=request.project_env,
             timeout_seconds=request.timeout_seconds,
-            actor=request.actor,
+            actor=actor,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -496,9 +480,14 @@ def create_model_connection(
 
 
 @router.get("/config/model-connections/{connection_id}")
-def get_model_connection(connection_id: str, app_request: Request) -> dict[str, Any]:
+def get_model_connection(
+    connection_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """Return one Shared Model Connection."""
 
+    _require_operator(identity, OperatorPermission.MODEL_CONNECTION_VIEW)
     store = _get_configuration_store(app_request)
     connection = _require_model_connection(store, connection_id)
     return _model_connection_payload(store, connection)
@@ -509,6 +498,7 @@ def update_model_connection(
     connection_id: str,
     request: ModelConnectionUpdateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Update one Shared Model Connection."""
 
@@ -516,6 +506,7 @@ def update_model_connection(
         _require_supported_shared_model_provider(request.provider)
     store = _get_configuration_store(app_request)
     _require_model_connection(store, connection_id)
+    actor = _require_operator(identity, OperatorPermission.MODEL_CONNECTION_EDIT)
     _require_model_connection_update_impact_confirmation(
         store,
         connection_id=connection_id,
@@ -524,7 +515,7 @@ def update_model_connection(
     try:
         connection = store.update_model_connection(
             connection_id=connection_id,
-            actor=request.actor,
+            actor=actor,
             display_name=request.display_name,
             description=request.description,
             tags=tuple(request.tags) if request.tags is not None else None,
@@ -550,15 +541,17 @@ def archive_model_connection(
     connection_id: str,
     request: ModelConnectionArchiveRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Archive a Shared Model Connection without deleting retained state."""
 
     store = _get_configuration_store(app_request)
     _require_model_connection(store, connection_id)
+    actor = _require_operator(identity, OperatorPermission.MODEL_CONNECTION_ARCHIVE)
     try:
         connection = store.archive_model_connection(
             connection_id=connection_id,
-            actor=request.actor,
+            actor=actor,
             reason=request.reason,
         )
     except ProofAgentError as exc:
@@ -571,15 +564,17 @@ def restore_model_connection(
     connection_id: str,
     request: ModelConnectionRestoreRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Restore an archived Shared Model Connection."""
 
     store = _get_configuration_store(app_request)
     _require_model_connection(store, connection_id)
+    actor = _require_operator(identity, OperatorPermission.MODEL_CONNECTION_ARCHIVE)
     try:
         connection = store.restore_model_connection(
             connection_id=connection_id,
-            actor=request.actor,
+            actor=actor,
             reason=request.reason,
         )
     except ProofAgentError as exc:
@@ -591,9 +586,11 @@ def restore_model_connection(
 def get_model_connection_references(
     connection_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return configuration references for one Shared Model Connection."""
 
+    _require_operator(identity, OperatorPermission.MODEL_CONNECTION_VIEW)
     store = _get_configuration_store(app_request)
     _require_model_connection(store, connection_id)
     try:
@@ -607,9 +604,11 @@ def get_model_connection_references(
 def get_model_connection_deletion_eligibility(
     connection_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return physical-deletion eligibility and blockers for one model connection."""
 
+    _require_operator(identity, OperatorPermission.MODEL_CONNECTION_VIEW)
     store = _get_configuration_store(app_request)
     _require_model_connection(store, connection_id)
     try:
@@ -624,15 +623,17 @@ def physically_delete_model_connection(
     connection_id: str,
     request: ModelConnectionPhysicalDeleteRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Permanently delete an eligible archived Shared Model Connection."""
 
     store = _get_configuration_store(app_request)
     _require_model_connection(store, connection_id)
+    actor = _require_operator(identity, OperatorPermission.MODEL_CONNECTION_ARCHIVE)
     try:
         eligibility = store.physically_delete_model_connection(
             connection_id=connection_id,
-            actor=request.actor,
+            actor=actor,
             reason=request.reason,
         )
     except ProofAgentError as exc:
@@ -645,12 +646,14 @@ def validate_model_connection(
     connection_id: str,
     request: ModelConnectionValidationRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Run local secret-safe validation for a Shared Model Connection."""
 
     store = _get_configuration_store(app_request)
     connection = _require_model_connection(store, connection_id)
-    record = _model_connection_validation_record(connection, actor=request.actor)
+    actor = _require_operator(identity, OperatorPermission.MODEL_CONNECTION_VALIDATE)
+    record = _model_connection_validation_record(connection, actor=actor)
     store.record_model_connection_validation(record)
     return record.model_dump(mode="json")
 
@@ -660,20 +663,25 @@ def smoke_test_model_connection(
     connection_id: str,
     request: ModelConnectionValidationRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Run a manual smoke test for a Shared Model Connection."""
 
     store = _get_configuration_store(app_request)
     connection = _require_model_connection(store, connection_id)
-    record = _model_connection_smoke_test_record(connection, actor=request.actor)
+    actor = _require_operator(identity, OperatorPermission.MODEL_CONNECTION_VALIDATE)
+    record = _model_connection_smoke_test_record(connection, actor=actor)
     store.record_model_connection_smoke_test(record)
     return record.model_dump(mode="json")
 
 
 @router.get("/config/tool-source-descriptors")
-def list_tool_source_descriptor_payloads() -> dict[str, Any]:
+def list_tool_source_descriptor_payloads(
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List built-in trusted Tool Source descriptors."""
 
+    _require_operator(identity, OperatorPermission.TOOL_SOURCE_VIEW)
     data = [
         descriptor.model_dump(mode="json") for descriptor in list_tool_source_descriptors()
     ]
@@ -681,9 +689,13 @@ def list_tool_source_descriptor_payloads() -> dict[str, Any]:
 
 
 @router.get("/config/tool-sources")
-def list_tool_sources(app_request: Request) -> dict[str, Any]:
+def list_tool_sources(
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List reusable Tool Sources managed by the local configuration store."""
 
+    _require_operator(identity, OperatorPermission.TOOL_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     data = [_tool_source_payload(source) for source in store.list_tool_sources()]
     return {"data": data, "meta": {"total": len(data)}}
@@ -693,11 +705,13 @@ def list_tool_sources(app_request: Request) -> dict[str, Any]:
 def create_tool_source(
     request: ToolSourceCreateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Create a reusable Tool Source from a trusted built-in descriptor."""
 
     _require_supported_tool_source_provider(request.provider)
     store = _get_configuration_store(app_request)
+    actor = _require_operator(identity, OperatorPermission.TOOL_SOURCE_EDIT)
     try:
         source = store.create_tool_source(
             source_id=_tool_source_id(request.source_id or request.name),
@@ -707,7 +721,7 @@ def create_tool_source(
             tool_contract_ids=tuple(request.tool_contract_ids),
             credential_env_ref=request.credential_env_ref,
             params=dict(request.params),
-            actor=request.actor,
+            actor=actor,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -717,9 +731,14 @@ def create_tool_source(
 
 
 @router.get("/config/tool-sources/{source_id}")
-def get_tool_source(source_id: str, app_request: Request) -> dict[str, Any]:
+def get_tool_source(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """Return one reusable Tool Source."""
 
+    _require_operator(identity, OperatorPermission.TOOL_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     source = _require_tool_source(store, source_id)
     return _tool_source_payload(source)
@@ -730,6 +749,7 @@ def update_tool_source(
     source_id: str,
     request: ToolSourceUpdateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Update one reusable Tool Source live connection."""
 
@@ -737,10 +757,11 @@ def update_tool_source(
         _require_supported_tool_source_provider(request.provider)
     store = _get_configuration_store(app_request)
     _require_tool_source(store, source_id)
+    actor = _require_operator(identity, OperatorPermission.TOOL_SOURCE_EDIT)
     try:
         source = store.update_tool_source(
             source_id=source_id,
-            actor=request.actor,
+            actor=actor,
             name=request.name,
             source_type=request.source_type,
             provider=request.provider,
@@ -762,15 +783,17 @@ def archive_tool_source(
     source_id: str,
     request: ToolSourceArchiveRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Archive a reusable Tool Source without deleting retained state."""
 
     store = _get_configuration_store(app_request)
     _require_tool_source(store, source_id)
+    actor = _require_operator(identity, OperatorPermission.TOOL_SOURCE_ARCHIVE)
     try:
         source = store.archive_tool_source(
             source_id=source_id,
-            actor=request.actor,
+            actor=actor,
             reason=request.reason,
         )
     except ProofAgentError as exc:
@@ -783,15 +806,17 @@ def restore_tool_source(
     source_id: str,
     request: ToolSourceRestoreRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Restore an archived reusable Tool Source to active state."""
 
     store = _get_configuration_store(app_request)
     _require_tool_source(store, source_id)
+    actor = _require_operator(identity, OperatorPermission.TOOL_SOURCE_ARCHIVE)
     try:
         source = store.restore_tool_source(
             source_id=source_id,
-            actor=request.actor,
+            actor=actor,
             reason=request.reason,
         )
     except ProofAgentError as exc:
@@ -800,9 +825,13 @@ def restore_tool_source(
 
 
 @router.get("/config/knowledge-sources")
-def list_knowledge_sources(app_request: Request) -> dict[str, Any]:
+def list_knowledge_sources(
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List reusable Knowledge Sources managed by the local configuration store."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     data = [_knowledge_source_payload(store, source) for source in store.list_knowledge_sources()]
     return {"data": data, "meta": {"total": len(data)}}
@@ -812,9 +841,11 @@ def list_knowledge_sources(app_request: Request) -> dict[str, Any]:
 def create_knowledge_source(
     request: KnowledgeSourceCreateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Create a reusable Knowledge Source independent of any Agent binding."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     if request.provider not in SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS:
         raise HTTPException(
             status_code=400,
@@ -829,7 +860,7 @@ def create_knowledge_source(
             name=request.name,
             provider=request.provider,
             params=params,
-            actor=request.actor,
+            actor=actor,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -839,9 +870,14 @@ def create_knowledge_source(
 
 
 @router.get("/config/knowledge-sources/{source_id}")
-def get_knowledge_source(source_id: str, app_request: Request) -> dict[str, Any]:
+def get_knowledge_source(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """Return one Knowledge Source with document counts."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     source = _require_knowledge_source(store, source_id)
     return _knowledge_source_payload(store, source)
@@ -852,15 +888,17 @@ def archive_knowledge_source(
     source_id: str,
     request: KnowledgeSourceArchiveRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Archive a reusable Knowledge Source without deleting retained state."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_ARCHIVE)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
         source = store.archive_knowledge_source(
             source_id=source_id,
-            actor=request.actor,
+            actor=actor,
             reason=request.reason,
         )
     except ProofAgentError as exc:
@@ -873,15 +911,17 @@ def restore_knowledge_source(
     source_id: str,
     request: KnowledgeSourceRestoreRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Restore an archived reusable Knowledge Source to active state."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
         source = store.restore_knowledge_source(
             source_id=source_id,
-            actor=request.actor,
+            actor=actor,
             reason=request.reason,
         )
     except ProofAgentError as exc:
@@ -893,9 +933,11 @@ def restore_knowledge_source(
 def get_knowledge_source_deletion_eligibility(
     source_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return physical-deletion eligibility and blockers for one Knowledge Source."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
@@ -910,15 +952,17 @@ def physically_delete_knowledge_source(
     source_id: str,
     request: KnowledgeSourcePhysicalDeleteRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Permanently delete an eligible empty archived Knowledge Source."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_ARCHIVE)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
         eligibility = store.physically_delete_knowledge_source(
             source_id=source_id,
-            actor=request.actor,
+            actor=actor,
             reason=request.reason,
         )
     except ProofAgentError as exc:
@@ -927,9 +971,14 @@ def physically_delete_knowledge_source(
 
 
 @router.get("/config/knowledge-sources/{source_id}/documents")
-def list_knowledge_source_documents(source_id: str, app_request: Request) -> dict[str, Any]:
+def list_knowledge_source_documents(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List managed documents for one Knowledge Source."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     documents = store.list_knowledge_documents(source_id)
@@ -944,9 +993,11 @@ def upload_knowledge_source_document(
     source_id: str,
     request: KnowledgeDocumentUploadRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Stage one upload for asynchronous validation and Local Index ingestion."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
     if source.provider != "local_index":
@@ -962,7 +1013,7 @@ def upload_knowledge_source_document(
             filename=request.filename,
             content_type=request.content_type,
             content=content,
-            actor=request.actor,
+            actor=actor,
         )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
@@ -975,9 +1026,11 @@ def update_knowledge_source_document_routing_metadata(
     document_id: str,
     request: KnowledgeDocumentRoutingMetadataUpdateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Update routing-only metadata for one managed Knowledge Document."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     _require_active_knowledge_source(store, source_id)
     try:
@@ -985,7 +1038,7 @@ def update_knowledge_source_document_routing_metadata(
             source_id=source_id,
             document_id=document_id,
             routing_metadata=request.routing_metadata,
-            actor=request.actor,
+            actor=actor,
         )
     except KeyError as exc:
         raise HTTPException(
@@ -1002,9 +1055,11 @@ def upload_knowledge_source_document_batch(
     source_id: str,
     request: KnowledgeDocumentBatchUploadRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Stage one upload batch for asynchronous validation and Local Index ingestion."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
     if source.provider != "local_index":
@@ -1025,7 +1080,7 @@ def upload_knowledge_source_document_batch(
         uploads = store.stage_quarantined_knowledge_upload_batch(
             source_id=source.source_id,
             uploads=staging_inputs,
-            actor=request.actor,
+            actor=actor,
         )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
@@ -1036,9 +1091,14 @@ def upload_knowledge_source_document_batch(
 
 
 @router.get("/config/knowledge-sources/{source_id}/quarantined-uploads")
-def list_quarantined_knowledge_uploads(source_id: str, app_request: Request) -> dict[str, Any]:
+def list_quarantined_knowledge_uploads(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List asynchronous upload-validation records for one Knowledge Source."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     uploads = store.list_quarantined_knowledge_uploads(source_id)
@@ -1053,9 +1113,11 @@ def get_quarantined_knowledge_upload(
     source_id: str,
     upload_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return one asynchronous upload-validation record."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     upload = store.get_quarantined_knowledge_upload(
@@ -1071,9 +1133,14 @@ def get_quarantined_knowledge_upload(
 
 
 @router.get("/config/knowledge-sources/{source_id}/ingestion-jobs")
-def list_knowledge_ingestion_jobs(source_id: str, app_request: Request) -> dict[str, Any]:
+def list_knowledge_ingestion_jobs(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List persisted artifact-build jobs for one Knowledge Source."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     jobs = store.list_knowledge_ingestion_jobs(source_id)
@@ -1088,9 +1155,11 @@ def get_knowledge_ingestion_job(
     source_id: str,
     job_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return one persisted artifact-build job."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     job = store.get_knowledge_ingestion_job(source_id=source_id, job_id=job_id)
@@ -1108,9 +1177,11 @@ def retry_knowledge_ingestion_job(
     job_id: str,
     request: KnowledgeIngestionRetryRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return one failed artifact-build job to the worker queue."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     _require_active_knowledge_source(store, source_id)
     if store.get_knowledge_ingestion_job(source_id=source_id, job_id=job_id) is None:
@@ -1122,7 +1193,6 @@ def retry_knowledge_ingestion_job(
         job = store.retry_failed_knowledge_ingestion_job(source_id=source_id, job_id=job_id)
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
-    _ = request.actor
     return _knowledge_ingestion_job_payload(job)
 
 
@@ -1130,9 +1200,11 @@ def retry_knowledge_ingestion_job(
 def get_candidate_knowledge_source_snapshot(
     source_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return the current derived Local Index candidate snapshot."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_active_knowledge_source(store, source_id)
     try:
@@ -1147,15 +1219,17 @@ def validate_candidate_knowledge_source_snapshot_foundation(
     source_id: str,
     request: KnowledgeSourceFoundationValidationRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Persist a minimal freeze-readiness validation for the current candidate."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     _require_active_knowledge_source(store, source_id)
     try:
         validation = store.validate_candidate_knowledge_source_snapshot_foundation(
             source_id=source_id,
-            actor=request.actor,
+            actor=actor,
         )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
@@ -1167,16 +1241,18 @@ def freeze_candidate_knowledge_source_snapshot(
     source_id: str,
     request: KnowledgeSourceSnapshotFreezeRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Freeze one foundation-validated Local Index snapshot manifest."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     _require_active_knowledge_source(store, source_id)
     try:
         snapshot = store.freeze_candidate_knowledge_source_snapshot(
             source_id=source_id,
             validation_id=request.validation_id,
-            actor=request.actor,
+            actor=actor,
         )
     except KeyError as exc:
         raise HTTPException(
@@ -1192,9 +1268,14 @@ def freeze_candidate_knowledge_source_snapshot(
 
 
 @router.get("/config/knowledge-sources/{source_id}/snapshots")
-def list_knowledge_source_snapshots(source_id: str, app_request: Request) -> dict[str, Any]:
+def list_knowledge_source_snapshots(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List immutable Local Index snapshot manifests for one source."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
@@ -1212,9 +1293,11 @@ def get_knowledge_source_snapshot(
     source_id: str,
     snapshot_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return one immutable Local Index snapshot manifest."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
@@ -1237,9 +1320,11 @@ def validate_knowledge_source_publication(
     source_id: str,
     request: KnowledgeSourcePublicationValidationRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Run Source-level smoke retrieval and persist a passed publication validation."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
     try:
@@ -1247,13 +1332,13 @@ def validate_knowledge_source_publication(
             validation = store.validate_local_index_source_publication(
                 source_id=source_id,
                 smoke_query=request.smoke_query,
-                actor=request.actor,
+                actor=actor,
             )
         elif source.provider == "http_json":
             validation = store.validate_http_json_source_publication(
                 source_id=source_id,
                 smoke_query=request.smoke_query,
-                actor=request.actor,
+                actor=actor,
             )
         else:
             raise ProofAgentError(
@@ -1271,9 +1356,11 @@ def publish_knowledge_source(
     source_id: str,
     request: KnowledgeSourcePublicationRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Publish one validation-passed Knowledge Source resource."""
 
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
     store = _get_configuration_store(app_request)
     _require_active_knowledge_source(store, source_id)
     try:
@@ -1281,7 +1368,7 @@ def publish_knowledge_source(
             source_id=source_id,
             validation_id=request.validation_id,
             change_note=request.change_note,
-            actor=request.actor,
+            actor=actor,
         )
     except KeyError as exc:
         raise HTTPException(
@@ -1300,9 +1387,11 @@ def publish_knowledge_source(
 def list_knowledge_source_publication_validations(
     source_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """List Source-level publication smoke validations."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
@@ -1319,9 +1408,11 @@ def list_knowledge_source_publication_validations(
 def list_knowledge_source_publications(
     source_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """List immutable Knowledge Source publication records."""
 
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
@@ -1335,9 +1426,13 @@ def list_knowledge_source_publications(
 
 
 @router.get("/config/agents")
-def list_config_agents(app_request: Request) -> dict[str, Any]:
+def list_config_agents(
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List Agent identities managed by the local configuration store."""
 
+    _require_operator(identity, OperatorPermission.AGENT_VIEW)
     store = _get_configuration_store(app_request)
     agent_ids = _configuration_agent_ids(store)
     data = [_agent_summary_payload(store, agent_id) for agent_id in agent_ids]
@@ -1348,9 +1443,11 @@ def list_config_agents(app_request: Request) -> dict[str, Any]:
 def import_config_agent(
     request: AgentImportRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Import an existing Agent Package into Draft Agent state."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
     manifest_path = Path(request.manifest_path)
     if not manifest_path.exists():
         raise HTTPException(
@@ -1361,7 +1458,7 @@ def import_config_agent(
         draft = import_agent_package(
             manifest_path,
             store=_get_configuration_store(app_request),
-            actor=request.actor,
+            actor=actor,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1374,9 +1471,15 @@ def import_config_agent(
 
 
 @router.get("/config/agents/{agent_id}/drafts/{draft_id}")
-def get_config_draft(agent_id: str, draft_id: str, app_request: Request) -> dict[str, Any]:
+def get_config_draft(
+    agent_id: str,
+    draft_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """Return editable Draft Agent metadata."""
 
+    _require_operator(identity, OperatorPermission.AGENT_VIEW)
     draft = _require_draft(_get_configuration_store(app_request), agent_id, draft_id)
     return _draft_payload(draft)
 
@@ -1387,9 +1490,11 @@ def update_config_draft(
     draft_id: str,
     request: DraftUpdateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Update editable Draft Agent fields."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
     store = _get_configuration_store(app_request)
     _require_draft(store, agent_id, draft_id)
     draft = store.update_draft(
@@ -1397,15 +1502,18 @@ def update_config_draft(
         draft_id=draft_id,
         display_name=request.display_name,
         purpose=request.purpose,
-        actor=request.actor,
+        actor=actor,
     )
     return _draft_payload(draft)
 
 
 @router.get("/config/workflow-templates")
-def list_config_workflow_templates() -> dict[str, Any]:
+def list_config_workflow_templates(
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """Return backend-owned Workflow Template Descriptors for Dashboard rendering."""
 
+    _require_operator(identity, OperatorPermission.AGENT_VIEW)
     descriptors = list_workflow_templates()
     return {
         "data": [_workflow_template_payload(descriptor) for descriptor in descriptors],
@@ -1414,9 +1522,13 @@ def list_config_workflow_templates() -> dict[str, Any]:
 
 
 @router.get("/config/workflow-templates/{template_id}")
-def get_config_workflow_template(template_id: str) -> dict[str, Any]:
+def get_config_workflow_template(
+    template_id: str,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """Return one backend-owned Workflow Template Descriptor."""
 
+    _require_operator(identity, OperatorPermission.AGENT_VIEW)
     try:
         descriptor = resolve_workflow_template(template_id)
     except ProofAgentError as exc:
@@ -1432,9 +1544,11 @@ def get_config_draft_contract(
     agent_id: str,
     draft_id: str,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Return the preserved Contract View for a Draft Agent."""
 
+    _require_operator(identity, OperatorPermission.AGENT_VIEW)
     draft = _require_draft(_get_configuration_store(app_request), agent_id, draft_id)
     return draft.contract_bundle.model_dump(mode="json")
 
@@ -1445,9 +1559,11 @@ def bind_knowledge_source_to_draft(
     draft_id: str,
     request: KnowledgeBindingAttachRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Bind a shared Knowledge Source into a Draft Agent contract."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
     source = _require_active_knowledge_source(store, request.source_id)
@@ -1490,7 +1606,7 @@ def bind_knowledge_source_to_draft(
         agent_id=agent_id,
         draft_id=draft_id,
         contract_bundle=bundle,
-        actor=request.actor,
+        actor=actor,
     )
     return updated.contract_bundle.model_dump(mode="json")
 
@@ -1502,9 +1618,11 @@ def unbind_knowledge_source_from_draft(
     binding_id: str,
     request: KnowledgeBindingDetachRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Remove a shared Knowledge Source binding from a Draft Agent contract."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
 
@@ -1534,7 +1652,7 @@ def unbind_knowledge_source_from_draft(
         agent_id=agent_id,
         draft_id=draft_id,
         contract_bundle=bundle,
-        actor=request.actor,
+        actor=actor,
     )
     return updated.contract_bundle.model_dump(mode="json")
 
@@ -1545,9 +1663,11 @@ def update_config_draft_contract(
     draft_id: str,
     request: ContractUpdateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Update the preserved Contract View and validate it as an Agent Package."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
     bundle = ContractBundle(
@@ -1580,7 +1700,7 @@ def update_config_draft_contract(
         agent_id=agent_id,
         draft_id=draft_id,
         contract_bundle=bundle,
-        actor=request.actor,
+        actor=actor,
     )
     return updated.contract_bundle.model_dump(mode="json")
 
@@ -1591,9 +1711,11 @@ def update_config_draft_workflow_nodes(
     draft_id: str,
     request: WorkflowNodesUpdateRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Replace Draft Agent workflow.nodes[] and validate the Agent Contract."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
     try:
@@ -1631,7 +1753,7 @@ def update_config_draft_workflow_nodes(
         agent_id=agent_id,
         draft_id=draft_id,
         contract_bundle=bundle,
-        actor=request.actor,
+        actor=actor,
     )
     return updated.contract_bundle.model_dump(mode="json")
 
@@ -1643,9 +1765,11 @@ def preview_config_draft_workflow_node(
     node_id: str,
     request: WorkflowNodePreviewRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Render a redacted Workflow Node Context Preview without executing a run."""
 
+    _require_operator(identity, OperatorPermission.AGENT_VALIDATE)
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
     try:
@@ -1684,9 +1808,11 @@ def validate_config_draft(
     draft_id: str,
     request: DraftValidationRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Run a Draft Agent through the governed Harness as a validation run."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_VALIDATE)
     config_store = _get_configuration_store(app_request)
     draft = _require_draft(config_store, agent_id, draft_id)
     try:
@@ -1710,7 +1836,6 @@ def validate_config_draft(
             package_dir / "agent.yaml",
             question=request.question,
             runs_dir=_get_runs_dir(app_request),
-            approved=request.approved,
             run_id=run_id,
             store=run_store,
             manifest=manifest,
@@ -1744,7 +1869,7 @@ def validate_config_draft(
         agent_id=agent_id,
         draft_id=draft_id,
         record=record,
-        actor=request.actor,
+        actor=actor,
     )
     return {
         "validation_id": record.validation_id,
@@ -1820,9 +1945,11 @@ def publish_config_draft(
     draft_id: str,
     request: DraftPublishRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Publish a validated Draft Agent as an immutable version."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
     validation_run_id = request.validation_run_id or _latest_validation_run_id(draft)
@@ -1845,7 +1972,7 @@ def publish_config_draft(
             agent_id=agent_id,
             draft_id=draft_id,
             validation_run_id=validation_run_id,
-            actor=request.actor,
+            actor=actor,
             resolved_knowledge_bindings=validation_record.resolved_knowledge_bindings,
         )
     except (KeyError, ValueError) as exc:
@@ -1859,9 +1986,14 @@ def publish_config_draft(
 
 
 @router.get("/config/agents/{agent_id}/versions")
-def list_config_versions(agent_id: str, app_request: Request) -> dict[str, Any]:
+def list_config_versions(
+    agent_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """List immutable Published Agent Versions for one Agent identity."""
 
+    _require_operator(identity, OperatorPermission.AGENT_VIEW)
     store = _get_configuration_store(app_request)
     versions = store.list_versions(agent_id)
     active = store.get_active_version(agent_id)
@@ -1880,15 +2012,17 @@ def rollback_config_version(
     version_id: str,
     request: RollbackRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Switch the Active Agent Version pointer to a previous version."""
 
+    actor = _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
     store = _get_configuration_store(app_request)
     try:
         active = store.rollback_active_version(
             agent_id=agent_id,
             version_id=version_id,
-            actor=request.actor,
+            actor=actor,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

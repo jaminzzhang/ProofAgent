@@ -21,7 +21,6 @@ interface ModelModuleEditorProps {
     base_url?: string | null
     credential_ref: { type: 'env'; name: string }
     timeout_seconds?: number | null
-    actor?: string
   }) => Promise<SharedModelConnection>
   onSave: () => void
   busy: boolean
@@ -469,7 +468,6 @@ function sharedConnectionPayload(agentYaml: string, role: ModelRole) {
     ...(baseUrl ? { base_url: baseUrl } : {}),
     credential_ref: { type: 'env' as const, name: credentialEnv },
     timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : undefined,
-    actor: 'dashboard',
   }
 }
 

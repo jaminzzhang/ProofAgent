@@ -156,7 +156,6 @@ export function KnowledgeDetailPage() {
       })))
       const response = await uploadKnowledgeDocuments(sourceId, {
         documents,
-        actor: 'dashboard',
       })
       setUploads(response.data)
       setStatus(`${response.meta.total} upload${response.meta.total === 1 ? '' : 's'} queued for validation.`)
@@ -189,7 +188,6 @@ export function KnowledgeDetailPage() {
     try {
       await updateKnowledgeDocumentRoutingMetadata(sourceId, document.document_id, {
         routing_metadata: routingPayloadFromForm(routingForm),
-        actor: 'dashboard',
       })
       setEditingRoutingDocumentId(null)
       setStatus(`Routing metadata saved for ${document.filename}.`)
@@ -207,7 +205,7 @@ export function KnowledgeDetailPage() {
     setError(null)
     setStatus(null)
     try {
-      await retryKnowledgeIngestionJob(sourceId, job.job_id, { actor: 'dashboard' })
+      await retryKnowledgeIngestionJob(sourceId, job.job_id)
       setStatus(`Retry queued for ${job.job_id}.`)
       await loadWorkspace(sourceId)
     } catch (err) {
@@ -224,17 +222,13 @@ export function KnowledgeDetailPage() {
     setStatus(null)
     try {
       if (source?.provider === 'local_index') {
-        const foundation = await validateCandidateKnowledgeSourceSnapshotFoundation(sourceId, {
-          actor: 'dashboard',
-        })
+        const foundation = await validateCandidateKnowledgeSourceSnapshotFoundation(sourceId)
         await freezeCandidateKnowledgeSourceSnapshot(sourceId, {
           validation_id: foundation.validation_id,
-          actor: 'dashboard',
         })
       }
       const validation = await validateKnowledgeSourcePublication(sourceId, {
         smoke_query: smokeQuery,
-        actor: 'dashboard',
       })
       setLastValidation(validation)
       setStatus(`Validation ${validation.validation_id} passed.`)
@@ -255,7 +249,6 @@ export function KnowledgeDetailPage() {
       const publication = await publishKnowledgeSource(sourceId, {
         validation_id: lastValidation.validation_id,
         change_note: changeNote,
-        actor: 'dashboard',
       })
       setStatus(`Published ${publication.publication_id}.`)
       setChangeNote('')
@@ -275,7 +268,6 @@ export function KnowledgeDetailPage() {
     try {
       await archiveKnowledgeSource(sourceId, {
         reason: archiveReason.trim(),
-        actor: 'dashboard',
       })
       setArchiveReason('')
       setLastValidation(null)
@@ -296,7 +288,6 @@ export function KnowledgeDetailPage() {
     try {
       await restoreKnowledgeSource(sourceId, {
         reason: restoreReason.trim() || null,
-        actor: 'dashboard',
       })
       setRestoreReason('')
       setDeleteReason('')
@@ -317,7 +308,6 @@ export function KnowledgeDetailPage() {
     try {
       await permanentlyDeleteKnowledgeSource(sourceId, {
         reason: deleteReason.trim(),
-        actor: 'dashboard',
       })
       navigate('/knowledge')
     } catch (err) {

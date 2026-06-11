@@ -84,6 +84,26 @@ def test_run_detail_accepts_governance_details() -> None:
     assert detail.governance_details["review_results"]
 
 
+def test_run_detail_accepts_pending_approvals() -> None:
+    detail = RunDetail(
+        run_id="run_abc123",
+        question="Check customer status",
+        outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
+        created_at="2026-05-10T14:32:18Z",
+        updated_at="2026-05-10T14:32:19Z",
+        pending_approvals=(
+            {
+                "approval_id": "appr_customer_lookup",
+                "action_id": "act_tool_1",
+                "tool_name": "customer_lookup",
+                "policy_decision": "require_approval",
+            },
+        ),
+    )
+
+    assert detail.pending_approvals[0]["approval_id"] == "appr_customer_lookup"
+
+
 def test_serialize_run_detail_includes_governance_details() -> None:
     detail = RunDetail(
         run_id="run_abc123",
@@ -97,6 +117,21 @@ def test_serialize_run_detail_includes_governance_details() -> None:
     serialized = serialize_run_detail(detail)
 
     assert serialized["governance_details"] == detail.governance_details
+
+
+def test_serialize_run_detail_includes_pending_approvals() -> None:
+    detail = RunDetail(
+        run_id="run_abc123",
+        question="Check customer status",
+        outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
+        created_at="2026-05-10T14:32:18Z",
+        updated_at="2026-05-10T14:32:19Z",
+        pending_approvals=({"approval_id": "appr_customer_lookup"},),
+    )
+
+    serialized = serialize_run_detail(detail)
+
+    assert serialized["pending_approvals"] == [{"approval_id": "appr_customer_lookup"}]
 
 
 def test_run_detail_is_frozen() -> None:

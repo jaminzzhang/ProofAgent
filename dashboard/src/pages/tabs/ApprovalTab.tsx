@@ -1,34 +1,37 @@
 import { useState } from 'react'
-import type { ApprovalState } from '../../api/types'
+import type { ApprovalState, PendingApproval } from '../../api/types'
 import { approveRun, denyRun } from '../../api/client'
 
 interface ApprovalTabProps {
   state: ApprovalState | null
+  pendingApprovals: PendingApproval[]
   runId: string
+  onResolved: () => Promise<void> | void
 }
 
-export function ApprovalTab({ state, runId }: ApprovalTabProps) {
+export function ApprovalTab({ state, pendingApprovals, runId, onResolved }: ApprovalTabProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showParameters, setShowParameters] = useState(false)
+  const pending = pendingApprovals[0] ?? null
 
   if (!state) {
     return <div className="text-[var(--text-muted)] text-sm p-4 text-center">No approval data available.</div>
   }
 
   const handleAction = async (action: 'approve' | 'deny') => {
-    if (!state.event_id) return
+    if (!pending) return
     setLoading(true)
     setError(null)
     try {
       if (action === 'approve') {
-        await approveRun(runId, state.event_id)
+        await approveRun(runId, pending.approval_id)
       } else {
-        await denyRun(runId, state.event_id)
+        await denyRun(runId, pending.approval_id)
       }
-      // Simple reload to reflect new state
-      window.location.reload()
-    } catch (err: any) {
-      setError(err.message || 'Action failed')
+      await onResolved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed')
       setLoading(false)
     }
   }
@@ -47,9 +50,15 @@ export function ApprovalTab({ state, runId }: ApprovalTabProps) {
         </div>
 
         <div className="space-y-4 mb-8">
+          {pending && (
+            <div className="flex justify-between py-2 border-b border-[var(--border)]">
+              <span className="text-sm text-[var(--text-muted)]">Approval ID</span>
+              <span className="text-sm font-mono text-[var(--text-primary)] bg-[var(--bg-hover)] px-2 py-0.5 rounded">{pending.approval_id}</span>
+            </div>
+          )}
           <div className="flex justify-between py-2 border-b border-[var(--border)]">
             <span className="text-sm text-[var(--text-muted)]">Tool Name</span>
-            <span className="text-sm font-mono text-[var(--text-primary)] bg-[var(--bg-hover)] px-2 py-0.5 rounded">{state.tool_name || 'unknown_tool'}</span>
+            <span className="text-sm font-mono text-[var(--text-primary)] bg-[var(--bg-hover)] px-2 py-0.5 rounded">{pending?.tool_name || state.tool_name || 'unknown_tool'}</span>
           </div>
           <div className="flex justify-between py-2 border-b border-[var(--border)]">
             <span className="text-sm text-[var(--text-muted)]">Current Status</span>
@@ -59,8 +68,38 @@ export function ApprovalTab({ state, runId }: ApprovalTabProps) {
           </div>
           <div className="flex justify-between py-2 border-b border-[var(--border)]">
             <span className="text-sm text-[var(--text-muted)]">Requested At</span>
-            <span className="text-sm font-mono text-[var(--text-secondary)]">{state.timestamp ? new Date(state.timestamp).toLocaleString() : 'N/A'}</span>
+            <span className="text-sm font-mono text-[var(--text-secondary)]">{formatTimestamp(pending?.created_at ?? state.timestamp)}</span>
           </div>
+          {pending && (
+            <>
+              <div className="flex justify-between py-2 border-b border-[var(--border)]">
+                <span className="text-sm text-[var(--text-muted)]">Expires At</span>
+                <span className="text-sm font-mono text-[var(--text-secondary)]">{formatTimestamp(pending.expires_at)}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-[var(--border)]">
+                <span className="text-sm text-[var(--text-muted)]">Action ID</span>
+                <span className="text-sm font-mono text-[var(--text-secondary)]">{pending.action_id}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-[var(--border)] gap-4">
+                <span className="text-sm text-[var(--text-muted)]">Parameter Keys</span>
+                <span className="text-sm font-mono text-[var(--text-secondary)] text-right">{parameterSummary(pending.parameters)}</span>
+              </div>
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowParameters((value) => !value)}
+                  className="text-sm text-[var(--accent)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  {showParameters ? 'Hide parameters' : 'Show parameters'}
+                </button>
+                {showParameters && (
+                  <pre className="mt-3 max-h-64 overflow-auto bg-[var(--bg-base)] border border-[var(--border)] rounded-md p-3 text-xs text-[var(--text-secondary)] font-mono whitespace-pre-wrap">
+                    {JSON.stringify(pending.parameters, null, 2)}
+                  </pre>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {error && (
@@ -69,7 +108,7 @@ export function ApprovalTab({ state, runId }: ApprovalTabProps) {
           </div>
         )}
 
-        {state.state === 'requested' && (
+        {state.state === 'requested' && pending && (
           <div className="flex gap-3 pt-2">
             <button
               onClick={() => handleAction('approve')}
@@ -88,6 +127,12 @@ export function ApprovalTab({ state, runId }: ApprovalTabProps) {
           </div>
         )}
 
+        {state.state === 'requested' && !pending && (
+          <div className="p-4 bg-[var(--bg-base)] border border-[var(--border)] rounded-md text-center text-sm text-[var(--text-muted)]">
+            No pending approval operation is available for this run.
+          </div>
+        )}
+
         {state.state !== 'requested' && (
           <div className="p-4 bg-[var(--bg-base)] border border-[var(--border)] rounded-md text-center text-sm text-[var(--text-muted)]">
             This request has already been processed and is no longer pending.
@@ -96,4 +141,13 @@ export function ApprovalTab({ state, runId }: ApprovalTabProps) {
       </div>
     </div>
   )
+}
+
+function formatTimestamp(value: string | undefined): string {
+  return value ? new Date(value).toLocaleString() : 'N/A'
+}
+
+function parameterSummary(parameters: Record<string, unknown>): string {
+  const keys = Object.keys(parameters)
+  return keys.length ? keys.join(', ') : 'none'
 }

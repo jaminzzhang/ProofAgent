@@ -2,9 +2,12 @@ import { afterEach, expect, test, vi } from 'vitest'
 import {
   archiveModelConnection,
   archiveKnowledgeSource,
+  approveRun,
   bindKnowledgeSourceToDraft,
   createModelConnection,
   deleteModelConnection,
+  denyRun,
+  fetchApprovals,
   fetchModelConnection,
   fetchModelConnectionDeletionEligibility,
   fetchModelConnectionReferences,
@@ -58,6 +61,23 @@ test('fetchHandoffs requests internal handoff projection', async () => {
   expect(response.data).toEqual([])
 })
 
+test('fetchApprovals requests the global pending approval queue projection', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ data: [], meta: { total: 0, limit: 25, offset: 0 } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  const response = await fetchApprovals({ limit: 25, offset: 50 })
+
+  const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost')
+  expect(url.pathname).toBe('/api/approvals')
+  expect(url.searchParams.get('limit')).toBe('25')
+  expect(url.searchParams.get('offset')).toBe('50')
+  expect(response.data).toEqual([])
+})
+
 test('fetchRuns includes run purpose filter', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(JSON.stringify({ data: [], meta: { total: 0, limit: 50, offset: 0 } }), {
@@ -72,6 +92,38 @@ test('fetchRuns includes run purpose filter', async () => {
   expect(url.pathname).toBe('/api/runs')
   expect(url.searchParams.get('run_purpose')).toBe('validation')
   expect(url.searchParams.get('search')).toBe('draft')
+})
+
+test('approveRun targets the Run History approval endpoint', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ run_id: 'run_1', pending_approvals: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  await approveRun('run_1', 'appr_customer_lookup')
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/runs/run_1/approvals/appr_customer_lookup/approve',
+    { method: 'POST' },
+  )
+})
+
+test('denyRun targets the Run History approval endpoint', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ run_id: 'run_1', pending_approvals: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  await denyRun('run_1', 'appr_customer_lookup')
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/runs/run_1/approvals/appr_customer_lookup/deny',
+    { method: 'POST' },
+  )
 })
 
 test('fetchConfigAgents requests Agent Configuration list', async () => {
@@ -153,12 +205,10 @@ test('workflow node update and preview use Agent Configuration endpoints', async
   await updateWorkflowNodes('enterprise_qa', 'draft_1', {
     template_descriptor_version: 'react_enterprise_qa.v1',
     nodes: [node],
-    actor: 'dashboard',
   })
   await previewWorkflowNodeContext('enterprise_qa', 'draft_1', 'plan', {
     prompt: node.prompt,
     context: node.context,
-    actor: 'dashboard',
   })
 
   expect(fetchMock).toHaveBeenNthCalledWith(
@@ -170,7 +220,6 @@ test('workflow node update and preview use Agent Configuration endpoints', async
       body: JSON.stringify({
         template_descriptor_version: 'react_enterprise_qa.v1',
         nodes: [node],
-        actor: 'dashboard',
       }),
     },
   )
@@ -183,7 +232,6 @@ test('workflow node update and preview use Agent Configuration endpoints', async
       body: JSON.stringify({
         prompt: node.prompt,
         context: node.context,
-        actor: 'dashboard',
       }),
     },
   )
@@ -266,13 +314,11 @@ test('knowledge source client methods use shared source endpoints', async () => 
       document_selection_budget: 8,
       worker_concurrency: 2,
     },
-    actor: 'dashboard',
   })
   await uploadKnowledgeDocument('ks_local_index', {
     filename: 'travel-policy.pdf',
     content_type: 'application/pdf',
     content_base64: 'JVBERi0xLjQ=',
-    actor: 'dashboard',
   })
   await uploadKnowledgeDocuments('ks_local_index', {
     documents: [
@@ -282,19 +328,16 @@ test('knowledge source client methods use shared source endpoints', async () => 
         content_base64: 'JVBERi0xLjQ=',
       },
     ],
-    actor: 'dashboard',
   })
   await fetchQuarantinedKnowledgeUploads('ks_local_index')
   await fetchKnowledgeIngestionJobs('ks_local_index')
-  await retryKnowledgeIngestionJob('ks_local_index', 'ksjob_1', { actor: 'dashboard' })
-  await validateCandidateKnowledgeSourceSnapshotFoundation('ks_local_index', { actor: 'dashboard' })
+  await retryKnowledgeIngestionJob('ks_local_index', 'ksjob_1')
+  await validateCandidateKnowledgeSourceSnapshotFoundation('ks_local_index')
   await freezeCandidateKnowledgeSourceSnapshot('ks_local_index', {
     validation_id: 'ksvalidation_1',
-    actor: 'dashboard',
   })
   await updateKnowledgeDocumentRoutingMetadata('ks_local_index', 'doc_1', {
     routing_metadata: { title: 'Policy' },
-    actor: 'dashboard',
   })
 
   expect(fetchMock.mock.calls[0][0]).toBe('/api/config/knowledge-sources')
@@ -391,16 +434,13 @@ test('knowledge source lifecycle methods use archive restore eligibility and del
 
   await archiveKnowledgeSource('ks_local_index', {
     reason: 'Retire stale index',
-    actor: 'dashboard',
   })
   await restoreKnowledgeSource('ks_local_index', {
     reason: 'Reopened',
-    actor: 'dashboard',
   })
   await fetchKnowledgeSourceDeletionEligibility('ks_local_index')
   await permanentlyDeleteKnowledgeSource('ks_local_index', {
     reason: 'Empty archived test fixture',
-    actor: 'dashboard',
   })
 
   expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/config/knowledge-sources/ks_local_index/archive', {
@@ -408,7 +448,6 @@ test('knowledge source lifecycle methods use archive restore eligibility and del
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       reason: 'Retire stale index',
-      actor: 'dashboard',
     }),
   })
   expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/config/knowledge-sources/ks_local_index/restore', {
@@ -416,7 +455,6 @@ test('knowledge source lifecycle methods use archive restore eligibility and del
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       reason: 'Reopened',
-      actor: 'dashboard',
     }),
   })
   expect(fetchMock).toHaveBeenNthCalledWith(
@@ -429,7 +467,6 @@ test('knowledge source lifecycle methods use archive restore eligibility and del
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       reason: 'Empty archived test fixture',
-      actor: 'dashboard',
     }),
   })
 })
@@ -567,27 +604,23 @@ test('model connection client methods use shared model endpoints', async () => {
     base_url: 'https://api.deepseek.com',
     credential_ref: { type: 'env', name: 'DEEPSEEK_API_KEY' },
     timeout_seconds: 20,
-    actor: 'dashboard',
   })
   await fetchModelConnection('model_deepseek_default')
   await updateModelConnection('model_deepseek_default', {
     display_name: 'DeepSeek Production',
     confirm_impact: true,
-    actor: 'dashboard',
   })
   await archiveModelConnection('model_deepseek_default', {
     reason: 'Retire stale default',
-    actor: 'dashboard',
   })
-  await restoreModelConnection('model_deepseek_default', { actor: 'dashboard' })
+  await restoreModelConnection('model_deepseek_default')
   await fetchModelConnectionReferences('model_deepseek_default')
   await fetchModelConnectionDeletionEligibility('model_deepseek_default')
   await deleteModelConnection('model_deepseek_default', {
     reason: 'No references remain',
-    actor: 'dashboard',
   })
-  await validateModelConnection('model_deepseek_default', { actor: 'dashboard' })
-  await smokeTestModelConnection('model_deepseek_default', { actor: 'dashboard' })
+  await validateModelConnection('model_deepseek_default')
+  await smokeTestModelConnection('model_deepseek_default')
 
   expect(fetchMock.mock.calls[0][0]).toBe('/api/config/model-connections')
   expect(fetchMock.mock.calls[1][0]).toBe('/api/config/model-connections')
@@ -631,7 +664,6 @@ test('bindKnowledgeSourceToDraft posts a shared source binding request', async (
     failure_mode: 'advisory',
     fusion_weight: 0.75,
     top_k: 3,
-    actor: 'dashboard',
   })
 
   expect(fetchMock).toHaveBeenCalledWith(
@@ -645,7 +677,6 @@ test('bindKnowledgeSourceToDraft posts a shared source binding request', async (
         failure_mode: 'advisory',
         fusion_weight: 0.75,
         top_k: 3,
-        actor: 'dashboard',
       }),
     },
   )
@@ -661,7 +692,6 @@ test('importConfigAgent posts manifest path', async () => {
 
   await importConfigAgent({
     manifest_path: 'examples/insurance_customer_service/agent.yaml',
-    actor: 'editor',
   })
 
   expect(fetchMock).toHaveBeenCalledWith('/api/config/agents/import', {
@@ -669,7 +699,6 @@ test('importConfigAgent posts manifest path', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       manifest_path: 'examples/insurance_customer_service/agent.yaml',
-      actor: 'editor',
     }),
   })
 })
@@ -697,13 +726,11 @@ test('validate publish and rollback use configuration lifecycle endpoints', asyn
 
   await validateConfigDraft('enterprise_qa', 'draft_1', {
     question: 'What is the reimbursement rule for travel meals?',
-    actor: 'validator',
   })
   await publishConfigDraft('enterprise_qa', 'draft_1', {
     validation_run_id: 'run_1',
-    actor: 'publisher',
   })
-  await rollbackConfigVersion('enterprise_qa', 'version_1', { actor: 'publisher' })
+  await rollbackConfigVersion('enterprise_qa', 'version_1')
 
   expect(fetchMock.mock.calls[0][0]).toBe(
     '/api/config/agents/enterprise_qa/drafts/draft_1/validate',
@@ -726,7 +753,6 @@ test('updateConfigDraftContract patches Contract View files', async () => {
 
   await updateConfigDraftContract('enterprise_qa', 'draft_1', {
     agent_yaml: 'name: enterprise_qa',
-    actor: 'workflow-editor',
   })
 
   expect(fetchMock).toHaveBeenCalledWith(
@@ -736,7 +762,6 @@ test('updateConfigDraftContract patches Contract View files', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         agent_yaml: 'name: enterprise_qa',
-        actor: 'workflow-editor',
       }),
     },
   )

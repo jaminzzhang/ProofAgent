@@ -254,7 +254,6 @@ review:
       model_identifier: 'deepseek-chat',
       credential_ref: { type: 'env', name: '' },
       timeout_seconds: undefined,
-      actor: 'dashboard',
     })
     await screen.findByText('Created shared model connection model_created.')
     expect(onModelConfigChange).toHaveBeenCalledWith(

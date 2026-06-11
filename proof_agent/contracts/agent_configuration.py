@@ -19,6 +19,7 @@ def _jsonable(value: Any) -> Any:
 
 
 class ConfigurationOperation(str, Enum):
+    CREATED = "created"
     IMPORTED = "imported"
     UPDATED = "updated"
     VALIDATED = "validated"

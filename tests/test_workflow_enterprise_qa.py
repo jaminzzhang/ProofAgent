@@ -2,7 +2,10 @@ from pathlib import Path
 import json
 import shutil
 
+from langgraph.checkpoint.memory import MemorySaver
+
 from proof_agent.runtime.langgraph_runner import run_with_langgraph
+from proof_agent.runtime.langgraph_runner import resume_langgraph_approval
 
 
 def test_supported_question_answers_with_citations(tmp_path: Path) -> None:
@@ -46,16 +49,84 @@ def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
         runs_dir=tmp_path,
     )
     assert result.outcome == "WAITING_FOR_APPROVAL"
+    events = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    run_id = events[0]["run_id"]
+    pending = next(event for event in events if event["event_type"] == "pending_approval_created")
+    assert pending["status"] == "waiting"
+    assert pending["payload"]["run_id"] == run_id
+    assert pending["payload"]["thread_id"] == run_id
+    assert pending["payload"]["action_id"] == "act_customer_lookup_1"
+    assert pending["payload"]["tool_name"] == "customer_lookup"
+    assert pending["payload"]["parameters"] == {
+        "customer_id": "CUST-001",
+        "policy_id": "POL-001",
+    }
+    assert pending["payload"]["policy_decision"] == "require_approval"
+    assert pending["payload"]["checkpoint_id"] == f"thread:{run_id}"
 
 
 def test_tool_question_handles_denied_approval(tmp_path: Path) -> None:
-    result = run_with_langgraph(
+    checkpointer = MemorySaver()
+    run_id = "run_deny_approval"
+    waiting = run_with_langgraph(
         Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
         question="Look up customer policy status before answering.",
         runs_dir=tmp_path,
+        run_id=run_id,
+        checkpointer=checkpointer,
+    )
+    assert waiting.outcome == "WAITING_FOR_APPROVAL"
+
+    denied = resume_langgraph_approval(
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        runs_dir=tmp_path,
+        run_id=run_id,
+        question="Look up customer policy status before answering.",
+        checkpointer=checkpointer,
+        approval_id="appr_customer_lookup",
         approved=False,
     )
-    assert result.outcome == "TOOL_APPROVAL_DENIED"
+    assert denied.outcome == "TOOL_APPROVAL_DENIED"
+
+
+def test_tool_question_resumes_approved_tool_from_checkpoint(tmp_path: Path) -> None:
+    checkpointer = MemorySaver()
+    run_id = "run_resume_approval"
+    first = run_with_langgraph(
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        question="Look up customer policy status before answering.",
+        runs_dir=tmp_path,
+        run_id=run_id,
+        checkpointer=checkpointer,
+    )
+    assert first.outcome == "WAITING_FOR_APPROVAL"
+
+    resumed = resume_langgraph_approval(
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        runs_dir=tmp_path,
+        run_id=run_id,
+        question="Look up customer policy status before answering.",
+        checkpointer=checkpointer,
+        approval_id="appr_customer_lookup",
+        approved=True,
+    )
+
+    assert resumed.outcome == "ANSWERED_WITH_CITATIONS"
+    assert resumed.final_output == "Tool execution successful."
+    events = [
+        json.loads(line)
+        for line in resumed.trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [event["event_type"] for event in events].count("run_started") == 1
+    assert [event["event_type"] for event in events].count("pending_approval_created") == 1
+    approval_granted = next(event for event in events if event["event_type"] == "approval_granted")
+    assert approval_granted["payload"]["approval_id"] == "appr_customer_lookup"
+    assert "tool_result" in [event["event_type"] for event in events]
 
 
 def test_agentic_retrieval_strategy_uses_registered_knowledge_provider(tmp_path: Path) -> None:

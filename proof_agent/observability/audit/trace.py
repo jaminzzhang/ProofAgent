@@ -14,10 +14,10 @@ from proof_agent.contracts import TraceEvent, TraceEventType
 class TraceWriter:
     """Writes ordered, redacted audit events to a JSONL trace file."""
 
-    def __init__(self, trace_path: Path, *, run_id: str) -> None:
+    def __init__(self, trace_path: Path, *, run_id: str, initial_sequence: int = 0) -> None:
         self.trace_path = trace_path
         self.run_id = run_id
-        self._sequence = 0
+        self._sequence = initial_sequence
 
     def emit(
         self,

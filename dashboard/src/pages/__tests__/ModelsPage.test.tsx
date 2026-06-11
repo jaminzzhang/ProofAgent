@@ -205,7 +205,6 @@ describe('ModelsPage', () => {
         base_url: 'https://api.deepseek.com',
         credential_ref: { type: 'env', name: 'DEEPSEEK_API_KEY' },
         timeout_seconds: 20,
-        actor: 'dashboard',
       })
     })
   })

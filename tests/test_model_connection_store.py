@@ -93,6 +93,44 @@ def test_create_list_get_and_persist_model_connection(tmp_path: Path) -> None:
     )
     assert payload["credential_ref"] == {"type": "env", "name": "DEEPSEEK_API_KEY"}
     assert "api_key" not in payload
+    audits = _configuration_audit_payloads(tmp_path)
+    created_audits = [
+        payload for payload in audits if payload["operation"] == "created"
+    ]
+    assert [payload["actor"] for payload in created_audits] == ["operator", "operator"]
+    created_by_connection = {
+        payload["metadata"]["connection_id"]: payload for payload in created_audits
+    }
+    assert created_by_connection[created.connection_id]["metadata"]["provider"] == "deepseek"
+    assert created_by_connection[created.connection_id]["metadata"]["credential_ref"] == {
+        "type": "env",
+        "name": "DEEPSEEK_API_KEY",
+    }
+
+
+def test_update_model_connection_records_audit(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    _create_connection(store)
+
+    updated = store.update_model_connection(
+        connection_id="model_deepseek_default",
+        actor="operator",
+        display_name="DeepSeek Production",
+        model_identifier="deepseek-reasoner",
+        timeout_seconds=30,
+    )
+
+    assert updated.display_name == "DeepSeek Production"
+    assert updated.model_identifier == "deepseek-reasoner"
+    audits = _configuration_audit_payloads(tmp_path)
+    updated_audit = [payload for payload in audits if payload["operation"] == "updated"][0]
+    assert updated_audit["actor"] == "operator"
+    assert updated_audit["metadata"]["connection_id"] == "model_deepseek_default"
+    assert updated_audit["metadata"]["changed_fields"] == [
+        "display_name",
+        "model_identifier",
+        "timeout_seconds",
+    ]
 
 
 def test_model_connection_create_rejects_duplicate_and_unsafe_ids(

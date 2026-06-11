@@ -15,8 +15,8 @@ type Tab = 'receipt' | 'approval' | 'timeline' | 'evidence' | 'model' | 'governa
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>()
   const location = useLocation()
-  const { detail, loading, error } = useRunDetail(runId)
-  const [activeTab, setActiveTab] = useState<Tab>('receipt')
+  const { detail, loading, error, refetch } = useRunDetail(runId)
+  const [activeTab, setActiveTab] = useState<Tab>(location.hash === '#approval' ? 'approval' : 'receipt')
 
   if (loading) return <LoadingSpinner />
   if (error) return <div className="text-[var(--danger)] text-sm">{error}</div>
@@ -90,7 +90,14 @@ export function RunDetailPage() {
 
       <div className="py-2">
         {activeTab === 'receipt' && <ReceiptTab markdown={detail.receipt_markdown} />}
-        {activeTab === 'approval' && <ApprovalTab state={detail.approval_state} runId={detail.run_id} />}
+        {activeTab === 'approval' && (
+          <ApprovalTab
+            state={detail.approval_state}
+            pendingApprovals={detail.pending_approvals}
+            runId={detail.run_id}
+            onResolved={refetch}
+          />
+        )}
         {activeTab === 'governance' && <GovernanceTab details={detail.governance_details} />}
         {activeTab === 'evidence' && <EvidenceTab chunks={detail.evidence_chunks} />}
         {activeTab === 'model' && <ModelUsageTab usage={detail.model_usage} />}

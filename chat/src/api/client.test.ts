@@ -64,7 +64,9 @@ describe('createConversationRun', () => {
       })
     vi.stubGlobal('fetch', fetchMock)
 
-    await createConversationRun('conv_123', 'What is the reimbursement rule?', undefined, true)
+    await createConversationRun('conv_123', 'What is the reimbursement rule?', {
+      includeGovernanceDetails: true,
+    })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/chat/conversations/conv_123/runs', {

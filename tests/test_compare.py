@@ -14,8 +14,8 @@ def test_plain_and_harness_diverge_on_unsupported_question() -> None:
 def test_harness_compare_reuses_enterprise_workflow(monkeypatch, tmp_path) -> None:
     calls = []
 
-    def fake_run_with_langgraph(agent_yaml, *, question, runs_dir, approved=None):
-        calls.append((agent_yaml, question, runs_dir, approved))
+    def fake_run_with_langgraph(agent_yaml, *, question, runs_dir):
+        calls.append((agent_yaml, question, runs_dir))
         return RunResult(
             final_output="Governed answer",
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,

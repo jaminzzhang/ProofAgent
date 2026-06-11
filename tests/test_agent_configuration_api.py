@@ -30,6 +30,10 @@ from proof_agent.contracts import (
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.app import create_app
+from proof_agent.observability.api.operator_identity import (
+    OperatorIdentityContext,
+    OperatorPermission,
+)
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -43,12 +47,38 @@ def _client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+class _StaticOperatorIdentityProvider:
+    def __init__(self, permissions: set[OperatorPermission]) -> None:
+        self._permissions = permissions
+
+    def current_identity(self) -> OperatorIdentityContext:
+        return OperatorIdentityContext(
+            operator_id="test-operator",
+            display_name="Test Operator",
+            permissions=frozenset(self._permissions),
+        )
+
+
+def _client_with_operator_permissions(
+    tmp_path: Path,
+    permissions: set[OperatorPermission],
+) -> TestClient:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={},
+        agent_configuration_dir=tmp_path / "config",
+    )
+    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(permissions)
+    return TestClient(app)
+
+
 def _import_enterprise_qa(client: TestClient) -> dict:
     response = client.post(
         "/api/config/agents/import",
         json={
             "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
-            "actor": "test-user",
         },
     )
     assert response.status_code == 200
@@ -60,7 +90,6 @@ def _import_react_enterprise_qa(client: TestClient) -> dict:
         "/api/config/agents/import",
         json={
             "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml",
-            "actor": "test-user",
         },
     )
     assert response.status_code == 200
@@ -76,6 +105,105 @@ def test_list_config_agents_empty(tmp_path: Path) -> None:
     assert response.json() == {"data": [], "meta": {"total": 0}}
 
 
+def test_agent_config_read_requires_agent_view_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(tmp_path, set())
+
+    response = client.get("/api/config/agents")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: agent.view"
+
+
+def test_agent_config_import_rejects_request_body_actor(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/config/agents/import",
+        json={
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+            "actor": "spoofed-operator",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_agent_config_import_requires_agent_edit_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.AGENT_VIEW},
+    )
+
+    response = client.post(
+        "/api/config/agents/import",
+        json={
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: agent.edit"
+
+
+def test_agent_config_import_uses_operator_identity_for_audit(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.AGENT_EDIT, OperatorPermission.AGENT_VIEW},
+    )
+
+    draft = client.post(
+        "/api/config/agents/import",
+        json={
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+        },
+    )
+
+    assert draft.status_code == 200
+    assert draft.json()["created_by"] == "test-operator"
+
+
+def test_agent_config_validation_requires_agent_validate_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.AGENT_EDIT, OperatorPermission.AGENT_VIEW},
+    )
+    draft = client.post(
+        "/api/config/agents/import",
+        json={
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+        },
+    ).json()
+
+    response = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={"question": "What is the reimbursement rule for travel meals?"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: agent.validate"
+
+
+def test_agent_config_publish_requires_agent_publish_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.AGENT_EDIT, OperatorPermission.AGENT_VIEW},
+    )
+    draft = client.post(
+        "/api/config/agents/import",
+        json={
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+        },
+    ).json()
+
+    response = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/publish",
+        json={},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: agent.publish"
+
+
 def test_tool_source_descriptors_include_brave_search(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -87,6 +215,117 @@ def test_tool_source_descriptors_include_brave_search(tmp_path: Path) -> None:
     assert data[0]["exposed_tool_contracts"] == ["untrusted_web_search"]
     assert data[0]["credential_env_vars"] == ["BRAVE_SEARCH_API_KEY"]
     assert data[0]["supports_validation"] is True
+
+
+def test_tool_source_read_requires_view_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(tmp_path, set())
+
+    response = client.get("/api/config/tool-source-descriptors")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: tool_source.view"
+
+
+def test_tool_source_create_rejects_request_body_actor(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/config/tool-sources",
+        json={
+            "source_id": "tool_brave_default",
+            "name": "Brave Search Default",
+            "source_type": "search_vendor",
+            "provider": "brave_search",
+            "tool_contract_ids": ["untrusted_web_search"],
+            "credential_env_ref": "BRAVE_SEARCH_API_KEY",
+            "params": {"timeout_seconds": 8, "default_max_results": 3},
+            "actor": "spoofed-operator",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_tool_source_create_requires_edit_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.TOOL_SOURCE_VIEW},
+    )
+
+    response = client.post(
+        "/api/config/tool-sources",
+        json={
+            "source_id": "tool_brave_default",
+            "name": "Brave Search Default",
+            "source_type": "search_vendor",
+            "provider": "brave_search",
+            "tool_contract_ids": ["untrusted_web_search"],
+            "credential_env_ref": "BRAVE_SEARCH_API_KEY",
+            "params": {"timeout_seconds": 8, "default_max_results": 3},
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: tool_source.edit"
+
+
+def test_tool_source_create_accepts_operator_identity_boundary(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.TOOL_SOURCE_EDIT, OperatorPermission.TOOL_SOURCE_VIEW},
+    )
+
+    response = client.post(
+        "/api/config/tool-sources",
+        json={
+            "source_id": "tool_brave_default",
+            "name": "Brave Search Default",
+            "source_type": "search_vendor",
+            "provider": "brave_search",
+            "tool_contract_ids": ["untrusted_web_search"],
+            "credential_env_ref": "BRAVE_SEARCH_API_KEY",
+            "params": {"timeout_seconds": 8, "default_max_results": 3},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source_id"] == "tool_brave_default"
+    audit_payloads = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((tmp_path / "config" / "configuration_audit").glob("*.json"))
+    ]
+    assert audit_payloads[0]["operation"] == "created"
+    assert audit_payloads[0]["actor"] == "test-operator"
+    assert audit_payloads[0]["metadata"]["source_id"] == "tool_brave_default"
+
+
+def test_tool_source_archive_requires_archive_permission(tmp_path: Path) -> None:
+    setup_client = _client(tmp_path)
+    created = setup_client.post(
+        "/api/config/tool-sources",
+        json={
+            "source_id": "tool_brave_default",
+            "name": "Brave Search Default",
+            "source_type": "search_vendor",
+            "provider": "brave_search",
+            "tool_contract_ids": ["untrusted_web_search"],
+            "credential_env_ref": "BRAVE_SEARCH_API_KEY",
+            "params": {"timeout_seconds": 8, "default_max_results": 3},
+        },
+    )
+    assert created.status_code == 200
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.TOOL_SOURCE_VIEW},
+    )
+
+    response = client.post(
+        "/api/config/tool-sources/tool_brave_default/archive",
+        json={"reason": "Rotate vendor."},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: tool_source.archive"
 
 
 def test_tool_source_api_manages_dashboard_connection_lifecycle(tmp_path: Path) -> None:
@@ -102,7 +341,6 @@ def test_tool_source_api_manages_dashboard_connection_lifecycle(tmp_path: Path) 
             "tool_contract_ids": ["untrusted_web_search"],
             "credential_env_ref": "BRAVE_SEARCH_API_KEY",
             "params": {"timeout_seconds": 8, "default_max_results": 3},
-            "actor": "operator",
         },
     )
     listed = client.get("/api/config/tool-sources")
@@ -111,16 +349,15 @@ def test_tool_source_api_manages_dashboard_connection_lifecycle(tmp_path: Path) 
         json={
             "name": "Brave Search Production",
             "params": {"timeout_seconds": 12, "default_max_results": 4},
-            "actor": "operator",
         },
     )
     archived = client.post(
         "/api/config/tool-sources/tool_brave_default/archive",
-        json={"reason": "Rotate vendor.", "actor": "operator"},
+        json={"reason": "Rotate vendor."},
     )
     restored = client.post(
         "/api/config/tool-sources/tool_brave_default/restore",
-        json={"reason": "Rollback vendor change.", "actor": "operator"},
+        json={"reason": "Rollback vendor change."},
     )
 
     assert created.status_code == 200
@@ -150,7 +387,6 @@ def _create_local_index_source(
             "name": "Local Index Policies",
             "provider": "local_index",
             "params": params or {},
-            "actor": "operator",
         },
     )
     assert response.status_code == 200
@@ -184,7 +420,6 @@ def test_create_http_json_knowledge_source_accepts_safe_remote_params(tmp_path: 
                     "citation": "/citation",
                 },
             },
-            "actor": "operator",
         },
     )
 
@@ -193,6 +428,140 @@ def test_create_http_json_knowledge_source_accepts_safe_remote_params(tmp_path: 
     assert created["provider"] == "http_json"
     assert created["params"]["endpoint"] == "https://knowledge.example/retrieve"
     assert created["document_count"] == 0
+
+
+def test_knowledge_source_read_requires_view_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(tmp_path, set())
+
+    response = client.get("/api/config/knowledge-sources")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Operator lacks required permission: knowledge_source.view"
+    )
+
+
+def test_knowledge_source_create_rejects_request_body_actor(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_local_index",
+            "name": "Local Index Policies",
+            "provider": "local_index",
+            "params": {},
+            "actor": "spoofed-operator",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_knowledge_source_archive_rejects_request_body_actor(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_local_index",
+            "name": "Local Index Policies",
+            "provider": "local_index",
+            "params": {},
+        },
+    )
+    assert created.status_code == 200
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": "No longer maintained.", "actor": "spoofed-operator"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_knowledge_source_create_requires_edit_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.KNOWLEDGE_SOURCE_VIEW},
+    )
+
+    response = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_local_index",
+            "name": "Local Index Policies",
+            "provider": "local_index",
+            "params": {},
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Operator lacks required permission: knowledge_source.edit"
+    )
+
+
+def test_knowledge_source_create_uses_operator_identity_for_audit(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+        },
+    )
+
+    response = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_local_index",
+            "name": "Local Index Policies",
+            "provider": "local_index",
+            "params": {},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source_id"] == "ks_local_index"
+
+
+def test_knowledge_source_publication_requires_publish_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+        },
+    )
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_local_index/publication/validate",
+        json={"smoke_query": "policy"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Operator lacks required permission: knowledge_source.publish"
+    )
+
+
+def test_knowledge_source_archive_requires_archive_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+        },
+    )
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_local_index/archive",
+        json={"reason": "No longer maintained."},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Operator lacks required permission: knowledge_source.archive"
+    )
 
 
 def _upload(
@@ -209,7 +578,6 @@ def _upload(
             "filename": filename,
             "content_type": content_type,
             "content_base64": base64.b64encode(content).decode("ascii"),
-            "actor": "operator",
         },
     )
 
@@ -234,10 +602,7 @@ def _batch_upload(
     ]
     return client.post(
         f"/api/config/knowledge-sources/{source_id}/documents/batch",
-        json={
-            "documents": payload_documents,
-            "actor": "operator",
-        },
+        json={"documents": payload_documents},
     )
 
 
@@ -364,11 +729,11 @@ def test_knowledge_source_lifecycle_routes_archive_restore_eligibility_and_delet
 
     missing_reason = client.post(
         "/api/config/knowledge-sources/ks_local_index/archive",
-        json={"actor": "operator"},
+        json={},
     )
     blank_reason = client.post(
         "/api/config/knowledge-sources/ks_local_index/archive",
-        json={"reason": " ", "actor": "operator"},
+        json={"reason": " "},
     )
     active_eligibility = client.get(
         "/api/config/knowledge-sources/ks_local_index/deletion-eligibility"
@@ -376,27 +741,27 @@ def test_knowledge_source_lifecycle_routes_archive_restore_eligibility_and_delet
     active_delete = client.request(
         "DELETE",
         "/api/config/knowledge-sources/ks_local_index",
-        json={"reason": "Created by mistake.", "actor": "operator"},
+        json={"reason": "Created by mistake."},
     )
     archived = client.post(
         "/api/config/knowledge-sources/ks_local_index/archive",
-        json={"reason": "No longer maintained.", "actor": "operator"},
+        json={"reason": "No longer maintained."},
     )
     archived_eligibility = client.get(
         "/api/config/knowledge-sources/ks_local_index/deletion-eligibility"
     )
     restored = client.post(
         "/api/config/knowledge-sources/ks_local_index/restore",
-        json={"reason": "Needed again.", "actor": "operator"},
+        json={"reason": "Needed again."},
     )
     archived_again = client.post(
         "/api/config/knowledge-sources/ks_local_index/archive",
-        json={"reason": "Created by mistake.", "actor": "operator"},
+        json={"reason": "Created by mistake."},
     )
     deleted = client.request(
         "DELETE",
         "/api/config/knowledge-sources/ks_local_index",
-        json={"reason": "Created by mistake.", "actor": "operator"},
+        json={"reason": "Created by mistake."},
     )
 
     assert missing_reason.status_code == 422
@@ -488,7 +853,7 @@ audit:
     )
     validation = client.post(
         f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/validate",
-        json={"question": "What is the policy?", "actor": "validator"},
+        json={"question": "What is the policy?"},
     )
 
     assert validation.status_code == 200
@@ -521,7 +886,7 @@ audit:
 
     response = client.post(
         f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/publish",
-        json={"validation_run_id": validation_body["run_id"], "actor": "publisher"},
+        json={"validation_run_id": validation_body["run_id"]},
     )
 
     assert response.status_code == 400
@@ -553,7 +918,6 @@ def test_knowledge_source_routes_map_invalid_source_id_to_structured_error(
                 "filename": "policy.md",
                 "content_type": "text/markdown",
                 "content_base64": base64.b64encode(b"# Policy\n").decode("ascii"),
-                "actor": "operator",
             },
         ),
         (
@@ -567,13 +931,12 @@ def test_knowledge_source_routes_map_invalid_source_id_to_structured_error(
                         "content_base64": base64.b64encode(b"# Policy\n").decode("ascii"),
                     }
                 ],
-                "actor": "operator",
             },
         ),
         (
             "PATCH",
             "/api/config/knowledge-sources/ks_local_index/documents/doc_missing/routing-metadata",
-            {"routing_metadata": {"title": "Policy"}, "actor": "operator"},
+            {"routing_metadata": {"title": "Policy"}},
         ),
         (
             "GET",
@@ -583,17 +946,17 @@ def test_knowledge_source_routes_map_invalid_source_id_to_structured_error(
         (
             "POST",
             "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
-            {"actor": "validator"},
+            {},
         ),
         (
             "POST",
             "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
-            {"validation_id": "ksvalidation_missing", "actor": "operator"},
+            {"validation_id": "ksvalidation_missing"},
         ),
         (
             "POST",
             "/api/config/knowledge-sources/ks_local_index/publication/validate",
-            {"smoke_query": "policy", "actor": "validator"},
+            {"smoke_query": "policy"},
         ),
         (
             "POST",
@@ -601,7 +964,6 @@ def test_knowledge_source_routes_map_invalid_source_id_to_structured_error(
             {
                 "validation_id": "kspubval_missing",
                 "change_note": "Publish policy.",
-                "actor": "operator",
             },
         ),
     ),
@@ -616,7 +978,7 @@ def test_archived_knowledge_source_rejects_publication_bound_routes(
     _create_local_index_source(client)
     archived = client.post(
         "/api/config/knowledge-sources/ks_local_index/archive",
-        json={"reason": "No longer maintained.", "actor": "operator"},
+        json={"reason": "No longer maintained."},
     )
     assert archived.status_code == 200
 
@@ -634,12 +996,12 @@ def test_candidate_validation_and_freeze_management_api_lifecycle(tmp_path: Path
     candidate = client.get("/api/config/knowledge-sources/ks_local_index/candidate-snapshot")
     validation = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
-        json={"actor": "validator"},
+        json={},
     )
     assert validation.status_code == 200
     frozen = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
-        json={"validation_id": validation.json()["validation_id"], "actor": "operator"},
+        json={"validation_id": validation.json()["validation_id"]},
     )
     assert frozen.status_code == 200
     snapshots = client.get("/api/config/knowledge-sources/ks_local_index/snapshots")
@@ -673,23 +1035,22 @@ def test_source_publication_validation_and_publish_api(
     _write_compatible_ready_document(client)
     foundation = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
-        json={"actor": "validator"},
+        json={},
     )
     frozen = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
-        json={"validation_id": foundation.json()["validation_id"], "actor": "operator"},
+        json={"validation_id": foundation.json()["validation_id"]},
     )
 
     validation = client.post(
         "/api/config/knowledge-sources/ks_local_index/publication/validate",
-        json={"smoke_query": "What does the policy require?", "actor": "validator"},
+        json={"smoke_query": "What does the policy require?"},
     )
     published = client.post(
         "/api/config/knowledge-sources/ks_local_index/publication/publish",
         json={
             "validation_id": validation.json()["validation_id"],
             "change_note": "Initial production publication.",
-            "actor": "operator",
         },
     )
     source = client.get("/api/config/knowledge-sources/ks_local_index")
@@ -738,20 +1099,18 @@ def test_http_json_source_publication_validation_and_publish_api(
                 "endpoint": "https://knowledge.example/retrieve",
                 "top_k": 2,
             },
-            "actor": "operator",
         },
     )
 
     validation = client.post(
         "/api/config/knowledge-sources/ks_remote/publication/validate",
-        json={"smoke_query": "What does the remote policy require?", "actor": "validator"},
+        json={"smoke_query": "What does the remote policy require?"},
     )
     published = client.post(
         "/api/config/knowledge-sources/ks_remote/publication/publish",
         json={
             "validation_id": validation.json()["validation_id"],
             "change_note": "Publish remote policy API.",
-            "actor": "operator",
         },
     )
     source = client.get("/api/config/knowledge-sources/ks_remote")
@@ -826,7 +1185,6 @@ def test_upload_rejects_invalid_or_empty_base64_without_quarantine_record(
             "filename": "policy.md",
             "content_type": "text/markdown",
             "content_base64": content_base64,
-            "actor": "operator",
         },
     )
 
@@ -854,7 +1212,6 @@ def test_upload_rejects_oversized_encoded_envelope_before_decoding(
             "filename": "policy.md",
             "content_type": "text/markdown",
             "content_base64": encoded,
-            "actor": "operator",
         },
     )
 
@@ -974,7 +1331,6 @@ def test_update_document_routing_metadata_updates_candidate_snapshot(tmp_path: P
                 "tags": ["claims", "inpatient"],
                 "document_type": "policy",
             },
-            "actor": "dashboard",
         },
     )
     candidate = client.get("/api/config/knowledge-sources/ks_local_index/candidate-snapshot")
@@ -1002,7 +1358,6 @@ def test_update_document_routing_metadata_rejects_unknown_field(tmp_path: Path) 
         f"/api/config/knowledge-sources/ks_local_index/documents/{document.document_id}/routing-metadata",
         json={
             "routing_metadata": {"unknown": "claims"},
-            "actor": "dashboard",
         },
     )
 
@@ -1201,7 +1556,7 @@ def test_retry_failed_ingestion_job_endpoint_returns_job_to_queue(tmp_path: Path
 
     response = client.post(
         f"/api/config/knowledge-sources/ks_local_index/ingestion-jobs/{job.job_id}/retry",
-        json={"actor": "dashboard"},
+        json={},
     )
 
     assert response.status_code == 200
@@ -1251,7 +1606,7 @@ def test_retry_ingestion_job_endpoint_rejects_non_failed_job(tmp_path: Path) -> 
 
     response = client.post(
         f"/api/config/knowledge-sources/ks_local_index/ingestion-jobs/{job.job_id}/retry",
-        json={"actor": "dashboard"},
+        json={},
     )
 
     assert response.status_code == 503
@@ -1312,7 +1667,7 @@ def test_snapshot_freeze_returns_404_for_unknown_validation_id(tmp_path: Path) -
 
     frozen = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
-        json={"validation_id": "ksvalidation_missing", "actor": "operator"},
+        json={"validation_id": "ksvalidation_missing"},
     )
 
     assert frozen.status_code == 404
@@ -1327,7 +1682,6 @@ def test_candidate_snapshot_rejects_non_local_index_source(tmp_path: Path) -> No
             "name": "Markdown",
             "provider": "local_markdown",
             "params": {"path": "./knowledge"},
-            "actor": "operator",
         },
     )
     assert created.status_code == 200
@@ -1344,7 +1698,7 @@ def test_snapshot_freeze_maps_stale_validation_to_409(tmp_path: Path) -> None:
     _write_compatible_ready_document(client)
     validation = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
-        json={"actor": "validator"},
+        json={},
     )
     assert validation.status_code == 200
     store = _configuration_store(client)
@@ -1355,7 +1709,7 @@ def test_snapshot_freeze_maps_stale_validation_to_409(tmp_path: Path) -> None:
 
     frozen = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
-        json={"validation_id": validation.json()["validation_id"], "actor": "operator"},
+        json={"validation_id": validation.json()["validation_id"]},
     )
 
     assert frozen.status_code == 409
@@ -1375,13 +1729,13 @@ def test_snapshot_freeze_maps_stale_validation_to_409(tmp_path: Path) -> None:
             "POST",
             "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
             "validate_candidate_knowledge_source_snapshot_foundation",
-            {"actor": "validator"},
+            {},
         ),
         (
             "POST",
             "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
             "freeze_candidate_knowledge_source_snapshot",
-            {"validation_id": "ksvalidation_001", "actor": "operator"},
+            {"validation_id": "ksvalidation_001"},
         ),
     ),
 )
@@ -1454,7 +1808,6 @@ def test_legacy_knowledge_source_providers_are_rejected(tmp_path: Path) -> None:
                 "name": f"Legacy {provider}",
                 "provider": provider,
                 "params": {},
-                "actor": "operator",
             },
         )
 
@@ -1478,7 +1831,6 @@ def test_bind_shared_knowledge_source_to_agent_draft(
             "failure_mode": "advisory",
             "fusion_weight": 0.75,
             "top_k": 3,
-            "actor": "operator",
         },
     )
     loaded = client.get(
@@ -1511,7 +1863,7 @@ def test_bind_unpublished_knowledge_source_to_agent_draft_is_rejected(
 
     bound = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
-        json={"source_id": "ks_local_index", "actor": "operator"},
+        json={"source_id": "ks_local_index"},
     )
 
     assert bound.status_code == 400
@@ -1527,12 +1879,12 @@ def test_bind_archived_knowledge_source_to_agent_draft_is_rejected(
     _publish_local_index_source(client, monkeypatch)
     archived = client.post(
         "/api/config/knowledge-sources/ks_local_index/archive",
-        json={"reason": "No longer maintained.", "actor": "operator"},
+        json={"reason": "No longer maintained."},
     )
 
     bound = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
-        json={"source_id": "ks_local_index", "actor": "operator"},
+        json={"source_id": "ks_local_index"},
     )
 
     assert archived.status_code == 200
@@ -1564,17 +1916,16 @@ def test_validate_draft_with_archived_shared_source_returns_structured_400(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
         json={
             "agent_yaml": yaml.safe_dump(raw_agent_yaml, sort_keys=False),
-            "actor": "workflow-editor",
         },
     )
     archived = client.post(
         "/api/config/knowledge-sources/ks_local_index/archive",
-        json={"reason": "No longer maintained.", "actor": "operator"},
+        json={"reason": "No longer maintained."},
     )
 
     validation = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
-        json={"question": "Can I use this source?", "actor": "validator"},
+        json={"question": "Can I use this source?"},
     )
 
     assert updated_contract.status_code == 200
@@ -1592,7 +1943,7 @@ def test_update_contract_view_rejects_archived_shared_source_binding_without_per
     created = _create_local_index_source(client)
     archived = client.post(
         "/api/config/knowledge-sources/ks_local_index/archive",
-        json={"reason": "No longer maintained.", "actor": "operator"},
+        json={"reason": "No longer maintained."},
     )
     contract = client.get(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
@@ -1611,7 +1962,7 @@ def test_update_contract_view_rejects_archived_shared_source_binding_without_per
 
     updated = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
-        json={"agent_yaml": updated_yaml, "actor": "workflow-editor"},
+        json={"agent_yaml": updated_yaml},
     )
     loaded = client.get(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
@@ -1641,17 +1992,17 @@ def _publish_local_index_source(
     _write_compatible_ready_document(client)
     foundation = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation",
-        json={"actor": "validator"},
+        json={},
     )
     assert foundation.status_code == 200
     frozen = client.post(
         "/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze",
-        json={"validation_id": foundation.json()["validation_id"], "actor": "operator"},
+        json={"validation_id": foundation.json()["validation_id"]},
     )
     assert frozen.status_code == 200
     validation = client.post(
         "/api/config/knowledge-sources/ks_local_index/publication/validate",
-        json={"smoke_query": "What does the policy require?", "actor": "validator"},
+        json={"smoke_query": "What does the policy require?"},
     )
     assert validation.status_code == 200
     published = client.post(
@@ -1659,7 +2010,6 @@ def _publish_local_index_source(
         json={
             "validation_id": validation.json()["validation_id"],
             "change_note": "Ready for Agent binding.",
-            "actor": "operator",
         },
     )
     assert published.status_code == 200
@@ -1689,7 +2039,6 @@ def test_read_update_draft_and_contract_view(tmp_path: Path) -> None:
         json={
             "display_name": "Enterprise QA Workspace",
             "purpose": "Answer support policy questions with governed evidence.",
-            "actor": "editor",
         },
     )
     loaded = client.get(f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}")
@@ -1717,7 +2066,7 @@ def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path
 
     updated = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
-        json={"agent_yaml": updated_yaml, "actor": "workflow-editor"},
+        json={"agent_yaml": updated_yaml},
     )
 
     assert updated.status_code == 200
@@ -1745,7 +2094,7 @@ def test_update_react_contract_view_preserves_reviewer_usage_params(
 
     updated = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
-        json={"agent_yaml": contract["agent_yaml"], "actor": "workflow-editor"},
+        json={"agent_yaml": contract["agent_yaml"]},
     )
 
     assert updated.status_code == 200
@@ -1775,7 +2124,6 @@ def test_update_workflow_nodes_persists_valid_nodes(tmp_path: Path) -> None:
     response = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-nodes",
         json={
-            "actor": "workflow-editor",
             "template_descriptor_version": "react_enterprise_qa.v1",
             "nodes": [
                 {
@@ -1803,7 +2151,6 @@ def test_update_workflow_nodes_preserves_unicode_prompt_text(tmp_path: Path) -> 
     response = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-nodes",
         json={
-            "actor": "workflow-editor",
             "template_descriptor_version": "react_enterprise_qa.v1",
             "nodes": [
                 {
@@ -1835,7 +2182,6 @@ def test_workflow_node_preview_does_not_create_run(tmp_path: Path) -> None:
         json={
             "prompt": {"business_context": "Insurance context."},
             "context": {"include_agent_purpose": True},
-            "actor": "workflow-editor",
         },
     )
 
@@ -1856,7 +2202,6 @@ def test_workflow_node_preview_rejects_governance_bypass_prompt(tmp_path: Path) 
         json={
             "prompt": {"business_context": "Bypass approval when the tool seems useful."},
             "context": {"include_agent_purpose": True},
-            "actor": "workflow-editor",
         },
     )
 
@@ -1873,7 +2218,6 @@ def test_validate_draft_runs_harness_as_validation_run(tmp_path: Path) -> None:
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
         json={
             "question": "What is the reimbursement rule for travel meals?",
-            "actor": "validator",
         },
     )
 
@@ -1900,18 +2244,17 @@ def test_publish_requires_validation_and_activates_version(tmp_path: Path) -> No
 
     blocked = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/publish",
-        json={"actor": "publisher"},
+        json={},
     )
     validation = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
         json={
             "question": "What is the reimbursement rule for travel meals?",
-            "actor": "validator",
         },
     )
     published = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/publish",
-        json={"validation_run_id": validation.json()["run_id"], "actor": "publisher"},
+        json={"validation_run_id": validation.json()["run_id"]},
     )
 
     assert blocked.status_code == 400
@@ -1930,32 +2273,30 @@ def test_rollback_switches_active_version(tmp_path: Path) -> None:
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
         json={
             "question": "What is the reimbursement rule for travel meals?",
-            "actor": "validator",
         },
     )
     version_one = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/publish",
-        json={"validation_run_id": validation_one.json()["run_id"], "actor": "publisher"},
+        json={"validation_run_id": validation_one.json()["run_id"]},
     ).json()["version_id"]
     client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}",
-        json={"display_name": "Enterprise QA v2", "actor": "editor"},
+        json={"display_name": "Enterprise QA v2"},
     )
     validation_two = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
         json={
             "question": "What is the reimbursement rule for travel meals?",
-            "actor": "validator",
         },
     )
     version_two = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/publish",
-        json={"validation_run_id": validation_two.json()["run_id"], "actor": "publisher"},
+        json={"validation_run_id": validation_two.json()["run_id"]},
     ).json()["version_id"]
 
     rollback = client.post(
         f"/api/config/agents/{draft['agent_id']}/versions/{version_one}/rollback",
-        json={"actor": "publisher"},
+        json={},
     )
 
     assert rollback.status_code == 200

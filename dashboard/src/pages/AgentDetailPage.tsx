@@ -171,7 +171,6 @@ export function AgentDetailPage() {
       await updateConfigDraft(agentId, draftId, {
         display_name: displayName,
         purpose,
-        actor: 'dashboard',
       })
       setStatus('Draft fields saved.')
       refresh()
@@ -183,7 +182,6 @@ export function AgentDetailPage() {
     await runAction('workflow', async () => {
       await updateConfigDraftContract(agentId, draftId, {
         agent_yaml: agentYaml,
-        actor: 'dashboard',
       })
       setStatus('Workflow node configuration saved.')
       refresh()
@@ -193,10 +191,7 @@ export function AgentDetailPage() {
   async function saveWorkflowNodes(payload: Parameters<typeof updateWorkflowNodes>[2]) {
     if (!agentId || !draftId) return
     await runAction('workflow-nodes', async () => {
-      const updated = await updateWorkflowNodes(agentId, draftId, {
-        ...payload,
-        actor: 'dashboard',
-      })
+      const updated = await updateWorkflowNodes(agentId, draftId, payload)
       setAgentYaml(updated.agent_yaml)
       setStatus('Workflow node configuration saved.')
       refresh()
@@ -205,13 +200,10 @@ export function AgentDetailPage() {
 
   async function previewWorkflowNode(
     nodeId: string,
-    payload: Omit<Parameters<typeof previewWorkflowNodeContext>[3], 'actor'>,
+    payload: Parameters<typeof previewWorkflowNodeContext>[3],
   ) {
     if (!agentId || !draftId) throw new Error('Draft route is missing.')
-    return previewWorkflowNodeContext(agentId, draftId, nodeId, {
-      ...payload,
-      actor: 'dashboard',
-    })
+    return previewWorkflowNodeContext(agentId, draftId, nodeId, payload)
   }
 
   async function bindKnowledgeSource(payload: Parameters<typeof bindKnowledgeSourceToDraft>[2]) {
@@ -227,7 +219,7 @@ export function AgentDetailPage() {
   async function unbindKnowledgeSource(bindingId: string) {
     if (!agentId || !draftId || !bindingId) return
     await runAction('knowledge-binding', async () => {
-      const updated = await unbindKnowledgeSourceFromDraft(agentId, draftId, bindingId, { actor: 'dashboard' })
+      const updated = await unbindKnowledgeSourceFromDraft(agentId, draftId, bindingId)
       setAgentYaml(updated.agent_yaml)
       setStatus('Knowledge source binding removed.')
       refresh()
@@ -239,7 +231,6 @@ export function AgentDetailPage() {
     await runAction('publish', async () => {
       const version = await publishConfigDraft(agentId, draftId, {
         validation_run_id: latestValidation.run_id,
-        actor: 'dashboard',
       })
       setStatus(`Published ${version.version_id}.`)
       refreshVersions()
@@ -249,7 +240,7 @@ export function AgentDetailPage() {
   async function rollback(versionId: string) {
     if (!agentId) return
     await runAction(`rollback-${versionId}`, async () => {
-      await rollbackConfigVersion(agentId, versionId, { actor: 'dashboard' })
+      await rollbackConfigVersion(agentId, versionId)
       setStatus(`Active version set to ${versionId}.`)
       refreshVersions()
     })
@@ -475,7 +466,6 @@ export function AgentDetailPage() {
             runAction('validation', async () => {
               const result = await validateConfigDraft(agentId, draftId, {
                 question,
-                actor: 'dashboard',
               })
               setStatus(`Validation run ${result.run_id} completed with ${result.outcome}.`)
               refresh()

@@ -104,7 +104,6 @@ export function KnowledgePage() {
           documentSelectionBudget,
           workerConcurrency,
         }),
-        actor: 'dashboard',
       })
       setStatus(`Created ${source.name}.`)
       setSourceId('')

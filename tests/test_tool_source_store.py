@@ -69,6 +69,17 @@ def test_create_list_get_and_persist_tool_source(tmp_path: Path) -> None:
     )
     assert payload["credential_env_ref"] == "BRAVE_SEARCH_API_KEY"
     assert "api_key" not in payload
+    audits = _configuration_audit_payloads(tmp_path)
+    created_audits = [
+        payload for payload in audits if payload["operation"] == "created"
+    ]
+    assert [payload["actor"] for payload in created_audits] == ["operator", "operator"]
+    created_by_source = {
+        payload["metadata"]["source_id"]: payload for payload in created_audits
+    }
+    assert created_by_source["tool_brave_default"]["metadata"]["tool_contract_ids"] == [
+        "untrusted_web_search"
+    ]
 
 
 def test_tool_source_create_rejects_duplicate_and_unsafe_ids(tmp_path: Path) -> None:
@@ -108,6 +119,13 @@ def test_update_tool_source_increments_live_config_revision(tmp_path: Path) -> N
     assert updated.config_revision == 2
     assert updated.params["timeout_seconds"] == 12
     assert updated.lifecycle_state is ToolSourceLifecycleState.ACTIVE
+    audits = _configuration_audit_payloads(tmp_path)
+    updated_audit = [payload for payload in audits if payload["operation"] == "updated"][0]
+    assert updated_audit["actor"] == "operator"
+    assert updated_audit["metadata"]["source_id"] == "tool_brave_default"
+    assert updated_audit["metadata"]["changed_fields"] == ["name", "params"]
+    assert updated_audit["metadata"]["previous_config_revision"] == 1
+    assert updated_audit["metadata"]["config_revision"] == 2
 
 
 def test_archive_and_restore_tool_source_records_audit(tmp_path: Path) -> None:
@@ -129,5 +147,5 @@ def test_archive_and_restore_tool_source_records_audit(tmp_path: Path) -> None:
     assert restored.lifecycle_state is ToolSourceLifecycleState.ACTIVE
     audits = _configuration_audit_payloads(tmp_path)
     audit_by_operation = {payload["operation"]: payload for payload in audits}
-    assert set(audit_by_operation) == {"archived", "restored"}
+    assert set(audit_by_operation) == {"created", "archived", "restored"}
     assert audit_by_operation["archived"]["metadata"]["source_id"] == "tool_brave_default"

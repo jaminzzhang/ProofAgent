@@ -92,7 +92,6 @@ export function ModelsPage() {
         base_url: baseUrl || undefined,
         credential_ref: { type: 'env', name: credentialEnv },
         timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : undefined,
-        actor: 'dashboard',
       })
       setStatus(`Created ${connection.display_name}.`)
       setConnectionId('')

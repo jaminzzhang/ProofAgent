@@ -95,7 +95,7 @@ The overall architecture of Proof Agent is not a simple top-down pipeline, but a
                                   |
                                   v
                            Runtime Plane
-      Plain Python Runner | LangGraph Adapter | LangChain Adapter
+      LangGraph Runner | future LangChain Adapter
       state execution | checkpoint | interrupt/resume | streaming
                                   |
                                   v
@@ -118,11 +118,11 @@ Audit & Observability side channel:
     -> Dashboard API / inspect / stats read projections
 ```
 
-Enterprise QA current main chain (In MVP, some Bootstrap/Composition is still done internally by the orchestrator, and will be pulled out as an independent assembly entry later):
+Enterprise QA current main chain:
 
 ```text
 CLI / Docker
-  -> run_enterprise_qa
+  -> run_with_langgraph
       -> load_agent_manifest
       -> resolve current dependencies from manifest
       -> emit run_started / manifest_loaded
@@ -1072,7 +1072,8 @@ Rules:
   an Active Agent Version exists, execution uses that immutable version package
   and records `agent_id` and `agent_version_id` in RunStore metadata.
 - Execution still goes through Bootstrap / Composition, Runtime Plane, PolicyEngine, ToolGateway, Validators, Trace, Receipt, and RunStore.
-- The first approval continuation shape carries an explicit approval decision into a follow-up run; durable checkpoint resume is future Runtime Plane work.
+- Chat run requests cannot carry inline approval decisions. Approval decisions are recorded against the original run through Run History approval endpoints. The local runtime persists approval resume metadata and LangGraph checkpoint files under the run storage root, so a restarted app process can resume the original thread. A per-run atomic local lock prevents concurrent local approval resumes from executing the same checkpoint twice. Multi-instance production deployments still require a shared transactional checkpointer and lock backend.
+- Approval endpoints must enforce the durable `PendingApproval.expires_at` boundary. Late approve or deny attempts record `approval_timeout` and must not resume tool execution.
 - Conversation runs admit a trace-safe summary of recent turns as Controlled Conversation Context; prior turns can resolve follow-ups but cannot replace current-turn evidence retrieval.
 
 Agent Configuration API is Delivery behavior for Dashboard configuration
@@ -1082,31 +1083,65 @@ surfaces submit arbitrary manifests for production execution.
 Configuration routes:
 | Route | Purpose |
 | --- | --- |
-| `GET /api/config/agents` | list locally configured Agent identities |
-| `POST /api/config/agents/import` | import an existing Agent Package into Draft Agent state |
-| `GET /api/config/agents/{agent_id}/drafts/{draft_id}` | read Draft Agent metadata |
-| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}` | update Draft Agent display fields |
-| `GET /api/config/agents/{agent_id}/drafts/{draft_id}/contract` | read preserved Contract View files |
-| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/contract` | update Contract View files after validation |
-| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/validate` | run a Draft Agent as `run_purpose: validation` |
-| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/publish` | publish a validated Draft Agent as an immutable version |
-| `POST /api/config/agents/{agent_id}/versions/{version_id}/rollback` | switch the Active Agent Version pointer |
-| `GET /api/config/model-connections` | list Shared Model Connections for Configuration > Models and selector dropdowns |
-| `POST /api/config/model-connections` | create a Shared Model Connection |
-| `GET /api/config/model-connections/{connection_id}` | read one Shared Model Connection with reference summary |
-| `PATCH /api/config/model-connections/{connection_id}` | update a Shared Model Connection after impact confirmation |
-| `POST /api/config/model-connections/{connection_id}/archive` | archive a connection and block new production references |
-| `POST /api/config/model-connections/{connection_id}/restore` | restore an archived connection |
-| `GET /api/config/model-connections/{connection_id}/references` | summarize Draft Agent, Published Agent Version, and Knowledge Source references |
-| `GET /api/config/model-connections/{connection_id}/deletion-eligibility` | check physical deletion blockers |
-| `POST /api/config/model-connections/{connection_id}/delete` | physically delete only archived unreferenced connections |
-| `POST /api/config/model-connections/{connection_id}/validate` | record credential/config validation without storing secrets |
-| `POST /api/config/model-connections/{connection_id}/smoke-test` | record manual smoke-test status without raw responses |
-| `GET /api/config/knowledge-sources/{source_id}/candidate-snapshot` | read the derived Local Index candidate snapshot |
-| `POST /api/config/knowledge-sources/{source_id}/candidate-snapshot/validate-foundation` | validate candidate freeze readiness |
-| `POST /api/config/knowledge-sources/{source_id}/candidate-snapshot/freeze` | freeze a validated development-stage snapshot manifest |
-| `GET /api/config/knowledge-sources/{source_id}/snapshots` | list frozen Local Index snapshot manifests |
-| `GET /api/config/knowledge-sources/{source_id}/snapshots/{snapshot_id}` | read one frozen Local Index snapshot manifest |
+| `GET /api/config/agents` | list locally configured Agent identities; requires `agent.view` |
+| `POST /api/config/agents/import` | import an existing Agent Package into Draft Agent state; requires `agent.edit` |
+| `GET /api/config/agents/{agent_id}/drafts/{draft_id}` | read Draft Agent metadata; requires `agent.view` |
+| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}` | update Draft Agent display fields; requires `agent.edit` |
+| `GET /api/config/workflow-templates` | list backend-owned Workflow Template Descriptors; requires `agent.view` |
+| `GET /api/config/workflow-templates/{template_id}` | read one Workflow Template Descriptor; requires `agent.view` |
+| `GET /api/config/agents/{agent_id}/drafts/{draft_id}/contract` | read preserved Contract View files; requires `agent.view` |
+| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/contract` | update Contract View files after validation; requires `agent.edit` |
+| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/knowledge-bindings` | bind a published shared Knowledge Source into a Draft Agent; requires `agent.edit` |
+| `DELETE /api/config/agents/{agent_id}/drafts/{draft_id}/knowledge-bindings/{binding_id}` | unbind a shared Knowledge Source from a Draft Agent; requires `agent.edit` |
+| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/workflow-nodes` | update descriptor-backed workflow node Prompt settings; requires `agent.edit` |
+| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/workflow-nodes/{node_id}/preview` | render a redacted Workflow Node Context Preview; requires `agent.validate` |
+| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/validate` | run a Draft Agent as `run_purpose: validation`; requires `agent.validate` |
+| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/publish` | publish a validated Draft Agent as an immutable version; requires `agent.publish` |
+| `GET /api/config/agents/{agent_id}/versions` | list Published Agent Versions; requires `agent.view` |
+| `POST /api/config/agents/{agent_id}/versions/{version_id}/rollback` | switch the Active Agent Version pointer; requires `agent.publish` |
+| `GET /api/config/model-connections` | list Shared Model Connections for Configuration > Models and selector dropdowns; requires `model_connection.view` |
+| `POST /api/config/model-connections` | create a Shared Model Connection; requires `model_connection.edit` |
+| `GET /api/config/model-connections/{connection_id}` | read one Shared Model Connection with reference summary; requires `model_connection.view` |
+| `PATCH /api/config/model-connections/{connection_id}` | update a Shared Model Connection after impact confirmation; requires `model_connection.edit` |
+| `POST /api/config/model-connections/{connection_id}/archive` | archive a connection and block new production references; requires `model_connection.archive` |
+| `POST /api/config/model-connections/{connection_id}/restore` | restore an archived connection; requires `model_connection.archive` |
+| `GET /api/config/model-connections/{connection_id}/references` | summarize Draft Agent, Published Agent Version, and Knowledge Source references; requires `model_connection.view` |
+| `GET /api/config/model-connections/{connection_id}/deletion-eligibility` | check physical deletion blockers; requires `model_connection.view` |
+| `DELETE /api/config/model-connections/{connection_id}` | physically delete only archived unreferenced connections; requires `model_connection.archive` |
+| `POST /api/config/model-connections/{connection_id}/validate` | record credential/config validation without storing secrets; requires `model_connection.validate` |
+| `POST /api/config/model-connections/{connection_id}/smoke-test` | record manual smoke-test status without raw responses; requires `model_connection.validate` |
+| `GET /api/config/tool-source-descriptors` | list trusted built-in Tool Source descriptors; requires `tool_source.view` |
+| `GET /api/config/tool-sources` | list reusable Tool Sources; requires `tool_source.view` |
+| `POST /api/config/tool-sources` | create a reusable Tool Source; requires `tool_source.edit` |
+| `GET /api/config/tool-sources/{source_id}` | read one reusable Tool Source; requires `tool_source.view` |
+| `PATCH /api/config/tool-sources/{source_id}` | update one reusable Tool Source; requires `tool_source.edit` |
+| `POST /api/config/tool-sources/{source_id}/archive` | archive a reusable Tool Source; requires `tool_source.archive` |
+| `POST /api/config/tool-sources/{source_id}/restore` | restore an archived Tool Source; requires `tool_source.archive` |
+| `GET /api/config/knowledge-sources` | list reusable Knowledge Sources; requires `knowledge_source.view` |
+| `POST /api/config/knowledge-sources` | create a reusable Knowledge Source; requires `knowledge_source.edit` |
+| `GET /api/config/knowledge-sources/{source_id}` | read one Knowledge Source; requires `knowledge_source.view` |
+| `POST /api/config/knowledge-sources/{source_id}/archive` | archive a Knowledge Source; requires `knowledge_source.archive` |
+| `POST /api/config/knowledge-sources/{source_id}/restore` | restore an archived Knowledge Source; requires `knowledge_source.edit` |
+| `GET /api/config/knowledge-sources/{source_id}/deletion-eligibility` | check physical deletion blockers; requires `knowledge_source.view` |
+| `DELETE /api/config/knowledge-sources/{source_id}` | physically delete only archived eligible Sources; requires `knowledge_source.archive` |
+| `GET /api/config/knowledge-sources/{source_id}/documents` | list managed documents; requires `knowledge_source.view` |
+| `POST /api/config/knowledge-sources/{source_id}/documents` | upload a single managed document; requires `knowledge_source.edit` |
+| `PATCH /api/config/knowledge-sources/{source_id}/documents/{document_id}/routing-metadata` | update allowlisted document routing metadata; requires `knowledge_source.edit` |
+| `POST /api/config/knowledge-sources/{source_id}/documents/batch` | upload a managed document batch; requires `knowledge_source.edit` |
+| `GET /api/config/knowledge-sources/{source_id}/quarantined-uploads` | list quarantined uploads; requires `knowledge_source.view` |
+| `GET /api/config/knowledge-sources/{source_id}/quarantined-uploads/{upload_id}` | read one quarantined upload record; requires `knowledge_source.view` |
+| `GET /api/config/knowledge-sources/{source_id}/ingestion-jobs` | list ingestion jobs; requires `knowledge_source.view` |
+| `GET /api/config/knowledge-sources/{source_id}/ingestion-jobs/{job_id}` | read one ingestion job; requires `knowledge_source.view` |
+| `POST /api/config/knowledge-sources/{source_id}/ingestion-jobs/{job_id}/retry` | retry a failed ingestion job; requires `knowledge_source.edit` |
+| `GET /api/config/knowledge-sources/{source_id}/candidate-snapshot` | read the derived Local Index candidate snapshot; requires `knowledge_source.view` |
+| `POST /api/config/knowledge-sources/{source_id}/candidate-snapshot/validate-foundation` | validate candidate freeze readiness; requires `knowledge_source.edit` |
+| `POST /api/config/knowledge-sources/{source_id}/candidate-snapshot/freeze` | freeze a validated development-stage snapshot manifest; requires `knowledge_source.edit` |
+| `GET /api/config/knowledge-sources/{source_id}/snapshots` | list frozen Local Index snapshot manifests; requires `knowledge_source.view` |
+| `GET /api/config/knowledge-sources/{source_id}/snapshots/{snapshot_id}` | read one frozen Local Index snapshot manifest; requires `knowledge_source.view` |
+| `POST /api/config/knowledge-sources/{source_id}/publication/validate` | validate Source publication readiness; requires `knowledge_source.publish` |
+| `POST /api/config/knowledge-sources/{source_id}/publication/publish` | publish a validated Source version; requires `knowledge_source.publish` |
+| `GET /api/config/knowledge-sources/{source_id}/publication-validations` | list Source publication validations; requires `knowledge_source.view` |
+| `GET /api/config/knowledge-sources/{source_id}/publications` | list Source publications; requires `knowledge_source.view` |
 
 Rules:
 - Draft Agents are editable configuration state and must not be executed as
@@ -1115,6 +1150,15 @@ Rules:
   `run_purpose: validation`, `agent_id`, and `draft_id`.
 - Published Agent Versions are immutable snapshots of the Contract Bundle and
   require a recorded validation run id.
+- Agent Configuration, Knowledge Source, Model Connection, and Tool Source command requests do not carry
+  `actor` fields. The API resolves Operator Identity Context server-side,
+  requires the matching `agent.*`, `knowledge_source.*`, or
+  `model_connection.*` or `tool_source.*` permission, and passes the resolved
+  operator id to the configuration store or trace-safe command record instead
+  of trusting frontend-supplied identity. Tool Source create, update, archive,
+  and restore operations and Model Connection create, update, archive, restore,
+  and physical delete operations write Configuration Operation Audit records
+  with the resolved operator id.
 - The Dashboard may show configuration and monitoring in one shell, but the
   Agent Configuration API, Run Execution API, and Dashboard read API remain
   separate boundaries.
@@ -1129,13 +1173,16 @@ Dashboard routes:
 | `/api/runs/{run_id}` | run detail |
 | `/api/runs/{run_id}/trace` | trace events |
 | `/api/runs/{run_id}/receipt` | receipt markdown |
+| `GET /api/approvals` | global pending approval queue projection sorted by expiry |
+| `POST /api/runs/{run_id}/approvals/{approval_id}/approve` | append approval-granted decision to the original run trace; requires Operator Identity Context with `approval.resolve` |
+| `POST /api/runs/{run_id}/approvals/{approval_id}/deny` | append approval-denied decision to the original run trace; requires Operator Identity Context with `approval.resolve` |
 | `/api/stats` | outcome distribution and pending approvals |
 
 Rules:
 - API serializers define public response shapes.
 - Dashboard API cannot start runs or bypass CLI/workflow.
 - Static SPA may be mounted when built assets exist.
-- Approval Console is a future UI on top of approval state, not a new tool execution path.
+- Approval Console actions resolve `PendingApproval` state. Approved tool execution resume must use the runtime checkpoint rather than a new chat request; if the checkpoint is missing, the system may record the decision but must not claim tool execution resumed. Approval command requests resolve Operator Identity Context server-side, require `approval.resolve`, and terminal approval trace events record the resolved operator id. The global Approval Queue is a read projection over pending approvals, not a Run list filter or stats payload; it marks expired approvals without mutating trace. The Dashboard `/approvals` page consumes that projection for triage and links operators to Run Detail Approval Action for the actual approve or deny command.
 
 ## 21. CLI And Docker
 

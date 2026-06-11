@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from proof_agent.contracts import TraceEventType
 from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunPurpose, RunSummary
 from proof_agent.contracts.receipt import ReceiptOutcome
+from proof_agent.observability.audit import TraceWriter
 
 
 class RunStore:
@@ -69,8 +72,10 @@ class RunStore:
         trace_dest = run_dir / "trace.jsonl"
         receipt_dest = run_dir / "governance_receipt.md"
 
-        shutil.copy2(trace_source, trace_dest)
-        shutil.copy2(receipt_source, receipt_dest)
+        if trace_source.resolve() != trace_dest.resolve():
+            shutil.copy2(trace_source, trace_dest)
+        if receipt_source.resolve() != receipt_dest.resolve():
+            shutil.copy2(receipt_source, receipt_dest)
 
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         index = RunIndex(
@@ -104,6 +109,7 @@ class RunStore:
         policy_decisions = self._extract_policy_decisions(trace_events)
         model_usage = self._extract_model_usage(trace_events)
         approval_state = self._extract_approval_state(trace_events)
+        pending_approvals = self._extract_pending_approvals(trace_events)
         governance_details = self._extract_governance_details(trace_events)
 
         return RunDetail(
@@ -124,8 +130,33 @@ class RunStore:
             policy_decisions=tuple(policy_decisions),
             model_usage=model_usage,
             approval_state=approval_state,
+            pending_approvals=tuple(pending_approvals),
             governance_details=governance_details,
         )
+
+    def append_trace_event(
+        self,
+        run_id: str,
+        *,
+        event_type: TraceEventType | str,
+        status: Literal["ok", "blocked", "waiting", "error"],
+        payload: Mapping[str, Any],
+    ) -> bool:
+        """Append one redacted trace event to a persisted run's history trace."""
+
+        run_dir = self._history_dir / run_id
+        trace_path = run_dir / "trace.jsonl"
+        if not run_dir.is_dir() or not trace_path.exists():
+            return False
+
+        writer = TraceWriter(
+            trace_path,
+            run_id=run_id,
+            initial_sequence=self._latest_trace_sequence(trace_path),
+        )
+        writer.emit(event_type, status=status, payload=payload)
+        self._touch_run_meta(run_dir)
+        return True
 
     def list_runs(
         self,
@@ -178,6 +209,47 @@ class RunStore:
             "outcome_distribution": outcome_counts,
             "pending_approvals": pending_count,
         }
+
+    def list_pending_approvals(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return pending approval queue items sorted by nearest expiry."""
+
+        items: list[dict[str, Any]] = []
+        for summary in self._load_all_summaries():
+            detail = self.get_run_detail(summary.run_id)
+            if detail is None:
+                continue
+            for pending in detail.pending_approvals:
+                parameters = pending.get("parameters")
+                parameter_keys = (
+                    list(parameters.keys()) if isinstance(parameters, Mapping) else []
+                )
+                items.append(
+                    {
+                        "run_id": detail.run_id,
+                        "approval_id": pending.get("approval_id"),
+                        "tool_name": pending.get("tool_name"),
+                        "action_id": pending.get("action_id"),
+                        "question": detail.question,
+                        "agent_id": detail.agent_id,
+                        "agent_version_id": detail.agent_version_id,
+                        "run_purpose": detail.run_purpose.value,
+                        "created_at": pending.get("created_at"),
+                        "expires_at": pending.get("expires_at"),
+                        "expired": _timestamp_expired(pending.get("expires_at")),
+                        "parameter_keys": parameter_keys,
+                        "parameter_count": len(parameter_keys),
+                        "links": {"run_detail": f"/api/runs/{detail.run_id}"},
+                    }
+                )
+
+        items.sort(key=lambda item: _timestamp_sort_key(item.get("expires_at")))
+        total = len(items)
+        return items[offset : offset + limit], total
 
     def _load_all_summaries(self) -> list[RunSummary]:
         """Scan history directories and return all run summaries sorted newest first."""
@@ -232,6 +304,24 @@ class RunStore:
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8")
+
+    def _latest_trace_sequence(self, trace_path: Path) -> int:
+        sequence = 0
+        for event in self._load_trace_events(trace_path):
+            try:
+                sequence = max(sequence, int(event.get("sequence") or 0))
+            except (TypeError, ValueError):
+                continue
+        return sequence
+
+    def _touch_run_meta(self, run_dir: Path) -> None:
+        meta = self._load_run_meta(run_dir)
+        if meta is None:
+            return
+        updated = meta.model_copy(
+            update={"updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z")}
+        )
+        self.write_run_meta(updated)
 
     def _apply_filters(
         self,
@@ -357,9 +447,46 @@ class RunStore:
         return {
             "state": state_map.get(event_type, "unknown"),
             "tool_name": payload.get("tool_name"),
+            "approval_id": payload.get("approval_id"),
             "event_id": last.get("event_id"),
             "timestamp": last.get("timestamp"),
         }
+
+    def _extract_pending_approvals(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Derive unresolved PendingApproval snapshots from trace events."""
+
+        terminal_by_approval_id: set[str] = set()
+        terminal_by_tool_name: set[str] = set()
+        for event in events:
+            if event.get("event_type") not in {
+                "approval_granted",
+                "approval_denied",
+                "approval_timeout",
+            }:
+                continue
+            payload = event.get("payload", {})
+            approval_id = payload.get("approval_id")
+            tool_name = payload.get("tool_name")
+            if isinstance(approval_id, str) and approval_id:
+                terminal_by_approval_id.add(approval_id)
+            if isinstance(tool_name, str) and tool_name:
+                terminal_by_tool_name.add(tool_name)
+
+        pending: list[dict[str, Any]] = []
+        for event in events:
+            if event.get("event_type") != "pending_approval_created":
+                continue
+            payload = event.get("payload", {})
+            if not isinstance(payload, dict):
+                continue
+            approval_id = payload.get("approval_id")
+            tool_name = payload.get("tool_name")
+            if isinstance(approval_id, str) and approval_id in terminal_by_approval_id:
+                continue
+            if isinstance(tool_name, str) and tool_name in terminal_by_tool_name:
+                continue
+            pending.append(dict(payload))
+        return pending
 
     def _extract_reasoning_summary(
         self,
@@ -435,3 +562,29 @@ class RunStore:
             details["clarification_request"] = clarification_request
 
         return details
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _timestamp_expired(value: Any) -> bool:
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return True
+    return parsed <= datetime.now(UTC)
+
+
+def _timestamp_sort_key(value: Any) -> str:
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return "9999-12-31T23:59:59+00:00"
+    return parsed.isoformat()

@@ -126,7 +126,6 @@ describe('ModelConnectionDetailPage', () => {
         project_env: null,
         timeout_seconds: 20,
         confirm_impact: true,
-        actor: 'dashboard',
       })
     })
   })
@@ -144,17 +143,13 @@ describe('ModelConnectionDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Test' }))
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }))
     await waitFor(() => {
-      expect(validateModelConnection).toHaveBeenCalledWith('model_deepseek_default', {
-        actor: 'dashboard',
-      })
+      expect(validateModelConnection).toHaveBeenCalledWith('model_deepseek_default')
     })
     expect(await screen.findByText('Validation modelvalidation_1 passed.')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Smoke Test' }))
     await waitFor(() => {
-      expect(smokeTestModelConnection).toHaveBeenCalledWith('model_deepseek_default', {
-        actor: 'dashboard',
-      })
+      expect(smokeTestModelConnection).toHaveBeenCalledWith('model_deepseek_default')
     })
     expect(await screen.findByText('Smoke test modelsmoke_1 skipped.')).toBeInTheDocument()
   })
@@ -179,7 +174,6 @@ describe('ModelConnectionDetailPage', () => {
     await waitFor(() => {
       expect(restoreModelConnection).toHaveBeenCalledWith('model_deepseek_default', {
         reason: 'Reopen',
-        actor: 'dashboard',
       })
     })
 
@@ -188,7 +182,6 @@ describe('ModelConnectionDetailPage', () => {
     await waitFor(() => {
       expect(deleteModelConnection).toHaveBeenCalledWith('model_deepseek_default', {
         reason: 'No references',
-        actor: 'dashboard',
       })
     })
     expect(await screen.findByText('Models list')).toBeInTheDocument()

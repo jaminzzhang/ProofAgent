@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from langgraph.checkpoint.memory import MemorySaver
 
 from proof_agent.contracts import (
     ModelConfig,
@@ -15,7 +16,7 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
 )
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
+from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_with_langgraph
 
 
 REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
@@ -200,7 +201,54 @@ def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
     )
 
     assert result.outcome == "WAITING_FOR_APPROVAL"
-    assert "approval_requested" in _event_types(_trace_events(result.trace_path))
+    events = _trace_events(result.trace_path)
+    run_id = events[0]["run_id"]
+    assert "approval_requested" in _event_types(events)
+    pending = next(event for event in events if event["event_type"] == "pending_approval_created")
+    assert pending["status"] == "waiting"
+    assert pending["payload"]["run_id"] == run_id
+    assert pending["payload"]["thread_id"] == run_id
+    assert pending["payload"]["action_id"] == "act_tool_1"
+    assert pending["payload"]["tool_name"] == "customer_lookup"
+    assert pending["payload"]["parameters"] == {
+        "customer_id": "CUST-001",
+        "policy_id": "POL-001",
+    }
+    assert pending["payload"]["policy_decision"] == "require_approval"
+    assert pending["payload"]["checkpoint_id"] == f"thread:{run_id}"
+
+
+def test_tool_question_resumes_approved_react_tool_from_checkpoint(tmp_path: Path) -> None:
+    checkpointer = MemorySaver()
+    run_id = "run_react_resume_approval"
+    first = run_with_langgraph(
+        REACT_AGENT,
+        question="Look up customer policy status before answering.",
+        runs_dir=tmp_path,
+        run_id=run_id,
+        checkpointer=checkpointer,
+    )
+    assert first.outcome == "WAITING_FOR_APPROVAL"
+
+    resumed = resume_langgraph_approval(
+        REACT_AGENT,
+        runs_dir=tmp_path,
+        run_id=run_id,
+        question="Look up customer policy status before answering.",
+        checkpointer=checkpointer,
+        approval_id="appr_customer_lookup",
+        approved=True,
+    )
+
+    assert resumed.outcome == "ANSWERED_WITH_CITATIONS"
+    assert "Customer policy status is active" in resumed.final_output
+    events = _trace_events(resumed.trace_path)
+    event_types = _event_types(events)
+    assert event_types.count("run_started") == 1
+    assert event_types.count("pending_approval_created") == 1
+    assert "tool_result" in event_types
+    approval_granted = next(event for event in events if event["event_type"] == "approval_granted")
+    assert approval_granted["payload"]["approval_id"] == "appr_customer_lookup"
 
 
 def test_react_agentic_retrieval_uses_shared_retrieval_service(

@@ -7,6 +7,7 @@ from proof_agent.contracts import (
     EnforcementPoint,
     EvidenceChunk,
     EvidenceStatus,
+    PendingApproval,
     PolicyDecision,
     PolicyDecisionType,
     ReceiptOutcome,
@@ -112,6 +113,33 @@ def test_approval_state_requires_contract_fields() -> None:
             reason="Human approval required.",
             trace_event_id="evt_0004",
         )
+
+
+def test_pending_approval_captures_continuation_snapshot() -> None:
+    pending = PendingApproval(
+        run_id="run_001",
+        thread_id="run_001",
+        approval_id="appr_customer_lookup",
+        action_id="act_tool_1",
+        tool_name="customer_lookup",
+        parameters={"customer_id": "CUST-001", "policy_id": "POL-001"},
+        policy_decision=PolicyDecisionType.REQUIRE_APPROVAL,
+        checkpoint_id="checkpoint-001",
+        status=ApprovalStatus.REQUESTED,
+        created_at="2026-06-09T10:30:04Z",
+        expires_at="2026-06-09T10:31:04Z",
+    )
+
+    assert pending.run_id == "run_001"
+    assert pending.thread_id == "run_001"
+    assert pending.action_id == "act_tool_1"
+    assert pending.parameters["customer_id"] == "CUST-001"
+    assert pending.policy_decision == PolicyDecisionType.REQUIRE_APPROVAL
+    assert pending.checkpoint_id == "checkpoint-001"
+    assert pending.expires_at == "2026-06-09T10:31:04Z"
+
+    with pytest.raises(TypeError):
+        pending.parameters["customer_id"] = "CUST-002"
 
 
 def test_trace_event_type_is_constrained() -> None:

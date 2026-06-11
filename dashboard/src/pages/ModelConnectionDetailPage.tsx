@@ -123,7 +123,6 @@ export function ModelConnectionDetailPage() {
         project_env: projectEnv || null,
         timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : null,
         confirm_impact: confirmImpact,
-        actor: 'dashboard',
       })
       setConnection(updated)
       setForm(updated)
@@ -144,7 +143,6 @@ export function ModelConnectionDetailPage() {
     try {
       await archiveModelConnection(connectionId, {
         reason: archiveReason.trim(),
-        actor: 'dashboard',
       })
       setArchiveReason('')
       setStatus('Model connection archived.')
@@ -164,7 +162,6 @@ export function ModelConnectionDetailPage() {
     try {
       await restoreModelConnection(connectionId, {
         reason: restoreReason.trim() || null,
-        actor: 'dashboard',
       })
       setRestoreReason('')
       setStatus('Model connection restored.')
@@ -184,7 +181,6 @@ export function ModelConnectionDetailPage() {
     try {
       await deleteModelConnection(connectionId, {
         reason: deleteReason.trim(),
-        actor: 'dashboard',
       })
       navigate('/models')
     } catch (err) {
@@ -200,7 +196,7 @@ export function ModelConnectionDetailPage() {
     setError(null)
     setStatus(null)
     try {
-      const record = await validateModelConnection(connectionId, { actor: 'dashboard' })
+      const record = await validateModelConnection(connectionId)
       setLastValidation(record)
       setStatus(`Validation ${record.validation_id} ${record.status}.`)
     } catch (err) {
@@ -216,7 +212,7 @@ export function ModelConnectionDetailPage() {
     setError(null)
     setStatus(null)
     try {
-      const record = await smokeTestModelConnection(connectionId, { actor: 'dashboard' })
+      const record = await smokeTestModelConnection(connectionId)
       setLastSmokeTest(record)
       setStatus(`Smoke test ${record.smoke_test_id} ${record.status}.`)
     } catch (err) {

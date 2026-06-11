@@ -324,7 +324,6 @@ workflow:
           output_preferences: [],
         },
         context: { include_agent_purpose: true },
-        actor: 'dashboard',
       })
     })
 
@@ -353,7 +352,6 @@ workflow:
             context: {},
           },
         ],
-        actor: 'dashboard',
       })
     })
   })
@@ -471,7 +469,6 @@ workflow:
         alias: '',
         failure_mode: 'required',
         fusion_weight: 1,
-        actor: 'dashboard',
       })
     })
     expect(refreshDraft).toHaveBeenCalled()

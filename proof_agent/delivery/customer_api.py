@@ -273,7 +273,6 @@ def create_customer_run(
             app_request=app_request,
             manifest_path=manifest_path,
             question=request.question,
-            approved=None,
             agent_id=published_agent.agent_id,
             agent_version_id=published_agent.agent_version_id,
             draft_id=published_agent.source_draft_id,
@@ -333,7 +332,6 @@ def create_customer_run(
         app_request=app_request,
         manifest_path=manifest_path,
         question=request.question,
-        approved=None,
         conversation_context=_memory_context(
             ("Case Memory", case_memory_admission),
             ("Customer Persistent User Memory", user_memory_admission),

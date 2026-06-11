@@ -18,6 +18,7 @@ describe('RunDetailPage navigation', () => {
       detail: runDetail(),
       loading: false,
       error: null,
+      refetch: vi.fn(),
     })
 
     render(
@@ -71,6 +72,7 @@ describe('RunDetailPage navigation', () => {
       detail: runDetail(),
       loading: false,
       error: null,
+      refetch: vi.fn(),
     })
 
     render(
@@ -86,6 +88,58 @@ describe('RunDetailPage navigation', () => {
 
     expect(screen.getByRole('heading', { name: 'Runs Page' })).toBeInTheDocument()
   })
+
+  it('opens the approval tab when linked from the global approval queue', () => {
+    vi.mocked(useRunDetail).mockReturnValue({
+      detail: runDetail({
+        outcome: 'WAITING_FOR_APPROVAL',
+        approval_state: {
+          state: 'requested',
+          tool_name: 'customer_lookup',
+          approval_id: 'appr_customer_lookup',
+          timestamp: '2026-06-07T00:00:00Z',
+        },
+        pending_approvals: [
+          {
+            run_id: 'run-1',
+            thread_id: 'thread-1',
+            approval_id: 'appr_customer_lookup',
+            action_id: 'action-1',
+            tool_name: 'customer_lookup',
+            parameters: { customer_id: 'C-001' },
+            policy_decision: 'require_approval',
+            checkpoint_id: 'checkpoint-1',
+            status: 'requested',
+            created_at: '2026-06-07T00:00:00Z',
+            expires_at: '2026-06-07T00:05:00Z',
+          },
+        ],
+      }),
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/runs/run-1',
+            hash: '#approval',
+            state: { returnTo: '/approvals', returnLabel: 'Back to Approvals' },
+          },
+        ]}
+      >
+        <Routes>
+          <Route path="/runs/:runId" element={<RunDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('link', { name: /Back to Approvals/ })).toHaveAttribute('href', '/approvals')
+    expect(screen.getByText('Tool Execution Approval')).toBeInTheDocument()
+    expect(screen.getByText('appr_customer_lookup')).toBeInTheDocument()
+  })
 })
 
 function LocationProbe() {
@@ -93,7 +147,7 @@ function LocationProbe() {
   return <span data-testid="location-probe">{`${location.pathname}${location.search}`}</span>
 }
 
-function runDetail(): RunDetail {
+function runDetail(overrides: Partial<RunDetail> = {}): RunDetail {
   return {
     run_id: 'run-1',
     question: '理赔怎么处理',
@@ -112,6 +166,8 @@ function runDetail(): RunDetail {
     policy_decisions: [],
     model_usage: {},
     approval_state: null,
+    pending_approvals: [],
     governance_details: {},
+    ...overrides,
   }
 }

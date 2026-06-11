@@ -1,5 +1,6 @@
 import type {
   ActiveAgentVersion,
+  ApprovalsResponse,
   CandidateKnowledgeSourceSnapshot,
   ConfigAgentsResponse,
   ConfigVersionsResponse,
@@ -89,6 +90,17 @@ export function fetchHandoffs(): Promise<HandoffsResponse> {
   return fetchJson<HandoffsResponse>(`${BASE}/handoffs`)
 }
 
+export function fetchApprovals(params?: {
+  limit?: number
+  offset?: number
+}): Promise<ApprovalsResponse> {
+  const searchParams = new URLSearchParams()
+  if (params?.limit) searchParams.set('limit', String(params.limit))
+  if (params?.offset) searchParams.set('offset', String(params.offset))
+  const query = searchParams.toString()
+  return fetchJson<ApprovalsResponse>(`${BASE}/approvals${query ? `?${query}` : ''}`)
+}
+
 export function fetchConfigAgents(): Promise<ConfigAgentsResponse> {
   return fetchJson<ConfigAgentsResponse>(`${BASE}/config/agents`)
 }
@@ -115,7 +127,6 @@ export function updateWorkflowNodes(
   payload: {
     template_descriptor_version?: string | null
     nodes: WorkflowNodeConfig[]
-    actor?: string
   },
 ): Promise<ContractBundle> {
   return fetchJson<ContractBundle>(
@@ -135,7 +146,6 @@ export function previewWorkflowNodeContext(
   payload: {
     prompt: WorkflowNodePromptConfig
     context: Record<string, boolean>
-    actor?: string
   },
 ): Promise<WorkflowNodeContextPreview> {
   return fetchJson<WorkflowNodeContextPreview>(
@@ -160,7 +170,6 @@ export function createModelConnection(payload: {
   organization_env?: string | null
   project_env?: string | null
   timeout_seconds?: number | null
-  actor?: string
 }): Promise<SharedModelConnection> {
   return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections`, {
     method: 'POST',
@@ -187,7 +196,6 @@ export function updateModelConnection(
     project_env?: string | null
     timeout_seconds?: number | null
     confirm_impact?: boolean
-    actor?: string
   },
 ): Promise<SharedModelConnection> {
   return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}`, {
@@ -199,7 +207,7 @@ export function updateModelConnection(
 
 export function archiveModelConnection(
   connectionId: string,
-  payload: { reason: string; actor?: string },
+  payload: { reason: string },
 ): Promise<SharedModelConnection> {
   return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}/archive`, {
     method: 'POST',
@@ -210,7 +218,7 @@ export function archiveModelConnection(
 
 export function restoreModelConnection(
   connectionId: string,
-  payload: { reason?: string | null; actor?: string } = {},
+  payload: { reason?: string | null } = {},
 ): Promise<SharedModelConnection> {
   return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}/restore`, {
     method: 'POST',
@@ -237,7 +245,7 @@ export function fetchModelConnectionDeletionEligibility(
 
 export function deleteModelConnection(
   connectionId: string,
-  payload: { reason: string; actor?: string },
+  payload: { reason: string },
 ): Promise<SharedModelConnectionDeletionEligibility> {
   return fetchJson<SharedModelConnectionDeletionEligibility>(
     `${BASE}/config/model-connections/${connectionId}`,
@@ -251,28 +259,26 @@ export function deleteModelConnection(
 
 export function validateModelConnection(
   connectionId: string,
-  payload: { actor?: string } = {},
 ): Promise<ModelConnectionValidationRecord> {
   return fetchJson<ModelConnectionValidationRecord>(
     `${BASE}/config/model-connections/${connectionId}/validate`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({}),
     },
   )
 }
 
 export function smokeTestModelConnection(
   connectionId: string,
-  payload: { actor?: string } = {},
 ): Promise<ModelConnectionSmokeTestRecord> {
   return fetchJson<ModelConnectionSmokeTestRecord>(
     `${BASE}/config/model-connections/${connectionId}/smoke-test`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({}),
     },
   )
 }
@@ -286,7 +292,6 @@ export function createKnowledgeSource(payload: {
   name: string
   provider: string
   params?: Record<string, unknown>
-  actor?: string
 }): Promise<KnowledgeSource> {
   return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources`, {
     method: 'POST',
@@ -297,7 +302,7 @@ export function createKnowledgeSource(payload: {
 
 export function archiveKnowledgeSource(
   sourceId: string,
-  payload: { reason: string; actor?: string },
+  payload: { reason: string },
 ): Promise<KnowledgeSource> {
   return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}/archive`, {
     method: 'POST',
@@ -308,7 +313,7 @@ export function archiveKnowledgeSource(
 
 export function restoreKnowledgeSource(
   sourceId: string,
-  payload: { reason?: string | null; actor?: string } = {},
+  payload: { reason?: string | null } = {},
 ): Promise<KnowledgeSource> {
   return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}/restore`, {
     method: 'POST',
@@ -327,7 +332,7 @@ export function fetchKnowledgeSourceDeletionEligibility(
 
 export function permanentlyDeleteKnowledgeSource(
   sourceId: string,
-  payload: { reason: string; actor?: string },
+  payload: { reason: string },
 ): Promise<KnowledgeSourceDeletionEligibility> {
   return fetchJson<KnowledgeSourceDeletionEligibility>(`${BASE}/config/knowledge-sources/${sourceId}`, {
     method: 'DELETE',
@@ -355,14 +360,13 @@ export function fetchKnowledgeIngestionJobs(sourceId: string): Promise<Knowledge
 export function retryKnowledgeIngestionJob(
   sourceId: string,
   jobId: string,
-  payload: { actor?: string },
 ): Promise<KnowledgeIngestionJob> {
   return fetchJson<KnowledgeIngestionJob>(
     `${BASE}/config/knowledge-sources/${sourceId}/ingestion-jobs/${jobId}/retry`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({}),
     },
   )
 }
@@ -377,21 +381,20 @@ export function fetchCandidateKnowledgeSourceSnapshot(
 
 export function validateCandidateKnowledgeSourceSnapshotFoundation(
   sourceId: string,
-  payload: { actor?: string },
 ): Promise<FoundationKnowledgeSourceValidation> {
   return fetchJson<FoundationKnowledgeSourceValidation>(
     `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot/validate-foundation`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({}),
     },
   )
 }
 
 export function freezeCandidateKnowledgeSourceSnapshot(
   sourceId: string,
-  payload: { validation_id: string; actor?: string },
+  payload: { validation_id: string },
 ): Promise<KnowledgeSourceSnapshotManifest> {
   return fetchJson<KnowledgeSourceSnapshotManifest>(
     `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot/freeze`,
@@ -405,7 +408,7 @@ export function freezeCandidateKnowledgeSourceSnapshot(
 
 export function validateKnowledgeSourcePublication(
   sourceId: string,
-  payload: { smoke_query: string; actor?: string },
+  payload: { smoke_query: string },
 ): Promise<KnowledgeSourcePublicationValidation> {
   return fetchJson<KnowledgeSourcePublicationValidation>(
     `${BASE}/config/knowledge-sources/${sourceId}/publication/validate`,
@@ -419,7 +422,7 @@ export function validateKnowledgeSourcePublication(
 
 export function publishKnowledgeSource(
   sourceId: string,
-  payload: { validation_id: string; change_note: string; actor?: string },
+  payload: { validation_id: string; change_note: string },
 ): Promise<KnowledgeSourcePublicationRecord> {
   return fetchJson<KnowledgeSourcePublicationRecord>(
     `${BASE}/config/knowledge-sources/${sourceId}/publication/publish`,
@@ -445,7 +448,6 @@ export function uploadKnowledgeDocument(
     filename: string
     content_type: string
     content_base64: string
-    actor?: string
   },
 ): Promise<QuarantinedKnowledgeUpload> {
   return fetchJson<QuarantinedKnowledgeUpload>(`${BASE}/config/knowledge-sources/${sourceId}/documents`, {
@@ -463,7 +465,6 @@ export function uploadKnowledgeDocuments(
       content_type: string
       content_base64: string
     }[]
-    actor?: string
   },
 ): Promise<KnowledgeUploadsResponse> {
   return fetchJson<KnowledgeUploadsResponse>(
@@ -481,7 +482,6 @@ export function updateKnowledgeDocumentRoutingMetadata(
   documentId: string,
   payload: {
     routing_metadata: Record<string, unknown>
-    actor?: string
   },
 ): Promise<KnowledgeDocument> {
   return fetchJson<KnowledgeDocument>(
@@ -504,7 +504,6 @@ export function bindKnowledgeSourceToDraft(
     failure_mode?: 'required' | 'advisory'
     fusion_weight?: number
     top_k?: number | null
-    actor?: string
   },
 ): Promise<ContractBundle> {
   return fetchJson<ContractBundle>(
@@ -521,21 +520,19 @@ export function unbindKnowledgeSourceFromDraft(
   agentId: string,
   draftId: string,
   bindingId: string,
-  payload: { actor?: string } = {},
 ): Promise<ContractBundle> {
   return fetchJson<ContractBundle>(
     `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-bindings/${bindingId}`,
     {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({}),
     },
   )
 }
 
 export function importConfigAgent(payload: {
   manifest_path: string
-  actor?: string
 }): Promise<DraftAgent> {
   return fetchJson<DraftAgent>(`${BASE}/config/agents/import`, {
     method: 'POST',
@@ -551,7 +548,7 @@ export function fetchConfigDraft(agentId: string, draftId: string): Promise<Draf
 export function updateConfigDraft(
   agentId: string,
   draftId: string,
-  payload: { display_name?: string; purpose?: string; actor?: string },
+  payload: { display_name?: string; purpose?: string },
 ): Promise<DraftAgent> {
   return fetchJson<DraftAgent>(`${BASE}/config/agents/${agentId}/drafts/${draftId}`, {
     method: 'PATCH',
@@ -574,7 +571,6 @@ export function updateConfigDraftContract(
     agent_yaml?: string
     policy_yaml?: string
     tools_yaml?: string
-    actor?: string
   },
 ): Promise<ContractBundle> {
   return fetchJson<ContractBundle>(`${BASE}/config/agents/${agentId}/drafts/${draftId}/contract`, {
@@ -587,7 +583,7 @@ export function updateConfigDraftContract(
 export function validateConfigDraft(
   agentId: string,
   draftId: string,
-  payload: { question: string; approved?: boolean | null; actor?: string },
+  payload: { question: string },
 ): Promise<DraftValidationResponse> {
   return fetchJson<DraftValidationResponse>(
     `${BASE}/config/agents/${agentId}/drafts/${draftId}/validate`,
@@ -602,7 +598,7 @@ export function validateConfigDraft(
 export function publishConfigDraft(
   agentId: string,
   draftId: string,
-  payload: { validation_run_id?: string | null; actor?: string },
+  payload: { validation_run_id?: string | null },
 ): Promise<PublishedAgentVersion> {
   return fetchJson<PublishedAgentVersion>(
     `${BASE}/config/agents/${agentId}/drafts/${draftId}/publish`,
@@ -621,26 +617,31 @@ export function fetchConfigVersions(agentId: string): Promise<ConfigVersionsResp
 export function rollbackConfigVersion(
   agentId: string,
   versionId: string,
-  payload: { actor?: string },
 ): Promise<ActiveAgentVersion> {
   return fetchJson<ActiveAgentVersion>(
     `${BASE}/config/agents/${agentId}/versions/${versionId}/rollback`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({}),
     },
   )
 }
 
-export function approveRun(runId: string, approvalId: string): Promise<{ status: string }> {
-  return fetchJson<{ status: string }>(`${BASE}/runs/${runId}/approve/${approvalId}`, {
+export function approveRun(
+  runId: string,
+  approvalId: string,
+): Promise<RunDetail> {
+  return fetchJson<RunDetail>(`${BASE}/runs/${runId}/approvals/${approvalId}/approve`, {
     method: 'POST'
   })
 }
 
-export function denyRun(runId: string, approvalId: string): Promise<{ status: string }> {
-  return fetchJson<{ status: string }>(`${BASE}/runs/${runId}/deny/${approvalId}`, {
+export function denyRun(
+  runId: string,
+  approvalId: string,
+): Promise<RunDetail> {
+  return fetchJson<RunDetail>(`${BASE}/runs/${runId}/approvals/${approvalId}/deny`, {
     method: 'POST'
   })
 }

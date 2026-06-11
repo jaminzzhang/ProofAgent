@@ -140,7 +140,6 @@ describe('KnowledgePage', () => {
           document_selection_budget: 8,
           worker_concurrency: 2,
         },
-        actor: 'dashboard',
       })
     })
   })
@@ -228,7 +227,6 @@ describe('KnowledgePage', () => {
           document_selection_budget: 8,
           worker_concurrency: 2,
         },
-        actor: 'dashboard',
       })
     })
   })
@@ -292,7 +290,6 @@ describe('KnowledgePage', () => {
             citation: '/citation',
           },
         },
-        actor: 'dashboard',
       })
     })
   })

@@ -17,7 +17,7 @@ export function AgentsPage() {
     setImporting(true)
     setImportError(null)
     try {
-      await importConfigAgent({ manifest_path: manifestPath, actor: 'dashboard' })
+      await importConfigAgent({ manifest_path: manifestPath })
       refresh()
     } catch (err) {
       setImportError(err instanceof Error ? err.message : String(err))
@@ -116,12 +116,11 @@ export function AgentsPage() {
         onClose={() => setWizardOpen(false)}
         onCreated={() => refresh()}
         onCreate={async (manifestPath, displayName, purpose) => {
-          const agent = await importConfigAgent({ manifest_path: manifestPath, actor: 'dashboard' })
+          const agent = await importConfigAgent({ manifest_path: manifestPath })
           if (displayName || purpose) {
             await updateConfigDraft(agent.agent_id, agent.draft_id, {
               display_name: displayName || undefined,
               purpose: purpose || undefined,
-              actor: 'dashboard',
             })
           }
           return agent

@@ -34,6 +34,10 @@ _Avoid_: Runtime adapter, provider-native tool schema, prompt instruction
 A reusable tool connection or local tool package that can expose one or more governed Tool Contracts.
 _Avoid_: Tool Contract, Agent Tool Binding, direct model function
 
+**Tool Source Permission Model**:
+The Operator Permission Vocabulary slice for reusable tool assets. `tool_source.view` gates Tool Source descriptors and Source reads. `tool_source.edit` gates Tool Source creation and update. `tool_source.archive` gates Archive and Restore. Tool Source API command requests do not carry actor fields; the API resolves Operator Identity Context server-side before calling the configuration store, and Tool Source create, update, archive, and restore operations write Configuration Operation Audit with the resolved operator.
+_Avoid_: One tool admin boolean, Agent edit permission reuse, request-body actor
+
 **Tool Source Descriptor**:
 The Dashboard-managed plugin-like contract that describes a reusable Tool Source's provider type, configuration schema, credential references, available Tool Contracts, validation behavior, and binding options.
 _Avoid_: Ad hoc tool form, hardcoded Dashboard tool config, executable plugin script
@@ -355,8 +359,12 @@ The Dashboard configuration workspace for administering Shared Model Connections
 _Avoid_: Provider model catalog, Agent Model module, runtime model endpoint
 
 **Model Connection Configuration API**:
-The Agent Configuration API resource family for creating, updating, testing, archiving, restoring, and reference-checking Shared Model Connections.
-_Avoid_: Dashboard read API, provider model inventory API, direct model execution API
+The Agent Configuration API resource family for creating, updating, testing, archiving, restoring, and reference-checking Shared Model Connections. Model Connection command requests do not carry actor fields; the API resolves Operator Identity Context server-side and records the resolved operator in Configuration Operation Audit for create, update, archive, restore, and physical deletion, and in Model Connection validation and smoke-test records for test commands.
+_Avoid_: Dashboard read API, provider model inventory API, direct model execution API, request-body actor
+
+**Model Connection Permission Model**:
+The Operator Permission Vocabulary slice for reusable model access assets. `model_connection.view` gates list, detail, reference summary, and deletion-eligibility reads. `model_connection.edit` gates creation and update after impact confirmation. `model_connection.validate` gates validation and smoke-test commands. `model_connection.archive` gates Archive, Restore, and physical deletion. V1 local single-user mode may grant all by default, but API checks and Dashboard actions preserve the distinctions for future RBAC.
+_Avoid_: One model admin boolean, Agent permission reuse, frontend-only permission check
 
 **Model Credential Reference**:
 A secret-safe pointer from a Shared Model Connection to the credential material needed for provider authentication, such as an environment variable name or future secret-store reference.
@@ -726,9 +734,37 @@ _Avoid_: Production run, frontend preview only, unchecked smoke test
 The run metadata classification that distinguishes production, validation, and preview runs while keeping all governed runs in RunStore.
 _Avoid_: Separate preview log, hidden test execution, metric-only tag
 
-**Approval Continuation Run**:
-A follow-up Harness run that carries an explicit approval decision after an earlier run reached a waiting-for-approval outcome.
-_Avoid_: Checkpoint resume, silent retry
+**Approval Checkpoint Resume**:
+The governed continuation of the original run after an external approval decision resolves a PendingApproval, resuming the stored runtime checkpoint and appending the terminal approval event to the original run trace.
+_Avoid_: Approval Continuation Run, new follow-up run, silent retry
+
+**Pending Approval Operation Source**:
+The `PendingApproval` projection used by Approval Console actions to identify an unresolved approval request. Approval Console may display `ApprovalState`, but approve and deny actions must target `PendingApproval.approval_id`, not trace event ids or status-only approval projections.
+_Avoid_: ApprovalState as command target, trace event id as approval id, inferred approval action
+
+**Approval Resolution Actor**:
+The operator identity resolved from Operator Identity Context for an approve or deny command and persisted on terminal approval trace events.
+_Avoid_: Anonymous approval, customer-supplied approval authority, trace event without resolver identity
+
+**Operator Identity Context**:
+The internal operator identity and permission set admitted at API command boundaries for Dashboard, operator chat, configuration, knowledge, model, and approval operations.
+_Avoid_: Per-form actor field, frontend-only role flag, customer authorization context
+
+**Local Operator Identity Provider**:
+The V1 local-mode source of Operator Identity Context, granting a deterministic local operator identity and local all-access permissions without trusting actor fields supplied by frontend request bodies.
+_Avoid_: Dashboard-supplied actor, anonymous local command, production authentication substitute
+
+**Operator Permission Vocabulary**:
+The named internal permissions used by Operator Identity Context, initially covering approval resolution, run viewing, Agent configuration, Knowledge Source administration, Model Connection administration, and Tool Source administration while local mode grants the full set.
+_Avoid_: Generic admin flag, frontend-only permission labels, resource operation without a named permission
+
+**Run Detail Approval Action**:
+The first Approval Console action surface embedded in a Run Detail view. It resolves a single run's pending approval through Approval Checkpoint Resume and refreshes that run projection after approve or deny; it is not a global approval queue.
+_Avoid_: Frontend-scanned approval queue, separate follow-up run, page reload as state management
+
+**Global Approval Queue Projection**:
+An operator-facing Dashboard API projection and `/approvals` triage page that lists unresolved PendingApproval items across runs for approval work triage. Its primary object is the pending approval request, enriched with run metadata for navigation; it is not a filtered Run list, stats payload, or approval execution surface. The first version sorts by `expires_at` ascending, returns parameter keys and count rather than raw parameters, marks expired items without writing trace, paginates with `limit` and `offset`, and navigates to Run Detail Approval Action for approve or deny.
+_Avoid_: Frontend-scanned run history, stats-expanded queue, run summary as approval command object, direct approve or deny from the queue page
 
 **Enterprise QA Reference Agent**:
 The first production-shaped Agent built with Proof Agent to validate governed enterprise question answering.
@@ -1007,8 +1043,8 @@ The first implementation scope that proves the import, Draft Agent edit, validat
 _Avoid_: Full no-code platform, complete RBAC product, all-module deep editor
 
 **Agent Configuration Permission Model**:
-The role semantics for viewing Agent configuration, editing Draft Agents, publishing or rolling back versions, and administering reusable configuration assets.
-_Avoid_: Full tenant RBAC, frontend-only permission check, untracked local edits
+The Operator Permission Vocabulary slice for Agent Configuration API boundaries. `agent.view` gates Agent configuration reads and Workflow Template descriptors; `agent.edit` gates Agent import, Draft Agent edits, Contract View updates, workflow node updates, and Agent Knowledge Binding attach or detach; `agent.validate` gates Draft Agent validation runs and Workflow Node Context Preview; `agent.publish` gates publish and rollback. Agent Configuration command requests do not carry actor fields; Configuration Operation Audit records the Operator Identity Context resolved by the API.
+_Avoid_: Full tenant RBAC, frontend-only permission check, request-body actor, untracked local edits
 
 **Configuration Operation Audit**:
 The audit metadata that records who created, changed, validated, published, or rolled back Agent configuration.
@@ -1283,8 +1319,8 @@ The shared impact and deletion-eligibility projection for one Knowledge Source. 
 _Avoid_: Raw Agent YAML dump, full audit log, best-effort warning text, runtime retrieval trace
 
 **Knowledge Source Permission Model**:
-The configuration capability boundary for reusable knowledge assets: `knowledge_source.view`, `knowledge_source.edit`, `knowledge_source.publish`, and `knowledge_source.archive`. V1 local single-user mode may grant all capabilities by default, but API operations, Dashboard actions, and Configuration Operation Audit records preserve the distinctions for future RBAC.
-_Avoid_: One knowledge admin boolean, Agent permission reuse, runtime retrieval authorization
+The configuration capability boundary for reusable knowledge assets. `knowledge_source.view` gates Source, document, upload, job, candidate snapshot, frozen snapshot, publication validation, publication, and deletion-eligibility reads. `knowledge_source.edit` gates Source creation, document upload, document routing metadata edits, ingestion retry, foundation validation, snapshot freeze, and restore. `knowledge_source.publish` gates publication validation and publication. `knowledge_source.archive` gates Archive and Knowledge Source Physical Deletion. Knowledge Source API command requests do not carry actor fields; the API resolves Operator Identity Context server-side and records the resolved operator in Knowledge Configuration Operation Audit. V1 local single-user mode may grant all capabilities by default, but API operations, Dashboard actions, and audit records preserve the distinctions for future RBAC.
+_Avoid_: One knowledge admin boolean, Agent permission reuse, runtime retrieval authorization, request-body actor
 
 **Knowledge Configuration Operation Audit**:
 The trace-safe configuration history for Knowledge Source and Agent Knowledge Binding administration. It records actor, timestamp, target source or Agent, prior and resulting version identifiers, document intake and replacement actions, retry, Knowledge Source Archive, Knowledge Source Restore, Knowledge Source Physical Deletion eligibility and deletion decisions, Source publication, remote verification, binding changes, retrieval override changes, and explicit source upgrades without storing raw document content, secrets, or complete remote responses. Source lifecycle operations are first-class configuration operations rather than generic updates; Archive and Physical Deletion require a reason or change note, Restore may include one, and Physical Deletion audit must survive removal of the Source's own storage directory.
@@ -1940,7 +1976,7 @@ _Avoid_: Evidence content dump
 - CLI demo, CLI run, CLI compare, and test fixtures may execute **Example Agent Templates** or manifest paths as local development and validation entry points; those entry points do not create **Published Agent Chat Access**.
 - When no **Published Agent** exists for a chat audience, chat surfaces show an empty state that directs users back to import, validate, and publish through the **Agent Configuration Workspace**; they do not auto-import **Example Agent Templates**.
 - Existing chat conversations remain bound to their original **Published Agent** identity; **Agent Publication** and **Agent Version Rollback** change the **Active Agent Version** resolved for that identity without moving conversations to a different Agent.
-- The first **Assisted QA Chat Frontend** uses an **Approval Continuation Run** after approval decisions rather than claiming durable checkpoint resume.
+- The **Assisted QA Chat Frontend** resolves waiting approval through **Approval Checkpoint Resume**, not by starting a new follow-up run with an inline approval decision.
 - The first framework boundary pass should make **Harness Invocation** and **Workflow Template** reusable while preserving **Enterprise QA Reference Agent** behavior.
 - The **Enterprise QA Reference Agent** is built on the **Controlled Agent Harness Framework**.
 - The V1 **Enterprise QA Reference Agent** operates in **Autonomous Customer Service Mode**.
@@ -2086,7 +2122,7 @@ _Avoid_: Evidence content dump
 - A **Knowledge Source** owns its **Knowledge Provider** configuration, and the **Knowledge Provider Registry** resolves that source-owned provider before retrieval.
 - **Knowledge Source Lifecycle State** separates reusable asset lifecycle from bindability and ingestion readiness. **Knowledge Source Archive** is the default delete-like action: it blocks new Agent binding and new Agent publication, leaves existing Draft Agent bindings visible as validation and publication blockers, and preserves existing Published Agent Version execution against pinned snapshots or configuration versions. Dashboard shows affected references through **Knowledge Source Reference Summary**.
 - **Knowledge Source Restore** returns an archived source to ACTIVE without changing any Agent binding, Source Draft, publication, or resolved version automatically. **Knowledge Source Physical Deletion** is a separate danger-zone action allowed only for archived, unreferenced, empty Sources with no retained publications, snapshots, documents, uploads, jobs, or audit-retention blocker.
-- **Knowledge Source Permission Model** separates `knowledge_source.view`, `knowledge_source.edit`, `knowledge_source.publish`, and `knowledge_source.archive`. Agent binding edits require `agent.edit`, and publishing a new Agent version requires `agent.publish`. V1 local single-user mode grants all by default while API checks, Dashboard actions, and Configuration Operation Audit preserve these boundaries for future RBAC.
+- **Knowledge Source Permission Model** separates `knowledge_source.view`, `knowledge_source.edit`, `knowledge_source.publish`, and `knowledge_source.archive`. Knowledge Source command requests do not carry actor fields; the API resolves Operator Identity Context server-side. Agent binding edits require `agent.edit`, and publishing a new Agent version requires `agent.publish`. V1 local single-user mode grants all by default while API checks, Dashboard actions, and Configuration Operation Audit preserve these boundaries for future RBAC.
 - **Knowledge Configuration Operation Audit** records actor, time, affected Source or Agent, prior and resulting version identifiers, document intake and replacement, retry, document archive, Source publication, Source archive and restore, Physical Deletion eligibility and deletion decisions, remote verification, Agent binding changes, retrieval override changes, and explicit Source upgrades. Physical Deletion audit survives removal of the Source storage directory.
 - **Knowledge Retrieval Runtime Facts** record resolved Source snapshot or configuration versions, routed Sources and local document revisions, provider call state, degraded retrieval, upstream revision observations, WRRF ordering, exact-dedup provenance, Evidence Admission Scores, citations, and Accepted Evidence Context Budget Truncation in Trace, Governance Receipt, and RunStore.
 - **Knowledge Retrieval Plan Summary** records `binding_candidates[]` using **Knowledge Binding Candidate Summary**, `selected_bindings[]` using **Selected Knowledge Binding Summary**, local `document_candidates[]` and `selected_documents[]` when applicable, and **Knowledge Provider Call Summary** for each selected provider. Unselected bindings and documents record compact summary reasons only.
@@ -2305,7 +2341,7 @@ _Avoid_: Evidence content dump
 - "Agent builder" could mean a blank free-form graph editor or a guided Contract-first setup. Resolved: new Agents start in an **Agent Creation Wizard** and continue in the **Agent Configuration Workspace**.
 - "Dashboard navigation" could mean a separate builder app, a settings page, or Agent-centered operations. Resolved: use an **Agent-Centric Dashboard Shell** with global observability and Agent detail views for monitoring and configuration.
 - "Handoff monitoring" could mean a dashboard projection or a full ticket workflow. Resolved: V1 provides **Internal Handoff Monitor** only; assignment, SLA, notification, and ticket status workflows are future scope.
-- "Approve and continue" could mean durable checkpoint resume or a new governed follow-up run. Resolved: first-stage chat uses an **Approval Continuation Run** and must not present it as checkpoint resume.
+- "Approve and continue" could mean durable checkpoint resume or a new governed follow-up run. Resolved: use **Approval Checkpoint Resume** for approval decisions; do not start a new governed follow-up run merely to carry approval.
 - "Enterprise QA intelligent customer service" could mean the whole product or the first Agent built with it. Resolved: use **Enterprise QA Reference Agent** for the first Agent and keep Proof Agent as the framework.
 - "Insurance customer service Agent" could mean the existing insurance QA example or the V1 customer-facing Agent. Resolved: use **Insurance Customer Service Agent** for the V1 Published Agent and keep the existing insurance QA example as a baseline package.
 - "Intelligent customer service" could mean direct customer-facing automation or staff assistance. Resolved: V1 delivery is **Autonomous Customer Service Mode**; **Assisted Service Mode** is a separate staff-assistance mode.
@@ -2366,7 +2402,7 @@ _Avoid_: Evidence content dump
 - "Agent binding customization" could mean no per-Agent tuning, bounded retrieval overrides, or permission to mutate source-owned provider configuration. Resolved: **Knowledge Binding Retrieval Override** permits `top_k`, fusion weight, failure mode, and source-routing metadata hints only; endpoint, credentials, index or namespace, ingestion settings, and admission scorer remain Knowledge Source-owned.
 - "Knowledge Source upgrade" could mean latest-at-runtime lookup for every Agent, immutable binding forever, or explicit Draft upgrade. Resolved: unpinned Draft bindings use **Draft Knowledge Binding Resolution** against the latest published source version, while **Published Knowledge Binding Resolution** remains immutable; Dashboard shows **Knowledge Binding Upgrade Available**, and production changes require Draft update, Agent Validation Run, and Agent Publication.
 - "Archive a Knowledge Source" could mean disabling all current retrieval immediately, removing it only from future configuration, or physically deleting it. Resolved: **Knowledge Source Archive** moves the source to ARCHIVED, blocks new binding and new Agent publication, preserves existing Draft Agent bindings as explicit blockers, preserves execution of existing pinned Published Agent Versions, shows affected references through **Knowledge Source Reference Summary**, supports explicit restore without Agent mutation, and permits **Knowledge Source Physical Deletion** only for archived, unreferenced, empty Sources after strict eligibility checks.
-- "Authorize knowledge configuration" could mean one broad administrator toggle, reusing Agent edit rights for every asset operation, or preserving distinct capabilities. Resolved: **Knowledge Source Permission Model** separates view, edit, publish, and archive; Agent binding changes and Agent publication remain separate `agent.edit` and `agent.publish` capabilities. V1 single-user mode grants all while keeping API, Dashboard, and audit boundaries explicit.
+- "Authorize knowledge configuration" could mean one broad administrator toggle, reusing Agent edit rights for every asset operation, or preserving distinct capabilities. Resolved: **Knowledge Source Permission Model** separates view, edit, publish, and archive; Knowledge Source API command requests resolve Operator Identity Context server-side instead of accepting request-body actor fields; Agent binding changes and Agent publication remain separate `agent.edit` and `agent.publish` capabilities. V1 single-user mode grants all while keeping API, Dashboard, and audit boundaries explicit.
 - "Audit knowledge management and retrieval" could mean one mixed activity log, raw document retention, or separate trace-safe records. Resolved: **Knowledge Configuration Operation Audit** records administrative versioned changes and Source lifecycle decisions, including archive, restore, Physical Deletion eligibility, and Physical Deletion audit that survives Source directory removal; **Knowledge Retrieval Runtime Facts** record execution-time routing, provider, fusion, admission, citation, and truncation facts; neither stores raw documents, secrets, or complete remote responses.
 - "Record retrieval planning" could mean only final evidence, every routing prompt and candidate, or a bounded plan summary. Resolved: **Knowledge Retrieval Plan Summary** records binding candidates, selected bindings, local document candidates and selections, provider call outcomes, compact unselected reasons, full RunStore/Dashboard detail, and compressed Governance Receipt summary without raw content.
 - "Multiple knowledge bases" could mean priority-only fallback, querying all sources, or governed evidence blending. Resolved: an Agent has an **Agent Knowledge Binding Set** and uses bounded **Multi-Source Blended Retrieval** with **Knowledge Source Routing** before provider-specific retrieval.

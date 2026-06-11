@@ -37,7 +37,6 @@ test('createOperatorConversationRun submits through internal chat API with gover
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       question: 'Question?',
-      approved: undefined,
       include_governance_details: true,
       allow_untrusted_web_supplement: true,
     }),

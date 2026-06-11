@@ -367,6 +367,19 @@ class LocalAgentConfigurationStore:
                 updated_at=now,
             )
             self._write_model_connection(connection)
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.CREATED,
+                    actor=actor,
+                    summary=f"Created Shared Model Connection {resolved_connection_id}.",
+                    metadata={
+                        "connection_id": resolved_connection_id,
+                        "provider": provider,
+                        "model_identifier": model_identifier,
+                        "credential_ref": connection.credential_ref.model_dump(mode="json"),
+                    },
+                )
+            )
             return connection
 
     def get_model_connection(self, connection_id: str) -> SharedModelConnection | None:
@@ -404,9 +417,24 @@ class LocalAgentConfigurationStore:
         project_env: str | None = None,
         timeout_seconds: float | None = None,
     ) -> SharedModelConnection:
-        del actor
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             existing = self._require_model_connection(connection_id)
+            changed_fields = [
+                field
+                for field, value in {
+                    "display_name": display_name,
+                    "description": description,
+                    "tags": tags,
+                    "provider": provider,
+                    "model_identifier": model_identifier,
+                    "base_url": base_url,
+                    "credential_ref": credential_ref,
+                    "organization_env": organization_env,
+                    "project_env": project_env,
+                    "timeout_seconds": timeout_seconds,
+                }.items()
+                if value is not None
+            ]
             updated = existing.model_copy(
                 update={
                     "display_name": display_name
@@ -433,6 +461,17 @@ class LocalAgentConfigurationStore:
                 }
             )
             self._write_model_connection(updated)
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.UPDATED,
+                    actor=actor,
+                    summary=f"Updated Shared Model Connection {connection_id}.",
+                    metadata={
+                        "connection_id": connection_id,
+                        "changed_fields": changed_fields,
+                    },
+                )
+            )
             return updated
 
     def archive_model_connection(
@@ -604,7 +643,6 @@ class LocalAgentConfigurationStore:
         params: Mapping[str, Any],
         actor: str,
     ) -> ToolSource:
-        del actor
         validate_secret_safe_params(
             params,
             field_prefix=f"tool_sources[{source_id}].params",
@@ -627,6 +665,20 @@ class LocalAgentConfigurationStore:
                 updated_at=now,
             )
             self._write_tool_source(source)
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.CREATED,
+                    actor=actor,
+                    summary=f"Created Tool Source {source_id}.",
+                    metadata={
+                        "source_id": source_id,
+                        "provider": provider,
+                        "source_type": source_type,
+                        "tool_contract_ids": list(tool_contract_ids),
+                        "config_revision": source.config_revision,
+                    },
+                )
+            )
             return source
 
     def get_tool_source(self, source_id: str) -> ToolSource | None:
@@ -660,7 +712,6 @@ class LocalAgentConfigurationStore:
         credential_env_ref: str | None = None,
         params: Mapping[str, Any] | None = None,
     ) -> ToolSource:
-        del actor
         if params is not None:
             validate_secret_safe_params(
                 params,
@@ -668,6 +719,18 @@ class LocalAgentConfigurationStore:
             )
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             existing = self._require_tool_source(source_id)
+            changed_fields = [
+                field
+                for field, value in {
+                    "name": name,
+                    "source_type": source_type,
+                    "provider": provider,
+                    "tool_contract_ids": tool_contract_ids,
+                    "credential_env_ref": credential_env_ref,
+                    "params": params,
+                }.items()
+                if value is not None
+            ]
             updated = existing.model_copy(
                 update={
                     "name": name if name is not None else existing.name,
@@ -687,6 +750,19 @@ class LocalAgentConfigurationStore:
                 }
             )
             self._write_tool_source(updated)
+            self._record_configuration_operation_unlocked(
+                _audit(
+                    ConfigurationOperation.UPDATED,
+                    actor=actor,
+                    summary=f"Updated Tool Source {source_id}.",
+                    metadata={
+                        "source_id": source_id,
+                        "changed_fields": changed_fields,
+                        "previous_config_revision": existing.config_revision,
+                        "config_revision": updated.config_revision,
+                    },
+                )
+            )
             return updated
 
     def archive_tool_source(
