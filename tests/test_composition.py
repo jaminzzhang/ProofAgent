@@ -106,10 +106,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -158,10 +160,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -239,10 +243,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md

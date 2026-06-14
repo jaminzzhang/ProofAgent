@@ -8,8 +8,8 @@ workflow:
   checkpointer:
     provider: sqlite
     uri: memory
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       prompt:
         business_context: "Institution Insurance Specialist planning: create a Dynamic Insurance Business Subplan for any insurance-related staff request while preserving the fixed Controlled ReAct Workflow."
         task_instructions:
@@ -24,12 +24,12 @@ workflow:
         include_bound_knowledge_sources: true
         include_bound_tools: true
         include_policy_outline: true
-    - node_id: clarification
+    - id: clarification
       context:
         include_agent_purpose: true
         include_recent_conversation_summary: true
         include_missing_field_schema: true
-    - node_id: retrieval_review
+    - id: retrieval_review
       prompt:
         business_context: "Retrieval review applies Insurance Source Authority Order before knowledge retrieval."
         task_instructions:
@@ -42,12 +42,12 @@ workflow:
         include_retrieval_intent: true
         include_bound_knowledge_sources: true
         include_policy_outline: true
-    - node_id: retrieval
+    - id: retrieval
       context:
         include_retrieval_intent: true
         include_bound_knowledge_sources: true
         include_source_routing_metadata: true
-    - node_id: model_answer
+    - id: model_answer
       prompt:
         business_context: "Model answers should support Institution Specialist Response Projection and optional External Wording Draft preparation."
         task_instructions:
@@ -62,7 +62,7 @@ workflow:
         include_evidence_summary: true
         include_citation_requirements: true
         include_response_disclosure_policy: true
-    - node_id: tool_review
+    - id: tool_review
       prompt:
         business_context: "Tool review permits only Institution Business Read Tool proposals inside Tool Proposal Scope."
         task_instructions:
@@ -77,18 +77,18 @@ workflow:
         include_tool_contract_summary: true
         include_policy_outline: true
         include_approval_requirements: true
-    - node_id: tool
+    - id: tool
       context:
         include_tool_contract_summary: true
         include_approval_state: true
         include_parameter_bounds: true
-    - node_id: memory
+    - id: memory
       context:
         include_agent_purpose: true
         include_memory_scope: true
         include_memory_denylist_summary: true
         include_recent_conversation_summary: true
-    - node_id: response
+    - id: response
       context:
         include_agent_purpose: true
         include_outcome: true
@@ -149,21 +149,23 @@ model:
 policy:
   file: ./policy.yaml
 
-tools:
-  file: ./tools.yaml
-
-memory:
-  provider: local
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: false
-    shared:
-      enabled: false
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: true
+    provider: local
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
 
 audit:
   trace_path: ../../runs/latest/trace.jsonl

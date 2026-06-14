@@ -51,7 +51,7 @@ business state.
 
 ## Workflow Configuration
 
-The package uses `workflow.template: react_enterprise_qa` with `workflow.nodes[]`
+The package uses `workflow.template: react_enterprise_qa` with `workflow.stages[]`
 Prompt addenda for:
 
 - Dynamic Insurance Business Subplan planning.
@@ -62,7 +62,7 @@ Prompt addenda for:
 - Institution Specialist Response Projection with optional External Wording
   Draft.
 
-Node Prompt configuration supplies business context only. It does not replace
+Stage Prompt configuration supplies business context only. It does not replace
 Harness-owned control prompts, topology, PolicyEngine, Tool Gateway, validators,
 trace, or receipt behavior.
 

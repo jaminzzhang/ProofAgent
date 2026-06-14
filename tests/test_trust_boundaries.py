@@ -38,10 +38,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: persistent
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: persistent
 audit:
   trace_path: ../../runs/latest/trace.jsonl
   receipt_path: ../../runs/latest/governance_receipt.md

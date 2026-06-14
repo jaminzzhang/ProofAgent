@@ -22,6 +22,26 @@ _Avoid_: Wrapper, guardrail layer
 The public configuration contract that declares an Agent's purpose, workflow, knowledge, model, policy, tools, memory, and audit behavior.
 _Avoid_: Internal config, runtime config
 
+**Agent Contract Capability Configuration**:
+The unified public Agent Contract YAML `capabilities:` structure that declares governed capability domains, including tools and memory, before Agent Publication resolves Workflow Stage Availability.
+_Avoid_: Internal-only capability profile, scattered top-level capability toggles, per-stage enable switches
+
+**Direct Capability Contract Migration**:
+The breaking Agent Contract migration that replaces top-level `tools` and `memory` capability declarations with top-level `capabilities:` in one cutover.
+_Avoid_: Dual-read capability fields, silent legacy migration, split capability source of truth
+
+**Disabled Capability Configuration**:
+A Draft Agent's retained active configuration fields under a capability domain whose `enabled` flag is false; it is inactive, visible as a validation blocker, and excluded from Published Agent Version snapshots unless the capability is restored.
+_Avoid_: Dormant tool file, dormant memory provider, hidden future reactivation
+
+**Explicit Capability Enablement**:
+The required `enabled: true|false` declaration for every Workflow Template-relevant capability domain under Agent Contract YAML `capabilities:`.
+_Avoid_: Missing means disabled, implicit default, Dashboard-inferred capability state
+
+**Enabled Capability Readiness**:
+The validation condition that an enabled capability domain has the active configuration required to provide at least one governed capability instance to Workflow Template Execution.
+_Avoid_: Enabled empty shell, prompt-only capability, deferred runtime discovery
+
 **Agent Package**:
 A reviewable delivery artifact containing an Agent Contract plus its policy, tools, knowledge references, fixtures, and domain adapters.
 _Avoid_: Database-only Agent, uploaded manifest path, loose config bundle
@@ -74,60 +94,140 @@ _Avoid_: Knowledge Provider, browser automation, scraping plugin, Search Vendor 
 A reusable governed flow shape for a class of Agents, such as enterprise question answering.
 _Avoid_: One-off orchestrator branch, runtime graph
 
+**Workflow Template Execution**:
+The governed execution of one selected Workflow Template during a run, including Control Envelope stage semantics without owning Runtime Plane mechanics.
+_Avoid_: Runtime graph execution, template-specific node class, orchestrator branch
+
+**Workflow Template Execution Result**:
+The typed governed facts produced by one Workflow Template Execution, including completion, terminal outcome, approval pause, clarification need, evidence basis, and safe response facts.
+_Avoid_: Runtime state dict, LangGraph final state, Dashboard projection
+
+**Workflow Stage Result**:
+The typed Control Envelope facts produced by one Workflow Template Stage for use inside a Workflow Template Execution.
+_Avoid_: Arbitrary state fragment, public runtime graph node output, loose dict mutation
+
+**Workflow Stage Availability**:
+The resolved enabled or disabled status of a Workflow Template Stage for one Agent Contract, derived from template support and configured capabilities rather than arbitrary topology editing.
+_Avoid_: Free-form stage disabling, runtime graph editing, hidden branch flag
+
+**Workflow Stage Availability Set**:
+The resolved Workflow Stage Availability for every registered stage, frozen into the Published Agent Version at publication and copied into each run before Workflow Template Execution starts.
+_Avoid_: Per-stage ad hoc availability checks, mutable runtime flags, Dashboard-only enabled state
+
+**Workflow Template Stage**:
+A registered governed stage within a Workflow Template, visible in configuration, Dashboard explanation, trace summaries, and Published Agent interpretation.
+_Avoid_: Workflow node, LangGraph node, arbitrary runtime step
+
+**React Enterprise QA Stage Set**:
+The governed Workflow Template Stages for React Enterprise QA: plan, clarification, retrieval_review, retrieval, model_answer, tool_review, tool, memory, and response; V2 adds intent_resolution before plan.
+_Avoid_: LangGraph node list, every policy check, every helper function
+
+**Tool Stage Group**:
+The paired tool_review and tool Workflow Template Stages that are enabled together only when the Agent Contract exposes governed tool capability.
+_Avoid_: Tool stage without review, review stage without tool, provider-native tool execution
+
 **Workflow Template Descriptor**:
-The backend-owned, read-only description of a registered Workflow Template's nodes, branch relationships, governed handoff points, editable Prompt fields, and allowed context options used by Dashboard to render Workflow Relationship Map and Workflow Node Panel.
+The backend-owned, read-only description of a registered Workflow Template's stages, branch relationships, governed handoff points, editable Prompt fields, and allowed context options used by Dashboard to render Workflow Relationship Map and Workflow Stage Panel.
 _Avoid_: Frontend-hardcoded workflow graph, Agent-authored node registry, runtime graph source of truth
 
 **Workflow Template Descriptor Version**:
-The immutable version identifier for the Workflow Template Descriptor used to validate, render, publish, and later explain a Published Agent Version's Workflow Node Prompt Configuration.
+The immutable version identifier for the Workflow Template Descriptor used to validate, render, publish, and later explain a Published Agent Version's Workflow Stage Prompt Configuration.
 _Avoid_: Latest template lookup for historical runs, mutable Dashboard graph version, frontend descriptor version
 
-**Workflow Template Node Configuration**:
-The editable per-node settings exposed by a registered Workflow Template while preserving the template's governed node types, ordering constraints, and Control Envelope semantics.
+**Workflow Template Stage Configuration**:
+The editable `workflow.stages[]` per-stage settings exposed by a registered Workflow Template while preserving the template's governed stage types, ordering constraints, and Control Envelope semantics.
 _Avoid_: Free-form runtime graph editing, arbitrary node creation, prompt-defined workflow
 
-**Workflow Node Prompt Configuration**:
-The Agent-owner-editable business Prompt and structured context settings attached to a registered Workflow Template node so Proof Agent can provide fuller task context while preserving Harness-owned control prompts, node order, policy gates, validators, and trace semantics.
+**Workflow Stage Configuration Override**:
+An entry in Agent Contract `workflow.stages[]` that records only explicit Agent-owner overrides for one Workflow Template Stage.
+_Avoid_: Full copied descriptor stage config, empty stage placeholder, hidden topology edit
+
+**Effective Workflow Stage Configuration**:
+The resolved per-stage configuration produced from Workflow Template Descriptor defaults, Workflow Stage Availability, Effective Workflow Stage Context Option Allowlist, and Agent Contract overrides.
+_Avoid_: Raw override only, latest descriptor lookup, runtime graph state
+
+**Published Effective Workflow Stage Configuration Snapshot**:
+The immutable full Effective Workflow Stage Configuration captured inside a Published Agent Version alongside the Workflow Stage Configuration Override entries and Workflow Template Descriptor Version.
+_Avoid_: Recompute from latest descriptor, run-only projection, override-only publication record
+
+**Workflow Stage Configuration Identifier**:
+The required `id` field on each `workflow.stages[]` item that references one registered Workflow Template Stage.
+_Avoid_: legacy id aliases, display label, runtime graph node id
+
+**Unavailable Stage Configuration**:
+A Draft Agent's retained configuration for a Workflow Template Stage that is currently unavailable because its required capability is disabled; it is inactive, visible as a validation blocker, and excluded from Published Agent Version snapshots unless the capability is restored.
+_Avoid_: Silently ignored stage config, hidden future reactivation, published disabled-stage config
+
+**Direct Workflow Stage Contract Migration**:
+The breaking Agent Contract migration that adopts `workflow.stages[]` directly in one cutover and rejects legacy public stage aliases.
+_Avoid_: Dual-read workflow stage fields, node/stage aliasing, hidden legacy stage config
+
+**Stage Terminology Code Cutover Scope**:
+The implementation rename scope that moves public and domain-facing Workflow Template configuration code from node terms to stage terms while preserving Runtime Plane graph node terminology where it describes actual runtime graph mechanics.
+_Avoid_: Renaming LangGraph nodes to stages, leaving public contract models as nodes, mixed node/stage domain API
+
+**Dashboard Stage Configuration Surface Cutover**:
+The Slice 1 rename of Dashboard and Agent Configuration API public surfaces to workflow stage language, including request and response fields, helper names, UI labels, fixtures, and tests.
+_Avoid_: Backend-only schema migration, node-labeled Stage Panel, mixed nodes/stages API payload
+
+**Workflow Stage Prompt Configuration**:
+The Agent-owner-editable business Prompt and structured context settings attached to a registered Workflow Template Stage so Proof Agent can provide fuller task context while preserving Harness-owned control prompts, stage order, policy gates, validators, and trace semantics.
 _Avoid_: Prompt-defined workflow, raw chain-of-thought instruction, hidden policy override, arbitrary node prompt
 
+**Workflow Stage Prompt Field Set**:
+The first allowed prompt fields under `workflow.stages[].prompt`: `business_context`, `task_instructions[]`, and `output_preferences[]`.
+_Avoid_: system_prompt, developer_prompt, raw_prompt, role_guidance, persona override
+
 **Business Context Addendum**:
-The runtime injection form of Workflow Node Prompt Configuration appended to a governed node's structured model context after Proof Agent's Harness-owned control prompt and Structured Control Context, without replacing JSON contracts, action sets, policy authority, validators, or Tool Gateway behavior.
+The runtime injection form of Workflow Stage Prompt Configuration appended to a governed stage's structured model context after Proof Agent's Harness-owned control prompt and Structured Control Context, without replacing JSON contracts, action sets, policy authority, validators, or Tool Gateway behavior.
 _Avoid_: System prompt override, developer prompt override, control prompt replacement, policy bypass context
 
-**Workflow Node Panel**:
-The first UI representation of Workflow Template Node Configuration as an ordered, expandable node list rather than a drag-and-drop canvas.
+**Harness Prompt Authority Boundary**:
+The rule that Proof Agent owns model system and developer prompt authority for governed workflow stages; Agent-authored stage prompt fields can only contribute bounded Business Context Addendum values.
+_Avoid_: Agent-authored system_prompt, developer_prompt, raw_prompt, hidden control prompt override
+
+**Workflow Stage Panel**:
+The first UI representation of Workflow Template Stage Configuration as an ordered, expandable stage list rather than a drag-and-drop canvas.
 _Avoid_: Free-form workflow canvas, runtime graph layout, node layout source of truth
 
 **Workflow Relationship Map**:
-The Dashboard-visible, read-only representation of a Workflow Template's node order, branch conditions, predecessor and successor relationships, and governed handoff points so Agent owners can understand how node Prompt configuration affects surrounding execution context.
+The Dashboard-visible, read-only representation of a Workflow Template's stage order, branch conditions, predecessor and successor relationships, and governed handoff points so Agent owners can understand how stage Prompt configuration affects surrounding execution context.
 _Avoid_: Editable runtime graph, drag-and-drop edge editor, hidden workflow source of truth
 
 **Workflow Control Layer Map**:
-The primary Dashboard workflow view that renders the backend-owned Workflow Relationship Map as the stable Harness execution layer, including registered nodes, predecessor and successor relationships, review gates, tool and retrieval boundaries, and per-node Prompt configuration entry points.
+The primary Dashboard workflow view that renders the backend-owned Workflow Relationship Map as the stable Harness execution layer, including registered stages, predecessor and successor relationships, review gates, tool and retrieval boundaries, and per-stage Prompt configuration entry points.
 _Avoid_: Business process diagram only, editable topology, runtime-generated graph source
 
 **Workflow Business Plan Layer**:
 The secondary Dashboard workflow view that renders a Dynamic Insurance Business Subplan as business-facing steps anchored to the Workflow Control Layer Map, showing inferred intent, missing inputs, evidence needs, allowed retrieval, allowed read-tool proposals, source-authority expectations, and response projection needs without becoming a runtime graph.
 _Avoid_: Harness topology replacement, executable BPMN, tool-call transcript, raw chain-of-thought
 
-**Workflow Plan-to-Node Mapping**:
-The Dashboard explanation link between one Dynamic Insurance Business Subplan step and the governed Workflow Template node or nodes that will handle it. A business step may map to several Harness nodes, and a Harness node may support several business steps, but the mapping never creates new execution edges.
+**Workflow Plan-to-Stage Mapping**:
+The Dashboard explanation link between one Dynamic Insurance Business Subplan step and the governed Workflow Template Stage or stages that will handle it. A business step may map to several Harness stages, and a Harness stage may support several business steps, but the mapping never creates new execution edges.
 _Avoid_: Edge editor, hidden branch rule, model-controlled workflow rewrite
 
-**Workflow Node Context Preview**:
-The Dashboard configuration preview that renders a redacted, length-bounded sample of Harness Control Prompt summary, selected Structured Control Context, and Business Context Addendum for one Workflow Template node without calling a model, executing a tool, or writing run trace.
+**Workflow Stage Context Option Configuration**:
+The descriptor-allowed boolean map under `workflow.stages[].context` that selects which Structured Control Context summaries may be included for one Workflow Template Stage.
+_Avoid_: Free-form context injection, raw prompt include list, model-selected context
+
+**Effective Workflow Stage Context Option Allowlist**:
+The per-stage context option allowlist after applying Workflow Template Descriptor rules and resolved capability availability for one Draft or Published Agent.
+_Avoid_: Base descriptor allowlist only, disabled-capability context flag, ignored false option
+
+**Workflow Stage Context Preview**:
+The Dashboard configuration preview that renders a redacted, length-bounded sample of Harness Control Prompt summary, selected Structured Control Context, and Business Context Addendum for one Workflow Template Stage without calling a model, executing a tool, or writing run trace.
 _Avoid_: Test run, model preview call, raw prompt dump, execution simulation
 
-**Workflow Node Prompt Validation**:
-The Draft Agent and Agent Validation Run checks that ensure Workflow Node Prompt Configuration references only registered node ids, editable Prompt fields, allowed context options, safe bounded text, and runtime assembly paths that cannot replace Harness-owned control prompts or bypass governance.
+**Workflow Stage Prompt Validation**:
+The Draft Agent and Agent Validation Run checks that ensure Workflow Stage Prompt Configuration references only registered stage ids, editable Prompt fields, allowed context options, safe bounded text, and runtime assembly paths that cannot replace Harness-owned control prompts or bypass governance.
 _Avoid_: Prompt lint only, optional UI warning, runtime-only prompt repair
 
-**Model-Bearing Workflow Node**:
-A Workflow Template node whose governed execution includes a model call, so its Business Context Addendum may enter that node's Harness-normalized model request as structured context after the Harness-owned control prompt.
+**Model-Bearing Workflow Stage**:
+A Workflow Template Stage whose governed execution includes a model call, so its Business Context Addendum may enter that stage's Harness-normalized model request as structured context after the Harness-owned control prompt.
 _Avoid_: Any node with text settings, direct prompt executor, model-owned policy node
 
-**Non-Model Governed Node**:
-A Workflow Template node that does not directly call a model, where Workflow Node Prompt Configuration can only affect adjacent reviewed context summaries, deterministic wording preferences, or trace-safe configuration summaries without changing retrieval, tool, memory, policy, validator, or response execution logic.
+**Non-Model Governed Stage**:
+A Workflow Template Stage that does not directly call a model, where Workflow Stage Prompt Configuration can only affect adjacent reviewed context summaries, deterministic wording preferences, or trace-safe configuration summaries without changing retrieval, tool, memory, policy, validator, or response execution logic.
 _Avoid_: Hidden model call, prompt-driven tool execution, prompt-driven retrieval behavior
 
 **Controlled ReAct Workflow**:
@@ -506,6 +606,14 @@ _Avoid_: Tool call, approved action, model decision
 The fixed V1 set of allowed ReAct action types: ask clarification, plan retrieval, run retrieval step, propose tool call, generate final answer, escalate, or stop.
 _Avoid_: Free-form action name, arbitrary model command
 
+**Effective ReAct Action Set**:
+The run-specific subset of the ReAct Action Set admitted by Workflow Stage Availability, Tool Proposal Scope, and Control Envelope preconditions before ReAct planning.
+_Avoid_: Prompt-only action hint, model-selected capability set, runtime-only branch list
+
+**Workflow Stage Availability Event**:
+The run-level trace fact that records the Workflow Stage Availability Set and Effective ReAct Action Set without pretending disabled stages executed.
+_Avoid_: Per-disabled-stage execution event, hidden capability omission, Dashboard-only availability
+
 **Tool Proposal Scope**:
 The run-specific set of Tool Contract identifiers that a ReAct Planner may mention in ReAct Action Proposal values before Harness policy decides whether execution is allowed.
 _Avoid_: Tool execution permission, provider-native tool list, prompt-only allowlist
@@ -536,7 +644,7 @@ _Avoid_: Silent allow, best-effort continuation
 
 **Auto Review Scope**:
 The set of Harness control nodes that the Harness Review Subagent may review in V1.
-_Avoid_: All workflow nodes, unrestricted review surface
+_Avoid_: All workflow stages, unrestricted review surface
 
 **Reasoning Summary**:
 An audit-safe structured summary of ReAct planning intent, observations, candidate actions, selected action, rationale, risk flags, and required evidence.
@@ -553,6 +661,34 @@ _Avoid_: Final policy decision event
 **Review Override Event**:
 A trace event that records PolicyEngine overriding or rejecting a Review Decision.
 _Avoid_: Silent rule conflict
+
+**Workflow Stage Configuration Trace Summary**:
+The default trace-safe record of applied stage configuration: stage id, configured prompt field names, bounded lengths and counts, context option names, redaction status, and Published Agent Version or Published Effective Workflow Stage Configuration Snapshot reference.
+_Avoid_: Full prompt text, full context payload, raw validation dump
+
+**Workflow Stage Trace Capture Mode**:
+The validation/test-run request switch that controls whether run trace stores only Workflow Stage Configuration Trace Summary or additionally captures full stage Prompt, selected context values, and intermediate Workflow Stage Result details for verification.
+_Avoid_: Always-on verbose trace, production raw prompt archive, chain-of-thought capture
+
+**Sensitive Validation Capture Artifact**:
+The access-controlled validation/test artifact produced when Workflow Stage Trace Capture Mode records full stage Prompt, selected context values, or intermediate Workflow Stage Result details.
+_Avoid_: Ordinary trace event, customer-support-visible run detail, default receipt export
+
+**Sensitive Validation Capture Retention**:
+The retention policy for Sensitive Validation Capture Artifacts: default short TTL of 7 days, with explicit audit retention only when requested and authorized.
+_Avoid_: Ordinary trace retention, permanent prompt archive, hidden validation payload storage
+
+**Agent Contract Stage Capability Implementation Sequence**:
+The implementation order for the React Enterprise QA contract refactor: contract schema cutover; descriptor, availability, and effective configuration publication; runtime execution consumption of frozen configuration; validation trace capture and sensitive artifact handling.
+_Avoid_: One giant migration, runtime-first refactor, trace capture before contract stability
+
+**Contract Schema Cutover Test Gate**:
+The tests-first gate for Slice 1 that locks the accepted and rejected Agent Contract YAML shapes before loader, API, Dashboard, examples, and fixtures are migrated.
+_Avoid_: Manual schema migration, UI-first rename, untested legacy rejection
+
+**Small-Step Verification Cadence**:
+The implementation discipline for the Agent Contract stage/capability refactor: every small behavior change must add or update targeted tests, run those tests immediately, and only then proceed to the next change.
+_Avoid_: Batch refactor before tests, final-only verification, unverified schema churn
 
 **Clarification Requested Event**:
 A trace event that records a Clarification Request and the missing information categories.
@@ -646,9 +782,13 @@ _Avoid_: Public internet production bot, full contact-center platform
 A customer-safe execution status that describes the current governed stage without streaming unvalidated model content.
 _Avoid_: Token streaming, raw trace event stream, provider stream
 
-**ReAct Step Budget**:
-The configured upper bound on ReAct planning, retrieval, tool, and answer steps for one governed run.
+**ReAct Action Budget**:
+The configured upper bound on ReAct Action Proposals admitted during one Controlled ReAct Workflow run.
 _Avoid_: Unlimited loop, best-effort loop
+
+**Qualified Step**:
+A named sequence item inside a specific process, such as Retrieval Step or Evaluation Scenario step; Proof Agent does not use bare Step to describe Workflow Template structure.
+_Avoid_: Workflow Step, generic step, runtime node
 
 **Evidence-First ReAct**:
 A Controlled ReAct Workflow policy where the default first executable action is retrieval unless the question requires clarification or a governed tool proposal.
@@ -707,7 +847,7 @@ A static reviewable Agent Package used as a starting point for import, validatio
 _Avoid_: Published Agent, production Agent, execution allowlist
 
 **Published Agent Version**:
-An immutable published snapshot of an Agent Contract or Agent Package that application-facing execution surfaces can resolve by stable Agent identity and version.
+An immutable published snapshot of an Agent Contract or Agent Package, including resolved stage availability and effective stage configuration, that application-facing execution surfaces can resolve by stable Agent identity and version.
 _Avoid_: Mutable draft, latest filesystem path, frontend-selected manifest
 
 **Active Agent Version**:
@@ -753,6 +893,10 @@ _Avoid_: Production run, frontend preview only, unchecked smoke test
 **Run Purpose**:
 The run metadata classification that distinguishes production, validation, and preview runs while keeping all governed runs in RunStore.
 _Avoid_: Separate preview log, hidden test execution, metric-only tag
+
+**Approval Pause**:
+The Control Envelope fact that a governed run has stopped in `WAITING_FOR_APPROVAL` because a Tool Contract requires an external approval decision.
+_Avoid_: LangGraph interrupt, runtime checkpoint, callback wait
 
 **Approval Checkpoint Resume**:
 The governed continuation of the original run after an external approval decision resolves a PendingApproval, resuming the stored runtime checkpoint and appending the terminal approval event to the original run trace.
@@ -1111,7 +1255,7 @@ The first implementation scope that proves the import, Draft Agent edit, validat
 _Avoid_: Full no-code platform, complete RBAC product, all-module deep editor
 
 **Agent Configuration Permission Model**:
-The Operator Permission Vocabulary slice for Agent Configuration API boundaries. `agent.view` gates Agent configuration reads and Workflow Template descriptors; `agent.edit` gates Agent import, Draft Agent edits, Contract View updates, workflow node updates, and Agent Knowledge Binding attach or detach; `agent.validate` gates Draft Agent validation runs and Workflow Node Context Preview; `agent.publish` gates publish and rollback. Agent Configuration command requests do not carry actor fields; Configuration Operation Audit records the Operator Identity Context resolved by the API.
+The Operator Permission Vocabulary slice for Agent Configuration API boundaries. `agent.view` gates Agent configuration reads and Workflow Template descriptors; `agent.edit` gates Agent import, Draft Agent edits, Contract View updates, workflow stage updates, and Agent Knowledge Binding attach or detach; `agent.validate` gates Draft Agent validation runs and Workflow Stage Context Preview; `agent.publish` gates publish and rollback. Agent Configuration command requests do not carry actor fields; Configuration Operation Audit records the Operator Identity Context resolved by the API.
 _Avoid_: Full tenant RBAC, frontend-only permission check, request-body actor, untracked local edits
 
 **Configuration Operation Audit**:
@@ -1335,7 +1479,7 @@ The one-time breaking cutover from inline Agent `knowledge.provider + params` co
 _Avoid_: Legacy dual-read path, automatic compatibility Source creation, mixed contract versions
 
 **Local Configuration Store Reset**:
-The development-environment cleanup action that clears generated local Agent Configuration Store state, including Draft Agents, Published Agent Versions, Knowledge Sources, local-index artifacts, snapshots, and compiled configuration packages, without deleting source-controlled examples, tests, documentation, or retained run audit history. Breaking Knowledge Source configuration changes, including introduction of the required Knowledge Source Lifecycle State, do not carry a legacy local-store compatibility path; stale generated local Configuration Store data is reset and rebuilt.
+The development-environment cleanup action that clears generated local Agent Configuration Store state, including Draft Agents, Published Agent Versions, Knowledge Sources, local-index artifacts, snapshots, and compiled configuration packages, without deleting source-controlled examples, tests, documentation, or retained run audit history. Breaking Knowledge Source or Agent Contract configuration changes, including stage/capability contract cutovers, do not carry a legacy local-store compatibility path; stale generated local Configuration Store data is reset and rebuilt.
 _Avoid_: Source migration, production data deletion, RunStore audit purge, fixture cleanup, legacy local-store dual-read
 
 **Sidebar Navigation Section**:
@@ -1703,11 +1847,11 @@ A frozen dataclass returned by `list_structure()` representing a node in the doc
 _Avoid_: raw tree traversal, full document content, internal storage paths
 
 **max_rounds**:
-A RetrievalConfig field (default 3) that caps the RetrievalPlanner's iterative retrieval loop. Independent from `max_steps` (which governs ReAct tool calling steps). Hard limit ensures bounded LLM cost and execution time.
-_Avoid_: max_steps, infinite loop, unbounded retrieval
+A RetrievalConfig field (default 3) that caps the RetrievalPlanner's iterative retrieval loop. Independent from `react.max_actions` (which governs ReAct Action Proposals). Hard limit ensures bounded LLM cost and execution time.
+_Avoid_: max_actions, infinite loop, unbounded retrieval
 
 **Nested ReAct Retrieval Loop**:
-The allowed composition where one Controlled ReAct retrieval action invokes `retrieval.strategy: agentic` and therefore contains an inner RetrievalPlanner loop. The outer ReAct Step Budget and inner `max_rounds` budget are independent and both remain enforced.
+The allowed composition where one Controlled ReAct retrieval action invokes `retrieval.strategy: agentic` and therefore contains an inner RetrievalPlanner loop. The outer ReAct Action Budget and inner `max_rounds` budget are independent and both remain enforced.
 _Avoid_: Single shared loop counter, RetrievalPlanner-controlled ReAct routing, unbounded nested planning
 
 **Local Index Snapshot Retrieval**:
@@ -1924,6 +2068,63 @@ _Avoid_: Evidence content dump
 - V1 ships both an **Agent Framework Deliverable** and the **Insurance Customer Service Agent** reference implementation.
 - The **Insurance Customer Service Agent** must validate the **Agent Framework Deliverable** without becoming the whole product.
 - An **Agent Contract** selects a **Workflow Template** for a run.
+- A **Workflow Template Execution** executes exactly one selected **Workflow Template** inside the **Control Envelope**.
+- A **Workflow Template Execution** is run-scoped; registered **Workflow Template Stages** are governed stages, not separate execution entry points.
+- A **Workflow Template Execution** applies **Workflow Stage Prompt Configuration** as **Business Context Addendum** and allowed **Structured Control Context** without replacing Harness-owned control prompts.
+- Agent Contract `workflow.stages[]` stores **Workflow Stage Configuration Override** entries only; available stages omitted from the array use descriptor defaults when building **Effective Workflow Stage Configuration**.
+- Agent Publication stores **Workflow Stage Configuration Override** entries, the **Workflow Template Descriptor Version**, and a full **Published Effective Workflow Stage Configuration Snapshot** so historical run explanation does not depend on reconstructing descriptor defaults later.
+- The first **Workflow Stage Prompt Field Set** is limited to `business_context`, `task_instructions[]`, and `output_preferences[]`; role or persona guidance must be expressed through those bounded business fields rather than a separate `role_guidance` field.
+- **Workflow Stage Context Option Configuration** uses descriptor-allowed boolean keys under `workflow.stages[].context`; missing keys inherit descriptor defaults, explicit `true` includes the option, and explicit `false` disables the option for that stage.
+- **Effective Workflow Stage Context Option Allowlist** removes context options whose prerequisite capability is unavailable; published Agent Contract YAML must not contain those context keys even with value `false`, and Draft Agents treat them as inactive blockers until cleared or the capability is restored.
+- Default run trace records **Workflow Stage Configuration Trace Summary** plus Published Agent Version or **Published Effective Workflow Stage Configuration Snapshot** reference, not full stage Prompt or selected context payloads.
+- When **Workflow Stage Trace Capture Mode** is enabled for validation, Proof Agent may record full stage Prompt values, selected context values, and intermediate **Workflow Stage Result** details, but still must not record raw chain-of-thought, secrets, raw evidence content, raw tool payloads, complete provider responses, or Runtime Plane state dictionaries.
+- **Workflow Stage Trace Capture Mode** full capture is allowed only for Agent Validation Runs or explicit test runs; production and customer-facing runs are forced to summary-only trace behavior.
+- **Workflow Stage Trace Capture Mode** belongs to the Agent Validation Run or explicit test-run request, not to the Published Agent Version or production Agent Contract snapshot.
+- Full capture output is a **Sensitive Validation Capture Artifact**: access requires `agent.validate` or stronger configuration permission, ordinary run viewers and customer support viewers cannot see it, ordinary receipts or exports exclude it, and Dashboard exposes it only through an explicit validation detail reveal.
+- **Sensitive Validation Capture Retention** gives Sensitive Validation Capture Artifacts a default 7-day TTL while ordinary Workflow Stage Configuration Trace Summary, receipt facts, and validation pass/fail results remain under normal run artifact retention; deleting expired full capture must not change the governed run outcome or summary trace.
+- Extending Sensitive Validation Capture Retention through `retain_for_audit` requires an explicit authorized validation/test-run request and must show the artifact expiry or audit-retention status in Dashboard.
+- **Agent Contract Stage Capability Implementation Sequence** proceeds in four slices: direct contract schema cutover; descriptor, availability, and effective configuration publication; Workflow Template Execution consumption of frozen configuration; validation trace capture with Sensitive Validation Capture Artifact retention and access controls.
+- `ReActWorkflowNodes` is excluded from the first **Stage Terminology Code Cutover Scope** because it currently acts as runtime graph handler assembly; renaming or splitting it belongs to the Workflow Template Execution consumption slice.
+- **Harness Prompt Authority Boundary** means `workflow.stages[].prompt` must not expose `system_prompt`, `developer_prompt`, or `raw_prompt`; loaders and validation reject those fields because they imply control prompt authority rather than business context.
+- A **Workflow Template Execution** produces governed execution facts, while the Run Execution surface owns artifact finalization, Governance Receipt rendering, and RunStore persistence.
+- A **Workflow Template Execution** may produce an **Approval Pause**; the Runtime Plane may implement that pause with checkpoint or interrupt mechanics, but those mechanics are not the approval authority.
+- A **Workflow Template Execution Result** is the external execution Interface; **Workflow Stage Result** values remain inside Workflow Template Execution and must not leak as Runtime Plane state dictionaries.
+- The public Agent Contract, Workflow Template Descriptor, trace facts, Dashboard configuration, tests, and examples use **Workflow Template Stage** language directly; Proof Agent does not dual-read legacy public stage aliases during the stage migration.
+- **Direct Workflow Stage Contract Migration** adopts Agent Contract `workflow.stages[]` in one breaking change; loaders, Dashboard, examples, fixtures, tests, and stage prompt configuration APIs migrate together and reject legacy public stage fields.
+- **Stage Terminology Code Cutover Scope** includes Agent Contract models, manifest loader, validation, Workflow Template descriptors, configuration APIs, Dashboard helpers, examples, fixtures, and tests; Runtime Plane graph nodes may continue using graph node terminology when they refer to actual LangGraph or runtime graph mechanics.
+- **Dashboard Stage Configuration Surface Cutover** changes Agent Configuration API request and response fields to `stages`, renames Dashboard helpers to stage terminology, updates UI labels from Node Panel to Stage Panel, and migrates Dashboard tests and fixtures in the same Slice 1 cutover.
+- Slice 1 does not provide a legacy Agent Contract migration script or codemod; source-controlled examples, fixtures, tests, and docs are edited directly, while stale generated local Agent Configuration Store data is cleared with **Local Configuration Store Reset** and recreated.
+- **Contract Schema Cutover Test Gate** must fail before implementation for `workflow.stages[]` with `id`, rejection of legacy public stage aliases, `capabilities.tools`, `capabilities.memory`, rejection of legacy top-level `tools` and `memory`, disabled capability active config blockers, enabled tools with no valid Tool Contract, and enabled memory provider readiness.
+- **Small-Step Verification Cadence** applies throughout the Agent Contract Stage Capability Implementation Sequence: each slice is broken into targeted test, minimal implementation, targeted verification, then broader regression before moving to the next slice.
+- Each `workflow.stages[]` item uses **Workflow Stage Configuration Identifier** field `id`; loaders reject legacy id aliases, missing ids, duplicate ids, and ids that are not registered by the selected Workflow Template Descriptor.
+- **Workflow Template Stage** names stable workflow structure; **Qualified Step** names a sequence item inside a specific process and must not replace stage terminology.
+- Stage transition rules belong to **Workflow Template Execution**; **Workflow Template Descriptor** explains the public topology, and Runtime Plane Adapters only schedule mechanics such as graph execution, checkpoint, interrupt, and resume.
+- **Workflow Stage Availability** may disable a stage only through template-defined capability rules; it must not become arbitrary stage or edge editing.
+- **Workflow Stage Availability** is derived from capability configuration, not from per-stage enable switches; stage-local configuration may edit Prompt or allowed context only for stages that the resolved capability set makes available.
+- **Agent Contract Capability Configuration** is the public YAML source for governed capability availability; Proof Agent should migrate scattered `tools` and `memory` capability declarations into this unified Agent Contract YAML structure instead of hiding capability normalization in an internal-only layer.
+- **Direct Capability Contract Migration** replaces top-level Agent Contract `tools` and `memory` capability declarations with `capabilities.tools` and `capabilities.memory` in one breaking change; loaders, Dashboard, examples, fixtures, and tests migrate together and reject legacy top-level capability fields.
+- Agent Contract YAML uses top-level `capabilities:` for governed capability availability; `capabilities.tools.enabled` controls the **Tool Stage Group**, and `capabilities.memory.enabled` controls memory stage availability for templates that include a memory stage.
+- Agent Contract YAML keeps `knowledge_bindings[]` as a separate Agent Knowledge Binding domain, not `capabilities.knowledge`, because React Enterprise QA retrieval stages are template-required evidence behavior; missing or invalid knowledge bindings are validation or retrieval failures, not stage availability choices.
+- **Explicit Capability Enablement** is required for every capability domain referenced by the selected Workflow Template's availability rules; missing domain or missing `enabled` is a schema or validation error, not `enabled: false`.
+- **Enabled Capability Readiness** applies to enabled tool capability: `capabilities.tools.enabled: true` must resolve at least one valid **Tool Contract** from `capabilities.tools.file`, otherwise Agent Validation and Agent Publication fail closed.
+- **Enabled Capability Readiness** applies to enabled memory capability: `capabilities.memory.enabled: true` requires a memory provider; provider-specific schema decides whether scopes are required, and scoped memory configuration must enable at least one memory scope.
+- A disabled capability domain must be clean in published Agent Contract YAML: `enabled: false` may not carry active configuration fields such as `tools.file`, memory provider, or memory scopes. **Disabled Capability Configuration** may remain only as inactive Draft Agent state that blocks Agent Validation and Agent Publication until cleared or re-enabled.
+- **Workflow Stage Availability Set** is resolved during Agent Publication from the Agent Contract, Workflow Template, and configured capabilities, frozen into the Published Agent Version, then copied into each run and consumed by Workflow Template Execution as a frozen run input.
+- **Workflow Template Descriptor** declares supported stages and availability rules, while **Agent Contract** declares capabilities and **Published Agent Version** stores the resolved **Workflow Stage Availability Set**; normal run execution must not dynamically reinterpret stage availability from mutable template code.
+- **Unavailable Stage Configuration** may remain in a Draft Agent only as inactive, Dashboard-visible configuration that blocks Agent Validation and Agent Publication until the Agent owner either clears it or restores the required capability.
+- **Published Agent Version** snapshots must not contain effective configuration for unavailable stages; Proof Agent must not silently ignore disabled-stage config or reactivate old config when a capability is enabled later.
+- **Workflow Stage Availability Event** is emitted once per run before Workflow Template Execution starts; disabled stages do not emit normal stage execution events.
+- TODO: align the deterministic **Enterprise QA Template** with the **Workflow Template Execution** Interface after the React Enterprise QA execution seam is stable; the first refactor keeps Enterprise QA behavior as the regression baseline.
+- The **Workflow Template Stage** terminology cutover must land before deepening the **Workflow Template Execution** seam so behavior-preserving contract migration and execution-ownership refactoring remain testable separately.
+- **Workflow Template Stages** are reserved for Agent-owner-visible configuration, explanation, audit, or evaluation points; internal policy checks, validators, model requests, helper functions, and Runtime Plane nodes are not automatically stages.
+- The **React Enterprise QA Stage Set** keeps memory and response as stages because memory governance and response projection are Control Envelope facts, not incidental return code.
+- The memory stage is part of the **React Enterprise QA Stage Set**, not a mandatory stage for every future Workflow Template; other templates must explicitly include memory when memory governance is part of their Control Envelope shape.
+- Memory stage availability is capability-gated; disabled-by-capability means the Agent Contract did not enable memory for that stage, while blocked-by-policy means memory was enabled but a specific memory write was denied by the Control Envelope.
+- The **React Enterprise QA Stage Set** keeps retrieval_review separate from retrieval, and tool_review separate from tool, so review context, review decisions, capability execution, and approval pauses remain explainable as distinct Control Envelope facts.
+- The **Tool Stage Group** must be enabled or disabled as a pair; a run must not execute tool without tool_review, and tool_review must not be editable when the tool stage is unavailable.
+- When the **Tool Stage Group** is disabled, **Effective ReAct Action Set** excludes tool proposal actions; any model output outside the Effective ReAct Action Set fails closed as a Control Envelope violation.
+- Retrieval_review and retrieval remain available in **React Enterprise QA Stage Set** because evidence-first retrieval is part of the template's governed promise; missing or invalid Knowledge Bindings are validation or retrieval failures, not stage availability choices.
+- Response stage configuration is projection-only: it may affect allowed wording and trace-safe context summaries, but it must not change governed outcome, evidence admission, approval state, customer-safe boundaries, Governance Detail Projection caps, trace facts, or receipt facts.
 - A **Controlled ReAct Workflow** is a **Workflow Template**.
 - The **React Enterprise QA Template** is separate from the existing **Enterprise QA Template** so deterministic Enterprise QA remains the regression baseline.
 - The **React Enterprise QA Template** must include a **Deterministic ReAct Demo** before remote model paths are required.
@@ -1957,7 +2158,7 @@ _Avoid_: Evidence content dump
 - A **LLM ReAct Planner** and **LLM Harness Review Subagent** use **Harness Control Prompt** templates maintained by Proof Agent.
 - An **Agent Contract** may configure model provider, model name, and provider parameters for planner and reviewer roles, but must not replace the **Harness Control Prompt** in V1.
 - **Harness Control Prompt** inputs come from **Structured Control Context**, not raw user transcripts, raw evidence content, secrets, or arbitrary Agent-authored prompt overrides.
-- **Structured Control Context** may include user question, Agent purpose, step budget, allowed actions, tool risk summary, evidence state, conversation summary, enforcement point, and policy-relevant metadata.
+- **Structured Control Context** may include user question, Agent purpose, ReAct Action Budget, allowed actions, tool risk summary, evidence state, conversation summary, enforcement point, and policy-relevant metadata.
 - A model may produce a **ReAct Action Proposal**, but only **Auto Review Mode** or another Harness review path can admit it for execution.
 - Every **ReAct Action Proposal** must use the fixed **ReAct Action Set**; non-enumerated actions are denied and traced.
 - Every tool-call **ReAct Action Proposal** must name a tool inside the run's **Tool Proposal Scope**, which is derived from the **Agent Contract** tool scope and matching **Tool Contract** definitions.
@@ -2008,7 +2209,7 @@ _Avoid_: Evidence content dump
 - Each customer-facing turn stores a **Customer Response Snapshot** linked to the RunStore `run_id` for audit replay and complaint investigation.
 - V1 is released as a **Private Pilot Customer Service Bot**, not as a public internet production bot or full contact-center platform.
 - V1 customer-facing execution may expose **Customer Run Progress State** values but does not stream unvalidated model tokens.
-- V1 **Controlled ReAct Workflow** allows multi-step planning and retrieval, at most one governed tool call, and one final answer generation within a **ReAct Step Budget**.
+- V1 **Controlled ReAct Workflow** allows multiple governed ReAct Action Proposals, at most one governed tool call, and one final answer generation within a **ReAct Action Budget**.
 - V1 **React Enterprise QA Template** uses **Evidence-First ReAct**: retrieval is the default first executable action, clarification is allowed for underspecified questions, and tool proposals are allowed only when policy permits.
 - **React Enterprise QA Template V2** adds **Intent Resolution** before ReAct planning as a versioned template change, not as a runtime feature flag on earlier template versions.
 - A **Controlled ReAct Workflow** cannot produce a direct final answer before evidence admission.
@@ -2172,7 +2373,7 @@ _Avoid_: Evidence content dump
 - **Agent Knowledge Binding Configuration API** stores Agent Draft `knowledge_bindings[]` and Agent-level blended-retrieval settings only. Knowledge Source provider parameters remain Source-owned, and Published Agent Versions capture a **Resolved Knowledge Binding Set** with resolved Source snapshot or configuration versions plus resolved binding settings.
 - **Direct Knowledge Contract Migration** replaces inline Agent `knowledge.provider + params` with Source-owned provider configuration and Agent `knowledge_bindings[]` in one breaking change. Loader, Dashboard, examples, fixtures, and tests migrate together; the new loader rejects legacy inline knowledge configuration rather than carrying a dual-read path.
 - **Agent Configuration MVP** prioritizes the vertical import-to-publication-to-monitoring loop before full Tool Source management, advanced Policy condition building, unbounded multi-source retrieval, full RBAC, deep visual diffs, or memory lifecycle UI.
-- **Agent Configuration MVP** uses a **Workflow Node Panel** for Workflow Template Node Configuration before adding any visual workflow canvas.
+- **Agent Configuration MVP** uses a **Workflow Stage Panel** for Workflow Template Stage Configuration before adding any visual workflow canvas.
 - New Agent setup enters through an **Agent Creation Wizard** and then lands in the module-based **Agent Configuration Workspace** for ongoing edits.
 - The **Agent Configuration Workspace** edits **Draft Agent** versions in the **Agent Configuration Store**; application-facing execution surfaces can call only immutable **Published Agent Version** snapshots after **Agent Publication**.
 - A **Published Agent** resolves to an **Active Agent Version** by default, and **Agent Version Rollback** changes that pointer without mutating prior Published Agent Version snapshots.
@@ -2309,7 +2510,20 @@ _Avoid_: Evidence content dump
 - "Harness Agent framework" could mean the framework itself or an Agent built with it. Resolved: use **Controlled Agent Harness Framework** for the framework category.
 - "V1 deliverable" could mean only the customer-service bot or the reusable Agent framework plus reference Agent. Resolved: V1 includes an **Agent Framework Deliverable** and the **Insurance Customer Service Agent**.
 - "Workflow" could mean business flow, runtime graph mechanics, or a hard-coded orchestrator branch. Resolved: use **Workflow Template** for the governed flow shape, and keep runtime mechanics separate.
-- "Workflow node editing" could mean configuring registered template nodes or freely rewriting the runtime graph. Resolved: use **Workflow Template Node Configuration** for editable node settings that compile back to the Agent Contract without changing Harness semantics.
+- "Workflow node editing" could mean configuring registered template stages, editing LangGraph nodes, or freely rewriting the runtime graph. Resolved: use **Workflow Template Stage Configuration** for editable stage settings that compile back to the Agent Contract without changing Harness semantics.
+- "Legacy public stage compatibility" could preserve existing examples but keep node/stage ambiguity in the public Agent Contract. Resolved: use **Direct Workflow Stage Contract Migration**, migrate to `workflow.stages[]`, and do not dual-read legacy public stage aliases.
+- "Internal node rename" could mean renaming every runtime graph node symbol or only public/domain Workflow Template configuration symbols. Resolved: follow **Stage Terminology Code Cutover Scope**; public/domain contracts become stages, while true Runtime Plane graph node terminology remains available.
+- "`ReActWorkflowNodes` rename" could be bundled with the schema cutover or deferred to execution seam work. Resolved: defer `ReActWorkflowNodes` renaming or splitting until the Workflow Template Execution consumption slice.
+- "Dashboard stage migration" could mean backend schema only or the full configuration surface. Resolved: **Dashboard Stage Configuration Surface Cutover** is part of Slice 1 and includes API payload fields, helpers, UI labels, fixtures, and tests.
+- "Legacy contract migration tool" could mean providing a codemod for old generated local data or resetting local configuration state. Resolved: do not provide a legacy migration script; source-controlled fixtures are edited directly, and generated local Agent Configuration Store data is cleared with **Local Configuration Store Reset**.
+- "`workflow.stages[]` item identity" could mean `id` or legacy aliases. Resolved: use **Workflow Stage Configuration Identifier** field `id` only, and reject aliases.
+- "`workflow.stages[]` completeness" could mean listing every registered stage or only configured stages. Resolved: Agent Contract stores **Workflow Stage Configuration Override** entries only; omitted available stages use descriptor defaults in **Effective Workflow Stage Configuration**.
+- "Effective stage config storage" could mean recomputing from overrides plus descriptor version or freezing the resolved result at publication. Resolved: Published Agent Versions store the **Published Effective Workflow Stage Configuration Snapshot** alongside overrides and descriptor version.
+- "Complete stage prompt configuration" could mean exposing `system_prompt`, `developer_prompt`, or `raw_prompt`. Resolved: preserve the **Harness Prompt Authority Boundary**; stage prompt fields compile only into **Business Context Addendum**.
+- "`role_guidance`" could mean a helpful business-role field or a disguised control prompt. Resolved: the first **Workflow Stage Prompt Field Set** does not include `role_guidance`; express role intent through `business_context` or `task_instructions[]`.
+- "`workflow.stages[].context` shape" could mean a list of included context names or a boolean map. Resolved: use **Workflow Stage Context Option Configuration** as a descriptor-allowed boolean map with defaults and explicit false.
+- "Context option false" could mean a valid explicit disable or a retained disabled-capability option. Resolved: explicit false is valid only inside the **Effective Workflow Stage Context Option Allowlist**; capability-unavailable context options are blockers even when false.
+- "Stage terminology migration" could be bundled with execution behavior changes. Resolved: land the **Workflow Template Stage** cutover first, then deepen the **Workflow Template Execution** seam while preserving behavior.
 - "ReAct framework" could mean an autonomous model-driven agent loop or a governed flow shape. Resolved: use **Controlled ReAct Workflow** for the governed Proof Agent version.
 - "Multi-round user intent thinking" could mean exposing raw model thoughts or adding a governed understanding step. Resolved: use **Intent Resolution** as an audit-safe step before ReAct planning.
 - "Intent Resolution rollout" could mean a mutable feature flag on the existing ReAct template or a new template version. Resolved: use **React Enterprise QA Template V2** so historical Published Agent Versions keep stable workflow semantics.
@@ -2351,6 +2565,8 @@ _Avoid_: Evidence content dump
 - "ReAct reasoning" could mean raw chain-of-thought or trace-safe planning facts. Resolved: record **Reasoning Summary** only.
 - "Review trace" could mean final policy or reviewer suggestion. Resolved: **Review Decision Event** records the suggestion; `policy_decision` records the final governance decision.
 - "Show planning" could mean trace recording or user-visible response projection. Resolved: **Governance Detail Projection** controls API/UI exposure, not trace completeness.
+- "Full validation trace" could mean always storing raw prompt/context/debug payloads, a production diagnostic button, Published Agent configuration, ordinary trace content, or a controlled validation request switch. Resolved: default trace uses **Workflow Stage Configuration Trace Summary** and snapshot references; **Workflow Stage Trace Capture Mode** belongs to Agent Validation Run or explicit test-run requests and produces **Sensitive Validation Capture Artifact** output while preserving safety exclusions.
+- "Full capture retention" could mean ordinary run trace retention or short-lived sensitive validation retention. Resolved: use **Sensitive Validation Capture Retention** with default 7-day TTL; ordinary summary trace, receipt facts, and validation outcomes remain under normal run artifact retention.
 - "Response visibility flag" could mean an unrestricted frontend request. Resolved: **Response Detail Policy** caps what API responses can expose.
 - "Policy configuration" could mean natural-language instructions, prompt rules, or executable governance rules. Resolved: use **Policy Rule Configuration** for structured rules; natural-language descriptions are non-executable unless compiled and validated.
 - "Customer response" could mean the full internal run response or a customer-safe shape. Resolved: customer-facing surfaces use **Customer-Safe Response Projection** and internal operator/developer surfaces use governed audit projections.
@@ -2372,7 +2588,7 @@ _Avoid_: Evidence content dump
 - "Customer-visible answer history" could mean recomputing from trace, using the complete visible message as memory, or storing what the customer actually saw. Resolved: V1 stores the complete text as a **Customer Response Snapshot** linked to the governed run; **Case Memory** may only use bounded, trace-safe facts or summaries derived from that snapshot linkage.
 - "V1 release" could mean private enterprise pilot or public internet production. Resolved: V1 is a **Private Pilot Customer Service Bot**; public-scale operations are future platform work.
 - "Streaming" could mean customer-safe stage progress or raw model tokens. Resolved: V1 exposes **Customer Run Progress State** only; token streaming is future verified streaming work.
-- "ReAct loop" could mean unlimited autonomous tool use or a bounded governed loop. Resolved: V1 uses a **ReAct Step Budget** and permits at most one governed tool call.
+- "ReAct loop" could mean unlimited autonomous tool use or a bounded governed loop. Resolved: V1 uses a **ReAct Action Budget** and permits at most one governed tool call.
 - "ReAct first action" could mean answer, tool call, retrieval, or clarification. Resolved: V1 uses **Evidence-First ReAct**.
 - "Needs more user input" could mean refusal or approval. Resolved: use **Clarification Request** and **Waiting For User Clarification**.
 - "Continue after clarification" could mean resuming the same runtime checkpoint or starting another governed run. Resolved: V1 uses a **Clarification Continuation Run** with **Controlled Conversation Context**.
@@ -2397,13 +2613,22 @@ _Avoid_: Evidence content dump
 - "Save Agent configuration" could mean creating a runnable Agent or persisting work in progress. Resolved: saving creates or updates a **Draft Agent**; only **Agent Publication** creates or updates a **Published Agent** for application-facing execution.
 - "Rollback" could mean editing an old version, overwriting current production config, or changing the active pointer. Resolved: **Agent Version Rollback** selects an earlier immutable **Published Agent Version** as the **Active Agent Version**.
 - "Configuration storage" could mean replacing Agent Contract files or storing editable product state. Resolved: the **Agent Configuration Store** owns draft/version metadata, while **Agent Contract** and **Agent Package** remain the reviewable execution artifacts.
+- "Unified capability configuration" could mean an internal resolved profile over scattered YAML fields or a public Agent Contract YAML structure. Resolved: use top-level `capabilities:` as **Agent Contract Capability Configuration**, then resolve stage availability during Agent Publication.
+- "Capability config migration" could mean dual-reading legacy top-level `tools` and `memory` or making one schema cutover. Resolved: use **Direct Capability Contract Migration** and reject legacy top-level capability fields.
+- "Implementing the stage/capability contract" could mean one giant runtime and schema refactor or a staged migration. Resolved: follow **Agent Contract Stage Capability Implementation Sequence** so schema, publication snapshots, runtime consumption, and validation trace capture remain separately testable.
+- "Schema cutover implementation order" could mean editing loader first or locking behavior with tests first. Resolved: Slice 1 starts with **Contract Schema Cutover Test Gate** before implementation.
+- "`capabilities.knowledge`" could mean treating retrieval as an optional stage-availability capability. Resolved: keep `knowledge_bindings[]` as the separate Agent Knowledge Binding domain; React Enterprise QA retrieval stages remain available and fail through validation or retrieval when knowledge config is missing or invalid.
+- "Enabled tools with an empty tool file" could mean an available Tool Stage Group with no proposals or an invalid capability. Resolved: **Enabled Capability Readiness** requires at least one valid **Tool Contract** when `capabilities.tools.enabled` is true.
+- "Enabled memory with no scopes" could mean invalid configuration for all providers or valid session memory. Resolved: **Enabled Capability Readiness** requires a provider; provider-specific schema decides scope requirements, and scoped providers must enable at least one scope.
+- "Disabled capability config" could mean a clean disabled declaration or a dormant configured capability. Resolved: published YAML permits clean `enabled: false` only; active fields under disabled capabilities are **Disabled Capability Configuration** blockers in Draft.
+- "Missing capability config" could mean disabled-by-default or incomplete YAML. Resolved: use **Explicit Capability Enablement**; missing template-relevant capability domains or `enabled` fields fail schema or validation.
 - "Configuration database" could mean requiring a production DB for the first implementation or defining a replaceable persistence boundary. Resolved: first use a **Local Agent Configuration Store** with a store adapter boundary.
 - "Import Agent" could mean running an arbitrary manifest, overwriting example files, or creating an editable draft. Resolved: **Agent Package Import** creates a **Draft Agent** from a reviewable Agent Package and preserves advanced fields.
 - "Configuration permissions" could mean full enterprise RBAC or no permission model at all. Resolved: first-stage configuration may be single-user, but the **Agent Configuration Permission Model** and **Configuration Operation Audit** fields are part of the domain model.
 - "Test run" could mean a cosmetic frontend preview or a governed pre-publication execution. Resolved: use **Agent Validation Run** for required validation and test execution before **Agent Publication**.
 - "Validation run storage" could mean a separate preview log or ordinary run history. Resolved: store validation artifacts in RunStore and distinguish them with **Run Purpose** metadata.
-- "Workflow builder UI" could mean an ordered node configuration panel or a drag-and-drop canvas. Resolved: first use a **Workflow Node Panel**; any future canvas remains a presentation of Workflow Template Node Configuration, not a new runtime graph source.
-- "Two-layer workflow display" could mean two executable graphs or one governed workflow with a business-plan projection. Resolved: Dashboard uses **Workflow Control Layer Map** for the fixed Harness layer, **Workflow Business Plan Layer** for the Dynamic Insurance Business Subplan, and **Workflow Plan-to-Node Mapping** to explain how business steps are handled without creating new topology.
+- "Workflow builder UI" could mean an ordered stage configuration panel or a drag-and-drop canvas. Resolved: first use a **Workflow Stage Panel**; any future canvas remains a presentation of Workflow Template Stage Configuration, not a new runtime graph source.
+- "Two-layer workflow display" could mean two executable graphs or one governed workflow with a business-plan projection. Resolved: Dashboard uses **Workflow Control Layer Map** for the fixed Harness layer, **Workflow Business Plan Layer** for the Dynamic Insurance Business Subplan, and **Workflow Plan-to-Stage Mapping** to explain how business steps are handled without creating new topology.
 - "YAML editor" could mean a second source of truth, an export pane, or a contract-level editor. Resolved: use **Contract View** as an advanced view over the same Draft Agent state, validated before save or publication.
 - "Dashboard API" could mean read-only observability or execution. Resolved: Dashboard and receipt views remain read projections; **Run Execution API** owns run creation.
 - "Management console" could mean internal run observability, Dashboard-hosted Agent configuration, or a full platform administration product. Resolved: V1 keeps an **Internal Governance Dashboard** for observability; Agent configuration belongs in an **Agent Configuration Workspace** hosted by the **Dashboard Shell** with separate configuration APIs; full **Agent Control Platform Console** work is future scope.
@@ -2580,7 +2805,7 @@ _Avoid_: Evidence content dump
 - "Agent creation" could mean inline form, modal wizard, or template selection. Resolved: the **Agent Creation Wizard** starts with template selection (Enterprise QA, Customer Service, Blank) before collecting agent details.
 - "Unsupported retrieval" could mean invalid configuration or unavailable capability. Resolved: a recognized but unavailable strategy is a **Retrieval Capability Error**.
 - "Agentic retrieval" could mean a single provider call, unbounded multi-round search, or governed iterative planning. Resolved: `retrieval.strategy: agentic` activates the **RetrievalPlanner** which drives a multi-round loop with `planner_model` for query analysis and `evaluator_model` for evidence sufficiency assessment, outputs structured **RetrievalAction** decisions, respects `max_rounds` hard limit, and fails closed on errors returning accumulated evidence.
-- "Agentic retrieval inside ReAct" could mean one shared loop, a recursive autonomous Agent, or a governed nested retrieval loop. Resolved: **Nested ReAct Retrieval Loop** is allowed only when a Controlled ReAct retrieval action invokes the shared governed retrieval service; `react.max_steps` limits the outer ReAct loop and `retrieval.max_rounds` limits the inner RetrievalPlanner loop.
+- "Agentic retrieval inside ReAct" could mean one shared loop, a recursive autonomous Agent, or a governed nested retrieval loop. Resolved: **Nested ReAct Retrieval Loop** is allowed only when a Controlled ReAct retrieval action invokes the shared governed retrieval service; `react.max_actions` limits the outer ReAct loop and `retrieval.max_rounds` limits the inner RetrievalPlanner loop.
 - "Tree index retrieval" could mean calling the external PageIndex API, using LlamaIndex's built-in retrievers, or implementing custom tree traversal. Resolved: **Local Index Provider** uses LlamaIndex `TreeSelectLeafRetriever` for single-document tree traversal, routes all LLM calls through **ProofAgentLLM** bridge to Proof Agent's ModelProvider protocol, and supports structured interfaces (`list_structure`, `retrieve_at_scope`) declared via **RetrievalCapabilities**.
 - "Planner error handling" could mean retry, partial results, or complete failure. Resolved: **RetrievalPlanner** uses fail-closed semantics — LLM failure, Action Plan parse failure, or provider timeout terminates the loop and returns accumulated evidence from prior rounds; all failures are recorded in trace with stable error codes.
 - "Multi-round trace" could mean one summary event, per-round detail, or full LLM conversation. Resolved: each round emits `retrieval_step`, `model_request`, `model_response` events with `round_id` correlation, and a final `agentic_retrieval_completed` summary event records total rounds, candidates, accepted count, final action, and per-round history.

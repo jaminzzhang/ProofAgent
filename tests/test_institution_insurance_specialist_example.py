@@ -18,15 +18,17 @@ def test_institution_insurance_specialist_manifest_loads_as_distinct_assisted_ag
     assert manifest.workflow.template == "react_enterprise_qa"
     assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v1"
 
-    node_prompts = {node.node_id: node.prompt for node in manifest.workflow.nodes}
-    assert "plan" in node_prompts
-    assert "Dynamic Insurance Business Subplan" in node_prompts["plan"].business_context
+    stage_prompts = {stage.id: stage.prompt for stage in manifest.workflow.stages}
+    assert "plan" in stage_prompts
+    assert "Dynamic Insurance Business Subplan" in stage_prompts["plan"].business_context
     assert (
         "Institution Specialist Response Projection"
-        in node_prompts["model_answer"].business_context
+        in stage_prompts["model_answer"].business_context
     )
-    response_node = next(node for node in manifest.workflow.nodes if node.node_id == "response")
-    assert response_node.context.options["include_governance_summary"] is True
+    response_stage = next(
+        stage for stage in manifest.workflow.stages if stage.id == "response"
+    )
+    assert response_stage.context.options["include_governance_summary"] is True
 
 
 def test_institution_insurance_specialist_package_is_decoupled_from_customer_service_example() -> None:
@@ -36,7 +38,7 @@ def test_institution_insurance_specialist_package_is_decoupled_from_customer_ser
     assert specialist.name != customer_service.name
     assert specialist.customer is None
     assert customer_service.customer is not None
-    assert specialist.tools.file != customer_service.tools.file
+    assert specialist.capabilities.tools.file != customer_service.capabilities.tools.file
     assert specialist.package_knowledge_sources[0].source_id != (
         customer_service.package_knowledge_sources[0].source_id
     )
@@ -47,7 +49,7 @@ def test_institution_insurance_specialist_package_is_decoupled_from_customer_ser
 
 def test_institution_insurance_specialist_tools_are_read_only_institution_tools() -> None:
     manifest = load_agent_manifest(AGENT_PATH)
-    gateway = ToolGateway.from_file(manifest.tools.file)
+    gateway = ToolGateway.from_file(manifest.capabilities.tools.file)
 
     assert set(gateway.tools) == {
         "institution_report_lookup",

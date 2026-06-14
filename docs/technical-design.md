@@ -160,21 +160,21 @@ CLI / API / Conversation turn
 
 The planner and review subagent are inputs to governance, not governance authorities.
 
-Workflow Node Prompt Configuration is a governed extension to the Agent Contract, not a
+Workflow Stage Prompt Configuration is a governed extension to the Agent Contract, not a
 new execution path. The backend-owned Workflow Template Descriptor publishes the fixed
-public node graph for Dashboard rendering, including node ids, labels, predecessor and
+public stage graph for Dashboard rendering, including stage ids, labels, predecessor and
 successor relationships, branch conditions, model-bearing status, editable Prompt fields,
-and allowlisted context options. The Dashboard can configure only `workflow.nodes[]`
-business context and selected context options for registered nodes. It cannot freely edit
-topology, disable nodes, or replace Harness-owned control prompts.
+and allowlisted context options. The Dashboard can configure only `workflow.stages[]`
+business context and selected context options for registered stages. It cannot freely edit
+topology, disable stages, or replace Harness-owned control prompts.
 
-At runtime, node Prompt text is appended only as a sanitized Business Context Addendum
-after Harness control prompts and structured control context. Model-bearing nodes can
+At runtime, stage Prompt text is appended only as a sanitized Business Context Addendum
+after Harness control prompts and structured control context. Model-bearing stages can
 receive addendum content in their model request user payload; review subagents receive
-only trace-safe node context summaries. Non-model governed nodes can record configured
+only trace-safe stage context summaries. Non-model governed stages can record configured
 context summaries and deterministic wording context, but do not alter Harness logic.
-Trace and receipts record `workflow_node_context_applied` summary events and never store
-full node Prompt text.
+Trace and receipts record `workflow_stage_context_applied` summary events and never store
+full stage Prompt text.
 
 Autonomous Customer Service Mode adds a customer-facing delivery path around the same Harness:
 
@@ -331,11 +331,13 @@ model:
 policy:
   file: ./policy.yaml
 
-tools:
-  file: ./tools.yaml
-
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: true
+    provider: session
 
 audit:
   trace_path: ../../runs/latest/trace.jsonl
@@ -879,21 +881,23 @@ The memory audit loop uses these events:
 
 `memory_read` may remain provider-level read metadata; `memory_admission` is the event that records whether memory can enter context.
 
-The planned Agent Contract shape keeps memory as one top-level section while exposing all scopes explicitly:
+The planned Agent Contract shape keeps memory under `capabilities.memory` while exposing all scopes explicitly:
 
 ```yaml
-memory:
-  provider: local  # or mem0
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: true  # Customer Persistent User Memory for Customer Run API
-    shared:
-      enabled: false
+capabilities:
+  memory:
+    enabled: true
+    provider: local  # or mem0
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: true  # Customer Persistent User Memory for Customer Run API
+      shared:
+        enabled: false
 ```
 
 Stage 1 allowed only Case Memory to be enabled. Stage 3 enables Customer Persistent User Memory for Customer Run API through the `user` scope. Shared Memory may appear as disabled config entries, but enabling it still fails until its governance behavior is implemented.
@@ -1093,8 +1097,9 @@ Configuration routes:
 | `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/contract` | update Contract View files after validation; requires `agent.edit` |
 | `POST /api/config/agents/{agent_id}/drafts/{draft_id}/knowledge-bindings` | bind a published shared Knowledge Source into a Draft Agent; requires `agent.edit` |
 | `DELETE /api/config/agents/{agent_id}/drafts/{draft_id}/knowledge-bindings/{binding_id}` | unbind a shared Knowledge Source from a Draft Agent; requires `agent.edit` |
-| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/workflow-nodes` | update descriptor-backed workflow node Prompt settings; requires `agent.edit` |
-| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/workflow-nodes/{node_id}/preview` | render a redacted Workflow Node Context Preview; requires `agent.validate` |
+| `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/workflow-stages` | update descriptor-backed Workflow Stage Prompt settings; requires `agent.edit` |
+| `POST /api/config/agents/{agent_id}/drafts/{draft_id}/workflow-stages/{stage_id}/preview` | render a redacted Workflow Stage Context Preview; requires `agent.validate` |
+| `GET /api/runs/{run_id}/validation-capture` | read a Sensitive Validation Capture Artifact for validation runs only; requires `agent.validate` |
 | `POST /api/config/agents/{agent_id}/drafts/{draft_id}/validate` | run a Draft Agent as `run_purpose: validation`; requires `agent.validate` |
 | `POST /api/config/agents/{agent_id}/drafts/{draft_id}/publish` | publish a validated Draft Agent as an immutable version; requires `agent.publish` |
 | `GET /api/config/agents/{agent_id}/versions` | list Published Agent Versions; requires `agent.view` |

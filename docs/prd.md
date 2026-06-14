@@ -16,7 +16,7 @@ V1 also introduces an **Autonomous Customer Service Mode** private pilot. This m
 
 - **Agent Framework Deliverable:** customer contracts, Customer Run API, Customer-Safe Response Projection, read-only authorization boundaries, internal handoff events, and handoff monitor projections.
 - **Insurance Customer Service Agent:** `examples/insurance_customer_service/`, customer Web Chat, deterministic journey suite, and local Markdown knowledge.
-- **Institution Insurance Specialist Agent:** `examples/institution_insurance_specialist/`, staff-facing Assisted Service Mode, Workflow Node Prompt Configuration, short-term insurance-scoped knowledge, and read-only institution business tools.
+- **Institution Insurance Specialist Agent:** `examples/institution_insurance_specialist/`, staff-facing Assisted Service Mode, Workflow Stage Prompt Configuration, short-term insurance-scoped knowledge, and read-only institution business tools.
 
 ## 2. Target Audience
 

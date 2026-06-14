@@ -182,7 +182,7 @@ Policy evaluation must emit a `policy_decision` trace event for every enforcemen
 
 ## Design Rule
 
-Do not scatter enterprise governance across workflow nodes. Workflow nodes ask the policy engine. The policy engine decides. Trace records the decision.
+Do not scatter enterprise governance across workflow stages. Workflow stages ask the policy engine. The policy engine decides. Trace records the decision.
 
 ## Customer Read Policy
 

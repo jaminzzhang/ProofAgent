@@ -1,7 +1,7 @@
 """Shared Harness helpers for trace formatting, model request construction, and run finalization.
 
-This module is the deep module behind the seam that runtime adapters and
-workflow nodes share.  All functions are public; callers import what they need.
+This module is the deep module behind the shared workflow template/runtime adapter
+helpers. All functions are public; callers import what they need.
 """
 
 from __future__ import annotations

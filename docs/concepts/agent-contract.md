@@ -38,11 +38,13 @@ model:
 policy:
   file: ./policy.yaml
 
-tools:
-  file: ./tools.yaml
-
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: true
+    provider: session
 
 audit:
   trace_path: ./runs/latest/trace.jsonl
@@ -51,21 +53,36 @@ audit:
 
 The base schema is intentionally small. It is enough to run the Enterprise QA template while leaving room for ReAct planning, review, remote model, vector store, MCP, and dashboard integrations through explicit sections and adapter-specific params.
 
-Long-term memory keeps the same top-level `memory` section but exposes Proof Agent scopes explicitly. Case Memory can be enabled for Customer Run API, and Stage 3 enables Customer Persistent User Memory for Customer Service conversations with customer memory consent, `agent_id + subject_ref` isolation, and lifecycle export/delete controls. Shared Memory may be declared only as disabled until its governance rules are implemented.
+Long-term memory lives under `capabilities.memory` and exposes Proof Agent scopes explicitly. Case Memory can be enabled for Customer Run API, and Stage 3 enables Customer Persistent User Memory for Customer Service conversations with customer memory consent, `agent_id + subject_ref` isolation, and lifecycle export/delete controls. Shared Memory may be declared only as disabled until its governance rules are implemented.
 
 ```yaml
-memory:
-  provider: local  # or mem0
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: false
-    shared:
-      enabled: false
+capabilities:
+  memory:
+    enabled: true
+    provider: local  # or mem0
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
+  tools:
+    enabled: false
+```
+
+Tools use the sibling `capabilities.tools` section. Set `enabled: true` only when a Tool Contract file is present and contains at least one tool.
+
+```yaml
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: false
 ```
 
 ## ReAct Shape

@@ -226,11 +226,13 @@ model:
 policy:
   file: ./policy.yaml
 
-tools:
-  file: ./tools.yaml
-
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: true
+    provider: session
 
 audit:
   trace_path: ../../runs/latest/trace.jsonl
@@ -244,18 +246,19 @@ Current v1 config constraints:
 - package-local providers are declared under `package_knowledge_sources[]`; shared Dashboard-managed Sources stay in the Configuration Store.
 - `knowledge_bindings[]` must use `source_ref.scope` plus `source_ref.source_id`; shared bindings require an active published Knowledge Source and do not copy provider params into Agent YAML.
 - `retrieval.strategy` supports `single_step` and `agentic`.
-- `memory.provider` must be `session`.
+- `capabilities.tools.enabled` and `capabilities.memory.enabled` must be explicit.
+- `capabilities.memory.provider` must be `session` when memory is enabled.
 - `model`, `react.planner`, and `review.subagent` support `model_source: shared`, `model_source: custom`, or legacy inline `provider/name` config. Shared references point at Dashboard-managed Shared Model Connections; custom config stores the connection parameters directly in Agent YAML.
 - Shared Model Connections store reusable connection parameters: display name, provider, model identifier, optional base URL, environment credential reference, optional account-scope env refs, and optional default `timeout_seconds`.
 - Usage parameters such as `temperature`, `max_output_tokens`, `top_k`, document routing budgets, and reviewer controls stay on the Agent role or Knowledge Source. `params.timeout_seconds` on the Agent or Knowledge Source overrides the Shared Model Connection default.
-- `policy.file`, `tools.file`, and provider-specific paths under `package_knowledge_sources[].params` must exist.
+- `policy.file`, `capabilities.tools.file`, and provider-specific paths under `package_knowledge_sources[].params` must exist when the corresponding capability is enabled.
 - The parent directories of `audit.trace_path` and `audit.receipt_path` must be writable.
 
-### Workflow Node Prompt Configuration
+### Workflow Stage Prompt Configuration
 
-`react_enterprise_qa` and `react_enterprise_qa_v2` support governed node-level business context under
-`workflow.nodes[]`. This is intentionally lightweight: it configures Prompt addenda and
-context inclusion for registered template nodes, while the Harness keeps ownership of
+`react_enterprise_qa` and `react_enterprise_qa_v2` support governed stage-level business context under
+`workflow.stages[]`. This is intentionally lightweight: it configures Prompt addenda and
+context inclusion for registered template stages, while the Harness keeps ownership of
 control prompts, topology, policy gates, validators, tool approval, trace, and receipt.
 
 Example:
@@ -265,8 +268,8 @@ workflow:
   runtime: langgraph
   template: react_enterprise_qa
   template_descriptor_version: react_enterprise_qa.v1
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       prompt:
         business_context: "Insurance claim servicing context."
         task_instructions:
@@ -276,7 +279,7 @@ workflow:
       context:
         include_agent_purpose: true
         include_bound_tools: true
-    - node_id: model_answer
+    - id: model_answer
       prompt:
         business_context: "Answer as an internal claims quality reviewer."
       context:
@@ -286,13 +289,13 @@ workflow:
 
 Rules:
 
-- `workflow.nodes[]` is accepted only for `react_enterprise_qa`; `enterprise_qa`
-  remains a deterministic read-only baseline.
-- `node_id` must match the backend Workflow Template Descriptor.
+- `workflow.stages[]` is accepted for Workflow Templates that declare editable stages;
+  `enterprise_qa` remains a deterministic read-only baseline.
+- `id` must match the backend Workflow Template Stage Descriptor.
 - Prompt fields are limited to `business_context`, `task_instructions`, and
   `output_preferences`.
-- Context options must be allowlisted by the descriptor for that node.
-- Node Prompt text is appended as Business Context Addendum. It never replaces the
+- Context options must be allowlisted by the descriptor for that stage.
+- Stage Prompt text is appended as Business Context Addendum. It never replaces the
   Harness-owned system/control prompt.
 - Trace events record only summary metadata such as configured fields, selected context
   options, counts, and redaction status.
@@ -839,8 +842,10 @@ When extending local indexed knowledge or remote retrieval:
 ### Memory
 Current v1 uses session memory:
 ```yaml
-memory:
-  provider: session
+capabilities:
+  memory:
+    enabled: true
+    provider: session
 ```
 
 Planned long-term memory uses three Proof Agent scopes:
@@ -852,23 +857,25 @@ These scopes are independent from provider frameworks. A provider such as Mem0 m
 
 The planned Case Memory contract shape is:
 ```yaml
-memory:
-  provider: local  # or mem0
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: false
-    shared:
-      enabled: false
+capabilities:
+  memory:
+    enabled: true
+    provider: local  # or mem0
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
 ```
 
-Customer Persistent User Memory can be enabled with `memory.scopes.user.enabled: true` for Customer Service conversations. Shared Memory is still rejected when enabled.
+Customer Persistent User Memory can be enabled with `capabilities.memory.scopes.user.enabled: true` for Customer Service conversations. Shared Memory is still rejected when enabled.
 
-Use `memory.provider: mem0` only when the runtime environment supplies the optional `mem0ai` package or an injected compatible Mem0 client. The Mem0 adapter maps Proof Agent Case Memory to Mem0 storage, search, and filtered deletion, then Proof Agent still applies Memory Admission before context injection.
+Use `capabilities.memory.provider: mem0` only when the runtime environment supplies the optional `mem0ai` package or an injected compatible Mem0 client. The Mem0 adapter maps Proof Agent Case Memory to Mem0 storage, search, and filtered deletion, then Proof Agent still applies Memory Admission before context injection.
 
 Customer Service conversations can request Case Memory deletion through `DELETE /api/customer/conversations/{conversation_id}/memory`. The response returns the deleted count and, when the conversation already has an audited run, the run id whose trace received the `memory_delete_decision` event. The endpoint does not expose memory summaries, facts, raw transcripts, or provider payloads.
 

@@ -18,7 +18,7 @@ It must not become a Harness-coded workflow fork.
 ## Design Position
 
 Use the existing `react_enterprise_qa` Controlled ReAct Workflow Template and
-configure it for the insurance specialist domain through Workflow Node Prompt
+configure it for the insurance specialist domain through Workflow Stage Prompt
 Configuration, Agent knowledge bindings, Tool Contracts, policy, memory, and
 response projection settings.
 
@@ -467,7 +467,7 @@ plan -> clarification -> retrieval_review -> retrieval -> tool_review -> tool
 An insurance specialist Agent Package should configure:
 
 - `workflow.template: react_enterprise_qa`.
-- `workflow.nodes[]` with node-level business context.
+- `workflow.stages[]` with stage-level business context.
 - knowledge bindings for public and business-line-scoped knowledge.
 - Tool Contracts for read-only report, policy, claim, customer, and agent
   lookup.

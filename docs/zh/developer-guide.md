@@ -138,11 +138,13 @@ model:
 policy:
   file: ./policy.yaml
 
-tools:
-  file: ./tools.yaml
-
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: true
+    provider: session
 
 audit:
   trace_path: ../../runs/latest/trace.jsonl
@@ -292,8 +294,10 @@ knowledge:
 当前 v1 使用 session memory：
 
 ```yaml
-memory:
-  provider: session
+capabilities:
+  memory:
+    enabled: true
+    provider: session
 ```
 
 扩展持久 memory 前，必须先定义：
