@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.bootstrap.validation import validate_workflow_node_prompt_config
+from proof_agent.bootstrap.validation import validate_workflow_stage_prompt_config
 from proof_agent.bootstrap.knowledge_resolution import (
     ConfigurationStoreKnowledgeBindingResolver,
     PackageKnowledgeBindingResolver,
@@ -49,9 +49,9 @@ from proof_agent.contracts import (
     RunPurpose,
     SharedModelConnection,
     ToolSource,
-    WorkflowNodePromptConfig,
+    WorkflowStagePromptConfig,
 )
-from proof_agent.control.workflow.node_context import build_workflow_node_context_preview
+from proof_agent.control.workflow.stage_context import build_workflow_stage_context_preview
 from proof_agent.control.workflow.templates import (
     list_workflow_templates,
     resolve_workflow_template,
@@ -120,8 +120,8 @@ class ContractUpdateRequest(BaseModel):
     tools_yaml: str | None = None
 
 
-class WorkflowNodePromptRequest(BaseModel):
-    """Request body fragment for node-level business Prompt settings."""
+class WorkflowStagePromptRequest(BaseModel):
+    """Request body fragment for stage-level business Prompt settings."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -130,31 +130,31 @@ class WorkflowNodePromptRequest(BaseModel):
     output_preferences: list[str] = Field(default_factory=list)
 
 
-class WorkflowNodeUpdateItemRequest(BaseModel):
-    """Request body item for one workflow node configuration."""
+class WorkflowStageUpdateItemRequest(BaseModel):
+    """Request body item for one workflow stage configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
-    node_id: str = Field(min_length=1)
-    prompt: WorkflowNodePromptRequest = Field(default_factory=WorkflowNodePromptRequest)
+    id: str = Field(min_length=1)
+    prompt: WorkflowStagePromptRequest = Field(default_factory=WorkflowStagePromptRequest)
     context: dict[str, bool] = Field(default_factory=dict)
 
 
-class WorkflowNodesUpdateRequest(BaseModel):
-    """Request body for replacing Draft Agent workflow node configuration."""
+class WorkflowStagesUpdateRequest(BaseModel):
+    """Request body for replacing Draft Agent workflow stage configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
     template_descriptor_version: str | None = None
-    nodes: list[WorkflowNodeUpdateItemRequest]
+    stages: list[WorkflowStageUpdateItemRequest]
 
 
-class WorkflowNodePreviewRequest(BaseModel):
-    """Request body for rendering one redacted Workflow Node Context Preview."""
+class WorkflowStagePreviewRequest(BaseModel):
+    """Request body for rendering one redacted Workflow Stage Context Preview."""
 
     model_config = ConfigDict(extra="forbid")
 
-    prompt: WorkflowNodePromptRequest = Field(default_factory=WorkflowNodePromptRequest)
+    prompt: WorkflowStagePromptRequest = Field(default_factory=WorkflowStagePromptRequest)
     context: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -1705,15 +1705,15 @@ def update_config_draft_contract(
     return updated.contract_bundle.model_dump(mode="json")
 
 
-@router.patch("/config/agents/{agent_id}/drafts/{draft_id}/workflow-nodes")
-def update_config_draft_workflow_nodes(
+@router.patch("/config/agents/{agent_id}/drafts/{draft_id}/workflow-stages")
+def update_config_draft_workflow_stages(
     agent_id: str,
     draft_id: str,
-    request: WorkflowNodesUpdateRequest,
+    request: WorkflowStagesUpdateRequest,
     app_request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """Replace Draft Agent workflow.nodes[] and validate the Agent Contract."""
+    """Replace Draft Agent workflow.stages[] and validate the Agent Contract."""
 
     actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
     store = _get_configuration_store(app_request)
@@ -1727,7 +1727,8 @@ def update_config_draft_workflow_nodes(
             raise ValueError("agent_yaml workflow must be a mapping.")
         if request.template_descriptor_version is not None:
             workflow["template_descriptor_version"] = request.template_descriptor_version
-        workflow["nodes"] = [_workflow_node_request_payload(item) for item in request.nodes]
+        workflow["stages"] = [_workflow_stage_request_payload(item) for item in request.stages]
+        workflow.pop("nodes", None)
         raw["workflow"] = workflow
         agent_yaml = _dump_agent_yaml(raw)
         bundle = ContractBundle(
@@ -1758,16 +1759,16 @@ def update_config_draft_workflow_nodes(
     return updated.contract_bundle.model_dump(mode="json")
 
 
-@router.post("/config/agents/{agent_id}/drafts/{draft_id}/workflow-nodes/{node_id}/preview")
-def preview_config_draft_workflow_node(
+@router.post("/config/agents/{agent_id}/drafts/{draft_id}/workflow-stages/{stage_id}/preview")
+def preview_config_draft_workflow_stage(
     agent_id: str,
     draft_id: str,
-    node_id: str,
-    request: WorkflowNodePreviewRequest,
+    stage_id: str,
+    request: WorkflowStagePreviewRequest,
     app_request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """Render a redacted Workflow Node Context Preview without executing a run."""
+    """Render a redacted Workflow Stage Context Preview without executing a run."""
 
     _require_operator(identity, OperatorPermission.AGENT_VALIDATE)
     store = _get_configuration_store(app_request)
@@ -1776,22 +1777,22 @@ def preview_config_draft_workflow_node(
         package_dir = compile_draft_agent(draft, store.root_dir / "compiled_preview")
         manifest = load_agent_manifest(package_dir / "agent.yaml")
         descriptor = resolve_workflow_template(manifest.workflow.template)
-        node_descriptor = descriptor.node(node_id)
-        prompt = WorkflowNodePromptConfig(
-            **_workflow_node_prompt_request_payload(request.prompt)
+        stage_descriptor = descriptor.stage(stage_id)
+        prompt = WorkflowStagePromptConfig(
+            **_workflow_stage_prompt_request_payload(request.prompt)
         )
-        validate_workflow_node_prompt_config(
-            node_id=node_id,
+        validate_workflow_stage_prompt_config(
+            stage_id=stage_id,
             prompt=prompt,
-            node_descriptor=node_descriptor,
+            stage_descriptor=stage_descriptor,
             manifest_path=package_dir / "agent.yaml",
         )
-        return build_workflow_node_context_preview(
+        return build_workflow_stage_context_preview(
             descriptor=descriptor,
-            node_id=node_id,
+            stage_id=stage_id,
             prompt=prompt,
             context_options=request.context,
-            sample_context=_workflow_node_sample_context(manifest),
+            sample_context=_workflow_stage_sample_context(manifest),
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2051,13 +2052,13 @@ def _agent_summary_payload(
 
 def _workflow_template_payload(descriptor: Any) -> dict[str, Any]:
     payload = asdict(descriptor)
-    payload["nodes"] = [asdict(node) for node in descriptor.nodes]
+    payload["stages"] = [asdict(stage) for stage in descriptor.stages]
     return payload
 
 
-def _workflow_node_request_payload(item: WorkflowNodeUpdateItemRequest) -> dict[str, Any]:
-    payload: dict[str, Any] = {"node_id": item.node_id}
-    prompt = _workflow_node_prompt_request_payload(item.prompt)
+def _workflow_stage_request_payload(item: WorkflowStageUpdateItemRequest) -> dict[str, Any]:
+    payload: dict[str, Any] = {"id": item.id}
+    prompt = _workflow_stage_prompt_request_payload(item.prompt)
     if prompt:
         payload["prompt"] = prompt
     if item.context:
@@ -2065,8 +2066,8 @@ def _workflow_node_request_payload(item: WorkflowNodeUpdateItemRequest) -> dict[
     return payload
 
 
-def _workflow_node_prompt_request_payload(
-    prompt: WorkflowNodePromptRequest,
+def _workflow_stage_prompt_request_payload(
+    prompt: WorkflowStagePromptRequest,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if prompt.business_context:
@@ -2078,18 +2079,27 @@ def _workflow_node_prompt_request_payload(
     return payload
 
 
-def _workflow_node_sample_context(manifest: Any) -> dict[str, Any]:
+def _workflow_stage_sample_context(manifest: Any) -> dict[str, Any]:
+    tool_contract_path = (
+        str(manifest.capabilities.tools.file)
+        if manifest.capabilities.tools.enabled and manifest.capabilities.tools.file is not None
+        else ""
+    )
     return {
         "agent_purpose": manifest.purpose,
         "bound_knowledge_sources": [
             binding.source_ref.source_id for binding in manifest.knowledge_bindings
         ],
-        "bound_tools": str(manifest.tools.file),
+        "bound_tools": tool_contract_path,
         "policy_outline": str(manifest.policy.file),
         "response_disclosure_policy": (
             manifest.response.model_dump(mode="json") if manifest.response else {}
         ),
-        "memory_scope": manifest.memory.model_dump(mode="json"),
+        "memory_scope": {
+            "enabled": manifest.capabilities.memory.enabled,
+            "provider": manifest.capabilities.memory.provider,
+            "scopes": dict(manifest.capabilities.memory.scopes),
+        },
     }
 
 

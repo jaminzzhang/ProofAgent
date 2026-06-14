@@ -20,8 +20,7 @@ BASIC_UI_TOP_LEVEL_FIELDS = {
     "retrieval",
     "model",
     "policy",
-    "tools",
-    "memory",
+    "capabilities",
     "audit",
 }
 
@@ -39,9 +38,15 @@ def import_agent_package(
     raw = _read_yaml_mapping(resolved_manifest_path)
     package_dir = resolved_manifest_path.parent
     policy_path = _resolve_package_path(package_dir, raw["policy"]["file"])
-    tools_path = _resolve_package_path(package_dir, raw["tools"]["file"])
-    tools_yaml, external_tool_files = _bundle_tools_yaml(package_dir, tools_path)
-    extra_files = _collect_extra_files(package_dir, {resolved_manifest_path, policy_path, tools_path})
+    tools_path = _resolve_tools_path(package_dir, raw)
+    if tools_path is None:
+        tools_yaml = ""
+        external_tool_files: dict[str, str] = {}
+        excluded_paths = {resolved_manifest_path, policy_path}
+    else:
+        tools_yaml, external_tool_files = _bundle_tools_yaml(package_dir, tools_path)
+        excluded_paths = {resolved_manifest_path, policy_path, tools_path}
+    extra_files = _collect_extra_files(package_dir, excluded_paths)
     extra_files.update(external_tool_files)
     bundle = ContractBundle(
         agent_yaml=resolved_manifest_path.read_text(encoding="utf-8"),
@@ -73,6 +78,19 @@ def _resolve_package_path(package_dir: Path, value: str | Path) -> Path:
     if path.is_absolute():
         return path
     return (package_dir / path).resolve()
+
+
+def _resolve_tools_path(package_dir: Path, raw: dict[str, Any]) -> Path | None:
+    capabilities = raw.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return None
+    tools = capabilities.get("tools")
+    if not isinstance(tools, dict) or not tools.get("enabled"):
+        return None
+    file_value = tools.get("file")
+    if not file_value:
+        return None
+    return _resolve_package_path(package_dir, file_value)
 
 
 def _collect_extra_files(package_dir: Path, excluded: set[Path]) -> dict[str, str]:
