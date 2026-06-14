@@ -6,9 +6,11 @@ from typing import Any
 from proof_agent.contracts import (
     AgentManifest,
     AuditConfig,
+    CapabilitiesConfig,
     CustomerConfig,
     KnowledgeBindingConfig,
     KnowledgeSourceReferenceConfig,
+    MemoryCapabilityConfig,
     MemoryConfig,
     MemoryScopeConfig,
     MemoryScopesConfig,
@@ -22,11 +24,11 @@ from proof_agent.contracts import (
     RetrievalConfig,
     ReviewConfig,
     ReviewSubagentConfig,
-    ToolsConfig,
+    ToolCapabilityConfig,
     WorkflowConfig,
-    WorkflowNodeConfig,
-    WorkflowNodeContextConfig,
-    WorkflowNodePromptConfig,
+    WorkflowStageConfig,
+    WorkflowStageContextConfig,
+    WorkflowStagePromptConfig,
 )
 from proof_agent.contracts.manifest import CheckpointerConfig
 
@@ -48,8 +50,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
     retrieval = raw["retrieval"]
     model = raw["model"]
     policy = raw["policy"]
-    tools = raw["tools"]
-    memory = raw["memory"]
+    capabilities = raw["capabilities"]
     audit = raw["audit"]
 
     return AgentManifest(
@@ -60,9 +61,9 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             template=workflow["template"],
             checkpointer=_checkpointer_config_from_mapping(workflow.get("checkpointer")),
             template_descriptor_version=workflow.get("template_descriptor_version"),
-            nodes=tuple(
-                _workflow_node_config_from_mapping(item)
-                for item in workflow.get("nodes", ())
+            stages=tuple(
+                _workflow_stage_config_from_mapping(item)
+                for item in workflow.get("stages", ())
             ),
         ),
         package_knowledge_sources=tuple(
@@ -86,9 +87,8 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         ),
         model=_required_model_config_from_mapping(model, field_name="model"),
         policy=PolicyConfig(file=resolve_path(base_dir, policy["file"])),
-        tools=ToolsConfig(file=resolve_path(base_dir, tools["file"])),
+        capabilities=_capabilities_config_from_mapping(capabilities, base_dir=base_dir),
         customer=_customer_config_from_mapping(raw.get("customer"), base_dir=base_dir),
-        memory=_memory_config_from_mapping(memory),
         audit=AuditConfig(
             trace_path=resolve_path(base_dir, audit["trace_path"]),
             receipt_path=resolve_path(base_dir, audit["receipt_path"]),
@@ -234,44 +234,70 @@ def _checkpointer_config_from_mapping(raw: Any) -> CheckpointerConfig | None:
     )
 
 
-def _workflow_node_config_from_mapping(raw: Any) -> WorkflowNodeConfig:
+def _capabilities_config_from_mapping(raw: Any, *, base_dir: Path) -> CapabilitiesConfig:
     if not isinstance(raw, dict):
-        raise TypeError("workflow.nodes entries must be mappings")
+        raise TypeError("capabilities must be a mapping")
+    tools = raw["tools"]
+    memory = raw["memory"]
+    if not isinstance(tools, dict):
+        raise TypeError("capabilities.tools must be a mapping")
+    if not isinstance(memory, dict):
+        raise TypeError("capabilities.memory must be a mapping")
+    return CapabilitiesConfig(
+        tools=ToolCapabilityConfig(
+            enabled=tools["enabled"],
+            file=resolve_path(base_dir, tools["file"]) if tools.get("file") else None,
+        ),
+        memory=MemoryCapabilityConfig(
+            enabled=memory["enabled"],
+            provider=memory.get("provider"),
+            scopes=memory.get("scopes", {}),
+        ),
+    )
+
+
+def _workflow_stage_config_from_mapping(raw: Any) -> WorkflowStageConfig:
+    if not isinstance(raw, dict):
+        raise TypeError("workflow.stages entries must be mappings")
+    if "node_id" in raw:
+        raise TypeError("workflow.stages[].node_id is not supported; use id")
+    if "stage_id" in raw:
+        raise TypeError("workflow.stages[].stage_id is not supported; use id")
     prompt = raw.get("prompt", {})
     if prompt is None:
         prompt = {}
     if not isinstance(prompt, dict):
-        raise TypeError("workflow.nodes[].prompt must be a mapping")
+        raise TypeError("workflow.stages[].prompt must be a mapping")
     context = raw.get("context", {})
     if context is None:
         context = {}
     if not isinstance(context, dict):
-        raise TypeError("workflow.nodes[].context must be a mapping")
-    return WorkflowNodeConfig(
-        node_id=raw["node_id"],
-        prompt=WorkflowNodePromptConfig(
+        raise TypeError("workflow.stages[].context must be a mapping")
+    return WorkflowStageConfig(
+        id=raw["id"],
+        prompt=WorkflowStagePromptConfig(
             business_context=prompt.get("business_context", ""),
             task_instructions=tuple(prompt.get("task_instructions", ())),
             output_preferences=tuple(prompt.get("output_preferences", ())),
         ),
-        context=WorkflowNodeContextConfig(
-            options=_workflow_node_context_options_from_mapping(
-                raw["node_id"],
+        context=WorkflowStageContextConfig(
+            options=_workflow_stage_context_options_from_mapping(
+                raw["id"],
                 context,
             ),
         ),
     )
 
 
-def _workflow_node_context_options_from_mapping(
-    node_id: str,
+def _workflow_stage_context_options_from_mapping(
+    stage_id: str,
     context: dict[str, Any],
 ) -> dict[str, bool]:
     options: dict[str, bool] = {}
     for key, value in context.items():
         if not isinstance(value, bool):
             raise TypeError(
-                f"workflow node {node_id} context option {key} must be a boolean"
+                f"workflow stage {stage_id} context option {key} must be a boolean"
             )
         options[str(key)] = value
     return options

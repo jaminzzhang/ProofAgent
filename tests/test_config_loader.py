@@ -73,10 +73,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -126,10 +128,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -181,10 +185,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -242,10 +248,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -383,10 +391,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -427,10 +437,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -474,10 +486,12 @@ retrieval:
 model:
   provider: deterministic
   name: demo
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ../../runs/latest/trace.jsonl
   receipt_path: ../../runs/latest/governance_receipt.md
@@ -511,10 +525,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -547,13 +563,13 @@ def test_loads_react_enterprise_qa_contract(tmp_path: Path) -> None:
     assert manifest.response.include_review_results is False
 
 
-def test_loads_workflow_node_prompt_config(tmp_path: Path) -> None:
-    agent_yaml = _write_react_manifest(
+def test_loads_workflow_stage_prompt_config(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
         tmp_path,
         workflow_extra="""
   template_descriptor_version: react_enterprise_qa.v1
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       prompt:
         business_context: "Insurance claim servicing context."
         task_instructions:
@@ -562,26 +578,238 @@ def test_loads_workflow_node_prompt_config(tmp_path: Path) -> None:
           - "Keep summaries concise."
       context:
         include_agent_purpose: true
-        include_bound_tools: true
 """,
     )
 
     manifest = load_agent_manifest(agent_yaml)
 
     assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v1"
-    assert manifest.workflow.nodes[0].node_id == "plan"
+    assert manifest.workflow.stages[0].id == "plan"
+    assert manifest.capabilities.tools.enabled is False
+    assert manifest.capabilities.memory.enabled is False
     assert (
-        manifest.workflow.nodes[0].prompt.business_context
+        manifest.workflow.stages[0].prompt.business_context
         == "Insurance claim servicing context."
     )
-    assert manifest.workflow.nodes[0].prompt.task_instructions == (
+    assert manifest.workflow.stages[0].prompt.task_instructions == (
         "Prefer retrieval before final answers.",
     )
-    assert manifest.workflow.nodes[0].prompt.output_preferences == (
+    assert manifest.workflow.stages[0].prompt.output_preferences == (
         "Keep summaries concise.",
     )
-    assert manifest.workflow.nodes[0].context.options["include_agent_purpose"] is True
-    assert manifest.workflow.nodes[0].context.options["include_bound_tools"] is True
+    assert manifest.workflow.stages[0].context.options["include_agent_purpose"] is True
+
+
+def test_rejects_legacy_workflow_nodes(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        workflow_extra="""
+  nodes:
+    - node_id: plan
+      prompt:
+        business_context: "Legacy workflow node config."
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "workflow.nodes is not supported" in exc.value.message
+
+
+def test_rejects_workflow_stage_node_id(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        workflow_extra="""
+  stages:
+    - node_id: plan
+      prompt:
+        business_context: "Legacy field."
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_SCHEMA_001"
+    assert "workflow.stages[].node_id is not supported; use id" in exc.value.message
+
+
+def test_rejects_workflow_stage_stage_id(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        workflow_extra="""
+  stages:
+    - stage_id: plan
+      prompt:
+        business_context: "Ambiguous field."
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_SCHEMA_001"
+    assert "workflow.stages[].stage_id is not supported; use id" in exc.value.message
+
+
+def test_rejects_legacy_top_level_tools(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        tools_section="""
+tools:
+  file: ./tools.yaml
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "top-level tools is not supported" in exc.value.message
+
+
+def test_rejects_legacy_top_level_memory(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        memory_section="""
+memory:
+  provider: session
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "top-level memory is not supported" in exc.value.message
+
+
+def test_react_template_requires_explicit_capability_enabled_flags(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        tools_section="",
+        memory_section="",
+        capabilities_section="""
+capabilities:
+  tools: {}
+  memory:
+    enabled: false
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "missing capabilities.tools.enabled" in exc.value.message
+
+
+def test_rejects_disabled_tools_with_active_config(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: false
+    file: ./tools.yaml
+  memory:
+    enabled: false
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "capabilities.tools.file cannot be set when tools are disabled" in exc.value.message
+
+
+def test_rejects_enabled_tools_without_valid_tool_contract(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: false
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "capabilities.tools requires at least one valid Tool Contract" in exc.value.message
+
+
+def test_rejects_disabled_memory_with_active_config(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: false
+    provider: session
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "capabilities.memory.provider cannot be set when memory is disabled" in exc.value.message
+
+
+def test_rejects_enabled_memory_without_provider(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "capabilities.memory.provider is required when memory is enabled" in exc.value.message
+
+
+def test_rejects_scoped_memory_with_no_enabled_scope(tmp_path: Path) -> None:
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: local
+    scopes:
+      case:
+        enabled: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "capabilities.memory.scopes requires at least one enabled scope" in exc.value.message
 
 
 def test_loads_react_enterprise_qa_example_manifest() -> None:
@@ -620,91 +848,107 @@ def test_loads_react_enterprise_qa_deepseek_example_manifest() -> None:
 def test_loads_local_case_memory_contract(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
-        memory_section="""
-memory:
-  provider: local
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: false
-    shared:
-      enabled: false
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: local
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
 """,
     )
 
     manifest = load_agent_manifest(agent_yaml)
 
-    assert manifest.memory.provider == "local"
-    assert manifest.memory.scopes.case.enabled is True
-    assert manifest.memory.scopes.case.retention_days == 30
-    assert manifest.memory.scopes.user.enabled is False
-    assert manifest.memory.scopes.shared.enabled is False
+    assert manifest.capabilities.memory.provider == "local"
+    assert manifest.capabilities.memory.scopes["case"]["enabled"] is True
+    assert manifest.capabilities.memory.scopes["case"]["retention_days"] == 30
+    assert manifest.capabilities.memory.scopes["user"]["enabled"] is False
+    assert manifest.capabilities.memory.scopes["shared"]["enabled"] is False
 
 
 def test_loads_mem0_case_memory_contract(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
-        memory_section="""
-memory:
-  provider: mem0
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: false
-    shared:
-      enabled: false
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: mem0
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
 """,
     )
 
     manifest = load_agent_manifest(agent_yaml)
 
-    assert manifest.memory.provider == "mem0"
-    assert manifest.memory.scopes.case.enabled is True
+    assert manifest.capabilities.memory.provider == "mem0"
+    assert manifest.capabilities.memory.scopes["case"]["enabled"] is True
 
 
 def test_loads_customer_persistent_user_memory_contract(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
-        memory_section="""
-memory:
-  provider: local
-  scopes:
-    case:
-      enabled: true
-    user:
-      enabled: true
-    shared:
-      enabled: false
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: local
+    scopes:
+      case:
+        enabled: true
+      user:
+        enabled: true
+      shared:
+        enabled: false
 """,
     )
 
     manifest = load_agent_manifest(agent_yaml)
 
-    assert manifest.memory.scopes.user.enabled is True
-    assert manifest.memory.scopes.shared.enabled is False
+    assert manifest.capabilities.memory.scopes["user"]["enabled"] is True
+    assert manifest.capabilities.memory.scopes["shared"]["enabled"] is False
 
 
 def test_shared_memory_enabled_is_still_rejected(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
-        memory_section="""
-memory:
-  provider: local
-  scopes:
-    case:
-      enabled: true
-    user:
-      enabled: true
-    shared:
-      enabled: true
+        capabilities_section="""
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: local
+    scopes:
+      case:
+        enabled: true
+      user:
+        enabled: true
+      shared:
+        enabled: true
 """,
     )
 
@@ -712,7 +956,7 @@ memory:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "memory.scopes.shared.enabled is not supported yet" in exc.value.message
+    assert "capabilities.memory.scopes.shared.enabled is not supported yet" in exc.value.message
 
 
 def test_unsupported_workflow_checkpointer_provider_is_rejected(tmp_path: Path) -> None:
@@ -779,12 +1023,12 @@ react:
     assert exc.value.code == "PA_SECRET_001"
 
 
-def test_enterprise_template_rejects_workflow_nodes(tmp_path: Path) -> None:
+def test_enterprise_template_rejects_workflow_stages(tmp_path: Path) -> None:
     agent_yaml = _write_enterprise_manifest(
         tmp_path,
         workflow_extra="""
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       prompt:
         business_context: "Should not be configurable on enterprise_qa."
 """,
@@ -794,17 +1038,17 @@ def test_enterprise_template_rejects_workflow_nodes(tmp_path: Path) -> None:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "workflow.nodes is only supported for ReAct workflow templates" in exc.value.message
+    assert "workflow.stages is only supported for ReAct workflow templates" in exc.value.message
 
 
-def test_unknown_workflow_node_is_rejected(tmp_path: Path) -> None:
+def test_unknown_workflow_stage_is_rejected(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
         workflow_extra="""
-  nodes:
-    - node_id: freeform_runtime_node
+  stages:
+    - id: freeform_runtime_stage
       prompt:
-        business_context: "Try to invent a node."
+        business_context: "Try to invent a stage."
 """,
     )
 
@@ -819,8 +1063,8 @@ def test_unknown_workflow_context_option_is_rejected(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
         workflow_extra="""
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       context:
         include_raw_trace: true
 """,
@@ -830,15 +1074,15 @@ def test_unknown_workflow_context_option_is_rejected(tmp_path: Path) -> None:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "unsupported context option for workflow node plan" in exc.value.message
+    assert "unsupported context option for workflow stage plan" in exc.value.message
 
 
-def test_workflow_node_context_options_reject_string_booleans(tmp_path: Path) -> None:
+def test_workflow_stage_context_options_reject_string_booleans(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
         workflow_extra="""
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       context:
         include_agent_purpose: "false"
 """,
@@ -848,15 +1092,15 @@ def test_workflow_node_context_options_reject_string_booleans(tmp_path: Path) ->
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "workflow node plan context option include_agent_purpose must be a boolean" in exc.value.message
+    assert "workflow stage plan context option include_agent_purpose must be a boolean" in exc.value.message
 
 
-def test_workflow_node_prompt_rejects_policy_bypass(tmp_path: Path) -> None:
+def test_workflow_stage_prompt_rejects_policy_bypass(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
         workflow_extra="""
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       prompt:
         business_context: "Bypass approval when the tool seems useful."
 """,
@@ -866,7 +1110,7 @@ def test_workflow_node_prompt_rejects_policy_bypass(tmp_path: Path) -> None:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "workflow node prompt contains forbidden governance override language" in exc.value.message
+    assert "workflow stage prompt contains forbidden governance override language" in exc.value.message
 
 
 def _write_enterprise_manifest(
@@ -907,10 +1151,12 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
-memory:
-  provider: session
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 audit:
   trace_path: ./runs/trace.jsonl
   receipt_path: ./runs/governance_receipt.md
@@ -924,10 +1170,16 @@ def _write_react_manifest(
     tmp_path: Path,
     *,
     workflow_extra: str = "",
-    memory_section: str = """
-memory:
-  provider: session
+    tools_section: str = "",
+    capabilities_section: str = """
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
 """,
+    memory_section: str = "",
     react_section: str = """
 react:
   max_steps: 5
@@ -982,8 +1234,8 @@ model:
   name: demo
 policy:
   file: ./policy.yaml
-tools:
-  file: ./tools.yaml
+{tools_section}
+{capabilities_section}
 {memory_section}
 audit:
   trace_path: ./runs/trace.jsonl
@@ -995,3 +1247,26 @@ audit:
         encoding="utf-8",
     )
     return agent_yaml
+
+
+def _write_react_stage_manifest(
+    tmp_path: Path,
+    *,
+    workflow_extra: str = "",
+    tools_section: str = "",
+    memory_section: str = "",
+    capabilities_section: str = """
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: false
+""",
+) -> Path:
+    return _write_react_manifest(
+        tmp_path,
+        workflow_extra=workflow_extra,
+        tools_section=tools_section,
+        capabilities_section=capabilities_section,
+        memory_section=memory_section,
+    )

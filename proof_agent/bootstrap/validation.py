@@ -6,7 +6,9 @@ from typing import Any
 from urllib import parse
 from uuid import uuid4
 
-from proof_agent.contracts import AgentManifest, WorkflowNodePromptConfig
+import yaml  # type: ignore[import-untyped]
+
+from proof_agent.contracts import AgentManifest, WorkflowStagePromptConfig
 from proof_agent.control.workflow.templates import WorkflowNodeDescriptor, resolve_workflow_template
 from proof_agent.errors import ProofAgentError
 
@@ -20,8 +22,7 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "retrieval",
     "model",
     "policy",
-    "tools",
-    "memory",
+    "capabilities",
     "audit",
 }
 
@@ -103,6 +104,20 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
             f"Rename knowledge_sources[] to package_knowledge_sources[] and replace knowledge_bindings[].source_id with knowledge_bindings[].source_ref in {manifest_path}.",
             artifact_path=manifest_path,
         )
+    if "tools" in raw:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            "top-level tools is not supported; use capabilities.tools",
+            f"Move tool configuration under capabilities.tools in {manifest_path}.",
+            artifact_path=manifest_path,
+        )
+    if "memory" in raw:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            "top-level memory is not supported; use capabilities.memory",
+            f"Move memory configuration under capabilities.memory in {manifest_path}.",
+            artifact_path=manifest_path,
+        )
 
     missing = sorted(REQUIRED_TOP_LEVEL_FIELDS.difference(raw))
     if missing:
@@ -117,8 +132,7 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
         "workflow": {"runtime", "template"},
         "retrieval": {"strategy"},
         "policy": {"file"},
-        "tools": {"file"},
-        "memory": {"provider"},
+        "capabilities": {"tools", "memory"},
         "audit": {"trace_path", "receipt_path"},
     }
     for section, keys in required_nested.items():
@@ -138,6 +152,15 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
                 f"Add {section}.{', '.join(missing_nested)} to {manifest_path}",
                 artifact_path=manifest_path,
             )
+
+    workflow = raw["workflow"]
+    if isinstance(workflow, Mapping) and "nodes" in workflow:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            "workflow.nodes is not supported; use workflow.stages",
+            f"Rename workflow.nodes[] to workflow.stages[] and node_id to id in {manifest_path}.",
+            artifact_path=manifest_path,
+        )
 
     _require_model_source_shape(raw.get("model"), "model", manifest_path=manifest_path)
     react = raw.get("react")
@@ -168,7 +191,8 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
 
     _require_sequence_of_mappings(raw, "package_knowledge_sources", manifest_path=manifest_path)
     _require_sequence_of_mappings(raw, "knowledge_bindings", manifest_path=manifest_path)
-    _require_workflow_node_context_booleans(raw["workflow"], manifest_path=manifest_path)
+    _require_workflow_stage_context_booleans(raw["workflow"], manifest_path=manifest_path)
+    _require_capability_enabled_flags(raw["capabilities"], manifest_path=manifest_path)
     for index, binding in enumerate(raw["knowledge_bindings"]):
         if "source_id" in binding:
             raise ProofAgentError(
@@ -201,21 +225,21 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
             )
 
 
-def _require_workflow_node_context_booleans(
+def _require_workflow_stage_context_booleans(
     workflow: Mapping[str, Any],
     *,
     manifest_path: Path,
 ) -> None:
-    nodes = workflow.get("nodes")
-    if nodes is None:
+    stages = workflow.get("stages")
+    if stages is None:
         return
-    if not isinstance(nodes, list | tuple):
+    if not isinstance(stages, list | tuple):
         return
-    for index, node in enumerate(nodes):
-        if not isinstance(node, Mapping):
+    for index, stage in enumerate(stages):
+        if not isinstance(stage, Mapping):
             continue
-        node_id = str(node.get("node_id", f"workflow.nodes[{index}]"))
-        context = node.get("context")
+        stage_id = str(stage.get("id", f"workflow.stages[{index}]"))
+        context = stage.get("context")
         if context is None:
             continue
         if not isinstance(context, Mapping):
@@ -225,8 +249,38 @@ def _require_workflow_node_context_booleans(
                 continue
             raise ProofAgentError(
                 "PA_CONFIG_002",
-                f"workflow node {node_id} context option {option} must be a boolean",
-                "Use unquoted true or false for workflow node context options.",
+                f"workflow stage {stage_id} context option {option} must be a boolean",
+                "Use unquoted true or false for workflow stage context options.",
+                artifact_path=manifest_path,
+            )
+
+
+def _require_capability_enabled_flags(
+    capabilities: Mapping[str, Any],
+    *,
+    manifest_path: Path,
+) -> None:
+    for domain in ("tools", "memory"):
+        value = capabilities.get(domain)
+        if not isinstance(value, Mapping):
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"capabilities.{domain} must be a mapping",
+                f"Set capabilities.{domain}.enabled in {manifest_path}.",
+                artifact_path=manifest_path,
+            )
+        if "enabled" not in value:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"missing capabilities.{domain}.enabled",
+                f"Set capabilities.{domain}.enabled to true or false in {manifest_path}.",
+                artifact_path=manifest_path,
+            )
+        if not isinstance(value.get("enabled"), bool):
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"capabilities.{domain}.enabled must be a boolean",
+                f"Use unquoted true or false for capabilities.{domain}.enabled.",
                 artifact_path=manifest_path,
             )
 
@@ -302,7 +356,8 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
             artifact_path=manifest_path,
         )
     _validate_checkpointer_config(manifest, manifest_path=manifest_path)
-    _validate_workflow_node_config(manifest, manifest_path=manifest_path)
+    _validate_capabilities_config(manifest, manifest_path=manifest_path)
+    _validate_workflow_stage_config(manifest, manifest_path=manifest_path)
     _validate_react_config(manifest, manifest_path=manifest_path)
     _validate_review_config(manifest, manifest_path=manifest_path)
     _validate_knowledge_sources_and_bindings(manifest, manifest_path=manifest_path)
@@ -310,17 +365,20 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     _validate_retrieval_config(manifest, manifest_path=manifest_path)
     _validate_model_role_config(manifest.model, "model", manifest_path=manifest_path)
     _reject_secret_model_params(manifest, manifest_path=manifest_path)
-    if manifest.memory.provider not in {"session", "local", "mem0"}:
+    if manifest.capabilities.memory.enabled and manifest.capabilities.memory.provider not in {
+        "session",
+        "local",
+        "mem0",
+    }:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            f"unsupported memory provider: {manifest.memory.provider}",
-            "Use memory.provider: session, local, or mem0 for v1.",
+            f"unsupported memory provider: {manifest.capabilities.memory.provider}",
+            "Use capabilities.memory.provider: session, local, or mem0 for v1.",
             artifact_path=manifest_path,
         )
     _validate_memory_config(manifest, manifest_path=manifest_path)
 
     require_path(manifest.policy.file, "policy.file", manifest_path)
-    require_path(manifest.tools.file, "tools.file", manifest_path)
     if manifest.customer is not None and manifest.customer.adapter is not None:
         require_path(manifest.customer.adapter, "customer.adapter", manifest_path)
     require_writable_parent(manifest.audit.trace_path, "audit.trace_path", manifest_path)
@@ -414,15 +472,98 @@ def _validate_checkpointer_config(manifest: AgentManifest, *, manifest_path: Pat
         )
 
 
-def _validate_workflow_node_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    nodes = manifest.workflow.nodes
-    if not nodes:
+def _validate_capabilities_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    tools = manifest.capabilities.tools
+    if not tools.enabled and tools.file is not None:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "capabilities.tools.file cannot be set when tools are disabled",
+            "Remove capabilities.tools.file or set capabilities.tools.enabled: true.",
+            artifact_path=manifest_path,
+        )
+    if tools.enabled:
+        if tools.file is None:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "capabilities.tools.file is required when tools are enabled",
+                "Set capabilities.tools.file to a Tool Contract YAML file.",
+                artifact_path=manifest_path,
+            )
+        require_path(tools.file, "capabilities.tools.file", manifest_path)
+        if _tool_contract_count(tools.file) == 0:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "capabilities.tools requires at least one valid Tool Contract",
+                "Add at least one tool entry with a name to capabilities.tools.file or disable tools.",
+                artifact_path=manifest_path,
+            )
+
+    memory = manifest.capabilities.memory
+    if not memory.enabled:
+        if memory.provider is not None:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "capabilities.memory.provider cannot be set when memory is disabled",
+                "Remove capabilities.memory.provider or set capabilities.memory.enabled: true.",
+                artifact_path=manifest_path,
+            )
+        if memory.scopes:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "capabilities.memory.scopes cannot be set when memory is disabled",
+                "Remove capabilities.memory.scopes or set capabilities.memory.enabled: true.",
+                artifact_path=manifest_path,
+            )
+        return
+    if not memory.provider:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "capabilities.memory.provider is required when memory is enabled",
+            "Set capabilities.memory.provider to session, local, or mem0.",
+            artifact_path=manifest_path,
+        )
+    if memory.provider in {"local", "mem0"} and memory.scopes:
+        enabled_scopes = [
+            scope_name
+            for scope_name in ("case", "user", "shared")
+            if _memory_scope_enabled(memory.scopes, scope_name)
+        ]
+        if not enabled_scopes:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "capabilities.memory.scopes requires at least one enabled scope",
+                "Enable at least one memory scope or disable memory.",
+                artifact_path=manifest_path,
+            )
+
+
+def _tool_contract_count(path: Path) -> int:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"invalid Tool Contract YAML: {path}",
+            "Fix capabilities.tools.file YAML syntax.",
+            artifact_path=path,
+        ) from exc
+    if not isinstance(raw, Mapping):
+        return 0
+    tools = raw.get("tools", [])
+    if not isinstance(tools, list | tuple):
+        return 0
+    return sum(1 for tool in tools if isinstance(tool, Mapping) and bool(tool.get("name")))
+
+
+def _validate_workflow_stage_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
+    stages = manifest.workflow.stages
+    if not stages:
         return
     if manifest.workflow.template not in REACT_WORKFLOW_TEMPLATES:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "workflow.nodes is only supported for ReAct workflow templates",
-            "Remove workflow.nodes or set workflow.template to a ReAct workflow template.",
+            "workflow.stages is only supported for ReAct workflow templates",
+            "Remove workflow.stages or set workflow.template to a ReAct workflow template.",
             artifact_path=manifest_path,
         )
 
@@ -438,55 +579,55 @@ def _validate_workflow_node_config(manifest: AgentManifest, *, manifest_path: Pa
             artifact_path=manifest_path,
         )
 
-    seen_node_ids: set[str] = set()
+    seen_stage_ids: set[str] = set()
     total_prompt_chars = 0
-    for node_config in nodes:
-        if node_config.node_id in seen_node_ids:
+    for stage_config in stages:
+        if stage_config.id in seen_stage_ids:
             raise ProofAgentError(
                 "PA_CONFIG_002",
-                f"duplicate workflow node_id: {node_config.node_id}",
-                "Use each workflow.nodes[].node_id at most once.",
+                f"duplicate workflow stage id: {stage_config.id}",
+                "Use each workflow.stages[].id at most once.",
                 artifact_path=manifest_path,
             )
-        seen_node_ids.add(node_config.node_id)
-        node_descriptor = descriptor.node(node_config.node_id)
+        seen_stage_ids.add(stage_config.id)
+        node_descriptor = descriptor.node(stage_config.id)
 
         unsupported_context_options = sorted(
             option
-            for option in node_config.context.options
+            for option in stage_config.context.options
             if option not in node_descriptor.context_options
         )
         if unsupported_context_options:
             raise ProofAgentError(
                 "PA_CONFIG_002",
-                f"unsupported context option for workflow node {node_config.node_id}: {', '.join(unsupported_context_options)}",
+                f"unsupported context option for workflow stage {stage_config.id}: {', '.join(unsupported_context_options)}",
                 f"Use context options: {', '.join(node_descriptor.context_options)}.",
                 artifact_path=manifest_path,
             )
 
-        total_prompt_chars += validate_workflow_node_prompt_config(
-            node_id=node_config.node_id,
-            prompt=node_config.prompt,
+        total_prompt_chars += validate_workflow_stage_prompt_config(
+            stage_id=stage_config.id,
+            prompt=stage_config.prompt,
             node_descriptor=node_descriptor,
             manifest_path=manifest_path,
         )
     if total_prompt_chars > MAX_WORKFLOW_NODE_TOTAL_PROMPT_CHARS:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "workflow node prompt text exceeds total size limit",
+            "workflow stage prompt text exceeds total size limit",
             f"Use at most {MAX_WORKFLOW_NODE_TOTAL_PROMPT_CHARS} total prompt characters.",
             artifact_path=manifest_path,
         )
 
 
-def validate_workflow_node_prompt_config(
+def validate_workflow_stage_prompt_config(
     *,
-    node_id: str,
-    prompt: WorkflowNodePromptConfig,
+    stage_id: str,
+    prompt: WorkflowStagePromptConfig,
     node_descriptor: WorkflowNodeDescriptor,
     manifest_path: Path | None = None,
 ) -> int:
-    """Validate one Workflow Node Prompt against descriptor and safety limits."""
+    """Validate one Workflow Stage Prompt against descriptor and safety limits."""
 
     configured_prompt_fields = _configured_workflow_prompt_fields(prompt)
     unsupported_prompt_fields = sorted(
@@ -497,13 +638,13 @@ def validate_workflow_node_prompt_config(
     if unsupported_prompt_fields:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            f"unsupported prompt field for workflow node {node_id}: {', '.join(unsupported_prompt_fields)}",
+            f"unsupported prompt field for workflow stage {stage_id}: {', '.join(unsupported_prompt_fields)}",
             f"Use editable Prompt fields: {', '.join(node_descriptor.editable_prompt_fields)}.",
             artifact_path=manifest_path,
         )
 
-    prompt_chars = _validate_workflow_node_prompt_text(
-        node_id,
+    prompt_chars = _validate_workflow_stage_prompt_text(
+        stage_id,
         prompt.business_context,
         "business_context",
         MAX_WORKFLOW_NODE_BUSINESS_CONTEXT_CHARS,
@@ -512,13 +653,13 @@ def validate_workflow_node_prompt_config(
     if len(prompt.task_instructions) > MAX_WORKFLOW_NODE_INSTRUCTION_COUNT:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            f"workflow node {node_id} task_instructions has too many items",
+            f"workflow stage {stage_id} task_instructions has too many items",
             f"Use at most {MAX_WORKFLOW_NODE_INSTRUCTION_COUNT} task_instructions.",
             artifact_path=manifest_path,
         )
     for instruction in prompt.task_instructions:
-        prompt_chars += _validate_workflow_node_prompt_text(
-            node_id,
+        prompt_chars += _validate_workflow_stage_prompt_text(
+            stage_id,
             instruction,
             "task_instructions",
             MAX_WORKFLOW_NODE_INSTRUCTION_CHARS,
@@ -527,13 +668,13 @@ def validate_workflow_node_prompt_config(
     if len(prompt.output_preferences) > MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            f"workflow node {node_id} output_preferences has too many items",
+            f"workflow stage {stage_id} output_preferences has too many items",
             f"Use at most {MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_COUNT} output_preferences.",
             artifact_path=manifest_path,
         )
     for preference in prompt.output_preferences:
-        prompt_chars += _validate_workflow_node_prompt_text(
-            node_id,
+        prompt_chars += _validate_workflow_stage_prompt_text(
+            stage_id,
             preference,
             "output_preferences",
             MAX_WORKFLOW_NODE_OUTPUT_PREFERENCE_CHARS,
@@ -553,8 +694,8 @@ def _configured_workflow_prompt_fields(prompt: object) -> tuple[str, ...]:
     return tuple(fields)
 
 
-def _validate_workflow_node_prompt_text(
-    node_id: str,
+def _validate_workflow_stage_prompt_text(
+    stage_id: str,
     value: str,
     field_name: str,
     max_chars: int,
@@ -564,7 +705,7 @@ def _validate_workflow_node_prompt_text(
     if len(value) > max_chars:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            f"workflow node {node_id} {field_name} exceeds size limit",
+            f"workflow stage {stage_id} {field_name} exceeds size limit",
             f"Use at most {max_chars} characters for {field_name}.",
             artifact_path=manifest_path,
         )
@@ -572,7 +713,7 @@ def _validate_workflow_node_prompt_text(
     if any(phrase in normalized for phrase in FORBIDDEN_WORKFLOW_NODE_PROMPT_PHRASES):
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "workflow node prompt contains forbidden governance override language",
+            "workflow stage prompt contains forbidden governance override language",
             (
                 "Remove instructions that override Harness prompts, policy, approval, "
                 "evidence, validators, tools, or chain-of-thought boundaries."
@@ -582,50 +723,61 @@ def _validate_workflow_node_prompt_text(
     if any(part in normalized for part in FORBIDDEN_WORKFLOW_NODE_PROMPT_SECRET_PARTS):
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "workflow node prompt contains secret-looking text",
-            "Remove secrets and credential-like values from workflow node Prompt configuration.",
+            "workflow stage prompt contains secret-looking text",
+            "Remove secrets and credential-like values from workflow stage Prompt configuration.",
             artifact_path=manifest_path,
         )
     return len(value)
 
 
 def _validate_memory_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    scopes = manifest.memory.scopes
-    if scopes.shared.enabled:
+    memory = manifest.capabilities.memory
+    if not memory.enabled:
+        return
+    scopes = memory.scopes
+    if _memory_scope_enabled(scopes, "shared"):
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "memory.scopes.shared.enabled is not supported yet",
-            "Set memory.scopes.shared.enabled: false until Shared Memory is implemented.",
+            "capabilities.memory.scopes.shared.enabled is not supported yet",
+            "Set capabilities.memory.scopes.shared.enabled: false until Shared Memory is implemented.",
             artifact_path=manifest_path,
         )
-    if scopes.case.retention_days <= 0:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "memory.scopes.case.retention_days must be greater than 0",
-            "Set memory.scopes.case.retention_days to a positive integer.",
-            artifact_path=manifest_path,
-        )
-    if scopes.case.max_records <= 0:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "memory.scopes.case.max_records must be greater than 0",
-            "Set memory.scopes.case.max_records to a positive integer.",
-            artifact_path=manifest_path,
-        )
-    if scopes.user.retention_days <= 0:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "memory.scopes.user.retention_days must be greater than 0",
-            "Set memory.scopes.user.retention_days to a positive integer.",
-            artifact_path=manifest_path,
-        )
-    if scopes.user.max_records <= 0:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "memory.scopes.user.max_records must be greater than 0",
-            "Set memory.scopes.user.max_records to a positive integer.",
-            artifact_path=manifest_path,
-        )
+    for scope_name in ("case", "user"):
+        if _memory_scope_int(scopes, scope_name, "retention_days", 30) <= 0:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"capabilities.memory.scopes.{scope_name}.retention_days must be greater than 0",
+                f"Set capabilities.memory.scopes.{scope_name}.retention_days to a positive integer.",
+                artifact_path=manifest_path,
+            )
+        if _memory_scope_int(scopes, scope_name, "max_records", 5) <= 0:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"capabilities.memory.scopes.{scope_name}.max_records must be greater than 0",
+                f"Set capabilities.memory.scopes.{scope_name}.max_records to a positive integer.",
+                artifact_path=manifest_path,
+            )
+
+
+def _memory_scope_enabled(
+    scopes: Mapping[str, Any],
+    scope_name: str,
+) -> bool:
+    value = scopes.get(scope_name)
+    return isinstance(value, Mapping) and value.get("enabled") is True
+
+
+def _memory_scope_int(
+    scopes: Mapping[str, Any],
+    scope_name: str,
+    key: str,
+    default: int,
+) -> int:
+    value = scopes.get(scope_name)
+    if not isinstance(value, Mapping):
+        return default
+    raw = value.get(key, default)
+    return raw if isinstance(raw, int) else default
 
 
 def _reject_secret_model_params(manifest: AgentManifest, *, manifest_path: Path) -> None:

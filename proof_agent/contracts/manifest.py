@@ -14,13 +14,13 @@ class CheckpointerConfig(FrozenModel):
     uri: str | None = None
 
 
-class WorkflowNodePromptConfig(FrozenModel):
+class WorkflowStagePromptConfig(FrozenModel):
     business_context: str = ""
     task_instructions: tuple[str, ...] = Field(default_factory=tuple)
     output_preferences: tuple[str, ...] = Field(default_factory=tuple)
 
 
-class WorkflowNodeContextConfig(FrozenModel):
+class WorkflowStageContextConfig(FrozenModel):
     options: Mapping[str, bool] = Field(default_factory=FrozenDict)
 
     @field_validator("options", mode="after")
@@ -29,10 +29,10 @@ class WorkflowNodeContextConfig(FrozenModel):
         return freeze_value(value)
 
 
-class WorkflowNodeConfig(FrozenModel):
-    node_id: str
-    prompt: WorkflowNodePromptConfig = Field(default_factory=WorkflowNodePromptConfig)
-    context: WorkflowNodeContextConfig = Field(default_factory=WorkflowNodeContextConfig)
+class WorkflowStageConfig(FrozenModel):
+    id: str
+    prompt: WorkflowStagePromptConfig = Field(default_factory=WorkflowStagePromptConfig)
+    context: WorkflowStageContextConfig = Field(default_factory=WorkflowStageContextConfig)
 
 
 class WorkflowConfig(FrozenModel):
@@ -40,8 +40,28 @@ class WorkflowConfig(FrozenModel):
     template: str
     checkpointer: CheckpointerConfig | None = None
     template_descriptor_version: str | None = None
-    nodes: tuple[WorkflowNodeConfig, ...] = Field(default_factory=tuple)
+    stages: tuple[WorkflowStageConfig, ...] = Field(default_factory=tuple)
 
+
+class ToolCapabilityConfig(FrozenModel):
+    enabled: bool
+    file: Path | None = None
+
+
+class MemoryCapabilityConfig(FrozenModel):
+    enabled: bool
+    provider: str | None = None
+    scopes: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("scopes", mode="after")
+    @classmethod
+    def freeze_scopes(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class CapabilitiesConfig(FrozenModel):
+    tools: ToolCapabilityConfig
+    memory: MemoryCapabilityConfig
 
 
 class KnowledgeConfig(FrozenModel):
@@ -211,9 +231,8 @@ class AgentManifest(FrozenModel):
     retrieval: RetrievalConfig
     model: ModelConfig
     policy: PolicyConfig
-    tools: ToolsConfig
+    capabilities: CapabilitiesConfig
     customer: CustomerConfig | None = None
-    memory: MemoryConfig
     audit: AuditConfig
     react: ReActConfig | None = None
     review: ReviewConfig | None = None
