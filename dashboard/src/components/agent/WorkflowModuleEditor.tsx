@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import type {
-  WorkflowNodeConfig,
-  WorkflowNodeContextPreview,
-  WorkflowNodeDescriptor,
-  WorkflowNodePromptConfig,
+  WorkflowStageConfig,
+  WorkflowStageContextPreview,
+  WorkflowStageDescriptor,
+  WorkflowStagePromptConfig,
   WorkflowTemplateDescriptor,
 } from '../../api/types'
 import { CodeBlock } from '../CodeBlock'
 import {
   readAgentYamlField,
-  readWorkflowNodeConfigs,
-  replaceWorkflowNodes,
+  readWorkflowStageConfigs,
+  replaceWorkflowStages,
 } from '../../utils/agentYaml'
 import { WORKFLOW_FIELDS } from './module-configs/workflow'
 
@@ -20,19 +20,19 @@ interface WorkflowModuleEditorProps {
   descriptorError?: string | null
   onFieldChange: (path: string[], value: string) => void
   onSaveCore: () => void
-  onSaveNodes: (payload: {
+  onSaveStages: (payload: {
     template_descriptor_version: string
-    nodes: WorkflowNodeConfig[]
+    stages: WorkflowStageConfig[]
   }) => Promise<void>
-  onPreviewNode: (
-    nodeId: string,
+  onPreviewStage: (
+    stageId: string,
     payload: {
-      prompt: WorkflowNodePromptConfig
+      prompt: WorkflowStagePromptConfig
       context: Record<string, boolean>
     },
-  ) => Promise<WorkflowNodeContextPreview>
+  ) => Promise<WorkflowStageContextPreview>
   busy: boolean
-  nodeBusy: boolean
+  stageBusy: boolean
 }
 
 export function WorkflowModuleEditor({
@@ -41,86 +41,86 @@ export function WorkflowModuleEditor({
   descriptorError,
   onFieldChange,
   onSaveCore,
-  onSaveNodes,
-  onPreviewNode,
+  onSaveStages,
+  onPreviewStage,
   busy,
-  nodeBusy,
+  stageBusy,
 }: WorkflowModuleEditorProps) {
   const [showYaml, setShowYaml] = useState(false)
-  const [selectedNodeId, setSelectedNodeId] = useState('')
-  const [nodes, setNodes] = useState<WorkflowNodeConfig[]>([])
-  const [preview, setPreview] = useState<WorkflowNodeContextPreview | null>(null)
+  const [selectedStageId, setSelectedStageId] = useState('')
+  const [stages, setStages] = useState<WorkflowStageConfig[]>([])
+  const [preview, setPreview] = useState<WorkflowStageContextPreview | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewBusy, setPreviewBusy] = useState(false)
 
   useEffect(() => {
     if (!descriptor) {
-      setNodes([])
-      setSelectedNodeId('')
+      setStages([])
+      setSelectedStageId('')
       return
     }
     const configuredById = new Map(
-      readWorkflowNodeConfigs(agentYaml).map((node) => [node.node_id, node]),
+      readWorkflowStageConfigs(agentYaml).map((stage) => [stage.id, stage]),
     )
-    const nextNodes = descriptor.nodes.map((node) => {
-      const configured = configuredById.get(node.node_id)
+    const nextStages = descriptor.stages.map((stage) => {
+      const configured = configuredById.get(stage.id)
       return configured
-        ? normalizeNodeConfig(configured)
-        : emptyNodeConfig(node.node_id)
+        ? normalizeStageConfig(configured)
+        : emptyStageConfig(stage.id)
     })
-    setNodes(nextNodes)
-    setSelectedNodeId((current) => (
-      current && descriptor.nodes.some((node) => node.node_id === current)
+    setStages(nextStages)
+    setSelectedStageId((current) => (
+      current && descriptor.stages.some((stage) => stage.id === current)
         ? current
-        : descriptor.nodes[0]?.node_id ?? ''
+        : descriptor.stages[0]?.id ?? ''
     ))
   }, [agentYaml, descriptor])
 
   useEffect(() => {
     setPreview(null)
     setPreviewError(null)
-  }, [selectedNodeId])
+  }, [selectedStageId])
 
-  const selectedDescriptor = descriptor?.nodes.find((node) => node.node_id === selectedNodeId) ?? null
-  const selectedConfig = nodes.find((node) => node.node_id === selectedNodeId) ?? null
+  const selectedDescriptor = descriptor?.stages.find((stage) => stage.id === selectedStageId) ?? null
+  const selectedConfig = stages.find((stage) => stage.id === selectedStageId) ?? null
   const canEditPrompt = Boolean(selectedDescriptor?.editable_prompt_fields.length)
   const canConfigureContext = Boolean(selectedDescriptor?.context_options.length)
   const canPreviewSelected = canEditPrompt || canConfigureContext
   const localYaml = descriptor
-    ? replaceWorkflowNodes(agentYaml, descriptor.descriptor_version, nodes)
+    ? replaceWorkflowStages(agentYaml, descriptor.descriptor_version, stages)
     : agentYaml
 
-  const nodeLabelById = useMemo(() => {
+  const stageLabelById = useMemo(() => {
     const labels = new Map<string, string>()
-    for (const node of descriptor?.nodes ?? []) labels.set(node.node_id, node.label)
+    for (const stage of descriptor?.stages ?? []) labels.set(stage.id, stage.label)
     return labels
   }, [descriptor])
-  const nodeGroups = useMemo(
-    () => groupWorkflowNodes(descriptor?.nodes ?? []),
+  const stageGroups = useMemo(
+    () => groupWorkflowStages(descriptor?.stages ?? []),
     [descriptor],
   )
 
-  function updateSelectedNode(updater: (node: WorkflowNodeConfig) => WorkflowNodeConfig) {
+  function updateSelectedStage(updater: (stage: WorkflowStageConfig) => WorkflowStageConfig) {
     if (!selectedConfig) return
-    setNodes((current) => current.map((node) => (
-      node.node_id === selectedConfig.node_id ? updater(node) : node
+    setStages((current) => current.map((stage) => (
+      stage.id === selectedConfig.id ? updater(stage) : stage
     )))
   }
 
-  async function saveNodes() {
+  async function saveStages() {
     if (!descriptor) return
-    await onSaveNodes({
+    await onSaveStages({
       template_descriptor_version: descriptor.descriptor_version,
-      nodes: nodes.map((node) => sanitizeNodeConfigForDescriptor(node, descriptor)),
+      stages: stages.map((stage) => sanitizeStageConfigForDescriptor(stage, descriptor)),
     })
   }
 
-  async function previewSelectedNode() {
+  async function previewSelectedStage() {
     if (!selectedConfig) return
     setPreviewBusy(true)
     setPreviewError(null)
     try {
-      const result = await onPreviewNode(selectedConfig.node_id, {
+      const result = await onPreviewStage(selectedConfig.id, {
         prompt: selectedConfig.prompt,
         context: selectedConfig.context,
       })
@@ -162,11 +162,11 @@ export function WorkflowModuleEditor({
             {busy ? 'Saving...' : 'Save Core'}
           </button>
           <button
-            onClick={saveNodes}
-            disabled={nodeBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
+            onClick={saveStages}
+            disabled={stageBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
-            {nodeBusy ? 'Saving...' : 'Save Nodes'}
+            {stageBusy ? 'Saving...' : 'Save Stages'}
           </button>
         </div>
       </div>
@@ -221,7 +221,7 @@ export function WorkflowModuleEditor({
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                Workflow Path
+                Stage Panel
               </h4>
               <p className="mt-1 text-xs text-[var(--text-muted)]">
                 {descriptor?.descriptor_version ?? 'Descriptor not loaded'}
@@ -229,7 +229,7 @@ export function WorkflowModuleEditor({
             </div>
             {descriptor && (
               <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs text-[var(--text-secondary)]">
-                {descriptor.nodes.length} nodes
+                {descriptor.stages.length} stages
               </span>
             )}
           </div>
@@ -238,23 +238,23 @@ export function WorkflowModuleEditor({
             <p className="text-sm text-[var(--text-muted)]">No workflow descriptor available.</p>
           ) : (
             <div className="space-y-4">
-              {nodeGroups.map((group) => (
+              {stageGroups.map((group) => (
                 <div key={group.title}>
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <h5 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                       {group.title}
                     </h5>
-                    <span className="text-[11px] text-[var(--text-muted)]">{group.nodes.length}</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">{group.stages.length}</span>
                   </div>
                   <div className="space-y-1">
-                    {group.nodes.map((node, index) => (
-                      <WorkflowMapNode
-                        key={node.node_id}
-                        node={node}
-                        selected={node.node_id === selectedNodeId}
-                        nodeLabelById={nodeLabelById}
-                        isLast={index === group.nodes.length - 1}
-                        onSelect={() => setSelectedNodeId(node.node_id)}
+                    {group.stages.map((stage, index) => (
+                      <WorkflowMapStage
+                        key={stage.id}
+                        stage={stage}
+                        selected={stage.id === selectedStageId}
+                        stageLabelById={stageLabelById}
+                        isLast={index === group.stages.length - 1}
+                        onSelect={() => setSelectedStageId(stage.id)}
                       />
                     ))}
                   </div>
@@ -266,7 +266,7 @@ export function WorkflowModuleEditor({
 
         <section className="p-5">
           {!selectedDescriptor || !selectedConfig ? (
-            <p className="text-sm text-[var(--text-muted)]">Select a workflow node.</p>
+            <p className="text-sm text-[var(--text-muted)]">Select a workflow stage.</p>
           ) : (
             <div className="space-y-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -295,21 +295,21 @@ export function WorkflowModuleEditor({
               </div>
 
               <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-xs text-[var(--text-secondary)]">
-                Harness-owned prompt is locked. Node Prompt is appended only as Business Context Addendum.
+                Harness-owned prompt is locked. Stage Prompt is appended only as Business Context Addendum.
               </div>
 
               <div className="block">
                 <FieldHeader
                   label="Business Context"
-                  help="Adds domain-specific context to this node without replacing the harness-owned control prompt. Use it for policy scope, business rules, and node-specific operating context."
+                  help="Adds domain-specific context to this stage without replacing the harness-owned control prompt. Use it for policy scope, business rules, and stage-specific operating context."
                 />
                 <textarea
                   aria-label="Business Context"
                   value={selectedConfig.prompt.business_context ?? ''}
                   disabled={!canEditPrompt}
-                  onChange={(event) => updateSelectedNode((node) => ({
-                    ...node,
-                    prompt: { ...node.prompt, business_context: event.target.value },
+                  onChange={(event) => updateSelectedStage((stage) => ({
+                    ...stage,
+                    prompt: { ...stage.prompt, business_context: event.target.value },
                   }))}
                   rows={4}
                   className="w-full resize-y bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] disabled:opacity-60"
@@ -320,16 +320,16 @@ export function WorkflowModuleEditor({
                 <div className="block">
                   <FieldHeader
                     label="Task Instructions"
-                    help="Adds short, line-by-line instructions for how this node should perform its task. Each non-empty line is saved as one instruction."
+                    help="Adds short, line-by-line instructions for how this stage should perform its task. Each non-empty line is saved as one instruction."
                   />
                   <textarea
                     aria-label="Task Instructions"
                     value={selectedConfig.prompt.task_instructions.join('\n')}
                     disabled={!canEditPrompt}
-                    onChange={(event) => updateSelectedNode((node) => ({
-                      ...node,
+                    onChange={(event) => updateSelectedStage((stage) => ({
+                      ...stage,
                       prompt: {
-                        ...node.prompt,
+                        ...stage.prompt,
                         task_instructions: splitLines(event.target.value),
                       },
                     }))}
@@ -340,16 +340,16 @@ export function WorkflowModuleEditor({
                 <div className="block">
                   <FieldHeader
                     label="Output Preferences"
-                    help="Controls how this node should shape its output, such as evidence style, formatting preferences, or response constraints. Each non-empty line is saved separately."
+                    help="Controls how this stage should shape its output, such as evidence style, formatting preferences, or response constraints. Each non-empty line is saved separately."
                   />
                   <textarea
                     aria-label="Output Preferences"
                     value={selectedConfig.prompt.output_preferences.join('\n')}
                     disabled={!canEditPrompt}
-                    onChange={(event) => updateSelectedNode((node) => ({
-                      ...node,
+                    onChange={(event) => updateSelectedStage((stage) => ({
+                      ...stage,
                       prompt: {
-                        ...node.prompt,
+                        ...stage.prompt,
                         output_preferences: splitLines(event.target.value),
                       },
                     }))}
@@ -363,7 +363,7 @@ export function WorkflowModuleEditor({
                 <div>
                   <FieldHeader
                     label="Context Options"
-                    help="Toggles structured runtime context that the harness can safely provide to this node, such as Agent purpose or prior outcome state."
+                    help="Toggles structured runtime context that the harness can safely provide to this stage, such as Agent purpose or prior outcome state."
                   />
                   <div className="grid gap-2 sm:grid-cols-2">
                     {selectedDescriptor.context_options.map((option) => (
@@ -375,10 +375,10 @@ export function WorkflowModuleEditor({
                           type="checkbox"
                           checked={Boolean(selectedConfig.context[option])}
                           disabled={!canConfigureContext}
-                          onChange={(event) => updateSelectedNode((node) => ({
-                            ...node,
+                          onChange={(event) => updateSelectedStage((stage) => ({
+                            ...stage,
                             context: {
-                              ...node.context,
+                              ...stage.context,
                               [option]: event.target.checked,
                             },
                           }))}
@@ -393,7 +393,7 @@ export function WorkflowModuleEditor({
 
               <div className="flex flex-wrap items-center gap-3">
                 <button
-                  onClick={previewSelectedNode}
+                  onClick={previewSelectedStage}
                   disabled={previewBusy || !canPreviewSelected}
                   className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
                 >
@@ -428,16 +428,16 @@ export function WorkflowModuleEditor({
   )
 }
 
-function WorkflowMapNode({
-  node,
+function WorkflowMapStage({
+  stage,
   selected,
-  nodeLabelById,
+  stageLabelById,
   isLast,
   onSelect,
 }: {
-  node: WorkflowNodeDescriptor
+  stage: WorkflowStageDescriptor
   selected: boolean
-  nodeLabelById: Map<string, string>
+  stageLabelById: Map<string, string>
   isLast: boolean
   onSelect: () => void
 }) {
@@ -460,16 +460,16 @@ function WorkflowMapNode({
       >
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{node.label}</div>
-            <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]">{node.node_id}</div>
+            <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{stage.label}</div>
+            <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]">{stage.id}</div>
           </div>
           <span className="shrink-0 rounded-full bg-[var(--bg-hover)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
-            {node.model_bearing ? 'model' : 'node'}
+            {stage.model_bearing ? 'model' : 'stage'}
           </span>
         </div>
         <div className="mt-2 truncate text-[11px] text-[var(--text-muted)]">
           <span className="font-semibold text-[var(--text-secondary)]">Next: </span>
-          {formatSuccessors(node, nodeLabelById)}
+          {formatSuccessors(stage, stageLabelById)}
         </div>
       </button>
     </div>
@@ -508,51 +508,51 @@ function FieldHeader({ label, help }: { label: string; help: string }) {
   )
 }
 
-function groupWorkflowNodes(nodes: WorkflowNodeDescriptor[]) {
+function groupWorkflowStages(stages: WorkflowStageDescriptor[]) {
   const visited = new Set<string>()
-  const ordered = topologicalWorkflowNodes(nodes)
+  const ordered = topologicalWorkflowStages(stages)
   const groups = [
     {
       title: 'Entry',
-      nodes: ordered.filter((node) => node.predecessors.length === 0),
+      stages: ordered.filter((stage) => stage.predecessors.length === 0),
     },
     {
       title: 'Processing',
-      nodes: ordered.filter((node) => node.predecessors.length > 0 && node.successors.length > 0),
+      stages: ordered.filter((stage) => stage.predecessors.length > 0 && stage.successors.length > 0),
     },
     {
       title: 'Terminal',
-      nodes: ordered.filter((node) => node.successors.length === 0),
+      stages: ordered.filter((stage) => stage.successors.length === 0),
     },
   ].map((group) => ({
     ...group,
-    nodes: group.nodes.filter((node) => {
-      if (visited.has(node.node_id)) return false
-      visited.add(node.node_id)
+    stages: group.stages.filter((stage) => {
+      if (visited.has(stage.id)) return false
+      visited.add(stage.id)
       return true
     }),
   }))
 
-  return groups.filter((group) => group.nodes.length > 0)
+  return groups.filter((group) => group.stages.length > 0)
 }
 
-function topologicalWorkflowNodes(nodes: WorkflowNodeDescriptor[]) {
-  const byId = new Map(nodes.map((node) => [node.node_id, node]))
+function topologicalWorkflowStages(stages: WorkflowStageDescriptor[]) {
+  const byId = new Map(stages.map((stage) => [stage.id, stage]))
   const visited = new Set<string>()
-  const ordered: WorkflowNodeDescriptor[] = []
+  const ordered: WorkflowStageDescriptor[] = []
 
-  function visit(node: WorkflowNodeDescriptor) {
-    if (visited.has(node.node_id)) return
-    visited.add(node.node_id)
-    ordered.push(node)
-    for (const successorId of node.successors) {
+  function visit(stage: WorkflowStageDescriptor) {
+    if (visited.has(stage.id)) return
+    visited.add(stage.id)
+    ordered.push(stage)
+    for (const successorId of stage.successors) {
       const successor = byId.get(successorId)
       if (successor) visit(successor)
     }
   }
 
-  for (const node of nodes.filter((item) => item.predecessors.length === 0)) visit(node)
-  for (const node of nodes) visit(node)
+  for (const stage of stages.filter((item) => item.predecessors.length === 0)) visit(stage)
+  for (const stage of stages) visit(stage)
 
   return ordered
 }
@@ -562,7 +562,7 @@ function workflowFieldHelp(path: string): string {
     case 'workflow.runtime':
       return 'Selects the workflow runtime that executes this Agent flow. This should match a backend-supported orchestrator.'
     case 'workflow.template':
-      return 'Selects the backend-owned workflow template. The template defines the available nodes and safe execution path.'
+      return 'Selects the backend-owned workflow template. The template defines the available stages and safe execution path.'
     case 'workflow.checkpointer.provider':
       return 'Chooses where workflow state is checkpointed so multi-step runs can resume or inspect state consistently.'
     case 'workflow.checkpointer.uri':
@@ -572,9 +572,9 @@ function workflowFieldHelp(path: string): string {
   }
 }
 
-function emptyNodeConfig(nodeId: string): WorkflowNodeConfig {
+function emptyStageConfig(stageId: string): WorkflowStageConfig {
   return {
-    node_id: nodeId,
+    id: stageId,
     prompt: {
       business_context: '',
       task_instructions: [],
@@ -584,30 +584,30 @@ function emptyNodeConfig(nodeId: string): WorkflowNodeConfig {
   }
 }
 
-function normalizeNodeConfig(node: WorkflowNodeConfig): WorkflowNodeConfig {
+function normalizeStageConfig(stage: WorkflowStageConfig): WorkflowStageConfig {
   return {
-    node_id: node.node_id,
+    id: stage.id,
     prompt: {
-      business_context: node.prompt.business_context ?? '',
-      task_instructions: node.prompt.task_instructions ?? [],
-      output_preferences: node.prompt.output_preferences ?? [],
+      business_context: stage.prompt.business_context ?? '',
+      task_instructions: stage.prompt.task_instructions ?? [],
+      output_preferences: stage.prompt.output_preferences ?? [],
     },
-    context: node.context ?? {},
+    context: stage.context ?? {},
   }
 }
 
-function sanitizeNodeConfigForDescriptor(
-  node: WorkflowNodeConfig,
+function sanitizeStageConfigForDescriptor(
+  stage: WorkflowStageConfig,
   descriptor: WorkflowTemplateDescriptor,
-): WorkflowNodeConfig {
-  const nodeDescriptor = descriptor.nodes.find((candidate) => candidate.node_id === node.node_id)
-  if (!nodeDescriptor?.editable_prompt_fields.length) {
+): WorkflowStageConfig {
+  const stageDescriptor = descriptor.stages.find((candidate) => candidate.id === stage.id)
+  if (!stageDescriptor?.editable_prompt_fields.length) {
     return {
-      ...node,
-      prompt: emptyNodeConfig(node.node_id).prompt,
+      ...stage,
+      prompt: emptyStageConfig(stage.id).prompt,
     }
   }
-  return node
+  return stage
 }
 
 function splitLines(value: string): string[] {
@@ -615,13 +615,13 @@ function splitLines(value: string): string[] {
 }
 
 function formatSuccessors(
-  node: WorkflowNodeDescriptor,
-  nodeLabelById: Map<string, string>,
+  stage: WorkflowStageDescriptor,
+  stageLabelById: Map<string, string>,
 ): string {
-  if (node.successors.length === 0) return 'Terminal'
-  return node.successors.map((nodeId) => {
-    const label = nodeLabelById.get(nodeId) ?? nodeId
-    const condition = node.branch_conditions[nodeId]
+  if (stage.successors.length === 0) return 'Terminal'
+  return stage.successors.map((stageId) => {
+    const label = stageLabelById.get(stageId) ?? stageId
+    const condition = stage.branch_conditions[stageId]
     return condition ? `${label} (${condition})` : label
   }).join(', ')
 }

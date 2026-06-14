@@ -9,9 +9,9 @@ const DESCRIPTOR: WorkflowTemplateDescriptor = {
   name: 'react_enterprise_qa',
   description: 'Controlled ReAct enterprise question answering.',
   descriptor_version: 'react_enterprise_qa.v1',
-  nodes: [
+  stages: [
     {
-      node_id: 'plan',
+      id: 'plan',
       label: 'Plan',
       description: 'Propose the next governed action.',
       predecessors: [],
@@ -26,7 +26,7 @@ const DESCRIPTOR: WorkflowTemplateDescriptor = {
       required: true,
     },
     {
-      node_id: 'response',
+      id: 'response',
       label: 'Response',
       description: 'Project governed outcome.',
       predecessors: ['plan'],
@@ -52,11 +52,11 @@ workflow:
 `
 
 describe('WorkflowModuleEditor', () => {
-  it('renders descriptor relationships and saves configured node context', async () => {
-    const saveNodes = vi.fn().mockResolvedValue(undefined)
-    const previewNode = vi.fn().mockResolvedValue({
-      node_id: 'plan',
-      node_label: 'Plan',
+  it('renders descriptor relationships and saves configured stage context', async () => {
+    const saveStages = vi.fn().mockResolvedValue(undefined)
+    const previewStage = vi.fn().mockResolvedValue({
+      stage_id: 'plan',
+      stage_label: 'Plan',
       harness_control_prompt_summary: 'Harness control prompt retained.',
       structured_control_context: { agent_purpose: 'Answer governed questions.' },
       business_context_addendum: {
@@ -64,7 +64,7 @@ describe('WorkflowModuleEditor', () => {
         text: 'Business Context:\nClaims context',
         fields: ['business_context'],
       },
-      summary: { node_id: 'plan' },
+      summary: { stage_id: 'plan' },
     })
 
     render(
@@ -73,14 +73,14 @@ describe('WorkflowModuleEditor', () => {
         descriptor={DESCRIPTOR}
         onFieldChange={vi.fn()}
         onSaveCore={vi.fn()}
-        onSaveNodes={saveNodes}
-        onPreviewNode={previewNode}
+        onSaveStages={saveStages}
+        onPreviewStage={previewStage}
         busy={false}
-        nodeBusy={false}
+        stageBusy={false}
       />,
     )
 
-    expect(screen.getByText('Workflow Path')).toBeInTheDocument()
+    expect(screen.getByText('Stage Panel')).toBeInTheDocument()
     expect(screen.getByText('Entry')).toBeInTheDocument()
     expect(screen.getAllByText('Terminal').length).toBeGreaterThan(0)
     expect(screen.getByText(/Response \(STOP\)/)).toBeInTheDocument()
@@ -97,7 +97,7 @@ describe('WorkflowModuleEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
 
     await waitFor(() => {
-      expect(previewNode).toHaveBeenCalledWith('plan', {
+      expect(previewStage).toHaveBeenCalledWith('plan', {
         prompt: {
           business_context: 'Claims context',
           task_instructions: ['Prefer retrieval first.'],
@@ -109,14 +109,14 @@ describe('WorkflowModuleEditor', () => {
     expect(await screen.findByText('Business Context Addendum')).toBeInTheDocument()
     expect(screen.getAllByText(/Claims context/).length).toBeGreaterThan(1)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Nodes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
 
     await waitFor(() => {
-      expect(saveNodes).toHaveBeenCalledWith({
+      expect(saveStages).toHaveBeenCalledWith({
         template_descriptor_version: 'react_enterprise_qa.v1',
-        nodes: expect.arrayContaining([
+        stages: expect.arrayContaining([
           {
-            node_id: 'plan',
+            id: 'plan',
             prompt: {
               business_context: 'Claims context',
               task_instructions: ['Prefer retrieval first.'],
@@ -129,8 +129,8 @@ describe('WorkflowModuleEditor', () => {
     })
   })
 
-  it('does not save prompt fields for nodes that only expose context options', async () => {
-    const saveNodes = vi.fn().mockResolvedValue(undefined)
+  it('does not save prompt fields for stages that only expose context options', async () => {
+    const saveStages = vi.fn().mockResolvedValue(undefined)
 
     render(
       <WorkflowModuleEditor
@@ -138,8 +138,8 @@ describe('WorkflowModuleEditor', () => {
 workflow:
   runtime: langgraph
   template: react_enterprise_qa
-  nodes:
-    - node_id: response
+  stages:
+    - id: response
       prompt:
         business_context: "Stale response context"
       context:
@@ -148,10 +148,10 @@ workflow:
         descriptor={DESCRIPTOR}
         onFieldChange={vi.fn()}
         onSaveCore={vi.fn()}
-        onSaveNodes={saveNodes}
-        onPreviewNode={vi.fn()}
+        onSaveStages={saveStages}
+        onPreviewStage={vi.fn()}
         busy={false}
-        nodeBusy={false}
+        stageBusy={false}
       />,
     )
 
@@ -164,14 +164,14 @@ workflow:
     expect(screen.getByLabelText('Output Preferences')).toBeDisabled()
     expect(screen.getByLabelText('include_outcome')).not.toBeDisabled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Nodes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
 
     await waitFor(() => {
-      expect(saveNodes).toHaveBeenCalledWith({
+      expect(saveStages).toHaveBeenCalledWith({
         template_descriptor_version: 'react_enterprise_qa.v1',
-        nodes: expect.arrayContaining([
+        stages: expect.arrayContaining([
           {
-            node_id: 'response',
+            id: 'response',
             prompt: {
               business_context: '',
               task_instructions: [],

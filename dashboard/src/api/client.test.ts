@@ -25,7 +25,7 @@ import {
   fetchWorkflowTemplates,
   importConfigAgent,
   permanentlyDeleteKnowledgeSource,
-  previewWorkflowNodeContext,
+  previewWorkflowStageContext,
   publishConfigDraft,
   retryKnowledgeIngestionJob,
   restoreKnowledgeSource,
@@ -34,7 +34,7 @@ import {
   smokeTestModelConnection,
   updateModelConnection,
   updateConfigDraftContract,
-  updateWorkflowNodes,
+  updateWorkflowStages,
   updateKnowledgeDocumentRoutingMetadata,
   uploadKnowledgeDocument,
   uploadKnowledgeDocuments,
@@ -185,7 +185,7 @@ test('workflow template client methods use descriptor endpoints', async () => {
     name: 'react_enterprise_qa',
     description: 'Controlled ReAct enterprise question answering.',
     descriptor_version: 'react_enterprise_qa.v1',
-    nodes: [{ node_id: 'plan', label: 'Plan', successors: ['response'] }],
+    stages: [{ id: 'plan', label: 'Plan', successors: ['response'] }],
   }
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockResolvedValueOnce(
@@ -212,7 +212,7 @@ test('workflow template client methods use descriptor endpoints', async () => {
   )
 })
 
-test('workflow node update and preview use Agent Configuration endpoints', async () => {
+test('workflow stage update and preview use Agent Configuration endpoints', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ agent_yaml: 'name: enterprise_qa' }), {
@@ -222,19 +222,19 @@ test('workflow node update and preview use Agent Configuration endpoints', async
     )
     .mockResolvedValueOnce(
       new Response(JSON.stringify({
-        node_id: 'plan',
-        node_label: 'Plan',
+        stage_id: 'plan',
+        stage_label: 'Plan',
         business_context_addendum: { present: true, text: 'Claims context', fields: [] },
         structured_control_context: {},
-        summary: { node_id: 'plan' },
+        summary: { stage_id: 'plan' },
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
     )
 
-  const node = {
-    node_id: 'plan',
+  const stage = {
+    id: 'plan',
     prompt: {
       business_context: 'Claims context',
       task_instructions: ['Prefer retrieval first.'],
@@ -243,36 +243,36 @@ test('workflow node update and preview use Agent Configuration endpoints', async
     context: { include_agent_purpose: true },
   }
 
-  await updateWorkflowNodes('enterprise_qa', 'draft_1', {
+  await updateWorkflowStages('enterprise_qa', 'draft_1', {
     template_descriptor_version: 'react_enterprise_qa.v1',
-    nodes: [node],
+    stages: [stage],
   })
-  await previewWorkflowNodeContext('enterprise_qa', 'draft_1', 'plan', {
-    prompt: node.prompt,
-    context: node.context,
+  await previewWorkflowStageContext('enterprise_qa', 'draft_1', 'plan', {
+    prompt: stage.prompt,
+    context: stage.context,
   })
 
   expect(fetchMock).toHaveBeenNthCalledWith(
     1,
-    '/api/config/agents/enterprise_qa/drafts/draft_1/workflow-nodes',
+    '/api/config/agents/enterprise_qa/drafts/draft_1/workflow-stages',
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         template_descriptor_version: 'react_enterprise_qa.v1',
-        nodes: [node],
+        stages: [stage],
       }),
     },
   )
   expect(fetchMock).toHaveBeenNthCalledWith(
     2,
-    '/api/config/agents/enterprise_qa/drafts/draft_1/workflow-nodes/plan/preview',
+    '/api/config/agents/enterprise_qa/drafts/draft_1/workflow-stages/plan/preview',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: node.prompt,
-        context: node.context,
+        prompt: stage.prompt,
+        context: stage.context,
       }),
     },
   )

@@ -7,13 +7,13 @@ import {
   fetchWorkflowTemplate,
   fetchKnowledgeSources,
   fetchModelConnections,
-  previewWorkflowNodeContext,
+  previewWorkflowStageContext,
   publishConfigDraft,
   rollbackConfigVersion,
   unbindKnowledgeSourceFromDraft,
   updateConfigDraft,
   updateConfigDraftContract,
-  updateWorkflowNodes,
+  updateWorkflowStages,
   validateConfigDraft,
 } from '../api/client'
 import type { SharedModelConnection, KnowledgeSource, WorkflowTemplateDescriptor } from '../api/types'
@@ -183,27 +183,27 @@ export function AgentDetailPage() {
       await updateConfigDraftContract(agentId, draftId, {
         agent_yaml: agentYaml,
       })
-      setStatus('Workflow node configuration saved.')
+      setStatus('Workflow stage configuration saved.')
       refresh()
     })
   }
 
-  async function saveWorkflowNodes(payload: Parameters<typeof updateWorkflowNodes>[2]) {
+  async function saveWorkflowStages(payload: Parameters<typeof updateWorkflowStages>[2]) {
     if (!agentId || !draftId) return
-    await runAction('workflow-nodes', async () => {
-      const updated = await updateWorkflowNodes(agentId, draftId, payload)
+    await runAction('workflow-stages', async () => {
+      const updated = await updateWorkflowStages(agentId, draftId, payload)
       setAgentYaml(updated.agent_yaml)
-      setStatus('Workflow node configuration saved.')
+      setStatus('Workflow stage configuration saved.')
       refresh()
     })
   }
 
-  async function previewWorkflowNode(
-    nodeId: string,
-    payload: Parameters<typeof previewWorkflowNodeContext>[3],
+  async function previewWorkflowStage(
+    stageId: string,
+    payload: Parameters<typeof previewWorkflowStageContext>[3],
   ) {
     if (!agentId || !draftId) throw new Error('Draft route is missing.')
-    return previewWorkflowNodeContext(agentId, draftId, nodeId, payload)
+    return previewWorkflowStageContext(agentId, draftId, stageId, payload)
   }
 
   async function bindKnowledgeSource(payload: Parameters<typeof bindKnowledgeSourceToDraft>[2]) {
@@ -373,10 +373,10 @@ export function AgentDetailPage() {
           descriptorError={workflowDescriptorError}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onSaveCore={saveWorkflow}
-          onSaveNodes={saveWorkflowNodes}
-          onPreviewNode={previewWorkflowNode}
+          onSaveStages={saveWorkflowStages}
+          onPreviewStage={previewWorkflowStage}
           busy={busy === 'workflow'}
-          nodeBusy={busy === 'workflow-nodes'}
+          stageBusy={busy === 'workflow-stages'}
         />
       )}
 

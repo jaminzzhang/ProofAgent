@@ -202,8 +202,8 @@ export interface ContractBundle {
   advanced_fields: Record<string, unknown>
 }
 
-export interface WorkflowNodeDescriptor {
-  node_id: string
+export interface WorkflowStageDescriptor {
+  id: string
   label: string
   description: string
   predecessors: string[]
@@ -222,7 +222,7 @@ export interface WorkflowTemplateDescriptor {
   name: string
   description: string
   descriptor_version: string
-  nodes: WorkflowNodeDescriptor[]
+  stages: WorkflowStageDescriptor[]
 }
 
 export interface WorkflowTemplatesResponse {
@@ -232,21 +232,21 @@ export interface WorkflowTemplatesResponse {
   }
 }
 
-export interface WorkflowNodePromptConfig {
+export interface WorkflowStagePromptConfig {
   business_context?: string | null
   task_instructions: string[]
   output_preferences: string[]
 }
 
-export interface WorkflowNodeConfig {
-  node_id: string
-  prompt: WorkflowNodePromptConfig
+export interface WorkflowStageConfig {
+  id: string
+  prompt: WorkflowStagePromptConfig
   context: Record<string, boolean>
 }
 
-export interface WorkflowNodeContextPreview {
-  node_id: string
-  node_label: string
+export interface WorkflowStageContextPreview {
+  stage_id: string
+  stage_label: string
   harness_control_prompt_summary: string
   structured_control_context: Record<string, unknown>
   business_context_addendum: {

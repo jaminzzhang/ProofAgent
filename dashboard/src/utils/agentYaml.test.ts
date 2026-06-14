@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  readWorkflowNodeConfigs,
+  readWorkflowStageConfigs,
   readWorkflowTemplateDescriptorVersion,
   replaceAgentYamlMapping,
-  replaceWorkflowNodes,
+  replaceWorkflowStages,
   updateAgentYamlField,
 } from './agentYaml'
 
@@ -91,16 +91,16 @@ policy:`)
     expect(updated).not.toContain('name: deepseek-chat')
   })
 
-  it('replaces workflow node arrays while preserving core workflow settings', () => {
-    const updated = replaceWorkflowNodes(
+  it('replaces workflow stage arrays while preserving core workflow settings', () => {
+    const updated = replaceWorkflowStages(
       `name: insurance
 workflow:
   runtime: langgraph
   template: react_enterprise_qa
   checkpointer:
     type: memory
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       prompt:
         business_context: "Old context"
 policy:
@@ -109,7 +109,7 @@ policy:
       'react_enterprise_qa.v1',
       [
         {
-          node_id: 'plan',
+          id: 'plan',
           prompt: {
             business_context: 'Claims context',
             task_instructions: ['Prefer retrieval first.'],
@@ -129,8 +129,8 @@ policy:
   template: react_enterprise_qa
   checkpointer:
     type: memory
-  nodes:
-    - node_id: plan
+  stages:
+    - id: plan
       prompt:
         business_context: "Claims context"
         task_instructions:
@@ -142,9 +142,9 @@ policy:
 policy:`)
     expect(updated).not.toContain('Old context')
     expect(readWorkflowTemplateDescriptorVersion(updated)).toBe('react_enterprise_qa.v1')
-    expect(readWorkflowNodeConfigs(updated)).toEqual([
+    expect(readWorkflowStageConfigs(updated)).toEqual([
       {
-        node_id: 'plan',
+        id: 'plan',
         prompt: {
           business_context: 'Claims context',
           task_instructions: ['Prefer retrieval first.'],
@@ -157,14 +157,14 @@ policy:`)
     ])
   })
 
-  it('reads workflow nodes from PyYAML sequence indentation returned by the API', () => {
-    const nodes = readWorkflowNodeConfigs(`name: insurance
+  it('reads workflow stages from PyYAML sequence indentation returned by the API', () => {
+    const stages = readWorkflowStageConfigs(`name: insurance
 workflow:
   runtime: langgraph
   template: react_enterprise_qa
   template_descriptor_version: react_enterprise_qa.v1
-  nodes:
-  - node_id: plan
+  stages:
+  - id: plan
     prompt:
       business_context: "Claims context"
       task_instructions:
@@ -177,9 +177,9 @@ policy:
   file: ./policy.yaml
 `)
 
-    expect(nodes).toEqual([
+    expect(stages).toEqual([
       {
-        node_id: 'plan',
+        id: 'plan',
         prompt: {
           business_context: 'Claims context',
           task_instructions: ['Prefer retrieval first.'],

@@ -34,9 +34,9 @@ import type {
   SharedModelConnectionDeletionEligibility,
   SharedModelConnectionReferenceSummary,
   StatsResponse,
-  WorkflowNodeConfig,
-  WorkflowNodeContextPreview,
-  WorkflowNodePromptConfig,
+  WorkflowStageConfig,
+  WorkflowStageContextPreview,
+  WorkflowStagePromptConfig,
   WorkflowTemplateDescriptor,
   WorkflowTemplatesResponse,
 } from './types'
@@ -142,16 +142,16 @@ export function fetchWorkflowTemplate(templateId: string): Promise<WorkflowTempl
   return fetchJson<WorkflowTemplateDescriptor>(`${BASE}/config/workflow-templates/${templateId}`)
 }
 
-export function updateWorkflowNodes(
+export function updateWorkflowStages(
   agentId: string,
   draftId: string,
   payload: {
     template_descriptor_version?: string | null
-    nodes: WorkflowNodeConfig[]
+    stages: WorkflowStageConfig[]
   },
 ): Promise<ContractBundle> {
   return fetchJson<ContractBundle>(
-    `${BASE}/config/agents/${agentId}/drafts/${draftId}/workflow-nodes`,
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/workflow-stages`,
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -160,17 +160,17 @@ export function updateWorkflowNodes(
   )
 }
 
-export function previewWorkflowNodeContext(
+export function previewWorkflowStageContext(
   agentId: string,
   draftId: string,
-  nodeId: string,
+  stageId: string,
   payload: {
-    prompt: WorkflowNodePromptConfig
+    prompt: WorkflowStagePromptConfig
     context: Record<string, boolean>
   },
-): Promise<WorkflowNodeContextPreview> {
-  return fetchJson<WorkflowNodeContextPreview>(
-    `${BASE}/config/agents/${agentId}/drafts/${draftId}/workflow-nodes/${nodeId}/preview`,
+): Promise<WorkflowStageContextPreview> {
+  return fetchJson<WorkflowStageContextPreview>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/workflow-stages/${stageId}/preview`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

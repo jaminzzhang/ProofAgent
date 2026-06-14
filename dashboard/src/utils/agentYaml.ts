@@ -23,15 +23,15 @@ export interface AgentYamlMapping {
   [key: string]: AgentYamlMappingValue
 }
 
-export interface AgentYamlWorkflowNodePrompt {
+export interface AgentYamlWorkflowStagePrompt {
   business_context?: string | null
   task_instructions: string[]
   output_preferences: string[]
 }
 
-export interface AgentYamlWorkflowNodeConfig {
-  node_id: string
-  prompt: AgentYamlWorkflowNodePrompt
+export interface AgentYamlWorkflowStageConfig {
+  id: string
+  prompt: AgentYamlWorkflowStagePrompt
   context: Record<string, boolean>
 }
 
@@ -61,20 +61,20 @@ export function readWorkflowTemplateDescriptorVersion(agentYaml: string): string
   return readAgentYamlField(agentYaml, ['workflow', 'template_descriptor_version'])
 }
 
-export function readWorkflowNodeConfigs(agentYaml: string): AgentYamlWorkflowNodeConfig[] {
+export function readWorkflowStageConfigs(agentYaml: string): AgentYamlWorkflowStageConfig[] {
   const lines = agentYaml.split('\n')
   const workflowStart = findLineIndex(lines, 0, 'workflow')
   if (workflowStart === -1) return []
 
   const workflowEnd = findBlockEnd(lines, workflowStart, 0)
-  const nodesIndex = findLineIndex(lines, 2, 'nodes', workflowStart + 1, workflowEnd)
-  if (nodesIndex === -1) return []
+  const stagesIndex = findLineIndex(lines, 2, 'stages', workflowStart + 1, workflowEnd)
+  if (stagesIndex === -1) return []
 
-  const nodesEnd = findBlockEnd(lines, nodesIndex, 2)
-  const nodes: AgentYamlWorkflowNodeConfig[] = []
-  const itemPattern = /^(\s*)-\s+node_id:\s*(.*)$/
-  let index = nodesIndex + 1
-  while (index < nodesEnd) {
+  const stagesEnd = findBlockEnd(lines, stagesIndex, 2)
+  const stages: AgentYamlWorkflowStageConfig[] = []
+  const itemPattern = /^(\s*)-\s+id:\s*(.*)$/
+  let index = stagesIndex + 1
+  while (index < stagesEnd) {
     const line = lines[index]
     const match = line.match(itemPattern)
     if (!match) {
@@ -85,26 +85,26 @@ export function readWorkflowNodeConfigs(agentYaml: string): AgentYamlWorkflowNod
     const nodeStart = index
     const nodeIndent = match[1].length
     index += 1
-    while (index < nodesEnd) {
+    while (index < stagesEnd) {
       const nextMatch = lines[index].match(itemPattern)
       if (nextMatch && nextMatch[1].length === nodeIndent) break
       index += 1
     }
-    nodes.push(parseWorkflowNodeBlock(lines.slice(nodeStart, index), match[2]))
+    stages.push(parseWorkflowStageBlock(lines.slice(nodeStart, index), match[2]))
   }
 
-  return nodes
+  return stages
 }
 
-export function replaceWorkflowNodes(
+export function replaceWorkflowStages(
   agentYaml: string,
   templateDescriptorVersion: string | null | undefined,
-  nodes: AgentYamlWorkflowNodeConfig[],
+  stages: AgentYamlWorkflowStageConfig[],
 ): string {
   const lines = agentYaml.split('\n')
   let workflowStart = findLineIndex(lines, 0, 'workflow')
   if (workflowStart === -1) {
-    const rendered = renderWorkflowSection(templateDescriptorVersion, nodes)
+    const rendered = renderWorkflowSection(templateDescriptorVersion, stages)
     return [...trimTrailingEmptyLines(lines), ...rendered].join('\n')
   }
 
@@ -125,13 +125,13 @@ export function replaceWorkflowNodes(
     }
   }
 
-  const renderedNodes = renderWorkflowNodes(nodes)
-  const nodesIndex = findLineIndex(lines, 2, 'nodes', workflowStart + 1, workflowEnd)
-  if (nodesIndex === -1) {
-    lines.splice(workflowEnd, 0, ...renderedNodes)
+  const renderedStages = renderWorkflowStages(stages)
+  const stagesIndex = findLineIndex(lines, 2, 'stages', workflowStart + 1, workflowEnd)
+  if (stagesIndex === -1) {
+    lines.splice(workflowEnd, 0, ...renderedStages)
   } else {
-    const nodesEnd = findBlockEnd(lines, nodesIndex, 2)
-    lines.splice(nodesIndex, nodesEnd - nodesIndex, ...renderedNodes)
+    const stagesEnd = findBlockEnd(lines, stagesIndex, 2)
+    lines.splice(stagesIndex, stagesEnd - stagesIndex, ...renderedStages)
   }
   return lines.join('\n')
 }
@@ -187,26 +187,26 @@ function renderYamlObject(value: AgentYamlMapping, indent: number): string[] {
 
 function renderWorkflowSection(
   templateDescriptorVersion: string | null | undefined,
-  nodes: AgentYamlWorkflowNodeConfig[],
+  stages: AgentYamlWorkflowStageConfig[],
 ): string[] {
   const lines = ['workflow:']
   if (templateDescriptorVersion) {
     lines.push(`  template_descriptor_version: ${formatYamlValue(templateDescriptorVersion)}`)
   }
-  lines.push(...renderWorkflowNodes(nodes))
+  lines.push(...renderWorkflowStages(stages))
   return lines
 }
 
-function renderWorkflowNodes(nodes: AgentYamlWorkflowNodeConfig[]): string[] {
-  const lines = ['  nodes:']
-  for (const node of nodes) {
-    lines.push(`    - node_id: ${formatYamlValue(node.node_id)}`)
-    const promptLines = renderWorkflowNodePrompt(node.prompt)
+function renderWorkflowStages(stages: AgentYamlWorkflowStageConfig[]): string[] {
+  const lines = ['  stages:']
+  for (const stage of stages) {
+    lines.push(`    - id: ${formatYamlValue(stage.id)}`)
+    const promptLines = renderWorkflowStagePrompt(stage.prompt)
     if (promptLines.length > 0) {
       lines.push('      prompt:')
       lines.push(...promptLines)
     }
-    const contextEntries = Object.entries(node.context).filter(([, value]) => value)
+    const contextEntries = Object.entries(stage.context).filter(([, value]) => value)
     if (contextEntries.length > 0) {
       lines.push('      context:')
       for (const [key, value] of contextEntries) {
@@ -217,7 +217,7 @@ function renderWorkflowNodes(nodes: AgentYamlWorkflowNodeConfig[]): string[] {
   return lines
 }
 
-function renderWorkflowNodePrompt(prompt: AgentYamlWorkflowNodePrompt): string[] {
+function renderWorkflowStagePrompt(prompt: AgentYamlWorkflowStagePrompt): string[] {
   const lines: string[] = []
   if (prompt.business_context?.trim()) {
     lines.push(`        business_context: ${formatYamlValue(prompt.business_context)}`)
@@ -237,14 +237,14 @@ function renderWorkflowNodePrompt(prompt: AgentYamlWorkflowNodePrompt): string[]
   return lines
 }
 
-function parseWorkflowNodeBlock(
+function parseWorkflowStageBlock(
   blockLines: string[],
   nodeIdValue: string,
-): AgentYamlWorkflowNodeConfig {
+): AgentYamlWorkflowStageConfig {
   const nodeIndent = indentation(blockLines[0] ?? '')
   const fieldIndent = nodeIndent + 4
   const listIndent = nodeIndent + 6
-  const prompt: AgentYamlWorkflowNodePrompt = {
+  const prompt: AgentYamlWorkflowStagePrompt = {
     business_context: '',
     task_instructions: [],
     output_preferences: [],
@@ -282,7 +282,7 @@ function parseWorkflowNodeBlock(
   }
 
   return {
-    node_id: parseInlineYamlValue(nodeIdValue),
+    id: parseInlineYamlValue(nodeIdValue),
     prompt,
     context,
   }

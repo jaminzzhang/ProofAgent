@@ -10,8 +10,8 @@ import {
   fetchWorkflowTemplate,
   fetchKnowledgeSources,
   fetchModelConnections,
-  previewWorkflowNodeContext,
-  updateWorkflowNodes,
+  previewWorkflowStageContext,
+  updateWorkflowStages,
   validateConfigDraft,
 } from '../../api/client'
 import type { DraftValidationResponse } from '../../api/types'
@@ -25,12 +25,12 @@ vi.mock('../../api/client', () => ({
   fetchWorkflowTemplate: vi.fn(),
   fetchKnowledgeSources: vi.fn(),
   fetchModelConnections: vi.fn(),
-  previewWorkflowNodeContext: vi.fn(),
+  previewWorkflowStageContext: vi.fn(),
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
   updateConfigDraft: vi.fn(),
   updateConfigDraftContract: vi.fn(),
-  updateWorkflowNodes: vi.fn(),
+  updateWorkflowStages: vi.fn(),
   validateConfigDraft: vi.fn(),
 }))
 
@@ -153,9 +153,9 @@ describe('AgentDetailPage', () => {
       name: 'react_enterprise_qa',
       description: 'Controlled ReAct enterprise question answering.',
       descriptor_version: 'react_enterprise_qa.v1',
-      nodes: [
+      stages: [
         {
-          node_id: 'plan',
+          id: 'plan',
           label: 'Plan',
           description: 'Propose the next governed action.',
           predecessors: [],
@@ -170,7 +170,7 @@ describe('AgentDetailPage', () => {
           required: true,
         },
         {
-          node_id: 'response',
+          id: 'response',
           label: 'Response',
           description: 'Project governed outcome.',
           predecessors: ['plan'],
@@ -186,13 +186,13 @@ describe('AgentDetailPage', () => {
         },
       ],
     })
-    vi.mocked(updateWorkflowNodes).mockResolvedValue({
+    vi.mocked(updateWorkflowStages).mockResolvedValue({
       ...mockContract,
       agent_yaml: 'name: insurance\nworkflow:\n  template: react_enterprise_qa\n',
     })
-    vi.mocked(previewWorkflowNodeContext).mockResolvedValue({
-      node_id: 'plan',
-      node_label: 'Plan',
+    vi.mocked(previewWorkflowStageContext).mockResolvedValue({
+      stage_id: 'plan',
+      stage_label: 'Plan',
       harness_control_prompt_summary: 'Harness control prompt retained.',
       structured_control_context: { agent_purpose: 'Answer governed insurance questions.' },
       business_context_addendum: {
@@ -200,7 +200,7 @@ describe('AgentDetailPage', () => {
         text: 'Business Context:\nClaims context',
         fields: ['business_context'],
       },
-      summary: { node_id: 'plan', prompt_fields: ['business_context'] },
+      summary: { stage_id: 'plan', prompt_fields: ['business_context'] },
     })
     mockDraft = {
       agent_id: 'agent-1',
@@ -292,7 +292,7 @@ describe('AgentDetailPage', () => {
     expect(screen.getByPlaceholderText('Enter a test question...')).toBeInTheDocument()
   })
 
-  it('loads workflow descriptor and saves node prompt configuration', async () => {
+  it('loads workflow descriptor and saves stage prompt configuration', async () => {
     mockContract = {
       ...mockContract,
       agent_yaml: `name: insurance
@@ -306,7 +306,7 @@ workflow:
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
 
-    expect(await screen.findByText('Workflow Path')).toBeInTheDocument()
+    expect(await screen.findByText('Stage Panel')).toBeInTheDocument()
     expect(screen.getAllByText('Plan').length).toBeGreaterThan(0)
     fireEvent.click(await screen.findByRole('button', { name: 'Explain Business Context' }))
     expect(screen.getByText(/Adds domain-specific context/)).toBeInTheDocument()
@@ -317,7 +317,7 @@ workflow:
     fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
 
     await waitFor(() => {
-      expect(previewWorkflowNodeContext).toHaveBeenCalledWith('agent-1', 'draft-1', 'plan', {
+      expect(previewWorkflowStageContext).toHaveBeenCalledWith('agent-1', 'draft-1', 'plan', {
         prompt: {
           business_context: 'Claims context',
           task_instructions: [],
@@ -327,14 +327,14 @@ workflow:
       })
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Nodes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
 
     await waitFor(() => {
-      expect(updateWorkflowNodes).toHaveBeenCalledWith('agent-1', 'draft-1', {
+      expect(updateWorkflowStages).toHaveBeenCalledWith('agent-1', 'draft-1', {
         template_descriptor_version: 'react_enterprise_qa.v1',
-        nodes: [
+        stages: [
           {
-            node_id: 'plan',
+            id: 'plan',
             prompt: {
               business_context: 'Claims context',
               task_instructions: [],
@@ -343,7 +343,7 @@ workflow:
             context: { include_agent_purpose: true },
           },
           {
-            node_id: 'response',
+            id: 'response',
             prompt: {
               business_context: '',
               task_instructions: [],
