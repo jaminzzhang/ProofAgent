@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -516,13 +517,13 @@ def _admit_customer_case_memory(
     conversation: CustomerConversationRecord,
     manifest: AgentManifest,
 ) -> MemoryAdmission:
-    case_config = manifest.memory.scopes.case
+    case_config = _memory_scope_config(manifest, "case")
     query = MemoryQuery(
         scope=MemoryScope.CASE,
         case_id=conversation.conversation_id,
         agent_id=conversation.agent_id,
-        max_records=case_config.max_records,
-        allow_restricted=case_config.allow_restricted,
+        max_records=case_config["max_records"],
+        allow_restricted=case_config["allow_restricted"],
     )
     records = _get_case_memory_store(app_request, manifest).read(query)
     return admit_memory(records, query=query)
@@ -533,15 +534,15 @@ def _admit_customer_user_memory(
     conversation: CustomerConversationRecord,
     manifest: AgentManifest,
 ) -> MemoryAdmission:
-    user_config = manifest.memory.scopes.user
+    user_config = _memory_scope_config(manifest, "user")
     if conversation.customer_ref is None:
         return MemoryAdmission(admitted=False)
     query = MemoryQuery(
         scope=MemoryScope.USER,
         subject_ref=conversation.customer_ref,
         agent_id=conversation.agent_id,
-        max_records=user_config.max_records,
-        allow_restricted=user_config.allow_restricted,
+        max_records=user_config["max_records"],
+        allow_restricted=user_config["allow_restricted"],
         consent_granted=True,
     )
     records = _get_case_memory_store(app_request, manifest).read(query)
@@ -594,7 +595,7 @@ def _write_case_memory(
         safe_response=safe_response,
         source_run_id=run_id,
         source_turn_id=turn_id,
-        retention_days=manifest.memory.scopes.case.retention_days,
+        retention_days=_memory_scope_config(manifest, "case")["retention_days"],
     )
     if candidate is None:
         return
@@ -625,7 +626,7 @@ def _write_user_memory(
         safe_response=safe_response,
         source_run_id=run_id,
         source_turn_id=turn_id,
-        retention_days=manifest.memory.scopes.user.retention_days,
+        retention_days=_memory_scope_config(manifest, "user")["retention_days"],
     )
     if candidate is None:
         return
@@ -713,11 +714,31 @@ def _write_memory_candidate(
 
 
 def _case_memory_enabled(manifest: AgentManifest) -> bool:
-    return manifest.memory.provider in {"local", "mem0"} and manifest.memory.scopes.case.enabled
+    return _memory_provider(manifest) in {"local", "mem0"} and _memory_scope_config(
+        manifest, "case"
+    )["enabled"]
 
 
 def _user_memory_enabled(manifest: AgentManifest) -> bool:
-    return manifest.memory.provider in {"local", "mem0"} and manifest.memory.scopes.user.enabled
+    return _memory_provider(manifest) in {"local", "mem0"} and _memory_scope_config(
+        manifest, "user"
+    )["enabled"]
+
+
+def _memory_provider(manifest: AgentManifest) -> str:
+    return str(manifest.capabilities.memory.provider or "")
+
+
+def _memory_scope_config(manifest: AgentManifest, scope: str) -> dict[str, Any]:
+    scopes = manifest.capabilities.memory.scopes
+    raw_scope = scopes.get(scope, {}) if isinstance(scopes, Mapping) else {}
+    scope_config = raw_scope if isinstance(raw_scope, Mapping) else {}
+    return {
+        "enabled": bool(scope_config.get("enabled", False)),
+        "retention_days": int(scope_config.get("retention_days", 30) or 30),
+        "max_records": int(scope_config.get("max_records", 5) or 5),
+        "allow_restricted": bool(scope_config.get("allow_restricted", False)),
+    }
 
 
 def _append_memory_admission_event(
@@ -768,7 +789,7 @@ def _append_case_memory_delete_event(
             "scope": MemoryScope.CASE.value,
             "case_id": conversation.conversation_id,
             "agent_id": conversation.agent_id,
-            "provider": manifest.memory.provider,
+            "provider": _memory_provider(manifest),
             "deleted_count": deleted_count,
         },
     )
@@ -794,7 +815,7 @@ def _append_customer_user_memory_export_event(
             "scope": MemoryScope.USER.value,
             "subject_ref": subject_ref,
             "agent_id": agent_id,
-            "provider": manifest.memory.provider,
+            "provider": _memory_provider(manifest),
             "exported_count": exported_count,
         },
     )
@@ -820,7 +841,7 @@ def _append_customer_user_memory_delete_event(
             "scope": MemoryScope.USER.value,
             "subject_ref": subject_ref,
             "agent_id": agent_id,
-            "provider": manifest.memory.provider,
+            "provider": _memory_provider(manifest),
             "deleted_count": deleted_count,
         },
     )
@@ -1027,7 +1048,7 @@ def _get_case_memory_store(
     request: Request,
     manifest: AgentManifest,
 ) -> LocalMemoryStore | Mem0MemoryStore:
-    if manifest.memory.provider == "mem0":
+    if _memory_provider(manifest) == "mem0":
         store = getattr(request.app.state, "mem0_memory_store", None)
         if store is None:
             store = Mem0MemoryStore()

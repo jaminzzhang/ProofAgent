@@ -136,6 +136,34 @@ class DraftAgent(FrozenModel):
     operation_audit: tuple[ConfigurationOperationAudit, ...] = Field(default_factory=tuple)
 
 
+class PublishedWorkflowStageConfigurationSnapshot(FrozenModel):
+    """Effective Workflow Stage configuration frozen with a Published Agent Version."""
+
+    descriptor_version: str
+    stages: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
+    capabilities: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("stages", mode="after")
+    @classmethod
+    def freeze_stages(
+        cls, value: tuple[Mapping[str, Any], ...]
+    ) -> tuple[Mapping[str, Any], ...]:
+        return tuple(cast(Mapping[str, Any], freeze_value(item)) for item in value)
+
+    @field_validator("capabilities", mode="after")
+    @classmethod
+    def freeze_capabilities(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("stages")
+    def serialize_stages(self, value: tuple[Mapping[str, Any], ...]) -> list[dict[str, Any]]:
+        return [cast(dict[str, Any], _jsonable(item)) for item in value]
+
+    @field_serializer("capabilities")
+    def serialize_capabilities(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
+
+
 class PublishedAgentVersion(FrozenModel):
     """Immutable published snapshot available to execution surfaces."""
 
@@ -150,6 +178,9 @@ class PublishedAgentVersion(FrozenModel):
     published_by: str
     operation_audit: tuple[ConfigurationOperationAudit, ...] = Field(default_factory=tuple)
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
+    effective_workflow_stage_configuration: (
+        PublishedWorkflowStageConfigurationSnapshot | None
+    ) = None
 
     @field_validator("validation_run_id")
     @classmethod

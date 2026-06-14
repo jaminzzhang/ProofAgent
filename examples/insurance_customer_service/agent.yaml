@@ -55,24 +55,26 @@ model:
 policy:
   file: ./policy.yaml
 
-tools:
-  file: ./tools.yaml
-
 customer:
   adapter: ./customer_adapter.py
 
-memory:
-  provider: local
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: false
-    shared:
-      enabled: false
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: true
+    provider: local
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
 
 audit:
   trace_path: ../../runs/latest/trace.jsonl

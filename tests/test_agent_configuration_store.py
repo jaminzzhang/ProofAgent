@@ -200,6 +200,82 @@ def test_publish_creates_immutable_version_and_active_pointer(tmp_path: Path) ->
     ] == "run_validation_001"
 
 
+def test_publish_version_freezes_effective_workflow_stage_configuration(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    draft = store.create_draft(
+        agent_id="react_enterprise_qa",
+        display_name="ReAct Enterprise QA",
+        purpose="Answer governed questions.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: react_enterprise_qa
+purpose: "Answer governed questions."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  stages:
+    - id: plan
+      prompt:
+        business_context: "Claims context."
+      context:
+        include_agent_purpose: true
+        include_bound_tools: true
+    - id: memory
+      context:
+        include_memory_scope: true
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: []\n",
+        ),
+        actor="local-user",
+    )
+
+    version = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_001",
+        actor="publisher",
+    )
+
+    snapshot = version.effective_workflow_stage_configuration
+    assert snapshot is not None
+    assert snapshot.descriptor_version == "react_enterprise_qa.v1"
+    assert snapshot.capabilities == {
+        "tools": {"enabled": False, "file": None},
+        "memory": {"enabled": True, "provider": "session", "scopes": {}},
+    }
+    stages_by_id = {stage["id"]: stage for stage in snapshot.stages}
+    assert set(stages_by_id) >= {"plan", "memory", "response"}
+    assert stages_by_id["plan"]["prompt"] == {
+        "business_context": "Claims context.",
+        "task_instructions": [],
+        "output_preferences": [],
+    }
+    assert stages_by_id["plan"]["context"] == {"include_agent_purpose": True}
+    assert "include_bound_tools" not in stages_by_id["plan"]["available_context_options"]
+    assert stages_by_id["memory"]["context"] == {"include_memory_scope": True}
+
+    publication = json.loads(
+        (
+            tmp_path
+            / "agents"
+            / "react_enterprise_qa"
+            / "versions"
+            / version.version_id
+            / "publication.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert publication["effective_workflow_stage_configuration"]["stages"][0]["id"] == "plan"
+
+
 def test_publish_version_rejects_archived_resolved_shared_source_inside_store_lock(
     tmp_path: Path,
 ) -> None:

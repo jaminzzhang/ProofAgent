@@ -2155,6 +2155,11 @@ def _version_payload(version: Any) -> dict[str, Any]:
             if version.resolved_knowledge_bindings is not None
             else None
         ),
+        "effective_workflow_stage_configuration": (
+            version.effective_workflow_stage_configuration.model_dump(mode="json")
+            if version.effective_workflow_stage_configuration is not None
+            else None
+        ),
         "operation_audit": [
             operation.model_dump(mode="json") for operation in version.operation_audit
         ],

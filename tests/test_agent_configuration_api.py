@@ -2263,6 +2263,31 @@ def test_publish_requires_validation_and_activates_version(tmp_path: Path) -> No
     assert published.status_code == 200
     assert published.json()["version_id"].startswith("version_")
     assert published.json()["validation_run_id"] == validation.json()["run_id"]
+    assert published.json()["effective_workflow_stage_configuration"] == {
+        "descriptor_version": "enterprise_qa.v1",
+        "stages": [
+            {
+                "id": "enterprise_qa",
+                "label": "Enterprise QA",
+                "description": "Evidence-backed deterministic Enterprise QA workflow summary.",
+                "required": True,
+                "model_bearing": False,
+                "editable_prompt_fields": [],
+                "available_context_options": [],
+                "prompt": {
+                    "business_context": "",
+                    "task_instructions": [],
+                    "output_preferences": [],
+                },
+                "context": {},
+                "source_override": {"configured": False},
+            }
+        ],
+        "capabilities": {
+            "tools": {"enabled": True, "file": "./tools.yaml"},
+            "memory": {"enabled": True, "provider": "session", "scopes": {}},
+        },
+    }
 
     listed = client.get("/api/config/agents")
     assert listed.json()["data"][0]["active_version_id"] == published.json()["version_id"]

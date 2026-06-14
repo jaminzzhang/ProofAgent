@@ -23,6 +23,7 @@ from proof_agent.contracts import (
     KnowledgeSourceSnapshotDocument,
     KnowledgeSourceSnapshotManifest,
     KnowledgeSourceReferenceSummary,
+    PublishedWorkflowStageConfigurationSnapshot,
     QuarantinedKnowledgeUpload,
     PublishedAgentVersion,
     ToolSource,
@@ -95,6 +96,52 @@ def test_published_agent_version_requires_validation_run_id() -> None:
             published_at="2026-05-27T00:06:00Z",
             published_by="local-user",
         )
+
+
+def test_published_agent_version_includes_effective_workflow_stage_configuration() -> None:
+    snapshot = PublishedWorkflowStageConfigurationSnapshot(
+        descriptor_version="react_enterprise_qa.v1",
+        stages=(
+            {
+                "id": "plan",
+                "prompt": {"business_context": "Claims context."},
+                "context": {"include_agent_purpose": True},
+            },
+        ),
+        capabilities={
+            "tools": {"enabled": False},
+            "memory": {"enabled": True, "provider": "session"},
+        },
+    )
+    version = PublishedAgentVersion(
+        agent_id="enterprise_qa",
+        version_id="version_001",
+        source_draft_id="draft_001",
+        validation_run_id="run_validation_001",
+        contract_bundle=_contract_bundle(),
+        published_at="2026-05-27T00:05:00Z",
+        published_by="local-user",
+        effective_workflow_stage_configuration=snapshot,
+    )
+
+    payload = version.model_dump(mode="json")
+
+    assert payload["effective_workflow_stage_configuration"] == {
+        "descriptor_version": "react_enterprise_qa.v1",
+        "stages": [
+            {
+                "id": "plan",
+                "prompt": {"business_context": "Claims context."},
+                "context": {"include_agent_purpose": True},
+            }
+        ],
+        "capabilities": {
+            "tools": {"enabled": False},
+            "memory": {"enabled": True, "provider": "session"},
+        },
+    }
+    with pytest.raises(TypeError):
+        snapshot.capabilities["tools"]["enabled"] = True  # type: ignore[index]
 
 
 def test_active_agent_version_points_at_immutable_version() -> None:
