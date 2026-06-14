@@ -42,7 +42,7 @@ class ReActPlanner(Protocol):
         question: str,
         system_prompt: str,
         context_summary: str,
-        workflow_node_context: Mapping[str, Any] | None = None,
+        workflow_stage_context: Mapping[str, Any] | None = None,
     ) -> ReActActionProposal:
         """Propose the next governed ReAct action."""
 
@@ -56,9 +56,9 @@ class DeterministicReActPlanner:
         question: str,
         system_prompt: str,
         context_summary: str,
-        workflow_node_context: Mapping[str, Any] | None = None,
+        workflow_stage_context: Mapping[str, Any] | None = None,
     ) -> ReActActionProposal:
-        _ = (system_prompt, context_summary, workflow_node_context)
+        _ = (system_prompt, context_summary, workflow_stage_context)
         normalized_question = question.lower()
 
         if "can this customer" in normalized_question or "claim it" in normalized_question:
@@ -135,7 +135,7 @@ class LLMReActPlanner:
         question: str,
         system_prompt: str,
         context_summary: str,
-        workflow_node_context: Mapping[str, Any] | None = None,
+        workflow_stage_context: Mapping[str, Any] | None = None,
     ) -> ReActActionProposal:
         user_payload: dict[str, Any] = {
             "question": question,
@@ -146,8 +146,8 @@ class LLMReActPlanner:
                 for action in _INITIAL_PLANNER_ACTION_TYPES
             ],
         }
-        if workflow_node_context:
-            user_payload["workflow_node_context"] = dict(workflow_node_context)
+        if workflow_stage_context:
+            user_payload["workflow_stage_context"] = dict(workflow_stage_context)
         request = ModelRequest(
             provider=self.model_provider.provider_name,
             model=self.model_provider.model_name,

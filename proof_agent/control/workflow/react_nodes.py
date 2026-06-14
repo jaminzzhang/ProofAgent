@@ -38,9 +38,9 @@ from proof_agent.control.workflow.harness_helpers import (
     system_prompt_length,
     validate_model_output,
 )
-from proof_agent.control.workflow.node_context import (
-    build_workflow_node_context_preview,
-    workflow_node_context_summary,
+from proof_agent.control.workflow.stage_context import (
+    build_workflow_stage_context_preview,
+    workflow_stage_context_summary,
 )
 from proof_agent.control.workflow.react_enterprise_qa import (
     clarification_message,
@@ -78,39 +78,39 @@ class ReActWorkflowNodes:
         self.auto_review_enabled = bool(
             self.manifest.review and self.manifest.review.mode == "auto"
         )
-        self.workflow_node_configs = {
-            node.node_id: node for node in self.manifest.workflow.nodes
+        self.workflow_stage_configs = {
+            stage.id: stage for stage in self.manifest.workflow.stages
         }
 
-    def configured_node_context(
+    def configured_stage_context(
         self,
-        node_id: str,
+        stage_id: str,
         state: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        config = self.workflow_node_configs.get(node_id)
+        config = self.workflow_stage_configs.get(stage_id)
         if config is None:
             return None
-        preview = build_workflow_node_context_preview(
+        preview = build_workflow_stage_context_preview(
             descriptor=self.invocation.template,
-            node_id=node_id,
+            stage_id=stage_id,
             prompt=config.prompt,
             context_options=config.context.options,
-            sample_context=_workflow_node_runtime_sample_context(
+            sample_context=_workflow_stage_runtime_sample_context(
                 invocation=self.invocation,
                 state=state,
                 conversation_context=self.conversation_context,
             ),
         )
-        summary = workflow_node_context_summary(preview)
-        if _workflow_node_summary_has_context(summary):
-            descriptor_node = self.invocation.template.node(node_id)
+        summary = workflow_stage_context_summary(preview)
+        if _workflow_stage_summary_has_context(summary):
+            descriptor_stage = self.invocation.template.stage(stage_id)
             self.trace.emit(
-                "workflow_node_context_applied",
+                "workflow_stage_context_applied",
                 status="ok",
                 payload={
                     **summary,
-                    "node_label": descriptor_node.label,
-                    "model_bearing": descriptor_node.model_bearing,
+                    "stage_label": descriptor_stage.label,
+                    "model_bearing": descriptor_stage.model_bearing,
                     "template_descriptor_version": (
                         self.manifest.workflow.template_descriptor_version
                         or self.invocation.template.descriptor_version
@@ -127,12 +127,12 @@ class ReActWorkflowNodes:
         if self.invocation.intent_resolver is None:
             return _refusal("Intent resolver is not configured.")
         try:
-            node_context = self.configured_node_context("intent_resolution", state)
+            stage_context = self.configured_stage_context("intent_resolution", state)
             resolution = self.invocation.intent_resolver.resolve(
                 question=state["question"],
                 system_prompt="Resolve user intent without raw chain-of-thought.",
                 context_summary=_conversation_context_summary(self.conversation_context),
-                workflow_node_context=node_context,
+                workflow_stage_context=stage_context,
             )
         except ModelOutputNormalizationError as exc:
             self.trace.emit(
@@ -160,12 +160,12 @@ class ReActWorkflowNodes:
             )
 
         try:
-            node_context = self.configured_node_context("plan", state)
+            stage_context = self.configured_stage_context("plan", state)
             proposal = self.invocation.react_planner.plan(
                 question=state["question"],
                 system_prompt="Use governed ReAct planning without raw chain-of-thought.",
                 context_summary=_intent_context_summary(state),
-                workflow_node_context=node_context,
+                workflow_stage_context=stage_context,
             )
         except ModelOutputNormalizationError as exc:
             self.trace.emit(
@@ -188,7 +188,7 @@ class ReActWorkflowNodes:
 
     def clarify(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
-        self.configured_node_context("clarification", state)
+        self.configured_stage_context("clarification", state)
         message = clarification_message(proposal)
         self.trace.emit(
             "clarification_requested",
@@ -203,12 +203,12 @@ class ReActWorkflowNodes:
             "governance_message": message,
             "final_output": message,
         }
-        self.configured_node_context("response", {**state, **result})
+        self.configured_stage_context("response", {**state, **result})
         return result
 
     def review_retrieval_plan(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
-        node_context = self.configured_node_context("retrieval_review", state)
+        stage_context = self.configured_stage_context("retrieval_review", state)
         context = {
             "question": state["question"],
             "query": proposal.parameters.get("query", state["question"]),
@@ -217,9 +217,9 @@ class ReActWorkflowNodes:
             "top_k": self.manifest.retrieval.top_k,
             "review_fallback_decision": PolicyDecisionType.DENY.value,
         }
-        if node_context is not None:
-            context["workflow_node_context_summary"] = node_context["summary"]
-            context["workflow_node_context"] = node_context
+        if stage_context is not None:
+            context["workflow_stage_context_summary"] = stage_context["summary"]
+            context["workflow_stage_context"] = stage_context
         decision, review_event = review_action(
             trace=self.trace,
             policy=self.invocation.policy,
@@ -239,7 +239,7 @@ class ReActWorkflowNodes:
 
     def retrieval(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
-        self.configured_node_context("retrieval", state)
+        self.configured_stage_context("retrieval", state)
         retrieval_query = str(proposal.parameters.get("query") or state["question"])
         step_proposal = _retrieval_step_action_proposal(retrieval_query)
         step_context = {
@@ -298,7 +298,7 @@ class ReActWorkflowNodes:
         emit_policy_decision(self.trace, answer_decision)
 
         memory = self.invocation.create_memory()
-        self.configured_node_context("memory", state)
+        self.configured_stage_context("memory", state)
         memory_result = memory.write({"summary": f"Question: {state['question']}"})
         self.trace.emit(
             "memory_write_decision",
@@ -334,14 +334,14 @@ class ReActWorkflowNodes:
 
     def model(self, state: Mapping[str, Any]) -> dict[str, Any]:
         evidence = tuple(EvidenceChunk.model_validate(chunk) for chunk in state.get("evidence", []))
-        node_context = self.configured_node_context("model_answer", state)
+        stage_context = self.configured_stage_context("model_answer", state)
         model_request = build_model_request(
             question=state["question"],
             evidence=evidence,
             provider=self.invocation.model_provider.provider_name,
             model=self.invocation.model_provider.model_name,
             conversation_context=self.conversation_context,
-            workflow_node_context=node_context,
+            workflow_stage_context=stage_context,
         )
         estimated_tokens = self.invocation.model_provider.estimate_tokens(model_request)
         proposal = _model_action_proposal(state["question"])
@@ -355,9 +355,9 @@ class ReActWorkflowNodes:
             "accepted_evidence_count": len(evidence),
             "citations_present": bool(evidence),
         }
-        if node_context is not None:
-            context["workflow_node_context_summary"] = node_context["summary"]
-            context["workflow_node_context"] = node_context
+        if stage_context is not None:
+            context["workflow_stage_context_summary"] = stage_context["summary"]
+            context["workflow_stage_context"] = stage_context
         decision, review_event = review_action(
             trace=self.trace,
             policy=self.invocation.policy,
@@ -424,7 +424,7 @@ class ReActWorkflowNodes:
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot answer because the model output failed validation.",
             }
-            self.configured_node_context("response", {**state, **result})
+            self.configured_stage_context("response", {**state, **result})
             return result
         result = {
             "review_results": [review_event],
@@ -432,7 +432,7 @@ class ReActWorkflowNodes:
             "governance_refusal": outcome,
             "governance_message": model_response.content,
         }
-        self.configured_node_context("response", {**state, **result})
+        self.configured_stage_context("response", {**state, **result})
         return result
 
     def review_tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -442,15 +442,15 @@ class ReActWorkflowNodes:
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot run the requested tool because the tool call budget is exhausted.",
             }
-        node_context = self.configured_node_context("tool_review", state)
+        stage_context = self.configured_stage_context("tool_review", state)
         context = {
             "tool_name": proposal.target_tool_name,
             "risk_level": proposal.risk_level,
             "parameters": dict(proposal.parameters),
         }
-        if node_context is not None:
-            context["workflow_node_context_summary"] = node_context["summary"]
-            context["workflow_node_context"] = node_context
+        if stage_context is not None:
+            context["workflow_stage_context_summary"] = stage_context["summary"]
+            context["workflow_stage_context"] = stage_context
         decision, review_event = review_action(
             trace=self.trace,
             policy=self.invocation.policy,
@@ -474,7 +474,7 @@ class ReActWorkflowNodes:
 
     def tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
-        self.configured_node_context("tool", state)
+        self.configured_stage_context("tool", state)
         tool_name = proposal.target_tool_name or ""
         parameters = dict(proposal.parameters)
         tool_policy_decision = PolicyDecisionType(
@@ -530,7 +530,7 @@ class ReActWorkflowNodes:
                     "governance_refusal": ReceiptOutcome.TOOL_APPROVAL_DENIED,
                     "governance_message": f"The {tool_name} tool was not run because approval was denied.",
                 }
-                self.configured_node_context("response", {**state, **result})
+                self.configured_stage_context("response", {**state, **result})
                 return result
 
         gateway_result = _request_tool_or_refuse(
@@ -576,7 +576,7 @@ class ReActWorkflowNodes:
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": message,
             }
-            self.configured_node_context("response", {**state, **result})
+            self.configured_stage_context("response", {**state, **result})
             return result
         message = "Customer policy status is active according to the approved mock lookup."
         result = {
@@ -584,7 +584,7 @@ class ReActWorkflowNodes:
             "governance_refusal": ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             "governance_message": message,
         }
-        self.configured_node_context("response", {**state, **result})
+        self.configured_stage_context("response", {**state, **result})
         return result
 
 
@@ -882,7 +882,7 @@ def _intent_context_summary(state: Mapping[str, Any]) -> str:
     )
 
 
-def _workflow_node_runtime_sample_context(
+def _workflow_stage_runtime_sample_context(
     *,
     invocation: HarnessInvocation,
     state: Mapping[str, Any],
@@ -897,6 +897,11 @@ def _workflow_node_runtime_sample_context(
     recent_conversation_summary = ""
     if conversation_context is not None and conversation_context.admitted:
         recent_conversation_summary = conversation_context.summary
+    tool_contract_path = (
+        str(manifest.capabilities.tools.file)
+        if manifest.capabilities.tools.enabled and manifest.capabilities.tools.file is not None
+        else ""
+    )
     return {
         "agent_purpose": manifest.purpose,
         "intent_resolution": state.get("intent_resolution") or {},
@@ -904,7 +909,7 @@ def _workflow_node_runtime_sample_context(
         "bound_knowledge_sources": [
             binding.source_ref.source_id for binding in manifest.knowledge_bindings
         ],
-        "bound_tools": str(manifest.tools.file),
+        "bound_tools": tool_contract_path,
         "policy_outline": str(manifest.policy.file),
         "missing_field_schema": (
             list(proposal.parameters.get("missing_fields", ()))
@@ -941,18 +946,22 @@ def _workflow_node_runtime_sample_context(
             if proposal is not None and proposal.target_tool_name
             else {}
         ),
-        "tool_contract_summary": str(manifest.tools.file),
+        "tool_contract_summary": tool_contract_path,
         "approval_requirements": "Medium-risk tool access requires Harness approval.",
         "approval_state": state.get("tool_policy_decision") or "",
         "parameter_bounds": dict(proposal.parameters) if proposal is not None else {},
-        "memory_scope": manifest.memory.model_dump(mode="json"),
+        "memory_scope": {
+            "enabled": manifest.capabilities.memory.enabled,
+            "provider": manifest.capabilities.memory.provider,
+            "scopes": dict(manifest.capabilities.memory.scopes),
+        },
         "memory_denylist_summary": sorted(invocation.memory_deny_fields),
         "outcome": outcome.value if isinstance(outcome, ReceiptOutcome) else str(outcome or ""),
         "governance_summary": list(state.get("review_results", [])),
     }
 
 
-def _workflow_node_summary_has_context(summary: dict[str, Any]) -> bool:
+def _workflow_stage_summary_has_context(summary: dict[str, Any]) -> bool:
     return bool(
         summary.get("prompt_fields")
         or summary.get("context_options")

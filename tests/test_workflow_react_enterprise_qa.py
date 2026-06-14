@@ -94,7 +94,7 @@ def test_v2_resolves_intent_before_react_planning(tmp_path: Path) -> None:
     assert intent_event["payload"]["domain_intent"] == "enterprise_policy_question"
 
 
-def test_workflow_node_context_extends_model_prompt_without_replacing_system_prompt(
+def test_workflow_stage_context_extends_model_prompt_without_replacing_system_prompt(
     tmp_path: Path,
 ) -> None:
     baseline = run_with_langgraph(
@@ -107,16 +107,16 @@ def test_workflow_node_context_extends_model_prompt_without_replacing_system_pro
     manifest_path = example_dir / "agent.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v1"
-    manifest["workflow"]["nodes"] = [
+    manifest["workflow"]["stages"] = [
         {
-            "node_id": "plan",
+            "id": "plan",
             "prompt": {
                 "business_context": "Insurance claim context for regulated advisors.",
             },
             "context": {"include_agent_purpose": True},
         },
         {
-            "node_id": "model_answer",
+            "id": "model_answer",
             "prompt": {
                 "business_context": "Answer as an internal claims quality reviewer.",
                 "task_instructions": ["Keep the answer anchored to accepted evidence."],
@@ -151,14 +151,14 @@ def test_workflow_node_context_extends_model_prompt_without_replacing_system_pro
     context_events = [
         event
         for event in configured_events
-        if event["event_type"] == "workflow_node_context_applied"
+        if event["event_type"] == "workflow_stage_context_applied"
     ]
-    assert {event["payload"]["node_id"] for event in context_events} >= {
+    assert {event["payload"]["stage_id"] for event in context_events} >= {
         "plan",
         "model_answer",
     }
     model_answer_context = next(
-        event for event in context_events if event["payload"]["node_id"] == "model_answer"
+        event for event in context_events if event["payload"]["stage_id"] == "model_answer"
     )
     assert model_answer_context["payload"]["prompt_fields"] == [
         "business_context",
@@ -350,7 +350,7 @@ def test_llm_planner_and_reviewer_calls_emit_safe_model_events(
             assert "content" not in event["payload"]
 
 
-def test_retrieval_review_node_context_reaches_reviewer_model_request(
+def test_retrieval_review_stage_context_reaches_reviewer_model_request(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
@@ -363,9 +363,9 @@ def test_retrieval_review_node_context_reaches_reviewer_model_request(
     manifest["review"]["subagent"]["provider"] = "openai_compatible"
     manifest["review"]["subagent"]["name"] = "reviewer-test"
     manifest["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v1"
-    manifest["workflow"]["nodes"] = [
+    manifest["workflow"]["stages"] = [
         {
-            "node_id": "retrieval_review",
+            "id": "retrieval_review",
             "prompt": {
                 "business_context": "Reviewer should consider regulator-facing claims context.",
                 "task_instructions": ["Require a retrieval query before allowing retrieval."],
@@ -407,7 +407,7 @@ def test_retrieval_review_node_context_reaches_reviewer_model_request(
     user_payload = json.loads(retrieval_review_request.messages[1].content)
 
     assert (
-        user_payload["context"]["workflow_node_context"]["business_context_addendum"]["text"]
+        user_payload["context"]["workflow_stage_context"]["business_context_addendum"]["text"]
         == (
             "Business context:\n"
             "Reviewer should consider regulator-facing claims context.\n"
@@ -415,7 +415,7 @@ def test_retrieval_review_node_context_reaches_reviewer_model_request(
             "- Require a retrieval query before allowing retrieval."
         )
     )
-    assert user_payload["context"]["workflow_node_context"]["structured_control_context"] == {
+    assert user_payload["context"]["workflow_stage_context"]["structured_control_context"] == {
         "include_agent_purpose": (
             "Answer enterprise knowledge questions through a governed ReAct workflow."
         ),

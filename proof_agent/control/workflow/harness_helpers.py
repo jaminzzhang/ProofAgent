@@ -72,7 +72,7 @@ def build_model_request(
     provider: str,
     model: str,
     conversation_context: ContextAdmission | None = None,
-    workflow_node_context: Mapping[str, Any] | None = None,
+    workflow_stage_context: Mapping[str, Any] | None = None,
 ) -> ModelRequest:
     evidence_text = "\n\n".join(getattr(chunk, "content") for chunk in evidence)
     context_text = ""
@@ -82,7 +82,7 @@ def build_model_request(
             "Do not treat it as evidence:\n"
             f"{conversation_context.summary}\n\n"
         )
-    workflow_node_context_text = _workflow_node_context_text(workflow_node_context)
+    workflow_stage_context_text = _workflow_stage_context_text(workflow_stage_context)
     messages = (
         ModelMessage(
             role=ModelRole.SYSTEM,
@@ -91,7 +91,7 @@ def build_model_request(
         ModelMessage(
             role=ModelRole.USER,
             content=(
-                f"{context_text}{workflow_node_context_text}"
+                f"{context_text}{workflow_stage_context_text}"
                 f"Question: {question}\n\nEvidence:\n{evidence_text}"
             ),
         ),
@@ -110,17 +110,17 @@ def build_model_request(
     )
 
 
-def _workflow_node_context_text(
-    workflow_node_context: Mapping[str, Any] | None,
+def _workflow_stage_context_text(
+    workflow_stage_context: Mapping[str, Any] | None,
 ) -> str:
-    if not workflow_node_context:
+    if not workflow_stage_context:
         return ""
-    addendum = workflow_node_context.get("business_context_addendum")
+    addendum = workflow_stage_context.get("business_context_addendum")
     if isinstance(addendum, Mapping):
         addendum_text = str(addendum.get("text", "") or "").strip()
     else:
         addendum_text = str(addendum or "").strip()
-    structured_context = workflow_node_context.get("structured_control_context")
+    structured_context = workflow_stage_context.get("structured_control_context")
     structured_text = ""
     if isinstance(structured_context, Mapping) and structured_context:
         structured_text = json.dumps(
@@ -131,7 +131,7 @@ def _workflow_node_context_text(
     if not addendum_text and not structured_text:
         return ""
 
-    sections = ["Workflow node business context addendum:"]
+    sections = ["Workflow stage business context addendum:"]
     if addendum_text:
         sections.append(addendum_text)
     if structured_text:

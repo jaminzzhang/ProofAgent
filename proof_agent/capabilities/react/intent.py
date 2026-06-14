@@ -35,7 +35,7 @@ class IntentResolver(Protocol):
         question: str,
         system_prompt: str,
         context_summary: str,
-        workflow_node_context: Mapping[str, Any] | None = None,
+        workflow_stage_context: Mapping[str, Any] | None = None,
     ) -> IntentResolution:
         """Resolve user intent into an audit-safe structured summary."""
 
@@ -49,9 +49,9 @@ class DeterministicIntentResolver:
         question: str,
         system_prompt: str,
         context_summary: str,
-        workflow_node_context: Mapping[str, Any] | None = None,
+        workflow_stage_context: Mapping[str, Any] | None = None,
     ) -> IntentResolution:
-        _ = (system_prompt, context_summary, workflow_node_context)
+        _ = (system_prompt, context_summary, workflow_stage_context)
         normalized_question = question.lower()
         if "can this customer" in normalized_question or "claim it" in normalized_question:
             return IntentResolution(
@@ -112,7 +112,7 @@ class LLMIntentResolver:
         question: str,
         system_prompt: str,
         context_summary: str,
-        workflow_node_context: Mapping[str, Any] | None = None,
+        workflow_stage_context: Mapping[str, Any] | None = None,
     ) -> IntentResolution:
         payload: dict[str, Any] = {
             "question": question,
@@ -122,8 +122,8 @@ class LLMIntentResolver:
                 action.value for action in sorted(_ALLOWED_RECOMMENDED_ACTIONS, key=str)
             ],
         }
-        if workflow_node_context:
-            payload["workflow_node_context"] = dict(workflow_node_context)
+        if workflow_stage_context:
+            payload["workflow_stage_context"] = dict(workflow_stage_context)
         request = ModelRequest(
             provider=self.model_provider.provider_name,
             model=self.model_provider.model_name,

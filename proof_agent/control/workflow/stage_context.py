@@ -16,25 +16,25 @@ _SECRET_TEXT_PATTERNS = (
 )
 
 
-def build_workflow_node_context_preview(
+def build_workflow_stage_context_preview(
     *,
     descriptor: WorkflowTemplate,
-    node_id: str,
+    stage_id: str,
     prompt: Mapping[str, Any] | WorkflowStagePromptConfig,
     context_options: Mapping[str, bool],
     sample_context: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Render a redacted Workflow Node Context Preview without executing the node."""
+    """Render a redacted Workflow Stage Context Preview without executing the stage."""
 
-    node = descriptor.node(node_id)
+    stage = descriptor.stage(stage_id)
     unsupported_context_options = sorted(
-        option for option in context_options if option not in node.context_options
+        option for option in context_options if option not in stage.context_options
     )
     if unsupported_context_options:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            f"unsupported context option for workflow node {node_id}: {', '.join(unsupported_context_options)}",
-            f"Use context options: {', '.join(node.context_options)}.",
+            f"unsupported context option for workflow stage {stage_id}: {', '.join(unsupported_context_options)}",
+            f"Use context options: {', '.join(stage.context_options)}.",
         )
 
     normalized_prompt = _normalize_prompt(prompt)
@@ -48,7 +48,7 @@ def build_workflow_node_context_preview(
         option for option, enabled in context_options.items() if enabled
     )
     summary = {
-        "node_id": node_id,
+        "stage_id": stage_id,
         "prompt_fields": prompt_fields,
         "context_options": selected_context_options,
         "business_context_length": len(normalized_prompt.business_context),
@@ -57,11 +57,11 @@ def build_workflow_node_context_preview(
         "redaction_applied": prompt_redacted or context_redacted,
     }
     return {
-        "node_id": node_id,
-        "node_label": node.label,
+        "stage_id": stage_id,
+        "stage_label": stage.label,
         "harness_control_prompt_summary": (
             "Harness control prompt is locked by Proof Agent and is not replaced by "
-            "Workflow Node Prompt Configuration."
+            "Workflow Stage Prompt Configuration."
         ),
         "structured_control_context": structured_context,
         "business_context_addendum": {
@@ -73,13 +73,13 @@ def build_workflow_node_context_preview(
     }
 
 
-def workflow_node_context_summary(preview: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the trace-safe summary portion of a rendered node context preview."""
+def workflow_stage_context_summary(preview: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the trace-safe summary portion of a rendered stage context preview."""
 
     summary = preview.get("summary")
     if not isinstance(summary, Mapping):
         return {
-            "node_id": str(preview.get("node_id", "")),
+            "stage_id": str(preview.get("stage_id", "")),
             "prompt_fields": [],
             "context_options": [],
             "business_context_length": 0,
@@ -88,7 +88,7 @@ def workflow_node_context_summary(preview: Mapping[str, Any]) -> dict[str, Any]:
             "redaction_applied": False,
         }
     return {
-        "node_id": str(summary.get("node_id", "")),
+        "stage_id": str(summary.get("stage_id", "")),
         "prompt_fields": list(summary.get("prompt_fields", [])),
         "context_options": list(summary.get("context_options", [])),
         "business_context_length": int(summary.get("business_context_length", 0)),
