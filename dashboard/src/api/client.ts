@@ -48,11 +48,32 @@ export function chatUrl(path: string): string {
   return `${CHAT_URL}${path}`
 }
 
+export class ApiError extends Error {
+  readonly status: number
+  readonly statusText: string
+  readonly detail: unknown
+
+  constructor(status: number, statusText: string, bodyText: string, detail: unknown) {
+    super(`API error: ${status} ${statusText} ${bodyText}`)
+    this.name = 'ApiError'
+    this.status = status
+    this.statusText = statusText
+    this.detail = detail
+  }
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(url, options)
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '')
-    throw new Error(`API error: ${resp.status} ${resp.statusText} ${errText}`)
+    let detail: unknown = null
+    try {
+      const parsed = JSON.parse(errText) as { detail?: unknown }
+      detail = parsed.detail ?? null
+    } catch {
+      detail = null
+    }
+    throw new ApiError(resp.status, resp.statusText, errText, detail)
   }
   return resp.json() as Promise<T>
 }

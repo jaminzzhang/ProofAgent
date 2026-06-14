@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
+  ApiError,
   archiveModelConnection,
   deleteModelConnection,
   fetchModelConnection,
@@ -12,6 +13,7 @@ import {
   validateModelConnection,
 } from '../api/client'
 import type {
+  ModelConnectionImpactReviewDetail,
   ModelConnectionSmokeTestRecord,
   ModelConnectionValidationRecord,
   SharedModelConnection,
@@ -42,6 +44,7 @@ export function ModelConnectionDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [impactReview, setImpactReview] = useState<ModelConnectionImpactReviewDetail | null>(null)
   const [displayName, setDisplayName] = useState('')
   const [description, setDescription] = useState('')
   const [tags, setTags] = useState('')
@@ -105,7 +108,7 @@ export function ModelConnectionDetailPage() {
     setConfirmImpact(false)
   }
 
-  async function saveOverview() {
+  async function saveOverview(confirmedImpact = false) {
     if (!connectionId) return
     setBusy('save')
     setError(null)
@@ -122,14 +125,22 @@ export function ModelConnectionDetailPage() {
         organization_env: organizationEnv || null,
         project_env: projectEnv || null,
         timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : null,
-        confirm_impact: confirmImpact,
+        confirm_impact: confirmedImpact || confirmImpact,
       })
       setConnection(updated)
       setForm(updated)
+      setImpactReview(null)
       setStatus('Model connection saved.')
       await loadWorkspace(connectionId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to save model connection.')
+      const review = impactReviewDetail(err)
+      if (review) {
+        setImpactReview(review)
+        setReferences(review.reference_summary)
+        setError(null)
+      } else {
+        setError(err instanceof Error ? err.message : 'Unable to save model connection.')
+      }
     } finally {
       setBusy(null)
     }
@@ -269,6 +280,13 @@ export function ModelConnectionDetailPage() {
           {error}
         </div>
       )}
+      {impactReview && (
+        <ImpactReviewNotice
+          detail={impactReview}
+          busy={busy === 'save'}
+          onConfirm={() => void saveOverview(true)}
+        />
+      )}
 
       {tab === 'overview' && (
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
@@ -302,7 +320,7 @@ export function ModelConnectionDetailPage() {
           </label>
           <div className="mt-4 flex justify-end">
             <button
-              onClick={saveOverview}
+              onClick={() => void saveOverview()}
               disabled={busy === 'save' || !displayName.trim() || !provider.trim() || !modelIdentifier.trim() || !credentialEnv.trim()}
               className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
             >
@@ -452,6 +470,48 @@ function NumberField({
   )
 }
 
+function ImpactReviewNotice({
+  detail,
+  busy,
+  onConfirm,
+}: {
+  detail: ModelConnectionImpactReviewDetail
+  busy: boolean
+  onConfirm: () => void
+}) {
+  const summary = detail.reference_summary
+  return (
+    <div className="rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-4 text-sm text-[var(--text-primary)]">
+      <div className="font-semibold">Impact review required</div>
+      <p className="mt-2 text-[var(--text-secondary)]">
+        This update changes high-impact model routing fields. Review the current references before confirming.
+      </p>
+      <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <ImpactStat label="Changed Fields" value={detail.changed_fields.join(', ')} />
+        <ImpactStat label="Draft Agents" value={String(summary.draft_agent_reference_count)} />
+        <ImpactStat label="Published Versions" value={String(summary.published_agent_version_reference_count)} />
+        <ImpactStat label="Knowledge Sources" value={String(summary.knowledge_source_reference_count)} />
+      </div>
+      <button
+        onClick={onConfirm}
+        disabled={busy}
+        className="mt-4 rounded-md border border-[var(--warning)]/50 bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+      >
+        {busy ? 'Saving...' : 'Confirm Impact and Save'}
+      </button>
+    </div>
+  )
+}
+
+function ImpactStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
+      <div className="mt-1 break-words font-mono text-sm text-[var(--text-primary)]">{value}</div>
+    </div>
+  )
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4">
@@ -484,6 +544,35 @@ function RecordBlock({
 
 function splitTags(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function impactReviewDetail(err: unknown): ModelConnectionImpactReviewDetail | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null
+  const detail = err.detail
+  if (!isRecord(detail) || detail.requires_impact_review !== true) return null
+  if (!Array.isArray(detail.changed_fields)) return null
+  if (!isReferenceSummary(detail.reference_summary)) return null
+  return {
+    requires_impact_review: true,
+    changed_fields: detail.changed_fields.filter((field): field is string => typeof field === 'string'),
+    reference_summary: detail.reference_summary,
+  }
+}
+
+function isReferenceSummary(value: unknown): value is SharedModelConnectionReferenceSummary {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.connection_id === 'string'
+    && typeof value.draft_agent_reference_count === 'number'
+    && typeof value.published_agent_version_reference_count === 'number'
+    && typeof value.knowledge_source_reference_count === 'number'
+    && typeof value.in_flight_operation_count === 'number'
+    && typeof value.audit_retention_blocked === 'boolean'
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
 
 function baseUrlHost(baseUrl: string | null): string {

@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import {
+  ApiError,
   archiveModelConnection,
   archiveKnowledgeSource,
   approveRun,
@@ -76,6 +77,46 @@ test('fetchApprovals requests the global pending approval queue projection', asy
   expect(url.searchParams.get('limit')).toBe('25')
   expect(url.searchParams.get('offset')).toBe('50')
   expect(response.data).toEqual([])
+})
+
+test('updateModelConnection preserves structured impact review conflicts', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        detail: {
+          requires_impact_review: true,
+          changed_fields: ['provider', 'model_identifier'],
+          reference_summary: {
+            connection_id: 'model_deepseek_default',
+            draft_agent_reference_count: 6,
+            published_agent_version_reference_count: 2,
+            knowledge_source_reference_count: 2,
+            in_flight_operation_count: 0,
+            audit_retention_blocked: false,
+          },
+        },
+      }),
+      {
+        status: 409,
+        statusText: 'Conflict',
+        headers: { 'Content-Type': 'application/json' },
+      },
+    ),
+  )
+
+  const request = updateModelConnection('model_deepseek_default', {
+    model_identifier: 'deepseek-reasoner',
+  })
+
+  await expect(request).rejects.toBeInstanceOf(ApiError)
+  await expect(request).rejects.toMatchObject({
+    status: 409,
+    statusText: 'Conflict',
+    detail: {
+      requires_impact_review: true,
+      changed_fields: ['provider', 'model_identifier'],
+    },
+  })
 })
 
 test('fetchRuns includes run purpose filter', async () => {

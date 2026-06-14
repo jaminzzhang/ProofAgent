@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  ApiError,
   archiveModelConnection,
   deleteModelConnection,
   fetchModelConnection,
@@ -18,6 +19,19 @@ import type { SharedModelConnection } from '../../api/types'
 import { ModelConnectionDetailPage } from '../ModelConnectionDetailPage'
 
 vi.mock('../../api/client', () => ({
+  ApiError: class ApiError extends Error {
+    readonly status: number
+    readonly statusText: string
+    readonly detail: unknown
+
+    constructor(status: number, statusText: string, bodyText: string, detail: unknown) {
+      super(`API error: ${status} ${statusText} ${bodyText}`)
+      this.name = 'ApiError'
+      this.status = status
+      this.statusText = statusText
+      this.detail = detail
+    }
+  },
   archiveModelConnection: vi.fn(),
   deleteModelConnection: vi.fn(),
   fetchModelConnection: vi.fn(),
@@ -128,6 +142,54 @@ describe('ModelConnectionDetailPage', () => {
         confirm_impact: true,
       })
     })
+  })
+
+  it('turns model impact conflicts into an explicit confirmation review', async () => {
+    vi.mocked(updateModelConnection)
+      .mockRejectedValueOnce(
+        new ApiError(
+          409,
+          'Conflict',
+          '{"detail":{"requires_impact_review":true}}',
+          {
+            requires_impact_review: true,
+            changed_fields: ['provider', 'model_identifier', 'base_url', 'credential_ref'],
+            reference_summary: {
+              connection_id: 'model_deepseek_default',
+              draft_agent_reference_count: 6,
+              published_agent_version_reference_count: 2,
+              knowledge_source_reference_count: 2,
+              in_flight_operation_count: 0,
+              audit_retention_blocked: false,
+            },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(modelConnection({ model_identifier: 'deepseek-reasoner' }))
+
+    renderPage()
+
+    expect(await screen.findByText('DeepSeek Default')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Model Identifier'), {
+      target: { value: 'deepseek-reasoner' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Overview' }))
+
+    expect(await screen.findByText('Impact review required')).toBeInTheDocument()
+    expect(screen.getByText('provider, model_identifier, base_url, credential_ref')).toBeInTheDocument()
+    expect(screen.getByText('6')).toBeInTheDocument()
+    expect(screen.getAllByText('2')).toHaveLength(2)
+    expect(screen.queryByText(/API error: 409/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Impact and Save' }))
+
+    await waitFor(() => {
+      expect(updateModelConnection).toHaveBeenLastCalledWith('model_deepseek_default', expect.objectContaining({
+        model_identifier: 'deepseek-reasoner',
+        confirm_impact: true,
+      }))
+    })
+    expect(await screen.findByText('Model connection saved.')).toBeInTheDocument()
   })
 
   it('shows references and runs validation and smoke actions', async () => {

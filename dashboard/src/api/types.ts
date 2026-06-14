@@ -363,6 +363,12 @@ export interface SharedModelConnectionReferenceSummary {
   audit_retention_blocked: boolean
 }
 
+export interface ModelConnectionImpactReviewDetail {
+  requires_impact_review: true
+  changed_fields: string[]
+  reference_summary: SharedModelConnectionReferenceSummary
+}
+
 export interface ModelConnectionValidationRecord {
   validation_id: string
   connection_id: string
