@@ -58,6 +58,7 @@ from proof_agent.contracts import (
     ResolvedKnowledgeBindingSet,
     ModelConnectionSmokeTestRecord,
     ModelConnectionValidationRecord,
+    SensitiveValidationCaptureArtifact,
     SharedModelConnection,
     SharedModelConnectionDeletionEligibility,
     SharedModelConnectionLifecycleState,
@@ -85,6 +86,20 @@ KNOWLEDGE_DOCUMENT_ROUTING_METADATA_KEYS = (
 MAX_ROUTING_METADATA_SCALARS = 20
 MAX_ROUTING_METADATA_SCALAR_CHARS = 300
 STORE_LOCK_TIMEOUT_SECONDS = 5.0
+VALIDATION_CAPTURE_DEFAULT_TTL_DAYS = 7
+VALIDATION_CAPTURE_REDACTION_METADATA = {
+    "secrets": "redacted",
+}
+VALIDATION_CAPTURE_EXCLUSION_METADATA = {
+    "raw_chain_of_thought": "excluded",
+    "raw_prompt": "excluded",
+    "raw_context": "excluded",
+    "raw_evidence_content": "excluded",
+    "raw_tool_payloads": "excluded",
+    "complete_provider_responses": "excluded",
+    "runtime_state_dicts": "excluded",
+    "intermediate_results": "summary_only",
+}
 
 
 @dataclass(frozen=True)
@@ -289,6 +304,85 @@ class LocalAgentConfigurationStore:
             )
             self._write_draft(updated)
             return updated
+
+    def record_sensitive_validation_capture_artifact(
+        self,
+        *,
+        run_id: str,
+        draft_id: str,
+        payload: Mapping[str, Any],
+        actor: str,
+        retain_for_audit: bool = False,
+    ) -> SensitiveValidationCaptureArtifact:
+        """Persist a gated validation-only full-capture artifact."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            now = datetime.now(UTC)
+            capture_id = f"vcap_{uuid4().hex[:12]}"
+            capture_dir = self._validation_capture_dir(capture_id)
+            relative_artifact_path = Path("validation_captures") / capture_id / "capture.json"
+            artifact = SensitiveValidationCaptureArtifact(
+                capture_id=capture_id,
+                run_id=run_id,
+                draft_id=draft_id,
+                created_at=_format_timestamp(now),
+                expires_at=_format_timestamp(
+                    now + timedelta(days=VALIDATION_CAPTURE_DEFAULT_TTL_DAYS)
+                ),
+                created_by=actor,
+                artifact_path=relative_artifact_path.as_posix(),
+                retain_for_audit=retain_for_audit,
+                redaction_metadata=VALIDATION_CAPTURE_REDACTION_METADATA,
+                exclusion_metadata=VALIDATION_CAPTURE_EXCLUSION_METADATA,
+            )
+            capture_dir.mkdir(parents=True, exist_ok=True)
+            _write_json_atomic(
+                capture_dir / "capture.json",
+                {
+                    "metadata": artifact.model_dump(mode="json"),
+                    "payload": _sanitize_validation_capture_payload(payload),
+                },
+            )
+            return artifact
+
+    def get_sensitive_validation_capture_artifact(
+        self,
+        capture_id: str,
+    ) -> SensitiveValidationCaptureArtifact | None:
+        path = self._validation_capture_file_path(capture_id)
+        if not path.exists():
+            return None
+        payload = _read_json(path)
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, Mapping):
+            return None
+        return SensitiveValidationCaptureArtifact.model_validate(metadata)
+
+    def get_sensitive_validation_capture_artifact_for_run(
+        self,
+        run_id: str,
+    ) -> SensitiveValidationCaptureArtifact | None:
+        captures_root = self._validation_captures_root()
+        if not captures_root.exists():
+            return None
+        for capture_dir in sorted(captures_root.iterdir()):
+            if not capture_dir.is_dir():
+                continue
+            artifact = self.get_sensitive_validation_capture_artifact(capture_dir.name)
+            if artifact is not None and artifact.run_id == run_id:
+                return artifact
+        return None
+
+    def read_sensitive_validation_capture_payload(
+        self,
+        capture_id: str,
+    ) -> dict[str, Any] | None:
+        path = self._validation_capture_file_path(capture_id)
+        if not path.exists():
+            return None
+        stored = _read_json(path)
+        payload = stored.get("payload")
+        return dict(payload) if isinstance(payload, Mapping) else None
 
     def get_version(self, agent_id: str, version_id: str) -> PublishedAgentVersion | None:
         path = self._version_path(agent_id, version_id) / "publication.json"
@@ -2959,6 +3053,34 @@ class LocalAgentConfigurationStore:
     def _active_version_path(self, agent_id: str) -> Path:
         return self._root_dir / "agents" / agent_id / "active_version.json"
 
+    def _validation_captures_root(self) -> Path:
+        return self._root_dir / "validation_captures"
+
+    def _validation_capture_dir(self, capture_id: str) -> Path:
+        raw_capture_id = capture_id.strip()
+        capture_path = Path(raw_capture_id)
+        if (
+            not raw_capture_id
+            or raw_capture_id != capture_id
+            or raw_capture_id in {".", ".."}
+            or capture_path.is_absolute()
+            or len(capture_path.parts) != 1
+            or "/" in raw_capture_id
+            or "\\" in raw_capture_id
+        ):
+            raise ValueError(f"Invalid validation capture id: {capture_id}")
+
+        captures_root = self._validation_captures_root().resolve()
+        capture_dir = (captures_root / raw_capture_id).resolve()
+        try:
+            capture_dir.relative_to(captures_root)
+        except ValueError as exc:
+            raise ValueError(f"Invalid validation capture id: {capture_id}") from exc
+        return capture_dir
+
+    def _validation_capture_file_path(self, capture_id: str) -> Path:
+        return self._validation_capture_dir(capture_id) / "capture.json"
+
     def _knowledge_sources_root(self) -> Path:
         return self._root_dir / "knowledge_sources"
 
@@ -3398,6 +3520,58 @@ MEMORY_CONTEXT_OPTIONS = frozenset(
         "include_memory_denylist_summary",
     }
 )
+VALIDATION_CAPTURE_EXCLUDED_KEYS = frozenset(
+    {
+        "chain_of_thought",
+        "raw_chain_of_thought",
+        "raw_prompt",
+        "raw_context",
+        "raw_evidence",
+        "raw_evidence_content",
+        "evidence_content",
+        "raw_tool_payload",
+        "raw_tool_payloads",
+        "tool_payload",
+        "tool_payloads",
+        "provider_response",
+        "provider_responses",
+        "complete_provider_response",
+        "complete_provider_responses",
+        "runtime_state",
+        "runtime_state_dict",
+        "runtime_state_dicts",
+    }
+)
+VALIDATION_CAPTURE_REDACTED_KEYS = frozenset(
+    {
+        "api_key",
+        "authorization",
+        "credential",
+        "credentials",
+        "password",
+        "secret",
+        "secrets",
+        "token",
+    }
+)
+
+
+def _sanitize_validation_capture_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key)
+            lowered = normalized_key.lower()
+            if lowered in VALIDATION_CAPTURE_EXCLUDED_KEYS:
+                continue
+            if lowered in VALIDATION_CAPTURE_REDACTED_KEYS:
+                sanitized[normalized_key] = "[REDACTED]"
+                continue
+            sanitized[normalized_key] = _sanitize_validation_capture_payload(item)
+        return sanitized
+    if isinstance(value, list | tuple):
+        return [_sanitize_validation_capture_payload(item) for item in value]
+    return value
 
 
 def _build_effective_workflow_stage_configuration(
@@ -3651,7 +3825,11 @@ def _shared_knowledge_binding_sources(agent_yaml: str) -> dict[str, str]:
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return _format_timestamp(datetime.now(UTC))
+
+
+def _format_timestamp(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def _new_source_draft_version_id() -> str:

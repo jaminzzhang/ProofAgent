@@ -1,3 +1,5 @@
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import shutil
 
@@ -6,7 +8,14 @@ from pytest import MonkeyPatch
 
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts.dashboard import RunPurpose
+from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.observability.api.app import create_app
+from proof_agent.observability.api.operator_identity import (
+    OperatorIdentityContext,
+    OperatorPermission,
+)
+from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime import langgraph_runner
 
 
@@ -25,6 +34,70 @@ def _app_with_published_agent(tmp_path: Path, manifest_path: Path):
         published_agents={},
         agent_configuration_store=store,
     )
+
+
+class _StaticOperatorIdentityProvider:
+    def __init__(self, permissions: set[OperatorPermission]) -> None:
+        self._permissions = permissions
+
+    def current_identity(self) -> OperatorIdentityContext:
+        return OperatorIdentityContext(
+            operator_id="test-operator",
+            display_name="Test Operator",
+            permissions=frozenset(self._permissions),
+        )
+
+
+def _write_artifacts(tmp_path: Path, run_id: str) -> tuple[Path, Path]:
+    trace_src = tmp_path / f"{run_id}.jsonl"
+    receipt_src = tmp_path / f"{run_id}.md"
+    trace_src.write_text(
+        json.dumps({"event_type": "run_started", "run_id": run_id}) + "\n",
+        encoding="utf-8",
+    )
+    receipt_src.write_text("# Receipt", encoding="utf-8")
+    return trace_src, receipt_src
+
+
+def _app_with_validation_capture(
+    tmp_path: Path,
+    *,
+    run_id: str = "run_validation",
+    run_purpose: RunPurpose = RunPurpose.VALIDATION,
+    expires_at: str | None = None,
+):
+    configuration_store = LocalAgentConfigurationStore(tmp_path / "config")
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        published_agents={},
+        agent_configuration_store=configuration_store,
+    )
+    run_store: RunStore = app.state.store
+    trace_src, receipt_src = _write_artifacts(tmp_path, run_id)
+    run_store.save_run_artifacts(
+        run_id,
+        trace_source=trace_src,
+        receipt_source=receipt_src,
+        question="Validate draft",
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        run_purpose=run_purpose,
+        agent_id="enterprise_qa",
+        draft_id="draft_001",
+    )
+    artifact = configuration_store.record_sensitive_validation_capture_artifact(
+        run_id=run_id,
+        draft_id="draft_001",
+        payload={"result_summary": {"outcome": "ANSWERED_WITH_CITATIONS"}},
+        actor="test-operator",
+    )
+    if expires_at is not None:
+        capture_file = tmp_path / "config" / artifact.artifact_path
+        stored = json.loads(capture_file.read_text(encoding="utf-8"))
+        stored["metadata"]["expires_at"] = expires_at
+        capture_file.write_text(json.dumps(stored), encoding="utf-8")
+    assert run_store.attach_validation_capture(run_id, artifact.capture_id)
+    return app, artifact
 
 
 def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
@@ -86,6 +159,45 @@ def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Pa
     detail = client.get(f"/api/runs/{body['run_id']}")
     assert detail.status_code == 200
     assert detail.json()["question"] == "What is the reimbursement rule for travel meals?"
+
+
+def test_validation_capture_requires_agent_validate_permission(tmp_path: Path) -> None:
+    app, _artifact = _app_with_validation_capture(tmp_path)
+    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(set())
+    client = TestClient(app)
+
+    response = client.get("/api/runs/run_validation/validation-capture")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: agent.validate"
+
+
+def test_production_run_never_exposes_validation_capture(tmp_path: Path) -> None:
+    app, _artifact = _app_with_validation_capture(
+        tmp_path,
+        run_id="run_production",
+        run_purpose=RunPurpose.PRODUCTION,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/runs/run_production/validation-capture")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Validation capture not found: run_production"
+
+
+def test_expired_validation_capture_returns_404(tmp_path: Path) -> None:
+    expired_at = (datetime.now(UTC) - timedelta(minutes=1)).isoformat().replace(
+        "+00:00",
+        "Z",
+    )
+    app, _artifact = _app_with_validation_capture(tmp_path, expires_at=expired_at)
+    client = TestClient(app)
+
+    response = client.get("/api/runs/run_validation/validation-capture")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Validation capture not found: run_validation"
 
 
 def test_chat_run_execution_rejects_unknown_agent_id(tmp_path: Path) -> None:

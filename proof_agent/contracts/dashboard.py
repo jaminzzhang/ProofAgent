@@ -35,6 +35,7 @@ class RunSummary(FrozenModel):
     agent_id: str | None = None
     agent_version_id: str | None = None
     draft_id: str | None = None
+    validation_capture_id: str | None = None
     created_at: str
     updated_at: str
     approval_status: ApprovalStatus | None = None
@@ -55,6 +56,7 @@ class RunDetail(FrozenModel):
     agent_id: str | None = None
     agent_version_id: str | None = None
     draft_id: str | None = None
+    validation_capture_id: str | None = None
     created_at: str
     updated_at: str
     approval_status: ApprovalStatus | None = None
@@ -79,6 +81,7 @@ class RunIndex(FrozenModel):
     agent_id: str | None = None
     agent_version_id: str | None = None
     draft_id: str | None = None
+    validation_capture_id: str | None = None
     created_at: str
     updated_at: str
     approval_status: ApprovalStatus | None = None

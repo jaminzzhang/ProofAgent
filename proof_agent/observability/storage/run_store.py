@@ -63,6 +63,7 @@ class RunStore:
         agent_id: str | None = None,
         agent_version_id: str | None = None,
         draft_id: str | None = None,
+        validation_capture_id: str | None = None,
     ) -> RunIndex:
         """Copy trace and receipt into the run's history directory and write metadata.
 
@@ -86,12 +87,29 @@ class RunStore:
             agent_id=agent_id,
             agent_version_id=agent_version_id,
             draft_id=draft_id,
+            validation_capture_id=validation_capture_id,
             created_at=now,
             updated_at=now,
             error_code=error_code,
         )
         self.write_run_meta(index)
         return index
+
+    def attach_validation_capture(self, run_id: str, capture_id: str) -> bool:
+        """Attach a gated validation capture artifact reference to run metadata."""
+
+        run_dir = self._history_dir / run_id
+        meta = self._load_run_meta(run_dir)
+        if meta is None:
+            return False
+        updated = meta.model_copy(
+            update={
+                "validation_capture_id": capture_id,
+                "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            }
+        )
+        self.write_run_meta(updated)
+        return True
 
     def get_run_detail(self, run_id: str) -> RunDetail | None:
         """Load full run detail including trace events, receipt, and derived data."""
@@ -120,6 +138,7 @@ class RunStore:
             agent_id=meta.agent_id,
             agent_version_id=meta.agent_version_id,
             draft_id=meta.draft_id,
+            validation_capture_id=meta.validation_capture_id,
             created_at=meta.created_at,
             updated_at=meta.updated_at,
             approval_status=meta.approval_status,
@@ -234,9 +253,9 @@ class RunStore:
                         "approval_id": pending.get("approval_id"),
                         "tool_name": pending.get("tool_name"),
                         "action_id": pending.get("action_id"),
-                        "question": detail.question,
-                        "agent_id": detail.agent_id,
-                        "agent_version_id": detail.agent_version_id,
+                    "question": detail.question,
+                    "agent_id": detail.agent_id,
+                    "agent_version_id": detail.agent_version_id,
                         "run_purpose": detail.run_purpose.value,
                         "created_at": pending.get("created_at"),
                         "expires_at": pending.get("expires_at"),
@@ -269,6 +288,7 @@ class RunStore:
                     agent_id=meta.agent_id,
                     agent_version_id=meta.agent_version_id,
                     draft_id=meta.draft_id,
+                    validation_capture_id=meta.validation_capture_id,
                     created_at=meta.created_at,
                     updated_at=meta.updated_at,
                     approval_status=meta.approval_status,

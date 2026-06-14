@@ -99,6 +99,33 @@ class AgentValidationRecord(FrozenModel):
         return tuple(cast(dict[str, Any], _jsonable(item)) for item in value)
 
 
+class SensitiveValidationCaptureArtifact(FrozenModel):
+    """Sensitive full-capture artifact metadata for validation-only replay/debugging."""
+
+    capture_id: str
+    run_id: str
+    draft_id: str
+    created_at: str
+    expires_at: str
+    created_by: str
+    retention_class: Literal["sensitive_validation_capture"] = (
+        "sensitive_validation_capture"
+    )
+    artifact_path: str
+    retain_for_audit: bool = False
+    redaction_metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    exclusion_metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("redaction_metadata", "exclusion_metadata", mode="after")
+    @classmethod
+    def freeze_metadata(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("redaction_metadata", "exclusion_metadata")
+    def serialize_metadata(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
+
+
 class ConfigurationOperationAudit(FrozenModel):
     """Audit metadata for configuration lifecycle operations."""
 

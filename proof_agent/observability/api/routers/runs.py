@@ -97,6 +97,45 @@ def get_run_receipt(
     }
 
 
+@router.get("/runs/{run_id}/validation-capture")
+def get_validation_capture(
+    run_id: str,
+    request: Request,
+    store: RunStore = Depends(get_store),
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Get a sensitive validation-only capture artifact for authorized operators."""
+
+    require_operator_permission(identity, OperatorPermission.AGENT_VALIDATE)
+    detail = store.get_run_detail(run_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    if detail.run_purpose is not RunPurpose.VALIDATION:
+        raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
+    if not detail.validation_capture_id:
+        raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
+
+    configuration_store = getattr(request.app.state, "agent_configuration_store", None)
+    if configuration_store is None:
+        raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
+    artifact = configuration_store.get_sensitive_validation_capture_artifact(
+        detail.validation_capture_id
+    )
+    if artifact is None or artifact.run_id != run_id:
+        raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
+    if _iso_timestamp_expired(artifact.expires_at):
+        raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
+    payload = configuration_store.read_sensitive_validation_capture_payload(
+        artifact.capture_id
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
+    return {
+        "metadata": artifact.model_dump(mode="json"),
+        "payload": payload,
+    }
+
+
 @router.post("/runs/{run_id}/approvals/{approval_id}/approve")
 def approve_tool_call(
     run_id: str,
@@ -314,6 +353,18 @@ def _pending_approval_expired(pending: dict[str, Any]) -> bool:
         return True
     try:
         parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed <= datetime.now(UTC)
+
+
+def _iso_timestamp_expired(value: str) -> bool:
+    if not value:
+        return True
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return True
     if parsed.tzinfo is None:

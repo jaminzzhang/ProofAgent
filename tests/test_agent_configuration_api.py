@@ -2240,6 +2240,69 @@ def test_validate_draft_runs_harness_as_validation_run(tmp_path: Path) -> None:
     assert loaded.json()["validation_records"][0]["run_id"] == body["run_id"]
 
 
+def test_validation_run_defaults_to_summary_only_trace_capture(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert validation.status_code == 200
+    body = validation.json()
+    assert body["trace_capture"] == {
+        "mode": "summary_only",
+        "validation_capture": None,
+    }
+    assert set(body["links"]) == {"run_detail", "trace", "receipt"}
+
+    detail = client.get(f"/api/runs/{body['run_id']}")
+    assert detail.status_code == 200
+    assert detail.json()["validation_capture_id"] is None
+
+
+def test_validation_run_full_capture_records_gated_artifact(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={
+            "question": "What is the reimbursement rule for travel meals?",
+            "full_capture": True,
+            "retain_for_audit": True,
+        },
+    )
+
+    assert validation.status_code == 200
+    body = validation.json()
+    assert body["trace_capture"]["mode"] == "full_capture"
+    artifact = body["trace_capture"]["validation_capture"]
+    assert artifact["capture_id"].startswith("vcap_")
+    assert artifact["run_id"] == body["run_id"]
+    assert artifact["draft_id"] == draft["draft_id"]
+    assert artifact["retention_class"] == "sensitive_validation_capture"
+    assert artifact["retain_for_audit"] is True
+    assert body["links"]["validation_capture"] == (
+        f"/api/runs/{body['run_id']}/validation-capture"
+    )
+
+    detail = client.get(f"/api/runs/{body['run_id']}")
+    assert detail.status_code == 200
+    assert detail.json()["validation_capture_id"] == artifact["capture_id"]
+
+    capture = client.get(body["links"]["validation_capture"])
+    assert capture.status_code == 200
+    capture_body = capture.json()
+    assert capture_body["metadata"]["capture_id"] == artifact["capture_id"]
+    assert capture_body["payload"]["result_summary"]["outcome"] == body["outcome"]
+    assert "raw_prompt" not in json.dumps(capture_body["payload"])
+    assert "raw_context" not in json.dumps(capture_body["payload"])
+
+
 def test_publish_requires_validation_and_activates_version(tmp_path: Path) -> None:
     client = _client(tmp_path)
     draft = _import_enterprise_qa(client)

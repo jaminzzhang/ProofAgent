@@ -48,6 +48,31 @@ def test_save_run_artifacts_persists_agent_configuration_metadata(tmp_path: Path
     assert detail.draft_id == "draft_001"
 
 
+def test_attach_validation_capture_id_persists_metadata(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "history")
+    trace_src, receipt_src = _write_artifacts(tmp_path, "run_validation")
+    store.save_run_artifacts(
+        "run_validation",
+        trace_source=trace_src,
+        receipt_source=receipt_src,
+        question="Validate draft",
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        run_purpose=RunPurpose.VALIDATION,
+        agent_id="agent_enterprise_qa",
+        draft_id="draft_001",
+    )
+
+    attached = store.attach_validation_capture("run_validation", "vcap_001")
+    detail = store.get_run_detail("run_validation")
+    runs, total = store.list_runs(run_purpose=RunPurpose.VALIDATION)
+
+    assert attached is True
+    assert detail is not None
+    assert detail.validation_capture_id == "vcap_001"
+    assert total == 1
+    assert runs[0].validation_capture_id == "vcap_001"
+
+
 def test_list_runs_defaults_to_production_runs(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
     store.write_run_meta(

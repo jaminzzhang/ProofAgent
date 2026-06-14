@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Mapping
 from dataclasses import asdict
 import os
 import re
@@ -164,6 +165,8 @@ class DraftValidationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1)
+    full_capture: bool = False
+    retain_for_audit: bool = False
 
 
 class DraftPublishRequest(BaseModel):
@@ -1854,6 +1857,31 @@ def validate_config_draft(
     detail = run_store.get_run_detail(run_id)
     if detail is None:
         raise HTTPException(status_code=500, detail="Validation run artifacts were not persisted.")
+    validation_capture: dict[str, Any] | None = None
+    if request.full_capture:
+        artifact = config_store.record_sensitive_validation_capture_artifact(
+            run_id=run_id,
+            draft_id=draft_id,
+            payload=_validation_capture_payload(
+                manifest=manifest,
+                detail=detail,
+                final_output=result.final_output,
+            ),
+            actor=actor,
+            retain_for_audit=request.retain_for_audit,
+        )
+        if not run_store.attach_validation_capture(run_id, artifact.capture_id):
+            raise HTTPException(
+                status_code=500,
+                detail="Validation capture artifact was not attached to the run.",
+            )
+        detail = run_store.get_run_detail(run_id)
+        if detail is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Validation run artifacts disappeared after capture attachment.",
+            )
+        validation_capture = artifact.model_dump(mode="json")
     warnings, publish_blockers = _validation_model_connection_warnings(detail.trace_events)
     record = AgentValidationRecord(
         validation_id=f"validation_{uuid4().hex[:8]}",
@@ -1872,6 +1900,13 @@ def validate_config_draft(
         record=record,
         actor=actor,
     )
+    links = {
+        "run_detail": f"/api/runs/{detail.run_id}",
+        "trace": f"/api/runs/{detail.run_id}/trace",
+        "receipt": f"/api/runs/{detail.run_id}/receipt",
+    }
+    if validation_capture is not None:
+        links["validation_capture"] = f"/api/runs/{detail.run_id}/validation-capture"
     return {
         "validation_id": record.validation_id,
         "run_id": detail.run_id,
@@ -1882,11 +1917,11 @@ def validate_config_draft(
         "draft_id": detail.draft_id,
         "warnings": list(warnings),
         "publish_blockers": list(publish_blockers),
-        "links": {
-            "run_detail": f"/api/runs/{detail.run_id}",
-            "trace": f"/api/runs/{detail.run_id}/trace",
-            "receipt": f"/api/runs/{detail.run_id}/receipt",
+        "trace_capture": {
+            "mode": "full_capture" if validation_capture is not None else "summary_only",
+            "validation_capture": validation_capture,
         },
+        "links": links,
     }
 
 
@@ -1938,6 +1973,146 @@ def _validation_model_connection_warnings(
             }
         )
     return tuple(warnings), tuple(publish_blockers)
+
+
+def _validation_capture_payload(
+    *,
+    manifest: Any,
+    detail: Any,
+    final_output: str,
+) -> dict[str, Any]:
+    workflow = _jsonable_contract(manifest.workflow)
+    capabilities = _jsonable_contract(manifest.capabilities)
+    configured_stages = workflow.get("stages", []) if isinstance(workflow, dict) else []
+    return {
+        "capture_contract_version": "validation_capture.v1",
+        "run_reference": {
+            "run_id": detail.run_id,
+            "run_purpose": detail.run_purpose.value,
+            "agent_id": detail.agent_id,
+            "agent_version_id": detail.agent_version_id,
+            "draft_id": detail.draft_id,
+        },
+        "agent_contract_snapshot_reference": {
+            "agent_name": getattr(manifest, "name", None),
+            "workflow_template": workflow.get("template")
+            if isinstance(workflow, dict)
+            else None,
+            "template_descriptor_version": workflow.get("template_descriptor_version")
+            if isinstance(workflow, dict)
+            else None,
+        },
+        "capability_configuration": capabilities,
+        "workflow_stage_configuration": {
+            "runtime": workflow.get("runtime") if isinstance(workflow, dict) else None,
+            "template": workflow.get("template") if isinstance(workflow, dict) else None,
+            "template_descriptor_version": workflow.get("template_descriptor_version")
+            if isinstance(workflow, dict)
+            else None,
+            "stages": configured_stages if isinstance(configured_stages, list) else [],
+        },
+        "prompt_context_capture": _prompt_context_capture(configured_stages),
+        "trace_summary": _validation_trace_summary(detail.trace_events),
+        "intermediate_result_summary": detail.governance_details,
+        "result_summary": {
+            "outcome": detail.outcome.value,
+            "final_output": final_output,
+            "final_output_length": len(final_output),
+        },
+    }
+
+
+def _jsonable_contract(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="python", warnings=False)
+        jsonable = _jsonable_value(dumped)
+        return jsonable if isinstance(jsonable, dict) else {}
+    jsonable = _jsonable_value(value)
+    return jsonable if isinstance(jsonable, dict) else {}
+
+
+def _jsonable_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable_value(item) for item in value]
+    return value
+
+
+def _prompt_context_capture(configured_stages: Any) -> list[dict[str, Any]]:
+    if not isinstance(configured_stages, list):
+        return []
+    capture: list[dict[str, Any]] = []
+    for stage in configured_stages:
+        if not isinstance(stage, dict):
+            continue
+        capture.append(
+            {
+                "stage_id": stage.get("id"),
+                "prompt": stage.get("prompt", {}),
+                "context": stage.get("context", {}),
+            }
+        )
+    return capture
+
+
+def _validation_trace_summary(
+    trace_events: tuple[dict[str, Any], ...],
+) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for event in trace_events:
+        payload = event.get("payload")
+        payload_keys = sorted(payload) if isinstance(payload, dict) else []
+        summary: dict[str, Any] = {
+            "event_id": event.get("event_id"),
+            "sequence": event.get("sequence"),
+            "timestamp": event.get("timestamp"),
+            "event_type": event.get("event_type"),
+            "status": event.get("status"),
+            "payload_keys": payload_keys,
+        }
+        if isinstance(payload, dict):
+            if event.get("event_type") == "workflow_stage_context_applied":
+                summary["workflow_stage_context"] = {
+                    key: payload.get(key)
+                    for key in (
+                        "stage_id",
+                        "stage_label",
+                        "prompt_fields",
+                        "context_options",
+                        "business_context_length",
+                        "task_instruction_count",
+                        "output_preference_count",
+                        "redaction_applied",
+                        "model_bearing",
+                        "template_descriptor_version",
+                    )
+                    if key in payload
+                }
+            elif event.get("event_type") == "model_request":
+                summary["model_request"] = {
+                    key: payload.get(key)
+                    for key in (
+                        "provider",
+                        "model",
+                        "message_count",
+                        "prompt_length",
+                        "system_prompt_length",
+                        "estimated_tokens",
+                        "stream",
+                    )
+                    if key in payload
+                }
+            elif event.get("event_type") == "model_response":
+                summary["model_response"] = {
+                    key: payload.get(key)
+                    for key in ("provider", "model", "finish_reason", "content_length")
+                    if key in payload
+                }
+        summaries.append(summary)
+    return summaries
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/publish")

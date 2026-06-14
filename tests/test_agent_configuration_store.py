@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -274,6 +275,64 @@ capabilities:
         ).read_text(encoding="utf-8")
     )
     assert publication["effective_workflow_stage_configuration"]["stages"][0]["id"] == "plan"
+
+
+def test_records_sensitive_validation_capture_artifact_with_default_ttl(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+
+    artifact = store.record_sensitive_validation_capture_artifact(
+        run_id="run_validation",
+        draft_id="draft_001",
+        payload={
+            "trace_summary": [
+                {
+                    "event_type": "workflow_stage_context_applied",
+                    "status": "ok",
+                    "payload_keys": ["stage_id", "context_summary"],
+                }
+            ],
+            "result_summary": {"outcome": "ANSWERED_WITH_CITATIONS"},
+            "raw_prompt": "Never persist me.",
+            "raw_context": {"secret": "Never persist me."},
+            "raw_tool_payloads": [{"authorization": "Bearer secret"}],
+            "complete_provider_responses": [{"content": "Never persist me."}],
+            "runtime_state_dicts": [{"messages": ["Never persist me."]}],
+        },
+        actor="validator",
+    )
+
+    created_at = datetime.fromisoformat(artifact.created_at.replace("Z", "+00:00"))
+    expires_at = datetime.fromisoformat(artifact.expires_at.replace("Z", "+00:00"))
+    stored_payload = store.read_sensitive_validation_capture_payload(artifact.capture_id)
+    stored_metadata = store.get_sensitive_validation_capture_artifact(artifact.capture_id)
+    for_run = store.get_sensitive_validation_capture_artifact_for_run("run_validation")
+
+    assert artifact.capture_id.startswith("vcap_")
+    assert artifact.run_id == "run_validation"
+    assert artifact.draft_id == "draft_001"
+    assert artifact.retention_class == "sensitive_validation_capture"
+    assert artifact.created_by == "validator"
+    assert artifact.retain_for_audit is False
+    assert (expires_at - created_at).total_seconds() == pytest.approx(604800, abs=5)
+    assert artifact.redaction_metadata["secrets"] == "redacted"
+    assert artifact.exclusion_metadata["raw_chain_of_thought"] == "excluded"
+    assert artifact.exclusion_metadata["raw_tool_payloads"] == "excluded"
+    assert artifact.exclusion_metadata["complete_provider_responses"] == "excluded"
+    assert artifact.exclusion_metadata["runtime_state_dicts"] == "excluded"
+    assert stored_metadata == artifact
+    assert for_run == artifact
+    assert stored_payload is not None
+    assert stored_payload["trace_summary"][0]["event_type"] == "workflow_stage_context_applied"
+
+    capture_file = tmp_path / artifact.artifact_path
+    stored = json.loads(capture_file.read_text(encoding="utf-8"))
+    assert stored["metadata"]["capture_id"] == artifact.capture_id
+    assert stored["payload"] == stored_payload
+    stored_text = json.dumps(stored["payload"])
+    assert "Never persist me." not in stored_text
+    assert "Bearer secret" not in stored_text
 
 
 def test_publish_version_rejects_archived_resolved_shared_source_inside_store_lock(
