@@ -175,10 +175,9 @@ def compose_harness_invocation(
         ),
         resolved_knowledge_bindings=resolved_bindings,
         model_provider=resolve_provider(resolved_answer_model.model_config),
-        tool_gateway=ToolGateway.from_file(
-            resolved_manifest.tools.file,
+        tool_gateway=_tool_gateway_for_manifest(
+            resolved_manifest,
             configuration_store=configuration_store,
-            tool_source_env=os.environ,
         ),
         intent_resolver=intent_resolver,
         react_planner=react_planner,
@@ -186,4 +185,21 @@ def compose_harness_invocation(
         retrieval_planner_model=resolved_retrieval_planner_model,
         retrieval_evaluator_model=resolved_retrieval_evaluator_model,
         model_resolution_records=tuple(model_resolution_records),
+    )
+
+
+def _tool_gateway_for_manifest(
+    manifest: AgentManifest,
+    *,
+    configuration_store: LocalAgentConfigurationStore | None,
+) -> ToolGateway:
+    tools = manifest.capabilities.tools
+    if not tools.enabled:
+        return ToolGateway({})
+    if tools.file is None:
+        return ToolGateway({})
+    return ToolGateway.from_file(
+        tools.file,
+        configuration_store=configuration_store,
+        tool_source_env=os.environ,
     )

@@ -14,10 +14,10 @@ EDITABLE_WORKFLOW_PROMPT_FIELDS = (
 
 
 @dataclass(frozen=True)
-class WorkflowNodeDescriptor:
-    """Public descriptor for one registered Workflow Template node."""
+class WorkflowStageDescriptor:
+    """Public descriptor for one registered Workflow Template Stage."""
 
-    node_id: str
+    id: str
     label: str
     description: str
     predecessors: tuple[str, ...] = ()
@@ -39,16 +39,16 @@ class WorkflowTemplate:
     name: str
     description: str
     descriptor_version: str
-    nodes: tuple[WorkflowNodeDescriptor, ...] = ()
+    stages: tuple[WorkflowStageDescriptor, ...] = ()
 
-    def node(self, node_id: str) -> WorkflowNodeDescriptor:
-        for candidate in self.nodes:
-            if candidate.node_id == node_id:
+    def stage(self, stage_id: str) -> WorkflowStageDescriptor:
+        for candidate in self.stages:
+            if candidate.id == stage_id:
                 return candidate
         raise ProofAgentError(
             "PA_CONFIG_002",
-            f"unsupported workflow node_id: {node_id}",
-            f"Use one of: {', '.join(node.node_id for node in self.nodes)}.",
+            f"unsupported workflow stage id: {stage_id}",
+            f"Use one of: {', '.join(stage.id for stage in self.stages)}.",
         )
 
 
@@ -57,9 +57,9 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
         name="enterprise_qa",
         description="Evidence-backed enterprise question answering.",
         descriptor_version="enterprise_qa.v1",
-        nodes=(
-            WorkflowNodeDescriptor(
-                node_id="enterprise_qa",
+        stages=(
+            WorkflowStageDescriptor(
+                id="enterprise_qa",
                 label="Enterprise QA",
                 description="Evidence-backed deterministic Enterprise QA workflow summary.",
                 output_summary="Answered, refused, or approval-waiting governed run outcome.",
@@ -70,9 +70,9 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
         name="react_enterprise_qa",
         description="Controlled ReAct enterprise question answering.",
         descriptor_version="react_enterprise_qa.v1",
-        nodes=(
-            WorkflowNodeDescriptor(
-                node_id="plan",
+        stages=(
+            WorkflowStageDescriptor(
+                id="plan",
                 label="Plan",
                 description="Propose the next governed ReAct action.",
                 successors=("clarification", "retrieval_review", "tool_review", "response"),
@@ -95,8 +95,8 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 output_summary="ReAct Action Proposal.",
                 model_bearing=True,
             ),
-            WorkflowNodeDescriptor(
-                node_id="clarification",
+            WorkflowStageDescriptor(
+                id="clarification",
                 label="Clarification",
                 description="Request missing user details before continuing.",
                 predecessors=("plan",),
@@ -109,8 +109,8 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 input_summary="Clarification action proposal.",
                 output_summary="Waiting-for-user-clarification response.",
             ),
-            WorkflowNodeDescriptor(
-                node_id="retrieval_review",
+            WorkflowStageDescriptor(
+                id="retrieval_review",
                 label="Retrieval Review",
                 description="Review retrieval intent before governed retrieval runs.",
                 predecessors=("plan",),
@@ -131,8 +131,8 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 output_summary="Policy decision and review summary.",
                 model_bearing=True,
             ),
-            WorkflowNodeDescriptor(
-                node_id="retrieval",
+            WorkflowStageDescriptor(
+                id="retrieval",
                 label="Retrieval",
                 description="Run governed retrieval through Knowledge Retrieval Service.",
                 predecessors=("retrieval_review",),
@@ -151,8 +151,8 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 input_summary="Reviewed retrieval intent and bound Knowledge Sources.",
                 output_summary="Accepted evidence or no-evidence refusal.",
             ),
-            WorkflowNodeDescriptor(
-                node_id="model_answer",
+            WorkflowStageDescriptor(
+                id="model_answer",
                 label="Model Answer",
                 description="Generate final answer from accepted evidence.",
                 predecessors=("retrieval",),
@@ -170,8 +170,8 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 output_summary="Validated final answer candidate.",
                 model_bearing=True,
             ),
-            WorkflowNodeDescriptor(
-                node_id="tool_review",
+            WorkflowStageDescriptor(
+                id="tool_review",
                 label="Tool Review",
                 description="Review proposed tool calls before Tool Gateway execution.",
                 predecessors=("plan",),
@@ -193,8 +193,8 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 output_summary="Tool policy decision.",
                 model_bearing=True,
             ),
-            WorkflowNodeDescriptor(
-                node_id="tool",
+            WorkflowStageDescriptor(
+                id="tool",
                 label="Tool",
                 description="Execute approved or approval-waiting tool requests through Tool Gateway.",
                 predecessors=("tool_review",),
@@ -208,8 +208,8 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 input_summary="Tool request, approval state, and parameter bounds.",
                 output_summary="Trace-safe tool result or approval wait outcome.",
             ),
-            WorkflowNodeDescriptor(
-                node_id="memory",
+            WorkflowStageDescriptor(
+                id="memory",
                 label="Memory",
                 description="Apply governed memory write policy for configured memory scope.",
                 predecessors=("retrieval", "tool"),
@@ -224,8 +224,8 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 input_summary="Run summary and memory scope.",
                 output_summary="Memory write decision summary.",
             ),
-            WorkflowNodeDescriptor(
-                node_id="response",
+            WorkflowStageDescriptor(
+                id="response",
                 label="Response",
                 description="Project governed outcome into caller-facing response.",
                 predecessors=(
@@ -252,11 +252,11 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
 }
 
 
-def _react_enterprise_qa_v2_nodes() -> tuple[WorkflowNodeDescriptor, ...]:
-    v1_nodes = TEMPLATES["react_enterprise_qa"].nodes
+def _react_enterprise_qa_v2_stages() -> tuple[WorkflowStageDescriptor, ...]:
+    v1_stages = TEMPLATES["react_enterprise_qa"].stages
     return (
-        WorkflowNodeDescriptor(
-            node_id="intent_resolution",
+        WorkflowStageDescriptor(
+            id="intent_resolution",
             label="Intent Resolution",
             description="Resolve the user's intent into an audit-safe structured summary.",
             successors=("plan",),
@@ -273,10 +273,10 @@ def _react_enterprise_qa_v2_nodes() -> tuple[WorkflowNodeDescriptor, ...]:
             model_bearing=True,
         ),
         *(
-            replace(node, predecessors=("intent_resolution",))
-            if node.node_id == "plan"
-            else node
-            for node in v1_nodes
+            replace(stage, predecessors=("intent_resolution",))
+            if stage.id == "plan"
+            else stage
+            for stage in v1_stages
         ),
     )
 
@@ -285,7 +285,7 @@ TEMPLATES["react_enterprise_qa_v2"] = WorkflowTemplate(
     name="react_enterprise_qa_v2",
     description="Controlled ReAct enterprise question answering with Intent Resolution.",
     descriptor_version="react_enterprise_qa.v2",
-    nodes=_react_enterprise_qa_v2_nodes(),
+    stages=_react_enterprise_qa_v2_stages(),
 )
 
 

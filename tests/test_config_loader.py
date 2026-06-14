@@ -1056,7 +1056,7 @@ def test_unknown_workflow_stage_is_rejected(tmp_path: Path) -> None:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "unsupported workflow node_id" in exc.value.message
+    assert "unsupported workflow stage id" in exc.value.message
 
 
 def test_unknown_workflow_context_option_is_rejected(tmp_path: Path) -> None:

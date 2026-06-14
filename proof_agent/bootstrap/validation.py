@@ -9,7 +9,7 @@ from uuid import uuid4
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts import AgentManifest, WorkflowStagePromptConfig
-from proof_agent.control.workflow.templates import WorkflowNodeDescriptor, resolve_workflow_template
+from proof_agent.control.workflow.templates import WorkflowStageDescriptor, resolve_workflow_template
 from proof_agent.errors import ProofAgentError
 
 
@@ -590,25 +590,25 @@ def _validate_workflow_stage_config(manifest: AgentManifest, *, manifest_path: P
                 artifact_path=manifest_path,
             )
         seen_stage_ids.add(stage_config.id)
-        node_descriptor = descriptor.node(stage_config.id)
+        stage_descriptor = descriptor.stage(stage_config.id)
 
         unsupported_context_options = sorted(
             option
             for option in stage_config.context.options
-            if option not in node_descriptor.context_options
+            if option not in stage_descriptor.context_options
         )
         if unsupported_context_options:
             raise ProofAgentError(
                 "PA_CONFIG_002",
                 f"unsupported context option for workflow stage {stage_config.id}: {', '.join(unsupported_context_options)}",
-                f"Use context options: {', '.join(node_descriptor.context_options)}.",
+                f"Use context options: {', '.join(stage_descriptor.context_options)}.",
                 artifact_path=manifest_path,
             )
 
         total_prompt_chars += validate_workflow_stage_prompt_config(
             stage_id=stage_config.id,
             prompt=stage_config.prompt,
-            node_descriptor=node_descriptor,
+            stage_descriptor=stage_descriptor,
             manifest_path=manifest_path,
         )
     if total_prompt_chars > MAX_WORKFLOW_NODE_TOTAL_PROMPT_CHARS:
@@ -624,7 +624,7 @@ def validate_workflow_stage_prompt_config(
     *,
     stage_id: str,
     prompt: WorkflowStagePromptConfig,
-    node_descriptor: WorkflowNodeDescriptor,
+    stage_descriptor: WorkflowStageDescriptor,
     manifest_path: Path | None = None,
 ) -> int:
     """Validate one Workflow Stage Prompt against descriptor and safety limits."""
@@ -633,13 +633,13 @@ def validate_workflow_stage_prompt_config(
     unsupported_prompt_fields = sorted(
         field
         for field in configured_prompt_fields
-        if field not in node_descriptor.editable_prompt_fields
+        if field not in stage_descriptor.editable_prompt_fields
     )
     if unsupported_prompt_fields:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"unsupported prompt field for workflow stage {stage_id}: {', '.join(unsupported_prompt_fields)}",
-            f"Use editable Prompt fields: {', '.join(node_descriptor.editable_prompt_fields)}.",
+            f"Use editable Prompt fields: {', '.join(stage_descriptor.editable_prompt_fields)}.",
             artifact_path=manifest_path,
         )
 

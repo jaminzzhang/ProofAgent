@@ -4,7 +4,7 @@ from collections.abc import Mapping
 import re
 from typing import Any
 
-from proof_agent.contracts import WorkflowNodePromptConfig
+from proof_agent.contracts import WorkflowStagePromptConfig
 from proof_agent.control.workflow.templates import WorkflowTemplate
 from proof_agent.errors import ProofAgentError
 
@@ -20,7 +20,7 @@ def build_workflow_node_context_preview(
     *,
     descriptor: WorkflowTemplate,
     node_id: str,
-    prompt: Mapping[str, Any] | WorkflowNodePromptConfig,
+    prompt: Mapping[str, Any] | WorkflowStagePromptConfig,
     context_options: Mapping[str, bool],
     sample_context: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -99,11 +99,11 @@ def workflow_node_context_summary(preview: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_prompt(
-    prompt: Mapping[str, Any] | WorkflowNodePromptConfig,
-) -> WorkflowNodePromptConfig:
-    if isinstance(prompt, WorkflowNodePromptConfig):
+    prompt: Mapping[str, Any] | WorkflowStagePromptConfig,
+) -> WorkflowStagePromptConfig:
+    if isinstance(prompt, WorkflowStagePromptConfig):
         return prompt
-    return WorkflowNodePromptConfig(
+    return WorkflowStagePromptConfig(
         business_context=str(prompt.get("business_context", "") or ""),
         task_instructions=tuple(
             str(item) for item in prompt.get("task_instructions", ()) or ()
@@ -114,7 +114,7 @@ def _normalize_prompt(
     )
 
 
-def _business_context_addendum(prompt: WorkflowNodePromptConfig) -> tuple[str, bool]:
+def _business_context_addendum(prompt: WorkflowStagePromptConfig) -> tuple[str, bool]:
     lines: list[str] = []
     if prompt.business_context:
         lines.append("Business context:")
@@ -144,7 +144,7 @@ def _selected_structured_context(
     return selected, redaction_applied
 
 
-def _prompt_fields(prompt: WorkflowNodePromptConfig) -> list[str]:
+def _prompt_fields(prompt: WorkflowStagePromptConfig) -> list[str]:
     fields: list[str] = []
     if prompt.business_context:
         fields.append("business_context")
