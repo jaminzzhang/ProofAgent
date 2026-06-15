@@ -14,7 +14,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
@@ -50,7 +50,17 @@ from proof_agent.contracts import (
     RunPurpose,
     SharedModelConnection,
     ToolSource,
+    ValidationCaptureExclusionSummary,
+    ValidationCaptureResultSummary,
+    ValidationCaptureSourceReference,
+    ValidationCaptureV2Payload,
+    WorkflowStageContextApplicationProjection,
+    WorkflowStageContextConfigurationCapture,
     WorkflowStagePromptConfig,
+    WorkflowStagePromptValueCapture,
+    WorkflowStageResultVerificationProjection,
+    WorkflowTemplateExecutionInput,
+    WorkflowTemplateExecutionResult,
 )
 from proof_agent.control.workflow.stage_context import build_workflow_stage_context_preview
 from proof_agent.control.workflow.templates import (
@@ -1858,30 +1868,36 @@ def validate_config_draft(
     if detail is None:
         raise HTTPException(status_code=500, detail="Validation run artifacts were not persisted.")
     validation_capture: dict[str, Any] | None = None
+    capture_error: dict[str, Any] | None = None
     if request.full_capture:
-        artifact = config_store.record_sensitive_validation_capture_artifact(
-            run_id=run_id,
-            draft_id=draft_id,
-            payload=_validation_capture_payload(
-                manifest=manifest,
-                detail=detail,
-                final_output=result.final_output,
-            ),
-            actor=actor,
-            retain_for_audit=request.retain_for_audit,
-        )
-        if not run_store.attach_validation_capture(run_id, artifact.capture_id):
-            raise HTTPException(
-                status_code=500,
-                detail="Validation capture artifact was not attached to the run.",
+        try:
+            artifact = config_store.record_sensitive_validation_capture_artifact(
+                run_id=run_id,
+                draft_id=draft_id,
+                payload=_validation_capture_payload(
+                    detail=detail,
+                    execution_input=result.workflow_template_execution_input,
+                    execution_result=result.workflow_template_execution_result,
+                ),
+                actor=actor,
+                retain_for_audit=request.retain_for_audit,
             )
-        detail = run_store.get_run_detail(run_id)
-        if detail is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Validation run artifacts disappeared after capture attachment.",
-            )
-        validation_capture = artifact.model_dump(mode="json")
+            if not run_store.attach_validation_capture(run_id, artifact.capture_id):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Validation capture artifact was not attached to the run.",
+                )
+            detail = run_store.get_run_detail(run_id)
+            if detail is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Validation run artifacts disappeared after capture attachment.",
+                )
+            validation_capture = artifact.model_dump(mode="json")
+        except (ValueError, ValidationError):
+            capture_error = _validation_capture_failure_projection()
+    if detail is None:
+        raise HTTPException(status_code=500, detail="Validation run artifacts were not persisted.")
     warnings, publish_blockers = _validation_model_connection_warnings(detail.trace_events)
     record = AgentValidationRecord(
         validation_id=f"validation_{uuid4().hex[:8]}",
@@ -1907,6 +1923,12 @@ def validate_config_draft(
     }
     if validation_capture is not None:
         links["validation_capture"] = f"/api/runs/{detail.run_id}/validation-capture"
+    trace_capture = {
+        "mode": "full_capture" if request.full_capture else "summary_only",
+        "validation_capture": validation_capture,
+    }
+    if capture_error is not None:
+        trace_capture["capture_error"] = capture_error
     return {
         "validation_id": record.validation_id,
         "run_id": detail.run_id,
@@ -1917,10 +1939,7 @@ def validate_config_draft(
         "draft_id": detail.draft_id,
         "warnings": list(warnings),
         "publish_blockers": list(publish_blockers),
-        "trace_capture": {
-            "mode": "full_capture" if validation_capture is not None else "summary_only",
-            "validation_capture": validation_capture,
-        },
+        "trace_capture": trace_capture,
         "links": links,
     }
 
@@ -1977,142 +1996,153 @@ def _validation_model_connection_warnings(
 
 def _validation_capture_payload(
     *,
-    manifest: Any,
     detail: Any,
-    final_output: str,
+    execution_input: WorkflowTemplateExecutionInput | None,
+    execution_result: WorkflowTemplateExecutionResult | None,
 ) -> dict[str, Any]:
-    workflow = _jsonable_contract(manifest.workflow)
-    capabilities = _jsonable_contract(manifest.capabilities)
-    configured_stages = workflow.get("stages", []) if isinstance(workflow, dict) else []
+    if execution_input is None or execution_result is None:
+        raise ValueError("validation capture requires workflow execution input and result")
+    payload = ValidationCaptureV2Payload(
+        source=_validation_capture_source(detail, execution_input),
+        stage_prompt_values=tuple(
+            _workflow_stage_prompt_value_capture(stage)
+            for stage in execution_input.effective_stage_configuration.stages
+        ),
+        context_configuration=tuple(
+            _workflow_stage_context_configuration_capture(stage)
+            for stage in execution_input.effective_stage_configuration.stages
+        ),
+        context_applications=tuple(
+            _workflow_stage_context_application_projection(item)
+            for item in execution_result.stage_context_applications
+        ),
+        stage_results=tuple(
+            WorkflowStageResultVerificationProjection(
+                stage_id=stage_result.stage_id,
+                status=stage_result.status,
+                outcome=stage_result.outcome,
+                summary=stage_result.summary,
+                produced_fact_refs=stage_result.produced_fact_refs,
+            )
+            for stage_result in execution_result.stage_results
+        ),
+        result_summary=ValidationCaptureResultSummary(
+            outcome=execution_result.outcome,
+            final_output=execution_result.final_output,
+            final_output_length=len(execution_result.final_output),
+            fact_refs=_execution_result_fact_refs(execution_result),
+            approval_pause=(
+                execution_result.approval_pause.model_dump(mode="json")
+                if execution_result.approval_pause is not None
+                else None
+            ),
+            clarification_need=(
+                execution_result.clarification_need.model_dump(mode="json")
+                if execution_result.clarification_need is not None
+                else None
+            ),
+        ),
+        exclusions=ValidationCaptureExclusionSummary(
+            excluded_categories=(
+                "raw_prompt",
+                "raw_context",
+                "raw_evidence",
+                "tool_payload",
+                "provider_response",
+                "runtime_state",
+                "chain_of_thought",
+            ),
+            sanitizer_version="validation_capture.v2",
+            redacted_secret_count=0,
+            dropped_unsafe_key_count=0,
+            redaction_applied=False,
+        ),
+    )
+    return payload.model_dump(mode="json")
+
+
+def _validation_capture_source(
+    detail: Any,
+    execution_input: WorkflowTemplateExecutionInput,
+) -> ValidationCaptureSourceReference:
+    source = execution_input.stage_configuration_source
+    return ValidationCaptureSourceReference(
+        run_id=detail.run_id,
+        run_purpose=detail.run_purpose.value,
+        agent_id=execution_input.agent_id or detail.agent_id,
+        agent_version_id=execution_input.agent_version_id or detail.agent_version_id,
+        draft_id=execution_input.draft_id or detail.draft_id,
+        template_name=execution_input.template_name,
+        template_descriptor_version=execution_input.template_descriptor_version,
+        stage_configuration_source_type=source.source_type.value,
+        stage_configuration_source_reference=source.reference,
+        effective_stage_configuration_ref=execution_input.effective_stage_configuration_ref,
+    )
+
+
+def _workflow_stage_prompt_value_capture(
+    stage: Any,
+) -> WorkflowStagePromptValueCapture:
+    prompt_values = dict(stage.prompt)
+    return WorkflowStagePromptValueCapture(
+        stage_id=stage.id,
+        prompt_values=prompt_values,
+        prompt_field_names=tuple(str(key) for key in prompt_values),
+        prompt_character_count=_prompt_character_count(prompt_values),
+        redaction_applied=False,
+        source="run_start_workflow_template_execution_input",
+    )
+
+
+def _workflow_stage_context_configuration_capture(
+    stage: Any,
+) -> WorkflowStageContextConfigurationCapture:
+    return WorkflowStageContextConfigurationCapture(
+        stage_id=stage.id,
+        selected_context_options=tuple(
+            str(key) for key, enabled in stage.context.items() if enabled
+        ),
+        available_context_options=tuple(str(key) for key in stage.available_context_options),
+    )
+
+
+def _workflow_stage_context_application_projection(
+    item: Mapping[str, Any],
+) -> WorkflowStageContextApplicationProjection:
+    return WorkflowStageContextApplicationProjection(
+        stage_id=str(item.get("stage_id") or "unknown"),
+        summary=item,
+    )
+
+
+def _execution_result_fact_refs(
+    execution_result: WorkflowTemplateExecutionResult,
+) -> tuple[str, ...]:
+    refs: list[str] = []
+    for stage_result in execution_result.stage_results:
+        refs.extend(stage_result.produced_fact_refs)
+    return tuple(refs)
+
+
+def _prompt_character_count(prompt_values: Mapping[str, Any]) -> int:
+    total = 0
+    for value in prompt_values.values():
+        if isinstance(value, str):
+            total += len(value)
+        elif isinstance(value, list | tuple):
+            total += sum(len(item) for item in value if isinstance(item, str))
+    return total
+
+
+def _validation_capture_failure_projection() -> dict[str, Any]:
     return {
-        "capture_contract_version": "validation_capture.v1",
-        "run_reference": {
-            "run_id": detail.run_id,
-            "run_purpose": detail.run_purpose.value,
-            "agent_id": detail.agent_id,
-            "agent_version_id": detail.agent_version_id,
-            "draft_id": detail.draft_id,
-        },
-        "agent_contract_snapshot_reference": {
-            "agent_name": getattr(manifest, "name", None),
-            "workflow_template": workflow.get("template")
-            if isinstance(workflow, dict)
-            else None,
-            "template_descriptor_version": workflow.get("template_descriptor_version")
-            if isinstance(workflow, dict)
-            else None,
-        },
-        "capability_configuration": capabilities,
-        "workflow_stage_configuration": {
-            "runtime": workflow.get("runtime") if isinstance(workflow, dict) else None,
-            "template": workflow.get("template") if isinstance(workflow, dict) else None,
-            "template_descriptor_version": workflow.get("template_descriptor_version")
-            if isinstance(workflow, dict)
-            else None,
-            "stages": configured_stages if isinstance(configured_stages, list) else [],
-        },
-        "prompt_context_capture": _prompt_context_capture(configured_stages),
-        "trace_summary": _validation_trace_summary(detail.trace_events),
-        "intermediate_result_summary": detail.governance_details,
-        "result_summary": {
-            "outcome": detail.outcome.value,
-            "final_output": final_output,
-            "final_output_length": len(final_output),
-        },
+        "code": "VALIDATION_CAPTURE_REJECTED",
+        "message": (
+            "Validation capture artifact was not created because the v2 safety "
+            "gate rejected unsafe fields."
+        ),
+        "retryable": False,
     }
-
-
-def _jsonable_contract(value: Any) -> dict[str, Any]:
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="python", warnings=False)
-        jsonable = _jsonable_value(dumped)
-        return jsonable if isinstance(jsonable, dict) else {}
-    jsonable = _jsonable_value(value)
-    return jsonable if isinstance(jsonable, dict) else {}
-
-
-def _jsonable_value(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, Mapping):
-        return {str(key): _jsonable_value(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [_jsonable_value(item) for item in value]
-    return value
-
-
-def _prompt_context_capture(configured_stages: Any) -> list[dict[str, Any]]:
-    if not isinstance(configured_stages, list):
-        return []
-    capture: list[dict[str, Any]] = []
-    for stage in configured_stages:
-        if not isinstance(stage, dict):
-            continue
-        capture.append(
-            {
-                "stage_id": stage.get("id"),
-                "prompt": stage.get("prompt", {}),
-                "context": stage.get("context", {}),
-            }
-        )
-    return capture
-
-
-def _validation_trace_summary(
-    trace_events: tuple[dict[str, Any], ...],
-) -> list[dict[str, Any]]:
-    summaries: list[dict[str, Any]] = []
-    for event in trace_events:
-        payload = event.get("payload")
-        payload_keys = sorted(payload) if isinstance(payload, dict) else []
-        summary: dict[str, Any] = {
-            "event_id": event.get("event_id"),
-            "sequence": event.get("sequence"),
-            "timestamp": event.get("timestamp"),
-            "event_type": event.get("event_type"),
-            "status": event.get("status"),
-            "payload_keys": payload_keys,
-        }
-        if isinstance(payload, dict):
-            if event.get("event_type") == "workflow_stage_context_applied":
-                summary["workflow_stage_context"] = {
-                    key: payload.get(key)
-                    for key in (
-                        "stage_id",
-                        "stage_label",
-                        "prompt_fields",
-                        "context_options",
-                        "business_context_length",
-                        "task_instruction_count",
-                        "output_preference_count",
-                        "redaction_applied",
-                        "model_bearing",
-                        "template_descriptor_version",
-                    )
-                    if key in payload
-                }
-            elif event.get("event_type") == "model_request":
-                summary["model_request"] = {
-                    key: payload.get(key)
-                    for key in (
-                        "provider",
-                        "model",
-                        "message_count",
-                        "prompt_length",
-                        "system_prompt_length",
-                        "estimated_tokens",
-                        "stream",
-                    )
-                    if key in payload
-                }
-            elif event.get("event_type") == "model_response":
-                summary["model_response"] = {
-                    key: payload.get(key)
-                    for key in ("provider", "model", "finish_reason", "content_length")
-                    if key in payload
-                }
-        summaries.append(summary)
-    return summaries
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/publish")

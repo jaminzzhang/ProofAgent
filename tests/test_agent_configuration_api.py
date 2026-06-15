@@ -2264,9 +2264,23 @@ def test_validation_run_defaults_to_summary_only_trace_capture(tmp_path: Path) -
     assert detail.json()["validation_capture_id"] is None
 
 
-def test_validation_run_full_capture_records_gated_artifact(tmp_path: Path) -> None:
+def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    draft = _import_enterprise_qa(client)
+    draft = _import_react_enterprise_qa(client)
+    update = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-stages",
+        json={
+            "template_descriptor_version": "react_enterprise_qa.v1",
+            "stages": [
+                {
+                    "id": "plan",
+                    "prompt": {"business_context": "Insurance servicing context."},
+                    "context": {"include_agent_purpose": True},
+                }
+            ],
+        },
+    )
+    assert update.status_code == 200
 
     validation = client.post(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
@@ -2298,9 +2312,84 @@ def test_validation_run_full_capture_records_gated_artifact(tmp_path: Path) -> N
     assert capture.status_code == 200
     capture_body = capture.json()
     assert capture_body["metadata"]["capture_id"] == artifact["capture_id"]
-    assert capture_body["payload"]["result_summary"]["outcome"] == body["outcome"]
-    assert "raw_prompt" not in json.dumps(capture_body["payload"])
-    assert "raw_context" not in json.dumps(capture_body["payload"])
+    payload = capture_body["payload"]
+    assert payload["capture_contract_version"] == "validation_capture.v2"
+    assert set(payload) == {
+        "capture_contract_version",
+        "source",
+        "stage_prompt_values",
+        "context_configuration",
+        "context_applications",
+        "stage_results",
+        "result_summary",
+        "exclusions",
+    }
+    assert payload["source"]["run_id"] == body["run_id"]
+    assert payload["source"]["draft_id"] == draft["draft_id"]
+    assert payload["source"]["template_name"] == "react_enterprise_qa"
+    assert payload["stage_prompt_values"]
+    assert payload["context_configuration"]
+    assert payload["context_applications"]
+    assert payload["stage_results"]
+    assert payload["result_summary"]["outcome"] == body["outcome"]
+    assert payload["result_summary"]["final_output"]
+    assert "prompt_context_capture" not in payload
+    assert "workflow_stage_configuration" not in payload
+    assert "capability_configuration" not in payload
+    assert "intermediate_result_summary" not in payload
+    assert "trace_summary" not in payload
+    payload_json = json.dumps(payload)
+    assert '"raw_prompt":' not in payload_json
+    assert '"raw_context":' not in payload_json
+
+
+def test_validation_run_full_capture_failure_returns_trace_safe_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+
+    def reject_capture_payload(**_: object) -> dict[str, object]:
+        raise ValueError("raw_prompt appeared in validation capture payload")
+
+    monkeypatch.setattr(
+        configuration_api_module,
+        "_validation_capture_payload",
+        reject_capture_payload,
+    )
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={
+            "question": "What is the reimbursement rule for travel meals?",
+            "full_capture": True,
+        },
+    )
+
+    assert validation.status_code == 200
+    body = validation.json()
+    assert body["outcome"] in {
+        "ANSWERED_WITH_CITATIONS",
+        "REFUSED_NO_EVIDENCE",
+        "WAITING_FOR_APPROVAL",
+    }
+    assert body["trace_capture"]["mode"] == "full_capture"
+    assert body["trace_capture"]["validation_capture"] is None
+    assert body["trace_capture"]["capture_error"] == {
+        "code": "VALIDATION_CAPTURE_REJECTED",
+        "message": (
+            "Validation capture artifact was not created because the v2 safety "
+            "gate rejected unsafe fields."
+        ),
+        "retryable": False,
+    }
+    assert "validation_capture" not in body["links"]
+
+    detail = client.get(f"/api/runs/{body['run_id']}")
+    assert detail.status_code == 200
+    assert detail.json()["validation_capture_id"] is None
+    assert "raw_prompt" not in json.dumps(body)
 
 
 def test_publish_requires_validation_and_activates_version(tmp_path: Path) -> None:

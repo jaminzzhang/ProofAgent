@@ -15,8 +15,10 @@ from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
+    ApprovalPause,
     ContextAdmission,
     EvidenceChunk,
+    PolicyDecisionType,
     PublishedAgentRuntimeFacts,
     ReceiptOutcome,
     ResolvedWorkflowStageRuntimeConfiguration,
@@ -152,6 +154,7 @@ def run_with_langgraph(
         "tool_call_count": 0,
         "review_results": [],
         "stage_results": [],
+        "stage_context_applications": [],
     }
     config = {"configurable": {"thread_id": actual_run_id}}
 
@@ -159,6 +162,17 @@ def run_with_langgraph(
     sync_checkpointer(checkpointer)
     interrupt_result = _approval_interrupt(final_state)
     if interrupt_result is not None:
+        execution_result = _workflow_execution_result_from_interrupt(
+            final_state,
+            interrupt_payload=interrupt_result,
+            invocation=invocation,
+            question=question,
+            run_id=actual_run_id,
+            execution_input=execution_input,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
+        )
         result = _finalize_approval_interrupt(
             trace=trace,
             receipt_path=receipt_path,
@@ -173,7 +187,10 @@ def run_with_langgraph(
             draft_id=draft_id,
         )
         return result.model_copy(
-            update={"workflow_template_execution_input": execution_input}
+            update={
+                "workflow_template_execution_input": execution_input,
+                "workflow_template_execution_result": execution_result,
+            }
         )
 
     execution_result = _workflow_execution_result_from_state(
@@ -201,7 +218,12 @@ def run_with_langgraph(
         agent_version_id=agent_version_id,
         draft_id=draft_id,
     )
-    return result.model_copy(update={"workflow_template_execution_input": execution_input})
+    return result.model_copy(
+        update={
+            "workflow_template_execution_input": execution_input,
+            "workflow_template_execution_result": execution_result,
+        }
+    )
 
 
 def resume_langgraph_approval(
@@ -285,6 +307,17 @@ def resume_langgraph_approval(
     sync_checkpointer(checkpointer)
     interrupt_result = _approval_interrupt(final_state)
     if interrupt_result is not None:
+        execution_result = _workflow_execution_result_from_interrupt(
+            final_state,
+            interrupt_payload=interrupt_result,
+            invocation=invocation,
+            question=question,
+            run_id=run_id,
+            execution_input=execution_input,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
+        )
         result = _finalize_approval_interrupt(
             trace=trace,
             receipt_path=receipt_path,
@@ -299,7 +332,10 @@ def resume_langgraph_approval(
             draft_id=draft_id,
         )
         return result.model_copy(
-            update={"workflow_template_execution_input": execution_input}
+            update={
+                "workflow_template_execution_input": execution_input,
+                "workflow_template_execution_result": execution_result,
+            }
         )
 
     execution_result = _workflow_execution_result_from_state(
@@ -326,7 +362,12 @@ def resume_langgraph_approval(
         agent_version_id=agent_version_id,
         draft_id=draft_id,
     )
-    return result.model_copy(update={"workflow_template_execution_input": execution_input})
+    return result.model_copy(
+        update={
+            "workflow_template_execution_input": execution_input,
+            "workflow_template_execution_result": execution_result,
+        }
+    )
 
 
 def _ensure_executable_template(manifest: AgentManifest, agent_yaml: Path) -> None:
@@ -417,12 +458,148 @@ def _workflow_execution_result_from_state(
         review_results=tuple(
             item for item in final_state.get("review_results", ()) if isinstance(item, Mapping)
         ),
+        stage_context_applications=_stage_context_applications_from_state(final_state),
         trace_summary_refs=(
             (execution_input.stage_configuration_source.reference,)
             if execution_input.stage_configuration_source.reference
             else ()
         ),
     )
+
+
+def _workflow_execution_result_from_interrupt(
+    final_state: Mapping[str, Any],
+    *,
+    interrupt_payload: Mapping[str, Any],
+    invocation: Any,
+    question: str,
+    run_id: str,
+    execution_input: WorkflowTemplateExecutionInput,
+    agent_id: str | None,
+    agent_version_id: str | None,
+    draft_id: str | None,
+) -> WorkflowTemplateExecutionResult:
+    message = str(
+        final_state.get("governance_message")
+        or _approval_waiting_message(interrupt_payload)
+    )
+    final_output = str(final_state.get("final_output") or message)
+    return WorkflowTemplateExecutionResult(
+        run_id=run_id,
+        template_name=invocation.template.name,
+        template_descriptor_version=invocation.template.descriptor_version,
+        outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
+        final_output=final_output,
+        message=message,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
+        effective_stage_configuration_ref=execution_input.effective_stage_configuration_ref,
+        approval_pause=_approval_pause_from_interrupt(interrupt_payload),
+        evidence=tuple(
+            EvidenceChunk.model_validate(item)
+            for item in final_state.get("evidence", ())
+        ),
+        stage_results=tuple(
+            WorkflowStageResult.model_validate(item)
+            for item in final_state.get("stage_results", ())
+        ),
+        intent_resolution=(
+            final_state.get("intent_resolution")
+            if isinstance(final_state.get("intent_resolution"), Mapping)
+            else None
+        ),
+        reasoning_summary=(
+            final_state.get("reasoning_summary")
+            if isinstance(final_state.get("reasoning_summary"), Mapping)
+            else None
+        ),
+        review_results=tuple(
+            item for item in final_state.get("review_results", ()) if isinstance(item, Mapping)
+        ),
+        stage_context_applications=_stage_context_applications_from_state(final_state),
+        trace_summary_refs=(
+            (execution_input.stage_configuration_source.reference,)
+            if execution_input.stage_configuration_source.reference
+            else ()
+        ),
+    )
+
+
+def _approval_pause_from_interrupt(
+    interrupt_payload: Mapping[str, Any],
+) -> ApprovalPause:
+    pending = interrupt_payload.get("pending_approval")
+    requested = interrupt_payload.get("approval_requested")
+    pending_payload = pending if isinstance(pending, Mapping) else {}
+    requested_payload = requested if isinstance(requested, Mapping) else {}
+    policy_decision = _policy_decision(
+        pending_payload.get("policy_decision")
+        or PolicyDecisionType.REQUIRE_APPROVAL.value
+    )
+    parameters = pending_payload.get("parameters")
+    parameter_count = len(parameters) if isinstance(parameters, Mapping) else 0
+    return ApprovalPause(
+        approval_id=str(
+            pending_payload.get("approval_id")
+            or requested_payload.get("approval_id")
+            or ""
+        ),
+        action_id=str(pending_payload.get("action_id") or ""),
+        tool_name=str(
+            pending_payload.get("tool_name")
+            or requested_payload.get("tool_name")
+            or "unknown"
+        ),
+        policy_decision=policy_decision,
+        checkpoint_ref=str(
+            pending_payload.get("checkpoint_id")
+            or pending_payload.get("checkpoint_ref")
+            or ""
+        ),
+        expires_at=(
+            str(pending_payload["expires_at"])
+            if pending_payload.get("expires_at") is not None
+            else None
+        ),
+        summary={
+            "status": str(
+                pending_payload.get("status")
+                or requested_payload.get("state")
+                or "requested"
+            ),
+            "parameter_count": parameter_count,
+        },
+    )
+
+
+def _policy_decision(value: Any) -> PolicyDecisionType:
+    try:
+        return PolicyDecisionType(str(value))
+    except ValueError:
+        return PolicyDecisionType.REQUIRE_APPROVAL
+
+
+def _approval_waiting_message(interrupt_payload: Mapping[str, Any]) -> str:
+    pending = interrupt_payload.get("pending_approval")
+    requested = interrupt_payload.get("approval_requested")
+    pending_payload = pending if isinstance(pending, Mapping) else {}
+    requested_payload = requested if isinstance(requested, Mapping) else {}
+    tool_name = str(
+        pending_payload.get("tool_name")
+        or requested_payload.get("tool_name")
+        or "customer_lookup"
+    )
+    return f"Waiting for approval before {tool_name} can execute."
+
+
+def _stage_context_applications_from_state(
+    final_state: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    applications = final_state.get("stage_context_applications", ())
+    if not isinstance(applications, list | tuple):
+        return ()
+    return tuple(item for item in applications if isinstance(item, Mapping))
 
 
 def _resolve_workflow_stage_runtime_configuration(

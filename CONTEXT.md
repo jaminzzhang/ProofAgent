@@ -102,6 +102,10 @@ _Avoid_: Runtime graph execution, template-specific node class, orchestrator bra
 The typed governed facts produced by one Workflow Template Execution, including completion, terminal outcome, approval pause, clarification need, evidence basis, and safe response facts.
 _Avoid_: Runtime state dict, LangGraph final state, Dashboard projection
 
+**Workflow Template Execution Result Run Handoff**:
+The process-local RunResult field that returns the Workflow Template Execution Result from a Workflow Runtime Adapter to Delivery for validation artifact construction and other governed post-processing.
+_Avoid_: RunStore detail field, Dashboard projection, trace file payload, runtime state passthrough
+
 **Workflow Template Execution Input**:
 The typed run-scoped input for Workflow Template Execution, including the selected template identity, Agent Contract facts, optional Published Agent Version references, conversation context, Effective Workflow Stage Configuration value, and trace-safe configuration source metadata.
 _Avoid_: Raw manifest path, latest descriptor lookup, Runtime Plane graph state
@@ -153,6 +157,18 @@ _Avoid_: Control Plane semantic owner, Workflow Template Descriptor, Agent Contr
 **Workflow Stage Result Summary**:
 The trace-safe summary inside a Workflow Stage Result Envelope, limited to governed fact names, statuses, counts, lengths, ids, decision enums, and redaction metadata.
 _Avoid_: Raw prompt text, raw selected context, raw evidence content, raw tool payload, complete provider response, Runtime Plane state dict
+
+**Workflow Stage Result Verification Projection**:
+The full-capture representation of an intermediate Workflow Stage Result as stage id, status, outcome, safe summary, and produced fact references, excluding Workflow Stage Continuation State.
+_Avoid_: Continuation state, scheduler state, raw stage result dump, runtime state dict
+
+**Governed Final Output Capture**:
+The Sensitive Validation Capture Artifact record of Proof Agent's governed final output after Harness normalization, including terminal outcome, final output text, output length, and safe citation or fact references when available.
+_Avoid_: Provider response body, raw model message list, raw evidence payload, raw tool payload, runtime state dict
+
+**Validation Capture Result Summary**:
+The `validation_capture.v2` terminal result section, containing the governed outcome plus final output capture, approval pause projection, or clarification projection as applicable for the validation attempt.
+_Avoid_: Provider response body, raw runtime state, raw evidence payload, raw tool payload, stage result list
 
 **Workflow Stage Availability**:
 The resolved enabled or disabled status of a Workflow Template Stage for one Agent Contract, derived from template support and configured capabilities rather than arbitrary topology editing.
@@ -742,6 +758,30 @@ _Avoid_: Full prompt text, full context payload, raw validation dump
 The validation/test-run request switch that controls whether run trace stores only Workflow Stage Configuration Trace Summary or additionally captures full stage Prompt, selected context values, and intermediate Workflow Stage Result details for verification.
 _Avoid_: Always-on verbose trace, production raw prompt archive, chain-of-thought capture
 
+**Workflow Stage Prompt Value Capture**:
+The full-capture record of run-start effective Workflow Stage Prompt Field Set values, including allowed Agent-authored business prompt text after secret redaction, field lengths, redaction flags, and source metadata.
+_Avoid_: system_prompt, developer_prompt, raw_prompt, provider request body, complete model context
+
+**Workflow Stage Context Verification Projection**:
+The full-capture representation of applied Workflow Stage context as option names, safe summaries, counts, identifiers, and references observed during execution, without storing raw business content.
+_Avoid_: Raw context dump, full model context snapshot, raw transcript, raw evidence content
+
+**Workflow Stage Context Application Fact**:
+The runtime-neutral, trace-safe execution fact emitted when a Workflow Template Stage applies its selected context, carrying the same safe summary used by Workflow Stage Context Verification Projection.
+_Avoid_: Trace-file-only event, raw context payload, runtime adapter state, model request dump
+
+**Workflow Stage Context Configuration Capture**:
+The full-capture record of selected Workflow Stage context option keys from the run-start Workflow Template Execution Input for available stages, independent of whether those stages executed.
+_Avoid_: Applied context event, raw context value, latest descriptor replay
+
+**Run-Start Validation Capture Source**:
+The rule that full validation capture records Workflow Stage Prompt and selected context from the run-start Workflow Template Execution Input selected for the executed run.
+_Avoid_: Raw Agent Contract override replay, latest descriptor recomputation, post-run manifest reinterpretation
+
+**Validation Capture Source Reference**:
+The `validation_capture.v2` source section containing run, validation, Agent, Workflow Template, descriptor, runtime source, Published Agent Version, and snapshot references needed to identify the executed configuration without embedding raw Agent Contract YAML, workflow YAML, or capability dumps.
+_Avoid_: Raw manifest snapshot, raw workflow YAML, raw capabilities dump, latest descriptor replay
+
 **Workflow Template Execution Resume Metadata**:
 The Runtime Plane metadata retained for resuming a paused Workflow Template Execution, including a protected reference to the run-start Workflow Template Execution Input needed for checkpoint resume without exposing full Prompt or context values through ordinary trace, receipt, RunStore detail, or Dashboard projection.
 _Avoid_: Ordinary trace content, Governance Receipt section, Dashboard run detail payload
@@ -749,6 +789,38 @@ _Avoid_: Ordinary trace content, Governance Receipt section, Dashboard run detai
 **Sensitive Validation Capture Artifact**:
 The access-controlled validation/test artifact produced when Workflow Stage Trace Capture Mode records full stage Prompt, selected context values, or intermediate Workflow Stage Result details.
 _Avoid_: Ordinary trace event, customer-support-visible run detail, default receipt export
+
+**Validation Capture Contract Version**:
+The explicit schema version for Sensitive Validation Capture Artifact payloads, used to distinguish incompatible validation-only capture shapes.
+_Avoid_: Published Agent Version, Workflow Template Descriptor Version, ordinary trace schema
+
+**Validation Capture V2 Payload Sections**:
+The semantic top-level sections of a `validation_capture.v2` Sensitive Validation Capture Artifact: source, stage_prompt_values, context_configuration, context_applications, stage_results, result_summary, and exclusions.
+_Avoid_: prompt_context_capture, raw workflow YAML dump, raw capabilities dump, trace parser output
+
+**Validation Capture V2 Contract Model**:
+The explicit Pydantic contract for `validation_capture.v2` payloads, defining typed source, prompt value, context configuration, context application, stage result, result summary, and exclusion sections before persistence.
+_Avoid_: dict[str, Any] payload builder, schema-by-test, store-inferred validation, ad hoc JSON shape
+
+**Validation Capture Contract Module**:
+The `proof_agent.contracts.validation_capture` module that owns `validation_capture.v2` payload models separately from Sensitive Validation Capture Artifact metadata and ordinary run result contracts.
+_Avoid_: agent_configuration metadata model, RunStore detail contract, workflow execution state model, inline delivery dict
+
+**Validation Capture Contract Safety Gate**:
+The fail-closed validation boundary in Delivery that rejects a `validation_capture.v2` payload before persistence if forbidden raw prompt, context, evidence, tool, provider, runtime, chain-of-thought, secret, or unsafe debug fields appear in any section.
+_Avoid_: Silent artifact truncation, sanitizer-only enforcement, best-effort payload cleanup, partial unsafe capture
+
+**Validation Capture Failure Projection**:
+The trace-safe validation API response object used when a validation run completes but requested Sensitive Validation Capture Artifact creation fails or is rejected; it preserves the validation outcome while making capture absence explicit.
+_Avoid_: HTTP 500 for successful validation run, silent capture omission, partial artifact id, raw safety-gate diagnostics
+
+**Validation Capture Exclusion Summary**:
+The `validation_capture.v2` exclusions section that records fixed excluded data categories plus coarse sanitizer facts such as sanitizer version, redacted secret count, dropped unsafe key count, and whether redaction occurred.
+_Avoid_: Raw excluded values, business payload snippets, full field paths, sensitive key inventory
+
+**Validation Capture Dashboard Reveal Slice**:
+The future Dashboard work that lets authorized validators explicitly reveal Sensitive Validation Capture Artifact projections from Run Detail.
+_Avoid_: Backend capture payload contract, ordinary Run Detail tab, customer support view
 
 **Sensitive Validation Capture Retention**:
 The retention policy for Sensitive Validation Capture Artifacts: default short TTL of 7 days, with explicit audit retention only when requested and authorized.
@@ -2161,10 +2233,30 @@ _Avoid_: Evidence content dump
 - **Workflow Stage Context Option Configuration** uses descriptor-allowed boolean keys under `workflow.stages[].context`; missing keys inherit descriptor defaults, explicit `true` includes the option, and explicit `false` disables the option for that stage.
 - **Effective Workflow Stage Context Option Allowlist** removes context options whose prerequisite capability is unavailable; published Agent Contract YAML must not contain those context keys even with value `false`, and Draft Agents treat them as inactive blockers until cleared or the capability is restored.
 - Default run trace records **Workflow Stage Configuration Trace Summary** plus Published Agent Version or **Published Effective Workflow Stage Configuration Snapshot** reference, not full stage Prompt or selected context payloads.
-- When **Workflow Stage Trace Capture Mode** is enabled for validation, Proof Agent may record full stage Prompt values, selected context values, and intermediate **Workflow Stage Result** details, but still must not record raw chain-of-thought, secrets, raw evidence content, raw tool payloads, complete provider responses, or Runtime Plane state dictionaries.
+- When **Workflow Stage Trace Capture Mode** is enabled for validation, Proof Agent may record **Workflow Stage Prompt Value Capture**, selected context projections, and intermediate **Workflow Stage Result** details, but still must not record raw chain-of-thought, secrets, raw evidence content, raw tool payloads, complete provider responses, or Runtime Plane state dictionaries.
 - **Workflow Stage Trace Capture Mode** full capture is allowed only for Agent Validation Runs or explicit test runs; production and customer-facing runs are forced to summary-only trace behavior.
 - **Workflow Stage Trace Capture Mode** belongs to the Agent Validation Run or explicit test-run request, not to the Published Agent Version or production Agent Contract snapshot.
-- **Workflow Stage Trace Capture Mode** is an observability request policy, not a field in **Workflow Template Execution Input**; Workflow Template Execution runs from the same semantic input regardless of whether the run records summary-only trace or a gated validation capture artifact.
+- **Workflow Stage Trace Capture Mode** is an observability request policy, not a Runtime Plane execution option or a field in **Workflow Template Execution Input**; Workflow Template Execution runs from the same semantic input and returns the same runtime-neutral execution facts regardless of whether Delivery records summary-only trace or a gated validation capture artifact.
+- **Run-Start Validation Capture Source** means full validation capture uses the **Workflow Template Execution Input** selected at run start as the source of Workflow Stage Prompt and selected context values; it must not rebuild those values from raw Agent Contract `workflow.stages[]`, mutable package-local YAML, latest descriptor defaults, or Configuration Store state after execution.
+- **Workflow Stage Prompt Value Capture** records only the effective **Workflow Stage Prompt Field Set** values from the run-start **Workflow Template Execution Input** after secret redaction; it must not include Harness control prompts, `system_prompt`, `developer_prompt`, `raw_prompt`, provider request bodies, or complete model context.
+- Full capture separates configured context from applied context: **Workflow Stage Context Configuration Capture** comes from the run-start **Workflow Template Execution Input**, while **Workflow Stage Context Verification Projection** comes from **Workflow Stage Context Application Fact** values returned in the **Workflow Template Execution Result**.
+- Trace events may mirror **Workflow Stage Context Application Fact** summaries for ordinary observability, but Validation Delivery must not parse trace files as the source for `validation_capture.v2`.
+- In this slice, full capture records selected context as **Workflow Stage Context Verification Projection** rather than raw business content; there is no raw validation capture override switch.
+- Full capture records intermediate results as **Workflow Stage Result Verification Projection**; it must not include Workflow Stage Continuation State, scheduler state, runtime state dictionaries, or other Runtime Plane continuation payloads.
+- Full capture records **Governed Final Output Capture** in `result_summary` so validators can compare the governed final answer against Workflow Stage Prompt values, context projections, and stage result projections; this does not permit provider response bodies, raw evidence payloads, raw tool payloads, or Runtime Plane state.
+- `validation_capture.v2` `source` is a **Validation Capture Source Reference**: it records identifiers and immutable configuration references needed to locate the executed configuration, not raw Agent Contract YAML, raw workflow YAML, raw capabilities, or latest descriptor recomputation inputs.
+- `validation_capture.v2` `result_summary` is a **Validation Capture Result Summary**: it records the terminal governed result for the validation attempt, including final output, approval pause, or clarification projection as applicable, without duplicating the intermediate stage result list.
+- `validation_capture.v2` `exclusions` is a **Validation Capture Exclusion Summary**: it records fixed excluded categories and coarse sanitizer counters, not raw excluded values, full field paths, business payload snippets, or a sensitive key inventory.
+- **Workflow Template Execution Result Run Handoff** exposes `WorkflowTemplateExecutionResult` on `RunResult` for in-process Delivery use; it is not persisted as ordinary RunStore detail, returned by ordinary Dashboard run detail APIs, or treated as a runtime-specific state dump.
+- Validation Delivery owns Sensitive Validation Capture Artifact construction from the returned **Workflow Template Execution Input** and **Workflow Template Execution Result**; Runtime Adapters must not receive a full-capture switch or write Sensitive Validation Capture Artifacts directly.
+- This slice upgrades **Validation Capture Contract Version** to `validation_capture.v2` because the payload source and projection semantics change; v1 capture payload compatibility is not retained.
+- `validation_capture.v2` uses **Validation Capture V2 Payload Sections** instead of v1 mixed sections such as `prompt_context_capture`, raw `workflow_stage_configuration`, raw `capability_configuration`, `trace_summary`, and `intermediate_result_summary`; each v2 section has one source and one semantic responsibility.
+- Validation Delivery constructs a **Validation Capture V2 Contract Model** and persists its JSON dump; Configuration Store remains a defense-in-depth sanitizer and retention owner, not the component that infers or normalizes the v2 payload schema from arbitrary dictionaries.
+- **Validation Capture Contract Module** owns the v2 payload schema; **Sensitive Validation Capture Artifact** metadata may remain with Agent Configuration Store contracts because it describes retention, identity, and storage location rather than payload section semantics.
+- **Validation Capture Contract Safety Gate** fails closed before persistence when v2 payload construction detects forbidden raw or unsafe fields; Store sanitization remains defense in depth and must not be treated as the normal schema enforcement path.
+- If requested capture fails after the validation run completes, the validation API returns the run outcome with **Validation Capture Failure Projection** under `trace_capture`, leaves `validation_capture` null, leaves Run Detail `validation_capture_id` unset, and does not create a partial Sensitive Validation Capture Artifact.
+- This slice does not include **Validation Capture Dashboard Reveal Slice** work; Dashboard may keep exposing only ordinary Run Detail and trace-safe validation links while backend artifact payload and API semantics are aligned.
+- A validation run that returns an **Approval Pause** still produces a **Sensitive Validation Capture Artifact** for that validation attempt at the pause point; later approval resume must not mutate or append to that artifact in this slice.
 - Full capture output is a **Sensitive Validation Capture Artifact**: access requires `agent.validate` or stronger configuration permission, ordinary run viewers and customer support viewers cannot see it, ordinary receipts or exports exclude it, and Dashboard exposes it only through an explicit validation detail reveal.
 - **Sensitive Validation Capture Retention** gives Sensitive Validation Capture Artifacts a default 7-day TTL while ordinary Workflow Stage Configuration Trace Summary, receipt facts, and validation pass/fail results remain under normal run artifact retention; deleting expired full capture must not change the governed run outcome or summary trace.
 - Extending Sensitive Validation Capture Retention through `retain_for_audit` requires an explicit authorized validation/test-run request and must show the artifact expiry or audit-retention status in Dashboard.
@@ -2678,6 +2770,24 @@ _Avoid_: Evidence content dump
 - "Workflow Template Execution Input persistence" could mean ordinary trace/receipt storage, Dashboard-visible run detail, inline resume context, or Runtime Plane resume metadata. Resolved: full run-start input may be retained only behind **Workflow Template Execution Resume Metadata** as a protected reference with integrity validation; ordinary projections expose trace-safe summaries and references.
 - "Workflow Stage Configuration trace summary" could mean full prompt/context capture, only per-stage applied context events, or one run-level source summary. Resolved: ordinary trace records a run-level **Workflow Stage Configuration Trace Summary** for the selected **Workflow Template Execution Input**, while full capture remains a separate validation/test-run concern.
 - "Workflow Stage Trace Capture Mode placement" could mean Published Agent Version configuration, Workflow Template Execution Input, or validation/test observability request policy. Resolved: **Workflow Stage Trace Capture Mode** is a validation/test observability policy outside **Workflow Template Execution Input**; full-capture alignment to run-start input remains a separate trace-capture slice concern.
+- "Full validation capture Prompt/Context source" could mean raw Agent Contract overrides, latest descriptor recomputation, or the executed run-start input. Resolved: use **Run-Start Validation Capture Source**; full capture records Workflow Stage Prompt and selected context from the **Workflow Template Execution Input** selected at run start.
+- "Full stage Prompt capture" could mean allowed Agent-authored stage prompt fields, Harness control prompts, raw prompt overrides, or provider request bodies. Resolved: use **Workflow Stage Prompt Value Capture**; record only effective **Workflow Stage Prompt Field Set** values from run-start input after secret redaction, excluding `system_prompt`, `developer_prompt`, `raw_prompt`, provider request bodies, and complete model context.
+- "Selected context values" could mean raw business content, full model context, or a validation-safe projection. Resolved: use **Workflow Stage Context Verification Projection**; this slice does not add a raw validation capture override switch.
+- "Context capture source" could mean only static effective configuration, trace file parsing, or runtime-neutral execution facts. Resolved: v2 full capture splits the two; **Workflow Stage Context Configuration Capture** records selected option keys from run-start input, and **Workflow Stage Context Verification Projection** records applied context summaries from **Workflow Stage Context Application Fact** values returned in **Workflow Template Execution Result**.
+- "Intermediate result full capture" could mean stage summaries, full Workflow Stage Results, or runtime continuation payloads. Resolved: use **Workflow Stage Result Verification Projection** and exclude Workflow Stage Continuation State.
+- "Validation capture final output" could mean the governed answer returned by Proof Agent, a short output summary, or the provider's raw response body. Resolved: use **Governed Final Output Capture**; v2 records the governed final output and outcome in `result_summary` while excluding provider response bodies, raw evidence payloads, raw tool payloads, and Runtime Plane state.
+- "Full capture execution switch" could mean passing capture mode into Runtime Adapters or constructing artifacts in Delivery after execution. Resolved: Runtime Adapters return runtime-neutral Workflow Template Execution facts, while Validation Delivery builds Sensitive Validation Capture Artifacts when requested.
+- "Workflow Template Execution Result return path" could mean persisting complete execution facts into ordinary RunStore detail, exposing them through Dashboard, or returning them process-locally for Delivery. Resolved: use **Workflow Template Execution Result Run Handoff**; `RunResult` may carry `WorkflowTemplateExecutionResult` for in-process Delivery artifact construction without changing ordinary RunStore or Dashboard projections.
+- "Validation capture payload versioning" could mean keeping `validation_capture.v1` with changed semantics or introducing an incompatible schema version. Resolved: use **Validation Capture Contract Version** `validation_capture.v2` and do not retain v1 compatibility.
+- "`validation_capture.v2` payload structure" could mean renaming v1 fields or adopting semantic sections aligned to run-start input and execution result facts. Resolved: use **Validation Capture V2 Payload Sections** and drop v1 mixed fields such as `prompt_context_capture`, raw `workflow_stage_configuration`, raw `capability_configuration`, `trace_summary`, and `intermediate_result_summary`.
+- "`validation_capture.v2` schema enforcement" could mean continuing a naked dictionary builder, relying on store sanitization, or adding an explicit contract. Resolved: use **Validation Capture V2 Contract Model** in the contracts layer and let Delivery persist the model's JSON dump through the existing Sensitive Validation Capture Artifact store.
+- "`validation_capture.v2` contract location" could mean adding payload models to Agent Configuration metadata contracts, ordinary Run contracts, Workflow Execution contracts, or a dedicated module. Resolved: use **Validation Capture Contract Module** for payload schema while keeping Sensitive Validation Capture Artifact metadata with Agent Configuration Store contracts.
+- "`validation_capture.v2` unsafe field handling" could mean silently dropping fields, relying only on store sanitization, or failing artifact creation. Resolved: use **Validation Capture Contract Safety Gate**; Delivery fails closed on forbidden raw or unsafe fields, while Store sanitization remains a defense-in-depth fallback.
+- "`validation_capture.v2` creation failure" could mean failing the whole validation run, silently omitting capture, or returning a trace-safe capture error. Resolved: use **Validation Capture Failure Projection**; the validation outcome returns, no partial artifact is created, and `validation_capture_id` remains unset.
+- "`validation_capture.v2` field completeness" could mean adding raw configuration dumps for safety or duplicating terminal state across sections. Resolved: use **Validation Capture Source Reference** for immutable references and **Validation Capture Result Summary** for terminal outcome, while keeping prompt, context configuration, context application, and stage result facts in separate non-overlapping sections joined by stage ids.
+- "`validation_capture.v2` exclusions" could mean a static compliance note, a detailed sanitizer log, or a sensitive key/path inventory. Resolved: use **Validation Capture Exclusion Summary** with fixed excluded categories and coarse sanitizer counters only.
+- "Validation capture UI scope" could mean implementing Dashboard reveal now or keeping this slice to backend contract/API alignment. Resolved: defer **Validation Capture Dashboard Reveal Slice** and keep this slice focused on artifact payload semantics and API access.
+- "Validation capture with Approval Pause" could mean waiting for approval resume, appending after resume, or capturing the current validation attempt. Resolved: produce the **Sensitive Validation Capture Artifact** when the validation attempt returns, including `WAITING_FOR_APPROVAL` pause summaries, without later mutation in this slice.
 - "Published snapshot runtime consumption slice scope" could mean only adding snapshot fields, rewriting validation capture, replacing LangGraph, or consuming frozen stage facts at run start. Resolved: **Published Effective Workflow Stage Configuration Runtime Consumption Slice** consumes resolved stage availability/configuration facts at run start and defers full-capture realignment, historical descriptor registries, dynamic topology, complete stage result unions, second runtimes, and local-store compatibility migration.
 - "Workflow Template Execution Input creation" could mean Delivery/API assembling per-surface inputs, Runtime Plane interpreting stage config, or a shared run entry point delegating to Control Plane resolution. Resolved: the common governed run entry point creates the run-scoped input after run id selection and delegates Effective Workflow Stage Configuration resolution to Control Plane logic.
 - "Template descriptor version execution" could mean building a historical executable descriptor registry in this slice or only validating that the selected executable descriptor matches the Workflow Template Execution Input. Resolved: this slice fails closed on descriptor version mismatch and leaves versioned historical executable descriptors to a future slice.

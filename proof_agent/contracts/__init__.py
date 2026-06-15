@@ -166,6 +166,16 @@ from proof_agent.contracts.run import RunResult, ValidationResult, ValidationSta
 from proof_agent.contracts.tool import ToolRequest
 from proof_agent.contracts.trace import TraceEvent, TraceEventType
 from proof_agent.contracts.untrusted_web import UntrustedWebContext, UntrustedWebResult
+from proof_agent.contracts.validation_capture import (
+    ValidationCaptureExclusionSummary,
+    ValidationCaptureResultSummary,
+    ValidationCaptureSourceReference,
+    ValidationCaptureV2Payload,
+    WorkflowStageContextApplicationProjection,
+    WorkflowStageContextConfigurationCapture,
+    WorkflowStagePromptValueCapture,
+    WorkflowStageResultVerificationProjection,
+)
 from proof_agent.contracts.workflow_execution import (
     ApprovalPause,
     ClarificationNeed,
@@ -352,7 +362,15 @@ __all__ = [
     "TokenUsage",
     "ValidationResult",
     "ValidationStatus",
+    "ValidationCaptureExclusionSummary",
+    "ValidationCaptureResultSummary",
+    "ValidationCaptureSourceReference",
+    "ValidationCaptureV2Payload",
     "WorkflowConfig",
+    "WorkflowStageContextApplicationProjection",
+    "WorkflowStageContextConfigurationCapture",
+    "WorkflowStagePromptValueCapture",
+    "WorkflowStageResultVerificationProjection",
     "WorkflowStageResult",
     "WorkflowStageStatus",
     "WorkflowStageConfig",

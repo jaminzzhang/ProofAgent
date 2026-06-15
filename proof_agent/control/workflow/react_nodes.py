@@ -103,24 +103,27 @@ class ReActWorkflowNodes:
             ),
         )
         summary = workflow_stage_context_summary(preview)
+        application: dict[str, Any] | None = None
         if _workflow_stage_summary_has_context(summary):
             descriptor_stage = self.invocation.template.stage(stage_id)
+            application = {
+                **summary,
+                "stage_label": descriptor_stage.label,
+                "model_bearing": descriptor_stage.model_bearing,
+                "template_descriptor_version": (
+                    self.execution_input.template_descriptor_version
+                ),
+            }
             self.trace.emit(
                 "workflow_stage_context_applied",
                 status="ok",
-                payload={
-                    **summary,
-                    "stage_label": descriptor_stage.label,
-                    "model_bearing": descriptor_stage.model_bearing,
-                    "template_descriptor_version": (
-                        self.execution_input.template_descriptor_version
-                    ),
-                },
+                payload=application,
             )
         return {
             "business_context_addendum": preview["business_context_addendum"],
             "structured_control_context": preview["structured_control_context"],
             "summary": summary,
+            "application": application,
         }
 
     def intent_resolution(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -148,7 +151,10 @@ class ReActWorkflowNodes:
                 "The intent resolution output failed validation and the run was stopped."
             )
         emit_intent_resolution(self.trace, resolution)
-        return {"intent_resolution": _intent_resolution_state_dict(resolution)}
+        return {
+            "intent_resolution": _intent_resolution_state_dict(resolution),
+            **_stage_context_applications_delta(state, stage_context),
+        }
 
     def plan(self, state: Mapping[str, Any]) -> dict[str, Any]:
         step_count = int(state.get("step_count", 0))
@@ -184,11 +190,12 @@ class ReActWorkflowNodes:
             "step_count": step_count + 1,
             "action": _proposal_state_dict(proposal),
             "reasoning_summary": _reasoning_summary_state_dict(proposal),
+            **_stage_context_applications_delta(state, stage_context),
         }
 
     def clarify(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
-        self.configured_stage_context("clarification", state)
+        clarification_stage_context = self.configured_stage_context("clarification", state)
         message = clarification_message(proposal)
         self.trace.emit(
             "clarification_requested",
@@ -203,8 +210,15 @@ class ReActWorkflowNodes:
             "governance_message": message,
             "final_output": message,
         }
-        self.configured_stage_context("response", {**state, **result})
-        return result
+        response_stage_context = self.configured_stage_context("response", {**state, **result})
+        return {
+            **result,
+            **_stage_context_applications_delta(
+                state,
+                clarification_stage_context,
+                response_stage_context,
+            ),
+        }
 
     def review_retrieval_plan(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
@@ -234,12 +248,16 @@ class ReActWorkflowNodes:
                 "review_results": [review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot answer because the retrieval plan was blocked by policy.",
+                **_stage_context_applications_delta(state, stage_context),
             }
-        return {"review_results": [review_event]}
+        return {
+            "review_results": [review_event],
+            **_stage_context_applications_delta(state, stage_context),
+        }
 
     def retrieval(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
-        self.configured_stage_context("retrieval", state)
+        retrieval_stage_context = self.configured_stage_context("retrieval", state)
         retrieval_query = str(proposal.parameters.get("query") or state["question"])
         step_proposal = _retrieval_step_action_proposal(retrieval_query)
         step_context = {
@@ -265,6 +283,7 @@ class ReActWorkflowNodes:
                 "review_results": [step_review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot answer because the retrieval step was blocked by policy.",
+                **_stage_context_applications_delta(state, retrieval_stage_context),
             }
 
         retrieval = KnowledgeRetrievalService(
@@ -297,9 +316,10 @@ class ReActWorkflowNodes:
         )
         emit_policy_decision(self.trace, answer_decision)
 
+        memory_stage_context: Mapping[str, Any] | None = None
         if self.workflow_stage_available("memory"):
             memory = self.invocation.create_memory()
-            self.configured_stage_context("memory", state)
+            memory_stage_context = self.configured_stage_context("memory", state)
             memory_result = memory.write({"summary": f"Question: {state['question']}"})
             self.trace.emit(
                 "memory_write_decision",
@@ -327,10 +347,20 @@ class ReActWorkflowNodes:
                 "review_results": [step_review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": message,
+                **_stage_context_applications_delta(
+                    state,
+                    retrieval_stage_context,
+                    memory_stage_context,
+                ),
             }
         return {
             "review_results": [step_review_event],
             "evidence": [_evidence_state_dict(chunk) for chunk in evidence],
+            **_stage_context_applications_delta(
+                state,
+                retrieval_stage_context,
+                memory_stage_context,
+            ),
         }
 
     def model(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -373,6 +403,7 @@ class ReActWorkflowNodes:
                 "review_results": [review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot answer because the model call was blocked by policy.",
+                **_stage_context_applications_delta(state, stage_context),
             }
 
         self.trace.emit(
@@ -425,16 +456,30 @@ class ReActWorkflowNodes:
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot answer because the model output failed validation.",
             }
-            self.configured_stage_context("response", {**state, **result})
-            return result
+            response_stage_context = self.configured_stage_context("response", {**state, **result})
+            return {
+                **result,
+                **_stage_context_applications_delta(
+                    state,
+                    stage_context,
+                    response_stage_context,
+                ),
+            }
         result = {
             "review_results": [review_event],
             "final_output": model_response.content,
             "governance_refusal": outcome,
             "governance_message": model_response.content,
         }
-        self.configured_stage_context("response", {**state, **result})
-        return result
+        response_stage_context = self.configured_stage_context("response", {**state, **result})
+        return {
+            **result,
+            **_stage_context_applications_delta(
+                state,
+                stage_context,
+                response_stage_context,
+            ),
+        }
 
     def review_tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
@@ -471,18 +516,20 @@ class ReActWorkflowNodes:
                 "review_results": [review_event],
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": "I cannot run the requested tool because the tool call was blocked by policy.",
+                **_stage_context_applications_delta(state, stage_context),
             }
         return {
             "review_results": [review_event],
             "tool_call_count": int(state.get("tool_call_count", 0)) + 1,
             "tool_policy_decision": decision.decision.value,
+            **_stage_context_applications_delta(state, stage_context),
         }
 
     def tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
         if not self.workflow_stage_available("tool"):
             return _tool_capability_disabled_delta()
-        self.configured_stage_context("tool", state)
+        tool_stage_context = self.configured_stage_context("tool", state)
         tool_name = proposal.target_tool_name or ""
         parameters = dict(proposal.parameters)
         tool_policy_decision = PolicyDecisionType(
@@ -499,7 +546,10 @@ class ReActWorkflowNodes:
                 approved=False,
             )
             if isinstance(gateway_result, dict):
-                return gateway_result
+                return {
+                    **gateway_result,
+                    **_stage_context_applications_delta(state, tool_stage_context),
+                }
             pending = create_pending_approval(
                 approval_state=gateway_result.approval_state,
                 thread_id=self.trace.run_id,
@@ -522,6 +572,7 @@ class ReActWorkflowNodes:
                 "governance_message": (
                     f"Waiting for approval before {tool_name} can execute."
                 ),
+                **_stage_context_applications_delta(state, tool_stage_context),
             }
 
         gateway_result = _request_tool_or_refuse(
@@ -533,7 +584,10 @@ class ReActWorkflowNodes:
             approved=True,
         )
         if isinstance(gateway_result, dict):
-            return gateway_result
+            return {
+                **gateway_result,
+                **_stage_context_applications_delta(state, tool_stage_context),
+            }
         self.trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
         if tool_name == "untrusted_web_search":
             supplement = _format_untrusted_web_supplement(
@@ -557,16 +611,30 @@ class ReActWorkflowNodes:
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
                 "governance_message": message,
             }
-            self.configured_stage_context("response", {**state, **result})
-            return result
+            response_stage_context = self.configured_stage_context("response", {**state, **result})
+            return {
+                **result,
+                **_stage_context_applications_delta(
+                    state,
+                    tool_stage_context,
+                    response_stage_context,
+                ),
+            }
         message = "Customer policy status is active according to the approved mock lookup."
         result = {
             "final_output": message,
             "governance_refusal": ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             "governance_message": message,
         }
-        self.configured_stage_context("response", {**state, **result})
-        return result
+        response_stage_context = self.configured_stage_context("response", {**state, **result})
+        return {
+            **result,
+            **_stage_context_applications_delta(
+                state,
+                tool_stage_context,
+                response_stage_context,
+            ),
+        }
 
     def workflow_stage_available(self, stage_id: str) -> bool:
         return self.execution_input.workflow_stage_availability.is_available(stage_id)
@@ -574,6 +642,26 @@ class ReActWorkflowNodes:
 
 def proposal_from_state(state: Mapping[str, Any]) -> ReActActionProposal:
     return ReActActionProposal.model_validate(state["action"])
+
+
+def _stage_context_applications_delta(
+    state: Mapping[str, Any],
+    *stage_contexts: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    _ = state
+    applications: list[dict[str, Any]] = []
+    added = False
+    for stage_context in stage_contexts:
+        if not isinstance(stage_context, Mapping):
+            continue
+        application = stage_context.get("application")
+        if not isinstance(application, Mapping):
+            continue
+        applications.append(dict(application))
+        added = True
+    if not added:
+        return {}
+    return {"stage_context_applications": applications}
 
 
 def _tool_capability_disabled_delta() -> dict[str, Any]:

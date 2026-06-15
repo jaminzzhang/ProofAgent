@@ -182,6 +182,9 @@ class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
     intent_resolution: Mapping[str, Any] | None = None
     reasoning_summary: Mapping[str, Any] | None = None
     review_results: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
+    stage_context_applications: tuple[Mapping[str, Any], ...] = Field(
+        default_factory=tuple
+    )
     model_usage_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
     trace_summary_refs: tuple[str, ...] = Field(default_factory=tuple)
 
@@ -198,14 +201,14 @@ class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
         _reject_forbidden_keys(value, SUMMARY_FORBIDDEN_KEYS, root="execution_result")
         return freeze_value(value)
 
-    @field_validator("review_results", mode="after")
+    @field_validator("review_results", "stage_context_applications", mode="after")
     @classmethod
-    def freeze_review_results(
+    def freeze_mapping_tuple(
         cls,
         value: tuple[Mapping[str, Any], ...],
     ) -> tuple[Mapping[str, Any], ...]:
         for item in value:
-            _reject_forbidden_keys(item, SUMMARY_FORBIDDEN_KEYS, root="review_results")
+            _reject_forbidden_keys(item, SUMMARY_FORBIDDEN_KEYS, root="execution_result")
         return tuple(cast(Mapping[str, Any], freeze_value(item)) for item in value)
 
     @field_validator("stage_results", mode="after")
@@ -231,8 +234,8 @@ class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
             return None
         return cast(dict[str, Any], _jsonable(value))
 
-    @field_serializer("review_results")
-    def serialize_review_results(
+    @field_serializer("review_results", "stage_context_applications")
+    def serialize_mapping_tuples(
         self,
         value: tuple[Mapping[str, Any], ...],
     ) -> list[dict[str, Any]]:
