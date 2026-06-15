@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 from langgraph.checkpoint.memory import MemorySaver
 
+from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.contracts import (
     ModelConfig,
     ModelRequest,
@@ -15,7 +16,14 @@ from proof_agent.contracts import (
     ReActActionProposal,
     ReActActionType,
     ReasoningSummary,
+    ReceiptOutcome,
+    WorkflowStageResult,
+    WorkflowStageStatus,
 )
+from proof_agent.control.workflow.react_enterprise_qa_execution import (
+    ReActEnterpriseQAWorkflowExecution,
+)
+from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_with_langgraph
 
 
@@ -41,6 +49,67 @@ def _final_answer_model_request(events: list[dict[str, Any]]) -> dict[str, Any]:
         for event in events
         if event["event_type"] == "model_request"
         and event["payload"].get("role") == "final_answer"
+    )
+
+
+def _react_execution(tmp_path: Path) -> ReActEnterpriseQAWorkflowExecution:
+    return ReActEnterpriseQAWorkflowExecution(
+        invocation=compose_harness_invocation(REACT_AGENT),
+        trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run_react_execution_test"),
+        conversation_context=None,
+        allow_untrusted_web_supplement=False,
+    )
+
+
+def test_react_execution_plan_returns_workflow_stage_result(tmp_path: Path) -> None:
+    execution = _react_execution(tmp_path)
+
+    result = execution.plan(
+        {
+            "question": "What is the reimbursement rule for travel meals?",
+            "step_count": 0,
+        }
+    )
+
+    assert isinstance(result, WorkflowStageResult)
+    assert result.stage_id == "plan"
+    assert result.status is WorkflowStageStatus.COMPLETED
+    assert result.summary["action_type"] == "plan_retrieval"
+    assert result.summary["action_id"] == "act_retrieval_1"
+    assert result.continuation["step_count"] == 1
+    assert result.continuation["action"]["action_id"] == "act_retrieval_1"
+    assert result.continuation["reasoning_summary"]["selected_action"] == "plan_retrieval"
+
+
+def test_react_execution_clarification_returns_workflow_stage_result(
+    tmp_path: Path,
+) -> None:
+    execution = _react_execution(tmp_path)
+    plan_result = execution.plan(
+        {
+            "question": "Can this customer claim it?",
+            "step_count": 0,
+        }
+    )
+    state = {
+        "question": "Can this customer claim it?",
+        **dict(plan_result.continuation),
+    }
+
+    result = execution.clarify(state)
+
+    assert isinstance(result, WorkflowStageResult)
+    assert result.stage_id == "clarification"
+    assert result.status is WorkflowStageStatus.WAITING
+    assert result.outcome is ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION
+    assert result.summary["missing_field_count"] == 3
+    assert result.continuation["governance_refusal"] is (
+        ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION
+    )
+    assert result.continuation["clarification_need"]["missing_fields"] == (
+        "customer_id",
+        "policy_id",
+        "claim_type",
     )
 
 

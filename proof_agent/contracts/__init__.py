@@ -166,12 +166,21 @@ from proof_agent.contracts.run import RunResult, ValidationResult, ValidationSta
 from proof_agent.contracts.tool import ToolRequest
 from proof_agent.contracts.trace import TraceEvent, TraceEventType
 from proof_agent.contracts.untrusted_web import UntrustedWebContext, UntrustedWebResult
+from proof_agent.contracts.workflow_execution import (
+    ApprovalPause,
+    ClarificationNeed,
+    WorkflowStageResult,
+    WorkflowStageStatus,
+    WorkflowTemplateExecutionInput,
+    WorkflowTemplateExecutionResult,
+)
 
 __all__ = [
     "AgentManifest",
     "ActiveAgentVersion",
     "ALLOWED_REVIEW_DECISIONS",
     "AgentValidationRecord",
+    "ApprovalPause",
     "ApprovalState",
     "ApprovalStatus",
     "AuditConfig",
@@ -180,6 +189,7 @@ __all__ = [
     "ConfigurationOperation",
     "ConfigurationOperationAudit",
     "ContractBundle",
+    "ClarificationNeed",
     "ContextAdmission",
     "ConversationRecord",
     "ConversationTurn",
@@ -326,10 +336,14 @@ __all__ = [
     "ValidationResult",
     "ValidationStatus",
     "WorkflowConfig",
+    "WorkflowStageResult",
+    "WorkflowStageStatus",
     "WorkflowStageConfig",
     "WorkflowStageContextConfig",
     "WorkflowStagePromptConfig",
     "WorkflowState",
+    "WorkflowTemplateExecutionInput",
+    "WorkflowTemplateExecutionResult",
     "allowed_review_decisions_for",
     "freeze_value",
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -15,10 +16,13 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
+    EvidenceChunk,
     ReceiptOutcome,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
     RunResult,
+    WorkflowStageResult,
+    WorkflowTemplateExecutionResult,
 )
 from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.control.workflow.harness_helpers import (
@@ -114,6 +118,7 @@ def run_with_langgraph(
         "step_count": 0,
         "tool_call_count": 0,
         "review_results": [],
+        "stage_results": [],
     }
     config = {"configurable": {"thread_id": actual_run_id}}
 
@@ -135,12 +140,15 @@ def run_with_langgraph(
             draft_id=draft_id,
         )
 
-    outcome = final_state.get("governance_refusal")
-    message = final_state.get("governance_message")
-
-    if not outcome:
-        outcome = ReceiptOutcome.REFUSED_NO_EVIDENCE
-        message = "Workflow ended unexpectedly without an outcome."
+    execution_result = _workflow_execution_result_from_state(
+        final_state,
+        invocation=invocation,
+        question=question,
+        run_id=actual_run_id,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
+    )
 
     return finalize_run(
         trace=trace,
@@ -148,8 +156,8 @@ def run_with_langgraph(
         trace_path=trace_path,
         agent_name=invocation.manifest.name,
         question=question,
-        outcome=outcome,
-        message=message,
+        outcome=execution_result.outcome,
+        message=execution_result.message,
         store=store,
         run_purpose=run_purpose,
         agent_id=agent_id,
@@ -234,19 +242,23 @@ def resume_langgraph_approval(
             draft_id=draft_id,
         )
 
-    outcome = final_state.get("governance_refusal")
-    message = final_state.get("governance_message")
-    if not outcome:
-        outcome = ReceiptOutcome.REFUSED_NO_EVIDENCE
-        message = "Workflow ended unexpectedly without an outcome."
+    execution_result = _workflow_execution_result_from_state(
+        final_state,
+        invocation=invocation,
+        question=question,
+        run_id=run_id,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
+    )
     return finalize_run(
         trace=trace,
         receipt_path=receipt_path,
         trace_path=trace_path,
         agent_name=invocation.manifest.name,
         question=question,
-        outcome=outcome,
-        message=message,
+        outcome=execution_result.outcome,
+        message=execution_result.message,
         store=store,
         run_purpose=run_purpose,
         agent_id=agent_id,
@@ -290,6 +302,74 @@ def _build_graph(
         conversation_context=conversation_context,
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )
+
+
+def _workflow_execution_result_from_state(
+    final_state: Mapping[str, Any],
+    *,
+    invocation: Any,
+    question: str,
+    run_id: str,
+    agent_id: str | None,
+    agent_version_id: str | None,
+    draft_id: str | None,
+) -> WorkflowTemplateExecutionResult:
+    outcome = _receipt_outcome(final_state.get("governance_refusal"))
+    message = str(final_state.get("governance_message") or "")
+    if outcome is None:
+        outcome = ReceiptOutcome.REFUSED_NO_EVIDENCE
+        message = "Workflow ended unexpectedly without an outcome."
+    final_output = str(final_state.get("final_output") or message)
+    return WorkflowTemplateExecutionResult(
+        run_id=run_id,
+        template_name=invocation.template.name,
+        template_descriptor_version=invocation.template.descriptor_version,
+        outcome=outcome,
+        final_output=final_output,
+        message=message,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
+        effective_stage_configuration_ref=(
+            f"published_version:{agent_version_id}:effective_workflow_stage_configuration"
+            if agent_version_id
+            else None
+        ),
+        evidence=tuple(
+            EvidenceChunk.model_validate(item)
+            for item in final_state.get("evidence", ())
+        ),
+        stage_results=tuple(
+            WorkflowStageResult.model_validate(item)
+            for item in final_state.get("stage_results", ())
+        ),
+        intent_resolution=(
+            final_state.get("intent_resolution")
+            if isinstance(final_state.get("intent_resolution"), Mapping)
+            else None
+        ),
+        reasoning_summary=(
+            final_state.get("reasoning_summary")
+            if isinstance(final_state.get("reasoning_summary"), Mapping)
+            else None
+        ),
+        review_results=tuple(
+            item for item in final_state.get("review_results", ()) if isinstance(item, Mapping)
+        ),
+        trace_summary_refs=(
+            (f"published_version:{agent_version_id}",)
+            if agent_version_id
+            else (f"template_descriptor:{invocation.template.descriptor_version}",)
+        ),
+    )
+
+
+def _receipt_outcome(value: Any) -> ReceiptOutcome | None:
+    if isinstance(value, ReceiptOutcome):
+        return value
+    if isinstance(value, str) and value:
+        return ReceiptOutcome(value)
+    return None
 
 
 def _create_checkpointer(manifest: AgentManifest) -> Any:
