@@ -8,4 +8,7 @@ def test_only_insurance_customer_service_is_public_example() -> None:
         if path.is_dir() and not path.name.startswith("__")
     )
 
-    assert public_examples == ["insurance_customer_service"]
+    assert public_examples == [
+        "institution_insurance_specialist",
+        "insurance_customer_service",
+    ]

@@ -8,7 +8,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from proof_agent.bootstrap.composition import HarnessInvocation
-from proof_agent.contracts import ContextAdmission, ReActActionType, ReceiptOutcome
+from proof_agent.contracts import (
+    ContextAdmission,
+    ReActActionType,
+    ReceiptOutcome,
+    WorkflowTemplateExecutionInput,
+)
 from proof_agent.control.workflow.react_enterprise_qa_execution import (
     ReActEnterpriseQAWorkflowExecution,
 )
@@ -46,6 +51,7 @@ class ReActGraphState(TypedDict, total=False):
 def build_react_enterprise_qa_graph(
     invocation: HarnessInvocation,
     trace: TraceWriter,
+    execution_input: WorkflowTemplateExecutionInput,
     conversation_context: ContextAdmission | None = None,
     allow_untrusted_web_supplement: bool = False,
 ) -> StateGraph:  # type: ignore[type-arg]
@@ -54,6 +60,7 @@ def build_react_enterprise_qa_graph(
     execution = ReActEnterpriseQAWorkflowExecution(
         invocation=invocation,
         trace=trace,
+        execution_input=execution_input,
         conversation_context=conversation_context,
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )

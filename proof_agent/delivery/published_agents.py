@@ -5,7 +5,7 @@ from pathlib import Path
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import ResolvedKnowledgeBindingSet
+from proof_agent.contracts import PublishedAgentRuntimeFacts, ResolvedKnowledgeBindingSet
 
 
 DEFAULT_PUBLISHED_AGENTS: dict[str, Path] = {
@@ -26,6 +26,7 @@ class PublishedAgent:
     source_draft_id: str | None = None
     validation_run_id: str | None = None
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
+    runtime_facts: PublishedAgentRuntimeFacts | None = None
     source: str = "configuration"
 
 
@@ -107,6 +108,7 @@ class PublishedAgentRegistry:
             source_draft_id=version.source_draft_id,
             validation_run_id=version.validation_run_id,
             resolved_knowledge_bindings=version.resolved_knowledge_bindings,
+            runtime_facts=_published_agent_runtime_facts(version),
             source="configuration_store",
         )
 
@@ -141,6 +143,23 @@ class PublishedAgentRegistry:
             customer_facing=manifest.customer is not None,
             source=source,
         )
+
+
+def _published_agent_runtime_facts(version: object) -> PublishedAgentRuntimeFacts | None:
+    workflow_stage_availability = getattr(version, "workflow_stage_availability", None)
+    effective_stage_configuration = getattr(
+        version,
+        "effective_workflow_stage_configuration",
+        None,
+    )
+    if workflow_stage_availability is None or effective_stage_configuration is None:
+        return None
+    return PublishedAgentRuntimeFacts(
+        agent_id=getattr(version, "agent_id"),
+        agent_version_id=getattr(version, "version_id"),
+        workflow_stage_availability=workflow_stage_availability,
+        effective_stage_configuration=effective_stage_configuration,
+    )
 
 
 def published_agent_directory_payload(agents: tuple[PublishedAgent, ...]) -> dict[str, object]:

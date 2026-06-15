@@ -10,6 +10,11 @@ from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.evidence import EvidenceChunk
 from proof_agent.contracts.policy import PolicyDecisionType
 from proof_agent.contracts.receipt import ReceiptOutcome
+from proof_agent.contracts.workflow_stage_configuration import (
+    EffectiveWorkflowStageConfiguration,
+    WorkflowStageAvailabilitySet,
+    WorkflowStageConfigurationRuntimeSource,
+)
 
 
 SUMMARY_FORBIDDEN_KEYS = frozenset(
@@ -70,6 +75,9 @@ class WorkflowTemplateExecutionInput(WorkflowExecutionModel):
     agent_version_id: str | None = None
     draft_id: str | None = None
     effective_stage_configuration_ref: str | None = None
+    workflow_stage_availability: WorkflowStageAvailabilitySet
+    effective_stage_configuration: EffectiveWorkflowStageConfiguration
+    stage_configuration_source: WorkflowStageConfigurationRuntimeSource
     conversation_context_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
 
     @field_validator("conversation_context_summary", mode="after")

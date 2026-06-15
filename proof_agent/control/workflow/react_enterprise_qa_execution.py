@@ -10,6 +10,7 @@ from proof_agent.contracts import (
     ContextAdmission,
     PolicyDecisionType,
     ReceiptOutcome,
+    WorkflowTemplateExecutionInput,
     WorkflowStageResult,
     WorkflowStageStatus,
 )
@@ -24,16 +25,19 @@ class ReActEnterpriseQAWorkflowExecution:
         *,
         invocation: HarnessInvocation,
         trace: TraceWriter,
+        execution_input: WorkflowTemplateExecutionInput,
         conversation_context: ContextAdmission | None,
         allow_untrusted_web_supplement: bool,
     ) -> None:
         self.invocation = invocation
         self.trace = trace
+        self.execution_input = execution_input
         from proof_agent.control.workflow.react_nodes import ReActWorkflowNodes
 
         self._nodes = ReActWorkflowNodes(
             invocation=invocation,
             trace=trace,
+            execution_input=execution_input,
             conversation_context=conversation_context,
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
         )
@@ -134,6 +138,8 @@ class ReActEnterpriseQAWorkflowExecution:
         from proof_agent.runtime.graph import _format_untrusted_web_supplement
 
         proposal = proposal_from_state(state)
+        if not self._stage_available("tool"):
+            return self._terminal_result("tool", _tool_capability_disabled_delta())
         tool_name = proposal.target_tool_name or ""
         parameters = dict(proposal.parameters)
         tool_policy_decision = PolicyDecisionType(
@@ -357,6 +363,9 @@ class ReActEnterpriseQAWorkflowExecution:
             continuation=delta,
         )
 
+    def _stage_available(self, stage_id: str) -> bool:
+        return self.execution_input.workflow_stage_availability.is_available(stage_id)
+
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
@@ -377,4 +386,13 @@ def _review_summary(delta: Mapping[str, Any]) -> dict[str, Any]:
         "review_result_count": len(review_results),
         "final_decision": str(first_review.get("final_decision", "")),
         "enforcement_point": str(first_review.get("enforcement_point", "")),
+    }
+
+
+def _tool_capability_disabled_delta() -> dict[str, Any]:
+    message = "The tools capability is disabled for this Agent Contract."
+    return {
+        "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+        "governance_message": message,
+        "final_output": message,
     }

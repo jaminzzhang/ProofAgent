@@ -256,6 +256,7 @@ def _resume_pending_approval_if_possible(
             agent_version_id=context.agent_version_id,
             draft_id=context.draft_id,
             allow_untrusted_web_supplement=context.allow_untrusted_web_supplement,
+            execution_input=context.workflow_template_execution_input,
         )
         registry.discard(run_id)
     updated = store.get_run_detail(run_id)

@@ -3,8 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from langgraph.types import interrupt
-
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.capabilities.models.protocol import ModelProvider
@@ -14,7 +12,6 @@ from proof_agent.capabilities.tools.approval import (
 )
 from proof_agent.capabilities.tools.gateway import ToolGatewayResult
 from proof_agent.contracts import (
-    ApprovalStatus,
     ContextAdmission,
     EnforcementPoint,
     EvidenceChunk,
@@ -27,6 +24,7 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
+    WorkflowTemplateExecutionInput,
 )
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
 from proof_agent.control.workflow.harness_helpers import (
@@ -64,11 +62,13 @@ class ReActWorkflowNodes:
         *,
         invocation: HarnessInvocation,
         trace: TraceWriter,
+        execution_input: WorkflowTemplateExecutionInput,
         conversation_context: ContextAdmission | None,
         allow_untrusted_web_supplement: bool,
     ) -> None:
         self.invocation = invocation
         self.trace = trace
+        self.execution_input = execution_input
         self.conversation_context = conversation_context
         self.allow_untrusted_web_supplement = allow_untrusted_web_supplement
         self.manifest = invocation.manifest
@@ -79,7 +79,8 @@ class ReActWorkflowNodes:
             self.manifest.review and self.manifest.review.mode == "auto"
         )
         self.workflow_stage_configs = {
-            stage.id: stage for stage in self.manifest.workflow.stages
+            stage.id: stage
+            for stage in self.execution_input.effective_stage_configuration.stages
         }
 
     def configured_stage_context(
@@ -94,7 +95,7 @@ class ReActWorkflowNodes:
             descriptor=self.invocation.template,
             stage_id=stage_id,
             prompt=config.prompt,
-            context_options=config.context.options,
+            context_options=config.context,
             sample_context=_workflow_stage_runtime_sample_context(
                 invocation=self.invocation,
                 state=state,
@@ -112,8 +113,7 @@ class ReActWorkflowNodes:
                     "stage_label": descriptor_stage.label,
                     "model_bearing": descriptor_stage.model_bearing,
                     "template_descriptor_version": (
-                        self.manifest.workflow.template_descriptor_version
-                        or self.invocation.template.descriptor_version
+                        self.execution_input.template_descriptor_version
                     ),
                 },
             )
@@ -297,17 +297,18 @@ class ReActWorkflowNodes:
         )
         emit_policy_decision(self.trace, answer_decision)
 
-        memory = self.invocation.create_memory()
-        self.configured_stage_context("memory", state)
-        memory_result = memory.write({"summary": f"Question: {state['question']}"})
-        self.trace.emit(
-            "memory_write_decision",
-            status="ok" if memory_result.status == "passed" else "blocked",
-            payload={
-                "status": memory_result.status.value,
-                "metadata": dict(memory_result.metadata),
-            },
-        )
+        if self.workflow_stage_available("memory"):
+            memory = self.invocation.create_memory()
+            self.configured_stage_context("memory", state)
+            memory_result = memory.write({"summary": f"Question: {state['question']}"})
+            self.trace.emit(
+                "memory_write_decision",
+                status="ok" if memory_result.status == "passed" else "blocked",
+                payload={
+                    "status": memory_result.status.value,
+                    "metadata": dict(memory_result.metadata),
+                },
+            )
 
         if (
             evidence_result.status == "failed"
@@ -437,6 +438,11 @@ class ReActWorkflowNodes:
 
     def review_tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
+        if not (
+            self.workflow_stage_available("tool_review")
+            and self.workflow_stage_available("tool")
+        ):
+            return _tool_capability_disabled_delta()
         if int(state.get("tool_call_count", 0)) >= self.max_tool_calls:
             return {
                 "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
@@ -474,6 +480,8 @@ class ReActWorkflowNodes:
 
     def tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
+        if not self.workflow_stage_available("tool"):
+            return _tool_capability_disabled_delta()
         self.configured_stage_context("tool", state)
         tool_name = proposal.target_tool_name or ""
         parameters = dict(proposal.parameters)
@@ -500,8 +508,8 @@ class ReActWorkflowNodes:
                 policy_decision=tool_policy_decision,
                 checkpoint_id=f"thread:{self.trace.run_id}",
             )
-            approval_decision = interrupt(
-                {
+            return {
+                "approval_interrupt": {
                     "kind": "tool_approval",
                     "approval_requested": {
                         "approval_id": gateway_result.approval_state.approval_id,
@@ -509,29 +517,12 @@ class ReActWorkflowNodes:
                         "state": gateway_result.approval_state.state.value,
                     },
                     "pending_approval": pending_approval_payload(pending),
-                }
-            )
-            if not approval_decision.get("approved"):
-                actor = approval_decision.get("actor", "local-user")
-                self.trace.emit(
-                    "approval_denied",
-                    status="blocked",
-                    payload={
-                        "approval_id": approval_decision.get(
-                            "approval_id",
-                            gateway_result.approval_state.approval_id,
-                        ),
-                        "tool_name": tool_name,
-                        "state": ApprovalStatus.DENIED.value,
-                        "actor": actor,
-                    },
-                )
-                result = {
-                    "governance_refusal": ReceiptOutcome.TOOL_APPROVAL_DENIED,
-                    "governance_message": f"The {tool_name} tool was not run because approval was denied.",
-                }
-                self.configured_stage_context("response", {**state, **result})
-                return result
+                },
+                "governance_refusal": ReceiptOutcome.WAITING_FOR_APPROVAL,
+                "governance_message": (
+                    f"Waiting for approval before {tool_name} can execute."
+                ),
+            }
 
         gateway_result = _request_tool_or_refuse(
             invocation=self.invocation,
@@ -543,16 +534,6 @@ class ReActWorkflowNodes:
         )
         if isinstance(gateway_result, dict):
             return gateway_result
-        self.trace.emit(
-            "approval_granted",
-            status="ok",
-            payload={
-                "approval_id": gateway_result.approval_state.approval_id,
-                "tool_name": tool_name,
-                "state": ApprovalStatus.GRANTED.value,
-                "actor": approval_decision.get("actor", "local-user"),
-            },
-        )
         self.trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
         if tool_name == "untrusted_web_search":
             supplement = _format_untrusted_web_supplement(
@@ -587,9 +568,21 @@ class ReActWorkflowNodes:
         self.configured_stage_context("response", {**state, **result})
         return result
 
+    def workflow_stage_available(self, stage_id: str) -> bool:
+        return self.execution_input.workflow_stage_availability.is_available(stage_id)
+
 
 def proposal_from_state(state: Mapping[str, Any]) -> ReActActionProposal:
     return ReActActionProposal.model_validate(state["action"])
+
+
+def _tool_capability_disabled_delta() -> dict[str, Any]:
+    message = "The tools capability is disabled for this Agent Contract."
+    return {
+        "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+        "governance_message": message,
+        "final_output": message,
+    }
 
 
 class _TracingModelProvider:

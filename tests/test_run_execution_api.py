@@ -161,6 +161,37 @@ def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Pa
     assert detail.json()["question"] == "What is the reimbursement rule for travel meals?"
 
 
+def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    trace = client.get(f"/api/runs/{body['run_id']}/trace").json()
+    summary = next(
+        event
+        for event in trace["events"]
+        if event["event_type"] == "workflow_stage_configuration_trace_summary"
+    )
+    assert summary["payload"]["source"] == {
+        "source_type": "published_agent_version",
+        "reference": (
+            f"published_version:{body['agent_version_id']}:"
+            "effective_workflow_stage_configuration"
+        ),
+    }
+
 def test_validation_capture_requires_agent_validate_permission(tmp_path: Path) -> None:
     app, _artifact = _app_with_validation_capture(tmp_path)
     app.state.operator_identity_provider = _StaticOperatorIdentityProvider(set())

@@ -30,6 +30,7 @@ class WorkflowStageDescriptor:
     output_summary: str = ""
     model_bearing: bool = False
     required: bool = True
+    availability_capability: str | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,7 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 id="tool_review",
                 label="Tool Review",
                 description="Review proposed tool calls before Tool Gateway execution.",
+                availability_capability="tools",
                 predecessors=("plan",),
                 successors=("tool", "response"),
                 branch_conditions={
@@ -197,6 +199,7 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 id="tool",
                 label="Tool",
                 description="Execute approved or approval-waiting tool requests through Tool Gateway.",
+                availability_capability="tools",
                 predecessors=("tool_review",),
                 successors=("memory", "response"),
                 governed_handoff_points=("before_tool_call",),
@@ -212,6 +215,7 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
                 id="memory",
                 label="Memory",
                 description="Apply governed memory write policy for configured memory scope.",
+                availability_capability="memory",
                 predecessors=("retrieval", "tool"),
                 successors=("response",),
                 governed_handoff_points=("before_memory_write",),

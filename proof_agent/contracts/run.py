@@ -13,6 +13,7 @@ from proof_agent.contracts.evidence import EvidenceChunk
 from proof_agent.contracts.policy import PolicyDecision
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.tool import ToolRequest
+from proof_agent.contracts.workflow_execution import WorkflowTemplateExecutionInput
 
 
 class ValidationStatus(str, Enum):
@@ -65,3 +66,4 @@ class RunResult(FrozenModel):
     outcome: ReceiptOutcome
     trace_path: Path
     receipt_path: Path
+    workflow_template_execution_input: WorkflowTemplateExecutionInput | None = None

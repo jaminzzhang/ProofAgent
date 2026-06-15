@@ -736,8 +736,8 @@ def test_customer_run_can_use_mem0_case_memory_adapter(tmp_path: Path) -> None:
     manifest_path = agent_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8").replace(
-            "memory:\n  provider: local",
-            "memory:\n  provider: mem0",
+            "  memory:\n    enabled: true\n    provider: local",
+            "  memory:\n    enabled: true\n    provider: mem0",
         ),
         encoding="utf-8",
     )
@@ -823,8 +823,8 @@ def test_customer_case_memory_can_be_deleted_for_mem0_provider(tmp_path: Path) -
     manifest_path = agent_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8").replace(
-            "memory:\n  provider: local",
-            "memory:\n  provider: mem0",
+            "  memory:\n    enabled: true\n    provider: local",
+            "  memory:\n    enabled: true\n    provider: mem0",
         ),
         encoding="utf-8",
     )
@@ -874,8 +874,8 @@ def test_customer_persistent_user_memory_is_admitted_across_conversations_with_c
     manifest_path = agent_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8").replace(
-            "    user:\n      enabled: false",
-            "    user:\n      enabled: true",
+            "      user:\n        enabled: false",
+            "      user:\n        enabled: true",
         ),
         encoding="utf-8",
     )
@@ -935,8 +935,8 @@ def test_customer_persistent_user_memory_can_be_exported_and_deleted(
     manifest_path = agent_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8").replace(
-            "    user:\n      enabled: false",
-            "    user:\n      enabled: true",
+            "      user:\n        enabled: false",
+            "      user:\n        enabled: true",
         ),
         encoding="utf-8",
     )
@@ -1023,8 +1023,8 @@ def test_customer_persistent_user_memory_is_not_written_without_consent(
     manifest_path = agent_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8").replace(
-            "    user:\n      enabled: false",
-            "    user:\n      enabled: true",
+            "      user:\n        enabled: false",
+            "      user:\n        enabled: true",
         ),
         encoding="utf-8",
     )

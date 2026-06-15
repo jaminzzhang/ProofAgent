@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -16,7 +17,9 @@ from proof_agent.contracts import (
     ContextAdmission,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
+    WorkflowTemplateExecutionInput,
 )
+from proof_agent.errors import ProofAgentError
 
 
 class _PersistentDictFactory:
@@ -69,6 +72,7 @@ class LangGraphApprovalResumeContext:
     agent_version_id: str | None = None
     draft_id: str | None = None
     allow_untrusted_web_supplement: bool = False
+    workflow_template_execution_input: WorkflowTemplateExecutionInput | None = None
 
 
 class ApprovalResumeClaim:
@@ -144,6 +148,12 @@ class LangGraphApprovalResumeRegistry:
         self._root_dir.mkdir(parents=True, exist_ok=True)
 
     def put(self, context: LangGraphApprovalResumeContext) -> None:
+        if context.workflow_template_execution_input is None:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "approval resume context requires Workflow Template Execution Input",
+                "Start the run through a Workflow Template Execution-aware runtime.",
+            )
         sync_checkpointer(context.checkpointer)
         self._write_metadata(context)
         self._contexts[context.run_id] = context
@@ -166,6 +176,7 @@ class LangGraphApprovalResumeRegistry:
         return create_persistent_checkpointer(self._checkpoint_dir(run_id))
 
     def _write_metadata(self, context: LangGraphApprovalResumeContext) -> None:
+        execution_input_payload = _model_payload(context.workflow_template_execution_input)
         metadata = {
             "agent_yaml": str(context.agent_yaml),
             "runs_dir": str(context.runs_dir),
@@ -178,6 +189,10 @@ class LangGraphApprovalResumeRegistry:
             "agent_version_id": context.agent_version_id,
             "draft_id": context.draft_id,
             "allow_untrusted_web_supplement": context.allow_untrusted_web_supplement,
+            "workflow_template_execution_input": execution_input_payload,
+            "workflow_template_execution_input_sha256": _payload_sha256(
+                execution_input_payload
+            ),
         }
         path = self._metadata_path(context.run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +215,7 @@ class LangGraphApprovalResumeRegistry:
             if data.get("resolved_knowledge_bindings") is not None
             else None
         )
+        execution_input = _load_execution_input(data, path=path)
         context = LangGraphApprovalResumeContext(
             agent_yaml=agent_yaml,
             runs_dir=Path(str(data["runs_dir"])),
@@ -217,6 +233,7 @@ class LangGraphApprovalResumeRegistry:
             allow_untrusted_web_supplement=bool(
                 data.get("allow_untrusted_web_supplement", False)
             ),
+            workflow_template_execution_input=execution_input,
         )
         self._contexts[run_id] = context
         return context
@@ -238,6 +255,41 @@ def _model_payload(value: Any) -> Any:
     if callable(model_dump):
         return _jsonable(model_dump(warnings=False))
     return _jsonable(value)
+
+
+def _load_execution_input(
+    data: dict[str, Any],
+    *,
+    path: Path,
+) -> WorkflowTemplateExecutionInput:
+    payload = data.get("workflow_template_execution_input")
+    digest = data.get("workflow_template_execution_input_sha256")
+    if not isinstance(payload, dict) or not isinstance(digest, str) or not digest:
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            "approval resume metadata is missing Workflow Template Execution Input",
+            "Restart the run so approval resume can use the original run-start input.",
+            artifact_path=path,
+        )
+    actual_digest = _payload_sha256(payload)
+    if actual_digest != digest:
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            "approval resume Workflow Template Execution Input failed integrity validation",
+            "Discard the stale approval checkpoint and restart the run.",
+            artifact_path=path,
+        )
+    return WorkflowTemplateExecutionInput.model_validate(payload)
+
+
+def _payload_sha256(value: Any) -> str:
+    canonical = json.dumps(
+        _jsonable(value),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _jsonable(value: Any) -> Any:

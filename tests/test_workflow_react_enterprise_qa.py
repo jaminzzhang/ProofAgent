@@ -9,16 +9,24 @@ import yaml
 from langgraph.checkpoint.memory import MemorySaver
 
 from proof_agent.bootstrap.composition import compose_harness_invocation
+from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import (
     ModelConfig,
     ModelRequest,
     ModelResponse,
+    PublishedAgentRuntimeFacts,
     ReActActionProposal,
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
     WorkflowStageResult,
     WorkflowStageStatus,
+    WorkflowStageConfigurationRuntimeSource,
+    WorkflowStageConfigurationRuntimeSourceType,
+    WorkflowTemplateExecutionInput,
+)
+from proof_agent.control.workflow.stage_configuration import (
+    resolve_workflow_stage_runtime_configuration,
 )
 from proof_agent.control.workflow.react_enterprise_qa_execution import (
     ReActEnterpriseQAWorkflowExecution,
@@ -52,10 +60,35 @@ def _final_answer_model_request(events: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
+def _react_execution_input(agent_yaml: Path) -> WorkflowTemplateExecutionInput:
+    source = WorkflowStageConfigurationRuntimeSource(
+        source_type=WorkflowStageConfigurationRuntimeSourceType.PACKAGE_LOCAL_LATEST,
+        reference="package_local:react_enterprise_qa",
+    )
+    resolved = resolve_workflow_stage_runtime_configuration(
+        agent_yaml.read_text(encoding="utf-8"),
+        source=source,
+    )
+    assert resolved is not None
+    return WorkflowTemplateExecutionInput(
+        run_id="run_react_execution_test",
+        template_name=resolved.effective_stage_configuration.template_name,
+        template_descriptor_version=(
+            resolved.effective_stage_configuration.template_descriptor_version
+        ),
+        question="What is the reimbursement rule for travel meals?",
+        effective_stage_configuration_ref=source.reference,
+        workflow_stage_availability=resolved.workflow_stage_availability,
+        effective_stage_configuration=resolved.effective_stage_configuration,
+        stage_configuration_source=source,
+    )
+
+
 def _react_execution(tmp_path: Path) -> ReActEnterpriseQAWorkflowExecution:
     return ReActEnterpriseQAWorkflowExecution(
         invocation=compose_harness_invocation(REACT_AGENT),
         trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run_react_execution_test"),
+        execution_input=_react_execution_input(REACT_AGENT),
         conversation_context=None,
         allow_untrusted_web_supplement=False,
     )
@@ -145,6 +178,39 @@ def test_supported_travel_meal_question_answers_with_react_review_trace(
     assert event_types.count("policy_decision") == 4
     assert "model_request" in event_types
     assert "model_response" in event_types
+
+
+def test_run_start_emits_workflow_stage_configuration_trace_summary(
+    tmp_path: Path,
+) -> None:
+    result = run_with_langgraph(
+        REACT_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+    )
+
+    events = _trace_events(result.trace_path)
+    summary = next(
+        event
+        for event in events
+        if event["event_type"] == "workflow_stage_configuration_trace_summary"
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["payload"]["source"] == {
+        "source_type": "package_local_latest",
+        "reference": "package_local:react_enterprise_qa",
+    }
+    assert summary["payload"]["template_name"] == "react_enterprise_qa"
+    assert summary["payload"]["template_descriptor_version"] == "react_enterprise_qa.v1"
+    assert {stage["stage_id"] for stage in summary["payload"]["stages"]} >= {
+        "plan",
+        "model_answer",
+    }
+    for stage in summary["payload"]["stages"]:
+        assert stage["redacted"] is True
+        assert "prompt" not in stage
+        assert "context" not in stage
 
 
 def test_v2_resolves_intent_before_react_planning(tmp_path: Path) -> None:
@@ -287,26 +353,147 @@ def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
     assert pending["payload"]["checkpoint_id"] == f"thread:{run_id}"
 
 
+def test_disabled_tools_block_react_tool_action_before_review(tmp_path: Path) -> None:
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"]["tools"] = {"enabled": False}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="Look up customer policy status before answering.",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "REFUSED_NO_EVIDENCE"
+    assert "tools capability is disabled" in result.final_output
+    events = _trace_events(result.trace_path)
+    event_types = _event_types(events)
+    assert "review_requested" not in event_types
+    assert "pending_approval_created" not in event_types
+    summary = next(
+        event
+        for event in events
+        if event["event_type"] == "workflow_stage_configuration_trace_summary"
+    )
+    assert "tool_review" not in {
+        stage["stage_id"] for stage in summary["payload"]["stages"]
+    }
+    assert "tool" not in {stage["stage_id"] for stage in summary["payload"]["stages"]}
+
+
+def test_published_runtime_facts_override_package_local_stage_resolution(
+    tmp_path: Path,
+) -> None:
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    shutil.copy(REACT_AGENT.parent.parent / "demo_tools.py", tmp_path / "demo_tools.py")
+    manifest_path = example_dir / "agent.yaml"
+    run_start_manifest = load_agent_manifest(manifest_path)
+    execution_input = _react_execution_input(manifest_path)
+    runtime_facts = PublishedAgentRuntimeFacts(
+        agent_id="react_enterprise_qa",
+        agent_version_id="version_001",
+        workflow_stage_availability=execution_input.workflow_stage_availability,
+        effective_stage_configuration=execution_input.effective_stage_configuration,
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"]["tools"] = {"enabled": False}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="Look up customer policy status before answering.",
+        runs_dir=tmp_path / "runs",
+        manifest=run_start_manifest,
+        agent_id="react_enterprise_qa",
+        agent_version_id="version_001",
+        published_agent_runtime_facts=runtime_facts,
+    )
+
+    assert result.outcome == "WAITING_FOR_APPROVAL"
+    assert result.workflow_template_execution_input is not None
+    assert (
+        result.workflow_template_execution_input.stage_configuration_source.source_type
+        is WorkflowStageConfigurationRuntimeSourceType.PUBLISHED_AGENT_VERSION
+    )
+    events = _trace_events(result.trace_path)
+    summary = next(
+        event
+        for event in events
+        if event["event_type"] == "workflow_stage_configuration_trace_summary"
+    )
+    assert summary["payload"]["source"] == {
+        "source_type": "published_agent_version",
+        "reference": "published_version:version_001:effective_workflow_stage_configuration",
+    }
+
+
+def test_disabled_memory_skips_react_memory_stage_write(tmp_path: Path) -> None:
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"]["memory"] = {"enabled": False}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    event_types = _event_types(events)
+    assert "memory_write_decision" not in event_types
+    assert not any(
+        event["event_type"] == "workflow_stage_context_applied"
+        and event["payload"]["stage_id"] == "memory"
+        for event in events
+    )
+    summary = next(
+        event
+        for event in events
+        if event["event_type"] == "workflow_stage_configuration_trace_summary"
+    )
+    assert "memory" not in {stage["stage_id"] for stage in summary["payload"]["stages"]}
+
+
 def test_tool_question_resumes_approved_react_tool_from_checkpoint(tmp_path: Path) -> None:
     checkpointer = MemorySaver()
     run_id = "run_react_resume_approval"
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    shutil.copy(REACT_AGENT.parent.parent / "demo_tools.py", tmp_path / "demo_tools.py")
+    manifest_path = example_dir / "agent.yaml"
+    run_start_manifest = load_agent_manifest(manifest_path)
     first = run_with_langgraph(
-        REACT_AGENT,
+        manifest_path,
         question="Look up customer policy status before answering.",
         runs_dir=tmp_path,
         run_id=run_id,
         checkpointer=checkpointer,
     )
     assert first.outcome == "WAITING_FOR_APPROVAL"
+    assert first.workflow_template_execution_input is not None
+
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"]["tools"] = {"enabled": False}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
     resumed = resume_langgraph_approval(
-        REACT_AGENT,
+        manifest_path,
         runs_dir=tmp_path,
         run_id=run_id,
         question="Look up customer policy status before answering.",
         checkpointer=checkpointer,
         approval_id="appr_customer_lookup",
         approved=True,
+        manifest=run_start_manifest,
+        execution_input=first.workflow_template_execution_input,
     )
 
     assert resumed.outcome == "ANSWERED_WITH_CITATIONS"

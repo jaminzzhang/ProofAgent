@@ -17,14 +17,24 @@ from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
     EvidenceChunk,
+    PublishedAgentRuntimeFacts,
     ReceiptOutcome,
+    ResolvedWorkflowStageRuntimeConfiguration,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
     RunResult,
+    TraceEventType,
+    WorkflowStageConfigurationRuntimeSource,
+    WorkflowStageConfigurationRuntimeSourceType,
     WorkflowStageResult,
+    WorkflowTemplateExecutionInput,
     WorkflowTemplateExecutionResult,
 )
 from proof_agent.contracts.conversation import context_admission_payload
+from proof_agent.control.workflow.stage_configuration import (
+    resolve_workflow_stage_runtime_configuration,
+    summarize_workflow_stage_configuration,
+)
 from proof_agent.control.workflow.harness_helpers import (
     emit_model_error,
     finalize_run,
@@ -56,6 +66,7 @@ def run_with_langgraph(
     agent_version_id: str | None = None,
     draft_id: str | None = None,
     allow_untrusted_web_supplement: bool = False,
+    published_agent_runtime_facts: PublishedAgentRuntimeFacts | None = None,
 ) -> RunResult:
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
@@ -77,6 +88,27 @@ def run_with_langgraph(
             status="ok" if conversation_context.admitted else "blocked",
             payload=context_admission_payload(conversation_context),
         )
+    stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
+        agent_yaml=agent_yaml,
+        manifest=resolved_manifest,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        published_agent_runtime_facts=published_agent_runtime_facts,
+    )
+    trace.emit(
+        TraceEventType.WORKFLOW_STAGE_CONFIGURATION_TRACE_SUMMARY,
+        status="ok",
+        payload=stage_runtime_configuration.trace_summary.model_dump(mode="json"),
+    )
+    execution_input = _workflow_template_execution_input(
+        run_id=actual_run_id,
+        question=question,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
+        stage_runtime_configuration=stage_runtime_configuration,
+        conversation_context=conversation_context,
+    )
     try:
         invocation = compose_harness_invocation(
             agent_yaml,
@@ -105,6 +137,7 @@ def run_with_langgraph(
         manifest=resolved_manifest,
         invocation=invocation,
         trace=trace,
+        execution_input=execution_input,
         conversation_context=conversation_context,
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )
@@ -126,7 +159,7 @@ def run_with_langgraph(
     sync_checkpointer(checkpointer)
     interrupt_result = _approval_interrupt(final_state)
     if interrupt_result is not None:
-        return _finalize_approval_interrupt(
+        result = _finalize_approval_interrupt(
             trace=trace,
             receipt_path=receipt_path,
             trace_path=trace_path,
@@ -139,18 +172,22 @@ def run_with_langgraph(
             agent_version_id=agent_version_id,
             draft_id=draft_id,
         )
+        return result.model_copy(
+            update={"workflow_template_execution_input": execution_input}
+        )
 
     execution_result = _workflow_execution_result_from_state(
         final_state,
         invocation=invocation,
         question=question,
         run_id=actual_run_id,
+        execution_input=execution_input,
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         draft_id=draft_id,
     )
 
-    return finalize_run(
+    result = finalize_run(
         trace=trace,
         receipt_path=receipt_path,
         trace_path=trace_path,
@@ -164,6 +201,7 @@ def run_with_langgraph(
         agent_version_id=agent_version_id,
         draft_id=draft_id,
     )
+    return result.model_copy(update={"workflow_template_execution_input": execution_input})
 
 
 def resume_langgraph_approval(
@@ -186,6 +224,7 @@ def resume_langgraph_approval(
     agent_version_id: str | None = None,
     draft_id: str | None = None,
     allow_untrusted_web_supplement: bool = False,
+    execution_input: WorkflowTemplateExecutionInput | None = None,
 ) -> RunResult:
     """Resume a LangGraph run from an approval interrupt."""
 
@@ -212,10 +251,28 @@ def resume_langgraph_approval(
         resolved_knowledge_bindings=resolved_knowledge_bindings,
         configuration_store=configuration_store,
     )
+    if execution_input is None:
+        stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
+            agent_yaml=agent_yaml,
+            manifest=resolved_manifest,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            published_agent_runtime_facts=None,
+        )
+        execution_input = _workflow_template_execution_input(
+            run_id=run_id,
+            question=question,
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            draft_id=draft_id,
+            stage_runtime_configuration=stage_runtime_configuration,
+            conversation_context=None,
+        )
     builder = _build_graph(
         manifest=resolved_manifest,
         invocation=invocation,
         trace=trace,
+        execution_input=execution_input,
         conversation_context=None,
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )
@@ -228,7 +285,7 @@ def resume_langgraph_approval(
     sync_checkpointer(checkpointer)
     interrupt_result = _approval_interrupt(final_state)
     if interrupt_result is not None:
-        return _finalize_approval_interrupt(
+        result = _finalize_approval_interrupt(
             trace=trace,
             receipt_path=receipt_path,
             trace_path=trace_path,
@@ -241,17 +298,21 @@ def resume_langgraph_approval(
             agent_version_id=agent_version_id,
             draft_id=draft_id,
         )
+        return result.model_copy(
+            update={"workflow_template_execution_input": execution_input}
+        )
 
     execution_result = _workflow_execution_result_from_state(
         final_state,
         invocation=invocation,
         question=question,
         run_id=run_id,
+        execution_input=execution_input,
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         draft_id=draft_id,
     )
-    return finalize_run(
+    result = finalize_run(
         trace=trace,
         receipt_path=receipt_path,
         trace_path=trace_path,
@@ -265,6 +326,7 @@ def resume_langgraph_approval(
         agent_version_id=agent_version_id,
         draft_id=draft_id,
     )
+    return result.model_copy(update={"workflow_template_execution_input": execution_input})
 
 
 def _ensure_executable_template(manifest: AgentManifest, agent_yaml: Path) -> None:
@@ -286,6 +348,7 @@ def _build_graph(
     manifest: AgentManifest,
     invocation: Any,
     trace: TraceWriter,
+    execution_input: WorkflowTemplateExecutionInput,
     conversation_context: ContextAdmission | None,
     allow_untrusted_web_supplement: bool,
 ) -> Any:
@@ -299,6 +362,7 @@ def _build_graph(
     return build_react_enterprise_qa_graph(
         invocation=invocation,
         trace=trace,
+        execution_input=execution_input,
         conversation_context=conversation_context,
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )
@@ -310,6 +374,7 @@ def _workflow_execution_result_from_state(
     invocation: Any,
     question: str,
     run_id: str,
+    execution_input: WorkflowTemplateExecutionInput,
     agent_id: str | None,
     agent_version_id: str | None,
     draft_id: str | None,
@@ -330,11 +395,7 @@ def _workflow_execution_result_from_state(
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         draft_id=draft_id,
-        effective_stage_configuration_ref=(
-            f"published_version:{agent_version_id}:effective_workflow_stage_configuration"
-            if agent_version_id
-            else None
-        ),
+        effective_stage_configuration_ref=execution_input.effective_stage_configuration_ref,
         evidence=tuple(
             EvidenceChunk.model_validate(item)
             for item in final_state.get("evidence", ())
@@ -357,11 +418,142 @@ def _workflow_execution_result_from_state(
             item for item in final_state.get("review_results", ()) if isinstance(item, Mapping)
         ),
         trace_summary_refs=(
-            (f"published_version:{agent_version_id}",)
-            if agent_version_id
-            else (f"template_descriptor:{invocation.template.descriptor_version}",)
+            (execution_input.stage_configuration_source.reference,)
+            if execution_input.stage_configuration_source.reference
+            else ()
         ),
     )
+
+
+def _resolve_workflow_stage_runtime_configuration(
+    *,
+    agent_yaml: Path,
+    manifest: AgentManifest,
+    agent_id: str | None,
+    agent_version_id: str | None,
+    published_agent_runtime_facts: PublishedAgentRuntimeFacts | None,
+) -> ResolvedWorkflowStageRuntimeConfiguration:
+    source = _workflow_stage_configuration_source(
+        manifest=manifest,
+        agent_version_id=agent_version_id,
+    )
+    if published_agent_runtime_facts is not None:
+        _require_matching_published_agent_runtime_facts(
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
+            facts=published_agent_runtime_facts,
+            artifact_path=agent_yaml,
+        )
+        return ResolvedWorkflowStageRuntimeConfiguration(
+            workflow_stage_availability=(
+                published_agent_runtime_facts.workflow_stage_availability
+            ),
+            effective_stage_configuration=(
+                published_agent_runtime_facts.effective_stage_configuration
+            ),
+            configuration_source=source,
+            trace_summary=summarize_workflow_stage_configuration(
+                published_agent_runtime_facts.effective_stage_configuration,
+                source=source,
+            ),
+        )
+    resolved = resolve_workflow_stage_runtime_configuration(
+        agent_yaml.read_text(encoding="utf-8"),
+        source=source,
+    )
+    if resolved is None:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "workflow stage runtime configuration could not be resolved",
+            "Use Agent Contract YAML with workflow.template and capabilities.",
+            artifact_path=agent_yaml,
+        )
+    return resolved
+
+
+def _require_matching_published_agent_runtime_facts(
+    *,
+    agent_id: str | None,
+    agent_version_id: str | None,
+    facts: PublishedAgentRuntimeFacts,
+    artifact_path: Path,
+) -> None:
+    if agent_id is not None and facts.agent_id != agent_id:
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            "Published Agent runtime facts do not match the requested Agent",
+            "Use runtime facts captured from the selected Published Agent Version.",
+            artifact_path=artifact_path,
+        )
+    if agent_version_id is not None and facts.agent_version_id != agent_version_id:
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            "Published Agent runtime facts do not match the requested Agent Version",
+            "Use runtime facts captured from the selected Published Agent Version.",
+            artifact_path=artifact_path,
+        )
+
+
+def _workflow_stage_configuration_source(
+    *,
+    manifest: AgentManifest,
+    agent_version_id: str | None,
+) -> WorkflowStageConfigurationRuntimeSource:
+    if agent_version_id:
+        return WorkflowStageConfigurationRuntimeSource(
+            source_type=WorkflowStageConfigurationRuntimeSourceType.PUBLISHED_AGENT_VERSION,
+            reference=f"published_version:{agent_version_id}:effective_workflow_stage_configuration",
+        )
+    return WorkflowStageConfigurationRuntimeSource(
+        source_type=WorkflowStageConfigurationRuntimeSourceType.PACKAGE_LOCAL_LATEST,
+        reference=f"package_local:{manifest.name}",
+    )
+
+
+def _workflow_template_execution_input(
+    *,
+    run_id: str,
+    question: str,
+    agent_id: str | None,
+    agent_version_id: str | None,
+    draft_id: str | None,
+    stage_runtime_configuration: ResolvedWorkflowStageRuntimeConfiguration,
+    conversation_context: ContextAdmission | None,
+) -> WorkflowTemplateExecutionInput:
+    return WorkflowTemplateExecutionInput(
+        run_id=run_id,
+        template_name=stage_runtime_configuration.effective_stage_configuration.template_name,
+        template_descriptor_version=(
+            stage_runtime_configuration
+            .effective_stage_configuration
+            .template_descriptor_version
+        ),
+        question=question,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        draft_id=draft_id,
+        effective_stage_configuration_ref=(
+            stage_runtime_configuration.configuration_source.reference
+        ),
+        workflow_stage_availability=(
+            stage_runtime_configuration.workflow_stage_availability
+        ),
+        effective_stage_configuration=(
+            stage_runtime_configuration.effective_stage_configuration
+        ),
+        stage_configuration_source=(
+            stage_runtime_configuration.configuration_source
+        ),
+        conversation_context_summary=_conversation_context_summary(conversation_context),
+    )
+
+
+def _conversation_context_summary(
+    conversation_context: ContextAdmission | None,
+) -> Mapping[str, Any]:
+    if conversation_context is None:
+        return {}
+    return context_admission_payload(conversation_context)
 
 
 def _receipt_outcome(value: Any) -> ReceiptOutcome | None:

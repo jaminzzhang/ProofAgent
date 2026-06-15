@@ -105,6 +105,7 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
         draft_id=published_agent.source_draft_id,
         resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
         allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
+        published_agent_runtime_facts=published_agent.runtime_facts,
     )
 
     return _run_response(
@@ -208,6 +209,7 @@ def create_conversation_run(
         draft_id=published_agent.source_draft_id,
         resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
         allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
+        published_agent_runtime_facts=published_agent.runtime_facts,
     )
     governance_details = _governance_projection(
         detail,
@@ -257,6 +259,7 @@ def _execute_published_agent_run(
     draft_id: str | None = None,
     resolved_knowledge_bindings: Any | None = None,
     allow_untrusted_web_supplement: bool = False,
+    published_agent_runtime_facts: Any | None = None,
 ) -> tuple[Any, Any, AgentManifest]:
     store = _get_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
@@ -279,6 +282,7 @@ def _execute_published_agent_run(
             agent_version_id=agent_version_id,
             draft_id=draft_id,
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
+            published_agent_runtime_facts=published_agent_runtime_facts,
         )
     except ProofAgentError as exc:
         raise HTTPException(
@@ -290,6 +294,12 @@ def _execute_published_agent_run(
     if detail is None:
         raise HTTPException(status_code=500, detail="Run artifacts were not persisted.")
     if detail.pending_approvals:
+        execution_input = result.workflow_template_execution_input
+        if execution_input is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Run is waiting for approval without Workflow Template Execution Input.",
+            )
         resume_registry.put(
             LangGraphApprovalResumeContext(
                 agent_yaml=manifest_path,
@@ -306,6 +316,7 @@ def _execute_published_agent_run(
                 agent_version_id=agent_version_id,
                 draft_id=draft_id,
                 allow_untrusted_web_supplement=allow_untrusted_web_supplement,
+                workflow_template_execution_input=execution_input,
             )
         )
     return result, detail, manifest

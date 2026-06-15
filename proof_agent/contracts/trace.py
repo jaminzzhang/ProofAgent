@@ -14,6 +14,7 @@ class TraceEventType(str, Enum):
 
     RUN_STARTED = "run_started"
     MANIFEST_LOADED = "manifest_loaded"
+    WORKFLOW_STAGE_CONFIGURATION_TRACE_SUMMARY = "workflow_stage_configuration_trace_summary"
     WORKFLOW_STAGE_CONTEXT_APPLIED = "workflow_stage_context_applied"
     INTENT_RESOLUTION = "intent_resolution"
     REASONING_SUMMARY = "reasoning_summary"

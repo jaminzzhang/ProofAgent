@@ -10,7 +10,8 @@ class WorkflowStageResultRuntimeAdapter:
     """Convert Workflow Stage Result envelopes into scheduler state updates."""
 
     def to_state_delta(self, result: WorkflowStageResult) -> dict[str, Any]:
-        delta = thaw_state_value(result.continuation)
+        raw_delta = thaw_state_value(result.continuation)
+        delta = dict(raw_delta) if isinstance(raw_delta, Mapping) else {}
         public_result = result.model_copy(update={"continuation": {}})
         delta["stage_results"] = [public_result.model_dump(mode="json")]
         return delta

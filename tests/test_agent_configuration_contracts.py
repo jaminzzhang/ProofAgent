@@ -13,6 +13,7 @@ from proof_agent.contracts import (
     ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
+    EffectiveWorkflowStageConfigurationStage,
     FoundationKnowledgeSourceValidation,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
@@ -27,6 +28,9 @@ from proof_agent.contracts import (
     QuarantinedKnowledgeUpload,
     PublishedAgentVersion,
     ToolSource,
+    WorkflowStageAvailability,
+    WorkflowStageAvailabilityReason,
+    WorkflowStageAvailabilitySet,
 )
 from proof_agent.errors import ErrorCode
 
@@ -99,14 +103,30 @@ def test_published_agent_version_requires_validation_run_id() -> None:
 
 
 def test_published_agent_version_includes_effective_workflow_stage_configuration() -> None:
-    snapshot = PublishedWorkflowStageConfigurationSnapshot(
-        descriptor_version="react_enterprise_qa.v1",
+    availability = WorkflowStageAvailabilitySet(
+        template_name="react_enterprise_qa",
+        template_descriptor_version="react_enterprise_qa.v1",
         stages=(
-            {
-                "id": "plan",
-                "prompt": {"business_context": "Claims context."},
-                "context": {"include_agent_purpose": True},
-            },
+            WorkflowStageAvailability(
+                stage_id="plan",
+                available=True,
+                reason=WorkflowStageAvailabilityReason.ALWAYS_AVAILABLE,
+            ),
+        ),
+    )
+    snapshot = PublishedWorkflowStageConfigurationSnapshot(
+        template_name="react_enterprise_qa",
+        template_descriptor_version="react_enterprise_qa.v1",
+        stages=(
+            EffectiveWorkflowStageConfigurationStage(
+                id="plan",
+                label="Plan",
+                description="Propose the next governed ReAct action.",
+                required=True,
+                model_bearing=True,
+                prompt={"business_context": "Claims context."},
+                context={"include_agent_purpose": True},
+            ),
         ),
         capabilities={
             "tools": {"enabled": False},
@@ -121,18 +141,39 @@ def test_published_agent_version_includes_effective_workflow_stage_configuration
         contract_bundle=_contract_bundle(),
         published_at="2026-05-27T00:05:00Z",
         published_by="local-user",
+        workflow_stage_availability=availability,
         effective_workflow_stage_configuration=snapshot,
     )
 
     payload = version.model_dump(mode="json")
 
+    assert payload["workflow_stage_availability"] == {
+        "template_name": "react_enterprise_qa",
+        "template_descriptor_version": "react_enterprise_qa.v1",
+        "stages": [
+            {
+                "stage_id": "plan",
+                "available": True,
+                "reason": "always_available",
+                "capability": "none",
+            }
+        ],
+    }
     assert payload["effective_workflow_stage_configuration"] == {
-        "descriptor_version": "react_enterprise_qa.v1",
+        "template_name": "react_enterprise_qa",
+        "template_descriptor_version": "react_enterprise_qa.v1",
         "stages": [
             {
                 "id": "plan",
+                "label": "Plan",
+                "description": "Propose the next governed ReAct action.",
+                "required": True,
+                "model_bearing": True,
+                "editable_prompt_fields": [],
+                "available_context_options": [],
                 "prompt": {"business_context": "Claims context."},
                 "context": {"include_agent_purpose": True},
+                "source_override": {},
             }
         ],
         "capabilities": {

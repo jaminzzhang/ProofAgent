@@ -56,6 +56,7 @@ from proof_agent.contracts import (
     PublishedWorkflowStageConfigurationSnapshot,
     QuarantinedKnowledgeUpload,
     ResolvedKnowledgeBindingSet,
+    ResolvedWorkflowStageRuntimeConfiguration,
     ModelConnectionSmokeTestRecord,
     ModelConnectionValidationRecord,
     SensitiveValidationCaptureArtifact,
@@ -65,10 +66,17 @@ from proof_agent.contracts import (
     SharedModelConnectionReferenceSummary,
     ToolSource,
     ToolSourceLifecycleState,
+    WorkflowStageAvailabilitySet,
 )
 from proof_agent.configuration.file_locking import locked, store_lock_path
 from proof_agent.contracts.manifest import KnowledgeConfig
-from proof_agent.control.workflow.templates import resolve_workflow_template
+from proof_agent.control.workflow.stage_configuration import (
+    resolve_workflow_stage_runtime_configuration,
+)
+from proof_agent.contracts.workflow_stage_configuration import (
+    WorkflowStageConfigurationRuntimeSource,
+    WorkflowStageConfigurationRuntimeSourceType,
+)
 from proof_agent.control.knowledge.source_publication import (
     validate_local_index_publication_smoke,
 )
@@ -222,6 +230,9 @@ class LocalAgentConfigurationStore:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             draft = self._require_draft(agent_id, draft_id)
             self._require_shared_model_connections_active_unlocked(draft.contract_bundle.agent_yaml)
+            _require_no_unavailable_workflow_stage_configuration(
+                draft.contract_bundle.agent_yaml
+            )
             if resolved_knowledge_bindings is not None:
                 _require_resolved_shared_bindings_cover_draft(
                     draft.contract_bundle.agent_yaml,
@@ -246,6 +257,9 @@ class LocalAgentConfigurationStore:
                 published_at=_now(),
                 published_by=actor,
                 resolved_knowledge_bindings=resolved_knowledge_bindings,
+                workflow_stage_availability=_build_workflow_stage_availability(
+                    draft.contract_bundle.agent_yaml
+                ),
                 effective_workflow_stage_configuration=(
                     _build_effective_workflow_stage_configuration(
                         draft.contract_bundle.agent_yaml
@@ -3504,22 +3518,6 @@ class LocalAgentConfigurationStore:
         )
 
 
-TOOL_CONTEXT_OPTIONS = frozenset(
-    {
-        "include_bound_tools",
-        "include_tool_proposal",
-        "include_tool_contract_summary",
-        "include_approval_requirements",
-        "include_approval_state",
-        "include_parameter_bounds",
-    }
-)
-MEMORY_CONTEXT_OPTIONS = frozenset(
-    {
-        "include_memory_scope",
-        "include_memory_denylist_summary",
-    }
-)
 VALIDATION_CAPTURE_EXCLUDED_KEYS = frozenset(
     {
         "chain_of_thought",
@@ -3577,83 +3575,56 @@ def _sanitize_validation_capture_payload(value: Any) -> Any:
 def _build_effective_workflow_stage_configuration(
     agent_yaml: str,
 ) -> PublishedWorkflowStageConfigurationSnapshot | None:
-    raw = yaml.safe_load(agent_yaml)
-    if not isinstance(raw, Mapping):
+    resolved = _resolve_workflow_stage_runtime_configuration(agent_yaml)
+    if resolved is None:
         return None
-    workflow = raw.get("workflow")
-    capabilities = raw.get("capabilities")
-    if not isinstance(workflow, Mapping) or not isinstance(capabilities, Mapping):
-        return None
-    template_name = workflow.get("template")
-    if not isinstance(template_name, str) or not template_name:
-        return None
-
-    template = resolve_workflow_template(template_name)
-    capability_summary = _effective_capability_summary(capabilities)
-    configured_stages = _configured_stage_overrides(workflow)
-    stages: list[dict[str, Any]] = []
-    for descriptor in template.stages:
-        override = configured_stages.get(descriptor.id, {})
-        available_context_options = [
-            option
-            for option in descriptor.context_options
-            if _context_option_available(option, capability_summary)
-        ]
-        stages.append(
-            {
-                "id": descriptor.id,
-                "label": descriptor.label,
-                "description": descriptor.description,
-                "required": descriptor.required,
-                "model_bearing": descriptor.model_bearing,
-                "editable_prompt_fields": list(descriptor.editable_prompt_fields),
-                "available_context_options": available_context_options,
-                "prompt": _effective_stage_prompt(override),
-                "context": _effective_stage_context(override, available_context_options),
-                "source_override": {"configured": bool(override)},
-            }
-        )
-
-    descriptor_version = workflow.get("template_descriptor_version")
-    return PublishedWorkflowStageConfigurationSnapshot(
-        descriptor_version=(
-            descriptor_version
-            if isinstance(descriptor_version, str) and descriptor_version
-            else template.descriptor_version
-        ),
-        stages=tuple(stages),
-        capabilities=capability_summary,
+    return PublishedWorkflowStageConfigurationSnapshot.model_validate(
+        resolved.effective_stage_configuration.model_dump(mode="python")
     )
 
 
-def _effective_capability_summary(capabilities: Mapping[str, Any]) -> dict[str, Any]:
-    tools = capabilities.get("tools")
-    memory = capabilities.get("memory")
-    tools_mapping = tools if isinstance(tools, Mapping) else {}
-    memory_mapping = memory if isinstance(memory, Mapping) else {}
-    return {
-        "tools": {
-            "enabled": bool(tools_mapping.get("enabled")),
-            "file": (
-                str(tools_mapping["file"])
-                if tools_mapping.get("file") is not None
-                else None
-            ),
-        },
-        "memory": {
-            "enabled": bool(memory_mapping.get("enabled")),
-            "provider": (
-                str(memory_mapping["provider"])
-                if memory_mapping.get("provider") is not None
-                else None
-            ),
-            "scopes": (
-                _jsonable(memory_mapping.get("scopes"))
-                if isinstance(memory_mapping.get("scopes"), Mapping)
-                else {}
-            ),
-        },
-    }
+def _require_no_unavailable_workflow_stage_configuration(agent_yaml: str) -> None:
+    resolved = _resolve_workflow_stage_runtime_configuration(agent_yaml)
+    if resolved is None:
+        return
+    raw = yaml.safe_load(agent_yaml)
+    if not isinstance(raw, Mapping):
+        return
+    workflow = raw.get("workflow")
+    if not isinstance(workflow, Mapping):
+        return
+    unavailable_stage_ids: list[str] = []
+    for stage_id in _configured_stage_overrides(workflow):
+        if not resolved.workflow_stage_availability.is_available(stage_id):
+            unavailable_stage_ids.append(stage_id)
+    if unavailable_stage_ids:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "unavailable workflow stage configuration cannot be published: "
+            + ", ".join(sorted(unavailable_stage_ids)),
+            "Clear inactive workflow stage configuration or re-enable the required capability.",
+        )
+
+
+def _build_workflow_stage_availability(
+    agent_yaml: str,
+) -> WorkflowStageAvailabilitySet | None:
+    resolved = _resolve_workflow_stage_runtime_configuration(agent_yaml)
+    if resolved is None:
+        return None
+    return resolved.workflow_stage_availability
+
+
+def _resolve_workflow_stage_runtime_configuration(
+    agent_yaml: str,
+) -> ResolvedWorkflowStageRuntimeConfiguration | None:
+    return resolve_workflow_stage_runtime_configuration(
+        agent_yaml,
+        source=WorkflowStageConfigurationRuntimeSource(
+            source_type=WorkflowStageConfigurationRuntimeSourceType.PACKAGE_LOCAL_LATEST,
+            reference="local_configuration_store",
+        ),
+    )
 
 
 def _configured_stage_overrides(workflow: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -3668,42 +3639,6 @@ def _configured_stage_overrides(workflow: Mapping[str, Any]) -> dict[str, Mappin
         if isinstance(stage_id, str) and stage_id:
             configured[stage_id] = item
     return configured
-
-
-def _effective_stage_prompt(stage_override: Mapping[str, Any]) -> dict[str, Any]:
-    prompt = stage_override.get("prompt")
-    prompt_mapping = prompt if isinstance(prompt, Mapping) else {}
-    return {
-        "business_context": str(prompt_mapping.get("business_context", "") or ""),
-        "task_instructions": [
-            str(item) for item in prompt_mapping.get("task_instructions", ()) or ()
-        ],
-        "output_preferences": [
-            str(item) for item in prompt_mapping.get("output_preferences", ()) or ()
-        ],
-    }
-
-
-def _effective_stage_context(
-    stage_override: Mapping[str, Any],
-    available_context_options: list[str],
-) -> dict[str, bool]:
-    context = stage_override.get("context")
-    context_mapping = context if isinstance(context, Mapping) else {}
-    return {
-        option: True for option in available_context_options if bool(context_mapping.get(option))
-    }
-
-
-def _context_option_available(
-    option: str,
-    capability_summary: Mapping[str, Mapping[str, Any]],
-) -> bool:
-    if option in TOOL_CONTEXT_OPTIONS:
-        return bool(capability_summary["tools"].get("enabled"))
-    if option in MEMORY_CONTEXT_OPTIONS:
-        return bool(capability_summary["memory"].get("enabled"))
-    return True
 
 
 def _audit(

@@ -6,10 +6,17 @@ from pydantic import ValidationError
 from proof_agent.contracts import (
     ApprovalPause,
     ClarificationNeed,
+    EffectiveWorkflowStageConfiguration,
+    EffectiveWorkflowStageConfigurationStage,
     EvidenceChunk,
     EvidenceStatus,
     PolicyDecisionType,
     ReceiptOutcome,
+    WorkflowStageAvailability,
+    WorkflowStageAvailabilityReason,
+    WorkflowStageAvailabilitySet,
+    WorkflowStageConfigurationRuntimeSource,
+    WorkflowStageConfigurationRuntimeSourceType,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
@@ -94,7 +101,7 @@ def test_clarification_need_is_distinct_from_approval_pause() -> None:
         need.summary["extra"] = "blocked"
 
 
-def test_workflow_template_execution_input_can_reference_future_snapshot() -> None:
+def test_workflow_template_execution_input_carries_stage_runtime_facts() -> None:
     execution_input = WorkflowTemplateExecutionInput(
         run_id="run_001",
         template_name="react_enterprise_qa",
@@ -103,9 +110,44 @@ def test_workflow_template_execution_input_can_reference_future_snapshot() -> No
         agent_id="react_enterprise_qa",
         agent_version_id="version_001",
         effective_stage_configuration_ref="version_001:effective_workflow_stage_configuration",
+        workflow_stage_availability=WorkflowStageAvailabilitySet(
+            template_name="react_enterprise_qa",
+            template_descriptor_version="react_enterprise_qa.v1",
+            stages=(
+                WorkflowStageAvailability(
+                    stage_id="plan",
+                    available=True,
+                    reason=WorkflowStageAvailabilityReason.ALWAYS_AVAILABLE,
+                ),
+            ),
+        ),
+        effective_stage_configuration=EffectiveWorkflowStageConfiguration(
+            template_name="react_enterprise_qa",
+            template_descriptor_version="react_enterprise_qa.v1",
+            stages=(
+                EffectiveWorkflowStageConfigurationStage(
+                    id="plan",
+                    label="Plan",
+                    description="Propose the next governed ReAct action.",
+                    required=True,
+                    model_bearing=True,
+                    prompt={"business_context": "Claims context."},
+                ),
+            ),
+        ),
+        stage_configuration_source=WorkflowStageConfigurationRuntimeSource(
+            source_type=WorkflowStageConfigurationRuntimeSourceType.PUBLISHED_AGENT_VERSION,
+            reference="published_version:version_001",
+        ),
     )
 
     assert execution_input.template_name == "react_enterprise_qa"
+    assert execution_input.workflow_stage_availability.is_available("plan") is True
+    assert execution_input.effective_stage_configuration.stage("plan").label == "Plan"
+    assert (
+        execution_input.stage_configuration_source.source_type
+        is WorkflowStageConfigurationRuntimeSourceType.PUBLISHED_AGENT_VERSION
+    )
     assert execution_input.effective_stage_configuration_ref == (
         "version_001:effective_workflow_stage_configuration"
     )

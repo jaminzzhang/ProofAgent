@@ -222,7 +222,6 @@ workflow:
         business_context: "Claims context."
       context:
         include_agent_purpose: true
-        include_bound_tools: true
     - id: memory
       context:
         include_memory_scope: true
@@ -248,21 +247,31 @@ capabilities:
 
     snapshot = version.effective_workflow_stage_configuration
     assert snapshot is not None
-    assert snapshot.descriptor_version == "react_enterprise_qa.v1"
+    assert snapshot.template_name == "react_enterprise_qa"
+    assert snapshot.template_descriptor_version == "react_enterprise_qa.v1"
+    availability = version.workflow_stage_availability
+    assert availability is not None
+    assert availability.template_name == "react_enterprise_qa"
+    assert availability.template_descriptor_version == "react_enterprise_qa.v1"
+    assert availability.is_available("plan") is True
+    assert availability.is_available("tool_review") is False
+    assert availability.is_available("tool") is False
     assert snapshot.capabilities == {
         "tools": {"enabled": False, "file": None},
         "memory": {"enabled": True, "provider": "session", "scopes": {}},
     }
-    stages_by_id = {stage["id"]: stage for stage in snapshot.stages}
+    stages_by_id = {stage.id: stage for stage in snapshot.stages}
     assert set(stages_by_id) >= {"plan", "memory", "response"}
-    assert stages_by_id["plan"]["prompt"] == {
+    assert "tool_review" not in stages_by_id
+    assert "tool" not in stages_by_id
+    assert stages_by_id["plan"].prompt == {
         "business_context": "Claims context.",
         "task_instructions": [],
         "output_preferences": [],
     }
-    assert stages_by_id["plan"]["context"] == {"include_agent_purpose": True}
-    assert "include_bound_tools" not in stages_by_id["plan"]["available_context_options"]
-    assert stages_by_id["memory"]["context"] == {"include_memory_scope": True}
+    assert stages_by_id["plan"].context == {"include_agent_purpose": True}
+    assert "include_bound_tools" not in stages_by_id["plan"].available_context_options
+    assert stages_by_id["memory"].context == {"include_memory_scope": True}
 
     publication = json.loads(
         (
@@ -274,7 +283,51 @@ capabilities:
             / "publication.json"
         ).read_text(encoding="utf-8")
     )
+    assert publication["workflow_stage_availability"]["stages"][0]["stage_id"] == "plan"
     assert publication["effective_workflow_stage_configuration"]["stages"][0]["id"] == "plan"
+
+
+def test_publish_version_rejects_unavailable_workflow_stage_configuration(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    draft = store.create_draft(
+        agent_id="react_enterprise_qa",
+        display_name="ReAct Enterprise QA",
+        purpose="Answer governed questions.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: react_enterprise_qa
+purpose: "Answer governed questions."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  stages:
+    - id: tool_review
+      prompt:
+        business_context: "Tool context."
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: false
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: []\n",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "unavailable workflow stage configuration" in blocked.value.message
 
 
 def test_records_sensitive_validation_capture_artifact_with_default_ttl(

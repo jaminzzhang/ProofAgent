@@ -282,7 +282,7 @@ def _policy_status_response(
             clear_disambiguation_options=True,
         )
 
-    result = ToolGateway.from_file(manifest.tools.file).request_tool(
+    result = _tool_gateway(manifest).request_tool(
         tool_name="policy_status_lookup",
         parameters={"customer_id": context.customer_ref, "policy_id": policy_id},
         approved=False,
@@ -332,7 +332,7 @@ def _claim_status_response(
             clear_disambiguation_options=True,
         )
 
-    result = ToolGateway.from_file(manifest.tools.file).request_tool(
+    result = _tool_gateway(manifest).request_tool(
         tool_name="claim_status_lookup",
         parameters={"customer_id": context.customer_ref, "claim_id": claim_id},
         approved=False,
@@ -431,6 +431,13 @@ def _load_customer_context(
         )
     except CustomerAccessError:
         return CustomerAuthorizationContext(session_type=CustomerSessionType.ANONYMOUS)
+
+
+def _tool_gateway(manifest: AgentManifest) -> ToolGateway:
+    tool_file = manifest.capabilities.tools.file
+    if tool_file is None:
+        raise RuntimeError("Customer adapter requires capabilities.tools.file")
+    return ToolGateway.from_file(tool_file)
 
 
 def _single_resource_id(values: tuple[str, ...]) -> str | None:

@@ -103,7 +103,7 @@ The typed governed facts produced by one Workflow Template Execution, including 
 _Avoid_: Runtime state dict, LangGraph final state, Dashboard projection
 
 **Workflow Template Execution Input**:
-The typed run-scoped input for Workflow Template Execution, including the selected template identity, Agent Contract facts, optional Published Agent Version references, conversation context, and future effective stage configuration snapshot input.
+The typed run-scoped input for Workflow Template Execution, including the selected template identity, Agent Contract facts, optional Published Agent Version references, conversation context, Effective Workflow Stage Configuration value, and trace-safe configuration source metadata.
 _Avoid_: Raw manifest path, latest descriptor lookup, Runtime Plane graph state
 
 **Approval Pause**:
@@ -138,9 +138,17 @@ _Avoid_: Workflow Stage Result Summary, public execution result, Dashboard proje
 The public contracts module for Workflow Template Execution facts, including execution results, stage result envelopes, approval pause, clarification need, and runtime-continuation boundaries.
 _Avoid_: Run artifact contract module, ReAct-only contract module, Runtime Plane state schema
 
+**Workflow Stage Configuration Contract Module**:
+The neutral contract home for Workflow Stage Availability Set, Effective Workflow Stage Configuration, and Workflow Stage Configuration Runtime Source facts shared by Agent Publication and Workflow Template Execution.
+_Avoid_: Published-Agent-only contract module, Runtime Plane state schema, Dashboard projection contract
+
 **Workflow Stage Result Runtime Adapter**:
 The thin Runtime Plane adapter that converts a Workflow Stage Result plus internal continuation state into the state update shape required by a scheduler such as LangGraph.
 _Avoid_: Control Plane fact source, public execution result, stage business logic owner
+
+**Workflow Runtime Adapter**:
+The Runtime Plane implementation that schedules a Workflow Template Execution with a concrete runtime while translating runtime-neutral Workflow Template Execution facts into runtime-specific graph, checkpoint, interrupt, or resume mechanics.
+_Avoid_: Control Plane semantic owner, Workflow Template Descriptor, Agent Contract interpreter
 
 **Workflow Stage Result Summary**:
 The trace-safe summary inside a Workflow Stage Result Envelope, limited to governed fact names, statuses, counts, lengths, ids, decision enums, and redaction metadata.
@@ -150,8 +158,12 @@ _Avoid_: Raw prompt text, raw selected context, raw evidence content, raw tool p
 The resolved enabled or disabled status of a Workflow Template Stage for one Agent Contract, derived from template support and configured capabilities rather than arbitrary topology editing.
 _Avoid_: Free-form stage disabling, runtime graph editing, hidden branch flag
 
+**Workflow Stage Availability Rule**:
+The backend-owned rule on a Workflow Template Stage that declares whether the stage is always available or requires a named Agent capability domain.
+_Avoid_: Stage id convention, Agent-owner enable switch, runtime graph mutation
+
 **Workflow Stage Availability Set**:
-The resolved Workflow Stage Availability for every registered stage, frozen into the Published Agent Version at publication and copied into each run before Workflow Template Execution starts.
+The typed resolved Workflow Stage Availability for every registered stage, frozen into the Published Agent Version at publication and copied into each run before Workflow Template Execution starts.
 _Avoid_: Per-stage ad hoc availability checks, mutable runtime flags, Dashboard-only enabled state
 
 **Workflow Template Stage**:
@@ -167,7 +179,7 @@ The paired tool_review and tool Workflow Template Stages that are enabled togeth
 _Avoid_: Tool stage without review, review stage without tool, provider-native tool execution
 
 **Workflow Template Descriptor**:
-The backend-owned, read-only description of a registered Workflow Template's stages, branch relationships, governed handoff points, editable Prompt fields, and allowed context options used by Dashboard to render Workflow Relationship Map and Workflow Stage Panel.
+The backend-owned, read-only description of a registered Workflow Template's stages, stage availability rules, branch relationships, governed handoff points, editable Prompt fields, and allowed context options used by Dashboard to render Workflow Relationship Map and Workflow Stage Panel.
 _Avoid_: Frontend-hardcoded workflow graph, Agent-authored node registry, runtime graph source of truth
 
 **Workflow Template Descriptor Version**:
@@ -183,12 +195,32 @@ An entry in Agent Contract `workflow.stages[]` that records only explicit Agent-
 _Avoid_: Full copied descriptor stage config, empty stage placeholder, hidden topology edit
 
 **Effective Workflow Stage Configuration**:
-The resolved per-stage configuration produced from Workflow Template Descriptor defaults, Workflow Stage Availability, Effective Workflow Stage Context Option Allowlist, and Agent Contract overrides.
-_Avoid_: Raw override only, latest descriptor lookup, runtime graph state
+The neutral resolved per-stage configuration value for available Workflow Template Stages, produced from Workflow Template Descriptor defaults, Workflow Stage Availability, Effective Workflow Stage Context Option Allowlist, and Agent Contract overrides.
+_Avoid_: Raw override only, disabled-stage config archive, latest descriptor lookup, runtime graph state
+
+**Effective Workflow Stage Configuration Stage**:
+A typed entry inside Effective Workflow Stage Configuration for one available Workflow Template Stage, with a stable stage identity and bounded prompt, context, descriptor, and source-override facts.
+_Avoid_: Arbitrary stage dictionary, unavailable-stage placeholder, runtime graph node payload
 
 **Published Effective Workflow Stage Configuration Snapshot**:
-The immutable full Effective Workflow Stage Configuration captured inside a Published Agent Version alongside the Workflow Stage Configuration Override entries and Workflow Template Descriptor Version.
+The immutable full Effective Workflow Stage Configuration value captured inside a Published Agent Version alongside the Workflow Stage Configuration Override entries and Workflow Template Descriptor Version.
 _Avoid_: Recompute from latest descriptor, run-only projection, override-only publication record
+
+**Published Effective Workflow Stage Configuration Runtime Input**:
+The run-scoped Effective Workflow Stage Configuration value and trace-safe reference metadata copied from a Published Effective Workflow Stage Configuration Snapshot for Workflow Template Execution.
+_Avoid_: Latest descriptor reconstruction, raw manifest stage config, Dashboard-only explanation snapshot
+
+**Package-Local Workflow Stage Configuration Runtime Input**:
+The run-scoped Effective Workflow Stage Configuration for package-local or configured Agent execution, built from the latest Agent Contract YAML structure and current Workflow Template Descriptor without Published Agent Version snapshot semantics.
+_Avoid_: Legacy Agent Contract compatibility path, Published Effective Workflow Stage Configuration Snapshot, historical replay guarantee
+
+**Workflow Stage Configuration Runtime Source**:
+The trace-safe category that identifies whether a run's Effective Workflow Stage Configuration came from a Published Agent Version snapshot or from package-local latest Agent Contract resolution.
+_Avoid_: Raw manifest path, Dashboard tab state, storage lookup mechanism
+
+**Resolved Workflow Stage Runtime Configuration**:
+The Control Plane resolver output that groups Workflow Stage Availability, Effective Workflow Stage Configuration, Workflow Stage Configuration Runtime Source, trace-safe configuration summary, and template-specific planner action admission facts for one run or publication.
+_Avoid_: Harness dependency composition, Published Agent Version storage record, Runtime Plane graph state
 
 **Workflow Stage Configuration Identifier**:
 The required `id` field on each `workflow.stages[]` item that references one registered Workflow Template Stage.
@@ -647,8 +679,8 @@ The fixed V1 set of allowed ReAct action types: ask clarification, plan retrieva
 _Avoid_: Free-form action name, arbitrary model command
 
 **Effective ReAct Action Set**:
-The run-specific subset of the ReAct Action Set admitted by Workflow Stage Availability, Tool Proposal Scope, and Control Envelope preconditions before ReAct planning.
-_Avoid_: Prompt-only action hint, model-selected capability set, runtime-only branch list
+The run-specific, planner-facing subset of the ReAct Action Set admitted by Workflow Stage Availability, Tool Proposal Scope, and Control Envelope preconditions before ReAct planning.
+_Avoid_: Prompt-only action hint, model-selected capability set, runtime-only branch list, generic Workflow Template fact
 
 **Workflow Stage Availability Event**:
 The run-level trace fact that records the Workflow Stage Availability Set and Effective ReAct Action Set without pretending disabled stages executed.
@@ -703,12 +735,16 @@ A trace event that records PolicyEngine overriding or rejecting a Review Decisio
 _Avoid_: Silent rule conflict
 
 **Workflow Stage Configuration Trace Summary**:
-The default trace-safe record of applied stage configuration: stage id, configured prompt field names, bounded lengths and counts, context option names, redaction status, and Published Agent Version or Published Effective Workflow Stage Configuration Snapshot reference.
+The default trace-safe record of a run's Workflow Stage configuration source and per-stage configuration summary: source, reference when available, descriptor version, stage ids, configured prompt field names, bounded lengths and counts, context option names, and redaction status.
 _Avoid_: Full prompt text, full context payload, raw validation dump
 
 **Workflow Stage Trace Capture Mode**:
 The validation/test-run request switch that controls whether run trace stores only Workflow Stage Configuration Trace Summary or additionally captures full stage Prompt, selected context values, and intermediate Workflow Stage Result details for verification.
 _Avoid_: Always-on verbose trace, production raw prompt archive, chain-of-thought capture
+
+**Workflow Template Execution Resume Metadata**:
+The Runtime Plane metadata retained for resuming a paused Workflow Template Execution, including a protected reference to the run-start Workflow Template Execution Input needed for checkpoint resume without exposing full Prompt or context values through ordinary trace, receipt, RunStore detail, or Dashboard projection.
+_Avoid_: Ordinary trace content, Governance Receipt section, Dashboard run detail payload
 
 **Sensitive Validation Capture Artifact**:
 The access-controlled validation/test artifact produced when Workflow Stage Trace Capture Mode records full stage Prompt, selected context values, or intermediate Workflow Stage Result details.
@@ -721,6 +757,10 @@ _Avoid_: Ordinary trace retention, permanent prompt archive, hidden validation p
 **Agent Contract Stage Capability Implementation Sequence**:
 The implementation order for the React Enterprise QA contract refactor: contract schema cutover; descriptor, availability, and effective configuration publication; runtime execution consumption of frozen configuration; validation trace capture and sensitive artifact handling.
 _Avoid_: One giant migration, runtime-first refactor, trace capture before contract stability
+
+**Published Effective Workflow Stage Configuration Runtime Consumption Slice**:
+The implementation slice that makes run-start Workflow Template Execution consume resolved Workflow Stage Availability and Effective Workflow Stage Configuration facts instead of raw Agent Contract stage overrides, while preserving static Runtime Adapter topology.
+_Avoid_: Validation full-capture rewrite, historical descriptor registry, second runtime implementation, dynamic runtime graph generation
 
 **Contract Schema Cutover Test Gate**:
 The tests-first gate for Slice 1 that locks the accepted and rejected Agent Contract YAML shapes before loader, API, Dashboard, examples, and fixtures are migrated.
@@ -901,6 +941,10 @@ _Avoid_: Editing old versions, deleting publication history, restoring a draft a
 **Published Agent**:
 An approved Agent configuration version exposed to application surfaces through a stable agent identifier after validation and publication.
 _Avoid_: Draft Agent, arbitrary manifest path, uploaded config
+
+**Published Agent Runtime Facts**:
+The internal execution-only facts resolved with a Published Agent, including immutable Published Agent Version identity, resolved Knowledge Binding facts, Workflow Stage Availability, and Published Effective Workflow Stage Configuration Runtime Input.
+_Avoid_: Published Agent Directory Entry, customer-safe metadata, mutable Draft Agent fields
 
 **Published Agent Chat Access**:
 The ability for chat surfaces to create conversations against a Published Agent by stable Agent identity while preserving audience-specific execution APIs and response projections.
@@ -2120,6 +2164,7 @@ _Avoid_: Evidence content dump
 - When **Workflow Stage Trace Capture Mode** is enabled for validation, Proof Agent may record full stage Prompt values, selected context values, and intermediate **Workflow Stage Result** details, but still must not record raw chain-of-thought, secrets, raw evidence content, raw tool payloads, complete provider responses, or Runtime Plane state dictionaries.
 - **Workflow Stage Trace Capture Mode** full capture is allowed only for Agent Validation Runs or explicit test runs; production and customer-facing runs are forced to summary-only trace behavior.
 - **Workflow Stage Trace Capture Mode** belongs to the Agent Validation Run or explicit test-run request, not to the Published Agent Version or production Agent Contract snapshot.
+- **Workflow Stage Trace Capture Mode** is an observability request policy, not a field in **Workflow Template Execution Input**; Workflow Template Execution runs from the same semantic input regardless of whether the run records summary-only trace or a gated validation capture artifact.
 - Full capture output is a **Sensitive Validation Capture Artifact**: access requires `agent.validate` or stronger configuration permission, ordinary run viewers and customer support viewers cannot see it, ordinary receipts or exports exclude it, and Dashboard exposes it only through an explicit validation detail reveal.
 - **Sensitive Validation Capture Retention** gives Sensitive Validation Capture Artifacts a default 7-day TTL while ordinary Workflow Stage Configuration Trace Summary, receipt facts, and validation pass/fail results remain under normal run artifact retention; deleting expired full capture must not change the governed run outcome or summary trace.
 - Extending Sensitive Validation Capture Retention through `retain_for_audit` requires an explicit authorized validation/test-run request and must show the artifact expiry or audit-retention status in Dashboard.
@@ -2136,7 +2181,31 @@ _Avoid_: Evidence content dump
 - A **Workflow Template Execution Result** carries **Approval Pause** as a first-class governed fact when execution is waiting for approval; Runtime Plane interrupt payloads are derived from that fact rather than defining it.
 - A **Workflow Template Execution Result** carries **Clarification Need** separately from **Approval Pause** because waiting for user information and waiting for operator tool approval are different governed states.
 - **Workflow Execution Contract Module** is the home for Workflow Template Execution contracts; `contracts/run.py` remains for run artifact results, and `contracts/react_workflow.py` remains for ReAct-specific action and reasoning contracts.
-- Slice 2 may introduce **Workflow Template Execution Input** with an optional effective stage configuration snapshot reference, but it does not make Published Effective Workflow Stage Configuration Snapshot the runtime source of truth; that runtime source-of-truth cutover is a later slice.
+- **Workflow Stage Configuration Contract Module** is the neutral home for stage availability, effective configuration, and runtime source facts shared by Agent Publication and Workflow Template Execution, so neither Published Agent Version storage nor Runtime Plane adapters own those facts.
+- The slice after React Enterprise QA Slice 2 makes **Published Effective Workflow Stage Configuration Runtime Input** the source of truth for Workflow Template Execution stage configuration, rather than recomputing effective stage configuration from latest descriptor defaults or raw manifest overrides at run time.
+- Configuration Store **Published Agent Version** execution must fail closed when its **Published Effective Workflow Stage Configuration Snapshot** is missing, while package-local or configured Agent execution may use a **Package-Local Workflow Stage Configuration Runtime Input** built from the latest supported Agent Contract structure.
+- **Workflow Template Execution Input** carries the Effective Workflow Stage Configuration value for execution and **Workflow Stage Configuration Runtime Source** metadata for trace-safe explanation; ordinary trace and receipt projections record only source/reference and summary, not full Prompt or selected context values.
+- **Workflow Template Execution Input** carries only template-generic run facts; template-specific planner admission facts such as **Effective ReAct Action Set** remain inputs to the concrete Workflow Template Execution that needs them.
+- React Enterprise QA stage Prompt and context consumers read Effective Workflow Stage Configuration from **Workflow Template Execution Input**; raw Agent Contract `workflow.stages[]` overrides are not the runtime source for Workflow Template Execution.
+- **Effective Workflow Stage Configuration** is the neutral value used by **Workflow Template Execution Input**; **Published Effective Workflow Stage Configuration Snapshot** is the Published Agent Version capture of that value, not the general runtime type for package-local execution.
+- **Effective Workflow Stage Configuration** is made of typed **Effective Workflow Stage Configuration Stage** entries rather than arbitrary mappings, so stage identity, descriptor version, available context options, Prompt configuration, context selection, and source override facts have stable contract boundaries.
+- Agent Publication and package-local Workflow Template Execution use the same Control Plane **Effective Workflow Stage Configuration** resolution semantics; Runtime Plane adapters and Configuration Store storage details do not independently reinterpret stage defaults, availability, context allowlists, or overrides.
+- **Effective Workflow Stage Configuration** contains available stage configuration only; unavailable stage explanations belong to **Workflow Stage Availability Set** and trace-safe availability summaries, not to executable stage Prompt or context configuration.
+- **Workflow Stage Availability Set** is a typed Workflow Template Execution input fact, not an ad hoc runtime helper; Runtime Adapters consume it for routing and fail-closed guards without reinterpreting capability configuration.
+- **Published Agent Version** stores **Workflow Stage Availability Set** separately from **Published Effective Workflow Stage Configuration Snapshot**; the snapshot serializes only the available-stage **Effective Workflow Stage Configuration** value, while availability explains unavailable stages.
+- **Published Agent Runtime Facts** carry the resolved Workflow Stage Availability and Published Effective Workflow Stage Configuration Runtime Input from Published Agent resolution into Workflow Template Execution; Published Agent Directory projections do not expose those execution-only facts.
+- A paused **Workflow Template Execution** resumes with the same **Workflow Template Execution Input** selected at run start; approval resume must not recompute Effective Workflow Stage Configuration from mutable descriptors, package-local YAML, or Configuration Store state.
+- **Workflow Template Execution Resume Metadata** may retain a protected reference and integrity summary for the full run-start **Workflow Template Execution Input** for checkpoint resume, but ordinary trace, Governance Receipt, RunStore detail, Dashboard projections, and customer-facing surfaces expose only trace-safe Workflow Stage configuration summaries and references.
+- Approval resume fails closed when the referenced run-start **Workflow Template Execution Input** is unavailable, fails integrity validation, or no longer matches the executable Workflow Template Descriptor Version selected for the resumed run.
+- Before Workflow Template Execution starts, ordinary trace records a run-level **Workflow Stage Configuration Trace Summary** for the selected **Workflow Template Execution Input**; this summary does not include full Prompt text, selected context values, intermediate Workflow Stage Result details, or Sensitive Validation Capture Artifact content.
+- The common governed run entry point creates the run-scoped **Workflow Template Execution Input** after the run id is selected, while Control Plane Effective Workflow Stage Configuration resolution supplies the value and Delivery supplies Published Agent Version facts when available.
+- **Resolved Workflow Stage Runtime Configuration** is the single Control Plane output used to freeze Agent Publication stage facts, build package-local runtime inputs, wrap Published Agent Runtime Facts for execution, emit Workflow Stage Configuration Trace Summary, and provide template-specific action admission such as Effective ReAct Action Set.
+- Workflow Template Execution requires the selected executable Workflow Template Descriptor Version to match the **Workflow Template Execution Input** descriptor version and fails closed on mismatch; versioned historical executable descriptor registries are a separate future concern.
+- **Published Effective Workflow Stage Configuration Runtime Consumption Slice** includes typed stage configuration contracts, Workflow Stage Availability Rules, Resolved Workflow Stage Runtime Configuration, Published Agent Runtime Facts, package-local latest runtime input, Workflow Template Execution Input runtime consumption, trace-safe run-level summary, ReAct availability and action-set guards, approval resume run-start input references, and Control Plane decoupling from LangGraph mechanics.
+- Full validation capture artifact realignment, historical executable descriptor registry, dynamic Runtime Adapter topology, complete stage-specific result unions, second runtime support, and stale local-store compatibility migrations are outside the **Published Effective Workflow Stage Configuration Runtime Consumption Slice**.
+- React Enterprise QA may keep a static LangGraph topology in this slice, but availability routing and fail-closed decisions are Control Plane Workflow Template Execution semantics exposed through runtime-neutral facts; LangGraph node registration, checkpointing, interrupts, and state deltas remain **Workflow Runtime Adapter** mechanics.
+- Control Plane Workflow Template Execution must not directly depend on LangGraph interrupts, state dictionaries, or scheduler APIs; **Workflow Runtime Adapter** implementations translate runtime-neutral approval pauses, continuations, and stage results into concrete runtime mechanics.
+- React Enterprise QA Workflow Template Execution stage handlers own Workflow Stage Availability and Effective ReAct Action Set admission before runtime routing; Runtime Adapters route only from already-admitted Workflow Stage Result continuation facts.
 - **ReAct Enterprise QA Workflow Execution** is the concrete Slice 2 execution object for `react_enterprise_qa` and `react_enterprise_qa_v2`; a generic ReAct workflow execution abstraction is deferred until multiple ReAct templates need it.
 - A **Workflow Template Execution Result** is the external execution Interface; **Workflow Stage Result** values remain inside Workflow Template Execution and must not leak as Runtime Plane state dictionaries.
 - The public Agent Contract, Workflow Template Descriptor, trace facts, Dashboard configuration, tests, and examples use **Workflow Template Stage** language directly; Proof Agent does not dual-read legacy public stage aliases during the stage migration.
@@ -2151,6 +2220,8 @@ _Avoid_: Evidence content dump
 - Stage transition rules belong to **Workflow Template Execution**; **Workflow Template Descriptor** explains the public topology, and Runtime Plane Adapters only schedule mechanics such as graph execution, checkpoint, interrupt, and resume.
 - **Workflow Stage Availability** may disable a stage only through template-defined capability rules; it must not become arbitrary stage or edge editing.
 - **Workflow Stage Availability** is derived from capability configuration, not from per-stage enable switches; stage-local configuration may edit Prompt or allowed context only for stages that the resolved capability set makes available.
+- A **Workflow Stage Availability Rule** belongs to the **Workflow Template Descriptor**, while the **Agent Contract** supplies capability facts used to resolve the **Workflow Stage Availability Set** for one Agent.
+- **Workflow Stage Availability** is separate from whether a Workflow Template Stage is required; availability decides whether the stage may execute for an Agent, while requiredness describes template interpretation for available stages.
 - **Agent Contract Capability Configuration** is the public YAML source for governed capability availability; Proof Agent should migrate scattered `tools` and `memory` capability declarations into this unified Agent Contract YAML structure instead of hiding capability normalization in an internal-only layer.
 - **Direct Capability Contract Migration** replaces top-level Agent Contract `tools` and `memory` capability declarations with `capabilities.tools` and `capabilities.memory` in one breaking change; loaders, Dashboard, examples, fixtures, and tests migrate together and reject legacy top-level capability fields.
 - Agent Contract YAML uses top-level `capabilities:` for governed capability availability; `capabilities.tools.enabled` controls the **Tool Stage Group**, and `capabilities.memory.enabled` controls memory stage availability for templates that include a memory stage.
@@ -2162,8 +2233,12 @@ _Avoid_: Evidence content dump
 - **Workflow Stage Availability Set** is resolved during Agent Publication from the Agent Contract, Workflow Template, and configured capabilities, frozen into the Published Agent Version, then copied into each run and consumed by Workflow Template Execution as a frozen run input.
 - **Workflow Template Descriptor** declares supported stages and availability rules, while **Agent Contract** declares capabilities and **Published Agent Version** stores the resolved **Workflow Stage Availability Set**; normal run execution must not dynamically reinterpret stage availability from mutable template code.
 - **Unavailable Stage Configuration** may remain in a Draft Agent only as inactive, Dashboard-visible configuration that blocks Agent Validation and Agent Publication until the Agent owner either clears it or restores the required capability.
+- Draft Agent save may retain **Unavailable Stage Configuration** as an inactive blocker for operator repair, but Agent Validation and Agent Publication fail closed until the stage's required capability is restored and the Draft Agent validates again or the unavailable configuration is cleared.
 - **Published Agent Version** snapshots must not contain effective configuration for unavailable stages; Proof Agent must not silently ignore disabled-stage config or reactivate old config when a capability is enabled later.
 - **Workflow Stage Availability Event** is emitted once per run before Workflow Template Execution starts; disabled stages do not emit normal stage execution events.
+- Workflow Template Execution must not route to or execute unavailable Workflow Template Stages; if a model or scheduler output selects an unavailable stage or action, the Control Envelope fails closed rather than treating the stage as silently skipped.
+- **Effective ReAct Action Set** is the ReAct-specific planner action admission fact derived from **Workflow Stage Availability Set** and Tool Proposal Scope; it is separate from generic Workflow Stage Availability and excludes tool proposal actions when Tool Stage Group is unavailable.
+- ReAct planning fails closed when a planner returns a **ReAct Action Proposal** outside the **Effective ReAct Action Set**; internal continuation actions are not exposed as planner-facing candidate actions.
 - TODO: align the deterministic **Enterprise QA Template** with the **Workflow Template Execution** Interface after the React Enterprise QA execution seam is stable; the first refactor keeps Enterprise QA behavior as the regression baseline.
 - The **Workflow Template Stage** terminology cutover must land before deepening the **Workflow Template Execution** seam so behavior-preserving contract migration and execution-ownership refactoring remain testable separately.
 - **Workflow Template Stages** are reserved for Agent-owner-visible configuration, explanation, audit, or evaluation points; internal policy checks, validators, model requests, helper functions, and Runtime Plane nodes are not automatically stages.
@@ -2583,7 +2658,31 @@ _Avoid_: Evidence content dump
 - "Approval pause" could mean the LangGraph interrupt payload or the governed approval state. Resolved: **Approval Pause** is the Workflow Template Execution fact; Runtime Plane interrupt mechanics are only one implementation of waiting.
 - "Clarification waiting" could mean the same thing as operator approval waiting. Resolved: use **Clarification Need** for missing user information and **Approval Pause** for operator approval.
 - "Workflow execution contracts" could live in the existing run contracts or ReAct-specific contracts. Resolved: use a separate **Workflow Execution Contract Module** and treat old `WorkflowState.current_node` as a follow-up convergence TODO rather than a Slice 2 blocker.
-- "Published snapshot runtime consumption" could mean making the snapshot the execution source of truth during Slice 2 or only preparing the execution input boundary. Resolved: Slice 2 prepares **Workflow Template Execution Input** for future snapshot consumption, while full Published snapshot runtime source-of-truth behavior remains a later slice.
+- "Workflow stage configuration contracts" could live inside Published Agent storage contracts, Workflow Template Execution contracts, or a neutral shared module. Resolved: use a separate **Workflow Stage Configuration Contract Module** shared by Agent Publication and Workflow Template Execution.
+- "Published snapshot runtime consumption" could mean one execution input shape for every Agent path or separate semantics for Published and package-local runs. Resolved: the slice after React Enterprise QA Slice 2 makes **Published Effective Workflow Stage Configuration Runtime Input** the source of truth for Configuration Store Published Agent Version execution, while package-local or configured Agent execution uses **Package-Local Workflow Stage Configuration Runtime Input** from the latest supported Agent Contract structure.
+- "Workflow Template Execution Input scope" could mean including every template-specific admission fact or only generic Workflow Template facts. Resolved: **Workflow Template Execution Input** remains template-generic; **Effective ReAct Action Set** is supplied to ReAct Enterprise QA Workflow Template Execution separately while still coming from **Resolved Workflow Stage Runtime Configuration**.
+- "Stage Prompt/context runtime consumption" could mean only passing stage configuration through execution input or actually changing existing stage Prompt/context consumers. Resolved: React Enterprise QA stage Prompt and context consumers read Effective Workflow Stage Configuration from **Workflow Template Execution Input**.
+- "Effective stage configuration type" could mean reusing the Published snapshot contract for every run or introducing a neutral value. Resolved: **Effective Workflow Stage Configuration** is the neutral value; **Published Effective Workflow Stage Configuration Snapshot** is the Published Agent Version capture of that value.
+- "Effective stage configuration structure" could mean keeping loose per-stage mappings or defining typed stage entries. Resolved: **Effective Workflow Stage Configuration** contains typed **Effective Workflow Stage Configuration Stage** entries with stable top-level fields and bounded prompt/context payloads.
+- "Effective stage configuration resolution owner" could mean Configuration Store publication code, Runtime Plane graph code, or a shared Control Plane operation. Resolved: Agent Publication and package-local Workflow Template Execution use the same Control Plane **Effective Workflow Stage Configuration** resolution semantics.
+- "Effective stage configuration resolver output" could mean several independent helper return values or one aggregate runtime configuration fact. Resolved: use **Resolved Workflow Stage Runtime Configuration** as the single Control Plane resolver output for availability, effective config, source, trace summary, and template-specific planner action admission.
+- "Effective stage configuration contents" could mean all descriptor stages with availability flags or only executable available stage configuration. Resolved: **Effective Workflow Stage Configuration** contains available stage configuration only, while **Workflow Stage Availability Set** explains unavailable stages.
+- "Workflow Stage Availability Set representation" could mean documentation-only language or scattered booleans around routing code. Resolved: use a typed **Workflow Stage Availability Set** contract and have Runtime Adapters consume it without reinterpreting capabilities.
+- "Workflow Stage Availability rule owner" could mean stage id conventions, Agent-owner switches, or backend template rules. Resolved: **Workflow Stage Availability Rule** belongs to the **Workflow Template Descriptor** and is resolved from Agent capability facts.
+- "Effective ReAct Action Set ownership" could mean generic Workflow Template availability, prompt-only instruction, or ReAct-specific planner admission. Resolved: **Effective ReAct Action Set** is ReAct-specific, planner-facing, derived from Workflow Stage Availability and Tool Proposal Scope, and excludes unavailable actions before routing.
+- "Availability and action-set guard authority" could mean LangGraph route functions, node helpers, or Workflow Template Execution stage handlers. Resolved: Control Plane Workflow Template Execution stage handlers perform admission; Runtime Adapters route only from already-admitted continuation facts.
+- "Unavailable stage configuration handling" could mean rejecting Draft saves, silently dropping disabled stage overrides, or keeping inactive blockers. Resolved: Draft Agent save may retain unavailable stage configuration for repair, while Agent Validation and Agent Publication fail closed until restored or cleared.
+- "Published stage availability storage" could mean embedding availability flags inside effective configuration or storing availability separately. Resolved: **Published Agent Version** stores **Workflow Stage Availability Set** separately from **Published Effective Workflow Stage Configuration Snapshot**.
+- "Published Agent runtime fact handoff" could mean Workflow Template Execution reloading Published Agent Version state, Delivery passing arbitrary storage records, or Published Agent resolution carrying explicit execution facts. Resolved: use **Published Agent Runtime Facts** to hand off Workflow Stage Availability and Published Effective Workflow Stage Configuration Runtime Input without exposing them through Published Agent Directory projections.
+- "Approval resume stage configuration" could mean rebuilding execution input when a tool approval resumes or restoring the run-start execution input. Resolved: a paused **Workflow Template Execution** resumes with the same **Workflow Template Execution Input** selected at run start.
+- "Workflow Template Execution Input persistence" could mean ordinary trace/receipt storage, Dashboard-visible run detail, inline resume context, or Runtime Plane resume metadata. Resolved: full run-start input may be retained only behind **Workflow Template Execution Resume Metadata** as a protected reference with integrity validation; ordinary projections expose trace-safe summaries and references.
+- "Workflow Stage Configuration trace summary" could mean full prompt/context capture, only per-stage applied context events, or one run-level source summary. Resolved: ordinary trace records a run-level **Workflow Stage Configuration Trace Summary** for the selected **Workflow Template Execution Input**, while full capture remains a separate validation/test-run concern.
+- "Workflow Stage Trace Capture Mode placement" could mean Published Agent Version configuration, Workflow Template Execution Input, or validation/test observability request policy. Resolved: **Workflow Stage Trace Capture Mode** is a validation/test observability policy outside **Workflow Template Execution Input**; full-capture alignment to run-start input remains a separate trace-capture slice concern.
+- "Published snapshot runtime consumption slice scope" could mean only adding snapshot fields, rewriting validation capture, replacing LangGraph, or consuming frozen stage facts at run start. Resolved: **Published Effective Workflow Stage Configuration Runtime Consumption Slice** consumes resolved stage availability/configuration facts at run start and defers full-capture realignment, historical descriptor registries, dynamic topology, complete stage result unions, second runtimes, and local-store compatibility migration.
+- "Workflow Template Execution Input creation" could mean Delivery/API assembling per-surface inputs, Runtime Plane interpreting stage config, or a shared run entry point delegating to Control Plane resolution. Resolved: the common governed run entry point creates the run-scoped input after run id selection and delegates Effective Workflow Stage Configuration resolution to Control Plane logic.
+- "Template descriptor version execution" could mean building a historical executable descriptor registry in this slice or only validating that the selected executable descriptor matches the Workflow Template Execution Input. Resolved: this slice fails closed on descriptor version mismatch and leaves versioned historical executable descriptors to a future slice.
+- "Availability guard implementation" could mean dynamically generating LangGraph topology or keeping a static LangGraph adapter with runtime-neutral Control Plane guards. Resolved: this slice may keep static LangGraph topology, while availability routing and fail-closed decisions remain Workflow Template Execution semantics that future Runtime Adapters can consume.
+- "LangGraph decoupling" could mean replacing LangGraph now, renaming every LangGraph-specific runtime class, or only removing Control Plane dependencies on LangGraph mechanics. Resolved: this slice removes direct Control Plane dependency on LangGraph interrupts/state/scheduler APIs while keeping LangGraph as the current **Workflow Runtime Adapter**.
 - "React execution object naming" could mean a generic `ReActWorkflowExecution` or a concrete React Enterprise QA execution class. Resolved: use **ReAct Enterprise QA Workflow Execution** for the concrete class and reserve generic ReAct names for future shared abstractions.
 - "ReAct framework" could mean an autonomous model-driven agent loop or a governed flow shape. Resolved: use **Controlled ReAct Workflow** for the governed Proof Agent version.
 - "Multi-round user intent thinking" could mean exposing raw model thoughts or adding a governed understanding step. Resolved: use **Intent Resolution** as an audit-safe step before ReAct planning.
