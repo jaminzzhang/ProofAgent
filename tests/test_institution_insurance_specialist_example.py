@@ -4,10 +4,15 @@ import yaml
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.capabilities.tools.gateway import ToolGateway
+from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 AGENT_PATH = Path("examples/institution_insurance_specialist/agent.yaml")
 CUSTOMER_SERVICE_AGENT_PATH = Path("examples/insurance_customer_service/agent.yaml")
+README_SAMPLE_QUESTION = (
+    "For short-term accident claims, what should a branch specialist explain to an "
+    "agent when the claim is still pending?"
+)
 
 
 def test_institution_insurance_specialist_manifest_loads_as_distinct_assisted_agent() -> None:
@@ -15,10 +20,15 @@ def test_institution_insurance_specialist_manifest_loads_as_distinct_assisted_ag
 
     assert manifest.name == "institution_insurance_specialist"
     assert manifest.customer is None
-    assert manifest.workflow.template == "react_enterprise_qa"
-    assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v1"
+    assert manifest.workflow.template == "react_enterprise_qa_v2"
+    assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v2"
 
     stage_prompts = {stage.id: stage.prompt for stage in manifest.workflow.stages}
+    assert "intent_resolution" in stage_prompts
+    assert (
+        "Institution Insurance Specialist intent"
+        in stage_prompts["intent_resolution"].business_context
+    )
     assert "plan" in stage_prompts
     assert "Dynamic Insurance Business Subplan" in stage_prompts["plan"].business_context
     assert (
@@ -83,7 +93,8 @@ def test_institution_insurance_specialist_tools_are_read_only_institution_tools(
 def test_institution_insurance_specialist_package_scopes_short_term_through_knowledge_and_tools() -> None:
     raw = yaml.safe_load(AGENT_PATH.read_text(encoding="utf-8"))
 
-    assert raw["workflow"]["template"] == "react_enterprise_qa"
+    assert raw["workflow"]["template"] == "react_enterprise_qa_v2"
+    assert raw["workflow"]["template_descriptor_version"] == "react_enterprise_qa.v2"
     assert "customer" not in raw
     assert any(
         binding.get("routing_metadata", {}).get("business_line") == "short_term_accident"
@@ -95,3 +106,19 @@ def test_institution_insurance_specialist_package_scopes_short_term_through_know
             "tools"
         ]
     )
+
+
+def test_institution_insurance_specialist_readme_sample_returns_business_answer(
+    tmp_path: Path,
+) -> None:
+    result = run_with_langgraph(
+        AGENT_PATH,
+        question=README_SAMPLE_QUESTION,
+        runs_dir=tmp_path,
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    assert "No deterministic answer is configured" not in result.final_output
+    assert "pending" in result.final_output.lower()
+    assert "claim" in result.final_output.lower()
+    assert "agent" in result.final_output.lower()

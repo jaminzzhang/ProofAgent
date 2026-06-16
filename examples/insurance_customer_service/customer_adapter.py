@@ -117,7 +117,7 @@ def load_mock_customer_context(
     *,
     customer_id: str | None,
 ) -> CustomerAuthorizationContext:
-    """Load a V1 mock customer session from the insurance demo fixture."""
+    """Load a mock customer session from the insurance demo fixture."""
 
     if customer_id is None:
         return CustomerAuthorizationContext(session_type=CustomerSessionType.ANONYMOUS)
@@ -150,7 +150,7 @@ def require_claim_access(context: CustomerAuthorizationContext, claim_id: str) -
 
 
 def is_policy_status_question(question: str) -> bool:
-    """Detect deterministic V1 policy-status intents before tool execution."""
+    """Detect deterministic policy-status intents before tool execution."""
 
     normalized = question.lower()
     return "policy status" in normalized or (
@@ -159,7 +159,7 @@ def is_policy_status_question(question: str) -> bool:
 
 
 def is_claim_status_question(question: str) -> bool:
-    """Detect deterministic V1 claim-status intents before tool execution."""
+    """Detect deterministic claim-status intents before tool execution."""
 
     normalized = question.lower()
     return (
@@ -170,7 +170,7 @@ def is_claim_status_question(question: str) -> bool:
 
 
 def is_transactional_customer_action(question: str) -> bool:
-    """Detect V1 account-changing requests that require internal follow-up only."""
+    """Detect account-changing requests that require internal follow-up only."""
 
     normalized = question.lower()
     transactional_terms = (

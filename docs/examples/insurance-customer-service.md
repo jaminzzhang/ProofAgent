@@ -1,12 +1,12 @@
 # Insurance Customer Service Agent
 
-`examples/insurance_customer_service/` is the V1 customer-facing reference Agent. It demonstrates direct automatic replies for insurance customers while preserving Proof Agent as a reusable Controlled Agent Harness Framework.
+`examples/insurance_customer_service/` is the customer-facing public reference Agent. It uses React Enterprise QA Template V2 with Intent Resolution to demonstrate direct automatic replies for insurance customers while preserving Proof Agent as a reusable Controlled Agent Harness Framework.
 
 ## Package Layout
 
 ```text
 examples/insurance_customer_service/
-  agent.yaml              # local Markdown customer-service Agent
+  agent.yaml              # React Enterprise QA V2 customer-service Agent
   policy.yaml             # answer, read-only tool, and memory rules
   tools.yaml              # declares policy_status_lookup and claim_status_lookup
   tools.py                # deterministic insurance read handlers
@@ -59,7 +59,7 @@ The customer response must not include trace links, receipt links, policy decisi
 
 ## Mock Customer Sessions
 
-`customers.yaml` defines V1 mock identities:
+`customers.yaml` defines mock identities:
 
 - `CUST-001` can read `POL-001` and `CLM-001`
 - `CUST-002` can read `POL-002` and `CLM-002`

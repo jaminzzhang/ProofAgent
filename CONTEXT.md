@@ -46,6 +46,10 @@ _Avoid_: Enabled empty shell, prompt-only capability, deferred runtime discovery
 A reviewable delivery artifact containing an Agent Contract plus its policy, tools, knowledge references, fixtures, and domain adapters.
 _Avoid_: Database-only Agent, uploaded manifest path, loose config bundle
 
+**Public Example Agent Package**:
+A source-controlled Agent Package under `examples/` used as a stable runnable reference for users, docs, local configuration seeding, tests, and Dashboard creation flows.
+_Avoid_: Workflow Template, template registry entry, generated local Draft Agent data
+
 **Tool Contract**:
 The public capability contract that declares a governed tool's purpose, risk level, read/write class, authorization conditions, parameter bounds, and audit behavior.
 _Avoid_: Runtime adapter, provider-native tool schema, prompt instruction
@@ -2860,6 +2864,12 @@ _Avoid_: Evidence content dump
 - "Intent Resolution review" could mean a new Auto Review enforcement point or deterministic validation only. Resolved: V2 uses deterministic **Intent Resolution Contract** validation and trace recording, while executable actions stay governed by existing ReAct review and `PolicyEngine` nodes.
 - "Intent Resolution model config" could mean introducing a third Agent-owner model role or reusing planner configuration. Resolved: V2 reuses **ReAct Planner Config** but records Intent Resolution as a distinct model-call role and audit fact.
 - "Intent Resolution visibility" could mean showing the understood intent to every user or treating it as governance detail. Resolved: expose it only through internal trace, receipt, Dashboard, or allowed operator **Governance Detail Projection**, never as ordinary customer-facing response text.
+- "`examples/` v2 template" could mean renaming Public Example Agent Package directories or changing the Workflow Template registry. Resolved: keep stable **Public Example Agent Package** paths under `examples/` and upgrade their Agent Contracts, docs, and tests to use **React Enterprise QA Template V2** semantics.
+- "Which public examples upgrade to V2" could mean only the default customer-facing package or every source-controlled public example. Resolved: both **Insurance Customer Service Agent** and **Institution Insurance Specialist Agent** public example packages upgrade to **React Enterprise QA Template V2** so `examples/` does not carry mixed V1/V2 template semantics.
+- "`examples/` cleanup scope" could mean deleting internal evaluation fixtures as well as public example packages. Resolved: this cleanup is limited to source-controlled **Public Example Agent Package** files under `examples/`; internal evaluation fixtures under `proof_agent/evaluation/demo/fixtures/` remain separate regression assets.
+- "V2 public example shape" could mean changing only `workflow.template` or actually demonstrating V2 stage configuration. Resolved: V2 public examples explicitly include `intent_resolution` Workflow Stage Prompt/context configuration while keeping Prompt fields bounded to business context, task instructions, and output preferences.
+- "V2 Intent Resolution disclosure in public examples" could mean showing intent details to every caller or preserving per-audience disclosure. Resolved: the customer-facing **Insurance Customer Service Agent** keeps Intent Resolution and review facts internal, while the staff-facing **Institution Insurance Specialist Agent** may expose governance details through allowed operator/internal projections.
+- "V2 public example stage coverage" could mean copying every Workflow Template Stage into every Agent Contract or configuring only business-meaningful stages. Resolved: the customer-facing public example configures key business stages only, while the specialist public example keeps its broader stage configuration and adds `intent_resolution`; descriptor defaults cover execution-oriented stages that do not need business Prompt addenda, and non-Prompt-editable stages such as `response` may only configure descriptor-allowed context.
 - "`enterprise_qa` with flags" could blur the deterministic baseline with ReAct behavior. Resolved: V1 adds **React Enterprise QA Template** instead of changing the existing template.
 - "Customer service workflow" could mean the existing linear Enterprise QA path or the ReAct path. Resolved: V1 customer-facing automation uses **React Enterprise QA Template**; long-term deterministic regression uses **Deterministic ReAct Baseline**, while **Enterprise QA Template** may remain only as a compatibility path.
 - "ReAct MVP" could mean requiring a remote LLM. Resolved: V1 requires a **Deterministic ReAct Demo**.

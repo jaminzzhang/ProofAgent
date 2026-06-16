@@ -9,7 +9,7 @@ institution staff while staying decoupled from the customer-facing
 
 ```text
 examples/institution_insurance_specialist/
-  agent.yaml              # ReAct specialist Agent with node Prompt configuration
+  agent.yaml              # ReAct Enterprise QA V2 specialist Agent with stage Prompt configuration
   policy.yaml             # evidence, read-only tool, transaction-deny, memory rules
   tools.yaml              # declares institution_* read-only lookup tools
   tools.py                # deterministic institution read handlers
@@ -51,9 +51,10 @@ business state.
 
 ## Workflow Configuration
 
-The package uses `workflow.template: react_enterprise_qa` with `workflow.stages[]`
-Prompt addenda for:
+The package uses `workflow.template: react_enterprise_qa_v2` with `workflow.stages[]`
+Prompt addenda and Intent Resolution for:
 
+- audit-safe staff request understanding.
 - Dynamic Insurance Business Subplan planning.
 - public knowledge versus scoped business-record distinction.
 - Insurance Source Authority Order.

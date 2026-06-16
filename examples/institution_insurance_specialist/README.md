@@ -3,8 +3,8 @@
 This Agent Package demonstrates an institution-facing insurance specialist, not
 a customer-facing service bot.
 
-It uses the shared `react_enterprise_qa` Workflow Template with node Prompt
-configuration for assisted insurance operations. The package is generic across
+It uses the shared `react_enterprise_qa_v2` Workflow Template with stage Prompt
+configuration and Intent Resolution for assisted insurance operations. The package is generic across
 insurance business lines; the bundled fixture scopes the example to
 short-term accident insurance through knowledge bindings and read-only
 institution tools.

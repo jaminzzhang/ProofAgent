@@ -41,6 +41,17 @@ class DeterministicProvider:
                 "complete, records the claim status, and routes the file for policy and "
                 "eligibility review."
             )
+        if question == (
+            "For short-term accident claims, what should a branch specialist explain to an "
+            "agent when the claim is still pending?"
+        ):
+            return (
+                "For a pending short-term accident claim, the branch specialist should "
+                "explain to the agent that the claim is still under review, required "
+                "materials or scoped claim records may still need to be completed, and no "
+                "approval or settlement outcome should be promised before authorized "
+                "records and human business review confirm the next step."
+            )
         if question == "What documents should I prepare to improve my claim approval odds?":
             return (
                 "I can't assess or promise approval likelihood. You can prepare the "

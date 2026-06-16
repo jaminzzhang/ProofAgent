@@ -148,7 +148,8 @@ Controlled ReAct Enterprise QA adds a planner loop around the same Control Plane
 
 ```text
 CLI / API / Conversation turn
-  -> load react_enterprise_qa Agent Contract
+  -> load react_enterprise_qa_v2 Agent Contract
+  -> resolve intent into an audit-safe summary
   -> ReAct planner proposes a fixed action
   -> emit reasoning_summary and action_proposal
   -> Harness Review Subagent suggests a decision for reviewed points
@@ -345,15 +346,16 @@ audit:
   receipt_path: ../../runs/latest/governance_receipt.md
 ```
 
-Controlled ReAct example:
+Controlled ReAct V2 example:
 
 ```yaml
-name: react_enterprise_qa
-purpose: "Answer enterprise knowledge questions through a governed ReAct workflow."
+name: react_enterprise_qa_v2
+purpose: "Answer enterprise knowledge questions through a governed ReAct workflow with Intent Resolution."
 
 workflow:
   runtime: langgraph
-  template: react_enterprise_qa
+  template: react_enterprise_qa_v2
+  template_descriptor_version: react_enterprise_qa.v2
   checkpointer:
     provider: sqlite
     uri: memory

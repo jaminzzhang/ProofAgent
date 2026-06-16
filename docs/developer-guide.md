@@ -23,7 +23,7 @@ The public runnable reference implementations are separate Agent Packages:
 - [Insurance Customer Service Agent](examples/insurance-customer-service.md), corresponding to `examples/insurance_customer_service/`, for customer-facing service automation.
 - [Institution Insurance Specialist Agent](examples/institution-insurance-specialist.md), corresponding to `examples/institution_insurance_specialist/`, for staff-facing assisted insurance operations.
 
-The `enterprise_qa` and `react_enterprise_qa` workflow templates remain supported framework contracts and internal regression fixtures.
+Both public example packages use `react_enterprise_qa_v2`. The older `enterprise_qa` and `react_enterprise_qa` workflow templates remain supported framework contracts and internal regression fixtures.
 
 ## 2. Quick Start
 
@@ -149,9 +149,9 @@ Core boundaries:
 
 The v1 deterministic path must always operate without requiring API keys, network models, or external services.
 
-### Customer Service V1
+### Customer Service Reference Agent
 
-`examples/insurance_customer_service/` is a direct-to-customer private-pilot Agent package. It keeps the framework generic by providing its own Customer Run Adapter and local tool handlers while proving:
+`examples/insurance_customer_service/` is a direct-to-customer public example Agent package built on React Enterprise QA Template V2. It keeps the framework generic by providing its own Customer Run Adapter and local tool handlers while proving:
 
 - mock authenticated customer sessions through `customers.yaml`
 - read-only account status tools through `policy_status_lookup` and `claim_status_lookup`
@@ -171,7 +171,7 @@ suite.
 
 It proves:
 
-- governed ReAct node Prompt configuration for insurance specialist work.
+- governed ReAct stage Prompt configuration for insurance specialist work.
 - Dynamic Insurance Business Subplan planning inside the fixed Workflow Template.
 - short-term insurance scope through knowledge and read-only tool bindings.
 - institution report, policy, claim, customer, and agent read-only tools.
@@ -266,9 +266,15 @@ Example:
 ```yaml
 workflow:
   runtime: langgraph
-  template: react_enterprise_qa
-  template_descriptor_version: react_enterprise_qa.v1
+  template: react_enterprise_qa_v2
+  template_descriptor_version: react_enterprise_qa.v2
   stages:
+    - id: intent_resolution
+      prompt:
+        business_context: "Insurance request understanding context."
+      context:
+        include_agent_purpose: true
+        include_recent_conversation_summary: true
     - id: plan
       prompt:
         business_context: "Insurance claim servicing context."
@@ -306,7 +312,8 @@ Controlled ReAct adds these sections to `agent.yaml`:
 ```yaml
 workflow:
   runtime: langgraph
-  template: react_enterprise_qa
+  template: react_enterprise_qa_v2
+  template_descriptor_version: react_enterprise_qa.v2
   checkpointer:
     provider: sqlite
     uri: memory

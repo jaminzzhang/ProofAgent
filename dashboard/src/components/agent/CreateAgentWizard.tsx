@@ -10,8 +10,8 @@ interface Template {
 }
 
 const TEMPLATES: readonly Template[] = [
-  { id: 'insurance_customer_service', name: 'Insurance Customer Service', purpose: 'Provide read-only customer service for insurance policy and claim questions.', manifestPath: 'examples/insurance_customer_service/agent.yaml', description: 'Customer-facing insurance Q&A with account-scoped evidence.' },
-  { id: 'institution_insurance_specialist', name: 'Institution Insurance Specialist', purpose: 'Assist internal insurance institution specialists with governed business consultation and read-only business-system lookup.', manifestPath: 'examples/institution_insurance_specialist/agent.yaml', description: 'Staff-facing insurance specialist workflow with scoped knowledge and read-only institution tools.' },
+  { id: 'insurance_customer_service', name: 'Insurance Customer Service', purpose: 'Provide read-only customer service for insurance policy and claim questions.', manifestPath: 'examples/insurance_customer_service/agent.yaml', description: 'Customer-facing ReAct V2 insurance Q&A with account-scoped evidence.' },
+  { id: 'institution_insurance_specialist', name: 'Institution Insurance Specialist', purpose: 'Assist internal insurance institution specialists with governed business consultation and read-only business-system lookup.', manifestPath: 'examples/institution_insurance_specialist/agent.yaml', description: 'Staff-facing ReAct V2 specialist workflow with scoped knowledge and read-only institution tools.' },
 ]
 
 type Step = 'template' | 'details'

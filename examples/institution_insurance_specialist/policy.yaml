@@ -35,7 +35,7 @@ rules:
     decision:
       on_match: deny
       on_pass: allow
-    reason_template: "Transactional Insurance Operation requests are out of V1 scope."
+    reason_template: "Transactional Insurance Operation requests are out of this Agent's supported scope."
 
   - rule_id: memory.institution_case_only
     enforcement_point: before_memory_write

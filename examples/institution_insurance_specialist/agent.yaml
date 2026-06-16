@@ -3,12 +3,27 @@ purpose: "Assist internal insurance institution specialists with governed busine
 
 workflow:
   runtime: langgraph
-  template: react_enterprise_qa
-  template_descriptor_version: react_enterprise_qa.v1
+  template: react_enterprise_qa_v2
+  template_descriptor_version: react_enterprise_qa.v2
   checkpointer:
     provider: sqlite
     uri: memory
   stages:
+    - id: intent_resolution
+      prompt:
+        business_context: "Institution Insurance Specialist intent resolution: classify staff requests across public insurance knowledge, scoped business-record lookup, external wording draft, transactional denial, or missing staff scope."
+        task_instructions:
+          - "Treat the baseline intent taxonomy as examples, not a closed list."
+          - "Identify whether the request needs institution, branch, business line, report period, policy, claim, customer, or agent identifiers."
+          - "Keep executable action recommendations bounded to governed ReAct planning."
+        output_preferences:
+          - "Summarize intent without raw chain-of-thought."
+      context:
+        include_agent_purpose: true
+        include_recent_conversation_summary: true
+        include_bound_knowledge_sources: true
+        include_bound_tools: true
+        include_policy_outline: true
     - id: plan
       prompt:
         business_context: "Institution Insurance Specialist planning: create a Dynamic Insurance Business Subplan for any insurance-related staff request while preserving the fixed Controlled ReAct Workflow."
