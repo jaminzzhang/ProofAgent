@@ -98,6 +98,53 @@ describe('WorkflowModuleEditor', () => {
     expect(container).not.toHaveTextContent(['workflow', 'node'].join(' '))
   })
 
+  it('explains that V2 is the recommended workflow template for new Agents', () => {
+    render(
+      <WorkflowModuleEditor
+        agentYaml={AGENT_YAML}
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Explain Template' }))
+
+    expect(screen.getByRole('note')).toHaveTextContent('Use react_enterprise_qa_v2 for new Agents')
+    expect(screen.getByRole('note')).toHaveTextContent('enterprise_qa remains a compatibility path')
+  })
+
+  it('shows a compatibility notice when the selected template is enterprise_qa', () => {
+    render(
+      <WorkflowModuleEditor
+        agentYaml={`name: legacy
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+`}
+        descriptor={{
+          ...DESCRIPTOR,
+          name: 'enterprise_qa',
+          descriptor_version: 'enterprise_qa.v1',
+          description: 'Compatibility Enterprise QA workflow.',
+        }}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    expect(screen.getByText('Compatibility Template')).toBeInTheDocument()
+    expect(screen.getByText(/Use react_enterprise_qa_v2 for new Agents/)).toBeInTheDocument()
+  })
+
   it('shows governed handoff points in the read-only relationship map', () => {
     render(
       <WorkflowModuleEditor

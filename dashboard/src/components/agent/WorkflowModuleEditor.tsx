@@ -87,6 +87,7 @@ export function WorkflowModuleEditor({
   const canConfigureContext = Boolean(selectedDescriptor?.context_options.length)
   const canPreviewSelected = canEditPrompt || canConfigureContext
   const workflowTemplate = readAgentYamlField(agentYaml, ['workflow', 'template']) || descriptor?.name || 'Not configured'
+  const usesCompatibilityTemplate = workflowTemplate === 'enterprise_qa'
   const workflowRuntime = readAgentYamlField(agentYaml, ['workflow', 'runtime']) || 'Not configured'
   const checkpointerProvider = (
     readAgentYamlField(agentYaml, ['workflow', 'checkpointer', 'provider'])
@@ -207,6 +208,16 @@ export function WorkflowModuleEditor({
           <SummaryItem label="Model-bearing" value={String(modelBearingStageCount)} />
           <SummaryItem label="Editable" value={String(editableStageCount)} />
         </dl>
+        {usesCompatibilityTemplate && (
+          <div className="mt-4 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-secondary)]">
+            <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              Compatibility Template
+            </div>
+            <p className="mt-1">
+              Use react_enterprise_qa_v2 for new Agents. enterprise_qa is retained for older fixtures and compatibility checks.
+            </p>
+          </div>
+        )}
       </section>
 
       {showYaml && (
@@ -666,7 +677,7 @@ function workflowFieldHelp(path: string): string {
     case 'workflow.runtime':
       return 'Selects the workflow runtime that executes this Agent flow. This should match a backend-supported orchestrator.'
     case 'workflow.template':
-      return 'Selects the backend-owned workflow template. The template defines the available stages and safe execution path.'
+      return 'Selects the backend-owned workflow template. Use react_enterprise_qa_v2 for new Agents. enterprise_qa remains a compatibility path for older fixtures.'
     case 'workflow.checkpointer.provider':
       return 'Chooses where workflow state is checkpointed so multi-step runs can resume or inspect state consistently.'
     case 'workflow.checkpointer.uri':

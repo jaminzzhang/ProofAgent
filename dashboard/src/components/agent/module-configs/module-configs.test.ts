@@ -30,6 +30,11 @@ describe('module configuration field options', () => {
   it('uses backend-supported workflow, model, review, and memory values', () => {
     const modelProviders = ['deterministic', 'openai_compatible', 'openai', 'deepseek', 'azure_openai', 'anthropic']
 
+    expect(optionsFor(WORKFLOW_FIELDS, 'Template')).toEqual([
+      'react_enterprise_qa_v2',
+      'react_enterprise_qa',
+      'enterprise_qa',
+    ])
     expect(optionsFor(WORKFLOW_FIELDS, 'Checkpointer Provider')).toEqual(['sqlite'])
     expect(optionsFor(MODEL_FIELDS, 'Answer Model Provider')).toEqual(modelProviders)
     expect(optionsFor(MODEL_FIELDS, 'Planner Provider')).toEqual(modelProviders)
