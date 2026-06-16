@@ -42,6 +42,30 @@ class RunSummary(FrozenModel):
     error_code: str | None = None
 
 
+class WorkflowRunStageProjection(FrozenModel):
+    """Trace-safe Workflow Template Stage projection for Dashboard run detail."""
+
+    stage_id: str
+    label: str | None = None
+    status: str | None = None
+    outcome: ReceiptOutcome | None = None
+    safe_summary: dict[str, Any] = Field(default_factory=dict)
+    context_application_summary: dict[str, Any] = Field(default_factory=dict)
+    produced_fact_refs: tuple[str, ...] = Field(default_factory=tuple)
+    related_event_ids: tuple[str, ...] = Field(default_factory=tuple)
+    approval_pause_summary: dict[str, Any] | None = None
+    clarification_need_summary: dict[str, Any] | None = None
+
+
+class WorkflowRunProjection(FrozenModel):
+    """Stage-organized, runtime-neutral projection for Dashboard run detail."""
+
+    template_name: str | None = None
+    template_descriptor_version: str | None = None
+    stage_configuration_source: dict[str, Any] = Field(default_factory=dict)
+    stages: tuple[WorkflowRunStageProjection, ...] = Field(default_factory=tuple)
+
+
 class RunDetail(FrozenModel):
     """Full run data for the Run Detail page.
 
@@ -69,6 +93,9 @@ class RunDetail(FrozenModel):
     approval_state: dict[str, Any] | None = None
     pending_approvals: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
     governance_details: dict[str, Any] = Field(default_factory=dict)
+    workflow_projection: WorkflowRunProjection = Field(
+        default_factory=WorkflowRunProjection
+    )
 
 
 class RunIndex(FrozenModel):

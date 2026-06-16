@@ -80,6 +80,121 @@ def test_write_and_load_run_meta(store: RunStore) -> None:
     assert detail.outcome == ReceiptOutcome.ANSWERED_WITH_CITATIONS
 
 
+def test_get_run_detail_builds_workflow_projection_from_trace_events(
+    store: RunStore,
+) -> None:
+    run_dir = store.create_run_dir("run_workflow")
+    _write_trace(
+        run_dir / "trace.jsonl",
+        "run_workflow",
+        [
+            {
+                "event_id": "evt_config",
+                "event_type": "workflow_stage_configuration_trace_summary",
+                "sequence": 1,
+                "timestamp": "2026-05-10T14:32:18Z",
+                "status": "ok",
+                "payload": {
+                    "source": {
+                        "source_type": "published_agent_version",
+                        "reference": "published_version:version_001",
+                    },
+                    "template_name": "react_enterprise_qa",
+                    "template_descriptor_version": "react_enterprise_qa.v1",
+                    "stages": [
+                        {"stage_id": "plan", "redacted": True},
+                        {"stage_id": "tool", "redacted": True},
+                    ],
+                },
+            },
+            {
+                "event_id": "evt_context_plan",
+                "event_type": "workflow_stage_context_applied",
+                "sequence": 2,
+                "timestamp": "2026-05-10T14:32:19Z",
+                "status": "ok",
+                "payload": {
+                    "stage_id": "plan",
+                    "stage_label": "Plan",
+                    "prompt_fields": ["business_context"],
+                    "template_descriptor_version": "react_enterprise_qa.v1",
+                },
+            },
+            {
+                "event_id": "evt_stage_plan",
+                "event_type": "workflow_stage_result",
+                "sequence": 3,
+                "timestamp": "2026-05-10T14:32:20Z",
+                "status": "ok",
+                "payload": {
+                    "stage_id": "plan",
+                    "status": "completed",
+                    "outcome": "ANSWERED_WITH_CITATIONS",
+                    "summary": {"action_type": "plan_retrieval"},
+                    "produced_fact_refs": ["action_proposal"],
+                },
+            },
+            {
+                "event_id": "evt_stage_tool",
+                "event_type": "workflow_stage_result",
+                "sequence": 4,
+                "timestamp": "2026-05-10T14:32:21Z",
+                "status": "waiting",
+                "payload": {
+                    "stage_id": "tool",
+                    "status": "waiting",
+                    "outcome": "WAITING_FOR_APPROVAL",
+                    "summary": {"approval_id": "appr_lookup", "tool_name": "lookup"},
+                    "produced_fact_refs": ["approval_pause"],
+                },
+            },
+        ],
+    )
+    _write_receipt(run_dir / "governance_receipt.md")
+    store.write_run_meta(
+        RunIndex(
+            run_id="run_workflow",
+            question="Check customer status",
+            outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
+            created_at="2026-05-10T14:32:18Z",
+            updated_at="2026-05-10T14:32:21Z",
+        )
+    )
+
+    detail = store.get_run_detail("run_workflow")
+
+    assert detail is not None
+    projection = detail.workflow_projection
+    assert projection.template_name == "react_enterprise_qa"
+    assert projection.template_descriptor_version == "react_enterprise_qa.v1"
+    assert projection.stage_configuration_source == {
+        "source_type": "published_agent_version",
+        "reference": "published_version:version_001",
+    }
+    assert [stage.stage_id for stage in projection.stages] == ["plan", "tool"]
+    plan_stage = projection.stages[0]
+    assert plan_stage.label == "Plan"
+    assert plan_stage.status == "completed"
+    assert plan_stage.outcome == ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert plan_stage.safe_summary == {"action_type": "plan_retrieval"}
+    assert plan_stage.context_application_summary == {
+        "prompt_fields": ["business_context"],
+        "template_descriptor_version": "react_enterprise_qa.v1",
+    }
+    assert plan_stage.produced_fact_refs == ("action_proposal",)
+    assert plan_stage.related_event_ids == (
+        "evt_config",
+        "evt_context_plan",
+        "evt_stage_plan",
+    )
+    tool_stage = projection.stages[1]
+    assert tool_stage.approval_pause_summary == {
+        "present": True,
+        "approval_id": "appr_lookup",
+        "tool_name": "lookup",
+    }
+
+
 def test_get_run_detail_nonexistent(store: RunStore) -> None:
     assert store.get_run_detail("run_nosuch") is None
 

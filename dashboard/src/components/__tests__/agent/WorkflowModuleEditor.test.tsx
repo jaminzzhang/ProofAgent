@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkflowTemplateDescriptor } from '../../../api/types'
 import { WorkflowModuleEditor } from '../../agent/WorkflowModuleEditor'
@@ -52,6 +52,92 @@ workflow:
 `
 
 describe('WorkflowModuleEditor', () => {
+  it('presents workflow configuration as a template summary, relationship map, and stage inspector', () => {
+    render(
+      <WorkflowModuleEditor
+        agentYaml={AGENT_YAML}
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    const summary = screen.getByLabelText('Workflow Template Summary')
+    expect(within(summary).getByText('Workflow Template')).toBeInTheDocument()
+    expect(within(summary).getByText('react_enterprise_qa')).toBeInTheDocument()
+    expect(within(summary).getByText('react_enterprise_qa.v1')).toBeInTheDocument()
+    expect(within(summary).getByText('2 stages')).toBeInTheDocument()
+    expect(screen.getByText('Read-Only Relationship Map')).toBeInTheDocument()
+    expect(screen.getByText('Stage Inspector')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Advanced YAML' })).toBeInTheDocument()
+    expect(screen.queryByText(/name: insurance/)).not.toBeInTheDocument()
+  })
+
+  it('uses stage terminology for the public Workflow configuration surface', () => {
+    const { container } = render(
+      <WorkflowModuleEditor
+        agentYaml={AGENT_YAML}
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    expect(screen.getByText('Read-Only Relationship Map')).toBeInTheDocument()
+    expect(screen.getByText('Stage Inspector')).toBeInTheDocument()
+    expect(container).not.toHaveTextContent(['Node', 'Panel'].join(' '))
+    expect(container).not.toHaveTextContent(['node', 'editor'].join(' '))
+    expect(container).not.toHaveTextContent(['workflow', 'node'].join(' '))
+  })
+
+  it('shows governed handoff points in the read-only relationship map', () => {
+    render(
+      <WorkflowModuleEditor
+        agentYaml={AGENT_YAML}
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    expect(screen.getByText('before_retrieval_plan')).toBeInTheDocument()
+  })
+
+  it('explains the selected stage identity and editable prompt field set in the inspector', () => {
+    render(
+      <WorkflowModuleEditor
+        agentYaml={AGENT_YAML}
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    const inspector = screen.getByLabelText('Stage Inspector')
+    expect(within(inspector).getByText('plan')).toBeInTheDocument()
+    expect(within(inspector).getByText('Required')).toBeInTheDocument()
+    expect(within(inspector).getByText('Editable prompt fields')).toBeInTheDocument()
+    expect(within(inspector).getByText('business_context')).toBeInTheDocument()
+    expect(within(inspector).getByText('task_instructions')).toBeInTheDocument()
+    expect(within(inspector).getByText('output_preferences')).toBeInTheDocument()
+  })
+
   it('renders descriptor relationships and saves configured stage context', async () => {
     const saveStages = vi.fn().mockResolvedValue(undefined)
     const previewStage = vi.fn().mockResolvedValue({
@@ -80,7 +166,7 @@ describe('WorkflowModuleEditor', () => {
       />,
     )
 
-    expect(screen.getByText('Stage Panel')).toBeInTheDocument()
+    expect(screen.getByText('Read-Only Relationship Map')).toBeInTheDocument()
     expect(screen.getByText('Entry')).toBeInTheDocument()
     expect(screen.getAllByText('Terminal').length).toBeGreaterThan(0)
     expect(screen.getByText(/Response \(STOP\)/)).toBeInTheDocument()

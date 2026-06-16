@@ -160,7 +160,14 @@ from proof_agent.contracts.react_workflow import (
     ReasoningSummary,
     ReviewDecision,
 )
-from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunPurpose, RunSummary
+from proof_agent.contracts.dashboard import (
+    RunDetail,
+    RunIndex,
+    RunPurpose,
+    RunSummary,
+    WorkflowRunProjection,
+    WorkflowRunStageProjection,
+)
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.run import RunResult, ValidationResult, ValidationStatus
 from proof_agent.contracts.tool import ToolRequest
@@ -367,6 +374,8 @@ __all__ = [
     "ValidationCaptureSourceReference",
     "ValidationCaptureV2Payload",
     "WorkflowConfig",
+    "WorkflowRunProjection",
+    "WorkflowRunStageProjection",
     "WorkflowStageContextApplicationProjection",
     "WorkflowStageContextConfigurationCapture",
     "WorkflowStagePromptValueCapture",

@@ -7,16 +7,17 @@ import { EvidenceTab } from './tabs/EvidenceTab'
 import { ModelUsageTab } from './tabs/ModelUsageTab'
 import { ReceiptTab } from './tabs/ReceiptTab'
 import { ApprovalTab } from './tabs/ApprovalTab'
+import { WorkflowTab } from './tabs/WorkflowTab'
 import { useState } from 'react'
 import type { GovernanceDetails } from '../api/types'
 
-type Tab = 'receipt' | 'approval' | 'timeline' | 'evidence' | 'model' | 'governance'
+type Tab = 'workflow' | 'receipt' | 'approval' | 'timeline' | 'evidence' | 'model' | 'governance'
 
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>()
   const location = useLocation()
   const { detail, loading, error, refetch } = useRunDetail(runId)
-  const [activeTab, setActiveTab] = useState<Tab>(location.hash === '#approval' ? 'approval' : 'receipt')
+  const [activeTab, setActiveTab] = useState<Tab>(location.hash === '#approval' ? 'approval' : 'workflow')
 
   if (loading) return <LoadingSpinner />
   if (error) return <div className="text-[var(--danger)] text-sm">{error}</div>
@@ -26,17 +27,24 @@ export function RunDetailPage() {
   const returnTo = returnState?.returnTo ?? '/runs'
   const returnLabel = returnState?.returnLabel ?? 'Back to Runs'
   const needsApproval = detail.outcome === 'WAITING_FOR_APPROVAL' || detail.approval_state
+  const hasWorkflowProjection = detail.workflow_projection.stages.length > 0
+  const visibleActiveTab =
+    activeTab === 'workflow' && !hasWorkflowProjection ? 'receipt' : activeTab
 
-  const tabs: { key: Tab; label: string }[] = [
-    { key: 'receipt', label: 'Governance Receipt' },
-  ]
+  const tabs: { key: Tab; label: string }[] = []
+
+  if (hasWorkflowProjection) {
+    tabs.push({ key: 'workflow', label: 'Workflow' })
+  }
+
+  tabs.push({ key: 'receipt', label: 'Governance Receipt' })
 
   if (needsApproval) {
     tabs.push({ key: 'approval', label: 'Approval State' })
   }
 
-  if (hasGovernanceDetails(detail.governance_details)) {
-    tabs.push({ key: 'governance', label: 'ReAct Governance' })
+  if (!hasWorkflowProjection && hasGovernanceDetails(detail.governance_details)) {
+    tabs.push({ key: 'governance', label: 'Governance Details' })
   }
 
   tabs.push(
@@ -77,7 +85,7 @@ export function RunDetailPage() {
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
               className={`px-1 py-3 text-sm font-medium tracking-wide border-b-2 transition-colors ${
-                activeTab === tab.key
+                visibleActiveTab === tab.key
                   ? 'border-[var(--accent)] text-[var(--text-primary)]'
                   : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:border-[var(--text-muted)]'
               }`}
@@ -89,8 +97,11 @@ export function RunDetailPage() {
       </div>
 
       <div className="py-2">
-        {activeTab === 'receipt' && <ReceiptTab markdown={detail.receipt_markdown} />}
-        {activeTab === 'approval' && (
+        {visibleActiveTab === 'workflow' && (
+          <WorkflowTab projection={detail.workflow_projection} />
+        )}
+        {visibleActiveTab === 'receipt' && <ReceiptTab markdown={detail.receipt_markdown} />}
+        {visibleActiveTab === 'approval' && (
           <ApprovalTab
             state={detail.approval_state}
             pendingApprovals={detail.pending_approvals}
@@ -98,10 +109,10 @@ export function RunDetailPage() {
             onResolved={refetch}
           />
         )}
-        {activeTab === 'governance' && <GovernanceTab details={detail.governance_details} />}
-        {activeTab === 'evidence' && <EvidenceTab chunks={detail.evidence_chunks} />}
-        {activeTab === 'model' && <ModelUsageTab usage={detail.model_usage} />}
-        {activeTab === 'timeline' && <TimelineTab events={detail.trace_events} />}
+        {visibleActiveTab === 'governance' && <GovernanceTab details={detail.governance_details} />}
+        {visibleActiveTab === 'evidence' && <EvidenceTab chunks={detail.evidence_chunks} />}
+        {visibleActiveTab === 'model' && <ModelUsageTab usage={detail.model_usage} />}
+        {visibleActiveTab === 'timeline' && <TimelineTab events={detail.trace_events} />}
       </div>
     </div>
   )
@@ -130,7 +141,7 @@ function hasGovernanceDetails(details?: GovernanceDetails | null): boolean {
 
 function GovernanceTab({ details }: { details?: GovernanceDetails | null }) {
   if (!hasGovernanceDetails(details)) {
-    return <div className="text-sm text-[var(--text-muted)]">No ReAct governance details.</div>
+    return <div className="text-sm text-[var(--text-muted)]">No governance details.</div>
   }
 
   const visibleDetails: GovernanceDetails = details ?? {}

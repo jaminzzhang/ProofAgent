@@ -3,7 +3,14 @@
 import pytest
 from pydantic import ValidationError
 
-from proof_agent.contracts import ReceiptOutcome, RunDetail, RunIndex, RunSummary
+from proof_agent.contracts import (
+    ReceiptOutcome,
+    RunDetail,
+    RunIndex,
+    RunSummary,
+    WorkflowRunProjection,
+    WorkflowRunStageProjection,
+)
 from proof_agent.observability.api.serializers import serialize_run_detail
 
 
@@ -84,6 +91,42 @@ def test_run_detail_accepts_governance_details() -> None:
     assert detail.governance_details["review_results"]
 
 
+def test_run_detail_accepts_workflow_projection() -> None:
+    projection = WorkflowRunProjection(
+        template_name="react_enterprise_qa",
+        template_descriptor_version="react_enterprise_qa.v1",
+        stage_configuration_source={
+            "source_type": "published_agent_version",
+            "reference": "published_version:version_001",
+        },
+        stages=(
+            WorkflowRunStageProjection(
+                stage_id="plan",
+                label="Plan",
+                status="completed",
+                outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+                safe_summary={"action_type": "plan_retrieval"},
+                context_application_summary={"prompt_fields": ["business_context"]},
+                produced_fact_refs=("action_proposal",),
+                related_event_ids=("evt_context_plan", "evt_stage_plan"),
+            ),
+        ),
+    )
+    detail = RunDetail(
+        run_id="run_abc123",
+        question="What is the travel meal rule?",
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        created_at="2026-05-10T14:32:18Z",
+        updated_at="2026-05-10T14:32:19Z",
+        workflow_projection=projection,
+    )
+
+    assert detail.workflow_projection.template_name == "react_enterprise_qa"
+    assert detail.workflow_projection.stages[0].safe_summary == {
+        "action_type": "plan_retrieval"
+    }
+
+
 def test_run_detail_accepts_pending_approvals() -> None:
     detail = RunDetail(
         run_id="run_abc123",
@@ -132,6 +175,25 @@ def test_serialize_run_detail_includes_pending_approvals() -> None:
     serialized = serialize_run_detail(detail)
 
     assert serialized["pending_approvals"] == [{"approval_id": "appr_customer_lookup"}]
+
+
+def test_serialize_run_detail_includes_workflow_projection() -> None:
+    detail = RunDetail(
+        run_id="run_abc123",
+        question="What is the travel meal rule?",
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        created_at="2026-05-10T14:32:18Z",
+        updated_at="2026-05-10T14:32:19Z",
+        workflow_projection=WorkflowRunProjection(
+            template_name="react_enterprise_qa",
+            stages=(WorkflowRunStageProjection(stage_id="plan", status="completed"),),
+        ),
+    )
+
+    serialized = serialize_run_detail(detail)
+
+    assert serialized["workflow_projection"]["template_name"] == "react_enterprise_qa"
+    assert serialized["workflow_projection"]["stages"][0]["stage_id"] == "plan"
 
 
 def test_run_detail_is_frozen() -> None:

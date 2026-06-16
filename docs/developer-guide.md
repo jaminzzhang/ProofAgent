@@ -1015,11 +1015,22 @@ curl -X POST http://127.0.0.1:8000/api/config/agents/insurance_customer_service/
 ```
 
 The Dashboard Agents workspace uses the Agent Configuration API to import
-existing Agent Packages, edit Draft Agent metadata and Workflow node settings,
+existing Agent Packages, edit Draft Agent metadata and Workflow Stage settings,
 validate drafts through the normal Harness, publish immutable Published Agent
 Versions, and roll back the Active Agent Version pointer. Validation runs share
 RunStore and Dashboard monitoring, but are tagged as `run_purpose: validation`;
 Overview metrics and the default Runs view stay scoped to production runs.
+
+The Agents workspace uses a Dashboard Workflow Lens rather than a graph editor:
+Workflow configuration starts from the backend-owned Workflow Template summary,
+a read-only relationship map, and a Stage Inspector for allowed Prompt/context
+fields. The Validate & Test area is a Validation Workspace with Draft Readiness,
+Run Validation, Latest Validation Result, and Validation History. When a
+validation run has a gated `validation_capture.v2` artifact, the Dashboard loads
+only the safe section projection from `/api/runs/{run_id}/validation-capture`.
+Run Detail uses the backend-owned `workflow_projection` read model to explain
+Workflow stages; frontend code must not parse JSONL trace files into governed
+semantics.
 
 Conversation API path:
 ```bash

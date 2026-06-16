@@ -21,6 +21,7 @@ import {
   fetchQuarantinedKnowledgeUploads,
   freezeCandidateKnowledgeSourceSnapshot,
   fetchRuns,
+  fetchValidationCapture,
   fetchWorkflowTemplate,
   fetchWorkflowTemplates,
   importConfigAgent,
@@ -782,6 +783,99 @@ test('validate publish and rollback use configuration lifecycle endpoints', asyn
   expect(fetchMock.mock.calls[2][0]).toBe(
     '/api/config/agents/enterprise_qa/versions/version_1/rollback',
   )
+})
+
+test('fetchValidationCapture reads the validation capture projection for a run', async () => {
+  const capture = {
+    metadata: {
+      capture_id: 'vcap_1',
+      run_id: 'run_1',
+      draft_id: 'draft_1',
+      created_at: '2026-06-16T00:00:00Z',
+      expires_at: '2026-06-17T00:00:00Z',
+      created_by: 'dashboard',
+      retention_class: 'sensitive_validation_capture',
+      artifact_path: 'validation_captures/vcap_1/capture.json',
+      retain_for_audit: false,
+      redaction_metadata: {},
+      exclusion_metadata: {},
+    },
+    payload: {
+      capture_contract_version: 'validation_capture.v2',
+      source: {
+        run_id: 'run_1',
+        run_purpose: 'validation',
+        agent_id: 'enterprise_qa',
+        agent_version_id: null,
+        draft_id: 'draft_1',
+        validation_id: 'validation_1',
+        template_name: 'react_enterprise_qa',
+        template_descriptor_version: 'react_enterprise_qa.v1',
+        stage_configuration_source_type: 'draft',
+        stage_configuration_source_reference: 'draft_1',
+        effective_stage_configuration_ref: 'snapshot_1',
+      },
+      stage_prompt_values: [
+        {
+          stage_id: 'plan',
+          prompt_values: { business_context: '[redacted projection]' },
+          prompt_field_names: ['business_context'],
+          prompt_character_count: 20,
+          redaction_applied: true,
+          source: 'draft',
+        },
+      ],
+      context_configuration: [
+        {
+          stage_id: 'plan',
+          selected_context_options: ['include_agent_purpose'],
+          available_context_options: ['include_agent_purpose'],
+        },
+      ],
+      context_applications: [
+        {
+          stage_id: 'plan',
+          summary: { option_count: 1 },
+        },
+      ],
+      stage_results: [
+        {
+          stage_id: 'plan',
+          status: 'completed',
+          outcome: null,
+          summary: { produced_fact_count: 1 },
+          produced_fact_refs: ['fact_1'],
+        },
+      ],
+      result_summary: {
+        outcome: 'ANSWERED_WITH_CITATIONS',
+        final_output: 'Validation answer.',
+        final_output_length: 18,
+        fact_refs: ['fact_1'],
+        approval_pause: null,
+        clarification_need: null,
+      },
+      exclusions: {
+        excluded_categories: ['raw_prompt', 'raw_context'],
+        sanitizer_version: 'validation_capture.v2',
+        redacted_secret_count: 0,
+        dropped_unsafe_key_count: 0,
+        redaction_applied: true,
+      },
+    },
+  }
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify(capture), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  const response = await fetchValidationCapture('run_1')
+
+  expect(fetchMock).toHaveBeenCalledWith('/api/runs/run_1/validation-capture', undefined)
+  expect(response.payload.capture_contract_version).toBe('validation_capture.v2')
+  expect(response.payload.stage_prompt_values[0].stage_id).toBe('plan')
 })
 
 test('updateConfigDraftContract patches Contract View files', async () => {

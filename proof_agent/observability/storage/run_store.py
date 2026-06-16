@@ -18,9 +18,45 @@ from pathlib import Path
 from typing import Any, Literal
 
 from proof_agent.contracts import TraceEventType
-from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunPurpose, RunSummary
+from proof_agent.contracts.dashboard import (
+    RunDetail,
+    RunIndex,
+    RunPurpose,
+    RunSummary,
+    WorkflowRunProjection,
+    WorkflowRunStageProjection,
+)
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.observability.audit import TraceWriter
+
+_WORKFLOW_PROJECTION_FORBIDDEN_KEYS = frozenset(
+    {
+        "raw_prompt",
+        "raw_context",
+        "raw_evidence",
+        "raw_tool_payload",
+        "raw_tool_payloads",
+        "tool_payload",
+        "tool_payloads",
+        "provider_response",
+        "provider_responses",
+        "complete_provider_response",
+        "complete_provider_responses",
+        "runtime_state",
+        "runtime_state_dict",
+        "runtime_state_dicts",
+        "langgraph_state",
+        "chain_of_thought",
+        "raw_chain_of_thought",
+        "secret",
+        "secrets",
+        "password",
+        "api_key",
+        "access_token",
+        "bearer",
+        "authorization",
+    }
+)
 
 
 class RunStore:
@@ -129,6 +165,7 @@ class RunStore:
         approval_state = self._extract_approval_state(trace_events)
         pending_approvals = self._extract_pending_approvals(trace_events)
         governance_details = self._extract_governance_details(trace_events)
+        workflow_projection = self._extract_workflow_projection(trace_events)
 
         return RunDetail(
             run_id=meta.run_id,
@@ -151,6 +188,7 @@ class RunStore:
             approval_state=approval_state,
             pending_approvals=tuple(pending_approvals),
             governance_details=governance_details,
+            workflow_projection=workflow_projection,
         )
 
     def append_trace_event(
@@ -583,6 +621,148 @@ class RunStore:
 
         return details
 
+    def _extract_workflow_projection(
+        self,
+        events: list[dict[str, Any]],
+    ) -> WorkflowRunProjection:
+        stage_order: list[str] = []
+        stage_data: dict[str, dict[str, Any]] = {}
+
+        def ensure_stage(stage_id: str) -> dict[str, Any]:
+            if stage_id not in stage_data:
+                stage_data[stage_id] = {
+                    "related_event_ids": [],
+                    "produced_fact_refs": (),
+                }
+                stage_order.append(stage_id)
+            return stage_data[stage_id]
+
+        def add_related_event(stage: dict[str, Any], event: dict[str, Any]) -> None:
+            event_id = event.get("event_id")
+            if isinstance(event_id, str) and event_id:
+                related = stage.setdefault("related_event_ids", [])
+                if event_id not in related:
+                    related.append(event_id)
+
+        config_event = next(
+            (
+                event
+                for event in events
+                if event.get("event_type") == "workflow_stage_configuration_trace_summary"
+            ),
+            None,
+        )
+        config_payload = _payload_dict(config_event) if config_event else {}
+        template_name = _string_or_none(config_payload.get("template_name"))
+        template_descriptor_version = _string_or_none(
+            config_payload.get("template_descriptor_version")
+        )
+        source = config_payload.get("source")
+        stage_configuration_source = (
+            _safe_projection_mapping(source) if isinstance(source, Mapping) else {}
+        )
+
+        stages = config_payload.get("stages")
+        if isinstance(stages, list | tuple):
+            for item in stages:
+                if not isinstance(item, Mapping):
+                    continue
+                stage_id = _string_or_none(item.get("stage_id"))
+                if stage_id is None:
+                    continue
+                stage = ensure_stage(stage_id)
+                add_related_event(stage, config_event or {})
+
+        for event in events:
+            event_type = event.get("event_type")
+            payload = _payload_dict(event)
+            stage_id = _string_or_none(payload.get("stage_id"))
+            if stage_id is None:
+                continue
+
+            if event_type == "workflow_stage_context_applied":
+                stage = ensure_stage(stage_id)
+                label = _string_or_none(payload.get("stage_label"))
+                if label:
+                    stage["label"] = label
+                context_summary = {
+                    str(key): value
+                    for key, value in payload.items()
+                    if key not in {"stage_id", "stage_label", "model_bearing"}
+                }
+                stage["context_application_summary"] = _safe_projection_mapping(
+                    context_summary
+                )
+                add_related_event(stage, event)
+                continue
+
+            if event_type in {
+                "workflow_stage_result",
+                "workflow_stage_completed",
+                "workflow_stage_blocked",
+                "workflow_stage_waiting",
+            }:
+                stage = ensure_stage(stage_id)
+                stage["status"] = _string_or_none(payload.get("status")) or _string_or_none(
+                    event.get("status")
+                )
+                stage["outcome"] = _receipt_outcome_or_none(payload.get("outcome"))
+                summary = payload.get("summary")
+                if isinstance(summary, Mapping):
+                    stage["safe_summary"] = _safe_projection_mapping(summary)
+                produced_fact_refs = payload.get("produced_fact_refs")
+                if isinstance(produced_fact_refs, list | tuple):
+                    stage["produced_fact_refs"] = tuple(
+                        item for item in produced_fact_refs if isinstance(item, str)
+                    )
+                _attach_stage_pause_summaries(stage)
+                add_related_event(stage, event)
+                continue
+
+            if event_type in {
+                "retrieval_result",
+                "evidence_evaluation",
+                "model_request",
+                "model_response",
+                "model_error",
+                "approval_requested",
+                "pending_approval_created",
+                "clarification_requested",
+            }:
+                stage = ensure_stage(stage_id)
+                add_related_event(stage, event)
+
+        return WorkflowRunProjection(
+            template_name=template_name,
+            template_descriptor_version=template_descriptor_version,
+            stage_configuration_source=stage_configuration_source,
+            stages=tuple(
+                WorkflowRunStageProjection(
+                    stage_id=stage_id,
+                    label=_string_or_none(stage_data[stage_id].get("label")),
+                    status=_string_or_none(stage_data[stage_id].get("status")),
+                    outcome=stage_data[stage_id].get("outcome"),
+                    safe_summary=stage_data[stage_id].get("safe_summary", {}),
+                    context_application_summary=stage_data[stage_id].get(
+                        "context_application_summary", {}
+                    ),
+                    produced_fact_refs=tuple(
+                        stage_data[stage_id].get("produced_fact_refs", ())
+                    ),
+                    related_event_ids=tuple(
+                        stage_data[stage_id].get("related_event_ids", ())
+                    ),
+                    approval_pause_summary=stage_data[stage_id].get(
+                        "approval_pause_summary"
+                    ),
+                    clarification_need_summary=stage_data[stage_id].get(
+                        "clarification_need_summary"
+                    ),
+                )
+                for stage_id in stage_order
+            ),
+        )
+
 
 def _parse_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
@@ -594,6 +774,68 @@ def _parse_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed
+
+
+def _payload_dict(event: dict[str, Any] | None) -> dict[str, Any]:
+    if event is None:
+        return {}
+    payload = event.get("payload")
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _string_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _receipt_outcome_or_none(value: Any) -> ReceiptOutcome | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return ReceiptOutcome(value)
+    except ValueError:
+        return None
+
+
+def _safe_projection_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, item in value.items():
+        normalized = str(key).lower()
+        if normalized in _WORKFLOW_PROJECTION_FORBIDDEN_KEYS:
+            continue
+        safe[str(key)] = _safe_projection_value(item)
+    return safe
+
+
+def _safe_projection_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _safe_projection_mapping(value)
+    if isinstance(value, list | tuple):
+        return [_safe_projection_value(item) for item in value]
+    return value
+
+
+def _attach_stage_pause_summaries(stage: dict[str, Any]) -> None:
+    summary = stage.get("safe_summary")
+    summary_mapping = summary if isinstance(summary, Mapping) else {}
+    produced_fact_refs = stage.get("produced_fact_refs", ())
+    produced_refs = set(produced_fact_refs if isinstance(produced_fact_refs, tuple) else ())
+    outcome = stage.get("outcome")
+
+    if "approval_pause" in produced_refs or outcome is ReceiptOutcome.WAITING_FOR_APPROVAL:
+        stage["approval_pause_summary"] = {
+            "present": True,
+            "approval_id": _string_or_none(summary_mapping.get("approval_id")),
+            "tool_name": _string_or_none(summary_mapping.get("tool_name")),
+        }
+
+    if (
+        "clarification_need" in produced_refs
+        or outcome is ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION
+    ):
+        stage["clarification_need_summary"] = {
+            "present": True,
+            "reason": _string_or_none(summary_mapping.get("reason")),
+        }
 
 
 def _timestamp_expired(value: Any) -> bool:

@@ -511,12 +511,18 @@ Contracts & Ports are the vertical foundation used by Control, Runtime, Capabili
 | `ReceiptOutcome` | final outcome enum |
 | `RunResult` | CLI-facing result |
 | `RunSummary` / `RunDetail` | Dashboard-facing read contracts |
+| `WorkflowRunProjection` | Dashboard-facing Workflow stage read projection for Run Detail |
 
 Evolution rules:
 - Add fields as optional/defaulted when possible.
 - Treat public enum changes as compatibility decisions.
 - Never store SDK objects or secrets in contracts.
 - Dashboard contracts are read projections, not workflow state.
+- `WorkflowRunProjection` is derived by RunStore from trace-safe Workflow Template
+  execution facts. It may expose stage ids, labels, status, outcome, safe
+  summaries, context application summaries, produced fact refs, and related event
+  ids, but must not expose continuation state, raw runtime state, raw Prompt or
+  context, raw evidence/tool payloads, provider responses, or chain-of-thought.
 
 ## 10. Control Plane
 
@@ -1176,7 +1182,7 @@ Dashboard routes:
 | --- | --- |
 | `/api/health` | service health |
 | `/api/runs` | run list, filters, pagination, production/validation purpose filtering |
-| `/api/runs/{run_id}` | run detail |
+| `/api/runs/{run_id}` | run detail, including backend-owned `workflow_projection` when Workflow stage facts exist |
 | `/api/runs/{run_id}/trace` | trace events |
 | `/api/runs/{run_id}/receipt` | receipt markdown |
 | `GET /api/approvals` | global pending approval queue projection sorted by expiry |
@@ -1188,6 +1194,10 @@ Rules:
 - API serializers define public response shapes.
 - Dashboard API cannot start runs or bypass CLI/workflow.
 - Static SPA may be mounted when built assets exist.
+- Dashboard Run Detail uses the backend-owned Workflow projection for governed
+  stage semantics. The JSONL Trace remains the source fact log and debug
+  drilldown; frontend code must not reconstruct governed Workflow semantics by
+  parsing trace events.
 - Approval Console actions resolve `PendingApproval` state. Approved tool execution resume must use the runtime checkpoint rather than a new chat request; if the checkpoint is missing, the system may record the decision but must not claim tool execution resumed. Approval command requests resolve Operator Identity Context server-side, require `approval.resolve`, and terminal approval trace events record the resolved operator id. The global Approval Queue is a read projection over pending approvals, not a Run list filter or stats payload; it marks expired approvals without mutating trace. The Dashboard `/approvals` page consumes that projection for triage and links operators to Run Detail Approval Action for the actual approve or deny command.
 
 ## 21. CLI And Docker

@@ -59,7 +59,7 @@ describe('AgentDetailShell', () => {
     expect(screen.queryByText(/Last edited 2m ago/)).not.toBeInTheDocument()
   })
 
-  it('renders Agent detail navigation with Overview and configuration modules', () => {
+  it('renders Agent detail navigation with Overview and Design modules', () => {
     renderWithRouter(
       <AgentDetailShell
         agentName="Test Agent"
@@ -74,12 +74,12 @@ describe('AgentDetailShell', () => {
 
     expect(screen.getByLabelText('Agent navigation')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Overview' })).toBeInTheDocument()
-    expect(screen.getByText('Configure')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Design' })).toBeInTheDocument()
     expect(screen.getByText('Workflow')).toBeInTheDocument()
     expect(screen.getByText('Knowledge')).toBeInTheDocument()
   })
 
-  it('renders lifecycle and observe sections', () => {
+  it('renders verify, release, and observe sections', () => {
     renderWithRouter(
       <AgentDetailShell
         agentName="Test Agent"
@@ -92,11 +92,39 @@ describe('AgentDetailShell', () => {
       </AgentDetailShell>
     )
 
-    expect(screen.getByText('Lifecycle')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Verify' })).toBeInTheDocument()
     expect(screen.getByText('Validate & Test')).toBeInTheDocument()
+    expect(screen.getByText('Contract View')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Release' })).toBeInTheDocument()
     expect(screen.getByText('Versions')).toBeInTheDocument()
-    expect(screen.getByText('Observe')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Observe' })).toBeInTheDocument()
     expect(screen.getByText('Monitor')).toBeInTheDocument()
+  })
+
+  it('groups Agent navigation by design, verification, release, and observation work', () => {
+    renderWithRouter(
+      <AgentDetailShell
+        agentName="Test Agent"
+        modules={mockModules}
+        lifecycle={mockLifecycle}
+        activeModule="general"
+        onModuleChange={() => {}}
+      >
+        <div>Content</div>
+      </AgentDetailShell>
+    )
+
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Design' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Verify' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Release' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Observe' })).toBeInTheDocument()
+
+    expect(screen.getByText('Workflow').closest('section')).toHaveTextContent('Design')
+    expect(screen.getByText('Validate & Test').closest('section')).toHaveTextContent('Verify')
+    expect(screen.getByText('Contract View').closest('section')).toHaveTextContent('Verify')
+    expect(screen.getByText('Versions').closest('section')).toHaveTextContent('Release')
+    expect(screen.getByText('Monitor').closest('section')).toHaveTextContent('Observe')
   })
 
   it('renders a full-window Agent Detail Page focus shell', () => {
@@ -171,7 +199,11 @@ describe('AgentDetailShell', () => {
 
     const workflowTab = screen.getByRole('button', { name: 'Workflow' })
     expect(workflowTab).toHaveAttribute('aria-current', 'page')
-    expect(workflowTab).toHaveClass('bg-[var(--bg-hover)]')
+    expect(workflowTab).toHaveStyle({
+      backgroundColor: 'var(--accent)',
+      borderColor: 'var(--accent)',
+      color: 'var(--accent-fg)',
+    })
   })
 
   it('renders children in content area', () => {

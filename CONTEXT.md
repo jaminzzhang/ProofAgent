@@ -216,7 +216,7 @@ _Avoid_: Per-stage ad hoc availability checks, mutable runtime flags, Dashboard-
 
 **Workflow Template Stage**:
 A registered governed stage within a Workflow Template, visible in configuration, Dashboard explanation, trace summaries, and Published Agent interpretation.
-_Avoid_: Workflow node, LangGraph node, arbitrary runtime step
+_Avoid_: LangGraph node, arbitrary runtime step, node-labeled workflow configuration
 
 **React Enterprise QA Stage Set**:
 The governed Workflow Template Stages for React Enterprise QA: plan, clarification, retrieval_review, retrieval, model_answer, tool_review, tool, memory, and response; V2 adds intent_resolution before plan.
@@ -227,7 +227,7 @@ The paired tool_review and tool Workflow Template Stages that are enabled togeth
 _Avoid_: Tool stage without review, review stage without tool, provider-native tool execution
 
 **Workflow Template Descriptor**:
-The backend-owned, read-only description of a registered Workflow Template's stages, stage availability rules, branch relationships, governed handoff points, editable Prompt fields, and allowed context options used by Dashboard to render Workflow Relationship Map and Workflow Stage Panel.
+The backend-owned, read-only description of a registered Workflow Template's stages, stage availability rules, branch relationships, governed handoff points, editable Prompt fields, and allowed context options used by Dashboard to render the Workflow Relationship Map and Stage Inspector.
 _Avoid_: Frontend-hardcoded workflow graph, Agent-authored node registry, runtime graph source of truth
 
 **Workflow Template Descriptor Version**:
@@ -288,7 +288,7 @@ _Avoid_: Renaming LangGraph nodes to stages, leaving public contract models as n
 
 **Dashboard Stage Configuration Surface Cutover**:
 The Slice 1 rename of Dashboard and Agent Configuration API public surfaces to workflow stage language, including request and response fields, helper names, UI labels, fixtures, and tests.
-_Avoid_: Backend-only schema migration, node-labeled Stage Panel, mixed nodes/stages API payload
+_Avoid_: Backend-only schema migration, node-labeled inspector, mixed nodes/stages API payload
 
 **Workflow Stage Prompt Configuration**:
 The Agent-owner-editable business Prompt and structured context settings attached to a registered Workflow Template Stage so Proof Agent can provide fuller task context while preserving Harness-owned control prompts, stage order, policy gates, validators, and trace semantics.
@@ -1159,7 +1159,7 @@ The baseline intent set for Institution Insurance Specialist planning: business 
 _Avoid_: Free-form planner action space, product-line-specific topology, model-only routing
 
 **Dynamic Insurance Business Subplan**:
-A trace-safe plan artifact produced by the LLM ReAct Planner for insurance-related Institution Insurance Specialist requests, describing inferred business intent, missing information, evidence needs, allowed knowledge retrieval, allowed read-tool proposals, source-authority expectations, and response-shaping needs while still executing through the fixed Controlled ReAct Workflow nodes.
+A trace-safe plan artifact produced by the LLM ReAct Planner for insurance-related Institution Insurance Specialist requests, describing inferred business intent, missing information, evidence needs, allowed knowledge retrieval, allowed read-tool proposals, source-authority expectations, and response-shaping needs while still executing through the fixed Controlled ReAct Workflow stages.
 _Avoid_: Workflow Template topology, executable policy, direct tool execution, raw chain-of-thought
 
 **Unmodeled Insurance Specialist Intent Signal**:
@@ -1429,6 +1429,14 @@ _Avoid_: Single backend API surface, customer-facing console, ungoverned executi
 **Agent-Centric Dashboard Shell**:
 A Dashboard Shell information architecture where each Agent detail view combines monitoring, configuration, validation, versioning, and contract inspection for that Agent.
 _Avoid_: Settings-only configuration, detached builder app, global-only run dashboard
+
+**Dashboard Workflow Lens**:
+The shared Dashboard information pattern for understanding Workflow Template Stage configuration, validation behavior, and run execution facts in their proper contexts without creating a mixed top-level Workflow workspace.
+_Avoid_: Standalone workflow builder, merged configuration-and-monitoring page, editable runtime graph surface
+
+**Dashboard Workflow Run Projection**:
+The Run Detail read projection that organizes trace-safe Workflow Template Execution facts by Workflow Template Stage for Dashboard Workflow Lens, while leaving raw trace events, receipts, evidence, model usage, and approvals available as drilldown artifacts.
+_Avoid_: Frontend-parsed JSONL stage view, ReAct-only governance tab, runtime state projection
 
 **Agent Detail Page**:
 The Agent-focused Focus Mode page opened from the Agents workspace for one Draft Agent, occupying the browser window with Agent-local navigation and the selected Agent sub-area.
@@ -2351,7 +2359,7 @@ _Avoid_: Evidence content dump
 - The public Agent Contract, Workflow Template Descriptor, trace facts, Dashboard configuration, tests, and examples use **Workflow Template Stage** language directly; Proof Agent does not dual-read legacy public stage aliases during the stage migration.
 - **Direct Workflow Stage Contract Migration** adopts Agent Contract `workflow.stages[]` in one breaking change; loaders, Dashboard, examples, fixtures, tests, and stage prompt configuration APIs migrate together and reject legacy public stage fields.
 - **Stage Terminology Code Cutover Scope** includes Agent Contract models, manifest loader, validation, Workflow Template descriptors, configuration APIs, Dashboard helpers, examples, fixtures, and tests; Runtime Plane graph nodes may continue using graph node terminology when they refer to actual LangGraph or runtime graph mechanics.
-- **Dashboard Stage Configuration Surface Cutover** changes Agent Configuration API request and response fields to `stages`, renames Dashboard helpers to stage terminology, updates UI labels from Node Panel to Stage Panel, and migrates Dashboard tests and fixtures in the same Slice 1 cutover.
+- **Dashboard Stage Configuration Surface Cutover** changes Agent Configuration API request and response fields to `stages`, renames Dashboard helpers to stage terminology, updates UI labels from legacy node-labeled panels to stage-centered surfaces, and migrates Dashboard tests and fixtures in the same Slice 1 cutover.
 - Slice 1 does not provide a legacy Agent Contract migration script or codemod; source-controlled examples, fixtures, tests, and docs are edited directly, while stale generated local Agent Configuration Store data is cleared with **Local Configuration Store Reset** and recreated.
 - **Contract Schema Cutover Test Gate** must fail before implementation for `workflow.stages[]` with `id`, rejection of legacy public stage aliases, `capabilities.tools`, `capabilities.memory`, rejection of legacy top-level `tools` and `memory`, disabled capability active config blockers, enabled tools with no valid Tool Contract, and enabled memory provider readiness.
 - **Small-Step Verification Cadence** applies throughout the Agent Contract Stage Capability Implementation Sequence: each slice is broken into targeted test, minimal implementation, targeted verification, then broader regression before moving to the next slice.
@@ -2776,7 +2784,7 @@ _Avoid_: Evidence content dump
 - "Harness Agent framework" could mean the framework itself or an Agent built with it. Resolved: use **Controlled Agent Harness Framework** for the framework category.
 - "V1 deliverable" could mean only the customer-service bot or the reusable Agent framework plus reference Agent. Resolved: V1 includes an **Agent Framework Deliverable** and the **Insurance Customer Service Agent**.
 - "Workflow" could mean business flow, runtime graph mechanics, or a hard-coded orchestrator branch. Resolved: use **Workflow Template** for the governed flow shape, and keep runtime mechanics separate.
-- "Workflow node editing" could mean configuring registered template stages, editing LangGraph nodes, or freely rewriting the runtime graph. Resolved: use **Workflow Template Stage Configuration** for editable stage settings that compile back to the Agent Contract without changing Harness semantics.
+- "Workflow graph editing" could mean configuring registered template stages, editing LangGraph nodes, or freely rewriting the runtime graph. Resolved: use **Workflow Template Stage Configuration** for editable stage settings that compile back to the Agent Contract without changing Harness semantics.
 - "Legacy public stage compatibility" could preserve existing examples but keep node/stage ambiguity in the public Agent Contract. Resolved: use **Direct Workflow Stage Contract Migration**, migrate to `workflow.stages[]`, and do not dual-read legacy public stage aliases.
 - "Internal node rename" could mean renaming every runtime graph node symbol or only public/domain Workflow Template configuration symbols. Resolved: follow **Stage Terminology Code Cutover Scope**; public/domain contracts become stages, while true Runtime Plane graph node terminology remains available.
 - "`ReActWorkflowNodes` rename" could be bundled with the schema cutover, treated as a runtime graph rename, or handled as execution seam cleanup. Resolved: defer it out of Slice 1, then handle it through the **ReAct Stage Behavior Consolidation Slice** by moving Control Plane stage work behind **ReAct Enterprise QA Workflow Execution** instead of renaming every LangGraph node.
@@ -3094,7 +3102,7 @@ _Avoid_: Evidence content dump
 - "Agent detail navigation" could mean horizontal tabs, vertical tabs, or a sectioned page. Resolved: the **Agent Configuration Workspace** uses vertical tabs in the main content area with CONFIGURE and LIFECYCLE sections.
 - "Configuration editing" could mean forms only, visual builders, code only, or a hybrid. Resolved: each **Agent Configuration Module** uses a **Configuration Module Editor** with forms for common settings and YAML toggle for advanced editing.
 - "Draft save behavior" could mean auto-save per field, save per module, or single draft save. Resolved: **Draft Agent** uses auto-save for all configuration changes with explicit publish in the Versions **Agent Lifecycle Tab**.
-- "Validation interface" could mean a simple test runner, test suite, or validation dashboard. Resolved: the Validate & Test **Agent Lifecycle Tab** uses a **Validation Workspace** combining quick test, test suite, and validation history.
+- "Validation interface" could mean a simple test runner, test suite, or validation dashboard. Resolved: the Validate & Test **Agent Lifecycle Tab** uses a **Validation Workspace** grouped by Draft Readiness, Run Validation, Latest Validation Result, Validation History, and gated validation capture sections.
 - "`Knowledge Hub`" could mean a new runtime, a retrieval engine, or the product-facing configuration surface for reusable knowledge. Resolved: **Knowledge Hub** names the Shared Asset Library capabilities for Knowledge Sources and Agent Knowledge Bindings, while retrieval still enters the Control Envelope through governed Knowledge Provider Adapters and evidence admission.
 - "Reusable assets" could mean agent-scoped only, shared library, or hybrid. Resolved: **Knowledge Source**, **Tool Source**, and **Policy Rule Configuration** live in the **Shared Asset Library** and are bound to agents through Agent Knowledge Bindings and Agent Tool Bindings.
 - "Agent Contract knowledge config" could mean storing full provider configuration inside every Agent or storing only reusable Source bindings. Resolved: Draft Agents store binding intent through **Agent Knowledge Binding Configuration API**, while Published Agent Versions execute with a **Resolved Knowledge Binding Set** pinned to Source snapshot or configuration versions.

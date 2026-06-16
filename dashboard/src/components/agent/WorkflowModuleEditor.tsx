@@ -86,6 +86,16 @@ export function WorkflowModuleEditor({
   const canEditPrompt = Boolean(selectedDescriptor?.editable_prompt_fields.length)
   const canConfigureContext = Boolean(selectedDescriptor?.context_options.length)
   const canPreviewSelected = canEditPrompt || canConfigureContext
+  const workflowTemplate = readAgentYamlField(agentYaml, ['workflow', 'template']) || descriptor?.name || 'Not configured'
+  const workflowRuntime = readAgentYamlField(agentYaml, ['workflow', 'runtime']) || 'Not configured'
+  const checkpointerProvider = (
+    readAgentYamlField(agentYaml, ['workflow', 'checkpointer', 'provider'])
+    || readAgentYamlField(agentYaml, ['workflow', 'checkpointer', 'type'])
+    || 'Not configured'
+  )
+  const stageCount = descriptor?.stages.length ?? 0
+  const modelBearingStageCount = descriptor?.stages.filter((stage) => stage.model_bearing).length ?? 0
+  const editableStageCount = descriptor?.stages.filter((stage) => stage.editable_prompt_fields.length > 0).length ?? 0
   const localYaml = descriptor
     ? replaceWorkflowStages(agentYaml, descriptor.descriptor_version, stages)
     : agentYaml
@@ -137,10 +147,10 @@ export function WorkflowModuleEditor({
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--border)] p-5">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Workflow Configuration
+            Workflow Design
           </h3>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            {descriptor?.description ?? 'Backend-owned workflow descriptor'}
+            {descriptor?.description ?? 'Backend-owned workflow descriptor.'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -152,7 +162,7 @@ export function WorkflowModuleEditor({
                 : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
             }`}
           >
-            {showYaml ? 'Hide YAML' : 'Show YAML'}
+            {showYaml ? 'Hide YAML' : 'Advanced YAML'}
           </button>
           <button
             onClick={onSaveCore}
@@ -170,6 +180,34 @@ export function WorkflowModuleEditor({
           </button>
         </div>
       </div>
+
+      <section
+        aria-label="Workflow Template Summary"
+        className="border-b border-[var(--border)] p-5"
+      >
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              Workflow Template
+            </h4>
+            <p className="mt-1 text-sm text-[var(--text-primary)]">
+              {workflowTemplate}
+            </p>
+          </div>
+          {descriptor && (
+            <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs text-[var(--text-secondary)]">
+              {descriptor.descriptor_version}
+            </span>
+          )}
+        </div>
+        <dl className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
+          <SummaryItem label="Runtime" value={workflowRuntime} />
+          <SummaryItem label="Checkpointer" value={checkpointerProvider} />
+          <SummaryItem label="Stages" value={`${stageCount} stages`} />
+          <SummaryItem label="Model-bearing" value={String(modelBearingStageCount)} />
+          <SummaryItem label="Editable" value={String(editableStageCount)} />
+        </dl>
+      </section>
 
       {showYaml && (
         <div className="border-b border-[var(--border)] p-5">
@@ -221,7 +259,7 @@ export function WorkflowModuleEditor({
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                Stage Panel
+                Read-Only Relationship Map
               </h4>
               <p className="mt-1 text-xs text-[var(--text-muted)]">
                 {descriptor?.descriptor_version ?? 'Descriptor not loaded'}
@@ -264,11 +302,20 @@ export function WorkflowModuleEditor({
           )}
         </section>
 
-        <section className="p-5">
+        <section aria-label="Stage Inspector" className="p-5">
           {!selectedDescriptor || !selectedConfig ? (
             <p className="text-sm text-[var(--text-muted)]">Select a workflow stage.</p>
           ) : (
             <div className="space-y-5">
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                  Stage Inspector
+                </h4>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">
+                  Review the selected stage before editing bounded prompt and context fields.
+                </p>
+              </div>
+
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h4 className="text-base font-semibold text-[var(--text-primary)]">
@@ -282,6 +329,44 @@ export function WorkflowModuleEditor({
                   {selectedDescriptor.model_bearing ? 'Model-bearing' : 'Governed'}
                 </span>
               </div>
+
+              <dl className="grid gap-3 text-xs text-[var(--text-muted)] sm:grid-cols-3">
+                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                  <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                    Stage ID
+                  </dt>
+                  <dd className="mt-1 font-mono text-[var(--text-primary)]">
+                    {selectedDescriptor.id}
+                  </dd>
+                </div>
+                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                  <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                    Availability
+                  </dt>
+                  <dd className="mt-1 text-[var(--text-primary)]">
+                    {selectedDescriptor.required ? 'Required' : 'Optional'}
+                  </dd>
+                </div>
+                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                  <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                    Editable prompt fields
+                  </dt>
+                  <dd className="mt-2 flex flex-wrap gap-1.5 font-mono text-[var(--text-primary)]">
+                    {selectedDescriptor.editable_prompt_fields.length > 0 ? (
+                      selectedDescriptor.editable_prompt_fields.map((field) => (
+                        <span
+                          key={field}
+                          className="rounded bg-[var(--bg-hover)] px-2 py-0.5"
+                        >
+                          {field}
+                        </span>
+                      ))
+                    ) : (
+                      <span>None</span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
 
               <div className="grid gap-3 text-xs text-[var(--text-muted)] sm:grid-cols-2">
                 <div>
@@ -428,6 +513,19 @@ export function WorkflowModuleEditor({
   )
 }
 
+function SummaryItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+      <dt className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        {label}
+      </dt>
+      <dd className="mt-1 break-words font-mono text-xs text-[var(--text-primary)]">
+        {value}
+      </dd>
+    </div>
+  )
+}
+
 function WorkflowMapStage({
   stage,
   selected,
@@ -471,6 +569,12 @@ function WorkflowMapStage({
           <span className="font-semibold text-[var(--text-secondary)]">Next: </span>
           {formatSuccessors(stage, stageLabelById)}
         </div>
+        {stage.governed_handoff_points.length > 0 && (
+          <div className="mt-1 truncate text-[11px] text-[var(--text-muted)]">
+            <span className="font-semibold text-[var(--text-secondary)]">Handoff: </span>
+            {stage.governed_handoff_points.join(', ')}
+          </div>
+        )}
       </button>
     </div>
   )

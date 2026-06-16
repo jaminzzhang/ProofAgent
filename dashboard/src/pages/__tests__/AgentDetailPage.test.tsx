@@ -6,15 +6,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindKnowledgeSourceToDraft,
   createModelConnection,
+  fetchValidationCapture,
   fetchRuns,
   fetchWorkflowTemplate,
   fetchKnowledgeSources,
   fetchModelConnections,
   previewWorkflowStageContext,
+  updateConfigDraft,
+  updateConfigDraftContract,
   updateWorkflowStages,
   validateConfigDraft,
 } from '../../api/client'
-import type { DraftValidationResponse } from '../../api/types'
+import type { DraftAgent, DraftValidationResponse } from '../../api/types'
 import { AgentDetailPage } from '../AgentDetailPage'
 
 vi.mock('../../api/client', () => ({
@@ -22,12 +25,14 @@ vi.mock('../../api/client', () => ({
   chatUrl: (path: string) => `http://localhost:5174${path}`,
   createModelConnection: vi.fn(),
   fetchRuns: vi.fn(),
+  fetchValidationCapture: vi.fn(),
   fetchWorkflowTemplate: vi.fn(),
   fetchKnowledgeSources: vi.fn(),
   fetchModelConnections: vi.fn(),
   previewWorkflowStageContext: vi.fn(),
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
+  unbindKnowledgeSourceFromDraft: vi.fn(),
   updateConfigDraft: vi.fn(),
   updateConfigDraftContract: vi.fn(),
   updateWorkflowStages: vi.fn(),
@@ -36,7 +41,7 @@ vi.mock('../../api/client', () => ({
 
 const refreshDraft = vi.fn()
 const refreshVersions = vi.fn()
-let mockDraft = {
+let mockDraft: DraftAgent = {
   agent_id: 'agent-1',
   draft_id: 'draft-1',
   display_name: 'Insurance Agent',
@@ -90,7 +95,7 @@ vi.mock('../../hooks/useConfigVersions', () => ({
 }))
 
 function renderPage(initialEntry = '/agents/agent-1/drafts/draft-1') {
-  render(
+  return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
         <Route path="/agents/:agentId/drafts/:draftId" element={<AgentDetailPage />} />
@@ -99,11 +104,25 @@ function renderPage(initialEntry = '/agents/agent-1/drafts/draft-1') {
   )
 }
 
+function latestSavedAgentYaml(): string {
+  const payload = vi.mocked(updateConfigDraftContract).mock.calls.at(-1)?.[2]
+  if (!payload?.agent_yaml) throw new Error('No agent_yaml payload was saved.')
+  return payload.agent_yaml
+}
+
 describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(updateConfigDraft).mockImplementation(async (_agentId, _draftId, payload) => ({
+      ...mockDraft,
+      ...payload,
+    }))
+    vi.mocked(updateConfigDraftContract).mockImplementation(async (_agentId, _draftId, payload) => ({
+      ...mockContract,
+      ...payload,
+    }))
     vi.mocked(fetchRuns).mockResolvedValue({
       data: [
         {
@@ -254,7 +273,26 @@ describe('AgentDetailPage', () => {
     expect(screen.queryByText('Other agent question')).not.toBeInTheDocument()
   })
 
-  it('shows validation busy state while a quick test is running', async () => {
+  it('saves overview identity fields through the draft configuration API', async () => {
+    renderPage()
+
+    fireEvent.change(screen.getByDisplayValue('Insurance Agent'), {
+      target: { value: 'Claims QA Agent' },
+    })
+    fireEvent.change(screen.getByDisplayValue('Answer governed insurance questions.'), {
+      target: { value: 'Handle governed claims questions.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
+        display_name: 'Claims QA Agent',
+        purpose: 'Handle governed claims questions.',
+      })
+    })
+  })
+
+  it('shows validation busy state while a validation run is running', async () => {
     let resolveValidation: (value: DraftValidationResponse) => void = () => {}
     vi.mocked(validateConfigDraft).mockReturnValue(
       new Promise<DraftValidationResponse>((resolve) => {
@@ -267,9 +305,9 @@ describe('AgentDetailPage', () => {
     fireEvent.change(screen.getByPlaceholderText('Enter a test question...'), {
       target: { value: 'What documents are required?' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Run Test' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Run Validation' }))
 
-    expect(screen.getByRole('button', { name: 'Running...' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Running Validation...' })).toBeDisabled()
 
     const validationResponse: DraftValidationResponse = {
       validation_id: 'validation-1',
@@ -292,6 +330,141 @@ describe('AgentDetailPage', () => {
     expect(screen.getByPlaceholderText('Enter a test question...')).toBeInTheDocument()
   })
 
+  it('presents validation as a draft validation workspace', () => {
+    mockDraft = {
+      ...mockDraft,
+      validation_records: [
+        {
+          validation_id: 'validation-1',
+          draft_id: 'draft-1',
+          run_id: 'run-validation-1',
+          status: 'ANSWERED_WITH_CITATIONS',
+          summary: 'Validation completed with citations.',
+          errors: [],
+          created_at: '2026-05-28T01:00:00Z',
+          validation_capture_id: 'vcap_1',
+        },
+      ],
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
+
+    expect(screen.getByRole('heading', { name: 'Draft Readiness' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Run Validation' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Latest Validation Result' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Validation History' })).toBeInTheDocument()
+    expect(screen.queryByText(new RegExp(['Quick', 'Test'].join(' ')))).not.toBeInTheDocument()
+    expect(screen.getByText('Capture available')).toBeInTheDocument()
+  })
+
+  it('loads safe validation capture sections for the latest validation run', async () => {
+    mockDraft = {
+      ...mockDraft,
+      validation_records: [
+        {
+          validation_id: 'validation-1',
+          draft_id: 'draft-1',
+          run_id: 'run-validation-1',
+          status: 'ANSWERED_WITH_CITATIONS',
+          summary: 'Validation completed with citations.',
+          errors: [],
+          created_at: '2026-05-28T01:00:00Z',
+          validation_capture_id: 'vcap_1',
+        },
+      ],
+    }
+    vi.mocked(fetchValidationCapture).mockResolvedValue({
+      metadata: {
+        capture_id: 'vcap_1',
+        run_id: 'run-validation-1',
+        draft_id: 'draft-1',
+        created_at: '2026-05-28T01:00:00Z',
+        expires_at: '2026-05-29T01:00:00Z',
+        created_by: 'dashboard',
+        retention_class: 'sensitive_validation_capture',
+        artifact_path: 'validation_captures/vcap_1/capture.json',
+        retain_for_audit: false,
+        redaction_metadata: {},
+        exclusion_metadata: {},
+      },
+      payload: {
+        capture_contract_version: 'validation_capture.v2',
+        source: {
+          run_id: 'run-validation-1',
+          run_purpose: 'validation',
+          agent_id: 'agent-1',
+          agent_version_id: null,
+          draft_id: 'draft-1',
+          validation_id: 'validation-1',
+          template_name: 'react_enterprise_qa',
+          template_descriptor_version: 'react_enterprise_qa.v1',
+          stage_configuration_source_type: 'draft',
+          stage_configuration_source_reference: 'draft-1',
+          effective_stage_configuration_ref: 'snapshot-1',
+        },
+        stage_prompt_values: [
+          {
+            stage_id: 'plan',
+            prompt_values: { business_context: '[projection]' },
+            prompt_field_names: ['business_context'],
+            prompt_character_count: 12,
+            redaction_applied: false,
+            source: 'draft',
+          },
+        ],
+        context_configuration: [
+          {
+            stage_id: 'plan',
+            selected_context_options: ['include_agent_purpose'],
+            available_context_options: ['include_agent_purpose'],
+          },
+        ],
+        context_applications: [
+          {
+            stage_id: 'plan',
+            summary: { option_count: 1 },
+          },
+        ],
+        stage_results: [
+          {
+            stage_id: 'plan',
+            status: 'completed',
+            outcome: null,
+            summary: { produced_fact_count: 1 },
+            produced_fact_refs: ['fact-1'],
+          },
+        ],
+        result_summary: {
+          outcome: 'ANSWERED_WITH_CITATIONS',
+          final_output: 'Validation answer.',
+          final_output_length: 18,
+          fact_refs: ['fact-1'],
+          approval_pause: null,
+          clarification_need: null,
+        },
+        exclusions: {
+          excluded_categories: ['raw_prompt', 'raw_context'],
+          sanitizer_version: 'validation_capture.v2',
+          redacted_secret_count: 0,
+          dropped_unsafe_key_count: 0,
+          redaction_applied: false,
+        },
+      },
+    })
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
+    fireEvent.click(screen.getByRole('button', { name: 'Load Validation Capture' }))
+
+    expect(await screen.findByText('Source')).toBeInTheDocument()
+    expect(screen.getByText('Stage Prompt Values')).toBeInTheDocument()
+    expect(screen.getByText('Context Configuration')).toBeInTheDocument()
+    expect(screen.getByText('Context Applications')).toBeInTheDocument()
+    expect(screen.getByText('Stage Results')).toBeInTheDocument()
+    expect(screen.getByText('Result Summary')).toBeInTheDocument()
+    expect(screen.getByText('Exclusions')).toBeInTheDocument()
+    expect(fetchValidationCapture).toHaveBeenCalledWith('run-validation-1')
+  })
+
   it('loads workflow descriptor and saves stage prompt configuration', async () => {
     mockContract = {
       ...mockContract,
@@ -306,7 +479,8 @@ workflow:
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
 
-    expect(await screen.findByText('Stage Panel')).toBeInTheDocument()
+    expect(await screen.findByText('Stage Inspector')).toBeInTheDocument()
+    expect(screen.getByText('Read-Only Relationship Map')).toBeInTheDocument()
     expect(screen.getAllByText('Plan').length).toBeGreaterThan(0)
     fireEvent.click(await screen.findByRole('button', { name: 'Explain Business Context' }))
     expect(screen.getByText(/Adds domain-specific context/)).toBeInTheDocument()
@@ -354,6 +528,33 @@ workflow:
         ],
       })
     })
+  })
+
+  it('saves Workflow core settings through the draft contract API', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: `name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    provider: sqlite
+    uri: sqlite:///runs/config/checkpoints.db
+`,
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+    const checkpointerUri = await screen.findByLabelText('Checkpointer URI')
+
+    fireEvent.change(checkpointerUri, {
+      target: { value: 'sqlite:///runs/config/checkpoints-v2.db' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Core' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    expect(latestSavedAgentYaml()).toContain('uri: "sqlite:///runs/config/checkpoints-v2.db"')
   })
 
   it('shows chat entry actions for the active Published Agent version', () => {
@@ -472,6 +673,210 @@ workflow:
       })
     })
     expect(refreshDraft).toHaveBeenCalled()
+  })
+
+  it('saves Knowledge retrieval settings through the draft contract API', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'retrieval:',
+        '  strategy: single_step',
+        '  top_k: 3',
+        '  min_score: 0.2',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+    expect(await screen.findByText('Global Retrieval Settings')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByDisplayValue('single_step'), {
+      target: { value: 'agentic' },
+    })
+    fireEvent.change(screen.getByDisplayValue('3'), {
+      target: { value: '8' },
+    })
+
+    expect(screen.queryByRole('button', { name: 'Save Workflow' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save Knowledge' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    const savedYaml = latestSavedAgentYaml()
+    expect(savedYaml).toContain('strategy: agentic')
+    expect(savedYaml).toContain('top_k: 8')
+  })
+
+  it.each([
+    {
+      tab: 'tools',
+      label: 'Tools Config File',
+      initialYaml: ['name: insurance', 'tools:', '  file: config/tools.yaml', ''].join('\n'),
+      value: 'config/tools-v2.yaml',
+      expected: 'file: config/tools-v2.yaml',
+    },
+    {
+      tab: 'policy',
+      label: 'Policy File',
+      initialYaml: ['name: insurance', 'policy:', '  file: config/policy.yaml', ''].join('\n'),
+      value: 'config/policy-v2.yaml',
+      expected: 'file: config/policy-v2.yaml',
+    },
+    {
+      tab: 'response',
+      label: 'Include Reasoning Summary',
+      initialYaml: [
+        'name: insurance',
+        'response:',
+        '  include_reasoning_summary: true',
+        '  include_review_results: true',
+        '',
+      ].join('\n'),
+      value: 'false',
+      expected: 'include_reasoning_summary: false',
+    },
+  ])('saves $tab configuration through the draft contract API', async ({ tab, label, initialYaml, value, expected }) => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: initialYaml,
+    }
+
+    renderPage(`/agents/agent-1/drafts/draft-1?tab=${tab}`)
+
+    fireEvent.change(screen.getByLabelText(label), {
+      target: { value },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    expect(latestSavedAgentYaml()).toContain(expected)
+  })
+
+  it('saves Memory provider and scope settings through the draft contract API', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'memory:',
+        '  provider: local',
+        '  scopes:',
+        '    case:',
+        '      enabled: false',
+        '      retention_days: 30',
+        '      max_records: 5',
+        '      allow_restricted: false',
+        '    user:',
+        '      enabled: false',
+        '    shared:',
+        '      enabled: false',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=memory')
+
+    fireEvent.change(screen.getByLabelText('Memory Provider'), {
+      target: { value: 'session' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Case Memory' }))
+    fireEvent.change(screen.getByLabelText('Retention (Days)'), {
+      target: { value: '45' },
+    })
+    fireEvent.change(screen.getByLabelText('Max Records'), {
+      target: { value: '9' },
+    })
+    fireEvent.click(screen.getByLabelText('Allow Restricted'))
+
+    expect(screen.queryByRole('button', { name: 'Save Workflow' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save Memory' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    const savedYaml = latestSavedAgentYaml()
+    expect(savedYaml).toContain('provider: session')
+    expect(savedYaml).toContain('enabled: true')
+    expect(savedYaml).toContain('retention_days: 45')
+    expect(savedYaml).toContain('max_records: 9')
+    expect(savedYaml).toContain('allow_restricted: true')
+  })
+
+  it('saves unified Model settings across answer, planner, and reviewer roles', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'model:',
+        '  provider: deepseek',
+        '  name: deepseek-chat',
+        '  credential_ref:',
+        '    type: env',
+        '    name: DEEPSEEK_API_KEY',
+        '  params:',
+        '    temperature: 0',
+        '    max_output_tokens: 800',
+        '    timeout_seconds: 20',
+        'react:',
+        '  max_steps: 6',
+        '  max_tool_calls: 4',
+        '  record_reasoning_summary: true',
+        '  planner:',
+        '    provider: deepseek',
+        '    name: deepseek-chat',
+        '    credential_ref:',
+        '      type: env',
+        '      name: DEEPSEEK_API_KEY',
+        '    params:',
+        '      temperature: 0',
+        '      max_output_tokens: 800',
+        '      timeout_seconds: 20',
+        'review:',
+        '  mode: rules_only',
+        '  subagent:',
+        '    provider: deepseek',
+        '    name: deepseek-chat',
+        '    credential_ref:',
+        '      type: env',
+        '      name: DEEPSEEK_API_KEY',
+        '    fail_closed: true',
+        '    params:',
+        '      temperature: 0',
+        '      max_output_tokens: 800',
+        '      timeout_seconds: 20',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=model')
+    expect(await screen.findByText('Model Configuration')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Provider'), {
+      target: { value: 'openai' },
+    })
+    fireEvent.change(screen.getByLabelText('Model Name'), {
+      target: { value: 'gpt-4.1-mini' },
+    })
+    fireEvent.change(screen.getByLabelText('Temperature'), {
+      target: { value: '0.2' },
+    })
+    fireEvent.change(screen.getByLabelText('Max ReAct Steps'), {
+      target: { value: '9' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Config' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    const savedYaml = latestSavedAgentYaml()
+    expect(savedYaml).toContain('model:\n  provider: openai\n  name: gpt-4.1-mini')
+    expect(savedYaml).toContain('planner:\n    provider: openai\n    name: gpt-4.1-mini')
+    expect(savedYaml).toContain('subagent:\n    provider: openai\n    name: gpt-4.1-mini')
+    expect(savedYaml).toContain('temperature: 0.2')
+    expect(savedYaml).toContain('max_steps: 9')
   })
 
   it('loads shared model connections for the Model module selector', async () => {

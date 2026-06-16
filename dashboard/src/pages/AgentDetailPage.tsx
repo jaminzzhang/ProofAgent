@@ -177,13 +177,13 @@ export function AgentDetailPage() {
     })
   }
 
-  async function saveWorkflow() {
+  async function saveAgentYaml(successMessage = 'Configuration saved.') {
     if (!agentId || !draftId) return
     await runAction('workflow', async () => {
       await updateConfigDraftContract(agentId, draftId, {
         agent_yaml: agentYaml,
       })
-      setStatus('Workflow stage configuration saved.')
+      setStatus(successMessage)
       refresh()
     })
   }
@@ -372,7 +372,7 @@ export function AgentDetailPage() {
           descriptor={workflowDescriptor}
           descriptorError={workflowDescriptorError}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSaveCore={saveWorkflow}
+          onSaveCore={() => saveAgentYaml('Workflow configuration saved.')}
           onSaveStages={saveWorkflowStages}
           onPreviewStage={previewWorkflowStage}
           busy={busy === 'workflow'}
@@ -387,7 +387,7 @@ export function AgentDetailPage() {
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onBindSource={bindKnowledgeSource}
           onUnbindSource={unbindKnowledgeSource}
-          onSave={saveWorkflow}
+          onSave={() => saveAgentYaml('Knowledge configuration saved.')}
           busy={busy === 'workflow' || busy === 'knowledge-binding'}
           knowledgeSourceError={knowledgeSourceError}
         />
@@ -401,7 +401,7 @@ export function AgentDetailPage() {
           yamlSection="tools"
           agentYaml={agentYaml}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={saveWorkflow}
+          onSave={() => saveAgentYaml('Tools configuration saved.')}
           busy={busy === 'workflow'}
         />
       )}
@@ -414,7 +414,7 @@ export function AgentDetailPage() {
           yamlSection="policy"
           agentYaml={agentYaml}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={saveWorkflow}
+          onSave={() => saveAgentYaml('Policy configuration saved.')}
           busy={busy === 'workflow'}
         />
       )}
@@ -430,7 +430,7 @@ export function AgentDetailPage() {
             setModelConnections((current) => [...current, connection])
             return connection
           }}
-          onSave={saveWorkflow}
+          onSave={() => saveAgentYaml('Model configuration saved.')}
           busy={busy === 'workflow'}
         />
       )}
@@ -439,7 +439,7 @@ export function AgentDetailPage() {
         <MemoryModuleEditor
           agentYaml={agentYaml}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={saveWorkflow}
+          onSave={() => saveAgentYaml('Memory configuration saved.')}
           busy={busy === 'workflow'}
         />
       )}
@@ -452,7 +452,7 @@ export function AgentDetailPage() {
           yamlSection="response"
           agentYaml={agentYaml}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={saveWorkflow}
+          onSave={() => saveAgentYaml('Response configuration saved.')}
           busy={busy === 'workflow'}
         />
       )}

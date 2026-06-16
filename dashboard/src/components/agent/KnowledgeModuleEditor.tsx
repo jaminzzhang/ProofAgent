@@ -311,7 +311,7 @@ export function KnowledgeModuleEditor({
             disabled={busy}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors"
           >
-            {busy ? 'Saving...' : 'Save Workflow'}
+            {busy ? 'Saving...' : 'Save Knowledge'}
           </button>
         </div>
       </div>

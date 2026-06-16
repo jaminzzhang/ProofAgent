@@ -10,6 +10,7 @@ export type ReceiptOutcome =
 
 export type RunPurpose = 'production' | 'validation'
 export type RunPurposeFilter = RunPurpose | 'all'
+export type WorkflowStageStatus = 'completed' | 'blocked' | 'waiting' | 'skipped'
 
 export interface GovernanceDetails {
   intent_resolution?: Record<string, unknown> | null
@@ -28,6 +29,7 @@ export interface RunSummary {
   agent_id: string | null
   agent_version_id: string | null
   draft_id: string | null
+  validation_capture_id?: string | null
   created_at: string
   updated_at: string
   approval_status: ApprovalStatus | null
@@ -42,6 +44,7 @@ export interface RunDetail {
   agent_id: string | null
   agent_version_id: string | null
   draft_id: string | null
+  validation_capture_id?: string | null
   created_at: string
   updated_at: string
   approval_status: ApprovalStatus | null
@@ -54,6 +57,116 @@ export interface RunDetail {
   approval_state: ApprovalState | null
   pending_approvals: PendingApproval[]
   governance_details?: GovernanceDetails
+  workflow_projection: WorkflowRunProjection
+}
+
+export interface WorkflowRunProjection {
+  template_name: string | null
+  template_descriptor_version: string | null
+  stage_configuration_source: Record<string, unknown>
+  stages: WorkflowRunStageProjection[]
+}
+
+export interface WorkflowRunStageProjection {
+  stage_id: string
+  label: string | null
+  status: WorkflowStageStatus | string | null
+  outcome: ReceiptOutcome | null
+  safe_summary: Record<string, unknown>
+  context_application_summary: Record<string, unknown>
+  produced_fact_refs: string[]
+  related_event_ids: string[]
+  approval_pause_summary: Record<string, unknown> | null
+  clarification_need_summary: Record<string, unknown> | null
+}
+
+export interface SensitiveValidationCaptureArtifactMetadata {
+  capture_id: string
+  run_id: string
+  draft_id: string
+  created_at: string
+  expires_at: string
+  created_by: string
+  retention_class: 'sensitive_validation_capture'
+  artifact_path: string
+  retain_for_audit: boolean
+  redaction_metadata: Record<string, unknown>
+  exclusion_metadata: Record<string, unknown>
+}
+
+export interface ValidationCaptureSourceReference {
+  run_id: string
+  run_purpose: string
+  agent_id: string | null
+  agent_version_id: string | null
+  draft_id: string | null
+  validation_id: string | null
+  template_name: string
+  template_descriptor_version: string
+  stage_configuration_source_type: string
+  stage_configuration_source_reference: string | null
+  effective_stage_configuration_ref: string | null
+}
+
+export interface WorkflowStagePromptValueCapture {
+  stage_id: string
+  prompt_values: Record<string, unknown>
+  prompt_field_names: string[]
+  prompt_character_count: number
+  redaction_applied: boolean
+  source: string | null
+}
+
+export interface WorkflowStageContextConfigurationCapture {
+  stage_id: string
+  selected_context_options: string[]
+  available_context_options: string[]
+}
+
+export interface WorkflowStageContextApplicationProjection {
+  stage_id: string
+  summary: Record<string, unknown>
+}
+
+export interface WorkflowStageResultVerificationProjection {
+  stage_id: string
+  status: WorkflowStageStatus
+  outcome: ReceiptOutcome | null
+  summary: Record<string, unknown>
+  produced_fact_refs: string[]
+}
+
+export interface ValidationCaptureResultSummary {
+  outcome: ReceiptOutcome
+  final_output: string
+  final_output_length: number
+  fact_refs: string[]
+  approval_pause: Record<string, unknown> | null
+  clarification_need: Record<string, unknown> | null
+}
+
+export interface ValidationCaptureExclusionSummary {
+  excluded_categories: string[]
+  sanitizer_version: string
+  redacted_secret_count: number
+  dropped_unsafe_key_count: number
+  redaction_applied: boolean
+}
+
+export interface ValidationCaptureV2Payload {
+  capture_contract_version: 'validation_capture.v2'
+  source: ValidationCaptureSourceReference
+  stage_prompt_values: WorkflowStagePromptValueCapture[]
+  context_configuration: WorkflowStageContextConfigurationCapture[]
+  context_applications: WorkflowStageContextApplicationProjection[]
+  stage_results: WorkflowStageResultVerificationProjection[]
+  result_summary: ValidationCaptureResultSummary
+  exclusions: ValidationCaptureExclusionSummary
+}
+
+export interface ValidationCaptureResponse {
+  metadata: SensitiveValidationCaptureArtifactMetadata
+  payload: ValidationCaptureV2Payload
 }
 
 export interface TraceEvent {
@@ -285,6 +398,7 @@ export interface AgentValidationRecord {
   created_at: string
   summary: string
   errors: string[]
+  validation_capture_id?: string | null
 }
 
 export interface ConfigAgentSummary {

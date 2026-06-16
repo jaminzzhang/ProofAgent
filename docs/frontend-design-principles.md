@@ -38,6 +38,12 @@ Unified Chat is a conversation execution surface. It must optimize for low-frict
 
 Keep the Proof Agent visual tone restrained, operational, and enterprise-focused. Do not import marketing-page patterns into product workflows.
 
+Workflow-related Dashboard screens use the Dashboard Workflow Lens:
+
+- Agent Workflow configuration starts from the Workflow Template summary, read-only relationship map, and Stage Inspector. YAML stays an advanced artifact, not the primary path.
+- Draft validation is a workspace: readiness, run action, latest result, history, and gated validation capture sections are separate jobs.
+- Run Detail uses backend-owned Workflow Run Projection data for governed stage semantics. JSONL Trace remains a drilldown artifact; frontend code must not parse trace events to invent Workflow meaning.
+
 ## Before Shipping UI Changes
 
 - The task and IA are written or explicitly reused.

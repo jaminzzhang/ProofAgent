@@ -38,14 +38,20 @@ export function AgentDetailShell({
         .filter((item): item is Tab => Boolean(item)),
     },
     {
-      title: 'Configure',
+      title: 'Design',
       items: ['workflow', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response']
         .map((id) => moduleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
     },
     {
-      title: 'Lifecycle',
-      items: ['validate', 'versions', 'contract']
+      title: 'Verify',
+      items: ['validate', 'contract']
+        .map((id) => lifecycleById.get(id))
+        .filter((item): item is Tab => Boolean(item)),
+    },
+    {
+      title: 'Release',
+      items: ['versions']
         .map((id) => lifecycleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
     },
@@ -93,27 +99,35 @@ export function AgentDetailShell({
             aria-label="Agent navigation"
             className="p-3"
           >
-            <div className="grid gap-3 sm:grid-cols-4 lg:block lg:space-y-5">
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5 lg:block lg:space-y-5">
               {groups.map((group) => (
                 <section key={group.title}>
                   <h3 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                     {group.title}
                   </h3>
                   <div className="space-y-1">
-                    {group.items.map((item) => (
-                      <button
-                        key={item.id}
-                        onClick={() => onModuleChange(item.id)}
-                        className={`w-full cursor-pointer rounded-md px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
-                          activeModule === item.id
-                            ? 'bg-[var(--bg-hover)] text-[var(--text-primary)]'
-                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
-                        }`}
-                        aria-current={activeModule === item.id ? 'page' : undefined}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
+                    {group.items.map((item) => {
+                      const isActive = activeModule === item.id
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => onModuleChange(item.id)}
+                          className={`w-full cursor-pointer rounded-md border-l-2 px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
+                            isActive
+                              ? 'shadow-sm'
+                              : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
+                          }`}
+                          style={isActive ? {
+                            backgroundColor: 'var(--accent)',
+                            borderColor: 'var(--accent)',
+                            color: 'var(--accent-fg)',
+                          } : undefined}
+                          aria-current={isActive ? 'page' : undefined}
+                        >
+                          {item.label}
+                        </button>
+                      )
+                    })}
                   </div>
                 </section>
               ))}

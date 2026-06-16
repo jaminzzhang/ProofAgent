@@ -191,6 +191,15 @@ def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:
             "effective_workflow_stage_configuration"
         ),
     }
+    detail = client.get(f"/api/runs/{body['run_id']}").json()
+    projection = detail["workflow_projection"]
+    assert projection["template_name"] == "react_enterprise_qa"
+    assert projection["template_descriptor_version"] == "react_enterprise_qa.v1"
+    assert projection["stage_configuration_source"] == summary["payload"]["source"]
+    assert {stage["stage_id"] for stage in projection["stages"]} >= {
+        "plan",
+        "model_answer",
+    }
 
 def test_validation_capture_requires_agent_validate_permission(tmp_path: Path) -> None:
     app, _artifact = _app_with_validation_capture(tmp_path)

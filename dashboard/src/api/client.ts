@@ -34,6 +34,7 @@ import type {
   SharedModelConnectionDeletionEligibility,
   SharedModelConnectionReferenceSummary,
   StatsResponse,
+  ValidationCaptureResponse,
   WorkflowStageConfig,
   WorkflowStageContextPreview,
   WorkflowStagePromptConfig,
@@ -97,6 +98,10 @@ export function fetchRuns(params?: {
 
 export function fetchRunDetail(runId: string): Promise<RunDetail> {
   return fetchJson<RunDetail>(`${BASE}/runs/${runId}`)
+}
+
+export function fetchValidationCapture(runId: string): Promise<ValidationCaptureResponse> {
+  return fetchJson<ValidationCaptureResponse>(`${BASE}/runs/${runId}/validation-capture`)
 }
 
 export function fetchStats(): Promise<StatsResponse> {

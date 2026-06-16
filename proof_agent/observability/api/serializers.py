@@ -53,4 +53,5 @@ def serialize_run_detail(detail: RunDetail) -> dict[str, Any]:
         "approval_state": detail.approval_state,
         "pending_approvals": list(detail.pending_approvals),
         "governance_details": detail.governance_details,
+        "workflow_projection": detail.workflow_projection.model_dump(mode="json"),
     }
