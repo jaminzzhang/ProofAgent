@@ -16,6 +16,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ApprovalPause,
+    ApprovalStatus,
     ContextAdmission,
     EvidenceChunk,
     PolicyDecisionType,
@@ -29,6 +30,7 @@ from proof_agent.contracts import (
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
     WorkflowStageResult,
+    WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
     WorkflowTemplateExecutionResult,
 )
@@ -500,10 +502,7 @@ def _workflow_execution_result_from_interrupt(
             EvidenceChunk.model_validate(item)
             for item in final_state.get("evidence", ())
         ),
-        stage_results=tuple(
-            WorkflowStageResult.model_validate(item)
-            for item in final_state.get("stage_results", ())
-        ),
+        stage_results=_stage_results_from_interrupt(final_state, interrupt_payload),
         intent_resolution=(
             final_state.get("intent_resolution")
             if isinstance(final_state.get("intent_resolution"), Mapping)
@@ -570,6 +569,40 @@ def _approval_pause_from_interrupt(
             ),
             "parameter_count": parameter_count,
         },
+    )
+
+
+def _stage_results_from_interrupt(
+    final_state: Mapping[str, Any],
+    interrupt_payload: Mapping[str, Any],
+) -> tuple[WorkflowStageResult, ...]:
+    stage_results = tuple(
+        WorkflowStageResult.model_validate(item)
+        for item in final_state.get("stage_results", ())
+    )
+    if any(
+        stage.stage_id == "tool" and stage.status is WorkflowStageStatus.WAITING
+        for stage in stage_results
+    ):
+        return stage_results
+    return (*stage_results, _tool_waiting_stage_result_from_interrupt(interrupt_payload))
+
+
+def _tool_waiting_stage_result_from_interrupt(
+    interrupt_payload: Mapping[str, Any],
+) -> WorkflowStageResult:
+    pause = _approval_pause_from_interrupt(interrupt_payload)
+    return WorkflowStageResult(
+        stage_id="tool",
+        status=WorkflowStageStatus.WAITING,
+        outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
+        summary={
+            "approval_id": pause.approval_id,
+            "tool_name": pause.tool_name,
+            "state": ApprovalStatus.REQUESTED.value,
+            "policy_decision": pause.policy_decision.value,
+        },
+        produced_fact_refs=("approval_pause",),
     )
 
 

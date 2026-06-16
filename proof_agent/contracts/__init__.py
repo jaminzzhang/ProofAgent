@@ -162,7 +162,7 @@ from proof_agent.contracts.react_workflow import (
 )
 from proof_agent.contracts.dashboard import RunDetail, RunIndex, RunPurpose, RunSummary
 from proof_agent.contracts.receipt import ReceiptOutcome
-from proof_agent.contracts.run import RunResult, ValidationResult, ValidationStatus, WorkflowState
+from proof_agent.contracts.run import RunResult, ValidationResult, ValidationStatus
 from proof_agent.contracts.tool import ToolRequest
 from proof_agent.contracts.trace import TraceEvent, TraceEventType
 from proof_agent.contracts.untrusted_web import UntrustedWebContext, UntrustedWebResult
@@ -383,7 +383,6 @@ __all__ = [
     "WorkflowStageConfigurationTraceSummary",
     "WorkflowStageContextConfig",
     "WorkflowStagePromptConfig",
-    "WorkflowState",
     "WorkflowTemplateExecutionInput",
     "WorkflowTemplateExecutionResult",
     "allowed_review_decisions_for",

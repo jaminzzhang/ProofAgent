@@ -351,6 +351,22 @@ def test_tool_question_waits_for_approval(tmp_path: Path) -> None:
     }
     assert pending["payload"]["policy_decision"] == "require_approval"
     assert pending["payload"]["checkpoint_id"] == f"thread:{run_id}"
+    assert result.workflow_template_execution_result is not None
+    tool_stage = next(
+        stage
+        for stage in result.workflow_template_execution_result.stage_results
+        if stage.stage_id == "tool"
+    )
+    assert tool_stage.status is WorkflowStageStatus.WAITING
+    assert tool_stage.outcome is ReceiptOutcome.WAITING_FOR_APPROVAL
+    assert tool_stage.produced_fact_refs == ("approval_pause",)
+    assert tool_stage.summary == {
+        "approval_id": "appr_customer_lookup",
+        "tool_name": "customer_lookup",
+        "state": "requested",
+        "policy_decision": "require_approval",
+    }
+    assert tool_stage.continuation == {}
 
 
 def test_disabled_tools_block_react_tool_action_before_review(tmp_path: Path) -> None:

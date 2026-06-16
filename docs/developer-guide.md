@@ -42,7 +42,7 @@ Run the Institution Insurance Specialist Agent:
 uv run --extra dev proof-agent run examples/institution_insurance_specialist/agent.yaml --question "For short-term accident claims, what should a branch specialist explain to an agent when the claim is still pending?"
 ```
 
-Run the deterministic Controlled ReAct Enterprise QA demo:
+Run the deterministic Controlled ReAct Enterprise QA compatibility command:
 ```bash
 uv run --extra dev --extra dashboard proof-agent react-demo
 ```
@@ -290,7 +290,8 @@ workflow:
 Rules:
 
 - `workflow.stages[]` is accepted for Workflow Templates that declare editable stages;
-  `enterprise_qa` remains a deterministic read-only baseline.
+  `enterprise_qa` remains a read-only compatibility path, while the deterministic
+  regression baseline runs through `react_enterprise_qa`.
 - `id` must match the backend Workflow Template Stage Descriptor.
 - Prompt fields are limited to `business_context`, `task_instructions`, and
   `output_preferences`.
@@ -951,7 +952,7 @@ Suggested validation commands:
 ```bash
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
 uv run --extra dev proof-agent run examples/institution_insurance_specialist/agent.yaml --question "For short-term accident claims, what should a branch specialist explain to an agent when the claim is still pending?"
-uv run --extra dev --extra dashboard proof-agent react-demo
+uv run --extra dev proof-agent demo
 uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
 uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md

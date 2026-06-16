@@ -17,7 +17,6 @@ from proof_agent.contracts import EvaluationReleaseDecisionStatus
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.analyzer import analyze_evaluation
 from proof_agent.evaluation.demo.scenarios import (
-    DEMO_SCENARIOS,
     REACT_DEMO_SCENARIOS,
     SUPPORTED_QUESTION,
 )
@@ -38,7 +37,7 @@ app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
 app.add_typer(evaluate_app, name="evaluate")
 
-DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 PUBLIC_EXAMPLE_PATH = Path("examples/insurance_customer_service/agent.yaml")
 DEV_PROCESS_POLL_SECONDS = 0.5
@@ -114,7 +113,7 @@ def demo() -> None:
 
     typer.echo("Proof Agent demo")
     store = RunStore(Path("runs/history"))
-    for scenario in DEMO_SCENARIOS:
+    for scenario in REACT_DEMO_SCENARIOS:
         result = run_with_langgraph(
             DEMO_AGENT_PATH,
             question=scenario.question,

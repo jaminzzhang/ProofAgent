@@ -6,6 +6,7 @@ from typing import Any
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.contracts import (
     ApprovalPause,
+    ApprovalState,
     ApprovalStatus,
     ContextAdmission,
     PolicyDecisionType,
@@ -32,9 +33,13 @@ class ReActEnterpriseQAWorkflowExecution:
         self.invocation = invocation
         self.trace = trace
         self.execution_input = execution_input
-        from proof_agent.control.workflow.react_nodes import ReActWorkflowNodes
+        from proof_agent.control.workflow.react_enterprise_qa_stage_behavior import (
+            ReActEnterpriseQAStageBehavior,
+            wrap_control_plane_model_providers,
+        )
 
-        self._nodes = ReActWorkflowNodes(
+        wrap_control_plane_model_providers(invocation, trace)
+        self._behavior = ReActEnterpriseQAStageBehavior(
             invocation=invocation,
             trace=trace,
             execution_input=execution_input,
@@ -43,7 +48,7 @@ class ReActEnterpriseQAWorkflowExecution:
         )
 
     def plan(self, state: Mapping[str, Any]) -> WorkflowStageResult:
-        delta = self._nodes.plan(state)
+        delta = self._behavior.plan(state)
         action = _mapping(delta.get("action"))
         outcome = _outcome(delta.get("governance_refusal"))
         return WorkflowStageResult(
@@ -63,7 +68,7 @@ class ReActEnterpriseQAWorkflowExecution:
         )
 
     def clarify(self, state: Mapping[str, Any]) -> WorkflowStageResult:
-        delta = self._nodes.clarify(state)
+        delta = self._behavior.clarify(state)
         action = _mapping(state.get("action"))
         parameters = _mapping(action.get("parameters"))
         missing_fields = [str(item) for item in parameters.get("missing_fields", ())]
@@ -90,7 +95,7 @@ class ReActEnterpriseQAWorkflowExecution:
         )
 
     def intent_resolution(self, state: Mapping[str, Any]) -> WorkflowStageResult:
-        delta = self._nodes.intent_resolution(state)
+        delta = self._behavior.intent_resolution(state)
         resolution = _mapping(delta.get("intent_resolution"))
         outcome = _outcome(delta.get("governance_refusal"))
         return WorkflowStageResult(
@@ -110,7 +115,7 @@ class ReActEnterpriseQAWorkflowExecution:
         )
 
     def review_retrieval_plan(self, state: Mapping[str, Any]) -> WorkflowStageResult:
-        delta = self._nodes.review_retrieval_plan(state)
+        delta = self._behavior.review_retrieval_plan(state)
         outcome = _outcome(delta.get("governance_refusal"))
         return WorkflowStageResult(
             stage_id="retrieval_review",
@@ -127,167 +132,80 @@ class ReActEnterpriseQAWorkflowExecution:
         *,
         approval_decision: Mapping[str, Any] | None = None,
     ) -> WorkflowStageResult:
+        delta = self._behavior.tool(state, approval_decision=approval_decision)
+        approval_state = delta.get("tool_approval_state")
+        if isinstance(approval_state, ApprovalState):
+            return self._approval_waiting_result(delta, approval_state)
+        return self._terminal_result("tool", delta)
+
+    def _approval_waiting_result(
+        self,
+        delta: Mapping[str, Any],
+        approval_state: ApprovalState,
+    ) -> WorkflowStageResult:
         from proof_agent.capabilities.tools.approval import (
             create_pending_approval,
             pending_approval_payload,
         )
-        from proof_agent.control.workflow.react_nodes import (
-            _request_tool_or_refuse,
-            proposal_from_state,
+
+        parameters = dict(_mapping(delta.get("tool_approval_parameters")))
+        policy_decision = _policy_decision(delta.get("tool_approval_policy_decision"))
+        action_id = str(delta.get("tool_approval_action_id", ""))
+        checkpoint_ref = str(
+            delta.get("tool_approval_checkpoint_ref") or f"thread:{self.trace.run_id}"
         )
-        from proof_agent.runtime.graph import _format_untrusted_web_supplement
-
-        proposal = proposal_from_state(state)
-        if not self._stage_available("tool"):
-            return self._terminal_result("tool", _tool_capability_disabled_delta())
-        tool_name = proposal.target_tool_name or ""
-        parameters = dict(proposal.parameters)
-        tool_policy_decision = PolicyDecisionType(
-            state.get("tool_policy_decision")
-            or PolicyDecisionType.REQUIRE_APPROVAL.value
-        )
-
-        if (
-            tool_policy_decision == PolicyDecisionType.REQUIRE_APPROVAL
-            and approval_decision is None
-        ):
-            gateway_result = _request_tool_or_refuse(
-                invocation=self.invocation,
-                trace=self.trace,
-                proposal=proposal,
-                tool_name=tool_name,
-                parameters=parameters,
-                approved=False,
-            )
-            if isinstance(gateway_result, dict):
-                return self._terminal_result("tool", gateway_result)
-            pending = create_pending_approval(
-                approval_state=gateway_result.approval_state,
-                thread_id=self.trace.run_id,
-                action_id=proposal.action_id,
-                parameters=parameters,
-                policy_decision=tool_policy_decision,
-                checkpoint_id=f"thread:{self.trace.run_id}",
-            )
-            interrupt_payload = {
-                "kind": "tool_approval",
-                "approval_requested": {
-                    "approval_id": gateway_result.approval_state.approval_id,
-                    "tool_name": tool_name,
-                    "state": gateway_result.approval_state.state.value,
-                },
-                "pending_approval": pending_approval_payload(pending),
-            }
-            pause = ApprovalPause(
-                approval_id=gateway_result.approval_state.approval_id,
-                action_id=proposal.action_id,
-                tool_name=tool_name,
-                policy_decision=tool_policy_decision,
-                checkpoint_ref=f"thread:{self.trace.run_id}",
-                expires_at=gateway_result.approval_state.expires_at,
-                summary={
-                    "state": gateway_result.approval_state.state.value,
-                    "parameter_count": len(parameters),
-                    "risk_level": proposal.risk_level,
-                },
-            )
-            return WorkflowStageResult(
-                stage_id="tool",
-                status=WorkflowStageStatus.WAITING,
-                outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
-                summary={
-                    "approval_id": pause.approval_id,
-                    "tool_name": tool_name,
-                    "state": ApprovalStatus.REQUESTED.value,
-                    "policy_decision": tool_policy_decision.value,
-                },
-                produced_fact_refs=("approval_pause",),
-                continuation={
-                    "approval_pause": pause,
-                    "approval_interrupt": interrupt_payload,
-                },
-            )
-
-        if approval_decision is not None and not approval_decision.get("approved"):
-            actor = approval_decision.get("actor", "local-user")
-            self.trace.emit(
-                "approval_denied",
-                status="blocked",
-                payload={
-                    "approval_id": approval_decision.get("approval_id", "appr_unknown"),
-                    "tool_name": tool_name,
-                    "state": ApprovalStatus.DENIED.value,
-                    "actor": actor,
-                },
-            )
-            return self._terminal_result(
-                "tool",
-                {
-                    "governance_refusal": ReceiptOutcome.TOOL_APPROVAL_DENIED,
-                    "governance_message": (
-                        f"The {tool_name} tool was not run because approval was denied."
-                    ),
-                },
-            )
-
-        gateway_result = _request_tool_or_refuse(
-            invocation=self.invocation,
-            trace=self.trace,
-            proposal=proposal,
-            tool_name=tool_name,
+        tool_name = str(delta.get("tool_approval_tool_name") or approval_state.tool_name)
+        pending = create_pending_approval(
+            approval_state=approval_state,
+            thread_id=self.trace.run_id,
+            action_id=action_id,
             parameters=parameters,
-            approved=True,
+            policy_decision=policy_decision,
+            checkpoint_id=checkpoint_ref,
         )
-        if isinstance(gateway_result, dict):
-            return self._terminal_result("tool", gateway_result)
-        if approval_decision is not None:
-            self.trace.emit(
-                "approval_granted",
-                status="ok",
-                payload={
-                    "approval_id": approval_decision.get(
-                        "approval_id",
-                        gateway_result.approval_state.approval_id,
-                    ),
-                    "tool_name": tool_name,
-                    "state": ApprovalStatus.GRANTED.value,
-                    "actor": approval_decision.get("actor", "local-user"),
-                },
-            )
-        self.trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
-        if tool_name == "untrusted_web_search":
-            supplement = _format_untrusted_web_supplement(
-                dict(gateway_result.result or {}).get("results", ())
-            )
-            message = (
-                "I cannot answer because the available evidence is insufficient."
-                if not supplement
-                else f"I cannot answer because the available evidence is insufficient.\n\n{supplement}"
-            )
-            self.trace.emit(
-                "final_output_disclosure",
-                status="ok",
-                payload={
-                    "used_untrusted_web_context": bool(supplement),
-                    "untrusted_web_disclaimer_present": bool(supplement),
-                },
-            )
-            return self._terminal_result(
-                "tool",
-                {
-                    "final_output": message,
-                    "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
-                    "governance_message": message,
-                },
-            )
-        message = "Customer policy status is active according to the approved mock lookup."
-        return self._terminal_result(
-            "tool",
-            {
-                "final_output": message,
-                "governance_refusal": ReceiptOutcome.ANSWERED_WITH_CITATIONS,
-                "governance_message": message,
+        interrupt_payload = {
+            "kind": "tool_approval",
+            "approval_requested": {
+                "approval_id": approval_state.approval_id,
+                "tool_name": tool_name,
+                "state": approval_state.state.value,
             },
+            "pending_approval": pending_approval_payload(pending),
+        }
+        pause = ApprovalPause(
+            approval_id=approval_state.approval_id,
+            action_id=action_id,
+            tool_name=tool_name,
+            policy_decision=policy_decision,
+            checkpoint_ref=checkpoint_ref,
+            expires_at=approval_state.expires_at,
+            summary={
+                "state": approval_state.state.value,
+                "parameter_count": len(parameters),
+                "risk_level": str(delta.get("tool_approval_risk_level", "")),
+            },
+        )
+        continuation: dict[str, Any] = {
+            "approval_pause": pause,
+            "approval_interrupt": interrupt_payload,
+        }
+        stage_context_applications = delta.get("stage_context_applications")
+        if isinstance(stage_context_applications, list | tuple):
+            continuation["stage_context_applications"] = [
+                dict(item) for item in stage_context_applications if isinstance(item, Mapping)
+            ]
+        return WorkflowStageResult(
+            stage_id="tool",
+            status=WorkflowStageStatus.WAITING,
+            outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
+            summary={
+                "approval_id": pause.approval_id,
+                "tool_name": tool_name,
+                "state": ApprovalStatus.REQUESTED.value,
+                "policy_decision": policy_decision.value,
+            },
+            produced_fact_refs=("approval_pause",),
+            continuation=continuation,
         )
 
     def _terminal_result(
@@ -312,7 +230,7 @@ class ReActEnterpriseQAWorkflowExecution:
         )
 
     def retrieval(self, state: Mapping[str, Any]) -> WorkflowStageResult:
-        delta = self._nodes.retrieval(state)
+        delta = self._behavior.retrieval(state)
         outcome = _outcome(delta.get("governance_refusal"))
         evidence = list(delta.get("evidence", ()))
         return WorkflowStageResult(
@@ -328,7 +246,7 @@ class ReActEnterpriseQAWorkflowExecution:
         )
 
     def model(self, state: Mapping[str, Any]) -> WorkflowStageResult:
-        delta = self._nodes.model(state)
+        delta = self._behavior.model(state)
         outcome = _outcome(delta.get("governance_refusal"))
         return WorkflowStageResult(
             stage_id="model_answer",
@@ -348,7 +266,7 @@ class ReActEnterpriseQAWorkflowExecution:
         )
 
     def review_tool(self, state: Mapping[str, Any]) -> WorkflowStageResult:
-        delta = self._nodes.review_tool(state)
+        delta = self._behavior.review_tool(state)
         outcome = _outcome(delta.get("governance_refusal"))
         return WorkflowStageResult(
             stage_id="tool_review",
@@ -377,6 +295,14 @@ def _outcome(value: Any) -> ReceiptOutcome | None:
     if isinstance(value, str) and value:
         return ReceiptOutcome(value)
     return None
+
+
+def _policy_decision(value: Any) -> PolicyDecisionType:
+    if isinstance(value, PolicyDecisionType):
+        return value
+    if isinstance(value, str) and value:
+        return PolicyDecisionType(value)
+    return PolicyDecisionType.REQUIRE_APPROVAL
 
 
 def _review_summary(delta: Mapping[str, Any]) -> dict[str, Any]:

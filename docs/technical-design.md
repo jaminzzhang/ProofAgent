@@ -27,14 +27,15 @@ Core goals:
 4. Provide CLI and Docker execution entry points.
 5. Maintain contract-first design; third-party SDK types must not leak into public contracts.
 
-Current demo acceptance results:
+Current deterministic demo acceptance results, backed by the React Enterprise QA baseline:
 ```text
 supported: ANSWERED_WITH_CITATIONS
 unsupported: REFUSED_NO_EVIDENCE
+clarify: WAITING_FOR_USER_CLARIFICATION
 tool_required: WAITING_FOR_APPROVAL
 ```
 
-Current ReAct demo acceptance results:
+The `react-demo` command remains as a compatibility regression command with the same expected outcomes:
 ```text
 supported: ANSWERED_WITH_CITATIONS
 unsupported: REFUSED_NO_EVIDENCE
@@ -1194,8 +1195,8 @@ Rules:
 CLI commands:
 | Command | Purpose |
 | --- | --- |
-| `proof-agent demo` | deterministic three-scenario demo |
-| `proof-agent react-demo` | deterministic Controlled ReAct Enterprise QA scenarios |
+| `proof-agent demo` | deterministic React Enterprise QA baseline scenarios |
+| `proof-agent react-demo` | compatibility command for deterministic React Enterprise QA scenarios |
 | `proof-agent run` | run one Enterprise QA question |
 | `proof-agent doctor` | local, Docker, sample, provider readiness |
 | `proof-agent inspect` | summarize trace or receipt |
@@ -1209,12 +1210,12 @@ Docker:
 - Docker path must not require API keys.
 - Remote provider env vars can be passed at runtime.
 
-Deterministic ReAct demo:
+Deterministic React baseline demo:
 ```bash
-uv run --extra dev --extra dashboard proof-agent react-demo
+uv run --extra dev proof-agent demo
 ```
 
-When the package is already installed with required extras, `proof-agent react-demo` is equivalent.
+When the package is already installed with required extras, `proof-agent demo` is equivalent.
 
 ## 22. Dependencies
 

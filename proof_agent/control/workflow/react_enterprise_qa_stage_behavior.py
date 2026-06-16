@@ -6,12 +6,9 @@ from typing import Any
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.capabilities.models.protocol import ModelProvider
-from proof_agent.capabilities.tools.approval import (
-    create_pending_approval,
-    pending_approval_payload,
-)
 from proof_agent.capabilities.tools.gateway import ToolGatewayResult
 from proof_agent.contracts import (
+    ApprovalStatus,
     ContextAdmission,
     EnforcementPoint,
     EvidenceChunk,
@@ -54,8 +51,8 @@ from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.runtime.graph import _format_untrusted_web_supplement, _maybe_untrusted_web_supplement
 
 
-class ReActWorkflowNodes:
-    """Node implementations for the React Enterprise QA workflow."""
+class ReActEnterpriseQAStageBehavior:
+    """Scheduler-neutral stage behavior for the React Enterprise QA workflow."""
 
     def __init__(
         self,
@@ -525,7 +522,12 @@ class ReActWorkflowNodes:
             **_stage_context_applications_delta(state, stage_context),
         }
 
-    def tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
+    def tool(
+        self,
+        state: Mapping[str, Any],
+        *,
+        approval_decision: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         proposal = proposal_from_state(state)
         if not self.workflow_stage_available("tool"):
             return _tool_capability_disabled_delta()
@@ -536,7 +538,10 @@ class ReActWorkflowNodes:
             state.get("tool_policy_decision") or PolicyDecisionType.REQUIRE_APPROVAL.value
         )
 
-        if tool_policy_decision == PolicyDecisionType.REQUIRE_APPROVAL:
+        if (
+            tool_policy_decision == PolicyDecisionType.REQUIRE_APPROVAL
+            and approval_decision is None
+        ):
             gateway_result = _request_tool_or_refuse(
                 invocation=self.invocation,
                 trace=self.trace,
@@ -550,28 +555,41 @@ class ReActWorkflowNodes:
                     **gateway_result,
                     **_stage_context_applications_delta(state, tool_stage_context),
                 }
-            pending = create_pending_approval(
-                approval_state=gateway_result.approval_state,
-                thread_id=self.trace.run_id,
-                action_id=proposal.action_id,
-                parameters=parameters,
-                policy_decision=tool_policy_decision,
-                checkpoint_id=f"thread:{self.trace.run_id}",
-            )
             return {
-                "approval_interrupt": {
-                    "kind": "tool_approval",
-                    "approval_requested": {
-                        "approval_id": gateway_result.approval_state.approval_id,
-                        "tool_name": tool_name,
-                        "state": gateway_result.approval_state.state.value,
-                    },
-                    "pending_approval": pending_approval_payload(pending),
-                },
                 "governance_refusal": ReceiptOutcome.WAITING_FOR_APPROVAL,
                 "governance_message": (
                     f"Waiting for approval before {tool_name} can execute."
                 ),
+                "tool_approval_action_id": proposal.action_id,
+                "tool_approval_checkpoint_ref": f"thread:{self.trace.run_id}",
+                "tool_approval_parameters": parameters,
+                "tool_approval_policy_decision": tool_policy_decision,
+                "tool_approval_risk_level": proposal.risk_level,
+                "tool_approval_state": gateway_result.approval_state,
+                "tool_approval_tool_name": tool_name,
+                **_stage_context_applications_delta(state, tool_stage_context),
+            }
+
+        if approval_decision is not None and not approval_decision.get("approved"):
+            actor = approval_decision.get("actor", "local-user")
+            self.trace.emit(
+                "approval_denied",
+                status="blocked",
+                payload={
+                    "approval_id": approval_decision.get("approval_id", "appr_unknown"),
+                    "tool_name": tool_name,
+                    "state": ApprovalStatus.DENIED.value,
+                    "actor": actor,
+                },
+            )
+            message = f"The {tool_name} tool was not run because approval was denied."
+            result = {
+                "governance_refusal": ReceiptOutcome.TOOL_APPROVAL_DENIED,
+                "governance_message": message,
+                "final_output": message,
+            }
+            return {
+                **result,
                 **_stage_context_applications_delta(state, tool_stage_context),
             }
 
@@ -588,6 +606,20 @@ class ReActWorkflowNodes:
                 **gateway_result,
                 **_stage_context_applications_delta(state, tool_stage_context),
             }
+        if approval_decision is not None:
+            self.trace.emit(
+                "approval_granted",
+                status="ok",
+                payload={
+                    "approval_id": approval_decision.get(
+                        "approval_id",
+                        gateway_result.approval_state.approval_id,
+                    ),
+                    "tool_name": tool_name,
+                    "state": ApprovalStatus.GRANTED.value,
+                    "actor": approval_decision.get("actor", "local-user"),
+                },
+            )
         self.trace.emit("tool_result", status="ok", payload=dict(gateway_result.result or {}))
         if tool_name == "untrusted_web_search":
             supplement = _format_untrusted_web_supplement(

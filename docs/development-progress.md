@@ -7,7 +7,7 @@
 
 Proof Agent is a **Controlled Agent Harness Framework**. The core product is the Harness lifecycle: Agent Contract, Workflow, PolicyEngine, Tool Gateway, Memory Boundary, Validators, Trace, Governance Receipt, RunStore, and Dashboard API.
 
-The project is no longer positioned as local-first or CLI-first. It keeps a deterministic local demo as the regression baseline, and supports CLI plus Docker entry points. Remote models, LangChain/LangGraph, vector stores, real MCP, and Dashboard capabilities are adapter-driven extensions around the same Harness contract.
+The project is no longer positioned as local-first or CLI-first. It keeps a deterministic local React Enterprise QA demo as the regression baseline, and supports CLI plus Docker entry points. Remote models, LangChain/LangGraph, vector stores, real MCP, and Dashboard capabilities are adapter-driven extensions around the same Harness contract.
 
 Authoritative design doc: `docs/technical-design.md`.
 
@@ -73,14 +73,6 @@ Expected outcomes:
 ```text
 supported: ANSWERED_WITH_CITATIONS
 unsupported: REFUSED_NO_EVIDENCE
-tool_required: WAITING_FOR_APPROVAL
-```
-
-ReAct demo expected outcomes:
-
-```text
-supported: ANSWERED_WITH_CITATIONS
-unsupported: REFUSED_NO_EVIDENCE
 clarify: WAITING_FOR_USER_CLARIFICATION
 tool_required: WAITING_FOR_APPROVAL
 ```
@@ -117,7 +109,6 @@ uv run --extra dev python -m pytest tests/ -v
 uv run --extra dev ruff check proof_agent tests
 uv run --extra dev mypy proof_agent
 uv run --extra dev proof-agent demo
-uv run --extra dev --extra dashboard proof-agent react-demo
 ```
 
 For documentation-only edits:

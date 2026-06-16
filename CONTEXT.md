@@ -126,12 +126,44 @@ _Avoid_: Runtime graph rewrite, stage logic rewrite, Published snapshot runtime 
 The concrete Control Plane execution object for React Enterprise QA and React Enterprise QA V2 that returns Workflow Stage Result Envelopes while leaving Runtime Plane scheduling mechanics to adapters.
 _Avoid_: Generic ReAct workflow execution, Runtime Plane graph builder, template descriptor
 
+**ReAct Enterprise QA Stage Behavior**:
+The internal Control Plane behavior service that performs React Enterprise QA stage work and returns scheduler-neutral state deltas for wrapping by ReAct Enterprise QA Workflow Execution.
+_Avoid_: Workflow Template Stage API, LangGraph node handler, Workflow Stage Result owner, runtime graph scheduler
+
+**ReAct Stage Behavior Consolidation Slice**:
+The Workflow improvement slice that makes ReAct Enterprise QA Workflow Execution the only public stage execution surface, moves shared stage work into ReAct Enterprise QA Stage Behavior, and removes duplicated tool/approval behavior.
+_Avoid_: Runtime graph rewrite, complete stage-specific result union, descriptor-derived dynamic topology, LangGraph node rename campaign
+
+**Workflow Refactor Closure Program**:
+The bounded cleanup program that closes remaining Workflow terminology and execution-boundary debt after the Agent Contract stage/capability refactor.
+_Avoid_: New workflow feature roadmap, dynamic topology rewrite, second runtime program
+
+**Workflow Stage Result Union Decision**:
+The closure decision that Workflow Stage Result remains a trace-safe envelope rather than becoming a complete per-stage result union.
+_Avoid_: Immediate per-stage union implementation, raw runtime state contract, validation capture schema rewrite
+
+**Stage-Specific Result Projection**:
+A purpose-bound typed projection of one Workflow Template Stage fact for a named consumer such as approval handling, clarification handling, or validation capture.
+_Avoid_: Complete per-stage result union, raw stage payload, Workflow Stage Continuation State
+
+**Workflow Legacy Contract Convergence**:
+The cleanup of older Workflow-facing contracts and templates so legacy names and execution shapes no longer conflict with Workflow Template Stage and Workflow Template Execution language.
+_Avoid_: ReAct Stage Behavior Consolidation, dynamic topology, new template capability
+
+**Legacy WorkflowState Retirement**:
+The Workflow Legacy Contract Convergence decision that removed the older WorkflowState snapshot contract instead of renaming its `current_node` field into new stage terminology.
+_Avoid_: current_stage alias, long-term compatibility shim, Runtime Plane state contract
+
+**Enterprise QA Baseline Reset**:
+The deliberate replacement of the old deterministic Enterprise QA baseline when preserving it would block clean Workflow Template Execution boundaries.
+_Avoid_: Incidental regression break, ReAct template rename, hidden compatibility migration
+
 **Workflow Stage Result**:
 The typed Control Envelope facts produced by one Workflow Template Stage for use inside a Workflow Template Execution.
 _Avoid_: Arbitrary state fragment, public runtime graph node output, loose dict mutation
 
 **Workflow Stage Result Envelope**:
-The Slice 2 typed envelope for Workflow Stage Result values, carrying stage id, stage status, optional terminal outcome, trace-safe summary, and produced governed fact references while deferring per-stage result union design.
+The typed envelope for Workflow Stage Result values, carrying stage id, stage status, optional terminal outcome, trace-safe summary, and produced governed fact references without requiring a complete per-stage result union.
 _Avoid_: Raw runtime state dict, complete per-stage union, untyped stage output
 
 **Workflow Stage Continuation State**:
@@ -517,6 +549,10 @@ _Avoid_: Quality score, governance pass rate, hidden launch blocker
 **Deterministic ReAct Demo**:
 A no-API-key acceptance path for the React Enterprise QA Template using deterministic planner and review providers.
 _Avoid_: Remote-only ReAct demo, provider-dependent MVP
+
+**Deterministic ReAct Baseline**:
+The deterministic regression baseline for Proof Agent's primary React Enterprise QA Workflow Template, using deterministic planner, reviewer, model, retrieval, and tool implementations.
+_Avoid_: Legacy linear Enterprise QA baseline, remote-model release gate, separate workflow world
 
 **ReAct Planner**:
 The planning capability that turns user input, system prompt, and admitted context into Reasoning Summary and ReAct Action Proposal values.
@@ -2265,7 +2301,7 @@ _Avoid_: Evidence content dump
 - **Harness Prompt Authority Boundary** means `workflow.stages[].prompt` must not expose `system_prompt`, `developer_prompt`, or `raw_prompt`; loaders and validation reject those fields because they imply control prompt authority rather than business context.
 - A **Workflow Template Execution** produces governed execution facts, while the Run Execution surface owns artifact finalization, Governance Receipt rendering, and RunStore persistence.
 - A **Workflow Template Execution Result** contains governed execution facts such as outcome, final output, approval pause, clarification request, evidence basis, governance summaries, stage results, model usage summary, and trace-safe references; it must not contain artifact paths, RunStore detail payloads, Dashboard projections, raw Runtime Plane state, raw Prompt/context payloads, or full-capture artifacts.
-- Slice 2 uses a **Workflow Stage Result Envelope** for React Enterprise QA stages instead of defining a complete per-stage result union; analyzing whether to introduce a complete union of stage-specific result contracts is a later TODO.
+- **Workflow Stage Result Union Decision** keeps **Workflow Stage Result Envelope** as the Workflow Template Execution contract and closes the earlier complete-union TODO; Proof Agent adds **Stage-Specific Result Projection** values only when a named consumer needs a bounded governed fact.
 - **Workflow Stage Result Summary** follows ordinary trace and receipt safety: raw Prompt text, selected context text, raw evidence content, raw tool payloads, complete provider responses, raw chain-of-thought, Runtime Plane state dictionaries, secrets, and secret-looking values are excluded even when the result is used inside Workflow Template Execution.
 - React Enterprise QA Slice 2 stage handlers should return **Workflow Stage Result Envelope** values as their Control Plane facts; a **Workflow Stage Result Runtime Adapter** may convert those results into LangGraph state deltas for scheduling, routing, checkpoint, and interrupt mechanics.
 - **Workflow Stage Continuation State** may carry typed governed objects or state-safe dictionaries needed for subsequent stage execution, but it is not part of ordinary trace, receipt, Dashboard projection, or Workflow Template Execution Result facts.
@@ -2298,7 +2334,19 @@ _Avoid_: Evidence content dump
 - React Enterprise QA may keep a static LangGraph topology in this slice, but availability routing and fail-closed decisions are Control Plane Workflow Template Execution semantics exposed through runtime-neutral facts; LangGraph node registration, checkpointing, interrupts, and state deltas remain **Workflow Runtime Adapter** mechanics.
 - Control Plane Workflow Template Execution must not directly depend on LangGraph interrupts, state dictionaries, or scheduler APIs; **Workflow Runtime Adapter** implementations translate runtime-neutral approval pauses, continuations, and stage results into concrete runtime mechanics.
 - React Enterprise QA Workflow Template Execution stage handlers own Workflow Stage Availability and Effective ReAct Action Set admission before runtime routing; Runtime Adapters route only from already-admitted Workflow Stage Result continuation facts.
+- **Workflow Refactor Closure Program** separates remaining Workflow cleanup into **ReAct Stage Behavior Consolidation Slice**, **Workflow Stage Result Union Decision**, and **Workflow Legacy Contract Convergence** so code-boundary cleanup, result-typing choice, and legacy contract convergence do not land as one broad change.
 - **ReAct Enterprise QA Workflow Execution** is the concrete Slice 2 execution object for `react_enterprise_qa` and `react_enterprise_qa_v2`; a generic ReAct workflow execution abstraction is deferred until multiple ReAct templates need it.
+- **ReAct Stage Behavior Consolidation Slice** resolved the leftover `ReActWorkflowNodes` ambiguity by making **ReAct Enterprise QA Workflow Execution** the only object whose public methods represent governed Workflow Template Stage execution.
+- **ReAct Enterprise QA Workflow Execution** owns Workflow Stage Result Envelope construction, including stage id, status, outcome, trace-safe summary, produced fact refs, and the separation between governed facts and continuation state.
+- **ReAct Enterprise QA Stage Behavior** may compute stage deltas, call template-specific helpers, and prepare approval/tool continuation data, but it must not expose a separate Workflow Template Stage API or own Workflow Stage Result Envelope construction.
+- In the tool stage, **ReAct Enterprise QA Stage Behavior** owns Tool Gateway calls, approval decision handling, and tool-related trace events; **ReAct Enterprise QA Workflow Execution** owns `ApprovalPause` construction and the waiting `WorkflowStageResult`; **Workflow Runtime Adapter** owns only concrete interrupt and resume mechanics.
+- **ReAct Stage Behavior Consolidation Slice** removes the `ReActWorkflowNodes` class and avoids keeping `react_nodes.py` as a long-term compatibility module.
+- ReAct routing helpers that only parse Runtime Plane state for LangGraph branch selection stay local to the Runtime Adapter, while Control Plane model-provider trace wrapping moves into ReAct Enterprise QA Workflow Execution or ReAct Enterprise QA Stage Behavior initialization.
+- **ReAct Stage Behavior Consolidation Slice** follows a small-step sequence: lock current Workflow Stage Result and approval behavior with targeted tests; add ReAct Enterprise QA Stage Behavior and migrate non-tool stages; migrate the tool stage and approval paths; move routing and trace-wrapper helpers to their owners; delete old node naming; then run focused and broad verification.
+- **ReAct Stage Behavior Consolidation Slice** does not include complete stage-specific result unions, descriptor-derived dynamic Runtime Adapter topology, runtime graph node rename campaigns, historical executable descriptor registries, second runtime support, or `validation_capture.v2` schema changes.
+- Runtime Plane LangGraph node names may remain implementation details in this slice; the slice removes ambiguous Control Plane "nodes" naming and duplicated stage behavior, not every graph node symbol.
+- **Workflow Legacy Contract Convergence** includes **Legacy WorkflowState Retirement** because the old WorkflowState snapshot is no longer the Workflow Template Execution boundary; it does not preserve the old contract by renaming `current_node` to `current_stage`.
+- The deterministic **Enterprise QA Template** is preserved as a read-only compatibility path while the default deterministic regression baseline runs through **Deterministic ReAct Baseline**.
 - A **Workflow Template Execution Result** is the external execution Interface; **Workflow Stage Result** values remain inside Workflow Template Execution and must not leak as Runtime Plane state dictionaries.
 - The public Agent Contract, Workflow Template Descriptor, trace facts, Dashboard configuration, tests, and examples use **Workflow Template Stage** language directly; Proof Agent does not dual-read legacy public stage aliases during the stage migration.
 - **Direct Workflow Stage Contract Migration** adopts Agent Contract `workflow.stages[]` in one breaking change; loaders, Dashboard, examples, fixtures, tests, and stage prompt configuration APIs migrate together and reject legacy public stage fields.
@@ -2331,7 +2379,7 @@ _Avoid_: Evidence content dump
 - Workflow Template Execution must not route to or execute unavailable Workflow Template Stages; if a model or scheduler output selects an unavailable stage or action, the Control Envelope fails closed rather than treating the stage as silently skipped.
 - **Effective ReAct Action Set** is the ReAct-specific planner action admission fact derived from **Workflow Stage Availability Set** and Tool Proposal Scope; it is separate from generic Workflow Stage Availability and excludes tool proposal actions when Tool Stage Group is unavailable.
 - ReAct planning fails closed when a planner returns a **ReAct Action Proposal** outside the **Effective ReAct Action Set**; internal continuation actions are not exposed as planner-facing candidate actions.
-- TODO: align the deterministic **Enterprise QA Template** with the **Workflow Template Execution** Interface after the React Enterprise QA execution seam is stable; the first refactor keeps Enterprise QA behavior as the regression baseline.
+- **Workflow Legacy Contract Convergence** may retire or rebuild the deterministic **Enterprise QA Template** after the React Enterprise QA execution seam is stable; **Deterministic ReAct Baseline** is the preferred long-term regression baseline.
 - The **Workflow Template Stage** terminology cutover must land before deepening the **Workflow Template Execution** seam so behavior-preserving contract migration and execution-ownership refactoring remain testable separately.
 - **Workflow Template Stages** are reserved for Agent-owner-visible configuration, explanation, audit, or evaluation points; internal policy checks, validators, model requests, helper functions, and Runtime Plane nodes are not automatically stages.
 - The **React Enterprise QA Stage Set** keeps memory and response as stages because memory governance and response projection are Control Envelope facts, not incidental return code.
@@ -2343,10 +2391,11 @@ _Avoid_: Evidence content dump
 - Retrieval_review and retrieval remain available in **React Enterprise QA Stage Set** because evidence-first retrieval is part of the template's governed promise; missing or invalid Knowledge Bindings are validation or retrieval failures, not stage availability choices.
 - Response stage configuration is projection-only: it may affect allowed wording and trace-safe context summaries, but it must not change governed outcome, evidence admission, approval state, customer-safe boundaries, Governance Detail Projection caps, trace facts, or receipt facts.
 - A **Controlled ReAct Workflow** is a **Workflow Template**.
-- The **React Enterprise QA Template** is separate from the existing **Enterprise QA Template** so deterministic Enterprise QA remains the regression baseline.
+- The **React Enterprise QA Template** is separate from the existing **Enterprise QA Template** so ReAct behavior can mature without silently mutating older packages.
 - The **React Enterprise QA Template** must include a **Deterministic ReAct Demo** before remote model paths are required.
+- **Deterministic ReAct Baseline** is the long-term deterministic regression baseline for the primary Workflow Template.
 - V1 **Autonomous Customer Service Mode** uses the **React Enterprise QA Template** as its primary customer-facing Workflow Template.
-- The existing **Enterprise QA Template** remains the deterministic regression baseline and compatibility path.
+- The existing **Enterprise QA Template** may remain a compatibility path only while it does not block clean Workflow Template Execution boundaries.
 - The **React Enterprise QA Template** uses a **ReAct Planner** configured by **ReAct Planner Config**.
 - A **LLM ReAct Planner** is a separate ReAct Planner implementation and must not replace the **Deterministic ReAct Demo** path.
 - A **LLM ReAct Planner** is the first LLM-backed implementation priority for **Business Agent AI Core**.
@@ -2730,7 +2779,7 @@ _Avoid_: Evidence content dump
 - "Workflow node editing" could mean configuring registered template stages, editing LangGraph nodes, or freely rewriting the runtime graph. Resolved: use **Workflow Template Stage Configuration** for editable stage settings that compile back to the Agent Contract without changing Harness semantics.
 - "Legacy public stage compatibility" could preserve existing examples but keep node/stage ambiguity in the public Agent Contract. Resolved: use **Direct Workflow Stage Contract Migration**, migrate to `workflow.stages[]`, and do not dual-read legacy public stage aliases.
 - "Internal node rename" could mean renaming every runtime graph node symbol or only public/domain Workflow Template configuration symbols. Resolved: follow **Stage Terminology Code Cutover Scope**; public/domain contracts become stages, while true Runtime Plane graph node terminology remains available.
-- "`ReActWorkflowNodes` rename" could be bundled with the schema cutover or deferred to execution seam work. Resolved: defer `ReActWorkflowNodes` renaming or splitting until the Workflow Template Execution consumption slice.
+- "`ReActWorkflowNodes` rename" could be bundled with the schema cutover, treated as a runtime graph rename, or handled as execution seam cleanup. Resolved: defer it out of Slice 1, then handle it through the **ReAct Stage Behavior Consolidation Slice** by moving Control Plane stage work behind **ReAct Enterprise QA Workflow Execution** instead of renaming every LangGraph node.
 - "Dashboard stage migration" could mean backend schema only or the full configuration surface. Resolved: **Dashboard Stage Configuration Surface Cutover** is part of Slice 1 and includes API payload fields, helpers, UI labels, fixtures, and tests.
 - "Legacy contract migration tool" could mean providing a codemod for old generated local data or resetting local configuration state. Resolved: do not provide a legacy migration script; source-controlled fixtures are edited directly, and generated local Agent Configuration Store data is cleared with **Local Configuration Store Reset**.
 - "`workflow.stages[]` item identity" could mean `id` or legacy aliases. Resolved: use **Workflow Stage Configuration Identifier** field `id` only, and reject aliases.
@@ -2743,13 +2792,13 @@ _Avoid_: Evidence content dump
 - "Stage terminology migration" could be bundled with execution behavior changes. Resolved: land the **Workflow Template Stage** cutover first, then deepen the **Workflow Template Execution** seam while preserving behavior.
 - "Slice 2" could mean rewriting React stage logic, consuming Published snapshots as the only runtime input, or first establishing a typed execution boundary. Resolved: Slice 2 starts with the **React Enterprise QA Template Execution Boundary** and preserves React Enterprise QA behavior while LangGraph remains an internal scheduler.
 - "Workflow Template Execution Result" could mean the final API/RunStore artifact shape or the governed facts returned by template execution. Resolved: it is the typed execution facts only; Delivery and Observability still own trace files, Governance Receipt rendering, RunStore persistence, and Dashboard projection.
-- "Workflow Stage Result typing" could mean full per-stage union contracts immediately or a safer envelope first. Resolved: Slice 2 uses a **Workflow Stage Result Envelope** and records complete stage-specific union analysis as TODO.
+- "Workflow Stage Result typing" could mean full per-stage union contracts, a trace-safe envelope, or local typed projections. Resolved: keep **Workflow Stage Result Envelope** as the contract and add **Stage-Specific Result Projection** values only for explicit consumers.
 - "Stage result summary" could mean an internal debug dump because Stage Results are inside execution. Resolved: **Workflow Stage Result Summary** is trace-safe by default and cannot carry raw Prompt/context/evidence/tool/provider/runtime state.
 - "Stage handler return value" could mean keeping dict state deltas as the source of truth or returning Workflow Stage Result values directly. Resolved: React Enterprise QA stage handlers return **Workflow Stage Result Envelope** values, while a **Workflow Stage Result Runtime Adapter** handles LangGraph state delta conversion.
 - "Continuation state" could mean leaking LangGraph state into execution facts. Resolved: use **Workflow Stage Continuation State** only as internal adapter input, separate from trace-safe summary and public execution results.
 - "Approval pause" could mean the LangGraph interrupt payload or the governed approval state. Resolved: **Approval Pause** is the Workflow Template Execution fact; Runtime Plane interrupt mechanics are only one implementation of waiting.
 - "Clarification waiting" could mean the same thing as operator approval waiting. Resolved: use **Clarification Need** for missing user information and **Approval Pause** for operator approval.
-- "Workflow execution contracts" could live in the existing run contracts or ReAct-specific contracts. Resolved: use a separate **Workflow Execution Contract Module** and treat old `WorkflowState.current_node` as a follow-up convergence TODO rather than a Slice 2 blocker.
+- "Workflow execution contracts" could live in the existing run contracts or ReAct-specific contracts. Resolved: use a separate **Workflow Execution Contract Module** and retire the old `WorkflowState.current_node` snapshot instead of renaming it.
 - "Workflow stage configuration contracts" could live inside Published Agent storage contracts, Workflow Template Execution contracts, or a neutral shared module. Resolved: use a separate **Workflow Stage Configuration Contract Module** shared by Agent Publication and Workflow Template Execution.
 - "Published snapshot runtime consumption" could mean one execution input shape for every Agent path or separate semantics for Published and package-local runs. Resolved: the slice after React Enterprise QA Slice 2 makes **Published Effective Workflow Stage Configuration Runtime Input** the source of truth for Configuration Store Published Agent Version execution, while package-local or configured Agent execution uses **Package-Local Workflow Stage Configuration Runtime Input** from the latest supported Agent Contract structure.
 - "Workflow Template Execution Input scope" could mean including every template-specific admission fact or only generic Workflow Template facts. Resolved: **Workflow Template Execution Input** remains template-generic; **Effective ReAct Action Set** is supplied to ReAct Enterprise QA Workflow Template Execution separately while still coming from **Resolved Workflow Stage Runtime Configuration**.
@@ -2804,7 +2853,7 @@ _Avoid_: Evidence content dump
 - "Intent Resolution model config" could mean introducing a third Agent-owner model role or reusing planner configuration. Resolved: V2 reuses **ReAct Planner Config** but records Intent Resolution as a distinct model-call role and audit fact.
 - "Intent Resolution visibility" could mean showing the understood intent to every user or treating it as governance detail. Resolved: expose it only through internal trace, receipt, Dashboard, or allowed operator **Governance Detail Projection**, never as ordinary customer-facing response text.
 - "`enterprise_qa` with flags" could blur the deterministic baseline with ReAct behavior. Resolved: V1 adds **React Enterprise QA Template** instead of changing the existing template.
-- "Customer service workflow" could mean the existing linear Enterprise QA path or the ReAct path. Resolved: V1 customer-facing automation uses **React Enterprise QA Template**; **Enterprise QA Template** remains the baseline path.
+- "Customer service workflow" could mean the existing linear Enterprise QA path or the ReAct path. Resolved: V1 customer-facing automation uses **React Enterprise QA Template**; long-term deterministic regression uses **Deterministic ReAct Baseline**, while **Enterprise QA Template** may remain only as a compatibility path.
 - "ReAct MVP" could mean requiring a remote LLM. Resolved: V1 requires a **Deterministic ReAct Demo**.
 - "ReAct planner" could mean the final answer model or a separate planning role. Resolved: use **ReAct Planner** and configure it through **ReAct Planner Config**.
 - "LLM planner" could mean replacing deterministic acceptance behavior or adding a second planner implementation. Resolved: use **LLM ReAct Planner** as an additional implementation.

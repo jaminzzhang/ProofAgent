@@ -1,10 +1,12 @@
 # Workflow Node Prompt Configuration
 
 > Superseded in part by [ADR-0028](0028-agent-contract-stage-capability-and-trace-capture-contract.md): public `workflow.nodes[]` configuration is replaced by `workflow.stages[]`; the Harness prompt authority boundary remains valid.
+>
+> Superseded in part by [ADR-0029](0029-deterministic-react-baseline.md): the long-term deterministic regression baseline is now the deterministic path through `react_enterprise_qa`, while `enterprise_qa` may remain only as a compatibility path.
 
 Proof Agent will add Workflow Node Prompt Configuration for the `react_enterprise_qa` template so Agent owners can provide richer business context for governed ReAct execution without editing workflow topology or replacing Harness-owned control prompts. We chose structured per-node Prompt and context settings inside `workflow.nodes[]` because Agent owners need to understand and tune the task context around `plan`, `clarification`, `retrieval_review`, `retrieval`, `model_answer`, `tool_review`, `tool`, `memory`, and `response` nodes, while the Control Envelope must remain the source of workflow order, policy gates, validators, Tool Gateway behavior, trace semantics, and model output contracts.
 
-V1 will not support free-form runtime graph editing, arbitrary node creation, edge editing, node disabling, shared Prompt templates, or prompt-defined workflow behavior. Full Workflow Node Prompt Configuration is scoped to `react_enterprise_qa`; `enterprise_qa` may expose a read-only workflow summary but remains the deterministic regression baseline. The Agent Contract stores only stable public node ids, not LangGraph internal node names.
+V1 will not support free-form runtime graph editing, arbitrary node creation, edge editing, node disabling, shared Prompt templates, or prompt-defined workflow behavior. Full Workflow Node Prompt Configuration is scoped to `react_enterprise_qa`; `enterprise_qa` may expose a read-only workflow summary but is only a compatibility path after ADR-0029. The Agent Contract stores only stable public node ids, not LangGraph internal node names.
 
 The backend Workflow Template Registry owns a Workflow Template Descriptor and Workflow Template Descriptor Version for each registered template. The descriptor is the source of truth for the Dashboard Workflow Relationship Map, node order, branch relationships, governed handoff points, editable Prompt fields, allowed context options, node input and output summaries, and model-bearing versus non-model governed node classification. The Dashboard renders this descriptor instead of hard-coding workflow semantics.
 

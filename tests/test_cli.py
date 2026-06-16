@@ -22,6 +22,7 @@ def test_demo_command_exists() -> None:
     result = runner.invoke(app, ["demo"])
     assert result.exit_code == 0
     assert "Proof Agent demo" in result.output
+    assert "clarify: WAITING_FOR_USER_CLARIFICATION" in result.output
 
 
 def test_react_demo_command_runs_no_key_scenarios() -> None:

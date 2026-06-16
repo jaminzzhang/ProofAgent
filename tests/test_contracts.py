@@ -5,15 +5,12 @@ from proof_agent.contracts import (
     ApprovalState,
     ApprovalStatus,
     EnforcementPoint,
-    EvidenceChunk,
-    EvidenceStatus,
     PendingApproval,
     PolicyDecision,
     PolicyDecisionType,
     ReceiptOutcome,
     TraceEvent,
     TraceEventType,
-    WorkflowState,
 )
 from proof_agent.errors import ProofAgentError
 
@@ -43,45 +40,6 @@ def test_policy_decision_metadata_is_immutable() -> None:
 
     with pytest.raises(TypeError):
         decision.metadata["x"] = 1
-
-
-def test_workflow_state_collections_are_immutable() -> None:
-    evidence = EvidenceChunk(
-        source="kb://policy.md",
-        content="Policy text",
-        admission_score=0.91,
-        status=EvidenceStatus.ACCEPTED,
-    )
-    workflow = WorkflowState(
-        run_id="run_001",
-        workflow_name="enterprise_qa",
-        current_node="retrieve",
-        question="What policy applies?",
-        evidence=[evidence],
-    )
-
-    with pytest.raises(AttributeError):
-        workflow.evidence.append(evidence)
-
-
-def test_workflow_state_defaults_are_isolated() -> None:
-    first = WorkflowState(
-        run_id="run_001",
-        workflow_name="enterprise_qa",
-        current_node="retrieve",
-        question="What policy applies?",
-    )
-    second = WorkflowState(
-        run_id="run_002",
-        workflow_name="enterprise_qa",
-        current_node="retrieve",
-        question="What policy applies?",
-    )
-
-    assert first.evidence == ()
-    assert second.evidence == ()
-    assert first.memory_writes == ()
-    assert second.memory_writes == ()
 
 
 def test_approval_state_contains_request_and_terminal_trace_fields() -> None:

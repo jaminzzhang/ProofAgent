@@ -10,16 +10,13 @@ from langgraph.types import interrupt
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.contracts import (
     ContextAdmission,
+    ReActActionProposal,
     ReActActionType,
     ReceiptOutcome,
     WorkflowTemplateExecutionInput,
 )
 from proof_agent.control.workflow.react_enterprise_qa_execution import (
     ReActEnterpriseQAWorkflowExecution,
-)
-from proof_agent.control.workflow.react_nodes import (
-    proposal_from_state,
-    wrap_control_plane_model_providers,
 )
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.runtime.workflow_stage_adapter import (
@@ -57,7 +54,6 @@ def build_react_enterprise_qa_graph(
     allow_untrusted_web_supplement: bool = False,
 ) -> StateGraph:  # type: ignore[type-arg]
     uses_intent_resolution = invocation.template.descriptor_version == "react_enterprise_qa.v2"
-    wrap_control_plane_model_providers(invocation, trace)
     execution = ReActEnterpriseQAWorkflowExecution(
         invocation=invocation,
         trace=trace,
@@ -129,7 +125,7 @@ def build_react_enterprise_qa_graph(
 def _route_after_plan(state: ReActGraphState) -> str:
     if state.get("governance_refusal"):
         return "end"
-    action = proposal_from_state(state).action_type
+    action = _proposal_from_state(state).action_type
     if action == ReActActionType.ASK_CLARIFICATION:
         return "clarify"
     if action == ReActActionType.PROPOSE_TOOL_CALL:
@@ -137,6 +133,10 @@ def _route_after_plan(state: ReActGraphState) -> str:
     if action == ReActActionType.PLAN_RETRIEVAL:
         return "review_retrieval_plan"
     return "end"
+
+
+def _proposal_from_state(state: Mapping[str, Any]) -> ReActActionProposal:
+    return ReActActionProposal.model_validate(state["action"])
 
 
 def _route_after_review(state: ReActGraphState) -> str:
