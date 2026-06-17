@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     WorkflowStageAvailabilitySet,
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
+    WorkflowStageFailureDiagnostic,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
@@ -68,6 +69,34 @@ def test_workflow_stage_result_rejects_nested_raw_summary_keys() -> None:
             status=WorkflowStageStatus.WAITING,
             summary={"debug": {"raw_tool_payload": {"policy_id": "POL-001"}}},
         )
+
+
+def test_workflow_stage_failure_diagnostic_is_independent_fact() -> None:
+    diagnostic = WorkflowStageFailureDiagnostic(
+        stage_id="intent_resolution",
+        stage_label="Intent Resolution",
+        event_type="model_output_normalization_failed",
+        status=WorkflowStageStatus.BLOCKED,
+        error_code="model_output_contract_validation_failed",
+        role="intent_resolution",
+        raw_content_length=378,
+        related_event_id="evt_0011",
+        contract_name="IntentResolution",
+        violation_codes=("missing",),
+        field_paths=("recommended_next_action",),
+        violation_count=1,
+    )
+    result = WorkflowTemplateExecutionResult(
+        run_id="run_001",
+        template_name="react_enterprise_qa_v2",
+        template_descriptor_version="react_enterprise_qa.v2",
+        outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+        final_output="The intent resolution output failed validation.",
+        message="The intent resolution output failed validation.",
+        stage_failure_diagnostics=(diagnostic,),
+    )
+
+    assert result.stage_failure_diagnostics == (diagnostic,)
 
 
 def test_approval_pause_is_a_trace_safe_execution_fact() -> None:

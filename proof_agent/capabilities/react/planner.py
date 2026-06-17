@@ -457,6 +457,10 @@ def _planner_semantic_error(
         error_code="model_output_contract_validation_failed",
         message=message,
         raw_content_length=raw_content_length,
+        contract_name="ReActActionProposal",
+        violation_codes=("semantic_contract_validation_failed",),
+        field_paths=("action_type",),
+        violation_count=1,
     )
 
 

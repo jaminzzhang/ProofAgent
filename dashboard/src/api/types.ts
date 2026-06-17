@@ -110,6 +110,7 @@ export interface ValidationCaptureSourceReference {
 
 export interface WorkflowStagePromptValueCapture {
   stage_id: string
+  stage_label?: string | null
   prompt_values: Record<string, unknown>
   prompt_field_names: string[]
   prompt_character_count: number
@@ -119,21 +120,39 @@ export interface WorkflowStagePromptValueCapture {
 
 export interface WorkflowStageContextConfigurationCapture {
   stage_id: string
+  stage_label?: string | null
   selected_context_options: string[]
   available_context_options: string[]
 }
 
 export interface WorkflowStageContextApplicationProjection {
   stage_id: string
+  stage_label?: string | null
   summary: Record<string, unknown>
 }
 
 export interface WorkflowStageResultVerificationProjection {
   stage_id: string
+  stage_label?: string | null
   status: WorkflowStageStatus
   outcome: ReceiptOutcome | null
   summary: Record<string, unknown>
   produced_fact_refs: string[]
+}
+
+export interface WorkflowStageFailureDiagnosticProjection {
+  stage_id: string
+  stage_label?: string | null
+  event_type: string
+  status: WorkflowStageStatus
+  error_code: string
+  role?: string | null
+  raw_content_length?: number | null
+  related_event_id?: string | null
+  contract_name?: string | null
+  violation_codes?: string[]
+  field_paths?: string[]
+  violation_count?: number
 }
 
 export interface ValidationCaptureResultSummary {
@@ -160,6 +179,7 @@ export interface ValidationCaptureV2Payload {
   context_configuration: WorkflowStageContextConfigurationCapture[]
   context_applications: WorkflowStageContextApplicationProjection[]
   stage_results: WorkflowStageResultVerificationProjection[]
+  failure_diagnostics?: WorkflowStageFailureDiagnosticProjection[]
   result_summary: ValidationCaptureResultSummary
   exclusions: ValidationCaptureExclusionSummary
 }
@@ -777,10 +797,22 @@ export interface DraftValidationResponse {
   run_purpose: RunPurpose
   agent_id: string
   draft_id: string
+  warnings?: Record<string, unknown>[]
+  publish_blockers?: Record<string, unknown>[]
+  trace_capture?: {
+    mode: 'summary_only' | 'full_capture'
+    validation_capture: SensitiveValidationCaptureArtifactMetadata | null
+    capture_error?: {
+      code: string
+      message: string
+      retryable: boolean
+    }
+  }
   links: {
     run_detail: string
     trace: string
     receipt: string
+    validation_capture?: string
   }
 }
 

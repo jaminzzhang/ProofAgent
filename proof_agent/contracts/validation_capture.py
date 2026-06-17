@@ -66,6 +66,7 @@ class WorkflowStagePromptValueCapture(ValidationCaptureModel):
     """Allowed effective Workflow Stage prompt values captured for validation."""
 
     stage_id: str
+    stage_label: str | None = None
     prompt_values: Mapping[str, Any] = Field(default_factory=FrozenDict)
     prompt_field_names: tuple[str, ...] = Field(default_factory=tuple)
     prompt_character_count: int = 0
@@ -87,6 +88,7 @@ class WorkflowStageContextConfigurationCapture(ValidationCaptureModel):
     """Selected context option keys from the run-start execution input."""
 
     stage_id: str
+    stage_label: str | None = None
     selected_context_options: tuple[str, ...] = Field(default_factory=tuple)
     available_context_options: tuple[str, ...] = Field(default_factory=tuple)
 
@@ -95,6 +97,7 @@ class WorkflowStageContextApplicationProjection(ValidationCaptureModel):
     """Applied context safe summary returned by Workflow Template Execution."""
 
     stage_id: str
+    stage_label: str | None = None
     summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
 
     @field_validator("summary", mode="after")
@@ -112,6 +115,7 @@ class WorkflowStageResultVerificationProjection(ValidationCaptureModel):
     """Intermediate stage result projection without continuation state."""
 
     stage_id: str
+    stage_label: str | None = None
     status: WorkflowStageStatus
     outcome: ReceiptOutcome | None = None
     summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
@@ -126,6 +130,23 @@ class WorkflowStageResultVerificationProjection(ValidationCaptureModel):
     @field_serializer("summary")
     def serialize_summary(self, value: Mapping[str, Any]) -> dict[str, Any]:
         return cast(dict[str, Any], _jsonable(value))
+
+
+class WorkflowStageFailureDiagnosticProjection(ValidationCaptureModel):
+    """Exceptional stage-stop diagnostic without raw failure payloads."""
+
+    stage_id: str
+    stage_label: str | None = None
+    event_type: str
+    status: WorkflowStageStatus
+    error_code: str
+    role: str | None = None
+    raw_content_length: int | None = None
+    related_event_id: str | None = None
+    contract_name: str | None = None
+    violation_codes: tuple[str, ...] = Field(default_factory=tuple)
+    field_paths: tuple[str, ...] = Field(default_factory=tuple)
+    violation_count: int = 0
 
 
 class ValidationCaptureResultSummary(ValidationCaptureModel):
@@ -181,6 +202,9 @@ class ValidationCaptureV2Payload(ValidationCaptureModel):
         default_factory=tuple
     )
     stage_results: tuple[WorkflowStageResultVerificationProjection, ...] = Field(
+        default_factory=tuple
+    )
+    failure_diagnostics: tuple[WorkflowStageFailureDiagnosticProjection, ...] = Field(
         default_factory=tuple
     )
     result_summary: ValidationCaptureResultSummary

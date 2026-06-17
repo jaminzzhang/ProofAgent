@@ -609,7 +609,7 @@ export function updateConfigDraftContract(
 export function validateConfigDraft(
   agentId: string,
   draftId: string,
-  payload: { question: string },
+  payload: { question: string; full_capture?: boolean; retain_for_audit?: boolean },
 ): Promise<DraftValidationResponse> {
   return fetchJson<DraftValidationResponse>(
     `${BASE}/config/agents/${agentId}/drafts/${draftId}/validate`,

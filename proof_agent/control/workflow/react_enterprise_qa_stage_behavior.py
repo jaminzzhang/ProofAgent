@@ -126,6 +126,7 @@ class ReActEnterpriseQAStageBehavior:
     def intent_resolution(self, state: Mapping[str, Any]) -> dict[str, Any]:
         if self.invocation.intent_resolver is None:
             return _refusal("Intent resolver is not configured.")
+        stage_context: Mapping[str, Any] | None = None
         try:
             stage_context = self.configured_stage_context("intent_resolution", state)
             resolution = self.invocation.intent_resolver.resolve(
@@ -135,18 +136,25 @@ class ReActEnterpriseQAStageBehavior:
                 workflow_stage_context=stage_context,
             )
         except ModelOutputNormalizationError as exc:
-            self.trace.emit(
+            event = self.trace.emit(
                 "model_output_normalization_failed",
                 status="blocked",
-                payload={
-                    "role": exc.role,
-                    "error_code": exc.error_code,
-                    "raw_content_length": exc.raw_content_length,
-                },
+                payload=_model_output_failure_payload(exc),
             )
-            return _refusal(
-                "The intent resolution output failed validation and the run was stopped."
-            )
+            return {
+                **_refusal(
+                    "The intent resolution output failed validation and the run was stopped."
+                ),
+                **_stage_context_applications_delta(state, stage_context),
+                "stage_failure_diagnostics": [
+                    _model_output_failure_diagnostic(
+                        stage_id="intent_resolution",
+                        stage_label=self._stage_label("intent_resolution"),
+                        event_id=event.event_id,
+                        exc=exc,
+                    )
+                ],
+            }
         emit_intent_resolution(self.trace, resolution)
         return {
             "intent_resolution": _intent_resolution_state_dict(resolution),
@@ -162,6 +170,7 @@ class ReActEnterpriseQAStageBehavior:
                 "The ReAct step budget was exhausted before an answer could be produced."
             )
 
+        stage_context: Mapping[str, Any] | None = None
         try:
             stage_context = self.configured_stage_context("plan", state)
             proposal = self.invocation.react_planner.plan(
@@ -171,16 +180,23 @@ class ReActEnterpriseQAStageBehavior:
                 workflow_stage_context=stage_context,
             )
         except ModelOutputNormalizationError as exc:
-            self.trace.emit(
+            event = self.trace.emit(
                 "model_output_normalization_failed",
                 status="blocked",
-                payload={
-                    "role": exc.role,
-                    "error_code": exc.error_code,
-                    "raw_content_length": exc.raw_content_length,
-                },
+                payload=_model_output_failure_payload(exc),
             )
-            return _refusal("The planner output failed validation and the run was stopped.")
+            return {
+                **_refusal("The planner output failed validation and the run was stopped."),
+                **_stage_context_applications_delta(state, stage_context),
+                "stage_failure_diagnostics": [
+                    _model_output_failure_diagnostic(
+                        stage_id="plan",
+                        stage_label=self._stage_label("plan"),
+                        event_id=event.event_id,
+                        exc=exc,
+                    )
+                ],
+            }
         emit_reasoning_summary(self.trace, proposal)
         emit_action_proposal(self.trace, proposal)
         return {
@@ -671,6 +687,12 @@ class ReActEnterpriseQAStageBehavior:
     def workflow_stage_available(self, stage_id: str) -> bool:
         return self.execution_input.workflow_stage_availability.is_available(stage_id)
 
+    def _stage_label(self, stage_id: str) -> str:
+        try:
+            return self.execution_input.effective_stage_configuration.stage(stage_id).label
+        except KeyError:
+            return stage_id
+
 
 def proposal_from_state(state: Mapping[str, Any]) -> ReActActionProposal:
     return ReActActionProposal.model_validate(state["action"])
@@ -694,6 +716,47 @@ def _stage_context_applications_delta(
     if not added:
         return {}
     return {"stage_context_applications": applications}
+
+
+def _model_output_failure_payload(exc: ModelOutputNormalizationError) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "role": exc.role,
+        "error_code": exc.error_code,
+        "raw_content_length": exc.raw_content_length,
+    }
+    if exc.contract_name is not None:
+        payload["contract_name"] = exc.contract_name
+    if exc.violation_codes:
+        payload["violation_codes"] = list(exc.violation_codes)
+    if exc.field_paths:
+        payload["field_paths"] = list(exc.field_paths)
+    if exc.violation_count:
+        payload["violation_count"] = exc.violation_count
+    return payload
+
+
+def _model_output_failure_diagnostic(
+    *,
+    stage_id: str,
+    stage_label: str,
+    event_id: str,
+    exc: ModelOutputNormalizationError,
+) -> dict[str, Any]:
+    diagnostic = {
+        "stage_id": stage_id,
+        "stage_label": stage_label,
+        "event_type": "model_output_normalization_failed",
+        "status": "blocked",
+        "error_code": exc.error_code,
+        "role": exc.role,
+        "raw_content_length": exc.raw_content_length,
+        "related_event_id": event_id,
+        "contract_name": exc.contract_name,
+        "violation_codes": list(exc.violation_codes),
+        "field_paths": list(exc.field_paths),
+        "violation_count": exc.violation_count,
+    }
+    return {key: value for key, value in diagnostic.items() if value not in (None, [], 0)}
 
 
 def _tool_capability_disabled_delta() -> dict[str, Any]:

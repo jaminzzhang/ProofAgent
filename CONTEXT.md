@@ -50,6 +50,10 @@ _Avoid_: Database-only Agent, uploaded manifest path, loose config bundle
 A source-controlled Agent Package under `examples/` used as a stable runnable reference for users, docs, local configuration seeding, tests, and Dashboard creation flows.
 _Avoid_: Workflow Template, template registry entry, generated local Draft Agent data
 
+**Business Flow Skill Pack**:
+A Skill Pack that contributes domain-specific intent taxonomy, Prompt addenda, retrieval recipes, Tool Contract bindings, policy rules, validators, evaluation cases, and business-plan projection hints while execution still runs through one selected Workflow Template.
+_Avoid_: Workflow Template, runtime graph, dynamic topology, prompt-defined process, direct tool executor
+
 **Tool Contract**:
 The public capability contract that declares a governed tool's purpose, risk level, read/write class, authorization conditions, parameter bounds, and audit behavior.
 _Avoid_: Runtime adapter, provider-native tool schema, prompt instruction
@@ -197,6 +201,10 @@ _Avoid_: Raw prompt text, raw selected context, raw evidence content, raw tool p
 **Workflow Stage Result Verification Projection**:
 The full-capture representation of an intermediate Workflow Stage Result as stage id, status, outcome, safe summary, and produced fact references, excluding Workflow Stage Continuation State.
 _Avoid_: Continuation state, scheduler state, raw stage result dump, runtime state dict
+
+**Workflow Stage Failure Diagnostic Projection**:
+The validation-safe explanation of why a Workflow Template Stage stopped because of an exceptional or repairable diagnostic condition, carried as an independent execution fact rather than inside Workflow Stage Result Summary, and limited to stable error codes, role names, bounded lengths, stage status, trace event references, and bounded contract-field diagnostics without free-form diagnostic messages.
+_Avoid_: Governed refusal, approval pause, clarification need, provider response body, raw failed output, rejected field value, free-form exception message, stack trace, runtime state, chain-of-thought
 
 **Governed Final Output Capture**:
 The Sensitive Validation Capture Artifact record of Proof Agent's governed final output after Harness normalization, including terminal outcome, final output text, output length, and safe citation or fact references when available.
@@ -835,7 +843,7 @@ The explicit schema version for Sensitive Validation Capture Artifact payloads, 
 _Avoid_: Published Agent Version, Workflow Template Descriptor Version, ordinary trace schema
 
 **Validation Capture V2 Payload Sections**:
-The semantic top-level sections of a `validation_capture.v2` Sensitive Validation Capture Artifact: source, stage_prompt_values, context_configuration, context_applications, stage_results, result_summary, and exclusions.
+The semantic top-level sections of a `validation_capture.v2` Sensitive Validation Capture Artifact: source, stage_prompt_values, context_configuration, context_applications, stage_results, failure_diagnostics, result_summary, and exclusions.
 _Avoid_: prompt_context_capture, raw workflow YAML dump, raw capabilities dump, trace parser output
 
 **Validation Capture V2 Contract Model**:
@@ -859,8 +867,44 @@ The `validation_capture.v2` exclusions section that records fixed excluded data 
 _Avoid_: Raw excluded values, business payload snippets, full field paths, sensitive key inventory
 
 **Validation Capture Dashboard Reveal Slice**:
-The future Dashboard work that lets authorized validators explicitly reveal Sensitive Validation Capture Artifact projections from Run Detail.
-_Avoid_: Backend capture payload contract, ordinary Run Detail tab, customer support view
+The authorized validation review experience that reveals Sensitive Validation Capture Artifact projections by stage so validators can inspect configured Prompt values, selected context options, applied context summaries, stage results, terminal output, exclusions, and safe failure diagnostics.
+_Avoid_: Raw JSON dump, ordinary Run Detail tab, customer support view, provider debug console
+
+**Stage-First Validation Capture Review**:
+The Dashboard review shape for Sensitive Validation Capture Artifacts, organizing validation evidence around each Workflow Template Stage rather than around storage payload sections.
+_Avoid_: Section-first JSON browser, trace log viewer, generic artifact inspector
+
+**Run-Start Stage Review Set**:
+The ordered set of available Workflow Template Stages from the run-start Effective Workflow Stage Configuration that Stage-First Validation Capture Review uses as its stage list, including stage labels and stages that were configured but not reached during execution.
+_Avoid_: Executed-only stage list, trace-derived stage list, latest descriptor stage list, frontend stage label mapping
+
+**Per-Stage Prompt Value Reveal**:
+The explicit validator action inside Stage-First Validation Capture Review that reveals one Workflow Template Stage's captured Agent-authored business Prompt values while preserving the Harness prompt authority boundary.
+_Avoid_: Auto-expanded prompt dump, system prompt reveal, developer prompt reveal, provider prompt transcript
+
+**Stage Context Review Split**:
+The Stage-First Validation Capture Review rule that shows configured context option keys separately from applied context safe summaries and explicitly marks stages that did not execute.
+_Avoid_: Single context list, raw context reveal, evidence content reveal, implying unexecuted context was applied
+
+**Structured Stage Result Review**:
+The Stage-First Validation Capture Review rule that presents Workflow Stage Result Verification Projection as status, outcome, produced fact references, and key safe summary fields before offering the full safe summary JSON.
+_Avoid_: JSON-first result viewer, raw stage result dump, runtime state inspector
+
+**Validation Capture Review Entry Point**:
+An authorized Dashboard location that opens the full Stage-First Validation Capture Review for a validation run, with Latest Validation Result and Run Detail as full-review entry points and Validation History as a status-and-link list.
+_Avoid_: History-embedded full review, customer-facing review, ordinary run summary
+
+**Explicit Validation Capture Load**:
+The validator-initiated Dashboard action that reads a Sensitive Validation Capture Artifact before showing Stage-First Validation Capture Review content.
+_Avoid_: Auto-loaded sensitive artifact, background capture fetch, passive run summary hydration
+
+**Validation Capture Diagnostic Compatibility**:
+The compatibility rule that existing `validation_capture.v2` artifacts without `failure_diagnostics` remain readable and are shown as diagnostics-not-recorded artifacts rather than being backfilled or synthesized from ordinary trace events.
+_Avoid_: Trace-derived diagnostic backfill, local store migration, synthetic legacy diagnostics
+
+**Bounded Contract Field Diagnostic**:
+A validation-safe field-level diagnostic for model output or contract normalization failures, limited to contract name, stable violation codes, bounded field paths, and violation counts.
+_Avoid_: Rejected value, raw model output, Pydantic error text, provider response body, exception message
 
 **Sensitive Validation Capture Retention**:
 The retention policy for Sensitive Validation Capture Artifacts: default short TTL of 7 days, with explicit audit retention only when requested and authorized.
@@ -2291,6 +2335,18 @@ _Avoid_: Evidence content dump
 - Trace events may mirror **Workflow Stage Context Application Fact** summaries for ordinary observability, but Validation Delivery must not parse trace files as the source for `validation_capture.v2`.
 - In this slice, full capture records selected context as **Workflow Stage Context Verification Projection** rather than raw business content; there is no raw validation capture override switch.
 - Full capture records intermediate results as **Workflow Stage Result Verification Projection**; it must not include Workflow Stage Continuation State, scheduler state, runtime state dictionaries, or other Runtime Plane continuation payloads.
+- Full capture records **Workflow Stage Failure Diagnostic Projection** values inside the Sensitive Validation Capture Artifact when a stage stops or fails; Dashboard must not reconstruct those diagnostics by parsing ordinary trace events.
+- **Workflow Stage Failure Diagnostic Projection** values remain separate from **Workflow Stage Result Summary** so stage result summaries describe governed stage output while diagnostics describe trace-safe stop or failure causes.
+- **Workflow Stage Failure Diagnostic Projection** is reserved for exceptional or repairable diagnostic conditions such as model output normalization failure, provider error, tool adapter error, knowledge adapter error, or capability readiness failure; normal governed outcomes remain represented by Workflow Stage Result, Validation Capture Result Summary, Approval Pause, or Clarification Need.
+- **Workflow Stage Failure Diagnostic Projection** does not carry free-form diagnostic messages; Dashboard maps stable error codes and roles to fixed safe explanatory text.
+- Model output contract failures may include **Bounded Contract Field Diagnostic** facts so validators can identify which contract field shape failed without exposing rejected values, provider responses, raw model output, or free-form validation messages.
+- **Validation Capture Diagnostic Compatibility** keeps existing `validation_capture.v2` artifacts readable without reconstructing missing `failure_diagnostics` from ordinary trace; Stage-First Validation Capture Review must clearly indicate when diagnostics were not recorded and a rerun is needed to collect them.
+- Stage-First Validation Capture Review uses the **Run-Start Stage Review Set** rather than an executed-only stage list so configured but unreached stages remain visible as not reached or not executed; Dashboard uses stage labels captured in the artifact instead of mapping stage ids from frontend code.
+- Stage-First Validation Capture Review uses **Per-Stage Prompt Value Reveal** for full captured Prompt values rather than auto-expanding every stage; the revealed values are Agent-authored business Prompt fields, not Harness control prompts, provider prompts, system prompts, or developer prompts.
+- Stage-First Validation Capture Review uses **Stage Context Review Split** so validators can distinguish run-start selected context options from execution-time applied context summaries, and so unavailable applied context for unexecuted stages is shown as not executed rather than blank or implied.
+- Stage-First Validation Capture Review uses **Structured Stage Result Review** so validators first see status, outcome, produced fact references, and key safe summary fields, with the complete safe summary JSON available only as an explicit detail view.
+- **Validation Capture Review Entry Point** keeps the full Stage-First Validation Capture Review available from Latest Validation Result and Run Detail, while Validation History remains a lightweight status-and-link projection.
+- **Explicit Validation Capture Load** keeps Sensitive Validation Capture Artifact reads intentional in Dashboard; after load, Stage-First Validation Capture Review provides structured summaries while Prompt values still require per-stage reveal.
 - Full capture records **Governed Final Output Capture** in `result_summary` so validators can compare the governed final answer against Workflow Stage Prompt values, context projections, and stage result projections; this does not permit provider response bodies, raw evidence payloads, raw tool payloads, or Runtime Plane state.
 - `validation_capture.v2` `source` is a **Validation Capture Source Reference**: it records identifiers and immutable configuration references needed to locate the executed configuration, not raw Agent Contract YAML, raw workflow YAML, raw capabilities, or latest descriptor recomputation inputs.
 - `validation_capture.v2` `result_summary` is a **Validation Capture Result Summary**: it records the terminal governed result for the validation attempt, including final output, approval pause, or clarification projection as applicable, without duplicating the intermediate stage result list.
@@ -2841,6 +2897,19 @@ _Avoid_: Evidence content dump
 - "Workflow Template Execution Result return path" could mean persisting complete execution facts into ordinary RunStore detail, exposing them through Dashboard, or returning them process-locally for Delivery. Resolved: use **Workflow Template Execution Result Run Handoff**; `RunResult` may carry `WorkflowTemplateExecutionResult` for in-process Delivery artifact construction without changing ordinary RunStore or Dashboard projections.
 - "Validation capture payload versioning" could mean keeping `validation_capture.v1` with changed semantics or introducing an incompatible schema version. Resolved: use **Validation Capture Contract Version** `validation_capture.v2` and do not retain v1 compatibility.
 - "`validation_capture.v2` payload structure" could mean renaming v1 fields or adopting semantic sections aligned to run-start input and execution result facts. Resolved: use **Validation Capture V2 Payload Sections** and drop v1 mixed fields such as `prompt_context_capture`, raw `workflow_stage_configuration`, raw `capability_configuration`, `trace_summary`, and `intermediate_result_summary`.
+- "Validation capture failure diagnostics" could mean Dashboard parsing ordinary trace events, storing raw failed model output, or adding a validation-safe payload projection. Resolved: use **Workflow Stage Failure Diagnostic Projection** values inside the Sensitive Validation Capture Artifact, limited to stable codes, roles, bounded lengths, statuses, and trace event references.
+- "Validation capture failure diagnostic versioning" could mean creating `validation_capture.v3` or treating diagnostics as a compatible v2 extension. Resolved: keep **Validation Capture Contract Version** `validation_capture.v2` and add `failure_diagnostics` as a default-empty compatible section so existing Sensitive Validation Capture Artifacts remain readable.
+- "Validation capture failure diagnostic placement" could mean mixing diagnostics into Workflow Stage Result Summary or carrying them as independent execution facts. Resolved: keep **Workflow Stage Failure Diagnostic Projection** separate from **Workflow Stage Result Summary** and join them by stage id in **Stage-First Validation Capture Review**.
+- "Validation capture failure diagnostic scope" could mean treating every terminal or waiting outcome as a failure diagnostic or reserving diagnostics for repairable exceptional stops. Resolved: reserve **Workflow Stage Failure Diagnostic Projection** for exceptional or repairable diagnostic conditions, while governed refusals, clarification needs, and approval pauses stay in their existing projections.
+- "Validation capture failure diagnostic text" could mean persisting a free-form message or persisting stable fields and letting Dashboard map them to safe copy. Resolved: **Workflow Stage Failure Diagnostic Projection** stores stable fields only and Dashboard owns fixed safe explanatory text.
+- "Validation capture contract-field diagnostics" could mean storing raw validation errors or exposing bounded field-level facts. Resolved: use **Bounded Contract Field Diagnostic** with contract name, stable violation codes, bounded field paths, and violation counts only.
+- "Legacy validation capture diagnostics" could mean backfilling old artifacts from trace, running a store migration, or marking diagnostics as unavailable. Resolved: use **Validation Capture Diagnostic Compatibility**; existing artifacts stay readable, missing diagnostics are explicit, and validators rerun with Full stage capture to collect new diagnostics.
+- "Validation capture stage list" could mean showing only executed stages, deriving labels from frontend code, or using the run-start available stage set with captured labels. Resolved: use **Run-Start Stage Review Set** so Stage-First Validation Capture Review shows configured but unreached stages explicitly and uses artifact-provided stage labels.
+- "Validation capture Prompt detail reveal" could mean auto-expanding every Prompt value or requiring an explicit per-stage reveal action. Resolved: use **Per-Stage Prompt Value Reveal** so validators reveal one stage's captured business Prompt values intentionally while preserving Harness prompt authority terminology.
+- "Validation capture context review" could mean one combined context option list or a split between configured and applied context facts. Resolved: use **Stage Context Review Split**, showing run-start selected context options separately from execution-time applied context summaries and marking unexecuted stages explicitly.
+- "Validation capture Stage Result review" could mean showing raw safe JSON first or presenting a structured review with JSON as a detail. Resolved: use **Structured Stage Result Review**, with status, outcome, produced facts, and key safe summary fields first, and full safe summary JSON behind an explicit detail view.
+- "Validation capture review entry point" could mean forcing operators into Run Detail or embedding full review in every history row. Resolved: use **Validation Capture Review Entry Point** with full review in Latest Validation Result and Run Detail, while Validation History stays lightweight.
+- "Validation capture load behavior" could mean automatically fetching sensitive artifacts on page load or requiring a validator action. Resolved: use **Explicit Validation Capture Load** before showing Stage-First Validation Capture Review content.
 - "`validation_capture.v2` schema enforcement" could mean continuing a naked dictionary builder, relying on store sanitization, or adding an explicit contract. Resolved: use **Validation Capture V2 Contract Model** in the contracts layer and let Delivery persist the model's JSON dump through the existing Sensitive Validation Capture Artifact store.
 - "`validation_capture.v2` contract location" could mean adding payload models to Agent Configuration metadata contracts, ordinary Run contracts, Workflow Execution contracts, or a dedicated module. Resolved: use **Validation Capture Contract Module** for payload schema while keeping Sensitive Validation Capture Artifact metadata with Agent Configuration Store contracts.
 - "`validation_capture.v2` unsafe field handling" could mean silently dropping fields, relying only on store sanitization, or failing artifact creation. Resolved: use **Validation Capture Contract Safety Gate**; Delivery fails closed on forbidden raw or unsafe fields, while Store sanitization remains a defense-in-depth fallback.
@@ -3005,6 +3074,7 @@ _Avoid_: Evidence content dump
 - "Missing institution authorization context" could mean refusing every request or allowing unrestricted tool lookup. Resolved: without sufficient **Institution Authorization Context**, the Agent may answer a **Public Insurance Knowledge Query** from approved knowledge sources, but must not use **Institution Business Read Tool** bindings for scoped reports, policy records, claim records, customer records, or agent records.
 - "Institution specialist answer shape" could mean one final answer for every audience or separate operator and external-facing views. Resolved: use **Institution Specialist Response Projection** for the staff-facing answer and include an **External Wording Draft** only when the request source or use case is customer or agent communication.
 - "Institution specialist intent routing" could mean a fixed business taxonomy only, unrestricted LLM-defined execution, or dynamic business planning inside a governed workflow. Resolved: use **Insurance Specialist Intent Taxonomy** as a baseline anchor, allow the **LLM ReAct Planner** to create a **Dynamic Insurance Business Subplan** for any insurance-related intent, and keep executable actions, tool scope, Workflow Template topology, and policy authority under the Control Envelope.
+- "Intent-routed business flow" could mean dynamically loading an executable workflow topology or selecting a domain capability pack. Resolved: use **Business Flow Skill Pack** for intent-routed domain configuration and governed capability contributions while the selected **Workflow Template** remains the execution shape.
 - "Institution specialist memory" could mean current-case follow-up context or a long-lived business fact store. Resolved: use **Institution Specialist Case Memory** for current task focus, clarified identifiers, scoped filters, and response-format preferences only; policy status, claim status, report values, tool payloads, and customer or agent identity facts remain live business records, not memory facts.
 - "Payment guarantee" could mean an ordinary unsupported question or a high-risk service commitment request. Resolved: use **Payment Or Coverage Guarantee Request** and create an internal **Customer Escalation Handoff** while returning customer-safe refusal wording.
 - "Handoff trigger configuration" could mean hard-coded only, business-configurable, or prompt-defined. Resolved: V1 keeps fixed baseline triggers and permits Agent Contract or policy configuration only for enterprise high-value failure scenarios; frontend and prompt-defined triggers are not trusted.

@@ -219,6 +219,28 @@ describe('RunDetailPage navigation', () => {
     expect(screen.getByText('action_proposal')).toBeInTheDocument()
     expect(screen.getByText('appr_customer_lookup')).toBeInTheDocument()
   })
+
+  it('shows validation capture tab when the run has an attached capture', () => {
+    vi.mocked(useRunDetail).mockReturnValue({
+      detail: runDetail({ validation_capture_id: 'vcap_1' }),
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-1']}>
+        <Routes>
+          <Route path="/runs/:runId" element={<RunDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validation Capture' }))
+
+    expect(screen.getByRole('heading', { name: 'Validation Capture' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Load Validation Capture' })).toBeInTheDocument()
+  })
 })
 
 function LocationProbe() {

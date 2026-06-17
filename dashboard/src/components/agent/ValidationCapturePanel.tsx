@@ -5,6 +5,7 @@ import type {
   ValidationCaptureV2Payload,
   WorkflowStageContextApplicationProjection,
   WorkflowStageContextConfigurationCapture,
+  WorkflowStageFailureDiagnosticProjection,
   WorkflowStagePromptValueCapture,
   WorkflowStageResultVerificationProjection,
 } from '../../api/types'
@@ -64,6 +65,7 @@ export function ValidationCapturePanel({ runId, available }: ValidationCapturePa
 }
 
 function ValidationCaptureSections({ payload }: { payload: ValidationCaptureV2Payload }) {
+  const stages = stageReviewItems(payload)
   return (
     <div className="mt-4 grid gap-3">
       <CaptureSection title="Source">
@@ -83,31 +85,36 @@ function ValidationCaptureSections({ payload }: { payload: ValidationCaptureV2Pa
         </dl>
       </CaptureSection>
 
-      <CaptureSection title="Stage Prompt Values">
-        <StagePromptValues values={payload.stage_prompt_values} />
-      </CaptureSection>
-
-      <CaptureSection title="Context Configuration">
-        <ContextConfiguration values={payload.context_configuration} />
-      </CaptureSection>
-
-      <CaptureSection title="Context Applications">
-        <ContextApplications values={payload.context_applications} />
-      </CaptureSection>
-
-      <CaptureSection title="Stage Results">
-        <StageResults values={payload.stage_results} />
+      <CaptureSection title="Stage Review">
+        <div className="grid gap-3">
+          {stages.map((stage) => (
+            <StageReviewCard
+              key={stage.stageId}
+              stage={stage}
+              legacyDiagnostics={payload.failure_diagnostics === undefined}
+            />
+          ))}
+        </div>
       </CaptureSection>
 
       <CaptureSection title="Result Summary">
-        <dl className="grid gap-2 sm:grid-cols-3">
+        <dl className="grid gap-2 sm:grid-cols-4">
           <CaptureFact label="Outcome" value={payload.result_summary.outcome} />
           <CaptureFact
             label="Output Length"
             value={String(payload.result_summary.final_output_length)}
           />
           <CaptureFact label="Fact Refs" value={String(payload.result_summary.fact_refs.length)} />
+          <CaptureFact
+            label="Approval Pause"
+            value={payload.result_summary.approval_pause ? 'Present' : 'None'}
+          />
         </dl>
+        {payload.result_summary.final_output && (
+          <pre className="mt-3 whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-xs text-[var(--text-primary)]">
+            {payload.result_summary.final_output}
+          </pre>
+        )}
       </CaptureSection>
 
       <CaptureSection title="Exclusions">
@@ -135,6 +142,336 @@ function ValidationCaptureSections({ payload }: { payload: ValidationCaptureV2Pa
   )
 }
 
+interface StageReview {
+  stageId: string
+  label: string
+  prompt?: WorkflowStagePromptValueCapture
+  contextConfig?: WorkflowStageContextConfigurationCapture
+  contextApplication?: WorkflowStageContextApplicationProjection
+  result?: WorkflowStageResultVerificationProjection
+  diagnostics: WorkflowStageFailureDiagnosticProjection[]
+}
+
+function stageReviewItems(payload: ValidationCaptureV2Payload): StageReview[] {
+  const order: string[] = []
+  const items = new Map<string, StageReview>()
+  const ensure = (stageId: string, label?: string | null) => {
+    if (!items.has(stageId)) {
+      order.push(stageId)
+      items.set(stageId, { stageId, label: label || stageId, diagnostics: [] })
+    }
+    const item = items.get(stageId)!
+    if (label && item.label === item.stageId) item.label = label
+    return item
+  }
+
+  payload.stage_prompt_values.forEach((prompt) => {
+    ensure(prompt.stage_id, prompt.stage_label).prompt = prompt
+  })
+  payload.context_configuration.forEach((config) => {
+    ensure(config.stage_id, config.stage_label).contextConfig = config
+  })
+  payload.context_applications.forEach((application) => {
+    ensure(application.stage_id, application.stage_label).contextApplication = application
+  })
+  payload.stage_results.forEach((result) => {
+    ensure(result.stage_id, result.stage_label).result = result
+  })
+  ;(payload.failure_diagnostics ?? []).forEach((diagnostic) => {
+    ensure(diagnostic.stage_id, diagnostic.stage_label).diagnostics.push(diagnostic)
+  })
+
+  return order.map((stageId) => items.get(stageId)!)
+}
+
+function StageReviewCard({
+  stage,
+  legacyDiagnostics,
+}: {
+  stage: StageReview
+  legacyDiagnostics: boolean
+}) {
+  const status = stage.result?.status ?? 'not reached'
+  const isBlocked = stage.result?.status === 'blocked' || stage.diagnostics.length > 0
+  return (
+    <article
+      className={`rounded-md border p-3 ${
+        isBlocked
+          ? 'border-[var(--danger)] bg-[var(--danger-bg)]'
+          : 'border-[var(--border)] bg-[var(--bg-base)]'
+      }`}
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h6 className="text-sm font-semibold text-[var(--text-primary)]">{stage.label}</h6>
+          <p className="mt-1 font-mono text-[11px] text-[var(--text-muted)]">{stage.stageId}</p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[11px]">
+          <span className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-[var(--text-primary)]">
+            {status}
+          </span>
+          {stage.result?.outcome && (
+            <span className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-[var(--text-primary)]">
+              {stage.result.outcome}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <StagePromptReview prompt={stage.prompt} />
+        <StageContextReview
+          config={stage.contextConfig}
+          application={stage.contextApplication}
+        />
+        <StageResultReview result={stage.result} />
+        <StageFailureDiagnostics
+          diagnostics={stage.diagnostics}
+          legacyDiagnostics={legacyDiagnostics}
+          blocked={stage.result?.status === 'blocked'}
+        />
+      </div>
+    </article>
+  )
+}
+
+function ReviewBlock({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3">
+      <h6 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        {title}
+      </h6>
+      <div className="mt-2">{children}</div>
+    </div>
+  )
+}
+
+function StagePromptReview({ prompt }: { prompt?: WorkflowStagePromptValueCapture }) {
+  if (!prompt) {
+    return (
+      <ReviewBlock title="Prompt Values">
+        <p className="text-xs text-[var(--text-muted)]">No prompt values configured.</p>
+      </ReviewBlock>
+    )
+  }
+  return (
+    <ReviewBlock title="Prompt Values">
+      <p className="text-xs text-[var(--text-muted)]">
+        {prompt.prompt_field_names.length} fields, {prompt.prompt_character_count} chars
+      </p>
+      <details className="mt-2">
+        <summary className="cursor-pointer text-xs font-medium text-[var(--text-primary)]">
+          Reveal Prompt Values
+        </summary>
+        <div className="mt-2 grid gap-2">
+          {orderedPromptEntries(prompt).map(([key, value]) => (
+            <div key={key}>
+              <div className="font-mono text-[11px] text-[var(--text-muted)]">{key}</div>
+              <PromptValue value={value} />
+            </div>
+          ))}
+        </div>
+      </details>
+    </ReviewBlock>
+  )
+}
+
+function orderedPromptEntries(prompt: WorkflowStagePromptValueCapture) {
+  const seen = new Set<string>()
+  const entries: Array<[string, unknown]> = []
+  prompt.prompt_field_names.forEach((key) => {
+    if (key in prompt.prompt_values) {
+      seen.add(key)
+      entries.push([key, prompt.prompt_values[key]])
+    }
+  })
+  Object.entries(prompt.prompt_values).forEach(([key, value]) => {
+    if (!seen.has(key)) entries.push([key, value])
+  })
+  return entries
+}
+
+function PromptValue({ value }: { value: unknown }) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <p className="text-xs text-[var(--text-muted)]">None</p>
+    return (
+      <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-[var(--text-primary)]">
+        {value.map((item, index) => (
+          <li key={index}>{String(item)}</li>
+        ))}
+      </ul>
+    )
+  }
+  if (typeof value === 'object' && value !== null) {
+    return <SafeJson value={value} />
+  }
+  return (
+    <p className="mt-1 whitespace-pre-wrap text-xs text-[var(--text-primary)]">
+      {String(value ?? '') || 'None'}
+    </p>
+  )
+}
+
+function StageContextReview({
+  config,
+  application,
+}: {
+  config?: WorkflowStageContextConfigurationCapture
+  application?: WorkflowStageContextApplicationProjection
+}) {
+  return (
+    <ReviewBlock title="Context">
+      <div className="grid gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            Configured Context
+          </div>
+          {config ? (
+            <p className="mt-1 text-xs text-[var(--text-primary)]">
+              {config.selected_context_options.length} selected of{' '}
+              {config.available_context_options.length}: {config.selected_context_options.join(', ') || 'None'}
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-[var(--text-muted)]">No configured context.</p>
+          )}
+        </div>
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            Applied Context
+          </div>
+          {application ? (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-xs font-medium text-[var(--text-primary)]">
+                {Object.keys(application.summary).length} safe summary fields
+              </summary>
+              <SafeJson value={application.summary} />
+            </details>
+          ) : (
+            <p className="mt-1 text-xs text-[var(--text-muted)]">Not executed</p>
+          )}
+        </div>
+      </div>
+    </ReviewBlock>
+  )
+}
+
+function StageResultReview({ result }: { result?: WorkflowStageResultVerificationProjection }) {
+  if (!result) {
+    return (
+      <ReviewBlock title="Stage Result">
+        <p className="text-xs text-[var(--text-muted)]">Not reached</p>
+      </ReviewBlock>
+    )
+  }
+  return (
+    <ReviewBlock title="Stage Result">
+      <dl className="grid gap-2 sm:grid-cols-2">
+        <CaptureFact label="Status" value={result.status} />
+        <CaptureFact label="Outcome" value={result.outcome ?? 'None'} />
+        <CaptureFact label="Facts" value={String(result.produced_fact_refs.length)} />
+        {Object.entries(result.summary).slice(0, 4).map(([key, value]) => (
+          <CaptureFact key={key} label={key} value={compactValue(value)} />
+        ))}
+      </dl>
+      <details className="mt-2">
+        <summary className="cursor-pointer text-xs font-medium text-[var(--text-primary)]">
+          Show Safe Summary JSON
+        </summary>
+        <SafeJson value={result.summary} />
+      </details>
+    </ReviewBlock>
+  )
+}
+
+function StageFailureDiagnostics({
+  diagnostics,
+  legacyDiagnostics,
+  blocked,
+}: {
+  diagnostics: WorkflowStageFailureDiagnosticProjection[]
+  legacyDiagnostics: boolean
+  blocked: boolean
+}) {
+  return (
+    <ReviewBlock title="Failure Diagnostic">
+      {diagnostics.length > 0 ? (
+        <div className="grid gap-3">
+          {diagnostics.map((diagnostic, index) => (
+            <div key={`${diagnostic.related_event_id ?? diagnostic.error_code}-${index}`}>
+              <p className="text-xs font-medium text-[var(--text-primary)]">
+                {diagnosticCopy(diagnostic)}
+              </p>
+              <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+                <CaptureFact label="Error Code" value={diagnostic.error_code} />
+                <CaptureFact label="Role" value={diagnostic.role ?? 'None'} />
+                <CaptureFact label="Event" value={diagnostic.related_event_id ?? 'None'} />
+                <CaptureFact
+                  label="Raw Length"
+                  value={String(diagnostic.raw_content_length ?? 0)}
+                />
+                {diagnostic.contract_name && (
+                  <CaptureFact label="Contract" value={diagnostic.contract_name} />
+                )}
+                {diagnostic.violation_count !== undefined && (
+                  <CaptureFact label="Violations" value={String(diagnostic.violation_count)} />
+                )}
+              </dl>
+              {(diagnostic.field_paths?.length || diagnostic.violation_codes?.length) && (
+                <p className="mt-2 text-xs text-[var(--text-muted)]">
+                  Fields: {diagnostic.field_paths?.join(', ') || 'None'}; Codes:{' '}
+                  {diagnostic.violation_codes?.join(', ') || 'None'}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : legacyDiagnostics && blocked ? (
+        <p className="text-xs text-[var(--text-muted)]">
+          Diagnostics not recorded for this capture. Rerun validation with Full stage capture to collect diagnostics.
+        </p>
+      ) : (
+        <p className="text-xs text-[var(--text-muted)]">None</p>
+      )}
+    </ReviewBlock>
+  )
+}
+
+function diagnosticCopy(diagnostic: WorkflowStageFailureDiagnosticProjection) {
+  if (diagnostic.error_code === 'model_output_contract_validation_failed') {
+    return 'Model response did not match the required contract.'
+  }
+  if (diagnostic.error_code === 'model_output_json_parse_failed') {
+    return 'Model response did not contain a valid JSON object.'
+  }
+  if (diagnostic.error_code === 'model_output_json_not_object') {
+    return 'Model response JSON was not an object.'
+  }
+  if (diagnostic.error_code === 'model_output_too_large') {
+    return 'Model response exceeded the normalization size limit.'
+  }
+  if (diagnostic.error_code === 'model_output_too_deep') {
+    return 'Model response exceeded the normalization depth limit.'
+  }
+  return 'Stage stopped with a safe diagnostic code.'
+}
+
+function SafeJson({ value }: { value: unknown }) {
+  return (
+    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-2 font-mono text-[11px] text-[var(--text-primary)]">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  )
+}
+
+function compactValue(value: unknown) {
+  if (value === null || value === undefined || value === '') return 'None'
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) return `${value.length} items`
+  return `${Object.keys(value as Record<string, unknown>).length} fields`
+}
+
 function CaptureSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3">
@@ -157,81 +494,4 @@ function CaptureFact({ label, value }: { label: string; value: string }) {
       </dd>
     </div>
   )
-}
-
-function StagePromptValues({ values }: { values: WorkflowStagePromptValueCapture[] }) {
-  if (values.length === 0) return <EmptySection />
-  return (
-    <div className="space-y-2">
-      {values.map((item) => (
-        <div key={item.stage_id} className="grid gap-2 text-xs sm:grid-cols-[120px_minmax(0,1fr)]">
-          <span className="font-mono text-[var(--text-primary)]">{item.stage_id}</span>
-          <span className="text-[var(--text-muted)]">
-            {item.prompt_field_names.length} fields, {item.prompt_character_count} chars
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function ContextConfiguration({
-  values,
-}: {
-  values: WorkflowStageContextConfigurationCapture[]
-}) {
-  if (values.length === 0) return <EmptySection />
-  return (
-    <div className="space-y-2">
-      {values.map((item) => (
-        <div key={item.stage_id} className="grid gap-2 text-xs sm:grid-cols-[120px_minmax(0,1fr)]">
-          <span className="font-mono text-[var(--text-primary)]">{item.stage_id}</span>
-          <span className="text-[var(--text-muted)]">
-            {item.selected_context_options.length} selected of {item.available_context_options.length}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function ContextApplications({
-  values,
-}: {
-  values: WorkflowStageContextApplicationProjection[]
-}) {
-  if (values.length === 0) return <EmptySection />
-  return (
-    <div className="space-y-2">
-      {values.map((item) => (
-        <div key={item.stage_id} className="grid gap-2 text-xs sm:grid-cols-[120px_minmax(0,1fr)]">
-          <span className="font-mono text-[var(--text-primary)]">{item.stage_id}</span>
-          <span className="text-[var(--text-muted)]">
-            {Object.keys(item.summary).length} safe summary fields
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function StageResults({ values }: { values: WorkflowStageResultVerificationProjection[] }) {
-  if (values.length === 0) return <EmptySection />
-  return (
-    <div className="space-y-2">
-      {values.map((item) => (
-        <div key={item.stage_id} className="grid gap-2 text-xs sm:grid-cols-[120px_minmax(0,1fr)]">
-          <span className="font-mono text-[var(--text-primary)]">{item.stage_id}</span>
-          <span className="text-[var(--text-muted)]">
-            {item.status}
-            {item.outcome ? ` / ${item.outcome}` : ''}, {item.produced_fact_refs.length} facts
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function EmptySection() {
-  return <p className="text-xs text-[var(--text-muted)]">None</p>
 }

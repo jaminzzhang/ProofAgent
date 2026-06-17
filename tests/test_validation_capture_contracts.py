@@ -11,6 +11,7 @@ from proof_agent.contracts.validation_capture import (
     ValidationCaptureV2Payload,
     WorkflowStageContextApplicationProjection,
     WorkflowStageContextConfigurationCapture,
+    WorkflowStageFailureDiagnosticProjection,
     WorkflowStagePromptValueCapture,
     WorkflowStageResultVerificationProjection,
 )
@@ -32,6 +33,7 @@ def _minimal_payload(**overrides: object) -> ValidationCaptureV2Payload:
         "stage_prompt_values": (
             WorkflowStagePromptValueCapture(
                 stage_id="plan",
+                stage_label="Plan",
                 prompt_values={"business_context": "Claims QA context."},
                 prompt_field_names=("business_context",),
                 prompt_character_count=18,
@@ -41,6 +43,7 @@ def _minimal_payload(**overrides: object) -> ValidationCaptureV2Payload:
         "context_configuration": (
             WorkflowStageContextConfigurationCapture(
                 stage_id="plan",
+                stage_label="Plan",
                 selected_context_options=("conversation_summary",),
                 available_context_options=("conversation_summary",),
             ),
@@ -48,6 +51,7 @@ def _minimal_payload(**overrides: object) -> ValidationCaptureV2Payload:
         "context_applications": (
             WorkflowStageContextApplicationProjection(
                 stage_id="plan",
+                stage_label="Plan",
                 summary={
                     "stage_id": "plan",
                     "context_options": ("conversation_summary",),
@@ -58,10 +62,27 @@ def _minimal_payload(**overrides: object) -> ValidationCaptureV2Payload:
         "stage_results": (
             WorkflowStageResultVerificationProjection(
                 stage_id="plan",
+                stage_label="Plan",
                 status=WorkflowStageStatus.COMPLETED,
                 outcome=None,
                 summary={"action_type": "plan_retrieval"},
                 produced_fact_refs=("action:act_1",),
+            ),
+        ),
+        "failure_diagnostics": (
+            WorkflowStageFailureDiagnosticProjection(
+                stage_id="plan",
+                stage_label="Plan",
+                event_type="model_output_normalization_failed",
+                status=WorkflowStageStatus.BLOCKED,
+                error_code="model_output_contract_validation_failed",
+                role="react_planner",
+                raw_content_length=31,
+                related_event_id="evt_0004",
+                contract_name="ReActActionProposal",
+                violation_codes=("missing",),
+                field_paths=("action_type",),
+                violation_count=1,
             ),
         ),
         "result_summary": ValidationCaptureResultSummary(
@@ -103,16 +124,19 @@ def test_validation_capture_v2_payload_uses_semantic_sections() -> None:
         "context_configuration",
         "context_applications",
         "stage_results",
+        "failure_diagnostics",
         "result_summary",
         "exclusions",
     }
     assert dumped["source"]["run_id"] == "run_validation"
     assert dumped["stage_prompt_values"][0]["stage_id"] == "plan"
+    assert dumped["stage_prompt_values"][0]["stage_label"] == "Plan"
     assert dumped["context_configuration"][0]["selected_context_options"] == [
         "conversation_summary"
     ]
     assert dumped["context_applications"][0]["summary"]["stage_id"] == "plan"
     assert dumped["stage_results"][0]["produced_fact_refs"] == ["action:act_1"]
+    assert dumped["failure_diagnostics"][0]["field_paths"] == ["action_type"]
     assert dumped["result_summary"]["final_output"] == "Travel meals require receipts."
 
 
@@ -140,6 +164,15 @@ def test_validation_capture_v2_payload_rejects_forbidden_keys(
         data[section][0]["summary"] = value
     elif section == "result_summary":
         data[section]["approval_pause"] = value
+
+    with pytest.raises(ValidationError):
+        ValidationCaptureV2Payload(**data)
+
+
+def test_validation_capture_failure_diagnostic_rejects_free_form_message() -> None:
+    payload = _minimal_payload()
+    data = payload.model_dump(mode="python")
+    data["failure_diagnostics"][0]["message"] = "raw validation detail should not pass"
 
     with pytest.raises(ValidationError):
         ValidationCaptureV2Payload(**data)

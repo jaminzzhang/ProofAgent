@@ -29,6 +29,7 @@ from proof_agent.contracts import (
     TraceEventType,
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
+    WorkflowStageFailureDiagnostic,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
@@ -461,6 +462,7 @@ def _workflow_execution_result_from_state(
             item for item in final_state.get("review_results", ()) if isinstance(item, Mapping)
         ),
         stage_context_applications=_stage_context_applications_from_state(final_state),
+        stage_failure_diagnostics=_stage_failure_diagnostics_from_state(final_state),
         trace_summary_refs=(
             (execution_input.stage_configuration_source.reference,)
             if execution_input.stage_configuration_source.reference
@@ -517,6 +519,7 @@ def _workflow_execution_result_from_interrupt(
             item for item in final_state.get("review_results", ()) if isinstance(item, Mapping)
         ),
         stage_context_applications=_stage_context_applications_from_state(final_state),
+        stage_failure_diagnostics=_stage_failure_diagnostics_from_state(final_state),
         trace_summary_refs=(
             (execution_input.stage_configuration_source.reference,)
             if execution_input.stage_configuration_source.reference
@@ -633,6 +636,19 @@ def _stage_context_applications_from_state(
     if not isinstance(applications, list | tuple):
         return ()
     return tuple(item for item in applications if isinstance(item, Mapping))
+
+
+def _stage_failure_diagnostics_from_state(
+    final_state: Mapping[str, Any],
+) -> tuple[WorkflowStageFailureDiagnostic, ...]:
+    diagnostics = final_state.get("stage_failure_diagnostics", ())
+    if not isinstance(diagnostics, list | tuple):
+        return ()
+    return tuple(
+        WorkflowStageFailureDiagnostic.model_validate(item)
+        for item in diagnostics
+        if isinstance(item, Mapping)
+    )
 
 
 def _resolve_workflow_stage_runtime_configuration(

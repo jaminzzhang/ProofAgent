@@ -1842,8 +1842,9 @@ def test_bind_shared_knowledge_source_to_agent_draft(
     assert bound.status_code == 200
     parsed = yaml.safe_load(bound.json()["agent_yaml"])
     assert "knowledge_sources" not in parsed
+    assert parsed["package_knowledge_sources"] == []
     assert all(
-        source["source_id"] != "ks_local_index" for source in parsed["package_knowledge_sources"]
+        binding["source_ref"]["scope"] == "shared" for binding in parsed["knowledge_bindings"]
     )
     assert any(
         binding["source_ref"] == {"scope": "shared", "source_id": "ks_local_index"}
@@ -1854,6 +1855,77 @@ def test_bind_shared_knowledge_source_to_agent_draft(
         for binding in parsed["knowledge_bindings"]
     )
     assert loaded.json()["agent_yaml"] == bound.json()["agent_yaml"]
+
+
+def test_update_model_contract_after_binding_shared_source_does_not_resolve_package_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    _publish_local_index_source(client, monkeypatch)
+    bound = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
+        json={
+            "source_id": "ks_local_index",
+            "failure_mode": "required",
+            "fusion_weight": 1.0,
+        },
+    )
+    contract = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    ).json()
+    raw_agent_yaml = yaml.safe_load(contract["agent_yaml"])
+    raw_agent_yaml["model"]["name"] = "demo-updated"
+
+    updated = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
+        json={"agent_yaml": yaml.safe_dump(raw_agent_yaml, sort_keys=False)},
+    )
+
+    assert bound.status_code == 200
+    assert updated.status_code == 200
+    parsed = yaml.safe_load(updated.json()["agent_yaml"])
+    assert parsed["model"]["name"] == "demo-updated"
+    assert parsed["package_knowledge_sources"] == []
+    assert all(
+        binding["source_ref"]["scope"] == "shared" for binding in parsed["knowledge_bindings"]
+    )
+
+
+def test_update_model_contract_normalizes_existing_mixed_package_and_shared_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    _publish_local_index_source(client, monkeypatch)
+    contract = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    ).json()
+    raw_agent_yaml = yaml.safe_load(contract["agent_yaml"])
+    raw_agent_yaml["knowledge_bindings"].append(
+        {
+            "binding_id": "ks_local_index_binding",
+            "source_ref": {"scope": "shared", "source_id": "ks_local_index"},
+            "failure_mode": "required",
+            "fusion_weight": 1.0,
+        }
+    )
+    raw_agent_yaml["model"]["name"] = "demo-updated"
+
+    updated = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
+        json={"agent_yaml": yaml.safe_dump(raw_agent_yaml, sort_keys=False)},
+    )
+
+    assert updated.status_code == 200
+    parsed = yaml.safe_load(updated.json()["agent_yaml"])
+    assert parsed["model"]["name"] == "demo-updated"
+    assert parsed["package_knowledge_sources"] == []
+    assert all(
+        binding["source_ref"]["scope"] == "shared" for binding in parsed["knowledge_bindings"]
+    )
 
 
 def test_bind_unpublished_knowledge_source_to_agent_draft_is_rejected(
@@ -2307,6 +2379,9 @@ def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -
     detail = client.get(f"/api/runs/{body['run_id']}")
     assert detail.status_code == 200
     assert detail.json()["validation_capture_id"] == artifact["capture_id"]
+    loaded = client.get(f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}")
+    assert loaded.status_code == 200
+    assert loaded.json()["validation_records"][0]["validation_capture_id"] == artifact["capture_id"]
 
     capture = client.get(body["links"]["validation_capture"])
     assert capture.status_code == 200
@@ -2321,6 +2396,7 @@ def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -
         "context_configuration",
         "context_applications",
         "stage_results",
+        "failure_diagnostics",
         "result_summary",
         "exclusions",
     }
@@ -2328,9 +2404,11 @@ def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -
     assert payload["source"]["draft_id"] == draft["draft_id"]
     assert payload["source"]["template_name"] == "react_enterprise_qa"
     assert payload["stage_prompt_values"]
+    assert payload["stage_prompt_values"][0]["stage_label"]
     assert payload["context_configuration"]
     assert payload["context_applications"]
     assert payload["stage_results"]
+    assert payload["failure_diagnostics"] == []
     assert payload["result_summary"]["outcome"] == body["outcome"]
     assert payload["result_summary"]["final_output"]
     assert "prompt_context_capture" not in payload

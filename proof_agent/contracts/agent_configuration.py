@@ -83,6 +83,7 @@ class AgentValidationRecord(FrozenModel):
     run_id: str
     status: str
     created_at: str
+    validation_capture_id: str | None = None
     summary: str = ""
     errors: tuple[str, ...] = Field(default_factory=tuple)
     warnings: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)

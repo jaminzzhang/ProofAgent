@@ -37,6 +37,7 @@ class ReActGraphState(TypedDict, total=False):
     review_results: Annotated[list[dict[str, Any]], operator.add]
     stage_results: Annotated[list[dict[str, Any]], operator.add]
     stage_context_applications: Annotated[list[dict[str, Any]], operator.add]
+    stage_failure_diagnostics: Annotated[list[dict[str, Any]], operator.add]
     clarification_need: dict[str, Any] | None
     approval_pause: dict[str, Any] | None
     tool_policy_decision: str | None

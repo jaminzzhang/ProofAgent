@@ -56,6 +56,7 @@ from proof_agent.contracts import (
     ValidationCaptureV2Payload,
     WorkflowStageContextApplicationProjection,
     WorkflowStageContextConfigurationCapture,
+    WorkflowStageFailureDiagnosticProjection,
     WorkflowStagePromptConfig,
     WorkflowStagePromptValueCapture,
     WorkflowStageResultVerificationProjection,
@@ -1683,10 +1684,13 @@ def update_config_draft_contract(
     actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
-    bundle = ContractBundle(
-        agent_yaml=request.agent_yaml
+    agent_yaml = (
+        _normalize_shared_knowledge_agent_yaml(request.agent_yaml)
         if request.agent_yaml is not None
-        else draft.contract_bundle.agent_yaml,
+        else draft.contract_bundle.agent_yaml
+    )
+    bundle = ContractBundle(
+        agent_yaml=agent_yaml,
         policy_yaml=request.policy_yaml
         if request.policy_yaml is not None
         else draft.contract_bundle.policy_yaml,
@@ -1743,6 +1747,7 @@ def update_config_draft_workflow_stages(
         workflow["stages"] = [_workflow_stage_request_payload(item) for item in request.stages]
         workflow.pop("nodes", None)
         raw["workflow"] = workflow
+        _normalize_shared_knowledge_mode(raw)
         agent_yaml = _dump_agent_yaml(raw)
         bundle = ContractBundle(
             agent_yaml=agent_yaml,
@@ -1905,6 +1910,7 @@ def validate_config_draft(
         run_id=run_id,
         status=detail.outcome.value,
         created_at=_now(),
+        validation_capture_id=validation_capture.get("capture_id") if validation_capture else None,
         summary=result.final_output[:500],
         warnings=warnings,
         publish_blockers=publish_blockers,
@@ -2002,6 +2008,9 @@ def _validation_capture_payload(
 ) -> dict[str, Any]:
     if execution_input is None or execution_result is None:
         raise ValueError("validation capture requires workflow execution input and result")
+    stage_labels = {
+        stage.id: stage.label for stage in execution_input.effective_stage_configuration.stages
+    }
     payload = ValidationCaptureV2Payload(
         source=_validation_capture_source(detail, execution_input),
         stage_prompt_values=tuple(
@@ -2013,18 +2022,36 @@ def _validation_capture_payload(
             for stage in execution_input.effective_stage_configuration.stages
         ),
         context_applications=tuple(
-            _workflow_stage_context_application_projection(item)
+            _workflow_stage_context_application_projection(item, stage_labels=stage_labels)
             for item in execution_result.stage_context_applications
         ),
         stage_results=tuple(
             WorkflowStageResultVerificationProjection(
                 stage_id=stage_result.stage_id,
+                stage_label=stage_labels.get(stage_result.stage_id),
                 status=stage_result.status,
                 outcome=stage_result.outcome,
                 summary=stage_result.summary,
                 produced_fact_refs=stage_result.produced_fact_refs,
             )
             for stage_result in execution_result.stage_results
+        ),
+        failure_diagnostics=tuple(
+            WorkflowStageFailureDiagnosticProjection(
+                stage_id=diagnostic.stage_id,
+                stage_label=diagnostic.stage_label or stage_labels.get(diagnostic.stage_id),
+                event_type=diagnostic.event_type,
+                status=diagnostic.status,
+                error_code=diagnostic.error_code,
+                role=diagnostic.role,
+                raw_content_length=diagnostic.raw_content_length,
+                related_event_id=diagnostic.related_event_id,
+                contract_name=diagnostic.contract_name,
+                violation_codes=diagnostic.violation_codes,
+                field_paths=diagnostic.field_paths,
+                violation_count=diagnostic.violation_count,
+            )
+            for diagnostic in execution_result.stage_failure_diagnostics
         ),
         result_summary=ValidationCaptureResultSummary(
             outcome=execution_result.outcome,
@@ -2086,6 +2113,7 @@ def _workflow_stage_prompt_value_capture(
     prompt_values = dict(stage.prompt)
     return WorkflowStagePromptValueCapture(
         stage_id=stage.id,
+        stage_label=stage.label,
         prompt_values=prompt_values,
         prompt_field_names=tuple(str(key) for key in prompt_values),
         prompt_character_count=_prompt_character_count(prompt_values),
@@ -2099,6 +2127,7 @@ def _workflow_stage_context_configuration_capture(
 ) -> WorkflowStageContextConfigurationCapture:
     return WorkflowStageContextConfigurationCapture(
         stage_id=stage.id,
+        stage_label=stage.label,
         selected_context_options=tuple(
             str(key) for key, enabled in stage.context.items() if enabled
         ),
@@ -2108,9 +2137,13 @@ def _workflow_stage_context_configuration_capture(
 
 def _workflow_stage_context_application_projection(
     item: Mapping[str, Any],
+    *,
+    stage_labels: Mapping[str, str],
 ) -> WorkflowStageContextApplicationProjection:
+    stage_id = str(item.get("stage_id") or "unknown")
     return WorkflowStageContextApplicationProjection(
-        stage_id=str(item.get("stage_id") or "unknown"),
+        stage_id=stage_id,
+        stage_label=str(item.get("stage_label") or stage_labels.get(stage_id) or ""),
         summary=item,
     )
 
@@ -2429,10 +2462,6 @@ def _bind_source_in_agent_yaml(
     raw.pop("knowledge", None)
     raw.pop("knowledge_sources", None)
 
-    package_knowledge_sources = raw.setdefault("package_knowledge_sources", [])
-    if not isinstance(package_knowledge_sources, list):
-        raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
-
     knowledge_bindings = raw.setdefault("knowledge_bindings", [])
     if not isinstance(knowledge_bindings, list):
         raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
@@ -2448,6 +2477,7 @@ def _bind_source_in_agent_yaml(
     if request.top_k is not None:
         binding_entry["top_k"] = request.top_k
     _upsert_by_key(knowledge_bindings, "binding_id", binding_id, binding_entry)
+    _normalize_shared_knowledge_mode(raw)
 
     return _dump_agent_yaml(raw)
 
@@ -2489,6 +2519,51 @@ def _dump_agent_yaml(raw: dict[str, Any]) -> str:
             width=1000,
         ),
     )
+
+
+def _normalize_shared_knowledge_agent_yaml(agent_yaml: str) -> str:
+    try:
+        raw = yaml.safe_load(agent_yaml)
+    except yaml.YAMLError:
+        return agent_yaml
+    if not isinstance(raw, dict):
+        return agent_yaml
+    if not _normalize_shared_knowledge_mode(raw):
+        return agent_yaml
+    return _dump_agent_yaml(raw)
+
+
+def _normalize_shared_knowledge_mode(raw: dict[str, Any]) -> bool:
+    knowledge_bindings = raw.get("knowledge_bindings", [])
+    if not isinstance(knowledge_bindings, list):
+        raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
+    has_shared_binding = any(
+        _knowledge_binding_scope(binding) == "shared" for binding in knowledge_bindings
+    )
+    if not has_shared_binding:
+        return False
+    package_knowledge_sources = raw.get("package_knowledge_sources", [])
+    if not isinstance(package_knowledge_sources, list):
+        raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
+    shared_bindings = [
+        binding
+        for binding in knowledge_bindings
+        if _knowledge_binding_scope(binding) != "package"
+    ]
+    changed = raw.get("package_knowledge_sources") != [] or shared_bindings != knowledge_bindings
+    raw["package_knowledge_sources"] = []
+    raw["knowledge_bindings"] = shared_bindings
+    return changed
+
+
+def _knowledge_binding_scope(binding: Any) -> str | None:
+    if not isinstance(binding, dict):
+        return None
+    source_ref = binding.get("source_ref")
+    if not isinstance(source_ref, dict):
+        return None
+    scope = source_ref.get("scope")
+    return scope if isinstance(scope, str) else None
 
 
 def _upsert_by_key(

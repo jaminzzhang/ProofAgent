@@ -10,8 +10,17 @@ import { ApprovalTab } from './tabs/ApprovalTab'
 import { WorkflowTab } from './tabs/WorkflowTab'
 import { useState } from 'react'
 import type { GovernanceDetails } from '../api/types'
+import { ValidationCapturePanel } from '../components/agent/ValidationCapturePanel'
 
-type Tab = 'workflow' | 'receipt' | 'approval' | 'timeline' | 'evidence' | 'model' | 'governance'
+type Tab =
+  | 'workflow'
+  | 'receipt'
+  | 'approval'
+  | 'timeline'
+  | 'evidence'
+  | 'model'
+  | 'governance'
+  | 'capture'
 
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>()
@@ -45,6 +54,10 @@ export function RunDetailPage() {
 
   if (!hasWorkflowProjection && hasGovernanceDetails(detail.governance_details)) {
     tabs.push({ key: 'governance', label: 'Governance Details' })
+  }
+
+  if (detail.validation_capture_id) {
+    tabs.push({ key: 'capture', label: 'Validation Capture' })
   }
 
   tabs.push(
@@ -110,6 +123,9 @@ export function RunDetailPage() {
           />
         )}
         {visibleActiveTab === 'governance' && <GovernanceTab details={detail.governance_details} />}
+        {visibleActiveTab === 'capture' && (
+          <ValidationCapturePanel runId={detail.run_id} available={Boolean(detail.validation_capture_id)} />
+        )}
         {visibleActiveTab === 'evidence' && <EvidenceTab chunks={detail.evidence_chunks} />}
         {visibleActiveTab === 'model' && <ModelUsageTab usage={detail.model_usage} />}
         {visibleActiveTab === 'timeline' && <TimelineTab events={detail.trace_events} />}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
+import re
 from typing import Any, cast
 
 from pydantic import ConfigDict, Field, field_serializer, field_validator
@@ -162,6 +163,44 @@ class WorkflowStageResult(WorkflowExecutionModel):
         return cast(dict[str, Any], _jsonable(value))
 
 
+class WorkflowStageFailureDiagnostic(WorkflowExecutionModel):
+    """Trace-safe diagnostic fact for an exceptional Workflow Template Stage stop."""
+
+    stage_id: str
+    stage_label: str | None = None
+    event_type: str
+    status: WorkflowStageStatus
+    error_code: str
+    role: str | None = None
+    raw_content_length: int | None = None
+    related_event_id: str | None = None
+    contract_name: str | None = None
+    violation_codes: tuple[str, ...] = Field(default_factory=tuple)
+    field_paths: tuple[str, ...] = Field(default_factory=tuple)
+    violation_count: int = 0
+
+    @field_validator(
+        "stage_id",
+        "stage_label",
+        "event_type",
+        "error_code",
+        "role",
+        "related_event_id",
+        "contract_name",
+        mode="after",
+    )
+    @classmethod
+    def bound_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _bounded_diagnostic_text(value)
+
+    @field_validator("violation_codes", "field_paths", mode="after")
+    @classmethod
+    def bound_sequence(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_bounded_diagnostic_text(item) for item in value)[:20]
+
+
 class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
     """Governed facts produced by one Workflow Template Execution."""
 
@@ -183,6 +222,9 @@ class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
     reasoning_summary: Mapping[str, Any] | None = None
     review_results: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
     stage_context_applications: tuple[Mapping[str, Any], ...] = Field(
+        default_factory=tuple
+    )
+    stage_failure_diagnostics: tuple[WorkflowStageFailureDiagnostic, ...] = Field(
         default_factory=tuple
     )
     model_usage_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
@@ -265,3 +307,8 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _bounded_diagnostic_text(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_.: -]+", "_", value.strip())
+    return (cleaned or "unknown")[:160]

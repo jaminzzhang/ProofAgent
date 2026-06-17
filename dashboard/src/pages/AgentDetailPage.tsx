@@ -462,10 +462,11 @@ export function AgentDetailPage() {
           agentId={agentId}
           draftId={draftId}
           validationRecords={draft.validation_records}
-          onValidate={(question) =>
+          onValidate={(question, options) =>
             runAction('validation', async () => {
               const result = await validateConfigDraft(agentId, draftId, {
                 question,
+                ...options,
               })
               setStatus(`Validation run ${result.run_id} completed with ${result.outcome}.`)
               refresh()

@@ -182,6 +182,10 @@ def _validate_intent_resolution(
                 "ask_clarification, plan_retrieval, or propose_tool_call."
             ),
             raw_content_length=raw_content_length,
+            contract_name="IntentResolution",
+            violation_codes=("invalid_recommended_next_action",),
+            field_paths=("recommended_next_action",),
+            violation_count=1,
         )
     if (
         resolution.recommended_next_action == ReActActionType.ASK_CLARIFICATION
@@ -192,5 +196,9 @@ def _validate_intent_resolution(
             error_code="model_output_contract_validation_failed",
             message="ask_clarification intent resolution requires missing_fields.",
             raw_content_length=raw_content_length,
+            contract_name="IntentResolution",
+            violation_codes=("missing_required_field_for_action",),
+            field_paths=("missing_fields",),
+            violation_count=1,
         )
     return resolution

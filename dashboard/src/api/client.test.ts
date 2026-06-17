@@ -768,6 +768,8 @@ test('validate publish and rollback use configuration lifecycle endpoints', asyn
 
   await validateConfigDraft('enterprise_qa', 'draft_1', {
     question: 'What is the reimbursement rule for travel meals?',
+    full_capture: true,
+    retain_for_audit: true,
   })
   await publishConfigDraft('enterprise_qa', 'draft_1', {
     validation_run_id: 'run_1',
@@ -777,6 +779,11 @@ test('validate publish and rollback use configuration lifecycle endpoints', asyn
   expect(fetchMock.mock.calls[0][0]).toBe(
     '/api/config/agents/enterprise_qa/drafts/draft_1/validate',
   )
+  expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+    question: 'What is the reimbursement rule for travel meals?',
+    full_capture: true,
+    retain_for_audit: true,
+  })
   expect(fetchMock.mock.calls[1][0]).toBe(
     '/api/config/agents/enterprise_qa/drafts/draft_1/publish',
   )
@@ -818,6 +825,7 @@ test('fetchValidationCapture reads the validation capture projection for a run',
       stage_prompt_values: [
         {
           stage_id: 'plan',
+          stage_label: 'Plan',
           prompt_values: { business_context: '[redacted projection]' },
           prompt_field_names: ['business_context'],
           prompt_character_count: 20,
@@ -828,6 +836,7 @@ test('fetchValidationCapture reads the validation capture projection for a run',
       context_configuration: [
         {
           stage_id: 'plan',
+          stage_label: 'Plan',
           selected_context_options: ['include_agent_purpose'],
           available_context_options: ['include_agent_purpose'],
         },
@@ -835,18 +844,21 @@ test('fetchValidationCapture reads the validation capture projection for a run',
       context_applications: [
         {
           stage_id: 'plan',
+          stage_label: 'Plan',
           summary: { option_count: 1 },
         },
       ],
       stage_results: [
         {
           stage_id: 'plan',
+          stage_label: 'Plan',
           status: 'completed',
           outcome: null,
           summary: { produced_fact_count: 1 },
           produced_fact_refs: ['fact_1'],
         },
       ],
+      failure_diagnostics: [],
       result_summary: {
         outcome: 'ANSWERED_WITH_CITATIONS',
         final_output: 'Validation answer.',

@@ -8,7 +8,10 @@ interface ValidateWorkspaceProps {
   agentId: string
   draftId: string
   validationRecords: AgentValidationRecord[]
-  onValidate: (question: string) => Promise<void>
+  onValidate: (
+    question: string,
+    options: { full_capture: boolean; retain_for_audit: boolean },
+  ) => Promise<void>
   busy: boolean
 }
 
@@ -20,6 +23,8 @@ export function ValidateWorkspace({
   busy,
 }: ValidateWorkspaceProps) {
   const [question, setQuestion] = useState('')
+  const [fullCapture, setFullCapture] = useState(false)
+  const [retainForAudit, setRetainForAudit] = useState(false)
   const latestValidation = validationRecords[validationRecords.length - 1]
   const history = useMemo(() => [...validationRecords].reverse(), [validationRecords])
   const latestErrorCount = latestValidation?.errors.length ?? 0
@@ -28,7 +33,10 @@ export function ValidateWorkspace({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!question.trim()) return
-    await onValidate(question.trim())
+    await onValidate(question.trim(), {
+      full_capture: fullCapture,
+      retain_for_audit: fullCapture && retainForAudit,
+    })
     setQuestion('')
   }
 
@@ -74,6 +82,32 @@ export function ValidateWorkspace({
               {busy ? 'Running Validation...' : 'Run Validation'}
             </button>
           </form>
+          <div className="mt-3 flex flex-wrap gap-4 text-xs text-[var(--text-secondary)]">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={fullCapture}
+                onChange={(e) => {
+                  setFullCapture(e.target.checked)
+                  if (!e.target.checked) setRetainForAudit(false)
+                }}
+                className="h-4 w-4 rounded border-[var(--border)]"
+              />
+              <span>Full stage capture</span>
+            </label>
+            <label
+              className={`inline-flex items-center gap-2 ${fullCapture ? '' : 'opacity-50'}`}
+            >
+              <input
+                type="checkbox"
+                checked={retainForAudit}
+                disabled={!fullCapture}
+                onChange={(e) => setRetainForAudit(e.target.checked)}
+                className="h-4 w-4 rounded border-[var(--border)]"
+              />
+              <span>Retain for audit</span>
+            </label>
+          </div>
         </section>
 
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">

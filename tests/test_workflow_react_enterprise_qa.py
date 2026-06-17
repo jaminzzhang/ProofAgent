@@ -781,6 +781,13 @@ def test_llm_planner_invalid_output_fails_closed_with_trace(
     )
     assert failure["payload"]["role"] == "react_planner"
     assert failure["payload"]["error_code"] == "model_output_json_parse_failed"
+    execution_result = result.workflow_template_execution_result
+    assert execution_result is not None
+    diagnostic = execution_result.stage_failure_diagnostics[0]
+    assert diagnostic.stage_id == "plan"
+    assert diagnostic.stage_label == "Plan"
+    assert diagnostic.error_code == "model_output_json_parse_failed"
+    assert diagnostic.related_event_id == failure["event_id"]
 
 
 def test_review_normalization_failure_fails_closed_with_trace(

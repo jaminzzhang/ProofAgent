@@ -324,6 +324,56 @@ describe('AgentDetailPage', () => {
     await waitFor(() => expect(refreshDraft).toHaveBeenCalled())
   })
 
+  it('submits validation capture options from Validate & Test', async () => {
+    vi.mocked(validateConfigDraft).mockResolvedValue({
+      validation_id: 'validation-1',
+      run_id: 'run-1',
+      status: 'completed',
+      outcome: 'ANSWERED_WITH_CITATIONS',
+      run_purpose: 'validation',
+      agent_id: 'agent-1',
+      draft_id: 'draft-1',
+      links: {
+        run_detail: '/runs/run-1',
+        trace: '',
+        receipt: '',
+        validation_capture: '/api/runs/run-1/validation-capture',
+      },
+      trace_capture: {
+        mode: 'full_capture',
+        validation_capture: {
+          capture_id: 'vcap_1',
+          run_id: 'run-1',
+          draft_id: 'draft-1',
+          created_at: '2026-05-28T01:00:00Z',
+          expires_at: '2026-05-29T01:00:00Z',
+          created_by: 'dashboard',
+          retention_class: 'sensitive_validation_capture',
+          artifact_path: 'validation_captures/vcap_1/capture.json',
+          retain_for_audit: true,
+          redaction_metadata: {},
+          exclusion_metadata: {},
+        },
+      },
+    })
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
+    fireEvent.change(screen.getByPlaceholderText('Enter a test question...'), {
+      target: { value: 'What documents are required?' },
+    })
+    fireEvent.click(screen.getByLabelText('Full stage capture'))
+    fireEvent.click(screen.getByLabelText('Retain for audit'))
+    fireEvent.click(screen.getByRole('button', { name: 'Run Validation' }))
+
+    await waitFor(() => {
+      expect(validateConfigDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
+        question: 'What documents are required?',
+        full_capture: true,
+        retain_for_audit: true,
+      })
+    })
+  })
+
   it('restores the Validate & Test module from the route query', () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
 
@@ -405,6 +455,7 @@ describe('AgentDetailPage', () => {
         stage_prompt_values: [
           {
             stage_id: 'plan',
+            stage_label: 'Plan',
             prompt_values: { business_context: '[projection]' },
             prompt_field_names: ['business_context'],
             prompt_character_count: 12,
@@ -415,6 +466,7 @@ describe('AgentDetailPage', () => {
         context_configuration: [
           {
             stage_id: 'plan',
+            stage_label: 'Plan',
             selected_context_options: ['include_agent_purpose'],
             available_context_options: ['include_agent_purpose'],
           },
@@ -422,18 +474,21 @@ describe('AgentDetailPage', () => {
         context_applications: [
           {
             stage_id: 'plan',
+            stage_label: 'Plan',
             summary: { option_count: 1 },
           },
         ],
         stage_results: [
           {
             stage_id: 'plan',
+            stage_label: 'Plan',
             status: 'completed',
             outcome: null,
             summary: { produced_fact_count: 1 },
             produced_fact_refs: ['fact-1'],
           },
         ],
+        failure_diagnostics: [],
         result_summary: {
           outcome: 'ANSWERED_WITH_CITATIONS',
           final_output: 'Validation answer.',
@@ -456,10 +511,12 @@ describe('AgentDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load Validation Capture' }))
 
     expect(await screen.findByText('Source')).toBeInTheDocument()
-    expect(screen.getByText('Stage Prompt Values')).toBeInTheDocument()
-    expect(screen.getByText('Context Configuration')).toBeInTheDocument()
-    expect(screen.getByText('Context Applications')).toBeInTheDocument()
-    expect(screen.getByText('Stage Results')).toBeInTheDocument()
+    expect(screen.getByText('Stage Review')).toBeInTheDocument()
+    expect(screen.getByText('Plan')).toBeInTheDocument()
+    expect(screen.getByText('Reveal Prompt Values')).toBeInTheDocument()
+    expect(screen.getByText('Configured Context')).toBeInTheDocument()
+    expect(screen.getByText('Applied Context')).toBeInTheDocument()
+    expect(screen.getByText('Stage Result')).toBeInTheDocument()
     expect(screen.getByText('Result Summary')).toBeInTheDocument()
     expect(screen.getByText('Exclusions')).toBeInTheDocument()
     expect(fetchValidationCapture).toHaveBeenCalledWith('run-validation-1')

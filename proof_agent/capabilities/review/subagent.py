@@ -294,6 +294,10 @@ def _parse_review_decision(
             error_code="model_output_contract_validation_failed",
             message="Model review output did not include a decision.",
             raw_content_length=len(content),
+            contract_name="ReviewDecision",
+            violation_codes=("missing_required_field",),
+            field_paths=("suggested_decision",),
+            violation_count=1,
         )
     return ReviewDecision(
         review_id=f"review.{action.action_id}.{enforcement_point.value}",

@@ -126,6 +126,10 @@ def test_parse_model_contract_rejects_invalid_contract_shape() -> None:
         )
 
     assert exc.value.error_code == "model_output_contract_validation_failed"
+    assert exc.value.contract_name == "ReActActionProposal"
+    assert "action_type" in exc.value.field_paths
+    assert exc.value.violation_codes
+    assert exc.value.violation_count >= 1
 
 
 def test_parse_model_contract_rejects_over_limit_content_before_parsing() -> None:
