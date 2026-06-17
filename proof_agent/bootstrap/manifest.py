@@ -6,6 +6,7 @@ from typing import Any
 from proof_agent.contracts import (
     AgentManifest,
     AuditConfig,
+    BusinessFlowSkillPackBindingConfig,
     CapabilitiesConfig,
     CustomerConfig,
     KnowledgeBindingConfig,
@@ -24,6 +25,7 @@ from proof_agent.contracts import (
     RetrievalConfig,
     ReviewConfig,
     ReviewSubagentConfig,
+    SkillsCapabilityConfig,
     ToolCapabilityConfig,
     WorkflowConfig,
     WorkflowStageConfig,
@@ -239,6 +241,7 @@ def _capabilities_config_from_mapping(raw: Any, *, base_dir: Path) -> Capabiliti
         raise TypeError("capabilities must be a mapping")
     tools = raw["tools"]
     memory = raw["memory"]
+    skills = raw.get("skills")
     if not isinstance(tools, dict):
         raise TypeError("capabilities.tools must be a mapping")
     if not isinstance(memory, dict):
@@ -253,6 +256,44 @@ def _capabilities_config_from_mapping(raw: Any, *, base_dir: Path) -> Capabiliti
             provider=memory.get("provider"),
             scopes=memory.get("scopes", {}),
         ),
+        skills=_skills_capability_config_from_mapping(skills, base_dir=base_dir),
+    )
+
+
+def _skills_capability_config_from_mapping(
+    raw: Any,
+    *,
+    base_dir: Path,
+) -> SkillsCapabilityConfig:
+    if raw is None:
+        return SkillsCapabilityConfig()
+    if not isinstance(raw, dict):
+        raise TypeError("capabilities.skills must be a mapping")
+    business_flows = raw.get("business_flows", ())
+    if business_flows is None:
+        business_flows = ()
+    if not isinstance(business_flows, list | tuple):
+        raise TypeError("capabilities.skills.business_flows must be a list")
+    return SkillsCapabilityConfig(
+        enabled=raw.get("enabled", False),
+        business_flows=tuple(
+            _business_flow_skill_pack_binding_from_mapping(item, base_dir=base_dir)
+            for item in business_flows
+        ),
+    )
+
+
+def _business_flow_skill_pack_binding_from_mapping(
+    raw: Any,
+    *,
+    base_dir: Path,
+) -> BusinessFlowSkillPackBindingConfig:
+    if not isinstance(raw, dict):
+        raise TypeError("capabilities.skills.business_flows entries must be mappings")
+    return BusinessFlowSkillPackBindingConfig(
+        id=raw["id"],
+        definition=resolve_path(base_dir, raw["definition"]),
+        default=raw.get("default", False),
     )
 
 
@@ -336,6 +377,7 @@ def _review_config_from_mapping(raw: Any) -> ReviewConfig | None:
     return ReviewConfig(
         mode=raw.get("mode", "rules_only"),
         subagent=_review_subagent_config_from_mapping(raw.get("subagent")),
+        low_risk_fast_path=raw.get("low_risk_fast_path", True),
     )
 
 

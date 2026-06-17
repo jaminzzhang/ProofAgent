@@ -17,6 +17,7 @@ CORE_ANALYZER_GATES_V1 = EvaluationGateProfile(
         EvaluationGateName.RESPONSE_PROJECTION_SAFETY,
         EvaluationGateName.REDACTION_SAFETY,
         EvaluationGateName.RESPONSE_ASSERTION,
+        EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
     ),
     diagnostic_gates=(
         EvaluationGateName.FORBIDDEN_CLAIM,

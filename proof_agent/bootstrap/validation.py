@@ -261,28 +261,47 @@ def _require_capability_enabled_flags(
     manifest_path: Path,
 ) -> None:
     for domain in ("tools", "memory"):
-        value = capabilities.get(domain)
-        if not isinstance(value, Mapping):
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"capabilities.{domain} must be a mapping",
-                f"Set capabilities.{domain}.enabled in {manifest_path}.",
-                artifact_path=manifest_path,
-            )
-        if "enabled" not in value:
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"missing capabilities.{domain}.enabled",
-                f"Set capabilities.{domain}.enabled to true or false in {manifest_path}.",
-                artifact_path=manifest_path,
-            )
-        if not isinstance(value.get("enabled"), bool):
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"capabilities.{domain}.enabled must be a boolean",
-                f"Use unquoted true or false for capabilities.{domain}.enabled.",
-                artifact_path=manifest_path,
-            )
+        _require_capability_enabled_flag(
+            capabilities,
+            domain,
+            manifest_path=manifest_path,
+        )
+    if "skills" in capabilities:
+        _require_capability_enabled_flag(
+            capabilities,
+            "skills",
+            manifest_path=manifest_path,
+        )
+
+
+def _require_capability_enabled_flag(
+    capabilities: Mapping[str, Any],
+    domain: str,
+    *,
+    manifest_path: Path,
+) -> None:
+    value = capabilities.get(domain)
+    if not isinstance(value, Mapping):
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"capabilities.{domain} must be a mapping",
+            f"Set capabilities.{domain}.enabled in {manifest_path}.",
+            artifact_path=manifest_path,
+        )
+    if "enabled" not in value:
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"missing capabilities.{domain}.enabled",
+            f"Set capabilities.{domain}.enabled to true or false in {manifest_path}.",
+            artifact_path=manifest_path,
+        )
+    if not isinstance(value.get("enabled"), bool):
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"capabilities.{domain}.enabled must be a boolean",
+            f"Use unquoted true or false for capabilities.{domain}.enabled.",
+            artifact_path=manifest_path,
+        )
 
 
 def _require_model_source_shape(
@@ -498,6 +517,8 @@ def _validate_capabilities_config(manifest: AgentManifest, *, manifest_path: Pat
                 artifact_path=manifest_path,
             )
 
+    _validate_skills_capability_config(manifest, manifest_path=manifest_path)
+
     memory = manifest.capabilities.memory
     if not memory.enabled:
         if memory.provider is not None:
@@ -535,6 +556,55 @@ def _validate_capabilities_config(manifest: AgentManifest, *, manifest_path: Pat
                 "Enable at least one memory scope or disable memory.",
                 artifact_path=manifest_path,
             )
+
+
+def _validate_skills_capability_config(
+    manifest: AgentManifest,
+    *,
+    manifest_path: Path,
+) -> None:
+    skills = manifest.capabilities.skills
+    if not skills.enabled:
+        if skills.business_flows:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "capabilities.skills.business_flows cannot be set when skills are disabled",
+                "Remove capabilities.skills.business_flows or set capabilities.skills.enabled: true.",
+                artifact_path=manifest_path,
+            )
+        return
+    if not skills.business_flows:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "capabilities.skills.business_flows is required when skills are enabled",
+            "Add at least one package-local Business Flow Skill Pack binding or disable skills.",
+            artifact_path=manifest_path,
+        )
+    seen_ids: set[str] = set()
+    default_ids: list[str] = []
+    for binding in skills.business_flows:
+        if binding.id in seen_ids:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"duplicate Business Flow Skill Pack binding id: {binding.id}",
+                "Use each capabilities.skills.business_flows[].id at most once.",
+                artifact_path=manifest_path,
+            )
+        seen_ids.add(binding.id)
+        if binding.default:
+            default_ids.append(binding.id)
+        require_path(
+            binding.definition,
+            f"capabilities.skills.business_flows[{binding.id}].definition",
+            manifest_path,
+        )
+    if len(default_ids) > 1:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "only one default Business Flow Skill Pack is allowed",
+            "Set default: true on at most one capabilities.skills.business_flows[] entry.",
+            artifact_path=manifest_path,
+        )
 
 
 def _tool_contract_count(path: Path) -> int:

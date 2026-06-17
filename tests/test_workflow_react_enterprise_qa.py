@@ -180,6 +180,65 @@ def test_supported_travel_meal_question_answers_with_react_review_trace(
     assert "model_response" in event_types
 
 
+def test_low_risk_review_fast_path_skips_reviewer_model_when_policy_allows(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["review"]["subagent"]["provider"] = "openai_compatible"
+    manifest["review"]["subagent"]["name"] = "reviewer-test"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    provider = FakeControlPlaneProvider("RAW_MODEL_OUTPUT_SHOULD_NOT_TRACE")
+
+    monkeypatch.setattr(
+        "proof_agent.capabilities.review.subagent.resolve_provider",
+        lambda config: provider,
+    )
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    assert provider.requests == []
+    events = _trace_events(result.trace_path)
+    review_requests = [
+        event["payload"]
+        for event in events
+        if event["event_type"] == "review_requested"
+    ]
+    assert {event["enforcement_point"] for event in review_requests} >= {
+        "before_retrieval_plan",
+        "before_retrieval_step",
+        "before_model_call",
+    }
+    assert all(event["low_risk_fast_path_enabled"] is True for event in review_requests)
+    fast_path_reviews = [
+        event["payload"]
+        for event in events
+        if event["event_type"] == "review_decision"
+        and event["payload"].get("fast_path_reason") == "low_risk_policy_allow"
+    ]
+    assert {
+        event["review_enforcement_point"]
+        for event in fast_path_reviews
+    } == {
+        "before_retrieval_plan",
+        "before_retrieval_step",
+        "before_model_call",
+    }
+    assert all(event["used_review"] is False for event in fast_path_reviews)
+    assert all(event["final_decision"] == "allow" for event in fast_path_reviews)
+
+
 def test_run_start_emits_workflow_stage_configuration_trace_summary(
     tmp_path: Path,
 ) -> None:
@@ -227,6 +286,173 @@ def test_v2_resolves_intent_before_react_planning(tmp_path: Path) -> None:
     intent_event = next(event for event in events if event["event_type"] == "intent_resolution")
     assert intent_event["payload"]["recommended_next_action"] == "plan_retrieval"
     assert intent_event["payload"]["domain_intent"] == "enterprise_policy_question"
+
+
+def test_v2_emits_business_flow_skill_pack_admission_after_intent_resolution(
+    tmp_path: Path,
+) -> None:
+    example_dir = tmp_path / "react_enterprise_qa_v2"
+    shutil.copytree(REACT_V2_AGENT.parent, example_dir)
+    skill_pack_dir = example_dir / "skill_packs"
+    skill_pack_dir.mkdir()
+    (skill_pack_dir / "enterprise.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: enterprise_policy_qa
+label: Enterprise Policy QA
+description: Enterprise policy question routing addenda.
+intent_patterns:
+  - enterprise_policy_question
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - react_enterprise_qa_v2_knowledge_binding
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.5
+""",
+        encoding="utf-8",
+    )
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"]["skills"] = {
+        "enabled": True,
+        "business_flows": [
+            {
+                "id": "enterprise_policy_qa",
+                "definition": "./skill_packs/enterprise.yaml",
+                "default": True,
+            }
+        ],
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "run",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    event_types = _event_types(events)
+    assert event_types.index("intent_resolution") < event_types.index(
+        "business_flow_skill_pack_admission"
+    )
+    admission_event = next(
+        event
+        for event in events
+        if event["event_type"] == "business_flow_skill_pack_admission"
+    )
+    assert admission_event["payload"]["decision"] == "admitted"
+    assert admission_event["payload"]["selected_pack_id"] == "enterprise_policy_qa"
+    assert admission_event["payload"]["recommended_pack_id"] == "enterprise_policy_qa"
+    assert result.workflow_template_execution_result is not None
+    intent_stage = next(
+        stage
+        for stage in result.workflow_template_execution_result.stage_results
+        if stage.stage_id == "intent_resolution"
+    )
+    assert "business_flow_skill_pack_admission" in intent_stage.produced_fact_refs
+
+
+def test_admitted_business_flow_stage_prompt_addendum_applies_to_plan_context(
+    tmp_path: Path,
+) -> None:
+    example_dir = tmp_path / "react_enterprise_qa_v2"
+    shutil.copytree(REACT_V2_AGENT.parent, example_dir)
+    skill_pack_dir = example_dir / "skill_packs"
+    skill_pack_dir.mkdir()
+    admitted_context = "Use the admitted enterprise policy QA business flow."
+    non_admitted_context = "This unrelated claims escalation flow must not apply."
+    (skill_pack_dir / "enterprise.yaml").write_text(
+        f"""
+schema_version: business_flow_skill_pack.v1
+id: enterprise_policy_qa
+label: Enterprise Policy QA
+description: Enterprise policy question routing addenda.
+intent_patterns:
+  - enterprise_policy_question
+stage_prompt_addenda:
+  plan:
+    business_context: "{admitted_context}"
+    task_instructions:
+      - "Prioritize the bound policy knowledge source before planning."
+knowledge_binding_refs:
+  - react_enterprise_qa_v2_knowledge_binding
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.5
+""",
+        encoding="utf-8",
+    )
+    (skill_pack_dir / "claims.yaml").write_text(
+        f"""
+schema_version: business_flow_skill_pack.v1
+id: claims_escalation
+label: Claims Escalation
+description: Unrelated claims escalation addenda.
+intent_patterns:
+  - claims_escalation
+stage_prompt_addenda:
+  plan:
+    business_context: "{non_admitted_context}"
+knowledge_binding_refs:
+  - react_enterprise_qa_v2_knowledge_binding
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.5
+""",
+        encoding="utf-8",
+    )
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"]["skills"] = {
+        "enabled": True,
+        "business_flows": [
+            {
+                "id": "enterprise_policy_qa",
+                "definition": "./skill_packs/enterprise.yaml",
+            },
+            {
+                "id": "claims_escalation",
+                "definition": "./skill_packs/claims.yaml",
+            },
+        ],
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "run",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    plan_context = next(
+        event
+        for event in events
+        if event["event_type"] == "workflow_stage_context_applied"
+        and event["payload"]["stage_id"] == "plan"
+    )
+    assert plan_context["payload"]["prompt_fields"] == [
+        "business_context",
+        "task_instructions",
+    ]
+    assert plan_context["payload"]["business_context_length"] == len(admitted_context)
+    assert plan_context["payload"]["task_instruction_count"] == 1
+    trace_text = result.trace_path.read_text(encoding="utf-8")
+    assert admitted_context not in trace_text
+    assert non_admitted_context not in trace_text
 
 
 def test_workflow_stage_context_extends_model_prompt_without_replacing_system_prompt(
@@ -565,6 +791,7 @@ def test_llm_planner_and_reviewer_calls_emit_safe_model_events(
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["react"]["planner"]["provider"] = "openai_compatible"
     manifest["react"]["planner"]["name"] = "planner-test"
+    manifest["review"]["low_risk_fast_path"] = False
     manifest["review"]["subagent"]["provider"] = "openai_compatible"
     manifest["review"]["subagent"]["name"] = "reviewer-test"
     manifest_path.write_text(
@@ -620,6 +847,16 @@ def test_llm_planner_and_reviewer_calls_emit_safe_model_events(
         ):
             assert "messages" not in event["payload"]
             assert "content" not in event["payload"]
+    execution_result = result.workflow_template_execution_result
+    assert execution_result is not None
+    planner_interaction = next(
+        item
+        for item in execution_result.stage_llm_interactions
+        if item.role == "react_planner"
+    )
+    assert planner_interaction.stage_id == "plan"
+    assert planner_interaction.request_json["response_format"] == "json"
+    assert planner_interaction.response_json["parameters"]["raw_output"] == sentinel
 
 
 def test_retrieval_review_stage_context_reaches_reviewer_model_request(
@@ -632,6 +869,7 @@ def test_retrieval_review_stage_context_reaches_reviewer_model_request(
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["react"]["planner"]["provider"] = "openai_compatible"
     manifest["react"]["planner"]["name"] = "planner-test"
+    manifest["review"]["low_risk_fast_path"] = False
     manifest["review"]["subagent"]["provider"] = "openai_compatible"
     manifest["review"]["subagent"]["name"] = "reviewer-test"
     manifest["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v1"
@@ -812,9 +1050,15 @@ def test_review_normalization_failure_fails_closed_with_trace(
         "proof_agent.capabilities.review.subagent.DeterministicHarnessReviewSubagent.review",
         invalid_review,
     )
+    example_dir = tmp_path / "react_enterprise_qa"
+    shutil.copytree(REACT_AGENT.parent, example_dir)
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["review"]["low_risk_fast_path"] = False
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
     result = run_with_langgraph(
-        REACT_AGENT,
+        manifest_path,
         question="What is the reimbursement rule for travel meals?",
         runs_dir=tmp_path,
     )

@@ -328,6 +328,7 @@ react:
 
 review:
   mode: auto
+  low_risk_fast_path: true
   subagent:
     provider: deterministic
     name: harness-review-demo
@@ -341,7 +342,7 @@ response:
   include_review_results: false
 ```
 
-`react_enterprise_qa` and `react_enterprise_qa_v2` require `react`. V2 adds Intent Resolution before ReAct planning and records it as governance detail when `response.include_reasoning_summary` allows reasoning details. `review.mode: auto` requires `review.subagent`. `response` controls optional governance details returned by Run Execution and Conversation APIs; the caller can request `include_governance_details`, but the Agent Contract caps the response through `response.include_reasoning_summary` and `response.include_review_results`.
+`react_enterprise_qa` and `react_enterprise_qa_v2` require `react`. V2 adds Intent Resolution before ReAct planning and records it as governance detail when `response.include_reasoning_summary` allows reasoning details. `review.mode: auto` requires `review.subagent`. `review.low_risk_fast_path` defaults to `true`; policy-allowed low-risk retrieval and evidence-backed answer checks keep review/policy trace events but bypass the reviewer model call. `response` controls optional governance details returned by Run Execution and Conversation APIs; the caller can request `include_governance_details`, but the Agent Contract caps the response through `response.include_reasoning_summary` and `response.include_review_results`.
 
 The fixed ReAct Action Set is:
 

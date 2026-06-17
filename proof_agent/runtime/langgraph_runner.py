@@ -30,6 +30,7 @@ from proof_agent.contracts import (
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
     WorkflowStageFailureDiagnostic,
+    WorkflowStageLlmInteraction,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
@@ -220,6 +221,7 @@ def run_with_langgraph(
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         draft_id=draft_id,
+        error_code=_execution_error_code(execution_result),
     )
     return result.model_copy(
         update={
@@ -364,6 +366,7 @@ def resume_langgraph_approval(
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         draft_id=draft_id,
+        error_code=_execution_error_code(execution_result),
     )
     return result.model_copy(
         update={
@@ -463,6 +466,7 @@ def _workflow_execution_result_from_state(
         ),
         stage_context_applications=_stage_context_applications_from_state(final_state),
         stage_failure_diagnostics=_stage_failure_diagnostics_from_state(final_state),
+        stage_llm_interactions=_stage_llm_interactions_from_state(final_state),
         trace_summary_refs=(
             (execution_input.stage_configuration_source.reference,)
             if execution_input.stage_configuration_source.reference
@@ -520,6 +524,7 @@ def _workflow_execution_result_from_interrupt(
         ),
         stage_context_applications=_stage_context_applications_from_state(final_state),
         stage_failure_diagnostics=_stage_failure_diagnostics_from_state(final_state),
+        stage_llm_interactions=_stage_llm_interactions_from_state(final_state),
         trace_summary_refs=(
             (execution_input.stage_configuration_source.reference,)
             if execution_input.stage_configuration_source.reference
@@ -649,6 +654,27 @@ def _stage_failure_diagnostics_from_state(
         for item in diagnostics
         if isinstance(item, Mapping)
     )
+
+
+def _stage_llm_interactions_from_state(
+    final_state: Mapping[str, Any],
+) -> tuple[WorkflowStageLlmInteraction, ...]:
+    interactions = final_state.get("stage_llm_interactions", ())
+    if not isinstance(interactions, list | tuple):
+        return ()
+    return tuple(
+        WorkflowStageLlmInteraction.model_validate(item)
+        for item in interactions
+        if isinstance(item, Mapping)
+    )
+
+
+def _execution_error_code(
+    execution_result: WorkflowTemplateExecutionResult,
+) -> str | None:
+    if execution_result.stage_failure_diagnostics:
+        return execution_result.stage_failure_diagnostics[0].error_code
+    return None
 
 
 def _resolve_workflow_stage_runtime_configuration(

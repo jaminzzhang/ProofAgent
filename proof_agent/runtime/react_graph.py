@@ -32,12 +32,16 @@ class ReActGraphState(TypedDict, total=False):
     step_count: int
     tool_call_count: int
     intent_resolution: dict[str, Any] | None
+    business_flow_skill_pack_recommendation: dict[str, Any] | None
+    business_flow_skill_pack_admission: dict[str, Any] | None
+    primary_business_flow_skill_pack_id: str | None
     action: dict[str, Any] | None
     reasoning_summary: dict[str, Any] | None
     review_results: Annotated[list[dict[str, Any]], operator.add]
     stage_results: Annotated[list[dict[str, Any]], operator.add]
     stage_context_applications: Annotated[list[dict[str, Any]], operator.add]
     stage_failure_diagnostics: Annotated[list[dict[str, Any]], operator.add]
+    stage_llm_interactions: Annotated[list[dict[str, Any]], operator.add]
     clarification_need: dict[str, Any] | None
     approval_pause: dict[str, Any] | None
     tool_policy_decision: str | None

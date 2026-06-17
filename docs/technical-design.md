@@ -468,6 +468,7 @@ Config rules:
 - `react_enterprise_qa` and `react_enterprise_qa_v2` require the `react` section.
 - `react_enterprise_qa_v2` adds Intent Resolution before ReAct planning; it reuses `react.planner` model configuration while emitting a distinct `intent_resolution` model-call role and audit event.
 - `review.mode: auto` requires `review.subagent`.
+- `review.low_risk_fast_path` defaults to `true`; low-risk retrieval and evidence-backed answer enforcement points may skip the reviewer model only after deterministic policy returns `allow`, and the runtime must still emit review/policy trace events with the fast-path reason.
 - Reviewer model usage settings belong under `review.subagent.params`; old top-level reviewer usage fields are rejected instead of dual-read.
 - Raw chain-of-thought must not be recorded, stored, or exposed; only audit-safe Reasoning Summary fields may enter trace, receipt, RunStore, Dashboard API, Conversation API, or response governance details.
 

@@ -55,6 +55,7 @@ class EvaluationGateName(str, Enum):
     RESPONSE_PROJECTION_SAFETY = "response_projection_safety"
     REDACTION_SAFETY = "redaction_safety"
     RESPONSE_ASSERTION = "response_assertion"
+    BUSINESS_FLOW_SKILL_PACK = "business_flow_skill_pack"
     FORBIDDEN_CLAIM = "forbidden_claim"
 
 
@@ -104,6 +105,7 @@ class EvaluationResponseAssertions(FrozenModel):
 class EvaluationCaseExpected(FrozenModel):
     outcome: ReceiptOutcome
     required_citation_refs: tuple[str, ...] = Field(default_factory=tuple)
+    expected_business_flow_skill_pack_id: str | None = None
     forbidden_claim_categories: tuple[str, ...] = Field(default_factory=tuple)
     required_business_claims: tuple[str, ...] = Field(default_factory=tuple)
     response_assertions: EvaluationResponseAssertions = Field(

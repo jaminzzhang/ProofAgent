@@ -68,8 +68,8 @@ def _request_payload(model: FakeRoutingModel) -> dict[str, object]:
     return json.loads(user_message.content)
 
 
-def test_document_router_sends_only_metadata_matches_when_available() -> None:
-    model = FakeRoutingModel('{"selected_document_ids":["doc_claims"],"reason":"match"}')
+def test_document_router_selects_metadata_matches_without_model_when_within_budget() -> None:
+    model = FakeRoutingModel('{"selected_document_ids":["doc_travel"],"reason":"wrong"}')
 
     result = route_snapshot_documents(
         "claim reimbursement",
@@ -86,10 +86,86 @@ def test_document_router_sends_only_metadata_matches_when_available() -> None:
         snapshot_id="kssnapshot_001",
     )
 
+    assert model.requests == []
+    assert [document.document_id for document in result.selected_documents] == ["doc_claims"]
+    assert result.summary["document_candidates"] == [
+        {
+            "document_id": "doc_claims",
+            "revision_id": "rev_doc_claims",
+            "filename": "claims-guide.md",
+            "routing_metadata_keys": ["tags"],
+            "metadata_matched": True,
+            "selection_reason": "metadata_match",
+        }
+    ]
+    assert result.summary["selected_documents"] == [
+        {
+            "document_id": "doc_claims",
+            "revision_id": "rev_doc_claims",
+            "selection_reason": "metadata_match_selected",
+        }
+    ]
+    assert result.summary["document_routing"]["selection_reason"] == (
+        "metadata_match_selected"
+    )
+
+
+def test_document_router_matches_cjk_metadata_without_model() -> None:
+    model = FakeRoutingModel('{"selected_document_ids":["doc_other"],"reason":"wrong"}')
+
+    result = route_snapshot_documents(
+        "我买平安御享一生终身寿险保单过期了怎么办",
+        documents=(
+            _document(
+                "doc_policy",
+                filename="policy.md",
+                routing_metadata={"title": "平安御享一生终身寿险"},
+            ),
+            _document("doc_other", filename="general-faq.md"),
+        ),
+        routing_model=model,
+        selection_budget=3,
+        snapshot_id="kssnapshot_cjk",
+    )
+
+    assert model.requests == []
+    assert [document.document_id for document in result.selected_documents] == ["doc_policy"]
+    assert result.summary["document_candidates"][0]["metadata_matched"] is True
+    assert result.summary["document_routing"]["selection_reason"] == (
+        "metadata_match_selected"
+    )
+
+
+def test_document_router_sends_only_metadata_matches_when_match_count_exceeds_budget() -> None:
+    model = FakeRoutingModel('{"selected_document_ids":["doc_claims"],"reason":"match"}')
+
+    result = route_snapshot_documents(
+        "claim reimbursement",
+        documents=(
+            _document(
+                "doc_claims",
+                filename="claims-guide.md",
+                routing_metadata={"tags": ["claim"], "ignored": "must-not-leak"},
+            ),
+            _document(
+                "doc_refunds",
+                filename="refunds-guide.md",
+                routing_metadata={"tags": ["claim"]},
+            ),
+            _document("doc_travel", filename="travel-policy.md"),
+        ),
+        routing_model=model,
+        selection_budget=1,
+        snapshot_id="kssnapshot_001",
+    )
+
     payload = _request_payload(model)
     candidates = payload["document_candidates"]
     assert isinstance(candidates, list)
-    assert [item["document_id"] for item in candidates] == ["doc_claims"]
+    assert [item["document_id"] for item in candidates] == [
+        "doc_claims",
+        "doc_refunds",
+    ]
     assert candidates[0]["routing_metadata"] == {"tags": ["claim"]}
     assert [document.document_id for document in result.selected_documents] == ["doc_claims"]
     assert result.summary["document_candidates"][0]["metadata_matched"] is True

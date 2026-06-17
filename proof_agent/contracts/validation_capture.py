@@ -149,6 +149,34 @@ class WorkflowStageFailureDiagnosticProjection(ValidationCaptureModel):
     violation_count: int = 0
 
 
+class WorkflowStageLlmInteractionCapture(ValidationCaptureModel):
+    """Sensitive validation-only LLM request/response JSON for stage tuning."""
+
+    stage_id: str
+    stage_label: str | None = None
+    role: str
+    provider: str
+    model: str
+    request_json: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    response_json: Any | None = None
+    response_content_length: int = 0
+    response_json_parse_error_code: str | None = None
+
+    @field_validator("request_json", "response_json", mode="after")
+    @classmethod
+    def freeze_json(cls, value: Any) -> Any:
+        _reject_forbidden_keys(value, root="llm_interactions")
+        return freeze_value(value)
+
+    @field_serializer("request_json")
+    def serialize_request_json(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
+
+    @field_serializer("response_json")
+    def serialize_response_json(self, value: Any) -> Any:
+        return _jsonable(value)
+
+
 class ValidationCaptureResultSummary(ValidationCaptureModel):
     """Terminal governed result projection for one validation attempt."""
 
@@ -205,6 +233,9 @@ class ValidationCaptureV2Payload(ValidationCaptureModel):
         default_factory=tuple
     )
     failure_diagnostics: tuple[WorkflowStageFailureDiagnosticProjection, ...] = Field(
+        default_factory=tuple
+    )
+    llm_interactions: tuple[WorkflowStageLlmInteractionCapture, ...] = Field(
         default_factory=tuple
     )
     result_summary: ValidationCaptureResultSummary

@@ -572,6 +572,38 @@ class RunStore:
         payload = event.get("payload", {})
         return dict(payload) if isinstance(payload, dict) else None
 
+    def _extract_business_flow_skill_pack_admission(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        event = next(
+            (
+                e
+                for e in reversed(events)
+                if e.get("event_type") == "business_flow_skill_pack_admission"
+            ),
+            None,
+        )
+        if event is None:
+            return None
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            return None
+        allowed_fields = {
+            "decision",
+            "selected_pack_id",
+            "recommended_pack_id",
+            "candidate_pack_ids",
+            "intent_resolution_id",
+            "candidate_count",
+            "failure_reason",
+        }
+        return {
+            field: payload[field]
+            for field in allowed_fields
+            if field in payload
+        }
+
     def _extract_review_results(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         review_event_types = {"review_decision", "review_error", "review_overridden"}
         results: list[dict[str, Any]] = []
@@ -610,6 +642,12 @@ class RunStore:
         intent_resolution = self._extract_intent_resolution(events)
         if intent_resolution:
             details["intent_resolution"] = intent_resolution
+
+        business_flow_admission = self._extract_business_flow_skill_pack_admission(
+            events
+        )
+        if business_flow_admission:
+            details["business_flow_skill_pack_admission"] = business_flow_admission
 
         review_results = self._extract_review_results(events)
         if review_results:

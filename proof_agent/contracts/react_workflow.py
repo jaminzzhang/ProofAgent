@@ -20,6 +20,14 @@ class ReActActionType(str, Enum):
     STOP = "stop"
 
 
+class BusinessFlowSkillPackAdmissionDecision(str, Enum):
+    ADMITTED = "admitted"
+    NEEDS_CLARIFICATION = "needs_clarification"
+    SAFE_DEFAULT = "safe_default"
+    REFUSED = "refused"
+    FAILED_CLOSED = "failed_closed"
+
+
 class ReasoningSummary(FrozenModel):
     """Audit-safe summary of controlled reasoning without raw chain-of-thought."""
 
@@ -44,6 +52,41 @@ class IntentResolution(FrozenModel):
     risk_flags: tuple[str, ...]
     confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     recommended_next_action: ReActActionType
+
+
+class BusinessFlowSkillPackRecommendation(FrozenModel):
+    """Intent-derived recommendation from the published Business Flow Skill Pack set."""
+
+    recommendation_id: str
+    intent_resolution_id: str
+    recommended_pack_id: str | None
+    candidate_pack_ids: tuple[str, ...]
+    confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    reason: str
+
+
+class BusinessFlowSkillPackAdmission(FrozenModel):
+    """Control Plane admission fact for the Primary Business Flow Skill Pack."""
+
+    admission_id: str
+    recommendation_id: str
+    decision: BusinessFlowSkillPackAdmissionDecision
+    selected_pack_id: str | None = None
+    reason: str
+    failure_reason: str | None = None
+    trace_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("trace_summary", mode="after")
+    @classmethod
+    def freeze_trace_summary(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class BusinessFlowSkillPackAdmissionResult(FrozenModel):
+    """Recommendation plus admission facts kept separate from IntentResolution."""
+
+    recommendation: BusinessFlowSkillPackRecommendation
+    admission: BusinessFlowSkillPackAdmission
 
 
 class ReActActionProposal(FrozenModel):

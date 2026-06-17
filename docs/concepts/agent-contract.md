@@ -115,6 +115,7 @@ react:
 
 review:
   mode: auto
+  low_risk_fast_path: true
   subagent:
     provider: deterministic
     name: harness-review-demo
@@ -128,7 +129,7 @@ response:
   include_review_results: false
 ```
 
-`workflow.template: react_enterprise_qa` and `workflow.template: react_enterprise_qa_v2` require a `react` section. `review.mode: auto` requires `review.subagent`. `response` controls what governance details may be returned to API callers; it does not change what the trace records. For V2, `response.include_reasoning_summary` also allows the internal Intent Resolution summary in operator governance details.
+`workflow.template: react_enterprise_qa` and `workflow.template: react_enterprise_qa_v2` require a `react` section. `review.mode: auto` requires `review.subagent`. `review.low_risk_fast_path` defaults to `true`; when deterministic policy allows a low-risk read-only retrieval step or an evidence-backed final answer, the runtime skips the Harness Review Subagent model call while still recording `review_requested`, `review_decision`, and `policy_decision` trace events. Set it to `false` when every auto-review enforcement point must invoke the reviewer model. `response` controls what governance details may be returned to API callers; it does not change what the trace records. For V2, `response.include_reasoning_summary` also allows the internal Intent Resolution summary in operator governance details.
 
 ## Responsibilities
 

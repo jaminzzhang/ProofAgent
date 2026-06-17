@@ -201,6 +201,48 @@ class WorkflowStageFailureDiagnostic(WorkflowExecutionModel):
         return tuple(_bounded_diagnostic_text(item) for item in value)[:20]
 
 
+class WorkflowStageLlmInteraction(WorkflowExecutionModel):
+    """Sensitive validation-only model input/output fact for one stage call."""
+
+    stage_id: str
+    stage_label: str | None = None
+    role: str
+    provider: str
+    model: str
+    request_json: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    response_json: Any | None = None
+    response_content_length: int = 0
+    response_json_parse_error_code: str | None = None
+
+    @field_validator(
+        "stage_id",
+        "stage_label",
+        "role",
+        "provider",
+        "model",
+        "response_json_parse_error_code",
+        mode="after",
+    )
+    @classmethod
+    def bound_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _bounded_diagnostic_text(value)
+
+    @field_validator("request_json", "response_json", mode="after")
+    @classmethod
+    def freeze_json(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("request_json")
+    def serialize_request_json(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
+
+    @field_serializer("response_json")
+    def serialize_response_json(self, value: Any) -> Any:
+        return _jsonable(value)
+
+
 class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
     """Governed facts produced by one Workflow Template Execution."""
 
@@ -225,6 +267,9 @@ class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
         default_factory=tuple
     )
     stage_failure_diagnostics: tuple[WorkflowStageFailureDiagnostic, ...] = Field(
+        default_factory=tuple
+    )
+    stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = Field(
         default_factory=tuple
     )
     model_usage_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)

@@ -23,8 +23,12 @@ The public configuration contract that declares an Agent's purpose, workflow, kn
 _Avoid_: Internal config, runtime config
 
 **Agent Contract Capability Configuration**:
-The unified public Agent Contract YAML `capabilities:` structure that declares governed capability domains, including tools and memory, before Agent Publication resolves Workflow Stage Availability.
+The unified public Agent Contract YAML `capabilities:` structure that declares governed capability domains, including tools, memory, and future skills, before Agent Publication resolves Workflow Stage Availability.
 _Avoid_: Internal-only capability profile, scattered top-level capability toggles, per-stage enable switches
+
+**Agent Contract Skills Capability Configuration**:
+The `capabilities.skills` Agent Contract section that declares Business Flow Skill Pack Bindings and other future Skill Pack bindings as governed capabilities rather than Workflow Template topology.
+_Avoid_: workflow.skills, workflow.stages skill entries, top-level skills, runtime skill discovery
 
 **Direct Capability Contract Migration**:
 The breaking Agent Contract migration that replaces top-level `tools` and `memory` capability declarations with top-level `capabilities:` in one cutover.
@@ -51,8 +55,76 @@ A source-controlled Agent Package under `examples/` used as a stable runnable re
 _Avoid_: Workflow Template, template registry entry, generated local Draft Agent data
 
 **Business Flow Skill Pack**:
-A Skill Pack that contributes domain-specific intent taxonomy, Prompt addenda, retrieval recipes, Tool Contract bindings, policy rules, validators, evaluation cases, and business-plan projection hints while execution still runs through one selected Workflow Template.
+A Skill Pack that contributes domain-specific intent taxonomy, Prompt addenda, retrieval recipes, references to explicit governed capabilities, evaluation cases, and business-plan projection hints while execution still runs through one selected Workflow Template.
 _Avoid_: Workflow Template, runtime graph, dynamic topology, prompt-defined process, direct tool executor
+
+**Business Flow Skill Pack Capability Reference Boundary**:
+The rule that a Business Flow Skill Pack may reference, prioritize, constrain, or explain already-bound Knowledge Bindings, Tool Contracts, policy rules, validators, and context options, but must not implicitly create, enable, or broaden those governed capabilities.
+_Avoid_: Hidden tool binding, hidden knowledge source, implicit policy install, validator side-load
+
+**Package-Local Business Flow Skill Pack Definition**:
+A Business Flow Skill Pack definition stored inside an Agent Package and referenced by `capabilities.skills`, then validated and frozen into the Published Agent Version for execution.
+_Avoid_: Global Skill Pack Registry, mutable shared pack, Dashboard-managed reusable asset, runtime package discovery
+
+**Business Flow Skill Pack Definition Field Set**:
+The first package-local Business Flow Skill Pack fields: id, label, description, intent patterns or taxonomy references, stage Prompt addenda, Knowledge Binding references, Tool Contract references, policy rule references, validator references, admission settings, and an optional default marker.
+_Avoid_: Executable steps, edges, scripts, model provider overrides, raw prompts, tool parameter templates, dynamic imports, inline tool schema, inline policy rule body
+
+**Business Flow Skill Pack Routing-Safe Summary**:
+The bounded selection-time summary of a Business Flow Skill Pack exposed to Intent Resolution, limited to identity, label, description, intent patterns or taxonomy references, default marker, and admission hints.
+_Avoid_: Full stage Prompt addenda, full tool scope summary, policy details, validator details, raw business instructions
+
+**Business Flow Skill Pack Binding**:
+An Agent Contract Skills Capability Configuration entry that makes one Business Flow Skill Pack available to governed runs for a Draft or Published Agent before Intent Resolution may select or recommend it.
+_Avoid_: Runtime discovery, latest pack lookup, unbound skill import, implicit intent plugin
+
+**Published Business Flow Skill Pack Set**:
+The immutable set of Business Flow Skill Pack Bindings captured inside a Published Agent Version and copied into each run so Intent Resolution can choose only among prevalidated packs.
+_Avoid_: Mutable skill catalog, runtime pack loading, latest pack resolution, unpublished business flow
+
+**Primary Business Flow Skill Pack**:
+The single Business Flow Skill Pack selected or recommended for one governed run from the Published Business Flow Skill Pack Set, used to frame domain context and business-plan projection without combining multiple pack authorities.
+_Avoid_: Multi-pack merge, tool scope union, policy rule union, validator stacking by intent
+
+**Business Flow Skill Pack Recommendation**:
+The structured recommendation contract emitted alongside Intent Resolution that names a candidate Primary Business Flow Skill Pack with confidence, missing-field, ambiguity, and risk signals, without becoming part of the Intent Resolution Contract or granting execution authority.
+_Avoid_: IntentResolution field, admitted pack, direct capability selection, policy decision, runtime loader command
+
+**Business Flow Skill Pack Admission**:
+The independent Control Plane fact that accepts or rejects a Business Flow Skill Pack Recommendation against the Published Business Flow Skill Pack Set, authorization context, confidence threshold, ambiguity rules, and readiness checks.
+_Avoid_: IntentResolution field, LLM self-selection, prompt-owned routing, best-effort pack match, untraced fallback
+
+**Intent Resolution Business Flow Admission Substep**:
+The Control Plane substep inside the Intent Resolution Workflow Template Stage that turns a Business Flow Skill Pack Recommendation into an admitted Primary Business Flow Skill Pack or an admission failure outcome without adding a new public Workflow Template Stage.
+_Avoid_: business_flow_admission stage, topology change, descriptor-version change, Dashboard graph node
+
+**Business Flow Skill Pack Stage Context Application**:
+The post-admission application of one admitted Primary Business Flow Skill Pack's stage-specific addenda and trace-safe capability reference summaries into later Workflow Template Stages through Structured Control Context or Business Context Addendum.
+_Avoid_: Pre-admission full pack injection, raw pack dump, all-pack context stuffing, Harness control prompt replacement
+
+**Business Flow Skill Pack Trace Summary**:
+The trace-safe projection of Business Flow Skill Pack binding, recommendation, admission, and stage context application facts, limited to references, ids, decisions, failure reasons, digests, counts, stage ids, default or fallback markers, and redaction flags.
+_Avoid_: Raw pack YAML, full stage Prompt addenda, full intent patterns, full business instructions, tool details, policy details, validator details
+
+**Business Flow Skill Pack Governance Receipt Summary**:
+The human-readable Governance Receipt section rendered from Business Flow Skill Pack Trace Summary, showing admission outcome and affected Workflow Stage context application summaries without exposing raw pack content.
+_Avoid_: Raw pack excerpt, full business instructions, prompt addenda dump, tool or policy details, second admission decision, unmarked generic stage context summary
+
+**Business Flow Skill Pack Publication Validation**:
+The fail-closed Agent Publication gate that validates Business Flow Skill Pack enablement, ids, default count, package-local definition references, allowed fields, governed capability references, stage addenda targets, Prompt safety, routing summary bounds, admission settings, and frozen definition digests.
+_Avoid_: Runtime-only validation, UI warning, best-effort missing reference repair, publish with disabled pack errors
+
+**Business Flow Skill Pack Evaluation Gate**:
+A deterministic Evaluation Gate that checks expected Business Flow Skill Pack recommendation, admission, fallback, clarification, refusal, stage context application, and no-unauthorized-fallback facts without replacing answer-quality, evidence, tool, policy, or response safety gates.
+_Avoid_: Answer quality score, judge preference, evidence gate replacement, business-flow-only pass
+
+**Default Business Flow Skill Pack**:
+An Agent-declared safe fallback Business Flow Skill Pack that may be admitted only when a recommendation is not admissible for non-authorization reasons and the fallback does not broaden tool, policy, validator, or data-scope authority.
+_Avoid_: Catch-all permission expansion, hidden default, broadest pack, runtime inferred fallback
+
+**Business Flow Skill Pack Admission Failure Policy**:
+The Control Plane rule for rejected Business Flow Skill Pack Recommendations: missing or ambiguous facts request clarification, non-admissible recommendations may use a Default Business Flow Skill Pack or refusal, and unauthorized or not-ready packs fail closed without broader fallback.
+_Avoid_: Single generic fallback, silent defaulting, authorization bypass, readiness bypass
 
 **Tool Contract**:
 The public capability contract that declares a governed tool's purpose, risk level, read/write class, authorization conditions, parameter bounds, and audit behavior.
@@ -843,11 +915,11 @@ The explicit schema version for Sensitive Validation Capture Artifact payloads, 
 _Avoid_: Published Agent Version, Workflow Template Descriptor Version, ordinary trace schema
 
 **Validation Capture V2 Payload Sections**:
-The semantic top-level sections of a `validation_capture.v2` Sensitive Validation Capture Artifact: source, stage_prompt_values, context_configuration, context_applications, stage_results, failure_diagnostics, result_summary, and exclusions.
+The semantic top-level sections of a `validation_capture.v2` Sensitive Validation Capture Artifact: source, stage_prompt_values, context_configuration, context_applications, stage_results, failure_diagnostics, llm_interactions, result_summary, and exclusions.
 _Avoid_: prompt_context_capture, raw workflow YAML dump, raw capabilities dump, trace parser output
 
 **Validation Capture V2 Contract Model**:
-The explicit Pydantic contract for `validation_capture.v2` payloads, defining typed source, prompt value, context configuration, context application, stage result, result summary, and exclusion sections before persistence.
+The explicit Pydantic contract for `validation_capture.v2` payloads, defining typed source, prompt value, context configuration, context application, stage result, failure diagnostic, LLM interaction, result summary, and exclusion sections before persistence.
 _Avoid_: dict[str, Any] payload builder, schema-by-test, store-inferred validation, ad hoc JSON shape
 
 **Validation Capture Contract Module**:
@@ -905,6 +977,14 @@ _Avoid_: Trace-derived diagnostic backfill, local store migration, synthetic leg
 **Bounded Contract Field Diagnostic**:
 A validation-safe field-level diagnostic for model output or contract normalization failures, limited to contract name, stable violation codes, bounded field paths, and violation counts.
 _Avoid_: Rejected value, raw model output, Pydantic error text, provider response body, exception message
+
+**Validation Capture LLM Interaction JSON**:
+The validation-only Sensitive Validation Capture Artifact section that records a Workflow Template Stage's LLM request JSON and response JSON for model debugging and tuning, without storing complete provider response envelopes, transport metadata, credentials, stack traces, or chain-of-thought.
+_Avoid_: Ordinary trace model event, provider debug dump, complete provider response body, production prompt archive
+
+**Per-Stage LLM Interaction Reveal**:
+The explicit Dashboard action inside Stage-First Validation Capture Review that reveals captured LLM request and response JSON for a single Workflow Template Stage.
+_Avoid_: Auto-expanded model transcript, ordinary trace payload, customer-visible prompt view
 
 **Sensitive Validation Capture Retention**:
 The retention policy for Sensitive Validation Capture Artifacts: default short TTL of 7 days, with explicit audit retention only when requested and authorized.
@@ -2340,6 +2420,9 @@ _Avoid_: Evidence content dump
 - **Workflow Stage Failure Diagnostic Projection** is reserved for exceptional or repairable diagnostic conditions such as model output normalization failure, provider error, tool adapter error, knowledge adapter error, or capability readiness failure; normal governed outcomes remain represented by Workflow Stage Result, Validation Capture Result Summary, Approval Pause, or Clarification Need.
 - **Workflow Stage Failure Diagnostic Projection** does not carry free-form diagnostic messages; Dashboard maps stable error codes and roles to fixed safe explanatory text.
 - Model output contract failures may include **Bounded Contract Field Diagnostic** facts so validators can identify which contract field shape failed without exposing rejected values, provider responses, raw model output, or free-form validation messages.
+- Full capture may record **Validation Capture LLM Interaction JSON** for model-bearing Workflow Template Stages so validators can inspect the exact LLM request JSON and response JSON used for debugging and tuning; ordinary trace events continue to exclude model messages and model content.
+- **Validation Capture LLM Interaction JSON** excludes complete provider response envelopes, credentials, transport metadata, stack traces, and chain-of-thought; secret-like keys are still redacted by the Sensitive Validation Capture sanitizer.
+- Stage-First Validation Capture Review uses **Per-Stage LLM Interaction Reveal** so LLM request and response JSON remains explicit and scoped to the validator's selected stage.
 - **Validation Capture Diagnostic Compatibility** keeps existing `validation_capture.v2` artifacts readable without reconstructing missing `failure_diagnostics` from ordinary trace; Stage-First Validation Capture Review must clearly indicate when diagnostics were not recorded and a rerun is needed to collect them.
 - Stage-First Validation Capture Review uses the **Run-Start Stage Review Set** rather than an executed-only stage list so configured but unreached stages remain visible as not reached or not executed; Dashboard uses stage labels captured in the artifact instead of mapping stage ids from frontend code.
 - Stage-First Validation Capture Review uses **Per-Stage Prompt Value Reveal** for full captured Prompt values rather than auto-expanding every stage; the revealed values are Agent-authored business Prompt fields, not Harness control prompts, provider prompts, system prompts, or developer prompts.
@@ -2903,6 +2986,7 @@ _Avoid_: Evidence content dump
 - "Validation capture failure diagnostic scope" could mean treating every terminal or waiting outcome as a failure diagnostic or reserving diagnostics for repairable exceptional stops. Resolved: reserve **Workflow Stage Failure Diagnostic Projection** for exceptional or repairable diagnostic conditions, while governed refusals, clarification needs, and approval pauses stay in their existing projections.
 - "Validation capture failure diagnostic text" could mean persisting a free-form message or persisting stable fields and letting Dashboard map them to safe copy. Resolved: **Workflow Stage Failure Diagnostic Projection** stores stable fields only and Dashboard owns fixed safe explanatory text.
 - "Validation capture contract-field diagnostics" could mean storing raw validation errors or exposing bounded field-level facts. Resolved: use **Bounded Contract Field Diagnostic** with contract name, stable violation codes, bounded field paths, and violation counts only.
+- "Full capture LLM input/output" could mean adding model messages and content to ordinary trace, storing complete provider envelopes, or adding a validation-only section. Resolved: use **Validation Capture LLM Interaction JSON** in `validation_capture.v2` `llm_interactions`, while ordinary trace keeps only model request/response summaries.
 - "Legacy validation capture diagnostics" could mean backfilling old artifacts from trace, running a store migration, or marking diagnostics as unavailable. Resolved: use **Validation Capture Diagnostic Compatibility**; existing artifacts stay readable, missing diagnostics are explicit, and validators rerun with Full stage capture to collect new diagnostics.
 - "Validation capture stage list" could mean showing only executed stages, deriving labels from frontend code, or using the run-start available stage set with captured labels. Resolved: use **Run-Start Stage Review Set** so Stage-First Validation Capture Review shows configured but unreached stages explicitly and uses artifact-provided stage labels.
 - "Validation capture Prompt detail reveal" could mean auto-expanding every Prompt value or requiring an explicit per-stage reveal action. Resolved: use **Per-Stage Prompt Value Reveal** so validators reveal one stage's captured business Prompt values intentionally while preserving Harness prompt authority terminology.
@@ -3075,6 +3159,20 @@ _Avoid_: Evidence content dump
 - "Institution specialist answer shape" could mean one final answer for every audience or separate operator and external-facing views. Resolved: use **Institution Specialist Response Projection** for the staff-facing answer and include an **External Wording Draft** only when the request source or use case is customer or agent communication.
 - "Institution specialist intent routing" could mean a fixed business taxonomy only, unrestricted LLM-defined execution, or dynamic business planning inside a governed workflow. Resolved: use **Insurance Specialist Intent Taxonomy** as a baseline anchor, allow the **LLM ReAct Planner** to create a **Dynamic Insurance Business Subplan** for any insurance-related intent, and keep executable actions, tool scope, Workflow Template topology, and policy authority under the Control Envelope.
 - "Intent-routed business flow" could mean dynamically loading an executable workflow topology or selecting a domain capability pack. Resolved: use **Business Flow Skill Pack** for intent-routed domain configuration and governed capability contributions while the selected **Workflow Template** remains the execution shape.
+- "Business Flow Skill Pack availability" could mean runtime discovery from a mutable skill catalog or predeclared Agent configuration. Resolved: use **Business Flow Skill Pack Binding** in the Agent Contract and freeze the **Published Business Flow Skill Pack Set** into each Published Agent Version; Intent Resolution can select or recommend only from that frozen set.
+- "Business Flow Skill Pack selection cardinality" could mean selecting one primary pack per run or composing multiple packs by intent. Resolved: select at most one **Primary Business Flow Skill Pack** per run; mixed business needs are represented inside that pack's business subplan and governed bindings rather than by dynamically merging pack authorities.
+- "Business Flow Skill Pack selection authority" could mean Intent Resolution directly selecting the run's pack or only recommending a candidate. Resolved: Intent Resolution emits a **Business Flow Skill Pack Recommendation**, while **Business Flow Skill Pack Admission** in the Control Plane determines whether that recommendation becomes the run's **Primary Business Flow Skill Pack**.
+- "Business Flow Skill Pack admission failure" could mean always refusing, always falling back, or branching by failure reason. Resolved: use **Business Flow Skill Pack Admission Failure Policy**: missing or ambiguous facts request clarification, non-admissible recommendations may use a safe **Default Business Flow Skill Pack** or refusal, and unauthorized or not-ready packs fail closed without fallback to broader authority.
+- "Business Flow Skill Pack Agent Contract location" could mean putting bindings under Workflow Template stage configuration, a top-level skills section, or capability configuration. Resolved: use **Agent Contract Skills Capability Configuration** under `capabilities.skills`; `workflow.stages[]` remains limited to Workflow Stage Prompt and context overrides.
+- "Business Flow Skill Pack capability contribution" could mean implicit installation of tools, knowledge, policy rules, or validators, or references to already-governed capabilities. Resolved: use **Business Flow Skill Pack Capability Reference Boundary**; a pack may reference, prioritize, constrain, and explain explicit frozen capabilities, but must not implicitly create, enable, or broaden them.
+- "Business Flow Skill Pack storage" could mean a package-local definition or a Dashboard-managed global reusable registry. Resolved: first use **Package-Local Business Flow Skill Pack Definition** referenced from `capabilities.skills` and frozen at Agent Publication; defer a global Skill Pack Registry until the contract, admission, trace, and validation path are proven.
+- "Business Flow Skill Pack definition shape" could mean a minimal domain configuration record or a workflow/script DSL. Resolved: use **Business Flow Skill Pack Definition Field Set** for V1 and exclude executable steps, edges, scripts, model provider overrides, raw prompts, tool parameter templates, dynamic imports, and inline governed capability definitions.
+- "Business Flow Skill Pack context layering" could mean giving Intent Resolution every pack's full content or separating selection summaries from post-admission stage context. Resolved: Intent Resolution sees only **Business Flow Skill Pack Routing-Safe Summary** values, and later stages receive admitted **Business Flow Skill Pack Stage Context Application** for the Primary Business Flow Skill Pack.
+- "Business Flow Skill Pack observability" could mean ordinary trace stores the full pack definition or only a safe projection. Resolved: ordinary trace, receipt, and Dashboard projections use **Business Flow Skill Pack Trace Summary**; full pack content belongs only in gated validation capture or explicit reveal paths.
+- "Business Flow Skill Pack publication validation" could mean warning-only checks or a fail-closed publication gate. Resolved: use **Business Flow Skill Pack Publication Validation** before Agent Publication; invalid enablement, duplicate ids, multiple defaults, missing definitions, unsupported fields, unresolved capability references, invalid stage addenda targets, unsafe Prompt text, oversized routing summaries, invalid admission settings, or missing definition digests block publication.
+- "Business Flow Skill Pack admission topology" could mean adding a new public Workflow Template Stage or keeping admission inside Intent Resolution. Resolved: use **Intent Resolution Business Flow Admission Substep** in the existing `intent_resolution` stage for V1; do not add a `business_flow_admission` Workflow Template Stage or change the Workflow Template Descriptor Version only for this admission decision.
+- "Business Flow Skill Pack recommendation contract placement" could mean adding fields to **Intent Resolution Contract** or emitting separate recommendation and admission facts. Resolved: keep **Intent Resolution Contract** focused on user intent and use independent **Business Flow Skill Pack Recommendation** and **Business Flow Skill Pack Admission** facts linked from the `intent_resolution` Workflow Template Stage result.
+- "Business Flow Skill Pack evaluation" could mean ignoring pack routing in release gates or treating it as a replacement answer-quality metric. Resolved: use **Business Flow Skill Pack Evaluation Gate** for deterministic routing-governance checks while existing evidence, tool, policy, response safety, and answer-quality gates remain authoritative for answer correctness.
 - "Institution specialist memory" could mean current-case follow-up context or a long-lived business fact store. Resolved: use **Institution Specialist Case Memory** for current task focus, clarified identifiers, scoped filters, and response-format preferences only; policy status, claim status, report values, tool payloads, and customer or agent identity facts remain live business records, not memory facts.
 - "Payment guarantee" could mean an ordinary unsupported question or a high-risk service commitment request. Resolved: use **Payment Or Coverage Guarantee Request** and create an internal **Customer Escalation Handoff** while returning customer-safe refusal wording.
 - "Handoff trigger configuration" could mean hard-coded only, business-configurable, or prompt-defined. Resolved: V1 keeps fixed baseline triggers and permits Agent Contract or policy configuration only for enterprise high-value failure scenarios; frontend and prompt-defined triggers are not trusted.

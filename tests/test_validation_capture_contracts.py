@@ -12,6 +12,7 @@ from proof_agent.contracts.validation_capture import (
     WorkflowStageContextApplicationProjection,
     WorkflowStageContextConfigurationCapture,
     WorkflowStageFailureDiagnosticProjection,
+    WorkflowStageLlmInteractionCapture,
     WorkflowStagePromptValueCapture,
     WorkflowStageResultVerificationProjection,
 )
@@ -85,6 +86,26 @@ def _minimal_payload(**overrides: object) -> ValidationCaptureV2Payload:
                 violation_count=1,
             ),
         ),
+        "llm_interactions": (
+            WorkflowStageLlmInteractionCapture(
+                stage_id="plan",
+                stage_label="Plan",
+                role="react_planner",
+                provider="openai_compatible",
+                model="planner-test",
+                request_json={
+                    "response_format": "json",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": '{"question": "What is covered?"}',
+                        }
+                    ],
+                },
+                response_json={"action_type": "plan_retrieval"},
+                response_content_length=33,
+            ),
+        ),
         "result_summary": ValidationCaptureResultSummary(
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             final_output="Travel meals require receipts.",
@@ -125,6 +146,7 @@ def test_validation_capture_v2_payload_uses_semantic_sections() -> None:
         "context_applications",
         "stage_results",
         "failure_diagnostics",
+        "llm_interactions",
         "result_summary",
         "exclusions",
     }
@@ -137,6 +159,9 @@ def test_validation_capture_v2_payload_uses_semantic_sections() -> None:
     assert dumped["context_applications"][0]["summary"]["stage_id"] == "plan"
     assert dumped["stage_results"][0]["produced_fact_refs"] == ["action:act_1"]
     assert dumped["failure_diagnostics"][0]["field_paths"] == ["action_type"]
+    assert dumped["llm_interactions"][0]["response_json"] == {
+        "action_type": "plan_retrieval"
+    }
     assert dumped["result_summary"]["final_output"] == "Travel meals require receipts."
 
 

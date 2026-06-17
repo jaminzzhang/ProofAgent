@@ -57,6 +57,7 @@ from proof_agent.contracts import (
     WorkflowStageContextApplicationProjection,
     WorkflowStageContextConfigurationCapture,
     WorkflowStageFailureDiagnosticProjection,
+    WorkflowStageLlmInteractionCapture,
     WorkflowStagePromptConfig,
     WorkflowStagePromptValueCapture,
     WorkflowStageResultVerificationProjection,
@@ -2053,6 +2054,20 @@ def _validation_capture_payload(
             )
             for diagnostic in execution_result.stage_failure_diagnostics
         ),
+        llm_interactions=tuple(
+            WorkflowStageLlmInteractionCapture(
+                stage_id=interaction.stage_id,
+                stage_label=interaction.stage_label or stage_labels.get(interaction.stage_id),
+                role=interaction.role,
+                provider=interaction.provider,
+                model=interaction.model,
+                request_json=interaction.request_json,
+                response_json=interaction.response_json,
+                response_content_length=interaction.response_content_length,
+                response_json_parse_error_code=interaction.response_json_parse_error_code,
+            )
+            for interaction in execution_result.stage_llm_interactions
+        ),
         result_summary=ValidationCaptureResultSummary(
             outcome=execution_result.outcome,
             final_output=execution_result.final_output,
@@ -2075,7 +2090,7 @@ def _validation_capture_payload(
                 "raw_context",
                 "raw_evidence",
                 "tool_payload",
-                "provider_response",
+                "complete_provider_response",
                 "runtime_state",
                 "chain_of_thought",
             ),

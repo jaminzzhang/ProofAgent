@@ -88,6 +88,7 @@ export function RunDetailPage() {
           {detail.agent_id && <span>{detail.agent_id}</span>}
           {detail.agent_version_id && <span>{detail.agent_version_id}</span>}
           {detail.draft_id && <span>{detail.draft_id}</span>}
+          {detail.error_code && <span>{detail.error_code}</span>}
         </div>
       </div>
 

@@ -859,6 +859,22 @@ test('fetchValidationCapture reads the validation capture projection for a run',
         },
       ],
       failure_diagnostics: [],
+      llm_interactions: [
+        {
+          stage_id: 'plan',
+          stage_label: 'Plan',
+          role: 'react_planner',
+          provider: 'openai_compatible',
+          model: 'planner-test',
+          request_json: {
+            response_format: 'json',
+            messages: [{ role: 'user', content: '{"question":"Q"}' }],
+          },
+          response_json: { action_type: 'plan_retrieval' },
+          response_content_length: 32,
+          response_json_parse_error_code: null,
+        },
+      ],
       result_summary: {
         outcome: 'ANSWERED_WITH_CITATIONS',
         final_output: 'Validation answer.',
@@ -888,6 +904,9 @@ test('fetchValidationCapture reads the validation capture projection for a run',
   expect(fetchMock).toHaveBeenCalledWith('/api/runs/run_1/validation-capture', undefined)
   expect(response.payload.capture_contract_version).toBe('validation_capture.v2')
   expect(response.payload.stage_prompt_values[0].stage_id).toBe('plan')
+  expect(response.payload.llm_interactions?.[0].response_json).toEqual({
+    action_type: 'plan_retrieval',
+  })
 })
 
 test('updateConfigDraftContract patches Contract View files', async () => {

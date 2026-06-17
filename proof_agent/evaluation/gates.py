@@ -38,6 +38,7 @@ def evaluate_case_gates(
         _response_projection_safety_gate(artifacts),
         _redaction_safety_gate(artifacts),
         _response_assertion_gate(case, artifacts),
+        _business_flow_skill_pack_gate(case, artifacts),
         _forbidden_claim_gate(case),
     )
 
@@ -300,6 +301,48 @@ def _response_assertion_gate(
     )
 
 
+def _business_flow_skill_pack_gate(
+    case: EvaluationCase,
+    artifacts: EvaluationArtifacts,
+) -> EvaluationGateResult:
+    expected_pack_id = case.expected.expected_business_flow_skill_pack_id
+    if expected_pack_id is None:
+        return _gate(
+            EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
+            EvaluationGateStatus.PASSED,
+            "no expected Business Flow Skill Pack declared",
+        )
+    admission = _business_flow_skill_pack_admission(artifacts.trace_events)
+    if admission is None:
+        return _gate(
+            EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
+            EvaluationGateStatus.FAILED,
+            "missing business_flow_skill_pack_admission event",
+            failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+        )
+    selected_pack_id = admission.get("selected_pack_id")
+    decision = admission.get("decision")
+    if selected_pack_id != expected_pack_id:
+        return _gate(
+            EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
+            EvaluationGateStatus.FAILED,
+            f"expected Business Flow Skill Pack {expected_pack_id}, got {selected_pack_id or 'missing'}",
+            failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+        )
+    if decision not in {"admitted", "safe_default"}:
+        return _gate(
+            EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
+            EvaluationGateStatus.FAILED,
+            f"Business Flow Skill Pack admission decision was {decision or 'missing'}",
+            failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+        )
+    return _gate(
+        EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
+        EvaluationGateStatus.PASSED,
+        "Business Flow Skill Pack admission matched expected routing",
+    )
+
+
 def _forbidden_claim_gate(case: EvaluationCase) -> EvaluationGateResult:
     if not case.expected.forbidden_claim_categories and not case.expected.required_business_claims:
         return _gate(
@@ -356,6 +399,16 @@ def _observed_source_refs(events: Iterable[EvaluationTraceEvent]) -> set[str]:
             for key in ("accepted_sources", "source_refs", "citations"):
                 refs.update(_string_items(metadata.get(key)))
     return refs
+
+
+def _business_flow_skill_pack_admission(
+    events: Iterable[EvaluationTraceEvent],
+) -> dict[str, Any] | None:
+    for event in reversed(tuple(events)):
+        if event.event_type != "business_flow_skill_pack_admission":
+            continue
+        return dict(event.payload)
+    return None
 
 
 def _string_items(value: Any) -> set[str]:

@@ -169,6 +169,7 @@ def finalize_run(
     agent_id: str | None = None,
     agent_version_id: str | None = None,
     draft_id: str | None = None,
+    error_code: str | None = None,
 ) -> RunResult:
     """Emit the final output, render the receipt, and return CLI-facing metadata."""
 
@@ -200,6 +201,7 @@ def finalize_run(
             agent_id=agent_id,
             agent_version_id=agent_version_id,
             draft_id=draft_id,
+            error_code=error_code,
         )
         history_dir = store.history_dir.parent
         update_latest_symlink(store.history_dir / trace.run_id, history_dir)

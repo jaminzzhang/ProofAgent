@@ -9,7 +9,9 @@ from proof_agent.contracts import (
     EnforcementPoint,
     IntentResolution,
     PolicyDecision,
+    PolicyDecisionType,
     ReActActionProposal,
+    ReActActionType,
     ReviewDecision,
 )
 from proof_agent.control.policy.engine import PolicyEngine
@@ -83,11 +85,20 @@ def review_action(
     proposal: ReActActionProposal,
     auto_review_enabled: bool,
     review_subagent: HarnessReviewSubagent | None,
+    low_risk_fast_path_enabled: bool = True,
     trace_event_id: str = "",
 ) -> tuple[PolicyDecision, dict[str, Any]]:
     """Review a ReAct action, fail closed on reviewer errors, then emit policy."""
 
     point = EnforcementPoint(enforcement_point)
+    fast_path_reason = _low_risk_fast_path_reason(
+        point=point,
+        context=context,
+        proposal=proposal,
+        enabled=low_risk_fast_path_enabled,
+        auto_review_enabled=auto_review_enabled,
+        review_subagent=review_subagent,
+    )
     trace.emit(
         "review_requested",
         status="ok" if auto_review_enabled and review_subagent is not None else "blocked",
@@ -97,10 +108,31 @@ def review_action(
             "enforcement_point": point.value,
             "auto_review_enabled": auto_review_enabled,
             "reviewer_available": review_subagent is not None,
+            "low_risk_fast_path_enabled": low_risk_fast_path_enabled,
+            "fast_path_candidate": fast_path_reason is not None,
         },
     )
 
     review_decision: ReviewDecision | None = None
+    if fast_path_reason is not None:
+        deterministic_decision = policy.evaluate(
+            point,
+            context,
+            trace_event_id=trace_event_id,
+        )
+        if deterministic_decision.decision is PolicyDecisionType.ALLOW:
+            review_event = {
+                "used_review": False,
+                "final_decision": deterministic_decision.decision.value,
+                "overridden": False,
+                "review_enforcement_point": point.value,
+                "subject_action_id": proposal.action_id,
+                "fast_path_reason": fast_path_reason,
+            }
+            trace.emit("review_decision", status="ok", payload=_jsonable(review_event))
+            emit_policy_decision(trace, deterministic_decision)
+            return deterministic_decision, review_event
+
     if auto_review_enabled and review_subagent is not None:
         try:
             review_decision = review_subagent.review(
@@ -164,13 +196,53 @@ def review_action(
     )
     trace.emit(
         "review_decision",
-        status="ok" if final_decision.decision == "allow" else "blocked",
+        status="ok" if final_decision.decision is PolicyDecisionType.ALLOW else "blocked",
         payload=_jsonable(review_event),
     )
     if review_event.get("overridden"):
         trace.emit("review_overridden", status="blocked", payload=_jsonable(review_event))
     emit_policy_decision(trace, final_decision)
     return final_decision, review_event
+
+
+def _low_risk_fast_path_reason(
+    *,
+    point: EnforcementPoint,
+    context: Mapping[str, Any],
+    proposal: ReActActionProposal,
+    enabled: bool,
+    auto_review_enabled: bool,
+    review_subagent: HarnessReviewSubagent | None,
+) -> str | None:
+    if not enabled or not auto_review_enabled or review_subagent is None:
+        return None
+    if proposal.risk_level != "low":
+        return None
+    if (
+        point is EnforcementPoint.BEFORE_RETRIEVAL_PLAN
+        and proposal.action_type is ReActActionType.PLAN_RETRIEVAL
+    ):
+        return "low_risk_policy_allow"
+    if (
+        point is EnforcementPoint.BEFORE_RETRIEVAL_STEP
+        and proposal.action_type is ReActActionType.RUN_RETRIEVAL_STEP
+    ):
+        return "low_risk_policy_allow"
+    if (
+        point is EnforcementPoint.BEFORE_MODEL_CALL
+        and proposal.action_type is ReActActionType.GENERATE_FINAL_ANSWER
+        and _positive_int(context.get("accepted_evidence_count")) > 0
+        and bool(context.get("citations_present"))
+    ):
+        return "low_risk_policy_allow"
+    return None
+
+
+def _positive_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def clarification_message(proposal: ReActActionProposal) -> str:

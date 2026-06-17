@@ -155,6 +155,18 @@ export interface WorkflowStageFailureDiagnosticProjection {
   violation_count?: number
 }
 
+export interface WorkflowStageLlmInteractionCapture {
+  stage_id: string
+  stage_label?: string | null
+  role: string
+  provider: string
+  model: string
+  request_json: Record<string, unknown>
+  response_json: unknown | null
+  response_content_length: number
+  response_json_parse_error_code?: string | null
+}
+
 export interface ValidationCaptureResultSummary {
   outcome: ReceiptOutcome
   final_output: string
@@ -180,6 +192,7 @@ export interface ValidationCaptureV2Payload {
   context_applications: WorkflowStageContextApplicationProjection[]
   stage_results: WorkflowStageResultVerificationProjection[]
   failure_diagnostics?: WorkflowStageFailureDiagnosticProjection[]
+  llm_interactions?: WorkflowStageLlmInteractionCapture[]
   result_summary: ValidationCaptureResultSummary
   exclusions: ValidationCaptureExclusionSummary
 }

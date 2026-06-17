@@ -20,6 +20,7 @@ from proof_agent.capabilities.tools.gateway import ToolGateway
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
+    BusinessFlowSkillPackDefinition,
     ModelCallRole,
     ModelConnectionResolutionRecord,
     ModelConfig,
@@ -35,6 +36,7 @@ from proof_agent.bootstrap.knowledge_resolution import (
     PackageKnowledgeBindingResolver,
 )
 from proof_agent.bootstrap.model_resolution import resolve_model_role_config
+from proof_agent.bootstrap.skills import load_business_flow_skill_pack_set
 
 
 DEFAULT_MEMORY_DENY_FIELDS = frozenset({"access_token", "customer_phone", "provider_api_key"})
@@ -58,6 +60,7 @@ class HarnessInvocation:
     review_subagent: HarnessReviewSubagent | None = None
     retrieval_planner_model: ModelConfig | None = None
     retrieval_evaluator_model: ModelConfig | None = None
+    business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = ()
     model_resolution_records: tuple[ModelConnectionResolutionRecord, ...] = ()
 
     def create_memory(self) -> SessionMemory:
@@ -161,11 +164,17 @@ def compose_harness_invocation(
     if resolved_bindings is None:
         resolver = knowledge_binding_resolver or PackageKnowledgeBindingResolver()
         resolved_bindings = resolver.resolve(resolved_manifest)
+    policy = PolicyEngine.from_file(resolved_manifest.policy.file)
+    business_flow_skill_packs = load_business_flow_skill_pack_set(
+        resolved_manifest,
+        template=template,
+        manifest_path=manifest_path,
+    )
     return HarnessInvocation(
         manifest_path=manifest_path,
         manifest=resolved_manifest,
         template=template,
-        policy=PolicyEngine.from_file(resolved_manifest.policy.file),
+        policy=policy,
         knowledge_provider=cast(
             KnowledgeProvider,
             resolve_blended_knowledge_provider(
@@ -184,6 +193,7 @@ def compose_harness_invocation(
         review_subagent=review_subagent,
         retrieval_planner_model=resolved_retrieval_planner_model,
         retrieval_evaluator_model=resolved_retrieval_evaluator_model,
+        business_flow_skill_packs=business_flow_skill_packs,
         model_resolution_records=tuple(model_resolution_records),
     )
 

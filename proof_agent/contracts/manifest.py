@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 
@@ -59,9 +59,56 @@ class MemoryCapabilityConfig(FrozenModel):
         return freeze_value(value)
 
 
+class BusinessFlowSkillPackBindingConfig(FrozenModel):
+    id: str
+    definition: Path
+    default: bool = False
+
+
+class BusinessFlowSkillPackAdmissionConfig(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    require_authorization_context: bool = False
+
+
+class BusinessFlowSkillPackDefinition(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal["business_flow_skill_pack.v1"]
+    id: str
+    label: str
+    description: str
+    intent_patterns: tuple[str, ...] = Field(default_factory=tuple)
+    intent_taxonomy_refs: tuple[str, ...] = Field(default_factory=tuple)
+    stage_prompt_addenda: Mapping[str, WorkflowStagePromptConfig] = Field(
+        default_factory=FrozenDict
+    )
+    knowledge_binding_refs: tuple[str, ...] = Field(default_factory=tuple)
+    tool_contract_refs: tuple[str, ...] = Field(default_factory=tuple)
+    policy_rule_refs: tuple[str, ...] = Field(default_factory=tuple)
+    validator_refs: tuple[str, ...] = Field(default_factory=tuple)
+    admission: BusinessFlowSkillPackAdmissionConfig = Field(
+        default_factory=BusinessFlowSkillPackAdmissionConfig
+    )
+
+    @field_validator("stage_prompt_addenda", mode="after")
+    @classmethod
+    def freeze_stage_prompt_addenda(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class SkillsCapabilityConfig(FrozenModel):
+    enabled: bool = False
+    business_flows: tuple[BusinessFlowSkillPackBindingConfig, ...] = Field(
+        default_factory=tuple
+    )
+
+
 class CapabilitiesConfig(FrozenModel):
     tools: ToolCapabilityConfig
     memory: MemoryCapabilityConfig
+    skills: SkillsCapabilityConfig = Field(default_factory=SkillsCapabilityConfig)
 
 
 class KnowledgeConfig(FrozenModel):
@@ -167,6 +214,7 @@ class ReviewSubagentConfig(FrozenModel):
 class ReviewConfig(FrozenModel):
     mode: str = "rules_only"
     subagent: ReviewSubagentConfig | None = None
+    low_risk_fast_path: bool = True
 
 
 class ResponseConfig(FrozenModel):

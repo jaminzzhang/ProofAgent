@@ -26,6 +26,17 @@ _ALLOWED_RECOMMENDED_ACTIONS = frozenset(
         ReActActionType.PROPOSE_TOOL_CALL,
     }
 )
+_INTENT_REQUIRED_FIELDS = (
+    "resolution_id",
+    "user_goal",
+    "domain_intent",
+    "known_facts",
+    "missing_fields",
+    "ambiguities",
+    "risk_flags",
+    "confidence",
+    "recommended_next_action",
+)
 
 
 class IntentResolver(Protocol):
@@ -118,6 +129,32 @@ class LLMIntentResolver:
             "question": question,
             "system_prompt_summary": system_prompt,
             "context_summary": context_summary,
+            "required_output_contract": {
+                "name": "IntentResolution",
+                "required_fields": list(_INTENT_REQUIRED_FIELDS),
+                "field_types": {
+                    "resolution_id": "string",
+                    "user_goal": "string",
+                    "domain_intent": "string",
+                    "known_facts": "array of strings",
+                    "missing_fields": "array of strings",
+                    "ambiguities": "array of strings",
+                    "risk_flags": "array of strings",
+                    "confidence": "number between 0 and 1",
+                    "recommended_next_action": "one of allowed_recommended_next_actions",
+                },
+                "example": {
+                    "resolution_id": "intent_1",
+                    "user_goal": "Understand the user's insurance knowledge request.",
+                    "domain_intent": "public_insurance_knowledge_query",
+                    "known_facts": ["The user asks for an insurance product explanation."],
+                    "missing_fields": [],
+                    "ambiguities": [],
+                    "risk_flags": [],
+                    "confidence": 0.82,
+                    "recommended_next_action": "plan_retrieval",
+                },
+            },
             "allowed_recommended_next_actions": [
                 action.value for action in sorted(_ALLOWED_RECOMMENDED_ACTIONS, key=str)
             ],
@@ -139,15 +176,100 @@ class LLMIntentResolver:
             metadata={"role": "intent_resolution", "question": question},
         )
         response = self.model_provider.generate(request)
-        resolution = parse_model_contract(
-            content=response.content,
-            contract_type=IntentResolution,
-            role="intent_resolution",
-        )
-        return _validate_intent_resolution(
-            resolution,
-            raw_content_length=len(response.content),
-        )
+        try:
+            return _parse_and_validate_intent_resolution(response.content)
+        except ModelOutputNormalizationError as exc:
+            repair_request = _intent_repair_request(
+                provider=self.model_provider.provider_name,
+                model=self.model_provider.model_name,
+                question=question,
+                original_payload=payload,
+                previous_content=response.content,
+                error=exc,
+            )
+        repair_response = self.model_provider.generate(repair_request)
+        return _parse_and_validate_intent_resolution(repair_response.content)
+
+
+def _parse_and_validate_intent_resolution(content: str) -> IntentResolution:
+    resolution = parse_model_contract(
+        content=content,
+        contract_type=IntentResolution,
+        role="intent_resolution",
+    )
+    return _validate_intent_resolution(
+        resolution,
+        raw_content_length=len(content),
+    )
+
+
+def _intent_repair_request(
+    *,
+    provider: str,
+    model: str,
+    question: str,
+    original_payload: Mapping[str, Any],
+    previous_content: str,
+    error: ModelOutputNormalizationError,
+) -> ModelRequest:
+    previous_json, previous_parse_error = _json_or_parse_error(previous_content)
+    repair_payload: dict[str, Any] = {
+        "question": question,
+        "instruction": (
+            "Repair the previous intent_resolution output. Return only one JSON object "
+            "matching IntentResolution. Preserve the user's meaning; do not answer the user."
+        ),
+        "required_output_contract": original_payload["required_output_contract"],
+        "allowed_recommended_next_actions": original_payload[
+            "allowed_recommended_next_actions"
+        ],
+        "validation_error": {
+            "error_code": error.error_code,
+            "contract_name": error.contract_name,
+            "field_paths": list(error.field_paths),
+            "violation_codes": list(error.violation_codes),
+            "violation_count": error.violation_count,
+        },
+        "previous_response_json": previous_json,
+        "previous_response_parse_error_code": previous_parse_error,
+    }
+    if "workflow_stage_context" in original_payload:
+        repair_payload["workflow_stage_context"] = original_payload[
+            "workflow_stage_context"
+        ]
+    return ModelRequest(
+        provider=provider,
+        model=model,
+        messages=(
+            ModelMessage(role=ModelRole.SYSTEM, content=_intent_repair_prompt()),
+            ModelMessage(
+                role=ModelRole.USER,
+                content=json.dumps(repair_payload, ensure_ascii=True, sort_keys=True),
+            ),
+        ),
+        response_format="json",
+        stream=False,
+        metadata={
+            "role": "intent_resolution",
+            "question": question,
+            "repair_attempt": 1,
+        },
+    )
+
+
+def _json_or_parse_error(content: str) -> tuple[Any | None, str | None]:
+    try:
+        return json.loads(content.strip()), None
+    except json.JSONDecodeError:
+        return None, "model_output_json_parse_failed"
+
+
+def _intent_repair_prompt() -> str:
+    return (
+        "You are repairing a Proof Agent IntentResolution JSON object. "
+        "Return exactly one JSON object with every required field present. "
+        "Do not include markdown, explanations, final answers, tool calls, or chain-of-thought."
+    )
 
 
 def resolve_intent_resolver(config: ReActPlannerConfig) -> IntentResolver:
@@ -159,7 +281,8 @@ def resolve_intent_resolver(config: ReActPlannerConfig) -> IntentResolver:
 def _intent_control_prompt() -> str:
     return (
         "You are the Proof Agent Intent Resolver. "
-        "Return exactly one JSON object matching IntentResolution. "
+        "Return exactly one JSON object matching IntentResolution with all required fields: "
+        f"{', '.join(_INTENT_REQUIRED_FIELDS)}. "
         "Summarize user intent, known facts, missing fields, ambiguities, risk flags, "
         "confidence, and a recommended_next_action. "
         "Use only allowed recommended_next_action values from the user message. "

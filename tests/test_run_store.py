@@ -396,6 +396,69 @@ def test_run_store_extracts_intent_resolution_for_react_v2_run(tmp_path: Path) -
     assert detail.governance_details["reasoning_summary"]
 
 
+def test_run_store_extracts_business_flow_skill_pack_trace_summary(
+    store: RunStore,
+) -> None:
+    run_dir = store.create_run_dir("run_bfsp")
+    _write_trace(
+        run_dir / "trace.jsonl",
+        "run_bfsp",
+        [
+            {
+                "event_id": "evt_bfsp",
+                "event_type": "business_flow_skill_pack_admission",
+                "sequence": 1,
+                "timestamp": "2026-05-10T14:32:18Z",
+                "status": "ok",
+                "payload": {
+                    "decision": "admitted",
+                    "selected_pack_id": "enterprise_policy_qa",
+                    "recommended_pack_id": "enterprise_policy_qa",
+                    "candidate_pack_ids": ["enterprise_policy_qa"],
+                    "intent_resolution_id": "intent_retrieval_1",
+                    "candidate_count": 1,
+                    "stage_prompt_addenda": {
+                        "plan": {"business_context": "full prompt must stay hidden"}
+                    },
+                },
+            },
+            {
+                "event_type": "final_output",
+                "sequence": 2,
+                "timestamp": "2026-05-10T14:32:19Z",
+                "payload": {
+                    "outcome": ReceiptOutcome.ANSWERED_WITH_CITATIONS.value,
+                    "question": "What is the reimbursement rule for travel meals?",
+                },
+            },
+        ],
+    )
+    _write_receipt(run_dir / "governance_receipt.md")
+    store.write_run_meta(
+        RunIndex(
+            run_id="run_bfsp",
+            question="What is the reimbursement rule for travel meals?",
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            created_at="2026-05-10T14:32:18Z",
+            updated_at="2026-05-10T14:32:19Z",
+        )
+    )
+
+    detail = store.get_run_detail("run_bfsp")
+
+    assert detail is not None
+    summary = detail.governance_details["business_flow_skill_pack_admission"]
+    assert summary == {
+        "decision": "admitted",
+        "selected_pack_id": "enterprise_policy_qa",
+        "recommended_pack_id": "enterprise_policy_qa",
+        "candidate_pack_ids": ["enterprise_policy_qa"],
+        "intent_resolution_id": "intent_retrieval_1",
+        "candidate_count": 1,
+    }
+    assert "stage_prompt_addenda" not in summary
+
+
 def test_run_store_projects_pending_approval_from_trace(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
     run_with_langgraph(

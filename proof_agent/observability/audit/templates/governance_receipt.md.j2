@@ -28,6 +28,34 @@ Question: {{ question }}
 {% endfor %}
 {% endif %}
 
+{% if business_flow_skill_pack_admission %}
+## Business Flow Skill Pack
+
+### Admission
+
+| Field | Value |
+| --- | --- |
+| Decision | {{ business_flow_skill_pack_admission.decision }} |
+| Selected Pack | {{ business_flow_skill_pack_admission.selected_pack_id }} |
+| Recommended Pack | {{ business_flow_skill_pack_admission.recommended_pack_id }} |
+| Candidate Count | {{ business_flow_skill_pack_admission.candidate_count }} |
+| Failure Reason | {{ business_flow_skill_pack_admission.failure_reason }} |
+| Recommendation ID | {{ business_flow_skill_pack_admission.recommendation_id }} |
+| Intent Resolution ID | {{ business_flow_skill_pack_admission.intent_resolution_id }} |
+
+### Stage Context Applications
+
+{% if business_flow_stage_context_applications %}
+| Stage | Pack | Prompt Fields | Context Options | Business Context Length | Task Instructions | Redacted |
+| --- | --- | --- | --- | --- | --- | --- |
+{% for application in business_flow_stage_context_applications %}
+| {{ application.stage_id }} | {{ application.business_flow_skill_pack_id }} | {{ application.prompt_fields }} | {{ application.context_options }} | {{ application.business_context_length }} | {{ application.task_instruction_count }} | {{ application.redaction_applied }} |
+{% endfor %}
+{% else %}
+- None recorded.
+{% endif %}
+{% endif %}
+
 {% if reasoning_summary_events %}
 ## ReAct Reasoning Summary
 

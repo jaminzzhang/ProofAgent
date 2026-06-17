@@ -100,11 +100,11 @@ VALIDATION_CAPTURE_REDACTION_METADATA = {
 }
 VALIDATION_CAPTURE_EXCLUSION_METADATA = {
     "raw_chain_of_thought": "excluded",
-    "raw_prompt": "excluded",
     "raw_context": "excluded",
     "raw_evidence_content": "excluded",
     "raw_tool_payloads": "excluded",
     "complete_provider_responses": "excluded",
+    "llm_request_response_json": "included_for_full_stage_capture",
     "runtime_state_dicts": "excluded",
     "intermediate_results": "summary_only",
 }

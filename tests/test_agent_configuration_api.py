@@ -2397,6 +2397,7 @@ def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -
         "context_applications",
         "stage_results",
         "failure_diagnostics",
+        "llm_interactions",
         "result_summary",
         "exclusions",
     }
@@ -2409,6 +2410,9 @@ def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -
     assert payload["context_applications"]
     assert payload["stage_results"]
     assert payload["failure_diagnostics"] == []
+    assert payload["llm_interactions"]
+    assert payload["llm_interactions"][0]["stage_id"] == "model_answer"
+    assert payload["llm_interactions"][0]["request_json"]["messages"]
     assert payload["result_summary"]["outcome"] == body["outcome"]
     assert payload["result_summary"]["final_output"]
     assert "prompt_context_capture" not in payload

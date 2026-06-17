@@ -63,6 +63,12 @@ def _build_context(
         {"review_requested", "review_decision", "review_error", "review_overridden"},
     )
     clarification_events = _events_by_type(events, {"clarification_requested"})
+    business_flow_skill_pack_admission = _extract_business_flow_skill_pack_admission(
+        events
+    )
+    business_flow_stage_context_applications = (
+        _extract_business_flow_stage_context_applications(events)
+    )
     model_usage = _extract_model_usage(events)
     redacted_fields = [
         field
@@ -87,11 +93,63 @@ def _build_context(
         "action_proposal_events": action_proposal_events,
         "review_events": review_events,
         "clarification_events": clarification_events,
+        "business_flow_skill_pack_admission": business_flow_skill_pack_admission,
+        "business_flow_stage_context_applications": (
+            business_flow_stage_context_applications
+        ),
         "model_usage": model_usage,
         "trace_path": trace_path,
         "receipt_path": receipt_path,
         "redacted_fields": redacted_fields,
     }
+
+
+def _extract_business_flow_skill_pack_admission(
+    events: list[dict[str, Any]],
+) -> dict[str, str] | None:
+    event = _last_event(events, "business_flow_skill_pack_admission")
+    if event is None:
+        return None
+    payload = event.get("payload", {})
+    return {
+        "decision": _audit_value(payload.get("decision")),
+        "selected_pack_id": _audit_value(payload.get("selected_pack_id")),
+        "recommended_pack_id": _audit_value(payload.get("recommended_pack_id")),
+        "candidate_count": _audit_value(payload.get("candidate_count")),
+        "failure_reason": _audit_value(payload.get("failure_reason")),
+        "recommendation_id": _audit_value(payload.get("recommendation_id")),
+        "intent_resolution_id": _audit_value(payload.get("intent_resolution_id")),
+    }
+
+
+def _extract_business_flow_stage_context_applications(
+    events: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    applications: list[dict[str, str]] = []
+    for event in events:
+        if event.get("event_type") != "workflow_stage_context_applied":
+            continue
+        payload = event.get("payload", {})
+        if payload.get("context_source") != "business_flow_skill_pack":
+            continue
+        applications.append(
+            {
+                "stage_id": _audit_value(payload.get("stage_id")),
+                "business_flow_skill_pack_id": _audit_value(
+                    payload.get("business_flow_skill_pack_id")
+                ),
+                "prompt_fields": _join_audit_values(payload.get("prompt_fields")),
+                "context_options": _join_audit_values(payload.get("context_options")),
+                "business_context_length": _audit_value(
+                    payload.get("business_context_length")
+                ),
+                "task_instruction_count": _audit_value(
+                    payload.get("task_instruction_count")
+                ),
+                "redaction_applied": _audit_value(payload.get("redaction_applied")),
+            }
+        )
+    return applications
 
 
 def _extract_model_usage(events: list[dict[str, Any]]) -> dict[str, str] | None:
@@ -157,3 +215,9 @@ def _audit_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _join_audit_values(value: Any) -> str:
+    if isinstance(value, list | tuple):
+        return ", ".join(str(item) for item in value) or "n/a"
+    return _audit_value(value)

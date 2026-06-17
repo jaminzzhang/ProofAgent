@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -9,9 +10,11 @@ from proof_agent.capabilities.models.protocol import ModelProvider
 from proof_agent.capabilities.tools.gateway import ToolGatewayResult
 from proof_agent.contracts import (
     ApprovalStatus,
+    BusinessFlowSkillPackDefinition,
     ContextAdmission,
     EnforcementPoint,
     EvidenceChunk,
+    BusinessFlowSkillPackAdmissionDecision,
     IntentResolution,
     ModelCallRole,
     ModelRequest,
@@ -21,9 +24,13 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
+    WorkflowStagePromptConfig,
     WorkflowTemplateExecutionInput,
 )
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
+from proof_agent.control.workflow.business_flow_skill_packs import (
+    admit_business_flow_skill_pack,
+)
 from proof_agent.control.workflow.harness_helpers import (
     build_model_request,
     cost_class,
@@ -75,6 +82,9 @@ class ReActEnterpriseQAStageBehavior:
         self.auto_review_enabled = bool(
             self.manifest.review and self.manifest.review.mode == "auto"
         )
+        self.low_risk_review_fast_path_enabled = bool(
+            self.manifest.review and self.manifest.review.low_risk_fast_path
+        )
         self.workflow_stage_configs = {
             stage.id: stage
             for stage in self.execution_input.effective_stage_configuration.stages
@@ -88,10 +98,16 @@ class ReActEnterpriseQAStageBehavior:
         config = self.workflow_stage_configs.get(stage_id)
         if config is None:
             return None
+        prompt, business_flow_skill_pack_id = _stage_prompt_with_business_flow_addendum(
+            stage_id=stage_id,
+            prompt=config.prompt,
+            state=state,
+            skill_packs=self.invocation.business_flow_skill_packs,
+        )
         preview = build_workflow_stage_context_preview(
             descriptor=self.invocation.template,
             stage_id=stage_id,
-            prompt=config.prompt,
+            prompt=prompt,
             context_options=config.context,
             sample_context=_workflow_stage_runtime_sample_context(
                 invocation=self.invocation,
@@ -111,6 +127,9 @@ class ReActEnterpriseQAStageBehavior:
                     self.execution_input.template_descriptor_version
                 ),
             }
+            if business_flow_skill_pack_id is not None:
+                application["context_source"] = "business_flow_skill_pack"
+                application["business_flow_skill_pack_id"] = business_flow_skill_pack_id
             self.trace.emit(
                 "workflow_stage_context_applied",
                 status="ok",
@@ -136,6 +155,11 @@ class ReActEnterpriseQAStageBehavior:
                 workflow_stage_context=stage_context,
             )
         except ModelOutputNormalizationError as exc:
+            llm_interactions = _drain_stage_llm_interactions(
+                self.invocation.intent_resolver,
+                stage_id="intent_resolution",
+                stage_label=self._stage_label("intent_resolution"),
+            )
             event = self.trace.emit(
                 "model_output_normalization_failed",
                 status="blocked",
@@ -146,6 +170,7 @@ class ReActEnterpriseQAStageBehavior:
                     "The intent resolution output failed validation and the run was stopped."
                 ),
                 **_stage_context_applications_delta(state, stage_context),
+                "stage_llm_interactions": llm_interactions,
                 "stage_failure_diagnostics": [
                     _model_output_failure_diagnostic(
                         stage_id="intent_resolution",
@@ -155,10 +180,72 @@ class ReActEnterpriseQAStageBehavior:
                     )
                 ],
             }
+        llm_interactions = _drain_stage_llm_interactions(
+            self.invocation.intent_resolver,
+            stage_id="intent_resolution",
+            stage_label=self._stage_label("intent_resolution"),
+        )
         emit_intent_resolution(self.trace, resolution)
+        business_flow_delta = self._business_flow_skill_pack_admission_delta(
+            resolution,
+        )
+        blocked_business_flow_delta = _blocked_business_flow_delta(business_flow_delta)
+        if blocked_business_flow_delta is not None:
+            return {
+                "intent_resolution": _intent_resolution_state_dict(resolution),
+                **business_flow_delta,
+                **blocked_business_flow_delta,
+                **_stage_context_applications_delta(state, stage_context),
+                "stage_llm_interactions": llm_interactions,
+            }
         return {
             "intent_resolution": _intent_resolution_state_dict(resolution),
+            **business_flow_delta,
             **_stage_context_applications_delta(state, stage_context),
+            "stage_llm_interactions": llm_interactions,
+        }
+
+    def _business_flow_skill_pack_admission_delta(
+        self,
+        resolution: IntentResolution,
+    ) -> dict[str, Any]:
+        if not self.invocation.business_flow_skill_packs:
+            return {}
+        result = admit_business_flow_skill_pack(
+            resolution,
+            self.invocation.business_flow_skill_packs,
+            default_pack_id=_default_business_flow_skill_pack_id(self.invocation),
+            authorization_context_present=False,
+        )
+        recommendation = _jsonable(
+            result.recommendation.model_dump(mode="python", warnings=False)
+        )
+        admission = _jsonable(
+            result.admission.model_dump(mode="python", warnings=False)
+        )
+        self.trace.emit(
+            "business_flow_skill_pack_admission",
+            status=(
+                "ok"
+                if result.admission.decision
+                in {
+                    BusinessFlowSkillPackAdmissionDecision.ADMITTED,
+                    BusinessFlowSkillPackAdmissionDecision.SAFE_DEFAULT,
+                }
+                else "blocked"
+            ),
+            payload={
+                **dict(result.admission.trace_summary),
+                "recommendation_id": result.recommendation.recommendation_id,
+                "recommended_pack_id": result.recommendation.recommended_pack_id,
+                "candidate_pack_ids": list(result.recommendation.candidate_pack_ids),
+                "intent_resolution_id": result.recommendation.intent_resolution_id,
+            },
+        )
+        return {
+            "business_flow_skill_pack_recommendation": recommendation,
+            "business_flow_skill_pack_admission": admission,
+            "primary_business_flow_skill_pack_id": result.admission.selected_pack_id,
         }
 
     def plan(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -180,6 +267,11 @@ class ReActEnterpriseQAStageBehavior:
                 workflow_stage_context=stage_context,
             )
         except ModelOutputNormalizationError as exc:
+            llm_interactions = _drain_stage_llm_interactions(
+                self.invocation.react_planner,
+                stage_id="plan",
+                stage_label=self._stage_label("plan"),
+            )
             event = self.trace.emit(
                 "model_output_normalization_failed",
                 status="blocked",
@@ -188,6 +280,7 @@ class ReActEnterpriseQAStageBehavior:
             return {
                 **_refusal("The planner output failed validation and the run was stopped."),
                 **_stage_context_applications_delta(state, stage_context),
+                "stage_llm_interactions": llm_interactions,
                 "stage_failure_diagnostics": [
                     _model_output_failure_diagnostic(
                         stage_id="plan",
@@ -197,6 +290,11 @@ class ReActEnterpriseQAStageBehavior:
                     )
                 ],
             }
+        llm_interactions = _drain_stage_llm_interactions(
+            self.invocation.react_planner,
+            stage_id="plan",
+            stage_label=self._stage_label("plan"),
+        )
         emit_reasoning_summary(self.trace, proposal)
         emit_action_proposal(self.trace, proposal)
         return {
@@ -204,6 +302,7 @@ class ReActEnterpriseQAStageBehavior:
             "action": _proposal_state_dict(proposal),
             "reasoning_summary": _reasoning_summary_state_dict(proposal),
             **_stage_context_applications_delta(state, stage_context),
+            "stage_llm_interactions": llm_interactions,
         }
 
     def clarify(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -255,6 +354,7 @@ class ReActEnterpriseQAStageBehavior:
             proposal=proposal,
             auto_review_enabled=self.auto_review_enabled,
             review_subagent=self.invocation.review_subagent,
+            low_risk_fast_path_enabled=self.low_risk_review_fast_path_enabled,
         )
         if decision.decision != PolicyDecisionType.ALLOW:
             return {
@@ -290,6 +390,7 @@ class ReActEnterpriseQAStageBehavior:
             proposal=step_proposal,
             auto_review_enabled=self.auto_review_enabled,
             review_subagent=self.invocation.review_subagent,
+            low_risk_fast_path_enabled=self.low_risk_review_fast_path_enabled,
         )
         if step_decision.decision != PolicyDecisionType.ALLOW:
             return {
@@ -410,6 +511,7 @@ class ReActEnterpriseQAStageBehavior:
             proposal=proposal,
             auto_review_enabled=self.auto_review_enabled,
             review_subagent=self.invocation.review_subagent,
+            low_risk_fast_path_enabled=self.low_risk_review_fast_path_enabled,
         )
         if decision.decision != PolicyDecisionType.ALLOW:
             return {
@@ -446,6 +548,15 @@ class ReActEnterpriseQAStageBehavior:
             )
             raise
         self.trace.emit("model_response", status="ok", payload=model_response_payload(model_response))
+        llm_interactions = [
+            _llm_interaction_capture(
+                stage_id="model_answer",
+                stage_label=self._stage_label("model_answer"),
+                role=ModelCallRole.FINAL_ANSWER.value,
+                request=model_request,
+                response=model_response,
+            )
+        ]
 
         outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
         validation_results = validate_model_output(
@@ -477,6 +588,7 @@ class ReActEnterpriseQAStageBehavior:
                     stage_context,
                     response_stage_context,
                 ),
+                "stage_llm_interactions": llm_interactions,
             }
         result = {
             "review_results": [review_event],
@@ -492,6 +604,7 @@ class ReActEnterpriseQAStageBehavior:
                 stage_context,
                 response_stage_context,
             ),
+            "stage_llm_interactions": llm_interactions,
         }
 
     def review_tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -523,6 +636,7 @@ class ReActEnterpriseQAStageBehavior:
             proposal=proposal,
             auto_review_enabled=self.auto_review_enabled,
             review_subagent=self.invocation.review_subagent,
+            low_risk_fast_path_enabled=self.low_risk_review_fast_path_enabled,
         )
         if decision.decision in {PolicyDecisionType.DENY, PolicyDecisionType.ESCALATE}:
             return {
@@ -759,6 +873,77 @@ def _model_output_failure_diagnostic(
     return {key: value for key, value in diagnostic.items() if value not in (None, [], 0)}
 
 
+def _drain_stage_llm_interactions(
+    owner: object | None,
+    *,
+    stage_id: str,
+    stage_label: str,
+) -> list[dict[str, Any]]:
+    provider = getattr(owner, "model_provider", None)
+    if not isinstance(provider, _TracingModelProvider):
+        return []
+    return provider.drain_sensitive_interactions(
+        stage_id=stage_id,
+        stage_label=stage_label,
+    )
+
+
+def _llm_interaction_capture(
+    *,
+    stage_id: str,
+    stage_label: str,
+    role: str,
+    request: ModelRequest,
+    response: ModelResponse,
+) -> dict[str, Any]:
+    response_json, parse_error = _model_content_json(response.content)
+    capture = {
+        "stage_id": stage_id,
+        "stage_label": stage_label,
+        "role": role,
+        "provider": response.provider_name,
+        "model": response.model_name,
+        "request_json": _model_request_json(request),
+        "response_json": response_json,
+        "response_content_length": len(response.content),
+        "response_json_parse_error_code": parse_error,
+    }
+    return {key: value for key, value in capture.items() if value is not None}
+
+
+def _model_request_json(request: ModelRequest) -> dict[str, Any]:
+    return {
+        "provider": request.provider,
+        "model": request.model,
+        "response_format": request.response_format,
+        "stream": request.stream,
+        "temperature": request.temperature,
+        "max_output_tokens": request.max_output_tokens,
+        "timeout_seconds": request.timeout_seconds,
+        "metadata": dict(request.metadata),
+        "evidence_sources": list(request.evidence_sources),
+        "messages": [
+            {
+                "role": message.role.value,
+                "content": message.content,
+                "name": message.name,
+                "metadata": dict(message.metadata),
+            }
+            for message in request.messages
+        ],
+    }
+
+
+def _model_content_json(content: str) -> tuple[Any | None, str | None]:
+    stripped = content.strip()
+    if not stripped:
+        return None, "empty_model_output"
+    try:
+        return json.loads(stripped), None
+    except json.JSONDecodeError:
+        return None, "model_output_json_parse_failed"
+
+
 def _tool_capability_disabled_delta() -> dict[str, Any]:
     message = "The tools capability is disabled for this Agent Contract."
     return {
@@ -779,6 +964,7 @@ class _TracingModelProvider:
         self._provider = provider
         self._trace = trace
         self._role = role
+        self._sensitive_interactions: list[dict[str, Any]] = []
 
     @property
     def inner_provider(self) -> ModelProvider:
@@ -834,7 +1020,33 @@ class _TracingModelProvider:
         payload = model_response_payload(response)
         payload["role"] = self._role.value
         self._trace.emit("model_response", status="ok", payload=payload)
+        self._sensitive_interactions.append(
+            _llm_interaction_capture(
+                stage_id="",
+                stage_label="",
+                role=self._role.value,
+                request=request,
+                response=response,
+            )
+        )
         return response
+
+    def drain_sensitive_interactions(
+        self,
+        *,
+        stage_id: str,
+        stage_label: str,
+    ) -> list[dict[str, Any]]:
+        interactions = self._sensitive_interactions
+        self._sensitive_interactions = []
+        return [
+            {
+                **interaction,
+                "stage_id": stage_id,
+                "stage_label": stage_label,
+            }
+            for interaction in interactions
+        ]
 
 
 def wrap_control_plane_model_providers(
@@ -1155,6 +1367,99 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _stage_prompt_with_business_flow_addendum(
+    *,
+    stage_id: str,
+    prompt: Mapping[str, Any] | WorkflowStagePromptConfig,
+    state: Mapping[str, Any],
+    skill_packs: tuple[BusinessFlowSkillPackDefinition, ...],
+) -> tuple[Mapping[str, Any] | WorkflowStagePromptConfig, str | None]:
+    selected_pack_id = state.get("primary_business_flow_skill_pack_id")
+    if not selected_pack_id:
+        return prompt, None
+    for skill_pack in skill_packs:
+        if skill_pack.id != selected_pack_id:
+            continue
+        addendum = skill_pack.stage_prompt_addenda.get(stage_id)
+        if addendum is None:
+            return prompt, None
+        return _merge_stage_prompt(prompt, addendum), skill_pack.id
+    return prompt, None
+
+
+def _merge_stage_prompt(
+    prompt: Mapping[str, Any] | WorkflowStagePromptConfig,
+    addendum: WorkflowStagePromptConfig,
+) -> WorkflowStagePromptConfig:
+    base = _stage_prompt_config(prompt)
+    return WorkflowStagePromptConfig(
+        business_context=_join_prompt_text(
+            base.business_context,
+            addendum.business_context,
+        ),
+        task_instructions=(
+            *base.task_instructions,
+            *addendum.task_instructions,
+        ),
+        output_preferences=(
+            *base.output_preferences,
+            *addendum.output_preferences,
+        ),
+    )
+
+
+def _stage_prompt_config(
+    prompt: Mapping[str, Any] | WorkflowStagePromptConfig,
+) -> WorkflowStagePromptConfig:
+    if isinstance(prompt, WorkflowStagePromptConfig):
+        return prompt
+    return WorkflowStagePromptConfig(
+        business_context=str(prompt.get("business_context", "") or ""),
+        task_instructions=tuple(
+            str(item) for item in prompt.get("task_instructions", ()) or ()
+        ),
+        output_preferences=tuple(
+            str(item) for item in prompt.get("output_preferences", ()) or ()
+        ),
+    )
+
+
+def _join_prompt_text(*parts: str) -> str:
+    return "\n\n".join(part for part in parts if part)
+
+
+def _default_business_flow_skill_pack_id(invocation: HarnessInvocation) -> str | None:
+    for binding in invocation.manifest.capabilities.skills.business_flows:
+        if binding.default:
+            return binding.id
+    return None
+
+
+def _blocked_business_flow_delta(delta: Mapping[str, Any]) -> dict[str, Any] | None:
+    admission = delta.get("business_flow_skill_pack_admission")
+    if not isinstance(admission, Mapping):
+        return None
+    decision = admission.get("decision")
+    if decision == BusinessFlowSkillPackAdmissionDecision.NEEDS_CLARIFICATION.value:
+        message = (
+            "The request matches multiple or no Business Flow Skill Packs. "
+            "Please clarify the intended business flow before the run continues."
+        )
+        return {
+            "governance_refusal": ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION,
+            "governance_message": message,
+            "final_output": message,
+        }
+    if decision in {
+        BusinessFlowSkillPackAdmissionDecision.REFUSED.value,
+        BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED.value,
+    }:
+        return _refusal(
+            "The Business Flow Skill Pack recommendation could not be admitted safely."
+        )
+    return None
 
 
 def _refusal(message: str) -> dict[str, Any]:

@@ -100,6 +100,22 @@ def route_snapshot_documents(
             ),
         )
 
+    if matched and len(routed_candidates) <= selection_budget:
+        selected_documents = tuple(candidate.document for candidate in routed_candidates)
+        return LocalIndexDocumentRoutingResult(
+            selected_documents=selected_documents,
+            summary=_routing_summary(
+                snapshot_id=snapshot_id,
+                candidate_count=len(documents),
+                routed_candidates=routed_candidates,
+                selected_documents=selected_documents,
+                selection_budget=selection_budget,
+                candidate_truncated=candidate_truncated,
+                selection_reason="metadata_match_selected",
+                selected_document_reason="metadata_match_selected",
+            ),
+        )
+
     prompt_payload = {
         "query": query,
         "selection_budget": selection_budget,
@@ -264,11 +280,19 @@ def _safe_basename(filename: str) -> str:
 def _term_matches_query(query: str, term: str) -> bool:
     normalized_query = _normalized_text(query)
     normalized_term = _normalized_text(term)
-    return bool(normalized_term and normalized_term in normalized_query)
+    if normalized_term and normalized_term in normalized_query:
+        return True
+    compact_query = _compact_match_text(query)
+    compact_term = _compact_match_text(term)
+    return bool(compact_term and compact_term in compact_query)
 
 
 def _normalized_text(value: str) -> str:
     return " ".join(_TOKEN_RE.findall(value.casefold()))
+
+
+def _compact_match_text(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
 
 
 def _selected_documents(
@@ -299,6 +323,7 @@ def _routing_summary(
     selection_budget: int,
     candidate_truncated: bool,
     selection_reason: str | None = None,
+    selected_document_reason: str = "routing_model_selected",
     error_code: str | None = None,
 ) -> dict[str, Any]:
     actual_selection_reason = selection_reason or (
@@ -333,7 +358,7 @@ def _routing_summary(
             {
                 "document_id": document.document_id,
                 "revision_id": document.revision_id,
-                "selection_reason": "routing_model_selected",
+                "selection_reason": selected_document_reason,
             }
             for document in selected_documents
         ],

@@ -54,6 +54,518 @@ def test_compose_harness_invocation_resolves_react_dependencies() -> None:
     assert invocation.review_subagent is not None
 
 
+def test_compose_harness_invocation_loads_business_flow_skill_packs(
+    tmp_path: Path,
+) -> None:
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "claims.md").write_text(
+        "# Claims\nClaims questions require evidence-backed answers.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "policy.yaml").write_text(
+        """
+rules:
+  - rule_id: answering.require_retrieval
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+      min_evidence_count: 1
+      require_citations: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Answers require evidence."
+""",
+        encoding="utf-8",
+    )
+    pack_dir = tmp_path / "skill_packs"
+    pack_dir.mkdir()
+    (pack_dir / "claims.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns:
+  - "claim status"
+stage_prompt_addenda:
+  intent_resolution:
+    business_context: "Classify claim-servicing intent only."
+  plan:
+    task_instructions:
+      - "Prefer retrieval before answering claim process questions."
+knowledge_binding_refs:
+  - kb_local
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.6
+""",
+        encoding="utf-8",
+    )
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: skill_pack_composition
+purpose: "Compose Business Flow Skill Packs."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v2
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: agentic
+  max_steps: 2
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/claims.yaml
+        default: true
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    invocation = compose_harness_invocation(agent_yaml)
+
+    assert len(invocation.business_flow_skill_packs) == 1
+    skill_pack = invocation.business_flow_skill_packs[0]
+    assert skill_pack.id == "claims_qa"
+    assert skill_pack.label == "Claims QA"
+    assert skill_pack.stage_prompt_addenda["intent_resolution"].business_context == (
+        "Classify claim-servicing intent only."
+    )
+    assert skill_pack.stage_prompt_addenda["plan"].task_instructions == (
+        "Prefer retrieval before answering claim process questions.",
+    )
+    assert skill_pack.knowledge_binding_refs == ("kb_local",)
+    assert skill_pack.policy_rule_refs == ("answering.require_retrieval",)
+    assert skill_pack.admission.min_confidence == 0.6
+
+
+def test_compose_harness_invocation_rejects_unknown_business_flow_knowledge_refs(
+    tmp_path: Path,
+) -> None:
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "claims.md").write_text(
+        "# Claims\nClaims questions require evidence-backed answers.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "policy.yaml").write_text(
+        """
+rules:
+  - rule_id: answering.require_retrieval
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+      min_evidence_count: 1
+      require_citations: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Answers require evidence."
+""",
+        encoding="utf-8",
+    )
+    pack_dir = tmp_path / "skill_packs"
+    pack_dir.mkdir()
+    (pack_dir / "claims.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns:
+  - "claim status"
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - missing_binding
+tool_contract_refs: []
+policy_rule_refs: []
+validator_refs: []
+admission: {}
+""",
+        encoding="utf-8",
+    )
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: skill_pack_unknown_ref
+purpose: "Reject unknown Business Flow Skill Pack refs."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/claims.yaml
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        compose_harness_invocation(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "unknown Business Flow Skill Pack knowledge_binding_refs" in exc.value.message
+    assert "missing_binding" in exc.value.message
+
+
+def test_compose_harness_invocation_rejects_unknown_business_flow_policy_refs(
+    tmp_path: Path,
+) -> None:
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "claims.md").write_text(
+        "# Claims\nClaims questions require evidence-backed answers.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "policy.yaml").write_text(
+        """
+rules:
+  - rule_id: answering.require_retrieval
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+      min_evidence_count: 1
+      require_citations: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Answers require evidence."
+""",
+        encoding="utf-8",
+    )
+    pack_dir = tmp_path / "skill_packs"
+    pack_dir.mkdir()
+    (pack_dir / "claims.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns:
+  - "claim status"
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - kb_local
+tool_contract_refs: []
+policy_rule_refs:
+  - missing.policy.rule
+validator_refs: []
+admission: {}
+""",
+        encoding="utf-8",
+    )
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: skill_pack_unknown_policy_ref
+purpose: "Reject unknown Business Flow Skill Pack policy refs."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/claims.yaml
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        compose_harness_invocation(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "unknown Business Flow Skill Pack policy_rule_refs" in exc.value.message
+    assert "missing.policy.rule" in exc.value.message
+
+
+def test_compose_harness_invocation_rejects_business_flow_tool_refs_when_tools_disabled(
+    tmp_path: Path,
+) -> None:
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "claims.md").write_text(
+        "# Claims\nClaims questions require evidence-backed answers.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "policy.yaml").write_text(
+        """
+rules:
+  - rule_id: answering.require_retrieval
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+      min_evidence_count: 1
+      require_citations: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Answers require evidence."
+""",
+        encoding="utf-8",
+    )
+    pack_dir = tmp_path / "skill_packs"
+    pack_dir.mkdir()
+    (pack_dir / "claims.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns:
+  - "claim status"
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - kb_local
+tool_contract_refs:
+  - customer_lookup
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission: {}
+""",
+        encoding="utf-8",
+    )
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: skill_pack_disabled_tool_ref
+purpose: "Reject tool refs when tools are disabled."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/claims.yaml
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        compose_harness_invocation(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "tool_contract_refs require capabilities.tools.enabled" in exc.value.message
+
+
+def test_compose_harness_invocation_rejects_unknown_business_flow_validator_refs(
+    tmp_path: Path,
+) -> None:
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "claims.md").write_text(
+        "# Claims\nClaims questions require evidence-backed answers.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "policy.yaml").write_text(
+        """
+rules:
+  - rule_id: answering.require_retrieval
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+      min_evidence_count: 1
+      require_citations: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Answers require evidence."
+""",
+        encoding="utf-8",
+    )
+    pack_dir = tmp_path / "skill_packs"
+    pack_dir.mkdir()
+    (pack_dir / "claims.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns:
+  - "claim status"
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - kb_local
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs:
+  - missing_validator
+admission: {}
+""",
+        encoding="utf-8",
+    )
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: skill_pack_unknown_validator_ref
+purpose: "Reject unknown Business Flow Skill Pack validator refs."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/claims.yaml
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        compose_harness_invocation(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "unknown Business Flow Skill Pack validator_refs" in exc.value.message
+    assert "missing_validator" in exc.value.message
+
+
 def test_compose_harness_invocation_blends_multiple_knowledge_bindings(tmp_path: Path) -> None:
     source_one = tmp_path / "knowledge_one"
     source_two = tmp_path / "knowledge_two"

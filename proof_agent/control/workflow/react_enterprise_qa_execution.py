@@ -98,6 +98,11 @@ class ReActEnterpriseQAWorkflowExecution:
         delta = self._behavior.intent_resolution(state)
         resolution = _mapping(delta.get("intent_resolution"))
         outcome = _outcome(delta.get("governance_refusal"))
+        produced_fact_refs = ["intent_resolution"] if resolution else []
+        if delta.get("business_flow_skill_pack_recommendation"):
+            produced_fact_refs.append("business_flow_skill_pack_recommendation")
+        if delta.get("business_flow_skill_pack_admission"):
+            produced_fact_refs.append("business_flow_skill_pack_admission")
         return WorkflowStageResult(
             stage_id="intent_resolution",
             status=WorkflowStageStatus.BLOCKED if outcome else WorkflowStageStatus.COMPLETED,
@@ -110,7 +115,7 @@ class ReActEnterpriseQAWorkflowExecution:
                 ),
                 "confidence": resolution.get("confidence", 0),
             },
-            produced_fact_refs=("intent_resolution",) if resolution else (),
+            produced_fact_refs=tuple(produced_fact_refs),
             continuation=delta,
         )
 

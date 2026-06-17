@@ -37,6 +37,212 @@ def test_load_valid_react_enterprise_qa_v2_manifest() -> None:
     assert manifest.react.planner.provider == "deterministic"
 
 
+def test_loads_business_flow_skill_pack_bindings(tmp_path: Path) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    pack_dir = tmp_path / "skill_packs"
+    pack_dir.mkdir()
+    pack_definition = pack_dir / "claims.yaml"
+    pack_definition.write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claims questions.
+intent_patterns:
+  - "claim status"
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - kb_local
+tool_contract_refs: []
+policy_rule_refs: []
+validator_refs: []
+admission: {}
+""",
+        encoding="utf-8",
+    )
+    agent_yaml.write_text(
+        """
+name: skill_pack_manifest
+purpose: "Load package-local business flow skill pack bindings."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/claims.yaml
+        default: true
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.capabilities.skills.enabled is True
+    assert len(manifest.capabilities.skills.business_flows) == 1
+    binding = manifest.capabilities.skills.business_flows[0]
+    assert binding.id == "claims_qa"
+    assert binding.definition == pack_definition.resolve()
+    assert binding.default is True
+
+
+def test_rejects_business_flow_skill_packs_when_skills_disabled(
+    tmp_path: Path,
+) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    pack_dir = tmp_path / "skill_packs"
+    pack_dir.mkdir()
+    (pack_dir / "claims.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claims questions.
+stage_prompt_addenda: {}
+admission: {}
+""",
+        encoding="utf-8",
+    )
+    agent_yaml.write_text(
+        """
+name: disabled_skill_pack_manifest
+purpose: "Reject configured Skill Packs when skills are disabled."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: false
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/claims.yaml
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "business_flows cannot be set when skills are disabled" in exc.value.message
+
+
+def test_rejects_missing_business_flow_skill_pack_definition(
+    tmp_path: Path,
+) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    agent_yaml.write_text(
+        """
+name: missing_skill_pack_manifest
+purpose: "Reject missing Skill Pack definitions."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/missing.yaml
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "capabilities.skills.business_flows[claims_qa].definition does not exist" in (
+        exc.value.message
+    )
+
+
 def test_loads_source_owned_knowledge_bindings(tmp_path: Path) -> None:
     agent_yaml = tmp_path / "agent.yaml"
     (tmp_path / "knowledge").mkdir()
@@ -556,11 +762,28 @@ def test_loads_react_enterprise_qa_contract(tmp_path: Path) -> None:
     assert manifest.react.planner.provider == "deterministic"
     assert manifest.review is not None
     assert manifest.review.mode == "auto"
+    assert manifest.review.low_risk_fast_path is True
     assert manifest.review.subagent is not None
     assert manifest.review.subagent.provider == "deterministic"
     assert manifest.response is not None
     assert manifest.response.include_reasoning_summary is False
     assert manifest.response.include_review_results is False
+
+
+def test_loads_react_review_low_risk_fast_path_override(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(tmp_path)
+    agent_yaml.write_text(
+        agent_yaml.read_text(encoding="utf-8").replace(
+            "review:\n  mode: auto\n",
+            "review:\n  mode: auto\n  low_risk_fast_path: false\n",
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.review is not None
+    assert manifest.review.low_risk_fast_path is False
 
 
 def test_loads_workflow_stage_prompt_config(tmp_path: Path) -> None:
@@ -825,6 +1048,7 @@ def test_loads_react_enterprise_qa_example_manifest() -> None:
     assert manifest.react.planner.provider == "deterministic"
     assert manifest.review is not None
     assert manifest.review.mode == "auto"
+    assert manifest.review.low_risk_fast_path is True
     assert manifest.review.subagent is not None
     assert manifest.review.subagent.provider == "deterministic"
     assert manifest.response is not None

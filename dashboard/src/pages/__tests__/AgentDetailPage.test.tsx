@@ -489,6 +489,22 @@ describe('AgentDetailPage', () => {
           },
         ],
         failure_diagnostics: [],
+        llm_interactions: [
+          {
+            stage_id: 'plan',
+            stage_label: 'Plan',
+            role: 'react_planner',
+            provider: 'openai_compatible',
+            model: 'planner-test',
+            request_json: {
+              response_format: 'json',
+              messages: [{ role: 'user', content: '{"question":"Q"}' }],
+            },
+            response_json: { action_type: 'plan_retrieval' },
+            response_content_length: 32,
+            response_json_parse_error_code: null,
+          },
+        ],
         result_summary: {
           outcome: 'ANSWERED_WITH_CITATIONS',
           final_output: 'Validation answer.',
@@ -517,6 +533,8 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText('Configured Context')).toBeInTheDocument()
     expect(screen.getByText('Applied Context')).toBeInTheDocument()
     expect(screen.getByText('Stage Result')).toBeInTheDocument()
+    expect(screen.getByText('LLM Input/Output JSON')).toBeInTheDocument()
+    expect(screen.getByText('react_planner')).toBeInTheDocument()
     expect(screen.getByText('Result Summary')).toBeInTheDocument()
     expect(screen.getByText('Exclusions')).toBeInTheDocument()
     expect(fetchValidationCapture).toHaveBeenCalledWith('run-validation-1')

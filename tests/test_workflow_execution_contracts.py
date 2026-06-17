@@ -18,6 +18,7 @@ from proof_agent.contracts import (
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
     WorkflowStageFailureDiagnostic,
+    WorkflowStageLlmInteraction,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
@@ -97,6 +98,33 @@ def test_workflow_stage_failure_diagnostic_is_independent_fact() -> None:
     )
 
     assert result.stage_failure_diagnostics == (diagnostic,)
+
+
+def test_workflow_stage_llm_interaction_is_sensitive_execution_fact() -> None:
+    interaction = WorkflowStageLlmInteraction(
+        stage_id="intent_resolution",
+        stage_label="Intent Resolution",
+        role="intent_resolution",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        request_json={
+            "response_format": "json",
+            "messages": [{"role": "user", "content": '{"question": "Q"}'}],
+        },
+        response_json={"known_facts": ["Q"]},
+        response_content_length=21,
+    )
+    result = WorkflowTemplateExecutionResult(
+        run_id="run_001",
+        template_name="react_enterprise_qa_v2",
+        template_descriptor_version="react_enterprise_qa.v2",
+        outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+        final_output="The intent resolution output failed validation.",
+        message="The intent resolution output failed validation.",
+        stage_llm_interactions=(interaction,),
+    )
+
+    assert result.stage_llm_interactions == (interaction,)
 
 
 def test_approval_pause_is_a_trace_safe_execution_fact() -> None:
