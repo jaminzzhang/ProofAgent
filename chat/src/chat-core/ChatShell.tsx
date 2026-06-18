@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 
 import type { ChatTurnView } from './types'
+import { useLocale } from '../i18n/locale'
 
 interface StarterAction {
   label: string
@@ -55,6 +56,7 @@ export function ChatShell({
   untrustedWebSupplementToggle,
 }: ChatShellProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const { t } = useLocale()
 
   useEffect(() => {
     const container = scrollRef.current
@@ -119,7 +121,7 @@ export function ChatShell({
                       {renderAssistantMeta?.(turn)}
                       <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--text-primary)]">
                         {turn.assistant.content || (
-                          <span className="italic text-[var(--text-muted)]">No output generated.</span>
+                          <span className="italic text-[var(--text-muted)]">{t('chatShell.noOutput')}</span>
                         )}
                       </p>
                       {renderAssistantActions?.(turn)}
@@ -129,7 +131,7 @@ export function ChatShell({
                 {sending && (
                   <div className="max-w-[88%] rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-4">
                     {sendingLabel ?? (
-                      <span className="text-xs font-medium text-[var(--text-muted)]">Working...</span>
+                      <span className="text-xs font-medium text-[var(--text-muted)]">{t('chatShell.working')}</span>
                     )}
                   </div>
                 )}
@@ -150,7 +152,7 @@ export function ChatShell({
                   disabled={sending}
                   className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)]"
                 />
-                <span>Network supplement</span>
+                <span>{t('chatShell.networkSupplement')}</span>
               </label>
             )}
             <div className="flex gap-3">

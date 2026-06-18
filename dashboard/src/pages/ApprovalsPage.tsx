@@ -3,39 +3,41 @@ import type { ApprovalQueueItem } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { useApprovals } from '../hooks/useApprovals'
+import { useLocale } from '../i18n/locale'
 
 export function ApprovalsPage() {
   const { approvals, total, loading, error } = useApprovals()
+  const { t, formatNumber } = useLocale()
 
   return (
     <div className="max-w-6xl space-y-6">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Approval Queue</h2>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">Pending tool approvals ordered by expiration.</p>
+          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('approvals.title')}</h2>
+          <p className="mt-1 text-sm text-[var(--text-muted)]">{t('approvals.description')}</p>
         </div>
         <div className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-secondary)]">
-          {approvals.length} of {total}
+          {t('approvals.count').replace('{shown}', formatNumber(approvals.length)).replace('{total}', formatNumber(total))}
         </div>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-12"><LoadingSpinner /></div>
       ) : error ? (
-        <EmptyState message="Unable to load approvals." />
+        <EmptyState message={t('approvals.loadError')} />
       ) : approvals.length === 0 ? (
-        <EmptyState message="No pending approvals." />
+        <EmptyState message={t('approvals.empty')} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-sm">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Status</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Run</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Tool</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Question</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Parameters</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Expires</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('approvals.status')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('approvals.run')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('approvals.tool')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('common.question')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('approvals.parameters')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('approvals.expires')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
@@ -51,17 +53,19 @@ export function ApprovalsPage() {
 }
 
 function ApprovalRow({ approval }: { approval: ApprovalQueueItem }) {
+  const { t, formatDateTime, formatNumber } = useLocale()
+
   return (
     <tr className="group hover:bg-[var(--bg-hover)]">
       <td className="px-5 py-3">
         <span className={`rounded-md px-2 py-1 text-xs font-semibold ${approval.expired ? 'bg-[var(--danger)]/10 text-[var(--danger)]' : 'bg-[var(--warning-bg)] text-[var(--warning)]'}`}>
-          {approval.expired ? 'expired' : 'pending'}
+          {approval.expired ? t('approvals.expired') : t('approvals.pending')}
         </span>
       </td>
       <td className="px-5 py-3 font-mono text-xs">
         <Link
           to={`/runs/${approval.run_id}#approval`}
-          state={{ returnTo: '/approvals', returnLabel: 'Back to Approvals' }}
+          state={{ returnTo: '/approvals', returnLabel: t('approvals.back') }}
           className="text-[var(--text-secondary)] transition-colors group-hover:text-[var(--accent)]"
         >
           {approval.run_id}
@@ -74,21 +78,17 @@ function ApprovalRow({ approval }: { approval: ApprovalQueueItem }) {
       </td>
       <td className="max-w-sm px-5 py-3 text-[var(--text-primary)]">
         <div className="truncate font-medium">{approval.question}</div>
-        <div className="mt-1 text-xs text-[var(--text-muted)]">{approval.agent_id ?? 'unknown agent'}</div>
+        <div className="mt-1 text-xs text-[var(--text-muted)]">{approval.agent_id ?? t('approvals.unknownAgent')}</div>
       </td>
       <td className="px-5 py-3 text-xs text-[var(--text-secondary)]">
-        <div className="font-mono">{parameterKeySummary(approval.parameter_keys)}</div>
-        <div className="mt-1 text-[var(--text-muted)]">{approval.parameter_count} {approval.parameter_count === 1 ? 'parameter' : 'parameters'}</div>
+        <div className="font-mono">{parameterKeySummary(approval.parameter_keys, t)}</div>
+        <div className="mt-1 text-[var(--text-muted)]">{formatNumber(approval.parameter_count)} {approval.parameter_count === 1 ? t('approvals.parameter') : t('approvals.parametersCount')}</div>
       </td>
-      <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatTimestamp(approval.expires_at)}</td>
+      <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatDateTime(approval.expires_at)}</td>
     </tr>
   )
 }
 
-function parameterKeySummary(keys: string[]): string {
-  return keys.length ? keys.join(', ') : 'none'
-}
-
-function formatTimestamp(value: string): string {
-  return new Date(value).toLocaleString()
+function parameterKeySummary(keys: string[], t: (key: string, fallback?: string) => string): string {
+  return keys.length ? keys.join(', ') : t('approvals.none')
 }

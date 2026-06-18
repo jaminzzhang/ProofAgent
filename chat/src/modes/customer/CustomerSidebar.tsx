@@ -1,4 +1,5 @@
 import type { CustomerSafeSource } from '../../api/types'
+import { useLocale } from '../../i18n/locale'
 import { SourceList } from './SourceList'
 
 export type CustomerMode = 'anonymous' | 'CUST-001' | 'CUST-002'
@@ -23,11 +24,12 @@ export function CustomerSidebar({
   latestSources: Array<string | CustomerSafeSource>
 }) {
   const activeMode = CUSTOMER_MODES.find((item) => item.id === mode) ?? CUSTOMER_MODES[0]
+  const { t, formatNumber } = useLocale()
 
   return (
     <>
       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Session</h2>
+        <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('customer.sidebar.session')}</h2>
         <div className="mt-3 grid grid-cols-1 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-1">
           {CUSTOMER_MODES.map((item) => (
             <button
@@ -40,15 +42,15 @@ export function CustomerSidebar({
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
             >
-              {item.label}
+              {item.id === 'anonymous' ? t('customer.mode.guest') : item.label}
             </button>
           ))}
         </div>
         <dl className="mt-4 space-y-2 text-sm">
           <div className="flex justify-between gap-3">
-            <dt className="text-[var(--text-secondary)]">Customer</dt>
+            <dt className="text-[var(--text-secondary)]">{t('customer.sidebar.customer')}</dt>
             <dd className="min-w-0 break-all text-right font-medium text-[var(--text-primary)]">
-              {activeMode.customerId ?? 'Anonymous'}
+              {activeMode.customerId ?? t('customer.sidebar.anonymous')}
             </dd>
           </div>
           <div className="flex justify-between gap-3">
@@ -58,18 +60,18 @@ export function CustomerSidebar({
             </dd>
           </div>
           <div className="flex justify-between gap-3">
-            <dt className="text-[var(--text-secondary)]">Turns</dt>
-            <dd className="min-w-0 break-all text-right font-medium text-[var(--text-primary)]">{turnCount}</dd>
+            <dt className="text-[var(--text-secondary)]">{t('customer.sidebar.turns')}</dt>
+            <dd className="min-w-0 break-all text-right font-medium text-[var(--text-primary)]">{formatNumber(turnCount)}</dd>
           </div>
         </dl>
       </div>
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Recent Sources</h2>
+        <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('customer.sidebar.recentSources')}</h2>
         <div className="mt-3">
           <SourceList sources={latestSources} />
           {latestSources.length === 0 && (
-            <p className="text-sm text-[var(--text-secondary)]">No sources yet</p>
+            <p className="text-sm text-[var(--text-secondary)]">{t('customer.sidebar.noSources')}</p>
           )}
         </div>
       </div>

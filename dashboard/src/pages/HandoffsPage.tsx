@@ -4,11 +4,13 @@ import { fetchHandoffs } from '../api/client'
 import type { HandoffProjection } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
+import { useLocale } from '../i18n/locale'
 
 export function HandoffsPage() {
   const [handoffs, setHandoffs] = useState<HandoffProjection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { t, formatDateTime } = useLocale()
 
   useEffect(() => {
     fetchHandoffs()
@@ -18,7 +20,7 @@ export function HandoffsPage() {
       })
       .catch((err) => {
         console.error('Failed to fetch handoffs', err)
-        setError('Unable to load handoffs.')
+        setError(t('handoffs.loadError'))
       })
       .finally(() => setLoading(false))
   }, [])
@@ -27,8 +29,8 @@ export function HandoffsPage() {
     <div className="max-w-6xl space-y-6">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Handoff Monitor</h2>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">Internal follow-up events from customer-facing runs.</p>
+          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('handoffs.title')}</h2>
+          <p className="mt-1 text-sm text-[var(--text-muted)]">{t('handoffs.description')}</p>
         </div>
       </div>
 
@@ -37,16 +39,16 @@ export function HandoffsPage() {
       ) : error ? (
         <EmptyState message={error} />
       ) : handoffs.length === 0 ? (
-        <EmptyState message="No customer handoffs recorded." />
+        <EmptyState message={t('handoffs.empty')} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-sm">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Reason</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Customer</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Summary</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Time</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('handoffs.reason')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('handoffs.customer')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('handoffs.summary')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('common.time')}</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Run</th>
               </tr>
             </thead>
@@ -58,11 +60,11 @@ export function HandoffsPage() {
                       {formatReason(handoff.reason)}
                     </span>
                   </td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{handoff.customer_ref || 'anonymous'}</td>
+                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{handoff.customer_ref || t('handoffs.anonymous')}</td>
                   <td className="max-w-xl px-5 py-3 text-[var(--text-primary)]">
                     <div className="truncate font-medium">{handoff.question_summary || handoff.summary}</div>
                   </td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{new Date(handoff.created_at).toLocaleString()}</td>
+                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatDateTime(handoff.created_at)}</td>
                   <td className="px-5 py-3 font-mono text-xs">
                     <Link to={`/runs/${handoff.run_id}`} className="text-[var(--accent)] hover:underline">
                       {handoff.run_id}

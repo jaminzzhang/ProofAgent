@@ -6,6 +6,7 @@ import { HistorySidebar } from './components/HistorySidebar'
 import { useState, useEffect } from 'react'
 import { fetchConversations, updateConversation, deleteConversation } from './api/client'
 import type { ConversationRecord } from './api/types'
+import { LocaleProvider } from './i18n/locale'
 
 function Layout() {
   const [conversations, setConversations] = useState<ConversationRecord[]>([])
@@ -112,9 +113,11 @@ function Layout() {
 export default function App() {
   return (
     <ThemeProvider>
-      <BrowserRouter>
-        <Layout />
-      </BrowserRouter>
+      <LocaleProvider>
+        <BrowserRouter>
+          <Layout />
+        </BrowserRouter>
+      </LocaleProvider>
     </ThemeProvider>
   )
 }

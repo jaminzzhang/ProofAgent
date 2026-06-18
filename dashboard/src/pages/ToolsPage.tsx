@@ -4,6 +4,7 @@ import { fetchConfigAgents, fetchConfigDraftContract } from '../api/client'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { CodeBlock } from '../components/CodeBlock'
+import { useLocale } from '../i18n/locale'
 
 interface ToolEntry {
   readonly agentId: string
@@ -22,6 +23,7 @@ export function ToolsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<readonly string[]>([])
+  const { t, formatNumber } = useLocale()
 
   useEffect(() => {
     async function load() {
@@ -40,7 +42,7 @@ export function ToolsPage() {
         setEntries(results)
         setError(null)
       } catch {
-        setError('Unable to load tool contracts.')
+        setError(t('tools.loadError'))
       } finally { setLoading(false) }
     }
     load()
@@ -57,8 +59,8 @@ export function ToolsPage() {
   return (
     <div className="w-full max-w-6xl space-y-6 overflow-hidden max-md:max-w-[calc(100vw-2rem)]">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Tools</h2>
-        <p className="mt-1 max-w-full break-words text-sm text-[var(--text-muted)]">Browse tool contracts across all agents. Edit within agent configuration.</p>
+        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('tools.title')}</h2>
+        <p className="mt-1 max-w-full break-words text-sm text-[var(--text-muted)]">{t('tools.description')}</p>
       </div>
 
       {error ? (
@@ -67,7 +69,7 @@ export function ToolsPage() {
         </div>
       ) : entries.length === 0 ? (
         <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
-          <EmptyState message="No tool contracts found." />
+          <EmptyState message={t('tools.empty')} />
         </div>
       ) : (
         <div className="space-y-3 min-w-0">
@@ -81,13 +83,13 @@ export function ToolsPage() {
                   className="w-full min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-4 text-left hover:bg-[var(--bg-hover)] transition-colors">
                   <span className={`shrink-0 text-[var(--text-muted)] transition-transform ${isOpen ? 'rotate-90' : ''}`}>&#9654;</span>
                   <span className="min-w-0 flex-1 basis-40 truncate font-medium text-[var(--text-primary)]">{entry.agentName}</span>
-                  <span className="shrink-0 text-sm text-[var(--text-secondary)]">{toolNames.length} tools</span>
+                  <span className="shrink-0 text-sm text-[var(--text-secondary)]">{formatNumber(toolNames.length)} {t('tools.count')}</span>
                   {preview && <span className="min-w-0 basis-full truncate pl-6 text-xs text-[var(--text-muted)] md:basis-auto md:pl-0">&mdash; {preview}</span>}
                 </button>
                 {isOpen && (
                   <div className="px-5 pb-4 space-y-3">
                     <CodeBlock>{entry.toolsYaml}</CodeBlock>
-                    <Link to={`/agents/${entry.agentId}/drafts/${entry.draftId}`} className="text-sm text-[var(--accent)] hover:underline">Edit in Agent</Link>
+                    <Link to={`/agents/${entry.agentId}/drafts/${entry.draftId}`} className="text-sm text-[var(--accent)] hover:underline">{t('tools.editInAgent')}</Link>
                   </div>
                 )}
               </div>
