@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Badge, Card } from '@proofagent/ui'
 import {
   createKnowledgeSource,
   fetchKnowledgeSources,
@@ -7,8 +8,9 @@ import {
 } from '../api/client'
 import type { SharedModelConnection, KnowledgeSource } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
-import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { useLocale } from '../i18n/locale'
+import { PageHeader } from '../components/PageHeader'
+import { TableSkeleton } from '../components/TableSkeleton'
 
 export function KnowledgePage() {
   const [sources, setSources] = useState<readonly KnowledgeSource[]>([])
@@ -117,16 +119,19 @@ export function KnowledgePage() {
     }
   }
 
-  if (loading) return <div className="flex justify-center py-12"><LoadingSpinner /></div>
+  if (loading)
+    return (
+      <div className="max-w-6xl space-y-5">
+        <PageHeader title={t('knowledge.title')} description={t('knowledge.description')} />
+        <Card className="p-0">
+          <TableSkeleton rows={4} columns={4} />
+        </Card>
+      </div>
+    )
 
   return (
     <div className="max-w-6xl space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('knowledge.title')}</h2>
-        <p className="mt-1 text-sm text-[var(--text-muted)]">
-          {t('knowledge.description')}
-        </p>
-      </div>
+      <PageHeader title={t('knowledge.title')} description={t('knowledge.description')} />
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
         <div className="mb-4">
@@ -223,20 +228,20 @@ export function KnowledgePage() {
       </section>
 
       {status && (
-        <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 px-4 py-3 text-sm text-[var(--success)]">
+        <div className="rounded-md border border-[var(--success-border)] bg-[var(--success-bg)] px-4 py-3 text-sm text-[var(--success-fg)]">
           {status}
         </div>
       )}
       {error && (
-        <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-4 py-3 text-sm text-[var(--danger)]">
+        <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-4 py-3 text-sm text-[var(--danger-fg)]">
           {error}
         </div>
       )}
 
       {sources.length === 0 ? (
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-6">
+        <Card className="p-6">
           <EmptyState message={t('knowledge.empty')} />
-        </div>
+        </Card>
       ) : (
         <div className="divide-y divide-[var(--border)] rounded-lg border border-[var(--border)] bg-[var(--bg-surface)]">
           {sources.map((source) => (
@@ -249,9 +254,9 @@ export function KnowledgePage() {
                 <div className="truncate font-medium text-[var(--text-primary)]">{source.name}</div>
                 <div className="mt-1 truncate font-mono text-xs text-[var(--text-muted)]">{source.source_id}</div>
               </div>
-              <span className={`self-center rounded-md px-2 py-0.5 text-xs font-medium ${source.lifecycle_state === 'ACTIVE' ? 'bg-[var(--success)]/10 text-[var(--success)]' : 'bg-[var(--bg-base)] text-[var(--text-muted)]'}`}>
+              <Badge variant={source.lifecycle_state === 'ACTIVE' ? 'success' : 'neutral'}>
                 {source.lifecycle_state === 'ACTIVE' ? t('models.active') : t('models.archived')}
-              </span>
+              </Badge>
               <span className="self-center rounded-md bg-[var(--bg-base)] px-2 py-0.5 text-xs font-mono text-[var(--text-secondary)]">
                 {source.provider}
               </span>

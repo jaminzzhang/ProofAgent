@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@proofagent/ui": ["./src/index.ts"],
+      "@proofagent/ui/*": ["./src/*"]
+    }
+  },
+  "include": ["src"]
+}

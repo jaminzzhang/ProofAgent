@@ -1,6 +1,15 @@
 import { useEffect, useRef } from 'react'
-import type { FormEvent, ReactNode } from 'react'
-
+import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
+import { ArrowUp } from 'lucide-react'
+import {
+  Avatar,
+  AvatarFallback,
+  BrandMark,
+  Button,
+  Markdown,
+  Textarea,
+  cn,
+} from '@proofagent/ui'
 import type { ChatTurnView } from './types'
 import { useLocale } from '../i18n/locale'
 
@@ -73,28 +82,38 @@ export function ChatShell({
     onSubmit()
   }
 
+  // Enter to send, Shift+Enter for newline
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault()
+      if (!sending && inputValue.trim()) onSubmit()
+    }
+  }
+
   return (
-    <div className="mx-auto flex h-[calc(100vh-8rem)] w-full max-w-6xl flex-col px-4">
-      <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-normal text-[var(--text-primary)]">{title}</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p>
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col px-4">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="truncate text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
+            {title}
+          </h1>
+          <p className="mt-1 truncate text-sm text-[var(--text-muted)]">{subtitle}</p>
         </div>
         {footer}
       </div>
 
       <div className={sidePanel ? 'grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_280px]' : 'min-h-0 flex-1'}>
-        <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-sm">
+        <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]">
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
             {turns.length === 0 && !sending ? (
-              <div className="flex h-full min-h-[360px] flex-col justify-end gap-3">
+              <div className="flex h-full min-h-[320px] flex-col justify-end gap-3">
                 {starters.length > 0 ? (
                   starters.map((starter) => (
                     <button
                       key={starter.label}
                       type="button"
                       onClick={starter.onSelect}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] px-4 py-3 text-left text-sm font-medium text-[var(--text-primary)] transition hover:border-[var(--accent)]"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] px-4 py-3 text-left text-sm font-medium text-[var(--text-primary)] transition hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]"
                     >
                       {starter.label}
                     </button>
@@ -102,46 +121,61 @@ export function ChatShell({
                 ) : (
                   <div className="flex flex-col items-center justify-center text-center">
                     <h2 className="text-sm font-semibold text-[var(--text-primary)]">{emptyTitle}</h2>
-                    <p className="mt-1 max-w-[260px] text-xs leading-5 text-[var(--text-muted)]">
+                    <p className="mt-1 max-w-[280px] text-xs leading-5 text-[var(--text-muted)]">
                       {emptyDescription}
                     </p>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="space-y-5">
+              <div className="space-y-6">
                 {turns.map((turn) => (
                   <article key={turn.id} className="space-y-3">
-                    <div className="flex justify-end">
-                      <div className="max-w-[82%] rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-medium text-white">
+                    {/* User message: right-aligned accent bubble */}
+                    <div className="flex justify-end gap-3">
+                      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[var(--accent)] px-4 py-2.5 text-sm font-medium text-[var(--accent-fg)]">
                         {turn.question}
                       </div>
+                      <Avatar className="mt-0.5 h-7 w-7 rounded-md">
+                        <AvatarFallback className="rounded-md bg-[var(--bg-hover)] text-[10px] text-[var(--text-secondary)]">
+                          You
+                        </AvatarFallback>
+                      </Avatar>
                     </div>
-                    <div className="max-w-[88%] space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-4 shadow-sm">
-                      {renderAssistantMeta?.(turn)}
-                      <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--text-primary)]">
-                        {turn.assistant.content || (
-                          <span className="italic text-[var(--text-muted)]">{t('chatShell.noOutput')}</span>
-                        )}
-                      </p>
-                      {renderAssistantActions?.(turn)}
+
+                    {/* Assistant message: bordered card with header + markdown + actions */}
+                    <div className="flex gap-3">
+                      <BrandMark size="sm" className="mt-0.5 h-7 w-7 rounded-md" />
+                      <div className="max-w-[85%] flex-1 space-y-3 rounded-2xl rounded-tl-md border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 shadow-[var(--shadow-xs)]">
+                        {renderAssistantMeta?.(turn)}
+                        <Markdown>{turn.assistant.content}</Markdown>
+                        {renderAssistantActions?.(turn)}
+                      </div>
                     </div>
                   </article>
                 ))}
                 {sending && (
-                  <div className="max-w-[88%] rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-4">
-                    {sendingLabel ?? (
-                      <span className="text-xs font-medium text-[var(--text-muted)]">{t('chatShell.working')}</span>
-                    )}
+                  <div className="flex gap-3">
+                    <BrandMark size="sm" className="mt-0.5 h-7 w-7 rounded-md" />
+                    <div className="flex max-w-[85%] items-center rounded-2xl rounded-tl-md border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-4">
+                      {sendingLabel ?? (
+                        <span className="text-xs font-medium text-[var(--text-muted)]">
+                          {t('chatShell.working')}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
             )}
           </div>
 
+          {/* Composer: auto-grow textarea + Enter-to-send */}
           <form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-3 sm:p-4">
             {error && (
-              <div className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+              <div className="mb-3 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-fg)]">
+                {error}
+              </div>
             )}
             {untrustedWebSupplementToggle && (
               <label className="mb-3 flex w-fit items-center gap-2 text-xs font-medium text-[var(--text-muted)]">
@@ -155,21 +189,32 @@ export function ChatShell({
                 <span>{t('chatShell.networkSupplement')}</span>
               </label>
             )}
-            <div className="flex gap-3">
-              <input
+            <div
+              className={cn(
+                'flex items-end gap-2 rounded-xl border bg-[var(--bg-base)] px-2 py-1.5 transition-colors',
+                'border-[var(--border-strong)] focus-within:border-[var(--accent)]',
+              )}
+            >
+              <Textarea
                 value={inputValue}
                 onChange={(event) => onInputChange(event.target.value)}
+                onKeyDown={handleKeyDown}
                 disabled={sending}
                 placeholder={placeholder}
-                className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 disabled:opacity-60"
+                autoGrow
+                maxHeight={160}
+                rows={1}
+                className="flex-1 resize-none border-0 bg-transparent px-2 py-1.5 focus-visible:ring-0"
               />
-              <button
+              <Button
                 type="submit"
+                size="icon"
                 disabled={sending || !inputValue.trim()}
-                className="rounded-lg bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={submitLabel}
+                className="mb-0.5 shrink-0"
               >
-                {submitLabel}
-              </button>
+                <ArrowUp size={16} strokeWidth={2.5} />
+              </Button>
             </div>
           </form>
         </section>

@@ -55,6 +55,22 @@ Workflow-related Dashboard screens use the Dashboard Workflow Lens:
 - Dashboard governance boundaries and Chat projection boundaries remain clear.
 - Meaningful UI changes are checked in a browser or screenshot.
 
+## Shared Design System (`@proofagent/ui`)
+
+The Dashboard and the Unified Chat share a single design system package, `packages/ui` (published as `@proofagent/ui` via the repo npm workspace). It is the single source of truth for tokens, typography, the locale engine, brand, and the primitive component catalog. Both apps consume it; they must not re-implement what the package already owns.
+
+**What lives in the package (do not duplicate in either app):**
+
+- **Tokens** — `src/styles/tokens.css` defines the refined-monochrome-plus-accent system: surfaces, borders, text, accent, semantic categories (`success`/`warning`/`danger`/`neutral`, each with `*-fg`/`*-bg`/`*-border`), a chart palette (`--chart-1..5`), depth (`--shadow-*`), spacing scale, and radii. Light and dark both supported. `src/styles/global.css` imports Fontsource `Inter Variable` + `JetBrains Mono` (self-hosted, offline-capable), Tailwind v4, base styles, focus-visible ring, scrollbar styling, enter/exit keyframes, and the `.prose-chat` markdown styles. Apps import `@proofagent/ui/styles/global.css` once from their `src/styles/global.css` and add a `@source` directive so Tailwind scans the package source for class names.
+- **Locale engine** — `createLocaleApi({ en, zh })` returns a bound `LocaleProvider` / `useLocale` / `LanguageToggleButton`. The package owns core keys (theme, language, outcome labels, common); each app registers its own messages via `src/i18n/messages.ts`. The `proof-agent-locale` storage key and provider/hook logic are shared so the two apps never drift.
+- **Theme engine** — `ThemeProvider` / `useTheme` (`proof-agent-theme` storage key, `.dark` class on `<html>`, `color-scheme` set).
+- **Brand** — `BrandMark` (shield-check glyph in an accent tile).
+- **Primitives** — built on Radix + `class-variance-authority` + `tailwind-merge`, with a `cn()` helper. The catalog: `Button` (variants: default/outline/ghost/subtle/destructive/destructive-outline/link), `Input`, `Textarea` (auto-grow), `Label`, `Card` family, `Badge` (semantic variants), `Avatar`, `Switch`, `Checkbox`, `Separator`, `Skeleton`, `CopyButton`, `Tabs`, `Dialog`, `Select`, `DropdownMenu`, `Tooltip`, `Table` family, `Markdown` (react-markdown + remark-gfm), `ToasterProvider`/`useToast`, plus domain-aligned `OutcomeBadge` (differentiates all 8 governance outcomes by semantic category), `StatusDot`, `EmptyState` (icon + description + action), `CodeBlock`, `LoadingSpinner`, and the unified `TopNav` (slot-driven: leading/title/subtitle/status/center/actions/languageToggle/accountMenu).
+
+**When adding or changing a primitive:** extend the package, not the app. Apps may keep a thin re-export shim (e.g. `src/components/OutcomeBadge.tsx` delegates to the shared `OutcomeBadge` and injects the app's `t`) so existing local import paths keep resolving while the source of truth stays singular.
+
+**Token discipline:** prefer the semantic tokens (`--success`, `--danger`, `--warning`, `--neutral` families) over raw Tailwind palette colors (`bg-green-400`, `text-red-500`, etc.). Raw palette colors do not theme correctly in dark mode. The chart palette tokens (`--chart-*`) drive all data visualizations.
+
 ## Reference Basis
 
 This document distills common guidance from established product design systems without adopting any one system wholesale:

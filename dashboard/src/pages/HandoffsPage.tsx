@@ -1,10 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import {
+  Badge,
+  Card,
+  EmptyState,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@proofagent/ui'
 import { fetchHandoffs } from '../api/client'
 import type { HandoffProjection } from '../api/types'
-import { EmptyState } from '../components/EmptyState'
-import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { useLocale } from '../i18n/locale'
+import { PageHeader } from '../components/PageHeader'
+import { TableSkeleton } from '../components/TableSkeleton'
 
 export function HandoffsPage() {
   const [handoffs, setHandoffs] = useState<HandoffProjection[]>([])
@@ -26,55 +37,63 @@ export function HandoffsPage() {
   }, [])
 
   return (
-    <div className="max-w-6xl space-y-6">
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('handoffs.title')}</h2>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">{t('handoffs.description')}</p>
-        </div>
-      </div>
+    <div className="max-w-6xl space-y-5">
+      <PageHeader title={t('handoffs.title')} description={t('handoffs.description')} />
 
       {loading ? (
-        <div className="flex justify-center py-12"><LoadingSpinner /></div>
+        <Card className="p-0">
+          <TableSkeleton rows={5} columns={5} />
+        </Card>
       ) : error ? (
-        <EmptyState message={error} />
+        <Card>
+          <EmptyState message={error} />
+        </Card>
       ) : handoffs.length === 0 ? (
-        <EmptyState message={t('handoffs.empty')} />
+        <Card>
+          <EmptyState message={t('handoffs.empty')} />
+        </Card>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-sm">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('handoffs.reason')}</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('handoffs.customer')}</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('handoffs.summary')}</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('common.time')}</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Run</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--border)]">
+        <Card className="overflow-hidden p-0">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-[var(--bg-subtle)] hover:bg-[var(--bg-subtle)]">
+                <TableHead>{t('handoffs.reason')}</TableHead>
+                <TableHead>{t('handoffs.customer')}</TableHead>
+                <TableHead>{t('handoffs.summary')}</TableHead>
+                <TableHead>{t('common.time')}</TableHead>
+                <TableHead>{t('approvals.run')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {handoffs.map((handoff) => (
-                <tr key={`${handoff.run_id}-${handoff.handoff_id || handoff.created_at}`} className="hover:bg-[var(--bg-hover)]">
-                  <td className="px-5 py-3">
-                    <span className="rounded-md bg-[var(--warning-bg)] px-2 py-1 text-xs font-semibold text-[var(--warning)]">
-                      {formatReason(handoff.reason)}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{handoff.customer_ref || t('handoffs.anonymous')}</td>
-                  <td className="max-w-xl px-5 py-3 text-[var(--text-primary)]">
-                    <div className="truncate font-medium">{handoff.question_summary || handoff.summary}</div>
-                  </td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatDateTime(handoff.created_at)}</td>
-                  <td className="px-5 py-3 font-mono text-xs">
-                    <Link to={`/runs/${handoff.run_id}`} className="text-[var(--accent)] hover:underline">
+                <TableRow key={`${handoff.run_id}-${handoff.handoff_id || handoff.created_at}`}>
+                  <TableCell>
+                    <Badge variant="warning">{formatReason(handoff.reason)}</Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-[var(--text-secondary)]">
+                    {handoff.customer_ref || t('handoffs.anonymous')}
+                  </TableCell>
+                  <TableCell className="max-w-xl">
+                    <div className="truncate font-medium text-[var(--text-primary)]">
+                      {handoff.question_summary || handoff.summary}
+                    </div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-[var(--text-muted)]">
+                    {formatDateTime(handoff.created_at)}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    <Link
+                      to={`/runs/${handoff.run_id}`}
+                      className="text-[var(--accent)] hover:underline"
+                    >
                       {handoff.run_id}
                     </Link>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       )}
     </div>
   )

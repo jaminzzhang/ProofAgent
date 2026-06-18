@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { ChevronRight } from 'lucide-react'
+import { Badge, Card, CodeBlock, EmptyState, Skeleton } from '@proofagent/ui'
 import { fetchConfigAgents, fetchConfigDraftContract } from '../api/client'
 import type { ConfigAgentSummary } from '../api/types'
-import { EmptyState } from '../components/EmptyState'
-import { LoadingSpinner } from '../components/ui/LoadingSpinner'
-import { CodeBlock } from '../components/CodeBlock'
 import { useLocale } from '../i18n/locale'
+import { PageHeader } from '../components/PageHeader'
 
 interface PolicyEntry {
   readonly agentId: string
@@ -47,7 +47,9 @@ export function PoliciesPage() {
                   policyYaml: contract.policy_yaml,
                 })
               }
-            } catch { /* skip agents with missing contracts */ }
+            } catch {
+              /* skip agents with missing contracts */
+            }
           })
 
         await Promise.all(fetches)
@@ -63,7 +65,9 @@ export function PoliciesPage() {
     }
 
     load()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   function toggle(agentId: string) {
@@ -73,39 +77,47 @@ export function PoliciesPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-6xl">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('policies.title')}</h2>
-        <p className="mt-1 text-sm text-[var(--text-muted)]">{t('policies.description')}</p>
-      </div>
+    <div className="max-w-6xl space-y-5">
+      <PageHeader title={t('policies.title')} description={t('policies.description')} />
 
       {loading ? (
-        <div className="flex justify-center py-12"><LoadingSpinner /></div>
+        <div className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-14 rounded-lg" />
+          ))}
+        </div>
       ) : error ? (
-        <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-4 py-3 text-sm text-[var(--danger)]">
+        <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-4 py-3 text-sm text-[var(--danger-fg)]">
           {error}
         </div>
       ) : entries.length === 0 ? (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
+        <Card>
           <EmptyState message={t('policies.empty')} />
-        </div>
+        </Card>
       ) : (
         <div className="space-y-3">
           {entries.map((entry) => {
             const isOpen = expanded.includes(entry.agentId)
             const rules = countRules(entry.policyYaml)
             return (
-              <div key={entry.agentId} className="border border-[var(--border)] rounded-lg bg-[var(--bg-surface)] overflow-hidden">
+              <Card key={entry.agentId} className="overflow-hidden p-0">
                 <button
                   onClick={() => toggle(entry.agentId)}
-                  className="flex w-full items-center justify-between gap-4 px-5 py-3 text-left hover:bg-[var(--bg-hover)] transition-colors"
+                  className="flex w-full items-center justify-between gap-4 px-5 py-3.5 text-left transition-colors hover:bg-[var(--bg-hover)]"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className={`text-[var(--text-muted)] transition-transform ${isOpen ? 'rotate-90' : ''}`}>&#9654;</span>
-                    <span className="font-medium text-[var(--text-primary)] truncate">{entry.agentName}</span>
-                    <span className="shrink-0 rounded-md bg-[var(--bg-base)] px-2 py-0.5 text-xs font-mono text-[var(--text-secondary)]">
-                      {formatNumber(rules)} {rules === 1 ? t('policies.rule') : t('policies.rules')}
+                  <div className="flex min-w-0 items-center gap-3">
+                    <ChevronRight
+                      size={16}
+                      className={`shrink-0 text-[var(--text-muted)] transition-transform ${
+                        isOpen ? 'rotate-90' : ''
+                      }`}
+                    />
+                    <span className="truncate font-medium text-[var(--text-primary)]">
+                      {entry.agentName}
                     </span>
+                    <Badge variant="subtle" className="font-mono">
+                      {formatNumber(rules)} {rules === 1 ? t('policies.rule') : t('policies.rules')}
+                    </Badge>
                   </div>
                   <Link
                     to={`/agents/${entry.agentId}/drafts/${entry.draftId}`}
@@ -120,7 +132,7 @@ export function PoliciesPage() {
                     <CodeBlock>{entry.policyYaml}</CodeBlock>
                   </div>
                 )}
-              </div>
+              </Card>
             )
           })}
         </div>

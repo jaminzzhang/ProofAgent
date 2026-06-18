@@ -1,22 +1,10 @@
-@import './tokens.css';
-
-@import 'tailwindcss';
-
-body {
-  margin: 0;
-  background-color: var(--bg-base);
-  color: var(--text-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-code, pre, .font-mono {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-}
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+/*
+ * Unified Chat global stylesheet.
+ *
+ * Imports the shared design system from @proofagent/ui (tokens, fonts,
+ * Tailwind v4, base styles, prose styles) so the Dashboard and Chat share a
+ * single source of truth. The `@source` directive tells Tailwind v4 to also
+ * scan the shared package's source for class names.
+ */
+@source "../../../node_modules/@proofagent/ui/src/**/*.{ts,tsx}";
+@import '@proofagent/ui/styles/global.css';

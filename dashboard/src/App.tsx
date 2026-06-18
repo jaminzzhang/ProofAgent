@@ -1,4 +1,5 @@
 import { BrowserRouter, useMatch } from 'react-router-dom'
+import { ToasterProvider } from '@proofagent/ui'
 import { AppRoutes } from './router'
 import { TopNav } from './components/TopNav'
 import { Sidebar } from './components/Sidebar'
@@ -9,9 +10,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <LocaleProvider>
-        <BrowserRouter>
-          <AppFrame />
-        </BrowserRouter>
+        <ToasterProvider>
+          <BrowserRouter>
+            <AppFrame />
+          </BrowserRouter>
+        </ToasterProvider>
       </LocaleProvider>
     </ThemeProvider>
   )

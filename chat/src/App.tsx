@@ -1,4 +1,5 @@
 import { BrowserRouter, matchPath, useLocation, useNavigate } from 'react-router-dom'
+import { ToasterProvider } from '@proofagent/ui'
 import { AppRoutes } from './router'
 import { TopNav } from './components/TopNav'
 import { ThemeProvider } from './components/ThemeProvider'
@@ -87,9 +88,9 @@ function Layout() {
   }
 
   return (
-    <div className="h-screen bg-[var(--bg-base)] text-[var(--text-primary)] transition-colors duration-200 flex flex-col overflow-hidden">
+    <div className="flex h-screen flex-col overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)] transition-colors duration-200">
       <TopNav />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {isOperatorRoute && (
           <HistorySidebar
             conversations={conversations}
@@ -100,10 +101,9 @@ function Layout() {
             routePrefix="/operator"
           />
         )}
-        <main className="flex-1 w-full overflow-y-auto px-8 py-8 relative">
-          <div className="w-full pb-12">
-            <AppRoutes onConversationUpdate={loadConversations} />
-          </div>
+        {/* Chat fills available height; ChatShell owns its own max-width + scroll */}
+        <main className="min-h-0 w-full flex-1 overflow-hidden py-6">
+          <AppRoutes onConversationUpdate={loadConversations} />
         </main>
       </div>
     </div>
@@ -114,9 +114,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <LocaleProvider>
-        <BrowserRouter>
-          <Layout />
-        </BrowserRouter>
+        <ToasterProvider>
+          <BrowserRouter>
+            <Layout />
+          </BrowserRouter>
+        </ToasterProvider>
       </LocaleProvider>
     </ThemeProvider>
   )

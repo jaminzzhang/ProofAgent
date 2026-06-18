@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Badge, Card, EmptyState } from '@proofagent/ui'
 import { createModelConnection, fetchModelConnections } from '../api/client'
 import type { SharedModelConnection } from '../api/types'
-import { EmptyState } from '../components/EmptyState'
-import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { useLocale } from '../i18n/locale'
+import { PageHeader } from '../components/PageHeader'
+import { TableSkeleton } from '../components/TableSkeleton'
 
 type ProviderOption = 'deepseek' | 'openai' | 'openai_compatible'
 
@@ -127,13 +128,19 @@ export function ModelsPage() {
     setCredentialEnv(CREDENTIAL_ENV_DEFAULTS[typedProvider])
   }
 
-  if (loading) return <div className="flex justify-center py-12"><LoadingSpinner /></div>
+  if (loading)
+    return (
+      <div className="max-w-6xl space-y-5">
+        <PageHeader title={t('models.title')} />
+        <Card className="p-0">
+          <TableSkeleton rows={5} columns={7} />
+        </Card>
+      </div>
+    )
 
   return (
-    <div className="max-w-6xl space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('models.title')}</h2>
-      </div>
+    <div className="max-w-6xl space-y-5">
+      <PageHeader title={t('models.title')} />
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -208,25 +215,25 @@ export function ModelsPage() {
       </section>
 
       {status && (
-        <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 px-4 py-3 text-sm text-[var(--success)]">
+        <div className="rounded-md border border-[var(--success-border)] bg-[var(--success-bg)] px-4 py-3 text-sm text-[var(--success-fg)]">
           {status}
         </div>
       )}
       {error && (
-        <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-4 py-3 text-sm text-[var(--danger)]">
+        <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-4 py-3 text-sm text-[var(--danger-fg)]">
           {error}
         </div>
       )}
 
       {filteredConnections.length === 0 ? (
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-6">
+        <Card>
           <EmptyState message={t('models.empty')} />
-        </div>
+        </Card>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-sm">
+        <Card className="overflow-hidden p-0">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
+              <tr className="border-b border-[var(--border)] bg-[var(--bg-subtle)]">
                 <TableHead>Model</TableHead>
                 <TableHead>{t('models.provider')}</TableHead>
                 <TableHead>{t('models.baseUrl')}</TableHead>
@@ -248,9 +255,9 @@ export function ModelsPage() {
                     </Link>
                     <div className="mt-1 font-mono text-xs text-[var(--text-muted)]">{connection.connection_id}</div>
                     <div className="mt-1 flex items-center gap-2">
-                      <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${connection.lifecycle_state === 'ACTIVE' ? 'bg-[var(--success)]/10 text-[var(--success)]' : 'bg-[var(--bg-base)] text-[var(--text-muted)]'}`}>
+                      <Badge variant={connection.lifecycle_state === 'ACTIVE' ? 'success' : 'neutral'}>
                         {connection.lifecycle_state === 'ACTIVE' ? t('models.active') : t('models.archived')}
-                      </span>
+                      </Badge>
                       <span className="font-mono text-xs text-[var(--text-muted)]">{connection.model_identifier}</span>
                     </div>
                   </td>
@@ -264,7 +271,7 @@ export function ModelsPage() {
               ))}
             </tbody>
           </table>
-        </div>
+        </Card>
       )}
     </div>
   )

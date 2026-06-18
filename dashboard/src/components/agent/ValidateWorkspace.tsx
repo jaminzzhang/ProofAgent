@@ -267,7 +267,7 @@ function StatusDot({ status }: { status: string }) {
   return (
     <span
       className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-        isPositive ? 'bg-emerald-500' : 'bg-[var(--text-muted)]'
+        isPositive ? 'bg-[var(--success)]' : 'bg-[var(--text-muted)]'
       }`}
     />
   )

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { ArrowUpRight, ExternalLink } from 'lucide-react'
+import { Badge, Button, Card } from '@proofagent/ui'
 
 import { ChatShell } from '../../chat-core/ChatShell'
 import type { ChatTurnView } from '../../chat-core/types'
@@ -19,6 +21,9 @@ import {
   fetchOperatorAgents,
   fetchOperatorConversation,
 } from './operatorAdapter'
+
+/** Dashboard base URL for run/approval deep-links (env-configurable). */
+const DASHBOARD_URL = import.meta.env.VITE_DASHBOARD_URL ?? 'http://localhost:5173'
 
 function syntheticNewChat(agentId: string): ConversationRecord {
   return {
@@ -247,7 +252,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
             <h1 className="text-lg font-semibold text-[var(--text-primary)]">{t('operator.loadErrorTitle')}</h1>
             <p className="mt-1 max-w-[320px] text-sm text-[var(--text-muted)]">{error}</p>
           </div>
-          <button
+          <Button
             onClick={() => {
               if (!routeConversationId) return
               setError(null)
@@ -259,10 +264,9 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
                 })
                 .finally(() => setLoading(false))
             }}
-            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
           >
             {t('operator.retry', 'Retry')}
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -345,29 +349,33 @@ function OperatorMessageMeta({ turn }: { turn: ConversationTurn }) {
   const { t, formatNumber } = useLocale()
 
   return (
-    <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] pb-3">
+    <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] pb-3">
       <OutcomeBadge outcome={turn.outcome} />
       {turn.evidence.length > 0 && (
-        <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-          {formatNumber(turn.evidence.length)} {t('operator.evidence')} {turn.evidence.length === 1 ? t('operator.source') : t('operator.sources')}
-        </span>
+        <Badge variant="subtle">
+          {formatNumber(turn.evidence.length)}{' '}
+          {turn.evidence.length === 1 ? t('operator.source') : t('operator.sources')}
+        </Badge>
       )}
-      <div className="ml-auto flex gap-3">
+      <div className="ml-auto flex items-center gap-1">
         <a
-          href={`http://localhost:5173/runs/${turn.run_id}`}
+          href={`${DASHBOARD_URL}/runs/${turn.run_id}`}
           target="_blank"
           rel="noreferrer"
-          className="text-[11px] font-bold uppercase tracking-tight text-[var(--accent)] hover:underline"
+          className="inline-flex items-center gap-0.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--accent)]"
         >
           {t('operator.auditTrace')}
+          <ExternalLink size={11} />
         </a>
+        <span className="text-[var(--border-strong)]">·</span>
         <a
           href={turn.links.receipt}
           target="_blank"
           rel="noreferrer"
-          className="text-[11px] font-bold uppercase tracking-tight text-[var(--accent)] hover:underline"
+          className="inline-flex items-center gap-0.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--accent)]"
         >
           {t('operator.receipt')}
+          <ExternalLink size={11} />
         </a>
       </div>
     </div>
@@ -378,30 +386,73 @@ function OperatorGovernanceDetails({ turn }: { turn: ConversationTurn }) {
   const { t } = useLocale()
 
   return (
-    <>
-      {turn.outcome === 'WAITING_FOR_APPROVAL' && (
-        <div className="flex gap-2 pt-1">
-          <a
-            href={`http://localhost:5173/runs/${turn.run_id}#approval`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-block rounded-md bg-blue-600 px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-white transition-colors hover:bg-blue-700"
-          >
-            {t('operator.reviewApproval')}
-          </a>
+    <div className="space-y-3 pt-1">
+      {/* Inline evidence/citation chips with excerpts */}
+      {turn.evidence.length > 0 && (
+        <div className="space-y-1.5">
+          {turn.evidence.map((ev, idx) => {
+            const sourceId = typeof ev === 'string' ? ev : ev.source_id
+            const label = typeof ev === 'string' ? ev : ev.label ?? ev.source_id
+            const excerpt = typeof ev === 'string' ? null : ev.excerpt
+            return (
+              <div
+                key={`${sourceId}-${idx}`}
+                title={excerpt ?? undefined}
+                className="flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-2.5 py-1.5"
+              >
+                <span className="mt-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+                  [{idx + 1}]
+                </span>
+                <div className="min-w-0">
+                  <span className="block truncate text-xs font-medium text-[var(--text-primary)]">
+                    {label}
+                  </span>
+                  {excerpt && (
+                    <span className="line-clamp-1 text-[11px] text-[var(--text-muted)]">
+                      {excerpt}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
+      {/* Inline approval action — links to Dashboard approval console */}
+      {turn.outcome === 'WAITING_FOR_APPROVAL' && (
+        <Card className="flex items-center justify-between gap-3 border-[var(--warning-border)] bg-[var(--warning-bg)] p-3">
+          <span className="text-xs font-medium text-[var(--warning-fg)]">
+            {t('operator.reviewApproval')}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            asChild
+          >
+            <a
+              href={`${DASHBOARD_URL}/runs/${turn.run_id}#approval`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {t('operator.reviewApproval')}
+              <ArrowUpRight size={13} />
+            </a>
+          </Button>
+        </Card>
+      )}
+
+      {/* Structured governance disclosure */}
       {hasGovernanceDetails(turn.governance_details) && (
-        <details className="border-t border-[var(--border)] pt-2">
-          <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+        <details className="rounded-md border border-[var(--border)] bg-[var(--bg-base)]">
+          <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
             {t('operator.governanceSummary')}
           </summary>
-          <pre className="mt-3 max-h-56 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-base)] p-3 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)] whitespace-pre-wrap">
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap border-t border-[var(--border)] px-3 py-2 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)]">
             {JSON.stringify(turn.governance_details, null, 2)}
           </pre>
         </details>
       )}
-    </>
+    </div>
   )
 }

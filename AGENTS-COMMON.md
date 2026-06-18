@@ -190,7 +190,9 @@ Python:
 
 Frontend:
 
+- The repo is an npm workspace (`package.json` `workspaces`: `packages/*`, `dashboard`, `chat`). Run installs from the repo root with `npm install`; do not pin `workspace:*` protocols (use `"*"` so npm links workspace packages).
 - Dashboard and Chat use React 19, Vite, React Router, TypeScript, and Tailwind CSS v4.
+- Both apps share a single design system package, `@proofagent/ui` (`packages/ui`): tokens, fonts, the locale engine (`createLocaleApi`), theme engine, `BrandMark`, and the full primitive catalog (Button, Input, Card, Badge, Avatar, Tabs, Dialog, Select, DropdownMenu, Tooltip, Table, Markdown, Toaster, plus domain-aligned OutcomeBadge/StatusDot/EmptyState). Extend the package rather than duplicating in an app. See `docs/frontend-design-principles.md` § "Shared Design System".
 - Dashboard and Unified Chat frontend changes must follow `docs/frontend-design-principles.md` before implementation and during review.
 - Keep frontend API types aligned with `proof_agent/contracts/` and API serializers.
 - Preserve the product tone: operational, audit-focused, dense enough for repeated enterprise use.
