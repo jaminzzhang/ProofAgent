@@ -8,6 +8,7 @@ import {
 import type { SharedModelConnection, KnowledgeSource } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
+import { useLocale } from '../i18n/locale'
 
 export function KnowledgePage() {
   const [sources, setSources] = useState<readonly KnowledgeSource[]>([])
@@ -38,6 +39,7 @@ export function KnowledgePage() {
   const [remoteContentPointer, setRemoteContentPointer] = useState('/content')
   const [remoteScorePointer, setRemoteScorePointer] = useState('/score')
   const [remoteCitationPointer, setRemoteCitationPointer] = useState('/citation')
+  const { t, formatNumber } = useLocale()
 
   async function loadSources() {
     const [{ data: sources }, { data: connections }] = await Promise.all([
@@ -63,7 +65,7 @@ export function KnowledgePage() {
           setError(null)
         }
       } catch {
-        if (!cancelled) setError('Unable to load knowledge sources.')
+        if (!cancelled) setError(t('knowledge.loadError'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -105,11 +107,11 @@ export function KnowledgePage() {
           workerConcurrency,
         }),
       })
-      setStatus(`Created ${source.name}.`)
+      setStatus(t('knowledge.created').replace('{name}', source.name))
       setSourceId('')
       await loadSources()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to create knowledge source.')
+      setError(err instanceof Error ? err.message : t('knowledge.createError'))
     } finally {
       setBusy(null)
     }
@@ -120,37 +122,37 @@ export function KnowledgePage() {
   return (
     <div className="max-w-6xl space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Knowledge Sources</h2>
+        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('knowledge.title')}</h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
-          Manage shared knowledge sources independently, then bind published snapshots from Agent configuration.
+          {t('knowledge.description')}
         </p>
       </div>
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
         <div className="mb-4">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Create Knowledge Source
+            {t('knowledge.createTitle')}
           </h3>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Configure a local index source for managed documents or connect a trusted HTTP JSON retrieval API.
+            {t('knowledge.createDescription')}
           </p>
         </div>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           <SelectField
-            label="Source Type"
+            label={t('knowledge.sourceType')}
             value={sourceProvider}
             onChange={(value) => setSourceProvider(value as 'local_index' | 'http_json')}
             options={[
-              { value: 'local_index', label: 'Local Index' },
+              { value: 'local_index', label: t('knowledge.localIndex') },
               { value: 'http_json', label: 'HTTP JSON' },
             ]}
           />
-          <TextField label="Name" value={name} onChange={setName} />
-          <TextField label="Source ID" value={sourceId} onChange={setSourceId} placeholder="ks_policies" />
+          <TextField label={t('knowledge.name')} value={name} onChange={setName} />
+          <TextField label={t('knowledge.sourceId')} value={sourceId} onChange={setSourceId} placeholder="ks_policies" />
           {sourceProvider === 'local_index' ? (
             <>
               <ModelSourceSelector
-                label="Ingestion Model Source"
+                label={t('knowledge.ingestionModelSource')}
                 value={modelSourceValue(ingestionModelSource, ingestionConnectionId)}
                 connections={modelConnections}
                 onChange={(value) => {
@@ -161,13 +163,13 @@ export function KnowledgePage() {
               />
               {ingestionModelSource === 'custom' && (
                 <>
-                  <TextField label="Ingestion Provider" value={ingestionProvider} onChange={setIngestionProvider} />
-                  <TextField label="Ingestion Model" value={ingestionModelName} onChange={setIngestionModelName} />
-                  <TextField label="Ingestion Credential Env" value={credentialEnv} onChange={setCredentialEnv} placeholder="OPENAI_API_KEY" />
+                  <TextField label={t('knowledge.ingestionProvider')} value={ingestionProvider} onChange={setIngestionProvider} />
+                  <TextField label={t('knowledge.ingestionModel')} value={ingestionModelName} onChange={setIngestionModelName} />
+                  <TextField label={t('knowledge.ingestionCredentialEnv')} value={credentialEnv} onChange={setCredentialEnv} placeholder="OPENAI_API_KEY" />
                 </>
               )}
               <ModelSourceSelector
-                label="Routing Model Source"
+                label={t('knowledge.routingModelSource')}
                 value={modelSourceValue(routingModelSource, routingConnectionId)}
                 connections={modelConnections}
                 onChange={(value) => {
@@ -178,23 +180,23 @@ export function KnowledgePage() {
               />
               {routingModelSource === 'custom' && (
                 <>
-                  <TextField label="Routing Provider" value={routingProvider} onChange={setRoutingProvider} />
-                  <TextField label="Routing Model" value={routingModelName} onChange={setRoutingModelName} />
-                  <TextField label="Routing Credential Env" value={routingCredentialEnv} onChange={setRoutingCredentialEnv} placeholder="OPENAI_API_KEY" />
+                  <TextField label={t('knowledge.routingProvider')} value={routingProvider} onChange={setRoutingProvider} />
+                  <TextField label={t('knowledge.routingModel')} value={routingModelName} onChange={setRoutingModelName} />
+                  <TextField label={t('knowledge.routingCredentialEnv')} value={routingCredentialEnv} onChange={setRoutingCredentialEnv} placeholder="OPENAI_API_KEY" />
                 </>
               )}
-              <NumberField label="Document Selection Budget" value={documentSelectionBudget} onChange={setDocumentSelectionBudget} min={1} />
-              <NumberField label="Worker Concurrency" value={workerConcurrency} onChange={setWorkerConcurrency} min={1} />
+              <NumberField label={t('knowledge.documentSelectionBudget')} value={documentSelectionBudget} onChange={setDocumentSelectionBudget} min={1} />
+              <NumberField label={t('knowledge.workerConcurrency')} value={workerConcurrency} onChange={setWorkerConcurrency} min={1} />
             </>
           ) : (
             <>
-              <TextField label="Remote Endpoint" value={remoteEndpoint} onChange={setRemoteEndpoint} placeholder="https://knowledge.example/retrieve" />
-              <TextField label="Header Value Env" value={remoteHeaderEnv} onChange={setRemoteHeaderEnv} placeholder="PA_KNOWLEDGE_TOKEN" />
-              <NumberField label="Remote Top K" value={remoteTopK} onChange={setRemoteTopK} min={1} />
-              <TextField label="Results Pointer" value={remoteResultsPointer} onChange={setRemoteResultsPointer} />
-              <TextField label="Content Pointer" value={remoteContentPointer} onChange={setRemoteContentPointer} />
-              <TextField label="Score Pointer" value={remoteScorePointer} onChange={setRemoteScorePointer} />
-              <TextField label="Citation Pointer" value={remoteCitationPointer} onChange={setRemoteCitationPointer} />
+              <TextField label={t('knowledge.remoteEndpoint')} value={remoteEndpoint} onChange={setRemoteEndpoint} placeholder="https://knowledge.example/retrieve" />
+              <TextField label={t('knowledge.headerValueEnv')} value={remoteHeaderEnv} onChange={setRemoteHeaderEnv} placeholder="PA_KNOWLEDGE_TOKEN" />
+              <NumberField label={t('knowledge.remoteTopK')} value={remoteTopK} onChange={setRemoteTopK} min={1} />
+              <TextField label={t('knowledge.resultsPointer')} value={remoteResultsPointer} onChange={setRemoteResultsPointer} />
+              <TextField label={t('knowledge.contentPointer')} value={remoteContentPointer} onChange={setRemoteContentPointer} />
+              <TextField label={t('knowledge.scorePointer')} value={remoteScorePointer} onChange={setRemoteScorePointer} />
+              <TextField label={t('knowledge.citationPointer')} value={remoteCitationPointer} onChange={setRemoteCitationPointer} />
             </>
           )}
         </div>
@@ -215,7 +217,7 @@ export function KnowledgePage() {
             })}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
-            {busy === 'create' ? 'Creating...' : 'Create Source'}
+            {busy === 'create' ? t('knowledge.creating') : t('knowledge.create')}
           </button>
         </div>
       </section>
@@ -233,7 +235,7 @@ export function KnowledgePage() {
 
       {sources.length === 0 ? (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-6">
-          <EmptyState message="No knowledge sources configured." />
+          <EmptyState message={t('knowledge.empty')} />
         </div>
       ) : (
         <div className="divide-y divide-[var(--border)] rounded-lg border border-[var(--border)] bg-[var(--bg-surface)]">
@@ -248,16 +250,16 @@ export function KnowledgePage() {
                 <div className="mt-1 truncate font-mono text-xs text-[var(--text-muted)]">{source.source_id}</div>
               </div>
               <span className={`self-center rounded-md px-2 py-0.5 text-xs font-medium ${source.lifecycle_state === 'ACTIVE' ? 'bg-[var(--success)]/10 text-[var(--success)]' : 'bg-[var(--bg-base)] text-[var(--text-muted)]'}`}>
-                {source.lifecycle_state === 'ACTIVE' ? 'active' : 'archived'}
+                {source.lifecycle_state === 'ACTIVE' ? t('models.active') : t('models.archived')}
               </span>
               <span className="self-center rounded-md bg-[var(--bg-base)] px-2 py-0.5 text-xs font-mono text-[var(--text-secondary)]">
                 {source.provider}
               </span>
               <span className="self-center text-xs text-[var(--text-muted)]">
-                {source.ready_document_count} / {source.document_count} ready
+                {formatNumber(source.ready_document_count)} / {formatNumber(source.document_count)} {t('knowledge.ready')}
               </span>
               <span className={`self-center text-xs font-medium ${source.published_snapshot_id ? 'text-[var(--success)]' : 'text-[var(--text-muted)]'}`}>
-                {source.published_snapshot_id ? 'published' : 'draft'}
+                {source.published_snapshot_id ? t('knowledge.published') : t('knowledge.draft')}
               </span>
             </Link>
           ))}
@@ -362,6 +364,7 @@ function ModelSourceSelector({
   connections: readonly SharedModelConnection[]
   onChange: (value: string) => void
 }) {
+  const { t } = useLocale()
   const activeConnections = connections.filter((connection) => connection.lifecycle_state === 'ACTIVE')
   return (
     <SelectField
@@ -373,7 +376,7 @@ function ModelSourceSelector({
           value: `shared:${connection.connection_id}`,
           label: connection.display_name,
         })),
-        { value: 'custom', label: 'Custom' },
+        { value: 'custom', label: t('knowledge.custom') },
       ]}
     />
   )

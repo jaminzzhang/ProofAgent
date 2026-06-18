@@ -3,13 +3,16 @@ import { AppRoutes } from './router'
 import { TopNav } from './components/TopNav'
 import { Sidebar } from './components/Sidebar'
 import { ThemeProvider } from './components/ThemeProvider'
+import { LocaleProvider } from './i18n/locale'
 
 export default function App() {
   return (
     <ThemeProvider>
-      <BrowserRouter>
-        <AppFrame />
-      </BrowserRouter>
+      <LocaleProvider>
+        <BrowserRouter>
+          <AppFrame />
+        </BrowserRouter>
+      </LocaleProvider>
     </ThemeProvider>
   )
 }

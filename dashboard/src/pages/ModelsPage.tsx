@@ -4,6 +4,7 @@ import { createModelConnection, fetchModelConnections } from '../api/client'
 import type { SharedModelConnection } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
+import { useLocale } from '../i18n/locale'
 
 type ProviderOption = 'deepseek' | 'openai' | 'openai_compatible'
 
@@ -31,6 +32,7 @@ export function ModelsPage() {
   const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com')
   const [credentialEnv, setCredentialEnv] = useState('DEEPSEEK_API_KEY')
   const [timeoutSeconds, setTimeoutSeconds] = useState('')
+  const { t, formatDateTime, formatNumber } = useLocale()
 
   async function loadConnections() {
     const { data } = await fetchModelConnections()
@@ -48,7 +50,7 @@ export function ModelsPage() {
           setError(null)
         }
       } catch {
-        if (!cancelled) setError('Unable to load model connections.')
+        if (!cancelled) setError(t('models.loadError'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -93,11 +95,11 @@ export function ModelsPage() {
         credential_ref: { type: 'env', name: credentialEnv },
         timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : undefined,
       })
-      setStatus(`Created ${connection.display_name}.`)
+      setStatus(t('models.created').replace('{name}', connection.display_name))
       setConnectionId('')
       await loadConnections()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to create model connection.')
+      setError(err instanceof Error ? err.message : t('models.createError'))
     } finally {
       setBusy(null)
     }
@@ -130,23 +132,23 @@ export function ModelsPage() {
   return (
     <div className="max-w-6xl space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Models</h2>
+        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('models.title')}</h2>
       </div>
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <TextField label="Display Name" value={displayName} onChange={setDisplayName} />
-          <TextField label="Connection ID" value={connectionId} onChange={setConnectionId} placeholder="model_deepseek_default" />
+          <TextField label={t('models.displayName')} value={displayName} onChange={setDisplayName} />
+          <TextField label={t('models.connectionId')} value={connectionId} onChange={setConnectionId} placeholder="model_deepseek_default" />
           <SelectField
-            label="Provider"
+            label={t('models.provider')}
             value={provider}
             onChange={updateProvider}
             options={PROVIDER_OPTIONS}
           />
-          <TextField label="Model Identifier" value={modelIdentifier} onChange={setModelIdentifier} />
-          <TextField label="Base URL" value={baseUrl} onChange={setBaseUrl} placeholder="https://api.example.com" />
-          <TextField label="Credential Env" value={credentialEnv} onChange={setCredentialEnv} placeholder={CREDENTIAL_ENV_DEFAULTS[provider] || 'API_KEY'} />
-          <NumberField label="Timeout Seconds" value={timeoutSeconds} onChange={setTimeoutSeconds} min={1} />
+          <TextField label={t('models.modelIdentifier')} value={modelIdentifier} onChange={setModelIdentifier} />
+          <TextField label={t('models.baseUrl')} value={baseUrl} onChange={setBaseUrl} placeholder="https://api.example.com" />
+          <TextField label={t('models.credentialEnv')} value={credentialEnv} onChange={setCredentialEnv} placeholder={CREDENTIAL_ENV_DEFAULTS[provider] || 'API_KEY'} />
+          <NumberField label={t('models.timeoutSeconds')} value={timeoutSeconds} onChange={setTimeoutSeconds} min={1} />
         </div>
         <div className="mt-4 flex justify-end">
           <button
@@ -154,52 +156,52 @@ export function ModelsPage() {
             disabled={busy === 'create' || !displayName.trim() || !modelIdentifier.trim() || !credentialEnv.trim()}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {busy === 'create' ? 'Creating...' : 'Create Model'}
+            {busy === 'create' ? t('models.creating') : t('models.create')}
           </button>
         </div>
       </section>
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4">
         <div className="grid gap-3 md:grid-cols-5">
-          <TextField label="Search" value={search} onChange={setSearch} placeholder="model, provider, env" />
+          <TextField label={t('models.search')} value={search} onChange={setSearch} placeholder="model, provider, env" />
           <SelectField
-            label="Provider Filter"
+            label={t('models.providerFilter')}
             value={providerFilter}
             onChange={setProviderFilter}
             options={[
-              { value: 'all', label: 'All providers' },
+              { value: 'all', label: t('models.allProviders') },
               ...PROVIDER_OPTIONS,
             ]}
           />
           <SelectField
-            label="Lifecycle"
+            label={t('models.lifecycle')}
             value={lifecycleFilter}
             onChange={setLifecycleFilter}
             options={[
-              { value: 'all', label: 'All lifecycle states' },
-              { value: 'ACTIVE', label: 'Active' },
-              { value: 'ARCHIVED', label: 'Archived' },
+              { value: 'all', label: t('models.allLifecycle') },
+              { value: 'ACTIVE', label: t('models.activeOption') },
+              { value: 'ARCHIVED', label: t('models.archivedOption') },
             ]}
           />
           <SelectField
-            label="References"
+            label={t('models.references')}
             value={referenceFilter}
             onChange={setReferenceFilter}
             options={[
-              { value: 'all', label: 'All references' },
-              { value: 'referenced', label: 'Referenced' },
-              { value: 'unreferenced', label: 'Unreferenced' },
+              { value: 'all', label: t('models.allReferences') },
+              { value: 'referenced', label: t('models.referenced') },
+              { value: 'unreferenced', label: t('models.unreferenced') },
             ]}
           />
           <SelectField
-            label="Smoke"
+            label={t('models.smoke')}
             value={smokeFilter}
             onChange={setSmokeFilter}
             options={[
-              { value: 'all', label: 'All smoke states' },
-              { value: 'passed', label: 'Passed' },
-              { value: 'failed', label: 'Failed' },
-              { value: 'skipped', label: 'Skipped' },
+              { value: 'all', label: t('models.allSmoke') },
+              { value: 'passed', label: t('models.passed') },
+              { value: 'failed', label: t('models.failed') },
+              { value: 'skipped', label: t('models.skipped') },
             ]}
           />
         </div>
@@ -218,7 +220,7 @@ export function ModelsPage() {
 
       {filteredConnections.length === 0 ? (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-6">
-          <EmptyState message="No model connections match the current filters." />
+          <EmptyState message={t('models.empty')} />
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-sm">
@@ -226,12 +228,12 @@ export function ModelsPage() {
             <thead>
               <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
                 <TableHead>Model</TableHead>
-                <TableHead>Provider</TableHead>
-                <TableHead>Base URL</TableHead>
-                <TableHead>Credential</TableHead>
+                <TableHead>{t('models.provider')}</TableHead>
+                <TableHead>{t('models.baseUrl')}</TableHead>
+                <TableHead>{t('models.credentialEnv')}</TableHead>
                 <TableHead>Refs</TableHead>
-                <TableHead>Smoke</TableHead>
-                <TableHead>Updated</TableHead>
+                <TableHead>{t('models.smoke')}</TableHead>
+                <TableHead>{t('agents.updated')}</TableHead>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
@@ -247,7 +249,7 @@ export function ModelsPage() {
                     <div className="mt-1 font-mono text-xs text-[var(--text-muted)]">{connection.connection_id}</div>
                     <div className="mt-1 flex items-center gap-2">
                       <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${connection.lifecycle_state === 'ACTIVE' ? 'bg-[var(--success)]/10 text-[var(--success)]' : 'bg-[var(--bg-base)] text-[var(--text-muted)]'}`}>
-                        {connection.lifecycle_state === 'ACTIVE' ? 'active' : 'archived'}
+                        {connection.lifecycle_state === 'ACTIVE' ? t('models.active') : t('models.archived')}
                       </span>
                       <span className="font-mono text-xs text-[var(--text-muted)]">{connection.model_identifier}</span>
                     </div>
@@ -255,9 +257,9 @@ export function ModelsPage() {
                   <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{connection.provider}</td>
                   <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{baseUrlHost(connection.base_url)}</td>
                   <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{connection.credential_ref.name}</td>
-                  <td className="px-5 py-3 text-xs text-[var(--text-secondary)]">{referenceCount(connection)} refs</td>
-                  <td className="px-5 py-3 text-xs text-[var(--text-secondary)]">{smokeLabel(connection)}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatDate(connection.updated_at)}</td>
+                  <td className="px-5 py-3 text-xs text-[var(--text-secondary)]">{formatNumber(referenceCount(connection))} {t('models.refs')}</td>
+                  <td className="px-5 py-3 text-xs text-[var(--text-secondary)]">{smokeLabel(connection, t)}</td>
+                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatDateTime(connection.updated_at)}</td>
                 </tr>
               ))}
             </tbody>
@@ -377,11 +379,10 @@ function baseUrlHost(baseUrl: string | null): string {
   }
 }
 
-function smokeLabel(connection: SharedModelConnection): string {
+function smokeLabel(
+  connection: SharedModelConnection,
+  t: (key: string, fallback?: string) => string,
+): string {
   const status = connection.last_smoke_test?.status
-  return status ? `smoke ${status}` : 'not tested'
-}
-
-function formatDate(value: string): string {
-  return new Date(value).toLocaleString()
+  return status ? `smoke ${status}` : t('models.notTested')
 }

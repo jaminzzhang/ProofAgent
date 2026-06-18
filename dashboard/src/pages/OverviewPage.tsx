@@ -7,9 +7,11 @@ import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { EmptyState } from '../components/EmptyState'
 import { Link } from 'react-router-dom'
 import type { StatsResponse } from '../api/types'
+import { useLocale } from '../i18n/locale'
 
 function OutcomeBar({ stats }: { stats: StatsResponse }) {
   const total = stats.total_runs
+  const { t, formatNumber } = useLocale()
   if (total === 0) return null
 
   const dist = stats.outcome_distribution
@@ -25,14 +27,14 @@ function OutcomeBar({ stats }: { stats: StatsResponse }) {
 
   return (
     <div className="bg-[var(--bg-surface)] p-6 rounded-lg border border-[var(--border)] shadow-sm">
-      <h3 className="text-sm font-semibold tracking-wide uppercase text-[var(--text-primary)] mb-4">Outcome Distribution</h3>
+      <h3 className="text-sm font-semibold tracking-wide uppercase text-[var(--text-primary)] mb-4">{t('overview.outcomeDistribution')}</h3>
       <div className="flex h-3 rounded-full overflow-hidden bg-[var(--bg-hover)] shadow-inner">
         {segments.map((seg) => {
           const count = dist[seg.key] ?? 0
           if (count === 0) return null
           const pct = (count / total) * 100
           return (
-            <div key={seg.key} className={`${seg.color}`} style={{ width: `${pct}%` }} title={`${seg.key}: ${count}`} />
+            <div key={seg.key} className={`${seg.color}`} style={{ width: `${pct}%` }} title={`${seg.key}: ${formatNumber(count)}`} />
           )
         })}
       </div>
@@ -43,7 +45,7 @@ function OutcomeBar({ stats }: { stats: StatsResponse }) {
           return (
             <span key={seg.key} className="flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-sm ${seg.color} shadow-sm`} />
-              {seg.key.replace(/_/g, ' ')} <span className="text-[var(--text-muted)]">({Math.round((count / total) * 100)}%)</span>
+              {seg.key.replace(/_/g, ' ')} <span className="text-[var(--text-muted)]">({formatNumber(Math.round((count / total) * 100))}%)</span>
             </span>
           )
         })}
@@ -55,6 +57,7 @@ function OutcomeBar({ stats }: { stats: StatsResponse }) {
 export function OverviewPage() {
   const { stats, loading: statsLoading } = useStats()
   const { runs, loading: runsLoading } = useRuns()
+  const { t, formatNumber } = useLocale()
 
   if (statsLoading) return <div className="py-12 flex justify-center"><LoadingSpinner /></div>
 
@@ -66,14 +69,14 @@ export function OverviewPage() {
   return (
     <div className="space-y-8 max-w-6xl">
       <div className="mb-8">
-        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">System Overview</h2>
-        <p className="text-sm text-[var(--text-muted)] mt-1">Metrics and health for governed Agent execution.</p>
+        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('overview.title')}</h2>
+        <p className="text-sm text-[var(--text-muted)] mt-1">{t('overview.description')}</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard label="Total Runs" value={totalCount} subtitle="All time governed runs" />
-        <StatCard label="Answered Rate" value={`${answerRate}%`} subtitle="Supported with citations" />
-        <StatCard label="Pending Approvals" value={pendingCount} subtitle="Awaiting human review" warning={pendingCount > 0} />
+        <StatCard label={t('overview.totalRuns')} value={formatNumber(totalCount)} subtitle={t('overview.totalRunsSubtitle')} />
+        <StatCard label={t('overview.answeredRate')} value={`${formatNumber(answerRate)}%`} subtitle={t('overview.answeredRateSubtitle')} />
+        <StatCard label={t('overview.pendingApprovals')} value={formatNumber(pendingCount)} subtitle={t('overview.pendingApprovalsSubtitle')} warning={pendingCount > 0} />
       </div>
 
       {stats && stats.total_runs > 0 && (
@@ -82,22 +85,22 @@ export function OverviewPage() {
 
       <section>
         <div className="flex justify-between items-end mb-4">
-          <SectionHeader title="Recent Activity" count={runs.length} />
-          <Link to="/runs" className="text-sm font-medium text-[var(--accent)] hover:underline tracking-wide">View all runs &rarr;</Link>
+          <SectionHeader title={t('overview.recentActivity')} count={runs.length} />
+          <Link to="/runs" className="text-sm font-medium text-[var(--accent)] hover:underline tracking-wide">{t('overview.viewAllRuns')}</Link>
         </div>
         {runsLoading ? (
           <div className="py-12 flex justify-center"><LoadingSpinner size="sm" /></div>
         ) : runs.length === 0 ? (
-          <EmptyState message="No runs yet. Run the demo to see data here." />
+          <EmptyState message={t('overview.noRuns')} />
         ) : (
           <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg overflow-hidden shadow-sm">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
-                  <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Run ID</th>
-                  <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Question</th>
-                  <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Outcome</th>
-                  <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Time</th>
+                  <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.runId')}</th>
+                  <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.question')}</th>
+                  <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.outcome')}</th>
+                  <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.time')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
@@ -108,7 +111,7 @@ export function OverviewPage() {
                     </td>
                     <td className="px-5 py-3 text-[var(--text-primary)] max-w-sm truncate font-medium">{run.question}</td>
                     <td className="px-5 py-3"><OutcomeBadge outcome={run.outcome} /></td>
-                    <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatRelative(run.created_at)}</td>
+                    <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatRelative(run.created_at, t, formatNumber)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -120,15 +123,19 @@ export function OverviewPage() {
   )
 }
 
-function formatRelative(ts: string): string {
+function formatRelative(
+  ts: string,
+  t: (key: string, fallback?: string) => string,
+  formatNumber: (value: number) => string,
+): string {
   try {
     const diff = Date.now() - new Date(ts).getTime()
     const minutes = Math.floor(diff / 60000)
-    if (minutes < 1) return 'just now'
-    if (minutes < 60) return `${minutes}m ago`
+    if (minutes < 1) return t('overview.justNow')
+    if (minutes < 60) return t('overview.minutesAgo').replace('{count}', formatNumber(minutes))
     const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    return `${Math.floor(hours / 24)}d ago`
+    if (hours < 24) return t('overview.hoursAgo').replace('{count}', formatNumber(hours))
+    return t('overview.daysAgo').replace('{count}', formatNumber(Math.floor(hours / 24)))
   } catch {
     return ts
   }

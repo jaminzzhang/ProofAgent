@@ -5,6 +5,7 @@ import { CreateAgentWizard } from '../components/agent/CreateAgentWizard'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { useConfigAgents } from '../hooks/useConfigAgents'
+import { useLocale } from '../i18n/locale'
 
 export function AgentsPage() {
   const { agents, loading, error, refresh } = useConfigAgents()
@@ -12,6 +13,7 @@ export function AgentsPage() {
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  const { t, formatDateTime, formatNumber } = useLocale()
 
   async function handleImport() {
     setImporting(true)
@@ -30,15 +32,15 @@ export function AgentsPage() {
     <div className="space-y-6 max-w-6xl">
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Agents</h2>
-          <p className="text-sm text-[var(--text-muted)] mt-1">Configure drafts, validate changes, and publish governed versions.</p>
+          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('agents.title')}</h2>
+          <p className="text-sm text-[var(--text-muted)] mt-1">{t('agents.description')}</p>
         </div>
         <div className="flex w-full md:w-auto items-center gap-3">
           <button
             onClick={() => setWizardOpen(true)}
             className="shrink-0 rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent)]/90"
           >
-            + Create Agent
+            {t('agents.create')}
           </button>
           <input
             value={manifestPath}
@@ -50,7 +52,7 @@ export function AgentsPage() {
             disabled={importing || !manifestPath.trim()}
             className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
-            {importing ? 'Importing' : 'Import'}
+            {importing ? t('agents.importing') : t('agents.import')}
           </button>
         </div>
       </div>
@@ -70,7 +72,7 @@ export function AgentsPage() {
         <div className="py-12 flex justify-center"><LoadingSpinner /></div>
       ) : agents.length === 0 ? (
         <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
-          <EmptyState message="No configured Agents yet." />
+          <EmptyState message={t('agents.empty')} />
         </div>
       ) : (
         <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg overflow-hidden shadow-sm">
@@ -78,9 +80,9 @@ export function AgentsPage() {
             <thead>
               <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
                 <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Agent</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Drafts</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Active Version</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Updated</th>
+                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('agents.drafts')}</th>
+                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('agents.activeVersion')}</th>
+                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('agents.updated')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
@@ -99,10 +101,10 @@ export function AgentsPage() {
                     )}
                     <div className="mt-1 max-w-xl truncate text-xs text-[var(--text-muted)]">{agent.purpose}</div>
                   </td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{agent.draft_count}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{agent.active_version_id ?? 'unpublished'}</td>
+                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{formatNumber(agent.draft_count)}</td>
+                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{agent.active_version_id ?? t('agents.unpublished')}</td>
                   <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">
-                    {agent.updated_at ? new Date(agent.updated_at).toLocaleString() : '-'}
+                    {agent.updated_at ? formatDateTime(agent.updated_at) : '-'}
                   </td>
                 </tr>
               ))}

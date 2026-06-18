@@ -5,6 +5,7 @@ import { ChatShell } from '../../chat-core/ChatShell'
 import type { ChatTurnView } from '../../chat-core/types'
 import { AgentSelectionPanel } from '../../components/AgentSelectionPanel'
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
+import { useLocale } from '../../i18n/locale'
 import type {
   CustomerConversation,
   CustomerRunProgressState,
@@ -25,10 +26,22 @@ import { FeedbackControl } from './FeedbackControl'
 import { ProgressState } from './ProgressState'
 import { SourceList } from './SourceList'
 
-const STARTERS = [
-  'What documents are required for inpatient claim reimbursement?',
-  'What is my policy status?',
-  'What is the status of claim CLM-001?',
+const STARTERS: Array<{ question: string; labelKey: string; fallback: string }> = [
+  {
+    question: 'What documents are required for inpatient claim reimbursement?',
+    labelKey: 'customer.starter.inpatientClaim',
+    fallback: 'What documents are required for inpatient claim reimbursement?',
+  },
+  {
+    question: 'What is my policy status?',
+    labelKey: 'customer.starter.policyStatus',
+    fallback: 'What is my policy status?',
+  },
+  {
+    question: 'What is the status of claim CLM-001?',
+    labelKey: 'customer.starter.claimStatus',
+    fallback: 'What is the status of claim CLM-001?',
+  },
 ]
 
 export function CustomerChatPage() {
@@ -46,6 +59,7 @@ export function CustomerChatPage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [allowUntrustedWebSupplement, setAllowUntrustedWebSupplement] = useState(false)
+  const { t } = useLocale()
 
   const activeMode = useMemo(
     () => CUSTOMER_MODES.find((item) => item.id === mode) ?? CUSTOMER_MODES[0],
@@ -61,7 +75,7 @@ export function CustomerChatPage() {
         setTurns(record.turns)
       })
       .catch(() => {
-        setError('The conversation is unavailable. Please start a new session.')
+        setError(t('customer.loadConversationError'))
       })
   }, [routeConversationId])
 
@@ -76,7 +90,7 @@ export function CustomerChatPage() {
     setAgentsError(null)
     fetchCustomerAgents()
       .then((response) => setAgents(response.data))
-      .catch(() => setAgentsError('Failed to load Customer-Facing Published Agents.'))
+      .catch(() => setAgentsError(t('customer.loadAgentsError')))
       .finally(() => setAgentsLoading(false))
   }, [routeConversationId])
 
@@ -109,7 +123,7 @@ export function CustomerChatPage() {
   const ensureConversation = async () => {
     if (conversation) return conversation
     if (!selectedAgent) {
-      throw new Error('No Customer-Facing Published Agent selected.')
+      throw new Error(t('customer.noAgentError'))
     }
     const created = await createCustomerConversation(selectedAgent.agent_id, activeMode.customerId)
     setConversation(created)
@@ -135,7 +149,7 @@ export function CustomerChatPage() {
     } catch (err) {
       console.error('Customer run failed', err)
       setInput(question)
-      setError('The service is unavailable. Please try again.')
+      setError(t('customer.sendError'))
     } finally {
       setSending(false)
     }
@@ -152,10 +166,10 @@ export function CustomerChatPage() {
   if (!routeConversationId && agentsError) {
     return (
       <AgentSelectionPanel
-        title="Choose a Customer-Facing Published Agent"
-        description="Select a Published Agent before starting customer chat."
+        title={t('customer.chooseAgentTitle')}
+        description={t('customer.choosePublishedAgentDescription')}
         agents={[]}
-        emptyTitle="Unable to load Customer-Facing Published Agents"
+        emptyTitle={t('customer.unableLoadAgents')}
         emptyDescription={agentsError}
         onSelect={() => undefined}
       />
@@ -165,15 +179,15 @@ export function CustomerChatPage() {
   if (!routeConversationId && !selectedAgent) {
     return (
       <AgentSelectionPanel
-        title="Choose a Customer-Facing Published Agent"
-        description="Select a Customer-Facing Published Agent before starting customer chat."
+        title={t('customer.chooseAgentTitle')}
+        description={t('customer.chooseAgentDescription')}
         agents={agentId ? [] : agents}
         unavailableAgentId={agentId}
-        emptyTitle="No Customer-Facing Published Agents are available"
+        emptyTitle={t('customer.noAgentsTitle')}
         emptyDescription={
           agentId
-            ? 'This Agent is not published for customer chat. Publish a customer-facing Agent before opening chat.'
-            : 'Import an Agent template, validate it, and publish a customer-facing Agent in the Dashboard first.'
+            ? t('customer.unpublishedAgent')
+            : t('customer.noAgentsDescription')
         }
         onSelect={(nextAgentId) => navigate(`/customer/agents/${nextAgentId}`)}
       />
@@ -182,8 +196,8 @@ export function CustomerChatPage() {
 
   return (
     <ChatShell
-      title="Customer Chat"
-      subtitle={selectedAgent?.display_name ?? 'Customer-safe service chat for policy and claim support.'}
+      title={t('customer.title')}
+      subtitle={selectedAgent?.display_name ?? t('customer.defaultSubtitle')}
       turns={turnViews}
       inputValue={input}
       onInputChange={setInput}
@@ -193,14 +207,14 @@ export function CustomerChatPage() {
         checked: allowUntrustedWebSupplement,
         onChange: setAllowUntrustedWebSupplement,
       }}
-      placeholder="Ask about a policy, claim, or reimbursement"
-      submitLabel="Send"
-      emptyTitle="Start a Conversation"
-      emptyDescription="Ask a customer-safe service question."
+      placeholder={t('customer.placeholder')}
+      submitLabel={t('customer.submit')}
+      emptyTitle={t('customer.emptyTitle')}
+      emptyDescription={t('customer.emptyDescription')}
       error={error}
       starters={STARTERS.map((starter) => ({
-        label: starter,
-        onSelect: () => void sendQuestion(starter),
+        label: t(starter.labelKey, starter.fallback),
+        onSelect: () => void sendQuestion(starter.question),
       }))}
       sidePanel={
         <CustomerSidebar

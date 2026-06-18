@@ -1,4 +1,5 @@
 import { useTheme } from './ThemeProvider'
+import { LanguageToggleButton, useLocale } from '../i18n/locale'
 
 interface TopNavProps {
   leading?: React.ReactNode
@@ -42,6 +43,7 @@ export function TopNav({
       </div>
 
       <div className="flex items-center gap-4">
+        <LanguageToggleButton />
         {showThemeToggle && <ThemeToggleButton />}
       </div>
     </header>
@@ -50,12 +52,13 @@ export function TopNav({
 
 function ThemeToggleButton() {
   const { theme, toggleTheme } = useTheme()
+  const { t } = useLocale()
 
   return (
     <button
       onClick={toggleTheme}
       className="p-1.5 rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
-      aria-label="Toggle Theme"
+      aria-label={t('topNav.toggleTheme')}
     >
       {theme === 'light' ? (
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>

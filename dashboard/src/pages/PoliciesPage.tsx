@@ -5,6 +5,7 @@ import type { ConfigAgentSummary } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { CodeBlock } from '../components/CodeBlock'
+import { useLocale } from '../i18n/locale'
 
 interface PolicyEntry {
   readonly agentId: string
@@ -22,6 +23,7 @@ export function PoliciesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<readonly string[]>([])
+  const { t, formatNumber } = useLocale()
 
   useEffect(() => {
     let cancelled = false
@@ -54,7 +56,7 @@ export function PoliciesPage() {
           setError(null)
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load policies.')
+        if (!cancelled) setError(err instanceof Error ? err.message : t('policies.loadError'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -73,8 +75,8 @@ export function PoliciesPage() {
   return (
     <div className="space-y-6 max-w-6xl">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Policies</h2>
-        <p className="mt-1 text-sm text-[var(--text-muted)]">Browse governance policies across all agents. Edit within agent configuration.</p>
+        <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('policies.title')}</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">{t('policies.description')}</p>
       </div>
 
       {loading ? (
@@ -85,7 +87,7 @@ export function PoliciesPage() {
         </div>
       ) : entries.length === 0 ? (
         <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
-          <EmptyState message="No governance policies found across configured agents." />
+          <EmptyState message={t('policies.empty')} />
         </div>
       ) : (
         <div className="space-y-3">
@@ -102,7 +104,7 @@ export function PoliciesPage() {
                     <span className={`text-[var(--text-muted)] transition-transform ${isOpen ? 'rotate-90' : ''}`}>&#9654;</span>
                     <span className="font-medium text-[var(--text-primary)] truncate">{entry.agentName}</span>
                     <span className="shrink-0 rounded-md bg-[var(--bg-base)] px-2 py-0.5 text-xs font-mono text-[var(--text-secondary)]">
-                      {rules} {rules === 1 ? 'rule' : 'rules'}
+                      {formatNumber(rules)} {rules === 1 ? t('policies.rule') : t('policies.rules')}
                     </span>
                   </div>
                   <Link
@@ -110,7 +112,7 @@ export function PoliciesPage() {
                     onClick={(e) => e.stopPropagation()}
                     className="shrink-0 text-xs text-[var(--accent)] hover:underline"
                   >
-                    Edit in Agent
+                    {t('policies.editInAgent')}
                   </Link>
                 </button>
                 {isOpen && (

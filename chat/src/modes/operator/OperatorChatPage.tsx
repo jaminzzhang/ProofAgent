@@ -6,6 +6,7 @@ import type { ChatTurnView } from '../../chat-core/types'
 import { AgentSelectionPanel } from '../../components/AgentSelectionPanel'
 import { OutcomeBadge } from '../../components/OutcomeBadge'
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
+import { useLocale } from '../../i18n/locale'
 import type {
   ConversationRecord,
   ConversationTurn,
@@ -56,6 +57,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
   const [input, setInput] = useState('')
   const [includeGovernanceDetails, setIncludeGovernanceDetails] = useState(false)
   const [allowUntrustedWebSupplement, setAllowUntrustedWebSupplement] = useState(false)
+  const { t } = useLocale()
 
   useEffect(() => {
     if (routeConversationId) {
@@ -65,7 +67,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
       fetchOperatorConversation(routeConversationId)
         .then(setConversation)
         .catch(() => {
-          setError('Failed to load conversation. It may have been deleted or the server is unavailable.')
+          setError(t('operator.loadConversationError'))
         })
         .finally(() => setLoading(false))
     } else if (isNewChat) {
@@ -89,7 +91,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
     setAgentsError(null)
     fetchOperatorAgents()
       .then((response) => setAgents(response.data))
-      .catch(() => setAgentsError('Failed to load Published Agents.'))
+      .catch(() => setAgentsError(t('operator.loadAgentsError')))
       .finally(() => setAgentsLoading(false))
   }, [isNewChat])
 
@@ -169,7 +171,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
     } catch (err) {
       console.error('Failed to send message', err)
       setInput(question)
-      setError('Failed to send message. Please try again.')
+      setError(t('operator.sendError'))
     } finally {
       setSending(false)
     }
@@ -180,9 +182,9 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
       <div className="flex h-[calc(100vh-160px)] flex-col px-4">
         <div className="flex flex-1 flex-col items-center justify-center space-y-4 text-center">
           <div>
-            <h1 className="text-xl font-semibold text-[var(--text-primary)]">Operator Chat</h1>
+            <h1 className="text-xl font-semibold text-[var(--text-primary)]">{t('operator.title')}</h1>
             <p className="mt-1 max-w-[280px] text-sm text-[var(--text-muted)]">
-              Select a conversation from the sidebar or start a new one.
+              {t('operator.emptyDescription')}
             </p>
           </div>
         </div>
@@ -209,10 +211,10 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
   if (isNewChat && agentsError) {
     return (
       <AgentSelectionPanel
-        title="Choose a Published Agent"
-        description="Select a Published Agent before starting operator chat."
+        title={t('operator.chooseAgentTitle')}
+        description={t('operator.chooseAgentDescription')}
         agents={[]}
-        emptyTitle="Unable to load Published Agents"
+        emptyTitle={t('operator.unableLoadAgents')}
         emptyDescription={agentsError}
         onSelect={() => undefined}
       />
@@ -222,15 +224,15 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
   if (isNewChat && !selectedAgent) {
     return (
       <AgentSelectionPanel
-        title="Choose a Published Agent"
-        description="Select a Published Agent before starting operator chat."
+        title={t('operator.chooseAgentTitle')}
+        description={t('operator.chooseAgentDescription')}
         agents={agentId ? [] : agents}
         unavailableAgentId={agentId}
-        emptyTitle="No Published Agents are available"
+        emptyTitle={t('operator.noAgentsTitle')}
         emptyDescription={
           agentId
-            ? 'This Agent is not published for operator chat. Publish it before opening chat.'
-            : 'Import an Agent template, validate it, and publish it in the Dashboard first.'
+            ? t('operator.unpublishedAgent')
+            : t('operator.noAgentsDescription')
         }
         onSelect={(nextAgentId) => navigate(`/operator/agents/${nextAgentId}/new`)}
       />
@@ -242,7 +244,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
       <div className="flex h-[calc(100vh-160px)] flex-col px-4">
         <div className="flex flex-1 flex-col items-center justify-center space-y-4 text-center">
           <div>
-            <h1 className="text-lg font-semibold text-[var(--text-primary)]">Unable to Load Conversation</h1>
+            <h1 className="text-lg font-semibold text-[var(--text-primary)]">{t('operator.loadErrorTitle')}</h1>
             <p className="mt-1 max-w-[320px] text-sm text-[var(--text-muted)]">{error}</p>
           </div>
           <button
@@ -253,13 +255,13 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
               fetchOperatorConversation(routeConversationId)
                 .then(setConversation)
                 .catch(() => {
-                  setError('Failed to load conversation. It may have been deleted or the server is unavailable.')
+                  setError(t('operator.loadConversationError'))
                 })
                 .finally(() => setLoading(false))
             }}
             className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
           >
-            Retry
+            {t('operator.retry', 'Retry')}
           </button>
         </div>
       </div>
@@ -272,8 +274,8 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
 
   return (
     <ChatShell
-      title="Operator Chat"
-      subtitle={selectedAgent?.display_name ?? 'Operator-facing governed question answering.'}
+      title={t('operator.title')}
+      subtitle={selectedAgent?.display_name ?? t('operator.defaultSubtitle')}
       turns={turns}
       inputValue={input}
       onInputChange={setInput}
@@ -283,10 +285,10 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
         checked: allowUntrustedWebSupplement,
         onChange: setAllowUntrustedWebSupplement,
       }}
-      placeholder="Type your question for the assistant"
-      submitLabel="Ask"
-      emptyTitle="Start a Conversation"
-      emptyDescription="Ask the Insurance Service QA agent anything about policies or processes."
+      placeholder={t('operator.placeholder')}
+      submitLabel={t('operator.submit')}
+      emptyTitle={t('operator.emptyTitle')}
+      emptyDescription={t('operator.chatEmptyDescription')}
       error={error}
       footer={
         <label className="inline-flex items-center gap-2 text-xs font-medium text-[var(--text-muted)]">
@@ -297,7 +299,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
             disabled={sending || loading}
             className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]"
           />
-          Show governance details
+          {t('operator.showGovernanceDetails')}
         </label>
       }
       renderAssistantMeta={(turn) => {
@@ -317,7 +319,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
             <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)] [animation-delay:150ms]" />
             <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)] [animation-delay:300ms]" />
           </div>
-          <span className="text-xs font-medium text-[var(--text-muted)]">Harness executing...</span>
+          <span className="text-xs font-medium text-[var(--text-muted)]">{t('operator.executing')}</span>
         </div>
       }
     />
@@ -340,12 +342,14 @@ function findOperatorTurn(conversation: ConversationRecord, turnId: string): Con
 }
 
 function OperatorMessageMeta({ turn }: { turn: ConversationTurn }) {
+  const { t, formatNumber } = useLocale()
+
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] pb-3">
       <OutcomeBadge outcome={turn.outcome} />
       {turn.evidence.length > 0 && (
         <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-          {turn.evidence.length} Evidence {turn.evidence.length === 1 ? 'Source' : 'Sources'}
+          {formatNumber(turn.evidence.length)} {t('operator.evidence')} {turn.evidence.length === 1 ? t('operator.source') : t('operator.sources')}
         </span>
       )}
       <div className="ml-auto flex gap-3">
@@ -355,7 +359,7 @@ function OperatorMessageMeta({ turn }: { turn: ConversationTurn }) {
           rel="noreferrer"
           className="text-[11px] font-bold uppercase tracking-tight text-[var(--accent)] hover:underline"
         >
-          Audit Trace
+          {t('operator.auditTrace')}
         </a>
         <a
           href={turn.links.receipt}
@@ -363,7 +367,7 @@ function OperatorMessageMeta({ turn }: { turn: ConversationTurn }) {
           rel="noreferrer"
           className="text-[11px] font-bold uppercase tracking-tight text-[var(--accent)] hover:underline"
         >
-          Receipt
+          {t('operator.receipt')}
         </a>
       </div>
     </div>
@@ -371,6 +375,8 @@ function OperatorMessageMeta({ turn }: { turn: ConversationTurn }) {
 }
 
 function OperatorGovernanceDetails({ turn }: { turn: ConversationTurn }) {
+  const { t } = useLocale()
+
   return (
     <>
       {turn.outcome === 'WAITING_FOR_APPROVAL' && (
@@ -381,7 +387,7 @@ function OperatorGovernanceDetails({ turn }: { turn: ConversationTurn }) {
             rel="noreferrer"
             className="inline-block rounded-md bg-blue-600 px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-white transition-colors hover:bg-blue-700"
           >
-            Review Approval Request
+            {t('operator.reviewApproval')}
           </a>
         </div>
       )}
@@ -389,7 +395,7 @@ function OperatorGovernanceDetails({ turn }: { turn: ConversationTurn }) {
       {hasGovernanceDetails(turn.governance_details) && (
         <details className="border-t border-[var(--border)] pt-2">
           <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
-            ReAct Governance
+            {t('operator.governanceSummary')}
           </summary>
           <pre className="mt-3 max-h-56 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-base)] p-3 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)] whitespace-pre-wrap">
             {JSON.stringify(turn.governance_details, null, 2)}

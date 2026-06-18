@@ -1,4 +1,5 @@
 import type { PublishedAgentDirectoryEntry } from '../api/types'
+import { useLocale } from '../i18n/locale'
 
 interface AgentSelectionPanelProps {
   title: string
@@ -19,10 +20,12 @@ export function AgentSelectionPanel({
   unavailableAgentId,
   onSelect,
 }: AgentSelectionPanelProps) {
+  const { t } = useLocale()
+
   if (unavailableAgentId) {
     return (
       <CenteredPanel
-        title={`${unavailableAgentId} is unavailable`}
+        title={t('agentSelection.unavailable', `${unavailableAgentId} is unavailable`).replace('{agentId}', unavailableAgentId)}
         description={emptyDescription}
       />
     )
