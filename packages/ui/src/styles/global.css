@@ -1,0 +1,259 @@
+/*
+ * Proof Agent global stylesheet.
+ *
+ * Import order matters:
+ *   1. Fontsource bundles (self-hosted, offline-capable) actually load the
+ *      Inter + JetBrains Mono fonts the app already declares in font stacks.
+ *   2. Design tokens (single source of truth for both apps).
+ *   3. Tailwind v4, with a `@theme` block mapping our tokens to Tailwind
+ *      utility namespaces so `bg-surface`, `text-muted`, `border-border`
+ *      etc. work out of the box.
+ */
+@import '@fontsource-variable/inter';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+@import './tokens.css';
+
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+  /* Map surface tokens to bg-* utilities */
+  --color-base: var(--bg-base);
+  --color-surface: var(--bg-surface);
+  --color-elevated: var(--bg-elevated);
+  --color-subtle: var(--bg-subtle);
+  --color-hover: var(--bg-hover);
+  --color-active: var(--bg-active);
+
+  /* Border utilities */
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  /* Text utilities */
+  --color-foreground: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+  --color-inverse: var(--text-inverse);
+
+  /* Accent */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-fg);
+  --color-accent-subtle: var(--accent-subtle);
+
+  /* Semantic */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-fg);
+  --color-success-bg: var(--success-bg);
+  --color-success-border: var(--success-border);
+
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-fg);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-border: var(--warning-border);
+
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-fg);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-border: var(--danger-border);
+
+  --color-neutral: var(--neutral);
+  --color-neutral-foreground: var(--neutral-fg);
+  --color-neutral-bg: var(--neutral-bg);
+  --color-neutral-border: var(--neutral-border);
+
+  /* Chart palette */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* Radius */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  /* Shadows */
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Consistent focus-visible ring across all apps */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Tidy scrollbars for a product feel */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
+
+/* Markdown prose rendered inside assistant messages */
+.prose-chat {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+.prose-chat > *:first-child {
+  margin-top: 0;
+}
+.prose-chat > *:last-child {
+  margin-bottom: 0;
+}
+.prose-chat p {
+  margin: 0 0 0.75em;
+}
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.2em 0 0.5em;
+}
+.prose-chat h1 { font-size: 1.15em; }
+.prose-chat h2 { font-size: 1.05em; }
+.prose-chat h3 { font-size: 1em; }
+.prose-chat ul,
+.prose-chat ol {
+  margin: 0 0 0.75em;
+  padding-left: 1.4em;
+}
+.prose-chat li {
+  margin: 0.2em 0;
+}
+.prose-chat a {
+  color: var(--success-fg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-chat code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-hover);
+  padding: 0.15em 0.35em;
+  border-radius: var(--radius-sm);
+}
+.prose-chat pre {
+  margin: 0 0 0.75em;
+  padding: 0.75em 1em;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  font-size: 0.85em;
+}
+.prose-chat pre code {
+  background: none;
+  padding: 0;
+}
+.prose-chat blockquote {
+  margin: 0 0 0.75em;
+  padding-left: 1em;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.prose-chat table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 0.75em;
+  font-size: 0.9em;
+}
+.prose-chat th,
+.prose-chat td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.6em;
+  text-align: left;
+}
+.prose-chat th {
+  background: var(--bg-hover);
+  font-weight: 600;
+}
+.prose-chat hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+/* ── enter/exit animations for Radix overlays (Tailwind v4, no plugin) ──── */
+@keyframes pa-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pa-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes pa-zoom-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes pa-zoom-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.95); }
+}
+
+.animate-in {
+  animation-duration: 150ms;
+  animation-fill-mode: both;
+  animation-name: pa-fade-in;
+}
+.animate-out {
+  animation-duration: 150ms;
+  animation-fill-mode: both;
+  animation-name: pa-fade-out;
+}
+.fade-in-0 { animation-name: pa-fade-in; }
+.fade-out-0 { animation-name: pa-fade-out; }
+.zoom-in-95 { animation-name: pa-zoom-in; }
+.zoom-out-95 { animation-name: pa-zoom-out; }
+
+[data-side='bottom'].animate-in,
+[data-side='top'].animate-in,
+[data-state='open'][data-side] {
+  animation-duration: 150ms;
+}

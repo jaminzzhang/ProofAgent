@@ -1,4 +1,7 @@
 import { useState } from 'react'
+import { ThumbsDown, ThumbsUp } from 'lucide-react'
+import { Button } from '@proofagent/ui'
+import { cn } from '@proofagent/ui'
 
 import { useLocale } from '../../i18n/locale'
 import { submitCustomerFeedback } from './customerAdapter'
@@ -27,23 +30,35 @@ export function FeedbackControl({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => void send('up')}
         disabled={busy || submitted !== null}
-        className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs font-semibold text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-default disabled:opacity-60"
+        aria-label={t('customer.feedback.helpful')}
+        className={cn('h-7 gap-1.5 px-2', submitted === 'up' && 'text-[var(--success-fg)]')}
       >
+        <ThumbsUp size={13} className={submitted === 'up' ? 'fill-current' : ''} />
         {t('customer.feedback.helpful')}
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => void send('down')}
         disabled={busy || submitted !== null}
-        className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs font-semibold text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-default disabled:opacity-60"
+        aria-label={t('customer.feedback.notHelpful')}
+        className={cn('h-7 gap-1.5 px-2', submitted === 'down' && 'text-[var(--danger-fg)]')}
       >
+        <ThumbsDown size={13} className={submitted === 'down' ? 'fill-current' : ''} />
         {t('customer.feedback.notHelpful')}
-      </button>
-      {submitted && <span className="text-xs text-[var(--text-muted)]">{t('customer.feedback.received')}</span>}
+      </Button>
+      {submitted && (
+        <span className="text-xs text-[var(--text-muted)]">
+          {t('customer.feedback.received')}
+        </span>
+      )}
     </div>
   )
 }

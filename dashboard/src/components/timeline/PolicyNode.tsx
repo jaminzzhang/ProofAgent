@@ -38,7 +38,7 @@ export function PolicyNode({ event }: PolicyNodeProps) {
       timestamp={event.timestamp}
       status={event.status}
     >
-      <span className={event.status === 'blocked' ? 'text-red-400' : 'text-green-400'}>
+      <span className={event.status === 'blocked' ? 'text-[var(--danger-fg)]' : 'text-[var(--success-fg)]'}>
         {payload.decision ?? '—'}
       </span>
       {payload.reason && <span className="ml-1 text-[var(--text-muted)]">: {payload.reason}</span>}

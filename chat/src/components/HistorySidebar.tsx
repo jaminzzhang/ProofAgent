@@ -203,7 +203,7 @@ export function HistorySidebar({
                         </button>
                         <button
                           onClick={() => handleDeleteStart(conv.conversation_id)}
-                          className="w-full text-left px-3 py-1.5 text-[13px] text-red-500 hover:bg-[var(--bg-hover)] transition-colors"
+                          className="w-full text-left px-3 py-1.5 text-[13px] text-[var(--danger-fg)] hover:bg-[var(--danger-bg)] transition-colors"
                         >
                           {t('history.delete')}
                         </button>
@@ -213,20 +213,20 @@ export function HistorySidebar({
 
                   {/* Delete confirmation */}
                   {deletingId === conv.conversation_id && (
-                    <div className="px-3 py-2 mt-0.5 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800/40 rounded-lg">
-                      <p className="text-[11px] text-red-800 dark:text-red-300 mb-2">
+                    <div className="mt-0.5 rounded-lg border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2">
+                      <p className="mb-2 text-[11px] text-[var(--danger-fg)]">
                         {t('history.deleteConfirm')}
                       </p>
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleDeleteConfirm(conv.conversation_id)}
-                          className="px-2.5 py-1 text-[11px] font-medium bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                          className="rounded bg-[var(--danger)] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:opacity-90"
                         >
                           {t('history.delete')}
                         </button>
                         <button
                           onClick={() => setDeletingId(null)}
-                          className="px-2.5 py-1 text-[11px] font-medium bg-[var(--bg-hover)] text-[var(--text-secondary)] rounded hover:text-[var(--text-primary)] transition-colors"
+                          className="rounded bg-[var(--bg-hover)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
                         >
                           {t('history.cancel')}
                         </button>

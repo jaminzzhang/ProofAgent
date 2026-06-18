@@ -1,0 +1,20 @@
+{
+  "name": "proof-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "dashboard",
+    "chat"
+  ],
+  "scripts": {
+    "build:ui": "npm run build -w @proofagent/ui",
+    "build:dashboard": "npm run build -w proof-agent-dashboard",
+    "build:chat": "npm run build -w proof-agent-chat",
+    "build": "npm run build:ui && npm run build:dashboard && npm run build:chat",
+    "test:dashboard": "npm run test -w proof-agent-dashboard",
+    "test:chat": "npm run test -w proof-agent-chat",
+    "test": "npm run test:dashboard && npm run test:chat"
+  }
+}

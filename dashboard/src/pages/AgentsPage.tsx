@@ -1,11 +1,24 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Plus } from 'lucide-react'
+import {
+  Button,
+  Card,
+  EmptyState,
+  Input,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@proofagent/ui'
 import { importConfigAgent, updateConfigDraft } from '../api/client'
 import { CreateAgentWizard } from '../components/agent/CreateAgentWizard'
-import { EmptyState } from '../components/EmptyState'
-import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { useConfigAgents } from '../hooks/useConfigAgents'
 import { useLocale } from '../i18n/locale'
+import { PageHeader } from '../components/PageHeader'
+import { TableSkeleton } from '../components/TableSkeleton'
 
 export function AgentsPage() {
   const { agents, loading, error, refresh } = useConfigAgents()
@@ -29,70 +42,66 @@ export function AgentsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-6xl">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{t('agents.title')}</h2>
-          <p className="text-sm text-[var(--text-muted)] mt-1">{t('agents.description')}</p>
-        </div>
-        <div className="flex w-full md:w-auto items-center gap-3">
-          <button
-            onClick={() => setWizardOpen(true)}
-            className="shrink-0 rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent)]/90"
-          >
-            {t('agents.create')}
-          </button>
-          <input
-            value={manifestPath}
-            onChange={(event) => setManifestPath(event.target.value)}
-            className="min-w-0 md:w-80 bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
-          />
-          <button
-            onClick={handleImport}
-            disabled={importing || !manifestPath.trim()}
-            className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-          >
-            {importing ? t('agents.importing') : t('agents.import')}
-          </button>
-        </div>
-      </div>
+    <div className="max-w-6xl space-y-5">
+      <PageHeader
+        title={t('agents.title')}
+        description={t('agents.description')}
+        actions={
+          <>
+            <Button variant="outline" size="md" onClick={() => setWizardOpen(true)}>
+              <Plus size={15} /> {t('agents.create').replace('+ ', '')}
+            </Button>
+            <Input
+              value={manifestPath}
+              onChange={(event) => setManifestPath(event.target.value)}
+              className="w-72 border-[var(--border)] bg-[var(--bg-base)]"
+              aria-label={t('agents.import')}
+            />
+            <Button
+              variant="subtle"
+              size="md"
+              onClick={handleImport}
+              disabled={importing || !manifestPath.trim()}
+            >
+              {importing ? t('agents.importing') : t('agents.import')}
+            </Button>
+          </>
+        }
+      />
 
-      {importError && (
-        <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-4 py-3 text-sm text-[var(--danger)]">
-          {importError}
-        </div>
-      )}
-      {error && (
-        <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-4 py-3 text-sm text-[var(--danger)]">
-          {error}
+      {(importError || error) && (
+        <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-4 py-3 text-sm text-[var(--danger-fg)]">
+          {importError || error}
         </div>
       )}
 
       {loading ? (
-        <div className="py-12 flex justify-center"><LoadingSpinner /></div>
+        <Card className="p-0">
+          <TableSkeleton rows={4} columns={4} />
+        </Card>
       ) : agents.length === 0 ? (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
+        <Card>
           <EmptyState message={t('agents.empty')} />
-        </div>
+        </Card>
       ) : (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg overflow-hidden shadow-sm">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Agent</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('agents.drafts')}</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('agents.activeVersion')}</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('agents.updated')}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--border)]">
+        <Card className="overflow-hidden p-0">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-[var(--bg-subtle)] hover:bg-[var(--bg-subtle)]">
+                <TableHead>{t('agents.title')}</TableHead>
+                <TableHead>{t('agents.drafts')}</TableHead>
+                <TableHead>{t('agents.activeVersion')}</TableHead>
+                <TableHead>{t('agents.updated')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {agents.map((agent) => (
-                <tr key={agent.agent_id} className="group hover:bg-[var(--bg-hover)] transition-colors">
-                  <td className="px-5 py-3">
+                <TableRow key={agent.agent_id}>
+                  <TableCell>
                     {agent.latest_draft_id ? (
                       <Link
                         to={`/agents/${agent.agent_id}/drafts/${agent.latest_draft_id}`}
-                        className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)]"
+                        className="font-medium text-[var(--text-primary)] transition-colors hover:text-[var(--accent)]"
                       >
                         {agent.display_name}
                       </Link>
@@ -100,17 +109,21 @@ export function AgentsPage() {
                       <span className="font-medium text-[var(--text-primary)]">{agent.display_name}</span>
                     )}
                     <div className="mt-1 max-w-xl truncate text-xs text-[var(--text-muted)]">{agent.purpose}</div>
-                  </td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{formatNumber(agent.draft_count)}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{agent.active_version_id ?? t('agents.unpublished')}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-[var(--text-secondary)]">
+                    {formatNumber(agent.draft_count)}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-[var(--text-secondary)]">
+                    {agent.active_version_id ?? t('agents.unpublished')}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-[var(--text-muted)]">
                     {agent.updated_at ? formatDateTime(agent.updated_at) : '-'}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       )}
 
       <CreateAgentWizard

@@ -58,7 +58,8 @@ describe('RunDetailPage navigation', () => {
 
     fireEvent.click(screen.getAllByRole('link', { name: 'run-1' })[0])
 
-    expect(screen.getByText(/Run:/)).toBeInTheDocument()
+    // header renders the run id (now under a mono span in the title)
+    expect(screen.getByText('run-1')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('link', { name: /Back to Agent Draft/ }))
 
     expect(screen.getByRole('heading', { name: 'Agent Draft Page' })).toBeInTheDocument()
@@ -199,7 +200,7 @@ describe('RunDetailPage navigation', () => {
       </MemoryRouter>,
     )
 
-    const tabLabels = screen.getAllByRole('button').map((button) => button.textContent)
+    const tabLabels = screen.getAllByRole('tab').map((tab) => tab.textContent)
     expect(tabLabels).toEqual([
       'Workflow',
       'Governance Receipt',
@@ -236,7 +237,11 @@ describe('RunDetailPage navigation', () => {
       </MemoryRouter>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Validation Capture' }))
+    // Radix Tabs triggers on pointer-down, not the synthetic click event.
+    const captureTab = screen.getByRole('tab', { name: 'Validation Capture' })
+    fireEvent.pointerDown(captureTab, { button: 0, pointerType: 'mouse' })
+    fireEvent.mouseDown(captureTab)
+    fireEvent.click(captureTab)
 
     expect(screen.getByRole('heading', { name: 'Validation Capture' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Load Validation Capture' })).toBeInTheDocument()

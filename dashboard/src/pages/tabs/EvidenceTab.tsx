@@ -1,5 +1,5 @@
+import { Badge, Card, EmptyState } from '@proofagent/ui'
 import type { EvidenceChunk } from '../../api/types'
-import { EmptyState } from '../../components/EmptyState'
 
 interface EvidenceTabProps {
   chunks: EvidenceChunk[]
@@ -12,40 +12,56 @@ export function EvidenceTab({ chunks }: EvidenceTabProps) {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-[var(--text-muted)]">{accepted}/{chunks.length} accepted</p>
+      <p className="text-xs text-[var(--text-muted)]">
+        {accepted}/{chunks.length} accepted
+      </p>
       {chunks.map((chunk) => {
         const admissionScore = chunk.admission_score ?? chunk.score ?? null
+        const isAccepted = chunk.status === 'accepted'
         return (
-          <div
+          <Card
             key={chunk.index}
-            className={`border rounded-lg p-4 ${
-              chunk.status === 'accepted'
-                ? 'border-green-500/20 bg-green-500/5'
-                : 'border-red-500/20 bg-red-500/5'
+            className={`p-4 ${
+              isAccepted
+                ? 'border-[var(--success-border)] bg-[var(--success-bg)]'
+                : 'border-[var(--danger-border)] bg-[var(--danger-bg)]'
             }`}
           >
-            <div className="flex flex-wrap items-center gap-2 mb-2">
-              <span className={`text-xs font-medium ${chunk.status === 'accepted' ? 'text-green-400' : 'text-red-400'}`}>
-                {chunk.status === 'accepted' ? 'Accepted' : 'Rejected'}
-              </span>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <Badge variant={isAccepted ? 'success' : 'danger'}>
+                {isAccepted ? 'Accepted' : 'Rejected'}
+              </Badge>
               {admissionScore !== null && (
-                <span className="text-xs text-[var(--text-muted)]">Admission: {admissionScore.toFixed(2)}</span>
+                <span className="text-xs text-[var(--text-muted)]">
+                  Admission: {admissionScore.toFixed(2)}
+                </span>
               )}
-              {chunk.provider_native_score !== null && chunk.provider_native_score !== undefined && (
-                <span className="text-xs text-[var(--text-muted)]">Native: {chunk.provider_native_score.toFixed(2)}</span>
-              )}
+              {chunk.provider_native_score !== null &&
+                chunk.provider_native_score !== undefined && (
+                  <span className="text-xs text-[var(--text-muted)]">
+                    Native: {chunk.provider_native_score.toFixed(2)}
+                  </span>
+                )}
               {chunk.fusion_rank !== null && chunk.fusion_rank !== undefined && (
-                <span className="text-xs text-[var(--text-muted)]">Rank: {chunk.fusion_rank}</span>
+                <span className="text-xs text-[var(--text-muted)]">
+                  Rank: {chunk.fusion_rank}
+                </span>
               )}
               {chunk.source_id && (
-                <span className="rounded bg-[var(--bg-base)] px-1.5 py-0.5 text-xs font-mono text-[var(--text-secondary)]">{chunk.source_id}</span>
+                <span className="rounded bg-[var(--bg-base)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
+                  {chunk.source_id}
+                </span>
               )}
               {chunk.binding_id && (
-                <span className="rounded bg-[var(--bg-base)] px-1.5 py-0.5 text-xs font-mono text-[var(--text-secondary)]">{chunk.binding_id}</span>
+                <span className="rounded bg-[var(--bg-base)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
+                  {chunk.binding_id}
+                </span>
               )}
             </div>
-            <p className="text-xs font-mono text-[var(--text-muted)] mb-1">{chunk.citation ?? chunk.source}</p>
-          </div>
+            <p className="mb-1 font-mono text-xs text-[var(--text-muted)]">
+              {chunk.citation ?? chunk.source}
+            </p>
+          </Card>
         )
       })}
     </div>

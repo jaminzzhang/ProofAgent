@@ -14,7 +14,7 @@ export function ErrorNode({ event }: ErrorNodeProps) {
       timestamp={event.timestamp}
       status="error"
     >
-      <span className="text-red-400">
+      <span className="text-[var(--danger-fg)]">
         {payload.error_code ?? 'UNKNOWN'}
       </span>
       {msg && (

@@ -113,7 +113,7 @@ export function ApprovalTab({ state, pendingApprovals, runId, onResolved }: Appr
             <button
               onClick={() => handleAction('approve')}
               disabled={loading}
-              className="flex-1 bg-[var(--text-primary)] hover:bg-gray-200 text-[var(--bg-base)] font-medium py-2.5 rounded-md transition-colors disabled:opacity-50"
+              className="flex-1 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-medium py-2.5 rounded-md transition-colors disabled:opacity-50"
             >
               {loading ? 'Processing...' : 'Approve Execution'}
             </button>
