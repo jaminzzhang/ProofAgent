@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { CodeBlock } from '../CodeBlock'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
+import { useLocale } from '../../i18n/locale'
 
 interface FieldConfig {
   label: string
@@ -32,6 +33,7 @@ export function ModuleEditor({
   onSave,
   busy,
 }: ModuleEditorProps) {
+  const { t } = useLocale()
   const [showYaml, setShowYaml] = useState(false)
 
   const sectionYaml = extractAgentYamlSection(agentYaml, yamlSection)
@@ -56,14 +58,14 @@ export function ModuleEditor({
                 : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
             }`}
           >
-            {showYaml ? 'Hide YAML' : 'Show YAML'}
+            {showYaml ? t('moduleEditor.hideYaml') : t('moduleEditor.showYaml')}
           </button>
           <button
             onClick={onSave}
             disabled={busy}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
-            {busy ? 'Saving...' : 'Save'}
+            {busy ? t('moduleEditor.saving') : t('moduleEditor.save')}
           </button>
         </div>
       </div>

@@ -22,6 +22,7 @@ import {
   validateConfigDraft,
 } from '../../api/client'
 import type { DraftAgent, DraftValidationResponse } from '../../api/types'
+import { LocaleProvider } from '../../i18n/locale'
 import { AgentDetailPage } from '../AgentDetailPage'
 
 vi.mock('../../api/client', () => ({
@@ -81,6 +82,27 @@ let mockVersions: Array<{
   operation_audit: []
 }> = []
 let mockActiveVersionId: string | null = null
+let testStorage: Record<string, string> = {}
+
+function installTestLocalStorage() {
+  testStorage = {}
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string) => testStorage[key] ?? null,
+    setItem: (key: string, value: string) => {
+      testStorage[key] = value
+    },
+    removeItem: (key: string) => {
+      delete testStorage[key]
+    },
+    clear: () => {
+      testStorage = {}
+    },
+    key: (index: number) => Object.keys(testStorage)[index] ?? null,
+    get length() {
+      return Object.keys(testStorage).length
+    },
+  })
+}
 
 vi.mock('../../hooks/useConfigDraft', () => ({
   useConfigDraft: () => ({
@@ -104,11 +126,13 @@ vi.mock('../../hooks/useConfigVersions', () => ({
 
 function renderPage(initialEntry = '/agents/agent-1/drafts/draft-1') {
   return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      <Routes>
-        <Route path="/agents/:agentId/drafts/:draftId" element={<AgentDetailPage />} />
-      </Routes>
-    </MemoryRouter>,
+    <LocaleProvider>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/agents/:agentId/drafts/:draftId" element={<AgentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </LocaleProvider>,
   )
 }
 
@@ -121,6 +145,7 @@ function latestSavedAgentYaml(): string {
 describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    installTestLocalStorage()
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchConfigDraftSkills).mockResolvedValue({
@@ -383,6 +408,37 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText('Recent Agent Runs')).toBeInTheDocument()
     expect(screen.getByText('What documents are required?')).toBeInTheDocument()
     expect(screen.queryByText('Other agent question')).not.toBeInTheDocument()
+  })
+
+  it('renders Agent Detail shell and overview in Chinese when locale is zh-CN', async () => {
+    globalThis.localStorage.setItem('proof-agent-locale', 'zh-CN')
+    mockVersions = [
+      {
+        agent_id: 'agent-1',
+        version_id: 'version-1',
+        source_draft_id: 'draft-1',
+        validation_run_id: 'run-validation-1',
+        display_name: 'Insurance Agent',
+        purpose: 'Answer governed insurance questions.',
+        published_at: '2026-05-28T01:00:00Z',
+        published_by: 'dashboard',
+        operation_audit: [],
+      },
+    ]
+    mockActiveVersionId = 'version-1'
+
+    renderPage()
+
+    expect(screen.getByRole('navigation', { name: 'Agent 导航' })).toBeInTheDocument()
+    expect(screen.getByText('设计')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '概览' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByText('Agent 概览')).toBeInTheDocument()
+    expect(screen.getByLabelText('显示名称')).toHaveValue('Insurance Agent')
+    expect(screen.getByRole('button', { name: '保存' })).toBeInTheDocument()
+    expect(await screen.findByText('生产 Runs')).toBeInTheDocument()
+    expect(screen.getByText('近期 Agent Runs')).toBeInTheDocument()
+    expect(screen.queryByText('Agent Overview')).not.toBeInTheDocument()
+    expect(screen.queryByText('Production Runs')).not.toBeInTheDocument()
   })
 
   it('saves overview identity fields through the draft configuration API', async () => {

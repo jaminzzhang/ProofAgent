@@ -13,6 +13,7 @@ import {
   replaceWorkflowStages,
 } from '../../utils/agentYaml'
 import { WORKFLOW_FIELDS } from './module-configs/workflow'
+import { useLocale } from '../../i18n/locale'
 
 interface WorkflowModuleEditorProps {
   agentYaml: string
@@ -46,6 +47,7 @@ export function WorkflowModuleEditor({
   busy,
   stageBusy,
 }: WorkflowModuleEditorProps) {
+  const { t } = useLocale()
   const [showYaml, setShowYaml] = useState(false)
   const [selectedStageId, setSelectedStageId] = useState('')
   const [stages, setStages] = useState<WorkflowStageConfig[]>([])
@@ -86,13 +88,13 @@ export function WorkflowModuleEditor({
   const canEditPrompt = Boolean(selectedDescriptor?.editable_prompt_fields.length)
   const canConfigureContext = Boolean(selectedDescriptor?.context_options.length)
   const canPreviewSelected = canEditPrompt || canConfigureContext
-  const workflowTemplate = readAgentYamlField(agentYaml, ['workflow', 'template']) || descriptor?.name || 'Not configured'
+  const workflowTemplate = readAgentYamlField(agentYaml, ['workflow', 'template']) || descriptor?.name || t('workflow.notConfigured')
   const usesCompatibilityTemplate = workflowTemplate === 'enterprise_qa'
-  const workflowRuntime = readAgentYamlField(agentYaml, ['workflow', 'runtime']) || 'Not configured'
+  const workflowRuntime = readAgentYamlField(agentYaml, ['workflow', 'runtime']) || t('workflow.notConfigured')
   const checkpointerProvider = (
     readAgentYamlField(agentYaml, ['workflow', 'checkpointer', 'provider'])
     || readAgentYamlField(agentYaml, ['workflow', 'checkpointer', 'type'])
-    || 'Not configured'
+    || t('workflow.notConfigured')
   )
   const stageCount = descriptor?.stages.length ?? 0
   const modelBearingStageCount = descriptor?.stages.filter((stage) => stage.model_bearing).length ?? 0
@@ -148,10 +150,10 @@ export function WorkflowModuleEditor({
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--border)] p-5">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Workflow Design
+            {t('workflow.design')}
           </h3>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            {descriptor?.description ?? 'Backend-owned workflow descriptor.'}
+            {descriptor?.description ?? t('workflow.descriptorFallback')}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -163,33 +165,33 @@ export function WorkflowModuleEditor({
                 : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
             }`}
           >
-            {showYaml ? 'Hide YAML' : 'Advanced YAML'}
+            {showYaml ? t('moduleEditor.hideYaml') : t('workflow.advancedYaml')}
           </button>
           <button
             onClick={onSaveCore}
             disabled={busy}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
-            {busy ? 'Saving...' : 'Save Core'}
+            {busy ? t('agentDetail.saving') : t('workflow.saveCore')}
           </button>
           <button
             onClick={saveStages}
             disabled={stageBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
           >
-            {stageBusy ? 'Saving...' : 'Save Stages'}
+            {stageBusy ? t('agentDetail.saving') : t('workflow.saveStages')}
           </button>
         </div>
       </div>
 
       <section
-        aria-label="Workflow Template Summary"
+        aria-label={t('workflow.templateSummary')}
         className="border-b border-[var(--border)] p-5"
       >
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              Workflow Template
+              {t('workflow.template')}
             </h4>
             <p className="mt-1 text-sm text-[var(--text-primary)]">
               {workflowTemplate}
@@ -203,18 +205,18 @@ export function WorkflowModuleEditor({
         </div>
         <dl className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
           <SummaryItem label="Runtime" value={workflowRuntime} />
-          <SummaryItem label="Checkpointer" value={checkpointerProvider} />
-          <SummaryItem label="Stages" value={`${stageCount} stages`} />
-          <SummaryItem label="Model-bearing" value={String(modelBearingStageCount)} />
-          <SummaryItem label="Editable" value={String(editableStageCount)} />
+          <SummaryItem label={t('workflow.checkpointer')} value={checkpointerProvider} />
+          <SummaryItem label={t('workflow.stages')} value={t('workflow.stagesCount').replace('{count}', String(stageCount))} />
+          <SummaryItem label={t('workflow.modelBearing')} value={String(modelBearingStageCount)} />
+          <SummaryItem label={t('workflow.editable')} value={String(editableStageCount)} />
         </dl>
         {usesCompatibilityTemplate && (
           <div className="mt-4 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-secondary)]">
             <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              Compatibility Template
+              {t('workflow.compatibilityTemplate')}
             </div>
             <p className="mt-1">
-              Use react_enterprise_qa_v2 for new Agents. enterprise_qa is retained for older fixtures and compatibility checks.
+              {t('workflow.compatibilityDescription')}
             </p>
           </div>
         )}

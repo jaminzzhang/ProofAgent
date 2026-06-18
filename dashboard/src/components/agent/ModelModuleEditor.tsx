@@ -3,6 +3,7 @@ import type { AgentYamlMapping } from '../../utils/agentYaml'
 import { CodeBlock } from '../CodeBlock'
 import type { SharedModelConnection } from '../../api/types'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
+import { useLocale } from '../../i18n/locale'
 
 const MODEL_PROVIDER_OPTIONS = ['deterministic', 'openai_compatible', 'openai', 'deepseek', 'azure_openai', 'anthropic']
 const DEFAULT_TEMPERATURE = '0'
@@ -67,6 +68,7 @@ export function ModelModuleEditor({
   onSave,
   busy,
 }: ModelModuleEditorProps) {
+  const { t } = useLocale()
   const [strategy, setStrategy] = useState<'unified' | 'role-specific'>('unified')
   const [showYaml, setShowYaml] = useState(false)
   const [localStatus, setLocalStatus] = useState<string | null>(null)
@@ -123,9 +125,9 @@ export function ModelModuleEditor({
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between border-b border-[var(--border)] p-5 bg-[var(--bg-surface)] rounded-t-lg">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Model Configuration
+            {t('model.configuration')}
           </h3>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">Configure models for Answer, Planner, and Reviewer roles</p>
+          <p className="mt-1 text-sm text-[var(--text-muted)]">{t('model.description')}</p>
         </div>
         <div className="flex items-center gap-3 mt-4 md:mt-0">
           <div className="flex bg-[var(--bg-base)] rounded-md p-1 border border-[var(--border)]">
@@ -135,7 +137,7 @@ export function ModelModuleEditor({
                 strategy === 'unified' ? 'bg-[var(--accent)]/10 text-[var(--accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
               }`}
             >
-              Unified Setup
+              {t('model.unifiedSetup')}
             </button>
             <button
               onClick={() => setStrategy('role-specific')}
@@ -143,7 +145,7 @@ export function ModelModuleEditor({
                 strategy === 'role-specific' ? 'bg-[var(--accent)]/10 text-[var(--accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
               }`}
             >
-              Role-Specific
+              {t('model.roleSpecific')}
             </button>
           </div>
           <button
@@ -154,14 +156,14 @@ export function ModelModuleEditor({
                 : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
             }`}
           >
-            {showYaml ? 'Hide YAML' : 'Show YAML'}
+            {showYaml ? t('moduleEditor.hideYaml') : t('moduleEditor.showYaml')}
           </button>
           <button
             onClick={onSave}
             disabled={busy}
             className="rounded-md border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent)]/90 disabled:opacity-50"
           >
-            {busy ? 'Saving...' : 'Save Config'}
+            {busy ? t('agentDetail.saving') : t('model.saveConfig')}
           </button>
         </div>
       </div>
@@ -259,8 +261,8 @@ export function ModelModuleEditor({
         )}
 
         <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm mt-8">
-          <h4 className="text-sm font-bold uppercase tracking-wider text-[var(--text-primary)] mb-1">ReAct Execution Controls</h4>
-          <p className="text-xs text-[var(--text-muted)] mb-4">Bounds and settings for the ReAct planning loop</p>
+          <h4 className="text-sm font-bold uppercase tracking-wider text-[var(--text-primary)] mb-1">{t('model.reactControls')}</h4>
+          <p className="text-xs text-[var(--text-muted)] mb-4">{t('model.reactControlsDescription')}</p>
           <div className="grid gap-4 md:grid-cols-3">
             <TextField
               type="number"
@@ -311,6 +313,7 @@ function ModelRoleCard({
   onSaveAsShared?: () => void
   creatingShared?: boolean
 }) {
+  const { t } = useLocale()
   const customSelected = currentModelSource(agentYaml, role.basePath) !== 'shared'
   const basePath = unified ? ['model'] : role.basePath
   const currentConnectionId = currentSharedConnectionId(agentYaml, role.basePath)
@@ -353,7 +356,7 @@ function ModelRoleCard({
         />
         {currentConnection?.lifecycle_state === 'ARCHIVED' && (
           <div className="self-end rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs font-medium text-[var(--warning)]">
-            Archived connection is already referenced.
+            {t('model.archivedConnection')}
           </div>
         )}
         {customSelected && (
@@ -389,7 +392,7 @@ function ModelRoleCard({
                   disabled={creatingShared || !effectiveProvider || !effectiveModelName}
                   className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
                 >
-                  {creatingShared ? 'Creating...' : 'Save As Shared'}
+                  {creatingShared ? t('model.creating') : t('model.saveAsShared')}
                 </button>
               </div>
             )}

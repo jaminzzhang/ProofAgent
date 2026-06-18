@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import type { AgentValidationRecord } from '../../api/types'
 import { EmptyState } from '../EmptyState'
 import { ValidationCapturePanel } from './ValidationCapturePanel'
+import { useLocale } from '../../i18n/locale'
 
 interface ValidateWorkspaceProps {
   agentId: string
@@ -22,13 +23,14 @@ export function ValidateWorkspace({
   onValidate,
   busy,
 }: ValidateWorkspaceProps) {
+  const { t } = useLocale()
   const [question, setQuestion] = useState('')
   const [fullCapture, setFullCapture] = useState(false)
   const [retainForAudit, setRetainForAudit] = useState(false)
   const latestValidation = validationRecords[validationRecords.length - 1]
   const history = useMemo(() => [...validationRecords].reverse(), [validationRecords])
   const latestErrorCount = latestValidation?.errors.length ?? 0
-  const readiness = readinessSignal(latestValidation)
+  const readiness = readinessSignal(latestValidation, t)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -46,14 +48,14 @@ export function ValidateWorkspace({
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
           <div className="border-b border-[var(--border)] pb-4">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              Draft Readiness
+              {t('validate.draftReadiness')}
             </h3>
           </div>
           <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <ReadinessItem label="Draft" value={draftId} mono />
-            <ReadinessItem label="Latest Status" value={latestValidation?.status ?? 'Not validated'} />
-            <ReadinessItem label="Latest Run" value={latestValidation?.run_id ?? 'None'} mono />
-            <ReadinessItem label="Recorded Errors" value={String(latestErrorCount)} />
+            <ReadinessItem label={t('validate.draft')} value={draftId} mono />
+            <ReadinessItem label={t('validate.latestStatus')} value={latestValidation?.status ?? t('validate.notValidated')} />
+            <ReadinessItem label={t('validate.latestRun')} value={latestValidation?.run_id ?? t('validate.none')} mono />
+            <ReadinessItem label={t('validate.recordedErrors')} value={String(latestErrorCount)} />
           </dl>
           <div className="mt-4 rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm">
             <span className="font-medium text-[var(--text-primary)]">{readiness.label}</span>
@@ -64,14 +66,14 @@ export function ValidateWorkspace({
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
           <div className="border-b border-[var(--border)] pb-4">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              Run Validation
+              {t('validate.runValidation')}
             </h3>
           </div>
           <form onSubmit={handleSubmit} className="mt-4 flex flex-col gap-3 sm:flex-row">
             <input
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder="Enter a test question..."
+              placeholder={t('validate.placeholder')}
               className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none"
             />
             <button
@@ -79,7 +81,7 @@ export function ValidateWorkspace({
               disabled={busy || !question.trim()}
               className="shrink-0 rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent)]/90 disabled:opacity-50"
             >
-              {busy ? 'Running Validation...' : 'Run Validation'}
+              {busy ? t('validate.running') : t('validate.runValidation')}
             </button>
           </form>
           <div className="mt-3 flex flex-wrap gap-4 text-xs text-[var(--text-secondary)]">
@@ -93,7 +95,7 @@ export function ValidateWorkspace({
                 }}
                 className="h-4 w-4 rounded border-[var(--border)]"
               />
-              <span>Full stage capture</span>
+              <span>{t('validate.fullStageCapture')}</span>
             </label>
             <label
               className={`inline-flex items-center gap-2 ${fullCapture ? '' : 'opacity-50'}`}
@@ -105,7 +107,7 @@ export function ValidateWorkspace({
                 onChange={(e) => setRetainForAudit(e.target.checked)}
                 className="h-4 w-4 rounded border-[var(--border)]"
               />
-              <span>Retain for audit</span>
+              <span>{t('validate.retainForAudit')}</span>
             </label>
           </div>
         </section>
@@ -113,7 +115,7 @@ export function ValidateWorkspace({
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
           <div className="border-b border-[var(--border)] pb-4">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              Latest Validation Result
+              {t('validate.latestResult')}
             </h3>
           </div>
           {latestValidation ? (
@@ -131,7 +133,7 @@ export function ValidateWorkspace({
             </div>
           ) : (
             <div className="mt-4">
-              <EmptyState message="No validation runs yet." />
+              <EmptyState message={t('validate.noRuns')} />
             </div>
           )}
         </section>
@@ -140,11 +142,11 @@ export function ValidateWorkspace({
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)]">
         <div className="border-b border-[var(--border)] p-5">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            Validation History
+            {t('validate.history')}
           </h3>
         </div>
         {history.length === 0 ? (
-          <EmptyState message="No validation runs yet." />
+          <EmptyState message={t('validate.noRuns')} />
         ) : (
           <div className="divide-y divide-[var(--border)]">
             {history.map((record) => (
@@ -197,6 +199,7 @@ function ValidationRecordSummary({
   draftId: string
   showCaptureState?: boolean
 }) {
+  const { t, formatDateTime } = useLocale()
   const returnTo = `/agents/${agentId}/drafts/${draftId}?tab=validate`
   return (
     <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-4">
@@ -208,7 +211,7 @@ function ValidationRecordSummary({
               to={`/runs/${record.run_id}`}
               state={{
                 returnTo,
-                returnLabel: 'Back to Agent Draft',
+                returnLabel: t('validate.backToDraft'),
               }}
               className="truncate font-mono text-xs text-[var(--accent)] hover:underline"
             >
@@ -216,12 +219,12 @@ function ValidationRecordSummary({
             </Link>
             {showCaptureState && (
               <span className="rounded-full bg-[var(--bg-hover)] px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)]">
-                {record.validation_capture_id ? 'Capture available' : 'Capture not attached'}
+                {record.validation_capture_id ? t('validate.captureAvailable') : t('validate.captureNotAttached')}
               </span>
             )}
           </div>
           <div className="mt-2 text-xs text-[var(--text-muted)]">
-            {new Date(record.created_at).toLocaleString()}
+            {formatDateTime(record.created_at)}
           </div>
           {record.summary && (
             <p className="mt-3 text-sm text-[var(--text-secondary)]">{record.summary}</p>
@@ -273,21 +276,21 @@ function StatusDot({ status }: { status: string }) {
   )
 }
 
-function readinessSignal(record: AgentValidationRecord | undefined) {
+function readinessSignal(record: AgentValidationRecord | undefined, t: (key: string, fallback?: string) => string) {
   if (!record) {
     return {
-      label: 'Needs validation',
-      detail: 'No validation run has been recorded for this draft.',
+      label: t('validate.needsValidation'),
+      detail: t('validate.noValidationRecorded'),
     }
   }
   if (record.errors.length > 0) {
     return {
-      label: 'Review required',
-      detail: `${record.errors.length} validation error${record.errors.length === 1 ? '' : 's'} recorded.`,
+      label: t('validate.reviewRequired'),
+      detail: t('validate.errorsRecorded').replace('{count}', String(record.errors.length)),
     }
   }
   return {
-    label: 'Latest validation available',
-    detail: `Last checked by ${record.run_id}.`,
+    label: t('validate.latestAvailable'),
+    detail: t('validate.lastCheckedBy').replace('{runId}', record.run_id),
   }
 }

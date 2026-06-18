@@ -5,12 +5,14 @@ import type { RunSummary, ReceiptOutcome } from '../../api/types'
 import { OutcomeBadge } from '../OutcomeBadge'
 import { EmptyState } from '../EmptyState'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
+import { useLocale } from '../../i18n/locale'
 
 interface AgentMonitorProps {
   agentId: string
 }
 
 export function AgentMonitor({ agentId }: AgentMonitorProps) {
+  const { t, formatDateTime } = useLocale()
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -31,16 +33,16 @@ export function AgentMonitor({ agentId }: AgentMonitorProps) {
     <div className="space-y-6">
       {/* Stats cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard label="Total Runs" value={String(summary.stats.total)} subtitle="All production runs" />
-        <StatCard label="Answered Rate" value={`${summary.stats.answerRate}%`} subtitle="With citations" />
-        <StatCard label="Validations" value={String(summary.validationRuns.length)} subtitle="Test runs" />
+        <StatCard label={t('agentMonitor.totalRuns')} value={String(summary.stats.total)} subtitle={t('agentMonitor.allProductionRuns')} />
+        <StatCard label={t('agentMonitor.answeredRate')} value={`${summary.stats.answerRate}%`} subtitle={t('agentMonitor.withCitations')} />
+        <StatCard label={t('agentMonitor.validations')} value={String(summary.validationRuns.length)} subtitle={t('agentMonitor.testRuns')} />
       </div>
 
       {/* Outcome distribution */}
       {summary.stats.total > 0 && (
         <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-5">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-3">
-            Outcome Distribution
+            {t('agentMonitor.outcomeDistribution')}
           </h3>
           <div className="flex flex-wrap gap-3">
             {Object.entries(summary.stats.outcomeCounts).map(([outcome, count]) => (
@@ -60,19 +62,19 @@ export function AgentMonitor({ agentId }: AgentMonitorProps) {
       <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg overflow-hidden">
         <div className="px-5 py-3 border-b border-[var(--border)] bg-[var(--bg-elevated)]">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-            Recent Runs
+            {t('agentMonitor.recentRuns')}
           </h3>
         </div>
         {summary.agentRuns.length === 0 ? (
-          <EmptyState message="No runs for this agent yet." />
+          <EmptyState message={t('agentMonitor.noRuns')} />
         ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Question</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Outcome</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Purpose</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">Time</th>
+                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.question')}</th>
+                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.outcome')}</th>
+                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.purpose')}</th>
+                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.time')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
@@ -88,7 +90,7 @@ export function AgentMonitor({ agentId }: AgentMonitorProps) {
                   </td>
                   <td className="px-5 py-3 text-xs text-[var(--text-muted)]">{run.run_purpose}</td>
                   <td className="px-5 py-3 text-xs text-[var(--text-muted)] font-mono">
-                    {new Date(run.created_at).toLocaleString()}
+                    {formatDateTime(run.created_at)}
                   </td>
                 </tr>
               ))}
@@ -101,6 +103,7 @@ export function AgentMonitor({ agentId }: AgentMonitorProps) {
 }
 
 export function AgentMonitorSummary({ agentId }: AgentMonitorProps) {
+  const { t, formatDateTime } = useLocale()
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -145,19 +148,19 @@ export function AgentMonitorSummary({ agentId }: AgentMonitorProps) {
   return (
     <section className="space-y-4">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <StatCard label="Production Runs" value={String(summary.stats.total)} subtitle="Published agent traffic" />
-        <StatCard label="Answered Rate" value={`${summary.stats.answerRate}%`} subtitle="With citations" />
-        <StatCard label="Validations" value={String(summary.validationRuns.length)} subtitle="Draft test runs" />
+        <StatCard label={t('agentMonitor.productionRuns')} value={String(summary.stats.total)} subtitle={t('agentMonitor.publishedTraffic')} />
+        <StatCard label={t('agentMonitor.answeredRate')} value={`${summary.stats.answerRate}%`} subtitle={t('agentMonitor.withCitations')} />
+        <StatCard label={t('agentMonitor.validations')} value={String(summary.validationRuns.length)} subtitle={t('agentMonitor.draftTestRuns')} />
       </div>
 
       <div className="overflow-hidden border border-[var(--border)] bg-[var(--bg-surface)]">
         <div className="border-b border-[var(--border)] bg-[var(--bg-elevated)] px-5 py-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-            Recent Agent Runs
+            {t('agentMonitor.recentAgentRuns')}
           </h3>
         </div>
         {summary.agentRuns.length === 0 ? (
-          <EmptyState message="No runs for this agent yet." />
+          <EmptyState message={t('agentMonitor.noRuns')} />
         ) : (
           <div className="divide-y divide-[var(--border)]">
             {summary.agentRuns.slice(0, 5).map((run) => (
@@ -171,7 +174,7 @@ export function AgentMonitorSummary({ agentId }: AgentMonitorProps) {
                     {run.question}
                   </div>
                   <div className="mt-1 text-xs text-[var(--text-muted)]">
-                    {run.run_purpose} · {new Date(run.created_at).toLocaleString()}
+                    {run.run_purpose} · {formatDateTime(run.created_at)}
                   </div>
                 </div>
                 <div className="flex items-center">

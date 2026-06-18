@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CodeBlock } from '../CodeBlock'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
+import { useLocale } from '../../i18n/locale'
 import type {
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
@@ -56,6 +57,7 @@ export function SkillsModuleEditor({
   onUpdatePack,
   onDeletePack,
 }: SkillsModuleEditorProps) {
+  const { t } = useLocale()
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null)
   const [draft, setDraft] = useState<PackDraft | null>(null)
   const [newPackId, setNewPackId] = useState('')
@@ -116,7 +118,7 @@ export function SkillsModuleEditor({
   if (!config) {
     return (
       <div className="border border-[var(--border)] bg-[var(--bg-surface)] p-5 text-sm text-[var(--text-muted)]">
-        Skills configuration is not loaded.
+        {t('skills.notLoaded')}
       </div>
     )
   }
@@ -211,16 +213,16 @@ export function SkillsModuleEditor({
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              Skills Configuration
+              {t('skills.configuration')}
             </h3>
             <p className="mt-1 text-sm text-[var(--text-muted)]">
-              Runtime-ordered business flow Skill Packs for {config.template_name}.
+              {t('skills.description').replace('{template}', config.template_name)}
             </p>
           </div>
           <div className="grid gap-2 text-xs text-[var(--text-muted)] sm:grid-cols-3 xl:min-w-[420px]">
-            <Metric label="Enabled" value={config.enabled ? 'Yes' : 'No'} />
-            <Metric label="Template" value={config.template_descriptor_version} />
-            <Metric label="Slots" value={String(config.addendum_slots.length)} />
+            <Metric label={t('skills.enabled')} value={config.enabled ? t('skills.yes') : t('skills.no')} />
+            <Metric label={t('skills.template')} value={config.template_descriptor_version} />
+            <Metric label={t('skills.slots')} value={String(config.addendum_slots.length)} />
           </div>
         </div>
       </div>
@@ -231,14 +233,14 @@ export function SkillsModuleEditor({
             <div>
               <div className="flex flex-wrap items-center gap-3">
                 <h4 className="text-sm font-semibold text-[var(--text-primary)]">
-                  Business Flow Skill Packs
+                  {t('skills.businessFlowPacks')}
                 </h4>
                 <span className="rounded-full bg-[var(--bg-hover)] px-2.5 py-1 text-xs text-[var(--text-secondary)]">
                   {config.packs.length}
                 </span>
               </div>
               <p className="mt-1 text-sm text-[var(--text-muted)]">
-                Stage-embeddable business guidance selected after intent resolution.
+                {t('skills.packsDescription')}
               </p>
             </div>
             <button
@@ -249,13 +251,13 @@ export function SkillsModuleEditor({
               }}
               className="inline-flex items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
             >
-              New Skill Pack
+              {t('skills.newPack')}
             </button>
           </div>
 
           {config.packs.length === 0 ? (
             <div className="mt-5 border border-dashed border-[var(--border)] bg-[var(--bg-surface)] p-6 text-sm text-[var(--text-muted)]">
-              No Business Flow Skill Packs configured.
+              {t('skills.noneConfigured')}
             </div>
           ) : (
             <div className="mt-5 space-y-3">
@@ -277,10 +279,10 @@ export function SkillsModuleEditor({
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                Available Addendum Slots
+                {t('skills.availableSlots')}
               </h4>
               <p className="mt-1 text-sm text-[var(--text-muted)]">
-                Skill Packs can embed prompt addenda into these Workflow stages.
+                {t('skills.slotsDescription')}
               </p>
             </div>
             <span className="rounded-full bg-[var(--bg-hover)] px-2.5 py-1 text-xs text-[var(--text-secondary)]">
@@ -289,7 +291,7 @@ export function SkillsModuleEditor({
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {config.addendum_slots.length === 0 ? (
-              <p className="text-sm text-[var(--text-muted)]">No embeddable stages for this Workflow Template.</p>
+              <p className="text-sm text-[var(--text-muted)]">{t('skills.noEmbeddableStages')}</p>
             ) : (
               config.addendum_slots.map((slot) => (
                 <div key={slot.stage_id} className="border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-3">

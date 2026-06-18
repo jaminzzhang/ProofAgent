@@ -47,6 +47,7 @@ import { MEMORY_FIELDS } from '../components/agent/module-configs/memory'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
 import { useConfigVersions } from '../hooks/useConfigVersions'
+import { useLocale } from '../i18n/locale'
 import {
   extractAgentYamlSection,
   readAgentYamlField,
@@ -57,6 +58,7 @@ import {
 type Tab = 'general' | 'workflow' | 'skills' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
 
 export function AgentDetailPage() {
+  const { t } = useLocale()
   const { agentId, draftId } = useParams<{ agentId: string; draftId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const { draft, contract, loading, error, refresh } = useConfigDraft(agentId, draftId)
@@ -142,7 +144,7 @@ export function AgentDetailPage() {
     if (activeTab !== 'workflow') return
     if (!workflowTemplateName) {
       setWorkflowDescriptor(null)
-      setWorkflowDescriptorError('workflow.template is not configured.')
+      setWorkflowDescriptorError(t('agentDetail.workflowTemplateMissing'))
       return
     }
 
@@ -162,7 +164,7 @@ export function AgentDetailPage() {
     return () => {
       mounted = false
     }
-  }, [activeTab, workflowTemplateName])
+  }, [activeTab, workflowTemplateName, t])
 
   useEffect(() => {
     if (activeTab !== 'skills' || skillsLoaded || !agentId || !draftId) return
@@ -206,12 +208,12 @@ export function AgentDetailPage() {
         display_name: displayName,
         purpose,
       })
-      setStatus('Draft fields saved.')
+      setStatus(t('agentDetail.draftFieldsSaved'))
       refresh()
     })
   }
 
-  async function saveAgentYaml(successMessage = 'Configuration saved.') {
+  async function saveAgentYaml(successMessage = t('agentDetail.configurationSaved')) {
     if (!agentId || !draftId) return
     await runAction('workflow', async () => {
       await updateConfigDraftContract(agentId, draftId, {
@@ -227,7 +229,7 @@ export function AgentDetailPage() {
     await runAction('workflow-stages', async () => {
       const updated = await updateWorkflowStages(agentId, draftId, payload)
       setAgentYaml(updated.agent_yaml)
-      setStatus('Workflow stage configuration saved.')
+      setStatus(t('agentDetail.workflowStagesSaved'))
       refresh()
     })
   }
@@ -236,7 +238,7 @@ export function AgentDetailPage() {
     stageId: string,
     payload: Parameters<typeof previewWorkflowStageContext>[3],
   ) {
-    if (!agentId || !draftId) throw new Error('Draft route is missing.')
+    if (!agentId || !draftId) throw new Error(t('agentDetail.draftRouteMissing'))
     return previewWorkflowStageContext(agentId, draftId, stageId, payload)
   }
 
@@ -247,7 +249,7 @@ export function AgentDetailPage() {
       setSkillsConfig(updated)
       setSkillsLoaded(true)
       setSkillsError(null)
-      setStatus('Skill Pack created.')
+      setStatus(t('agentDetail.skillPackCreated'))
       refresh()
     })
   }
@@ -259,7 +261,7 @@ export function AgentDetailPage() {
       setSkillsConfig(updated)
       setSkillsLoaded(true)
       setSkillsError(null)
-      setStatus('Skill Pack saved.')
+      setStatus(t('agentDetail.skillPackSaved'))
       refresh()
     })
   }
@@ -271,7 +273,7 @@ export function AgentDetailPage() {
       setSkillsConfig(updated)
       setSkillsLoaded(true)
       setSkillsError(null)
-      setStatus('Skill Pack deleted.')
+      setStatus(t('agentDetail.skillPackDeleted'))
       refresh()
     })
   }
@@ -281,7 +283,7 @@ export function AgentDetailPage() {
     await runAction('knowledge-binding', async () => {
       const updated = await bindKnowledgeSourceToDraft(agentId, draftId, payload)
       setAgentYaml(updated.agent_yaml)
-      setStatus('Knowledge source binding saved.')
+      setStatus(t('agentDetail.knowledgeBindingSaved'))
       refresh()
     })
   }
@@ -291,7 +293,7 @@ export function AgentDetailPage() {
     await runAction('knowledge-binding', async () => {
       const updated = await unbindKnowledgeSourceFromDraft(agentId, draftId, bindingId)
       setAgentYaml(updated.agent_yaml)
-      setStatus('Knowledge source binding removed.')
+      setStatus(t('agentDetail.knowledgeBindingRemoved'))
       refresh()
     })
   }
@@ -302,7 +304,7 @@ export function AgentDetailPage() {
       const version = await publishConfigDraft(agentId, draftId, {
         validation_run_id: latestValidation.run_id,
       })
-      setStatus(`Published ${version.version_id}.`)
+      setStatus(t('agentDetail.publishedVersion').replace('{version}', version.version_id))
       refreshVersions()
     })
   }
@@ -311,33 +313,33 @@ export function AgentDetailPage() {
     if (!agentId) return
     await runAction(`rollback-${versionId}`, async () => {
       await rollbackConfigVersion(agentId, versionId)
-      setStatus(`Active version set to ${versionId}.`)
+      setStatus(t('agentDetail.activeVersionSet').replace('{version}', versionId))
       refreshVersions()
     })
   }
 
   const CONFIGURE_MODULES = [
-    { id: 'general', label: 'Overview' },
-    { id: 'workflow', label: 'Workflow' },
-    { id: 'skills', label: 'Skills' },
-    { id: 'knowledge', label: 'Knowledge' },
-    { id: 'tools', label: 'Tools' },
-    { id: 'policy', label: 'Policy' },
-    { id: 'model', label: 'Model' },
-    { id: 'memory', label: 'Memory' },
-    { id: 'response', label: 'Response' },
+    { id: 'general', label: t('agentDetail.tabOverview') },
+    { id: 'workflow', label: t('agentDetail.tabWorkflow') },
+    { id: 'skills', label: t('agentDetail.tabSkills') },
+    { id: 'knowledge', label: t('agentDetail.tabKnowledge') },
+    { id: 'tools', label: t('agentDetail.tabTools') },
+    { id: 'policy', label: t('agentDetail.tabPolicy') },
+    { id: 'model', label: t('agentDetail.tabModel') },
+    { id: 'memory', label: t('agentDetail.tabMemory') },
+    { id: 'response', label: t('agentDetail.tabResponse') },
   ]
 
   const LIFECYCLE_TABS = [
-    { id: 'validate', label: 'Validate & Test' },
-    { id: 'versions', label: 'Versions' },
-    { id: 'contract', label: 'Contract View' },
-    { id: 'monitor', label: 'Monitor' },
+    { id: 'validate', label: t('agentDetail.tabValidate') },
+    { id: 'versions', label: t('agentDetail.tabVersions') },
+    { id: 'contract', label: t('agentDetail.tabContract') },
+    { id: 'monitor', label: t('agentDetail.tabMonitor') },
   ]
 
   if (loading) return <div className="py-12 flex justify-center"><LoadingSpinner /></div>
   if (error) return <div className="text-[var(--danger)] text-sm">{error}</div>
-  if (!draft || !contract) return <div className="text-[var(--text-muted)] text-sm">Draft not found.</div>
+  if (!draft || !contract) return <div className="text-[var(--text-muted)] text-sm">{t('agentDetail.draftNotFound')}</div>
 
   function setActiveTab(moduleId: string) {
     const nextTab = agentDetailTab(moduleId)
@@ -366,10 +368,10 @@ export function AgentDetailPage() {
             <div className="flex flex-col gap-4 border-b border-[var(--border)] pb-4 md:flex-row md:items-start md:justify-between">
               <div>
                 <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-                  Agent Overview
+                  {t('agentDetail.overviewTitle')}
                 </h3>
                 <p className="mt-1 text-sm text-[var(--text-muted)]">
-                  Identity, draft status, and recent operating signals for this Agent.
+                  {t('agentDetail.overviewDescription')}
                 </p>
               </div>
               <button
@@ -377,7 +379,7 @@ export function AgentDetailPage() {
                 disabled={busy === 'basics'}
                 className="w-fit rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
               >
-                {busy === 'basics' ? 'Saving...' : 'Save'}
+                {busy === 'basics' ? t('agentDetail.saving') : t('agentDetail.save')}
               </button>
             </div>
 
@@ -385,9 +387,10 @@ export function AgentDetailPage() {
               <div className="space-y-4">
                 <div>
                   <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                    Display Name
+                    <span>{t('agentDetail.displayName')}</span>
                   </label>
                   <input
+                    aria-label={t('agentDetail.displayName')}
                     value={displayName}
                     onChange={(event) => setDisplayName(event.target.value)}
                     className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
@@ -395,9 +398,10 @@ export function AgentDetailPage() {
                 </div>
                 <div>
                   <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                    Purpose
+                    <span>{t('common.purpose')}</span>
                   </label>
                   <textarea
+                    aria-label={t('common.purpose')}
                     value={purpose}
                     onChange={(event) => setPurpose(event.target.value)}
                     rows={4}
@@ -408,26 +412,26 @@ export function AgentDetailPage() {
 
               <dl className="grid content-start gap-3 text-sm">
                 <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Agent ID</dt>
+                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('agentDetail.agentId')}</dt>
                   <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">{draft.agent_id}</dd>
                 </div>
                 <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Draft ID</dt>
+                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('agentDetail.draftId')}</dt>
                   <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">{draft.draft_id}</dd>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                    <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Validations</dt>
+                    <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('agentDetail.validations')}</dt>
                     <dd className="mt-1 text-lg font-semibold text-[var(--text-primary)]">{draft.validation_records.length}</dd>
                   </div>
                   <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                    <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Versions</dt>
+                    <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('agentDetail.versions')}</dt>
                     <dd className="mt-1 text-lg font-semibold text-[var(--text-primary)]">{versions.length}</dd>
                   </div>
                 </div>
                 <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Active Version</dt>
-                  <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">{activeVersionId ?? 'Not published'}</dd>
+                  <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('agentDetail.activeVersion')}</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">{activeVersionId ?? t('agentDetail.notPublished')}</dd>
                 </div>
               </dl>
             </div>
@@ -443,7 +447,7 @@ export function AgentDetailPage() {
           descriptor={workflowDescriptor}
           descriptorError={workflowDescriptorError}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSaveCore={() => saveAgentYaml('Workflow configuration saved.')}
+          onSaveCore={() => saveAgentYaml(t('agentDetail.workflowSaved'))}
           onSaveStages={saveWorkflowStages}
           onPreviewStage={previewWorkflowStage}
           busy={busy === 'workflow'}
@@ -470,7 +474,7 @@ export function AgentDetailPage() {
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
           onBindSource={bindKnowledgeSource}
           onUnbindSource={unbindKnowledgeSource}
-          onSave={() => saveAgentYaml('Knowledge configuration saved.')}
+          onSave={() => saveAgentYaml(t('agentDetail.knowledgeSaved'))}
           busy={busy === 'workflow' || busy === 'knowledge-binding'}
           knowledgeSourceError={knowledgeSourceError}
         />
@@ -478,26 +482,26 @@ export function AgentDetailPage() {
 
       {activeTab === 'tools' && (
         <ModuleEditor
-          title="Tools Configuration"
-          description="Tool contracts file reference"
+          title={t('agentDetail.toolsTitle')}
+          description={t('agentDetail.toolsDescription')}
           fields={TOOLS_FIELDS}
           yamlSection="tools"
           agentYaml={agentYaml}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={() => saveAgentYaml('Tools configuration saved.')}
+          onSave={() => saveAgentYaml(t('agentDetail.toolsSaved'))}
           busy={busy === 'workflow'}
         />
       )}
 
       {activeTab === 'policy' && (
         <ModuleEditor
-          title="Policy Configuration"
-          description="Policy rules file reference"
+          title={t('agentDetail.policyTitle')}
+          description={t('agentDetail.policyDescription')}
           fields={POLICY_FIELDS}
           yamlSection="policy"
           agentYaml={agentYaml}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={() => saveAgentYaml('Policy configuration saved.')}
+          onSave={() => saveAgentYaml(t('agentDetail.policySaved'))}
           busy={busy === 'workflow'}
         />
       )}
@@ -513,7 +517,7 @@ export function AgentDetailPage() {
             setModelConnections((current) => [...current, connection])
             return connection
           }}
-          onSave={() => saveAgentYaml('Model configuration saved.')}
+          onSave={() => saveAgentYaml(t('agentDetail.modelSaved'))}
           busy={busy === 'workflow'}
         />
       )}
@@ -522,20 +526,20 @@ export function AgentDetailPage() {
         <MemoryModuleEditor
           agentYaml={agentYaml}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={() => saveAgentYaml('Memory configuration saved.')}
+          onSave={() => saveAgentYaml(t('agentDetail.memorySaved'))}
           busy={busy === 'workflow'}
         />
       )}
 
       {activeTab === 'response' && (
         <ModuleEditor
-          title="Response Configuration"
-          description="Response disclosure and detail settings"
+          title={t('agentDetail.responseTitle')}
+          description={t('agentDetail.responseDescription')}
           fields={RESPONSE_FIELDS}
           yamlSection="response"
           agentYaml={agentYaml}
           onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={() => saveAgentYaml('Response configuration saved.')}
+          onSave={() => saveAgentYaml(t('agentDetail.responseSaved'))}
           busy={busy === 'workflow'}
         />
       )}
@@ -551,7 +555,11 @@ export function AgentDetailPage() {
                 question,
                 ...options,
               })
-              setStatus(`Validation run ${result.run_id} completed with ${result.outcome}.`)
+              setStatus(
+                t('agentDetail.validationCompleted')
+                  .replace('{runId}', result.run_id)
+                  .replace('{outcome}', result.outcome),
+              )
               refresh()
             })
           }
@@ -564,10 +572,10 @@ export function AgentDetailPage() {
           <div className="flex items-center justify-between border-b border-[var(--border)] pb-4">
             <div>
               <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-                Published Versions
+                {t('agentDetail.publishedVersions')}
               </h3>
               <p className="mt-1 text-xs text-[var(--text-muted)]">
-                {activeVersionId ?? 'No active version'}
+                {activeVersionId ?? t('agentDetail.noActiveVersion')}
               </p>
             </div>
             <button
@@ -575,20 +583,22 @@ export function AgentDetailPage() {
               disabled={busy === 'publish' || !latestValidation}
               className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
             >
-              Publish
+              {t('agentDetail.publish')}
             </button>
           </div>
           {versionsLoading ? (
             <div className="py-8 flex justify-center"><LoadingSpinner size="sm" /></div>
           ) : versions.length === 0 ? (
-            <EmptyState message="No published versions." />
+            <EmptyState message={t('agentDetail.noPublishedVersions')} />
           ) : (
             <div className="mt-4 divide-y divide-[var(--border)]">
               {versions.map((version) => (
                 <div key={version.version_id} className="flex items-center justify-between gap-4 py-3">
                   <div>
                     <div className="font-mono text-xs text-[var(--text-primary)]">{version.version_id}</div>
-                    <div className="mt-1 text-xs text-[var(--text-muted)]">validated by {version.validation_run_id}</div>
+                    <div className="mt-1 text-xs text-[var(--text-muted)]">
+                      {t('agentDetail.validatedBy').replace('{runId}', version.validation_run_id)}
+                    </div>
                   </div>
                   {version.version_id === activeVersionId ? (
                     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -598,7 +608,7 @@ export function AgentDetailPage() {
                         rel="noreferrer"
                         className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
                       >
-                        Open in Operator Chat
+                        {t('agentDetail.openOperator')}
                       </a>
                       {isCustomerFacing && (
                         <a
@@ -607,11 +617,11 @@ export function AgentDetailPage() {
                           rel="noreferrer"
                           className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
                         >
-                          Open in Customer Chat
+                          {t('agentDetail.openCustomer')}
                         </a>
                       )}
                       <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
-                        Active
+                        {t('agentDetail.active')}
                       </span>
                     </div>
                   ) : (
@@ -620,7 +630,7 @@ export function AgentDetailPage() {
                       disabled={busy === `rollback-${version.version_id}`}
                       className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
                     >
-                      Rollback
+                      {t('agentDetail.rollback')}
                     </button>
                   )}
                 </div>

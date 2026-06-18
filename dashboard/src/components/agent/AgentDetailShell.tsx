@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { useLocale } from '../../i18n/locale'
 import { TopNav } from '../TopNav'
 
 interface Tab {
@@ -28,35 +29,36 @@ export function AgentDetailShell({
   onModuleChange,
   children,
 }: AgentDetailShellProps) {
+  const { t } = useLocale()
   const moduleById = new Map(modules.map((module) => [module.id, module]))
   const lifecycleById = new Map(lifecycle.map((tab) => [tab.id, tab]))
   const groups: WorkspaceGroup[] = [
     {
-      title: 'Overview',
+      title: t('agentDetail.groupOverview'),
       items: ['general']
         .map((id) => moduleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
     },
     {
-      title: 'Design',
+      title: t('agentDetail.groupDesign'),
       items: ['workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response']
         .map((id) => moduleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
     },
     {
-      title: 'Verify',
+      title: t('agentDetail.groupVerify'),
       items: ['validate', 'contract']
         .map((id) => lifecycleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
     },
     {
-      title: 'Release',
+      title: t('agentDetail.groupRelease'),
       items: ['versions']
         .map((id) => lifecycleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
     },
     {
-      title: 'Observe',
+      title: t('agentDetail.groupObserve'),
       items: ['monitor']
         .map((id) => lifecycleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
@@ -70,14 +72,14 @@ export function AgentDetailShell({
     >
       <TopNav
         title={
-          <nav aria-label="Agent breadcrumb">
+          <nav aria-label={t('agentDetail.breadcrumb')}>
             <ol className="flex min-w-0 items-center gap-2">
               <li className="shrink-0">
                 <Link
                   to="/agents"
                   className="rounded-md text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                 >
-                  Agents
+                  {t('agents.title')}
                 </Link>
               </li>
               <li aria-hidden="true" className="shrink-0 text-[var(--text-muted)]">
@@ -96,7 +98,7 @@ export function AgentDetailShell({
       <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)] lg:grid-rows-1">
         <aside className="min-w-0 overflow-y-auto border-b border-[var(--border)] bg-[var(--bg-surface)] lg:border-b-0 lg:border-r">
           <nav
-            aria-label="Agent navigation"
+            aria-label={t('agentDetail.navigation')}
             className="p-3"
           >
             <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5 lg:block lg:space-y-5">

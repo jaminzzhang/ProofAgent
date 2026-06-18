@@ -1,5 +1,6 @@
 import React from 'react'
 import { readAgentYamlField } from '../../utils/agentYaml'
+import { useLocale } from '../../i18n/locale'
 
 interface MemoryModuleEditorProps {
   agentYaml: string
@@ -14,6 +15,7 @@ export function MemoryModuleEditor({
   onSave,
   busy,
 }: MemoryModuleEditorProps) {
+  const { t } = useLocale()
   // Provider Settings
   const providerPath = ['memory', 'provider']
   const provider = readAgentYamlField(agentYaml, providerPath) || 'session'
@@ -42,10 +44,10 @@ export function MemoryModuleEditor({
       {/* SECTION 1: Storage Provider */}
       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-          Storage Layer
+          {t('memory.storageLayer')}
         </h3>
         <p className="mt-1 text-sm text-[var(--text-muted)] mb-4">
-          The underlying database or provider used to persist agent memory.
+          {t('memory.storageDescription')}
         </p>
 
         <div className="max-w-xs">
@@ -53,7 +55,7 @@ export function MemoryModuleEditor({
             htmlFor="memory-provider"
             className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]"
           >
-            Memory Provider
+            {t('memory.provider')}
           </label>
           <select
             id="memory-provider"
@@ -73,10 +75,10 @@ export function MemoryModuleEditor({
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              Memory Scopes
+              {t('memory.scopes')}
             </h3>
             <p className="mt-1 text-sm text-[var(--text-muted)]">
-              Toggle and configure the contextual layers of memory the Agent has access to.
+              {t('memory.scopesDescription')}
             </p>
           </div>
         </div>
@@ -86,9 +88,9 @@ export function MemoryModuleEditor({
           {/* Card: Case Memory */}
           <div className={`rounded-md border p-4 transition-colors ${caseEnabled ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border)] bg-[var(--bg-base)]'}`}>
             <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold text-[var(--text-primary)]">Case Memory</span>
+              <span className="font-semibold text-[var(--text-primary)]">{t('memory.caseMemory')}</span>
               <button
-                aria-label="Toggle Case Memory"
+                aria-label={t('memory.toggleCase')}
                 onClick={() => onFieldChange(caseEnabledPath, caseEnabled ? 'false' : 'true')}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${caseEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-hover)]'}`}
               >
@@ -96,7 +98,7 @@ export function MemoryModuleEditor({
               </button>
             </div>
             <p className="text-xs text-[var(--text-muted)] mb-4">
-              Context bound to a specific interaction thread or ticket.
+              {t('memory.caseDescription')}
             </p>
             
             {caseEnabled && (
@@ -106,7 +108,7 @@ export function MemoryModuleEditor({
                     htmlFor="case-memory-retention-days"
                     className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1"
                   >
-                    Retention (Days)
+                    {t('memory.retentionDays')}
                   </label>
                   <input
                     id="case-memory-retention-days"
@@ -121,7 +123,7 @@ export function MemoryModuleEditor({
                     htmlFor="case-memory-max-records"
                     className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1"
                   >
-                    Max Records
+                    {t('memory.maxRecords')}
                   </label>
                   <input
                     id="case-memory-max-records"
@@ -136,7 +138,7 @@ export function MemoryModuleEditor({
                     htmlFor="case-memory-allow-restricted"
                     className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]"
                   >
-                    Allow Restricted
+                    {t('memory.allowRestricted')}
                   </label>
                   <input
                     id="case-memory-allow-restricted"
@@ -153,9 +155,9 @@ export function MemoryModuleEditor({
           {/* Card: User Memory */}
           <div className={`rounded-md border p-4 transition-colors ${userEnabled ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border)] bg-[var(--bg-base)]'}`}>
             <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold text-[var(--text-primary)]">User Memory</span>
+              <span className="font-semibold text-[var(--text-primary)]">{t('memory.userMemory')}</span>
               <button
-                aria-label="Toggle User Memory"
+                aria-label={t('memory.toggleUser')}
                 onClick={() => onFieldChange(userEnabledPath, userEnabled ? 'false' : 'true')}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${userEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-hover)]'}`}
               >
@@ -163,16 +165,16 @@ export function MemoryModuleEditor({
               </button>
             </div>
             <p className="text-xs text-[var(--text-muted)]">
-              Long-term context tied to a specific user identity across multiple cases.
+              {t('memory.userDescription')}
             </p>
           </div>
 
           {/* Card: Shared Memory */}
           <div className={`rounded-md border p-4 transition-colors ${sharedEnabled ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border)] bg-[var(--bg-base)]'}`}>
             <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold text-[var(--text-primary)]">Shared Memory</span>
+              <span className="font-semibold text-[var(--text-primary)]">{t('memory.sharedMemory')}</span>
               <button
-                aria-label="Toggle Shared Memory"
+                aria-label={t('memory.toggleShared')}
                 onClick={() => onFieldChange(sharedEnabledPath, sharedEnabled ? 'false' : 'true')}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${sharedEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-hover)]'}`}
               >
@@ -180,7 +182,7 @@ export function MemoryModuleEditor({
               </button>
             </div>
             <p className="text-xs text-[var(--text-muted)]">
-              Global facts and knowledge shared organically across all agent sessions.
+              {t('memory.sharedDescription')}
             </p>
           </div>
 
@@ -192,7 +194,7 @@ export function MemoryModuleEditor({
             disabled={busy}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors"
           >
-            {busy ? 'Saving...' : 'Save Memory'}
+            {busy ? t('agentDetail.saving') : t('memory.saveMemory')}
           </button>
         </div>
       </div>

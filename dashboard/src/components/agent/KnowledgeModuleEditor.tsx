@@ -3,6 +3,7 @@ import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYa
 import { KnowledgeSource } from '../../api/types'
 import { KNOWLEDGE_FIELDS } from './module-configs/knowledge'
 import { EmptyState } from '../EmptyState'
+import { useLocale } from '../../i18n/locale'
 
 interface KnowledgeModuleEditorProps {
   agentYaml: string
@@ -31,6 +32,7 @@ export function KnowledgeModuleEditor({
   busy,
   knowledgeSourceError,
 }: KnowledgeModuleEditorProps) {
+  const { t } = useLocale()
   const publishedSources = useMemo(
     () => knowledgeSources.filter((source) => (
       source.lifecycle_state === 'ACTIVE' && Boolean(source.published_snapshot_id)
@@ -87,14 +89,14 @@ export function KnowledgeModuleEditor({
       {/* SECTION 1: Active Bound Sources */}
       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-          Active Bound Sources
+          {t('knowledgeEditor.activeSources')}
         </h3>
         <p className="mt-1 text-sm text-[var(--text-muted)] mb-4">
-          These knowledge sources are currently bound to this Agent draft.
+          {t('knowledgeEditor.activeSourcesDescription')}
         </p>
 
         {parsedBindings.length === 0 ? (
-          <EmptyState message="No sources bound to this Agent yet." />
+          <EmptyState message={t('knowledgeEditor.noBoundSources')} />
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
             {parsedBindings.map((binding, idx) => {
@@ -104,12 +106,12 @@ export function KnowledgeModuleEditor({
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-semibold text-[var(--text-primary)]">
-                        {sourceInfo ? sourceInfo.name : 'Unknown Source'}
+                        {sourceInfo ? sourceInfo.name : t('knowledgeEditor.unknownSource')}
                       </span>
                       {binding.failure_mode === 'required' ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[var(--danger)]/10 text-[var(--danger)]">Required</span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[var(--danger)]/10 text-[var(--danger)]">{t('knowledgeEditor.required')}</span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[var(--accent)]/10 text-[var(--accent)]">Advisory</span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[var(--accent)]/10 text-[var(--accent)]">{t('knowledgeEditor.advisory')}</span>
                       )}
                     </div>
                     <div className="text-xs font-mono text-[var(--text-muted)] mb-3">
@@ -119,11 +121,11 @@ export function KnowledgeModuleEditor({
                   
                   <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)]">
                     <div className="flex items-center gap-1">
-                      <span className="font-semibold text-[var(--text-muted)]">Alias:</span>
+                      <span className="font-semibold text-[var(--text-muted)]">{t('knowledgeEditor.alias')}</span>
                       <span>{binding.alias || '-'}</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <span className="font-semibold text-[var(--text-muted)]">Weight:</span>
+                      <span className="font-semibold text-[var(--text-muted)]">{t('knowledgeEditor.weight')}</span>
                       <span>{binding.fusion_weight}</span>
                     </div>
                     <div className="ml-auto">
@@ -132,7 +134,7 @@ export function KnowledgeModuleEditor({
                         disabled={busy}
                         className="text-[var(--danger)] hover:text-red-500 font-medium disabled:opacity-50 transition-colors"
                       >
-                        Remove
+                        {t('knowledgeEditor.remove')}
                       </button>
                     </div>
                   </div>
@@ -148,19 +150,19 @@ export function KnowledgeModuleEditor({
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              Bind New Source
+              {t('knowledgeEditor.bindNewSource')}
             </h3>
             <p className="mt-1 text-sm text-[var(--text-muted)]">
-              Attach a shared Knowledge Source to this Agent.
+              {t('knowledgeEditor.bindDescription')}
             </p>
           </div>
           <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
-            {publishedSources.length} published available
+            {t('knowledgeEditor.publishedAvailable').replace('{count}', String(publishedSources.length))}
           </span>
         </div>
         {unavailableCount > 0 && (
           <p className="mb-4 text-xs text-[var(--text-muted)]">
-            {unavailableCount} unavailable Source{unavailableCount === 1 ? '' : 's'} hidden until active and published.
+            {t('knowledgeEditor.unavailableHidden').replace('{count}', String(unavailableCount))}
           </p>
         )}
 
@@ -171,12 +173,12 @@ export function KnowledgeModuleEditor({
         )}
 
         {publishedSources.length === 0 ? (
-          <EmptyState message="No published shared Knowledge Sources are available. Publish one in Knowledge Hub first." />
+          <EmptyState message={t('knowledgeEditor.noPublished')} />
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                Knowledge Source
+                {t('knowledgeEditor.knowledgeSource')}
               </label>
               <select
                 value={selectedSourceId}
@@ -193,12 +195,12 @@ export function KnowledgeModuleEditor({
             
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                Alias
+                {t('knowledgeEditor.aliasLabel')}
               </label>
               <input
                 value={bindingAlias}
                 onChange={(event) => setBindingAlias(event.target.value)}
-                placeholder="optional display alias"
+                placeholder={t('knowledgeEditor.aliasPlaceholder')}
                 className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
               />
             </div>
@@ -206,7 +208,7 @@ export function KnowledgeModuleEditor({
             <div className="grid gap-4 grid-cols-2">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                  Failure Mode
+                  {t('knowledgeEditor.failureMode')}
                 </label>
                 <select
                   value={bindingFailureMode}
@@ -220,7 +222,7 @@ export function KnowledgeModuleEditor({
               
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                  Fusion Weight
+                  {t('knowledgeEditor.fusionWeight')}
                 </label>
                 <input
                   type="number"
@@ -235,14 +237,14 @@ export function KnowledgeModuleEditor({
 
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                Top K Override
+                {t('knowledgeEditor.topKOverride')}
               </label>
               <input
                 type="number"
                 min="1"
                 value={bindingTopK}
                 onChange={(event) => setBindingTopK(event.target.value)}
-                placeholder="use Agent retrieval default"
+                placeholder={t('knowledgeEditor.topKPlaceholder')}
                 className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
               />
             </div>
@@ -253,7 +255,7 @@ export function KnowledgeModuleEditor({
                 disabled={busy || publishedSources.length === 0}
                 className="rounded-md bg-[var(--accent)] px-6 py-2 text-sm font-medium text-[var(--accent-fg)] hover:opacity-80 disabled:opacity-50 transition-all"
               >
-                {busy ? 'Binding...' : 'Bind Source'}
+                {busy ? t('knowledgeEditor.binding') : t('knowledgeEditor.bindSource')}
               </button>
             </div>
           </div>
@@ -263,10 +265,10 @@ export function KnowledgeModuleEditor({
       {/* SECTION 3: Global Retrieval Settings */}
       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-          Global Retrieval Settings
+          {t('knowledgeEditor.globalRetrieval')}
         </h3>
         <p className="mt-1 text-sm text-[var(--text-muted)] mb-4">
-          Agent-level retrieval controls that apply across all bound knowledge sources.
+          {t('knowledgeEditor.globalRetrievalDescription')}
         </p>
 
         <div className="grid gap-6 md:grid-cols-3">
@@ -311,7 +313,7 @@ export function KnowledgeModuleEditor({
             disabled={busy}
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors"
           >
-            {busy ? 'Saving...' : 'Save Knowledge'}
+            {busy ? t('agentDetail.saving') : t('knowledgeEditor.saveKnowledge')}
           </button>
         </div>
       </div>
