@@ -20,6 +20,7 @@ from proof_agent.contracts import (
     ModelResponse,
     ModelRole,
     ResolvedKnowledgeBinding,
+    RetrievalQueryItem,
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.knowledge.retrieval_service import (
@@ -155,6 +156,122 @@ def test_single_step_retrieval_service_gates_provider_and_evaluates_evidence(
     assert event_types.index("policy_decision") < event_types.index("retrieval_step")
     assert event_types.index("retrieval_step") < event_types.index("retrieval_result")
     assert event_types.index("retrieval_result") < event_types.index("evidence_evaluation")
+
+
+def test_single_step_retrieval_uses_first_required_retrieval_query_item(
+    tmp_path: Path,
+) -> None:
+    provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="policy.md",
+                content="Inpatient reimbursement requires discharge summary.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.9,
+                citation="policy.md:1",
+            ),
+        )
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    service.retrieve(
+        KnowledgeRetrievalRequest(
+            question="What documents are required for inpatient reimbursement?",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query="inpatient reimbursement overview",
+                    intent_angle="overview",
+                    required=False,
+                    reason="Optional broad search.",
+                ),
+                RetrievalQueryItem(
+                    query="inpatient reimbursement required documents",
+                    intent_angle="required_documents",
+                    required=True,
+                    reason="Required documents are the user's direct intent.",
+                ),
+            ),
+            max_queries=3,
+        )
+    )
+
+    assert provider.calls == [("inpatient reimbursement required documents", 1)]
+    retrieval_step = _last_event(trace.trace_path, "retrieval_step")
+    assert retrieval_step["payload"]["question"] == (
+        "inpatient reimbursement required documents"
+    )
+    assert retrieval_step["payload"]["retrieval_query_item"]["intent_angle"] == (
+        "required_documents"
+    )
+
+
+def test_agentic_retrieval_executes_query_set_before_planner_rewrites(
+    tmp_path: Path,
+) -> None:
+    provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="policy.md",
+                content="Inpatient reimbursement requires invoices.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.9,
+                citation="policy.md:1",
+            ),
+        )
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="What documents are required for inpatient reimbursement?",
+            strategy="agentic",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query="inpatient reimbursement required documents",
+                    intent_angle="required_documents",
+                    required=True,
+                    reason="The answer must list documents.",
+                ),
+                RetrievalQueryItem(
+                    query="inpatient reimbursement exception documents",
+                    intent_angle="exception_policy",
+                    required=False,
+                    reason="Exceptions may change the document list.",
+                ),
+            ),
+            max_queries=3,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    assert provider.calls == [
+        ("inpatient reimbursement required documents", 1),
+        ("inpatient reimbursement exception documents", 1),
+    ]
+    assert result.evidence_result.status == "passed"
+    retrieval_steps = [
+        event for event in _read_events(trace.trace_path)
+        if event["event_type"] == "retrieval_step"
+    ]
+    assert [
+        event["payload"]["retrieval_query_item"]["intent_angle"]
+        for event in retrieval_steps
+    ] == ["required_documents", "exception_policy"]
 
 
 def test_single_step_retrieval_traces_direct_provider_summary(tmp_path: Path) -> None:

@@ -62,6 +62,10 @@ _Avoid_: Workflow Template, runtime graph, dynamic topology, prompt-defined proc
 The rule that a Business Flow Skill Pack may reference, prioritize, constrain, or explain already-bound Knowledge Bindings, Tool Contracts, policy rules, validators, and context options, but must not implicitly create, enable, or broaden those governed capabilities.
 _Avoid_: Hidden tool binding, hidden knowledge source, implicit policy install, validator side-load
 
+**Business Flow Skill Pack Capability Reference Scope**:
+The pack-level scope for Business Flow Skill Pack references to governed Knowledge Bindings, Tool Contracts, policy rules, and validators. Stage-Scoped Business Flow Skill Pack Addenda may explain how to consider these references in a stage, but cannot create stage-local capability bindings or stage-specific authority.
+_Avoid_: Stage-level tool binding, stage-level knowledge binding, per-stage policy install, per-stage validator binding, addendum-granted authority
+
 **Package-Local Business Flow Skill Pack Definition**:
 A Business Flow Skill Pack definition stored inside an Agent Package and referenced by `capabilities.skills`, then validated and frozen into the Published Agent Version for execution.
 _Avoid_: Global Skill Pack Registry, mutable shared pack, Dashboard-managed reusable asset, runtime package discovery
@@ -73,6 +77,10 @@ _Avoid_: Executable steps, edges, scripts, model provider overrides, raw prompts
 **Business Flow Skill Pack Routing-Safe Summary**:
 The bounded selection-time summary of a Business Flow Skill Pack exposed to Intent Resolution, limited to identity, label, description, intent patterns or taxonomy references, default marker, and admission hints.
 _Avoid_: Full stage Prompt addenda, full tool scope summary, policy details, validator details, raw business instructions
+
+**Business Flow Skill Pack Routing And Admission Configuration**:
+The pre-admission configuration used by Intent Resolution and the Control Plane to recommend and admit a Primary Business Flow Skill Pack, including intent patterns or taxonomy references, default marker, admission thresholds, ambiguity policy, and routing-safe summary preview.
+_Avoid_: Stage Prompt addendum, full business guidance, Harness control prompt, selected-pack context application, model-answer instruction
 
 **Business Flow Skill Pack Binding**:
 An Agent Contract Skills Capability Configuration entry that makes one Business Flow Skill Pack available to governed runs for a Draft or Published Agent before Intent Resolution may select or recommend it.
@@ -101,6 +109,22 @@ _Avoid_: business_flow_admission stage, topology change, descriptor-version chan
 **Business Flow Skill Pack Stage Context Application**:
 The post-admission application of one admitted Primary Business Flow Skill Pack's stage-specific addenda and trace-safe capability reference summaries into later Workflow Template Stages through Structured Control Context or Business Context Addendum.
 _Avoid_: Pre-admission full pack injection, raw pack dump, all-pack context stuffing, Harness control prompt replacement
+
+**Stage-Scoped Business Flow Skill Pack Addendum**:
+A stage-specific guidance addendum owned by one Business Flow Skill Pack and keyed to an embeddable Workflow Template Stage, applied only after that pack is admitted as the run's Primary Business Flow Skill Pack. Dashboard may present these addenda in a stage-first editor, but the source of truth remains the pack definition rather than the Workflow Template stage.
+_Avoid_: Intent Resolution routing summary, Stage-owned skill snippet, workflow-embedded business flow, runtime prompt plugin, Harness control prompt override, pre-admission addendum injection
+
+**Business Flow Skill Pack Addendum Slot**:
+A V1 Workflow Template Stage that may receive a Stage-Scoped Business Flow Skill Pack Addendum after Primary Business Flow Skill Pack admission. For `react_enterprise_qa_v2`, the V1 slots are `plan`, `retrieval_review`, `tool_review`, and `model_answer`.
+_Avoid_: `intent_resolution`, `retrieval`, `tool`, `memory`, `clarification`, `response`, execution stage prompt injection, response projection rewrite
+
+**Append-Only Business Flow Skill Pack Addendum**:
+The merge rule for Stage-Scoped Business Flow Skill Pack Addendum values: append the admitted pack's `business_context`, `task_instructions`, and `output_preferences` after the base Workflow Stage Prompt without replacing, deleting, or reordering the base prompt.
+_Avoid_: Prompt override, base prompt deletion, Harness instruction rewrite, stage prompt replacement, addendum-before-base ordering
+
+**Business Flow Skill Pack Stage-First Configuration Surface**:
+The Dashboard Skills configuration surface that edits one selected Business Flow Skill Pack at a time while grouping its routing/admission configuration and addendum slots by Workflow Template Stage, with any cross-pack stage matrix kept as read-only coverage summary.
+_Avoid_: Editable pack-by-stage matrix, simultaneous multi-pack prompt editing, implied multi-pack merge, workflow-stage-owned pack configuration
 
 **Business Flow Skill Pack Trace Summary**:
 The trace-safe projection of Business Flow Skill Pack binding, recommendation, admission, and stage context application facts, limited to references, ids, decisions, failure reasons, digests, counts, stage ids, default or fallback markers, and redaction flags.
@@ -445,6 +469,14 @@ _Avoid_: Raw chain-of-thought, hidden thinking, unstructured intent guess
 **Intent Resolution Contract**:
 The structured output contract for Intent Resolution, distinct from Reasoning Summary because it describes user intent and ambiguity rather than the rationale for a selected ReAct action.
 _Avoid_: Reused Reasoning Summary, planner scratchpad, free-form intent notes
+
+**Retrieval Query Set**:
+A bounded, non-executing set of candidate Knowledge retrieval queries emitted with Intent Resolution to express the search angles needed for the user's intent before the governed Retrieval stages choose and execute queries.
+_Avoid_: Executable retrieval plan, provider call list, ReAct planner query rewrite, untrusted web search rewrite
+
+**Retrieval Query Item**:
+One candidate query in a Retrieval Query Set, carrying query text plus audit-safe intent angle, required flag, and reason without naming Knowledge Sources, providers, filters, or execution parameters.
+_Avoid_: Provider route, source filter, scoped retrieval command, top_k override
 
 **React Enterprise QA Template**:
 The V1 Controlled ReAct Workflow Template for enterprise question answering.
@@ -2593,6 +2625,14 @@ _Avoid_: Evidence content dump
 - **Intent Resolution** records an audit-safe intent summary before ReAct planning; it does not expose raw chain-of-thought.
 - **Intent Resolution Contract** and **Reasoning Summary** are separate audit-safe summaries: the former captures understood user intent, while the latter captures selected ReAct action rationale.
 - **Intent Resolution** may recommend the next action category, but it cannot create executable retrieval plans, tool calls, or final answers; the **ReAct Planner** still emits the governed **ReAct Action Proposal**.
+- **Retrieval Query Set** must be non-empty when **Intent Resolution** recommends Knowledge retrieval and no blocking missing fields remain; it may be empty for clarification, tool, or non-retrieval intents.
+- **Intent Resolution Contract** may default **Retrieval Query Set** to empty for compatibility, but LLM Intent Resolution output fails validation when a retrieval-ready intent omits required query items.
+- **Retrieval Query Set** defaults to at most three **Retrieval Query Items** with a hard configurable cap of five; contract validation fails rather than silently truncating when the set exceeds its allowed budget.
+- `retrieval.max_queries` is the Agent-level Retrieval Query Set budget, valid from one through five, distinct from provider result `top_k` and agentic rewrite `max_rounds`.
+- The governed Retrieval stage executes required **Retrieval Query Items** before optional items, and optional items may run only while the query budget remains.
+- **Retrieval Query Set** provides the initial query queue for agentic retrieval; **RetrievalPlanner** may append later rewrite queries only after the initial query queue fails to produce sufficient accepted evidence.
+- `single_step` retrieval may record a **Retrieval Query Set** but executes at most one selected query, while `agentic` retrieval is the strategy that may execute multiple **Retrieval Query Items**.
+- **Retrieval Query Set** is recorded both inside the `intent_resolution` trace payload and as a separate `retrieval_query_set` trace event with only audit-safe query item fields, counts, budget, validation status, and Intent Resolution linkage.
 - V2 **Intent Resolution** requires deterministic contract validation and trace recording, but does not add an independent Auto Review node because executable actions remain governed by existing review and policy nodes.
 - V2 **Intent Resolution** reuses **ReAct Planner Config** for model configuration while remaining a distinct model-call role and audit fact from ReAct planning.
 - A **Controlled ReAct Workflow** records **Action Proposal Event**, **Review Decision Event**, **Review Override Event**, and **Clarification Requested Event** where applicable.
@@ -2600,6 +2640,7 @@ _Avoid_: Evidence content dump
 - Backend response settings may expose or hide **Governance Detail Projection**, but trace still records the full audit-safe facts.
 - **Response Detail Policy** sets the maximum **Governance Detail Projection** allowed for an Agent; API requests may request less detail but cannot exceed it.
 - **Intent Resolution** may appear in internal trace, receipt, Dashboard, or operator governance details when allowed by **Response Detail Policy**, but it must not appear in ordinary customer-facing response text.
+- **Retrieval Query Set** may appear in trace, Governance Receipt, Dashboard or operator governance details, and evaluation diagnostics, but must not appear in ordinary customer-facing response text or **Customer-Safe Response Projection**.
 - A **Customer-Safe Response Projection** is required for **Customer Service Chat Frontend** responses and must not expose **Governance Detail Projection**, trace links, receipt links, internal policy decisions, review results, or raw tool parameters.
 - A **Customer-Safe Response Projection** must not expose **Customer Escalation Handoff** as an `ESCALATED_TO_HUMAN` customer-visible outcome.
 - A **Customer-Safe Response Projection** may expose **Authorized Tool Result** support only through **Customer-Safe Source Label** values, not through tool names, trace identifiers, receipt identifiers, internal authorization reasons, or raw tool payloads.
@@ -3014,6 +3055,7 @@ _Avoid_: Evidence content dump
 - "Intent summary" could mean reusing **Reasoning Summary** or creating a separate contract. Resolved: use **Intent Resolution Contract** because user-intent understanding and ReAct action rationale are different audit facts.
 - "Multi-round Intent Resolution" could mean repeated hidden thinking inside one run or governed accumulation across user turns. Resolved: run Intent Resolution once per governed run and accumulate multi-turn understanding through **Controlled Conversation Context** and **Clarification Continuation Run**.
 - "Intent Resolution next action" could mean directly executing retrieval or tools. Resolved: **Intent Resolution** may recommend an action category only; the **ReAct Planner** must still produce the governed **ReAct Action Proposal** before execution can be reviewed.
+- "Retrieval Query Set" could mean an executable retrieval plan or a candidate query summary. Resolved: it is a bounded non-executing candidate set emitted with **Intent Resolution**; execution remains owned by governed Retrieval stages.
 - "Intent Resolution review" could mean a new Auto Review enforcement point or deterministic validation only. Resolved: V2 uses deterministic **Intent Resolution Contract** validation and trace recording, while executable actions stay governed by existing ReAct review and `PolicyEngine` nodes.
 - "Intent Resolution model config" could mean introducing a third Agent-owner model role or reusing planner configuration. Resolved: V2 reuses **ReAct Planner Config** but records Intent Resolution as a distinct model-call role and audit fact.
 - "Intent Resolution visibility" could mean showing the understood intent to every user or treating it as governance detail. Resolved: expose it only through internal trace, receipt, Dashboard, or allowed operator **Governance Detail Projection**, never as ordinary customer-facing response text.
@@ -3165,9 +3207,15 @@ _Avoid_: Evidence content dump
 - "Business Flow Skill Pack admission failure" could mean always refusing, always falling back, or branching by failure reason. Resolved: use **Business Flow Skill Pack Admission Failure Policy**: missing or ambiguous facts request clarification, non-admissible recommendations may use a safe **Default Business Flow Skill Pack** or refusal, and unauthorized or not-ready packs fail closed without fallback to broader authority.
 - "Business Flow Skill Pack Agent Contract location" could mean putting bindings under Workflow Template stage configuration, a top-level skills section, or capability configuration. Resolved: use **Agent Contract Skills Capability Configuration** under `capabilities.skills`; `workflow.stages[]` remains limited to Workflow Stage Prompt and context overrides.
 - "Business Flow Skill Pack capability contribution" could mean implicit installation of tools, knowledge, policy rules, or validators, or references to already-governed capabilities. Resolved: use **Business Flow Skill Pack Capability Reference Boundary**; a pack may reference, prioritize, constrain, and explain explicit frozen capabilities, but must not implicitly create, enable, or broaden them.
+- "Business Flow Skill Pack capability references" could mean pack-level governed capability references or per-stage ability bindings. Resolved: use **Business Flow Skill Pack Capability Reference Scope**; Knowledge, Tool, Policy, and Validator references belong to the pack definition, while stage addenda may only explain stage-specific use of those references.
 - "Business Flow Skill Pack storage" could mean a package-local definition or a Dashboard-managed global reusable registry. Resolved: first use **Package-Local Business Flow Skill Pack Definition** referenced from `capabilities.skills` and frozen at Agent Publication; defer a global Skill Pack Registry until the contract, admission, trace, and validation path are proven.
 - "Business Flow Skill Pack definition shape" could mean a minimal domain configuration record or a workflow/script DSL. Resolved: use **Business Flow Skill Pack Definition Field Set** for V1 and exclude executable steps, edges, scripts, model provider overrides, raw prompts, tool parameter templates, dynamic imports, and inline governed capability definitions.
 - "Business Flow Skill Pack context layering" could mean giving Intent Resolution every pack's full content or separating selection summaries from post-admission stage context. Resolved: Intent Resolution sees only **Business Flow Skill Pack Routing-Safe Summary** values, and later stages receive admitted **Business Flow Skill Pack Stage Context Application** for the Primary Business Flow Skill Pack.
+- "Stage-based Skills configuration" could mean Workflow Template stages own skill snippets or Skill Packs own stage-scoped addenda. Resolved: use **Stage-Scoped Business Flow Skill Pack Addendum** values owned by the Business Flow Skill Pack definition while Dashboard may render a stage-first editor grouped by embeddable Workflow Template Stages.
+- "Intent Resolution as a Skills stage slot" could mean injecting a Skill Pack's full stage guidance into the same stage that recommends and admits that pack. Resolved: `intent_resolution` uses **Business Flow Skill Pack Routing And Admission Configuration** and **Business Flow Skill Pack Routing-Safe Summary** only; ordinary **Stage-Scoped Business Flow Skill Pack Addendum** values begin after admission.
+- "Business Flow Skill Pack embeddable stages" could mean every Workflow Template Stage, every stage with configurable context, or only post-admission model-bearing Prompt stages. Resolved: V1 exposes **Business Flow Skill Pack Addendum Slot** values only for `plan`, `retrieval_review`, `tool_review`, and `model_answer`; `intent_resolution` remains routing/admission only, and execution/projection stages do not receive ordinary Skill Pack addenda.
+- "Business Flow Skill Pack addendum merge" could mean replacing the base Workflow Stage Prompt, prepending business guidance, or appending pack-owned guidance after the base prompt. Resolved: use **Append-Only Business Flow Skill Pack Addendum** so Skill Packs can specialize stage behavior without overriding Harness-owned or Agent-owned base prompt configuration.
+- "Dashboard Skills stage editing" could mean an editable all-pack-by-stage matrix or a stage-grouped editor for one selected pack. Resolved: use **Business Flow Skill Pack Stage-First Configuration Surface**; Dashboard edits one Business Flow Skill Pack at a time and may show a read-only cross-pack stage coverage matrix.
 - "Business Flow Skill Pack observability" could mean ordinary trace stores the full pack definition or only a safe projection. Resolved: ordinary trace, receipt, and Dashboard projections use **Business Flow Skill Pack Trace Summary**; full pack content belongs only in gated validation capture or explicit reveal paths.
 - "Business Flow Skill Pack publication validation" could mean warning-only checks or a fail-closed publication gate. Resolved: use **Business Flow Skill Pack Publication Validation** before Agent Publication; invalid enablement, duplicate ids, multiple defaults, missing definitions, unsupported fields, unresolved capability references, invalid stage addenda targets, unsafe Prompt text, oversized routing summaries, invalid admission settings, or missing definition digests block publication.
 - "Business Flow Skill Pack admission topology" could mean adding a new public Workflow Template Stage or keeping admission inside Intent Resolution. Resolved: use **Intent Resolution Business Flow Admission Substep** in the existing `intent_resolution` stage for V1; do not add a `business_flow_admission` Workflow Template Stage or change the Workflow Template Descriptor Version only for this admission decision.

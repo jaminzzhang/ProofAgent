@@ -10,6 +10,8 @@ V2 runs Intent Resolution once per governed run. Multi-turn intent understanding
 
 Intent Resolution may recommend the next action category, but it cannot create executable retrieval plans, tool calls, or final answers. The ReAct Planner must still emit the governed **ReAct Action Proposal**, and executable behavior remains subject to existing review, policy, Tool Gateway, evidence admission, validation, trace, and receipt paths.
 
+2026-06-18 amendment: ADR-0031 permits Intent Resolution to emit a bounded, non-executing **Retrieval Query Set** for knowledge-retrieval intents. This does not grant execution authority: governed Retrieval stages still review, select, execute, route, trace, and admit query results as evidence.
+
 V2 reuses **ReAct Planner Config** for model configuration while recording Intent Resolution as a distinct model-call role and audit fact. We chose this to avoid forcing Agent owners to configure a third model role before there is evidence that intent resolution needs independent model selection, while still preserving clear error attribution and evaluation diagnostics.
 
 Intent Resolution requires deterministic contract validation and trace recording, but V2 does not add an independent Auto Review enforcement point. This is acceptable because Intent Resolution is not an execution proposal surface; high-risk executable actions continue to be governed by existing ReAct review and `PolicyEngine` nodes.

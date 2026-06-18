@@ -228,6 +228,7 @@ class RetrievalConfig(FrozenModel):
     min_score: float = 0.2
     max_steps: int | None = None
     max_rounds: int = 3
+    max_queries: int = Field(default=3, ge=1, le=5)
     allow_query_rewrite: bool = False
     allow_rerank: bool = False
     allow_single_step_fallback: bool = False

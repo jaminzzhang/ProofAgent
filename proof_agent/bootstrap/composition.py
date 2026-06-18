@@ -141,7 +141,8 @@ def compose_harness_invocation(
                     provider=resolved_intent_model.model_config.provider,
                     name=resolved_intent_model.model_config.name,
                     params=resolved_intent_model.model_config.params,
-                )
+                ),
+                max_queries=resolved_manifest.retrieval.max_queries,
             )
     review_subagent = None
     if resolved_manifest.review is not None and resolved_manifest.review.subagent is not None:

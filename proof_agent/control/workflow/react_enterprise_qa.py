@@ -40,9 +40,15 @@ def emit_reasoning_summary(trace: TraceWriter, proposal: ReActActionProposal) ->
     )
 
 
-def emit_intent_resolution(trace: TraceWriter, resolution: IntentResolution) -> None:
+def emit_intent_resolution(
+    trace: TraceWriter,
+    resolution: IntentResolution,
+    *,
+    max_queries: int = 3,
+) -> None:
     """Emit an audit-safe intent summary without raw chain-of-thought."""
 
+    query_set = _retrieval_query_set_payload(resolution)
     trace.emit(
         "intent_resolution",
         status="ok",
@@ -56,6 +62,19 @@ def emit_intent_resolution(trace: TraceWriter, resolution: IntentResolution) -> 
             "risk_flags": list(resolution.risk_flags),
             "confidence": resolution.confidence,
             "recommended_next_action": resolution.recommended_next_action.value,
+            "retrieval_query_set": query_set,
+        },
+    )
+    trace.emit(
+        "retrieval_query_set",
+        status="ok",
+        payload={
+            "intent_resolution_id": resolution.resolution_id,
+            "query_count": len(query_set),
+            "max_queries": max_queries,
+            "queries": query_set,
+            "recommended_next_action": resolution.recommended_next_action.value,
+            "validation_status": "passed",
         },
     )
 
@@ -74,6 +93,18 @@ def emit_action_proposal(trace: TraceWriter, proposal: ReActActionProposal) -> N
             "risk_level": proposal.risk_level,
         },
     )
+
+
+def _retrieval_query_set_payload(resolution: IntentResolution) -> list[dict[str, Any]]:
+    return [
+        {
+            "query": item.query,
+            "intent_angle": item.intent_angle,
+            "required": item.required,
+            "reason": item.reason,
+        }
+        for item in resolution.retrieval_query_set
+    ]
 
 
 def review_action(

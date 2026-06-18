@@ -218,6 +218,7 @@ retrieval:
   strategy: single_step
   top_k: 2
   min_score: 0.2
+  max_queries: 3
 
 model:
   provider: deterministic
@@ -477,6 +478,7 @@ retrieval:
   strategy: agentic
   top_k: 5
   min_score: 0.2
+  max_queries: 3
   max_rounds: 3
 ```
 
@@ -843,7 +845,7 @@ When extending local indexed knowledge or remote retrieval:
 - Provider Adapter must return candidate `EvidenceChunk`.
 - Provider-specific config belongs to package-local Knowledge Sources or the Dashboard Knowledge Source store.
 - Agents bind package-local or shared Sources through `knowledge_bindings[].source_ref`; they do not own shared provider credentials or ingestion settings.
-- `top_k` and `min_score` belong under `retrieval`.
+- `top_k`, `min_score`, and the Intent Resolution Query Set budget `max_queries` belong under `retrieval`.
 - Retrieval cannot determine the final answer.
 - Whether evidence is sufficient is determined by evaluators, PolicyEngine, and validators.
 - Provider SDK types must not enter contracts.

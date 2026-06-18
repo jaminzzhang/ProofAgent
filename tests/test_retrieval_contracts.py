@@ -271,6 +271,19 @@ def test_retrieval_config_max_rounds_default() -> None:
     assert config.max_rounds == 3
 
 
+def test_retrieval_config_max_queries_default() -> None:
+    """max_queries defaults to 3."""
+    config = RetrievalConfig(strategy="agentic")
+    assert config.max_queries == 3
+
+
+@pytest.mark.parametrize("max_queries", [0, 6])
+def test_retrieval_config_rejects_out_of_range_max_queries(max_queries: int) -> None:
+    """max_queries is constrained to the approved 1..5 budget range."""
+    with pytest.raises(ValidationError):
+        RetrievalConfig(strategy="agentic", max_queries=max_queries)
+
+
 def test_retrieval_config_evaluator_model_default_none() -> None:
     """evaluator_model defaults to None."""
     config = RetrievalConfig(strategy="agentic")

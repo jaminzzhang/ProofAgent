@@ -81,6 +81,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             min_score=retrieval.get("min_score", 0.2),
             max_steps=retrieval.get("max_steps"),
             max_rounds=retrieval.get("max_rounds", 3),
+            max_queries=retrieval.get("max_queries", 3),
             allow_query_rewrite=retrieval.get("allow_query_rewrite", False),
             allow_rerank=retrieval.get("allow_rerank", False),
             allow_single_step_fallback=retrieval.get("allow_single_step_fallback", False),

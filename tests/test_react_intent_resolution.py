@@ -69,6 +69,10 @@ def test_deterministic_intent_resolver_recommends_retrieval_for_policy_question(
     assert resolution.recommended_next_action == ReActActionType.PLAN_RETRIEVAL
     assert resolution.domain_intent == "enterprise_policy_question"
     assert resolution.missing_fields == ()
+    assert [item.intent_angle for item in resolution.retrieval_query_set] == [
+        "primary_policy_question"
+    ]
+    assert resolution.retrieval_query_set[0].required is True
 
 
 def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
@@ -83,7 +87,15 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
           "ambiguities": [],
           "risk_flags": [],
           "confidence": 0.91,
-          "recommended_next_action": "plan_retrieval"
+          "recommended_next_action": "plan_retrieval",
+          "retrieval_query_set": [
+            {
+              "query": "inpatient reimbursement required documents",
+              "intent_angle": "required_documents",
+              "required": true,
+              "reason": "The user asks which documents are required."
+            }
+          ]
         }
         """
     )
@@ -113,7 +125,12 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
         "risk_flags",
         "confidence",
         "recommended_next_action",
+        "retrieval_query_set",
     ]
+    assert user_payload["retrieval_query_set_budget"]["max_queries"] == 3
+    assert resolution.retrieval_query_set[0].query == (
+        "inpatient reimbursement required documents"
+    )
 
 
 def test_llm_intent_resolver_repairs_missing_contract_fields_once() -> None:
@@ -139,7 +156,15 @@ def test_llm_intent_resolver_repairs_missing_contract_fields_once() -> None:
               "ambiguities": [],
               "risk_flags": [],
               "confidence": 0.76,
-              "recommended_next_action": "plan_retrieval"
+              "recommended_next_action": "plan_retrieval",
+              "retrieval_query_set": [
+                {
+                  "query": "insurance product advantages disadvantages",
+                  "intent_angle": "product_explanation",
+                  "required": true,
+                  "reason": "The user asks for product pros and cons."
+                }
+              ]
             }
             """,
         ]
@@ -194,6 +219,77 @@ def test_llm_intent_resolver_rejects_executable_final_answer_action() -> None:
             system_prompt="Resolve intent safely.",
             context_summary="",
         )
+
+
+def test_llm_intent_resolver_rejects_retrieval_intent_without_query_set() -> None:
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=FakeIntentProvider(
+            """
+            {
+              "resolution_id": "intent_llm_1",
+              "user_goal": "Understand reimbursement documents.",
+              "domain_intent": "insurance_claim_reimbursement_requirements",
+              "known_facts": ["The user asks about reimbursement documents."],
+              "missing_fields": [],
+              "ambiguities": [],
+              "risk_flags": [],
+              "confidence": 0.91,
+              "recommended_next_action": "plan_retrieval",
+              "retrieval_query_set": []
+            }
+            """
+        ),
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        resolver.resolve(
+            question="What documents are required for inpatient reimbursement?",
+            system_prompt="Resolve intent safely.",
+            context_summary="",
+        )
+
+    assert "retrieval_query_set" in exc.value.field_paths
+
+
+def test_llm_intent_resolver_rejects_over_budget_query_set() -> None:
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=FakeIntentProvider(
+            json.dumps(
+                {
+                    "resolution_id": "intent_llm_1",
+                    "user_goal": "Understand reimbursement documents.",
+                    "domain_intent": "insurance_claim_reimbursement_requirements",
+                    "known_facts": ["The user asks about reimbursement documents."],
+                    "missing_fields": [],
+                    "ambiguities": [],
+                    "risk_flags": [],
+                    "confidence": 0.91,
+                    "recommended_next_action": "plan_retrieval",
+                    "retrieval_query_set": [
+                        {
+                            "query": f"query {index}",
+                            "intent_angle": f"angle_{index}",
+                            "required": index == 0,
+                            "reason": f"Reason {index}",
+                        }
+                        for index in range(4)
+                    ],
+                }
+            )
+        ),
+        max_queries=3,
+    )
+
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        resolver.resolve(
+            question="What documents are required for inpatient reimbursement?",
+            system_prompt="Resolve intent safely.",
+            context_summary="",
+        )
+
+    assert "retrieval_query_set" in exc.value.field_paths
 
 
 def test_resolve_intent_resolver_uses_deterministic_provider() -> None:

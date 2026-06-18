@@ -149,7 +149,7 @@ Controlled ReAct Enterprise QA adds a planner loop around the same Control Plane
 ```text
 CLI / API / Conversation turn
   -> load react_enterprise_qa_v2 Agent Contract
-  -> resolve intent into an audit-safe summary
+  -> resolve intent into an audit-safe summary and bounded Retrieval Query Set
   -> ReAct planner proposes a fixed action
   -> emit reasoning_summary and action_proposal
   -> Harness Review Subagent suggests a decision for reviewed points
@@ -160,7 +160,7 @@ CLI / API / Conversation turn
   -> persist trace and Governance Receipt
 ```
 
-The planner and review subagent are inputs to governance, not governance authorities.
+The Intent Resolution Retrieval Query Set is a non-executing candidate query summary. The planner, Retrieval Query Set, and review subagent are inputs to governance, not governance authorities.
 
 Workflow Stage Prompt Configuration is a governed extension to the Agent Contract, not a
 new execution path. The backend-owned Workflow Template Descriptor publishes the fixed

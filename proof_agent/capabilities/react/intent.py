@@ -9,12 +9,14 @@ from proof_agent.capabilities.models.normalization import (
     ModelOutputNormalizationError,
     parse_model_contract,
 )
+from proof_agent.capabilities.react.planner import _deterministic_query
 from proof_agent.contracts import (
     IntentResolution,
     ModelMessage,
     ModelRequest,
     ModelRole,
     ReActActionType,
+    RetrievalQueryItem,
 )
 from proof_agent.contracts.manifest import ModelConfig, ReActPlannerConfig
 
@@ -36,6 +38,7 @@ _INTENT_REQUIRED_FIELDS = (
     "risk_flags",
     "confidence",
     "recommended_next_action",
+    "retrieval_query_set",
 )
 
 
@@ -98,6 +101,14 @@ class DeterministicIntentResolver:
             risk_flags=(),
             confidence=0.84,
             recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query=_deterministic_query(question),
+                    intent_angle="primary_policy_question",
+                    required=True,
+                    reason="The user asks a knowledge-backed enterprise policy question.",
+                ),
+            ),
         )
 
 
@@ -107,8 +118,12 @@ class LLMIntentResolver:
         *,
         config: ReActPlannerConfig,
         model_provider: ModelProvider | None = None,
+        max_queries: int = 3,
     ) -> None:
+        if max_queries < 1 or max_queries > 5:
+            raise ValueError("max_queries must be between 1 and 5")
         self.config = config
+        self.max_queries = max_queries
         self.model_provider = model_provider or resolve_provider(
             ModelConfig(
                 provider=config.provider,
@@ -142,6 +157,10 @@ class LLMIntentResolver:
                     "risk_flags": "array of strings",
                     "confidence": "number between 0 and 1",
                     "recommended_next_action": "one of allowed_recommended_next_actions",
+                    "retrieval_query_set": (
+                        "array of RetrievalQueryItem objects with query, "
+                        "intent_angle, required, and reason"
+                    ),
                 },
                 "example": {
                     "resolution_id": "intent_1",
@@ -153,7 +172,29 @@ class LLMIntentResolver:
                     "risk_flags": [],
                     "confidence": 0.82,
                     "recommended_next_action": "plan_retrieval",
+                    "retrieval_query_set": [
+                        {
+                            "query": "insurance product explanation",
+                            "intent_angle": "primary_policy_question",
+                            "required": True,
+                            "reason": "The user asks for a knowledge-backed explanation.",
+                        }
+                    ],
                 },
+            },
+            "retrieval_query_set_budget": {
+                "max_queries": self.max_queries,
+                "required_when": (
+                    "recommended_next_action is plan_retrieval and missing_fields is empty"
+                ),
+                "allowed_item_fields": ["query", "intent_angle", "required", "reason"],
+                "forbidden_item_fields": [
+                    "source_id",
+                    "provider",
+                    "filters",
+                    "top_k",
+                    "scope_id",
+                ],
             },
             "allowed_recommended_next_actions": [
                 action.value for action in sorted(_ALLOWED_RECOMMENDED_ACTIONS, key=str)
@@ -177,7 +218,10 @@ class LLMIntentResolver:
         )
         response = self.model_provider.generate(request)
         try:
-            return _parse_and_validate_intent_resolution(response.content)
+            return _parse_and_validate_intent_resolution(
+                response.content,
+                max_queries=self.max_queries,
+            )
         except ModelOutputNormalizationError as exc:
             repair_request = _intent_repair_request(
                 provider=self.model_provider.provider_name,
@@ -188,10 +232,17 @@ class LLMIntentResolver:
                 error=exc,
             )
         repair_response = self.model_provider.generate(repair_request)
-        return _parse_and_validate_intent_resolution(repair_response.content)
+        return _parse_and_validate_intent_resolution(
+            repair_response.content,
+            max_queries=self.max_queries,
+        )
 
 
-def _parse_and_validate_intent_resolution(content: str) -> IntentResolution:
+def _parse_and_validate_intent_resolution(
+    content: str,
+    *,
+    max_queries: int,
+) -> IntentResolution:
     resolution = parse_model_contract(
         content=content,
         contract_type=IntentResolution,
@@ -200,6 +251,7 @@ def _parse_and_validate_intent_resolution(content: str) -> IntentResolution:
     return _validate_intent_resolution(
         resolution,
         raw_content_length=len(content),
+        max_queries=max_queries,
     )
 
 
@@ -272,10 +324,14 @@ def _intent_repair_prompt() -> str:
     )
 
 
-def resolve_intent_resolver(config: ReActPlannerConfig) -> IntentResolver:
+def resolve_intent_resolver(
+    config: ReActPlannerConfig,
+    *,
+    max_queries: int = 3,
+) -> IntentResolver:
     if config.provider == "deterministic":
         return DeterministicIntentResolver()
-    return LLMIntentResolver(config=config)
+    return LLMIntentResolver(config=config, max_queries=max_queries)
 
 
 def _intent_control_prompt() -> str:
@@ -286,8 +342,10 @@ def _intent_control_prompt() -> str:
         "Summarize user intent, known facts, missing fields, ambiguities, risk flags, "
         "confidence, and a recommended_next_action. "
         "Use only allowed recommended_next_action values from the user message. "
-        "Do not return raw chain-of-thought, markdown, tool calls, retrieval plans, "
-        "final answers, or policy decisions."
+        "When the recommended_next_action is plan_retrieval and no missing_fields "
+        "block retrieval, include a bounded non-executing retrieval_query_set. "
+        "Do not return raw chain-of-thought, markdown, tool calls, executable retrieval "
+        "plans, final answers, or policy decisions."
     )
 
 
@@ -295,6 +353,7 @@ def _validate_intent_resolution(
     resolution: IntentResolution,
     *,
     raw_content_length: int,
+    max_queries: int,
 ) -> IntentResolution:
     if resolution.recommended_next_action not in _ALLOWED_RECOMMENDED_ACTIONS:
         raise ModelOutputNormalizationError(
@@ -308,6 +367,35 @@ def _validate_intent_resolution(
             contract_name="IntentResolution",
             violation_codes=("invalid_recommended_next_action",),
             field_paths=("recommended_next_action",),
+            violation_count=1,
+        )
+    if len(resolution.retrieval_query_set) > max_queries:
+        raise ModelOutputNormalizationError(
+            role="intent_resolution",
+            error_code="model_output_contract_validation_failed",
+            message="intent_resolution retrieval_query_set exceeds max_queries.",
+            raw_content_length=raw_content_length,
+            contract_name="IntentResolution",
+            violation_codes=("retrieval_query_set_over_budget",),
+            field_paths=("retrieval_query_set",),
+            violation_count=1,
+        )
+    if (
+        resolution.recommended_next_action == ReActActionType.PLAN_RETRIEVAL
+        and not resolution.missing_fields
+        and not resolution.retrieval_query_set
+    ):
+        raise ModelOutputNormalizationError(
+            role="intent_resolution",
+            error_code="model_output_contract_validation_failed",
+            message=(
+                "plan_retrieval intent resolution without blocking missing_fields "
+                "requires retrieval_query_set."
+            ),
+            raw_content_length=raw_content_length,
+            contract_name="IntentResolution",
+            violation_codes=("retrieval_query_set_required",),
+            field_paths=("retrieval_query_set",),
             violation_count=1,
         )
     if (

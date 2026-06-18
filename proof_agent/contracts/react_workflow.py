@@ -40,6 +40,22 @@ class ReasoningSummary(FrozenModel):
     required_evidence: tuple[str, ...]
 
 
+class RetrievalQueryItem(FrozenModel):
+    """Audit-safe candidate Knowledge retrieval query emitted by Intent Resolution."""
+
+    query: str
+    intent_angle: str
+    required: bool
+    reason: str
+
+    @field_validator("query", "intent_angle", "reason", mode="after")
+    @classmethod
+    def require_non_empty_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must be non-empty")
+        return value
+
+
 class IntentResolution(FrozenModel):
     """Audit-safe user intent understanding before ReAct action planning."""
 
@@ -52,6 +68,12 @@ class IntentResolution(FrozenModel):
     risk_flags: tuple[str, ...]
     confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     recommended_next_action: ReActActionType
+    retrieval_query_set: tuple[RetrievalQueryItem, ...] = Field(default_factory=tuple)
+
+    @field_validator("retrieval_query_set", mode="after")
+    @classmethod
+    def freeze_retrieval_query_set(cls, value: Any) -> Any:
+        return freeze_value(value)
 
 
 class BusinessFlowSkillPackRecommendation(FrozenModel):

@@ -26,6 +26,7 @@ from proof_agent.contracts import (
     ReceiptOutcome,
     WorkflowStagePromptConfig,
     WorkflowTemplateExecutionInput,
+    RetrievalQueryItem,
 )
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
 from proof_agent.control.workflow.business_flow_skill_packs import (
@@ -185,7 +186,11 @@ class ReActEnterpriseQAStageBehavior:
             stage_id="intent_resolution",
             stage_label=self._stage_label("intent_resolution"),
         )
-        emit_intent_resolution(self.trace, resolution)
+        emit_intent_resolution(
+            self.trace,
+            resolution,
+            max_queries=self.manifest.retrieval.max_queries,
+        )
         business_flow_delta = self._business_flow_skill_pack_admission_delta(
             resolution,
         )
@@ -414,6 +419,8 @@ class ReActEnterpriseQAStageBehavior:
                 max_rounds=self.manifest.retrieval.max_rounds,
                 planner_model=self.invocation.retrieval_planner_model,
                 evaluator_model=self.invocation.retrieval_evaluator_model,
+                retrieval_query_set=_retrieval_query_set_from_state(state),
+                max_queries=self.manifest.retrieval.max_queries,
                 force_empty=state["question"] == UNSUPPORTED_QUESTION,
             ),
             execution_mode="react_reviewed_retrieval",
@@ -1247,7 +1254,32 @@ def _intent_resolution_state_dict(resolution: IntentResolution) -> dict[str, Any
         "risk_flags": list(resolution.risk_flags),
         "confidence": resolution.confidence,
         "recommended_next_action": resolution.recommended_next_action.value,
+        "retrieval_query_set": [
+            {
+                "query": item.query,
+                "intent_angle": item.intent_angle,
+                "required": item.required,
+                "reason": item.reason,
+            }
+            for item in resolution.retrieval_query_set
+        ],
     }
+
+
+def _retrieval_query_set_from_state(
+    state: Mapping[str, Any],
+) -> tuple[RetrievalQueryItem, ...]:
+    resolution = state.get("intent_resolution")
+    if not isinstance(resolution, Mapping):
+        return ()
+    raw_items = resolution.get("retrieval_query_set")
+    if not isinstance(raw_items, list | tuple):
+        return ()
+    items: list[RetrievalQueryItem] = []
+    for raw_item in raw_items:
+        if isinstance(raw_item, Mapping):
+            items.append(RetrievalQueryItem.model_validate(dict(raw_item)))
+    return tuple(items)
 
 
 def _conversation_context_summary(conversation_context: ContextAdmission | None) -> str:

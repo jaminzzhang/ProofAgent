@@ -21,6 +21,7 @@ from proof_agent.contracts import (
     ModelRole,
     PolicyDecision,
     PolicyDecisionType,
+    RetrievalQueryItem,
     ValidationResult,
 )
 from proof_agent.control.policy.engine import PolicyEngine
@@ -60,6 +61,8 @@ class KnowledgeRetrievalRequest:
     max_rounds: int | None = None
     planner_model: ModelConfig | None = None
     evaluator_model: ModelConfig | None = None
+    retrieval_query_set: tuple[RetrievalQueryItem, ...] = ()
+    max_queries: int = 3
     force_empty: bool = False
 
 
@@ -81,6 +84,7 @@ class _RoutingDecision:
 class _ProviderStepResult:
     evidence: tuple[EvidenceChunk, ...]
     no_evidence_reason_code: str | None = None
+    required_provider_failed: bool = False
 
 
 class _GovernedRoutingModelProvider:
@@ -263,7 +267,13 @@ class KnowledgeRetrievalService:
         reviewed: bool,
         execution_mode: str | None,
     ) -> KnowledgeRetrievalResult:
-        step_context = self._step_context(request, execution_mode=execution_mode)
+        query_item = _single_step_query_item(request)
+        step_context = self._step_context(
+            request,
+            execution_mode=execution_mode,
+            question=_query_text(request, query_item),
+            query_item=query_item,
+        )
         if not reviewed:
             retrieval_decision = self._policy.evaluate(
                 EnforcementPoint.BEFORE_RETRIEVAL,
@@ -285,6 +295,7 @@ class KnowledgeRetrievalService:
             request,
             step_context=step_context,
             step_id="step_1",
+            query_item=query_item,
         )
 
     def _run_agentic(
@@ -314,6 +325,8 @@ class KnowledgeRetrievalService:
                 "provider": self._knowledge_provider.provider_name,
                 "decision": decision_value,
                 "question": request.question,
+                "retrieval_query_count": len(request.retrieval_query_set),
+                "max_queries": request.max_queries,
             },
         )
         if not retrieval_allowed:
@@ -322,6 +335,25 @@ class KnowledgeRetrievalService:
                 step_id="step_1",
                 min_score=request.min_score,
             )
+
+        query_set_step = self._execute_agentic_query_set(
+            request,
+            execution_mode=execution_mode,
+        )
+        query_set_evidence = query_set_step.evidence
+        if request.force_empty or query_set_step.required_provider_failed:
+            query_set_evidence = ()
+        if request.retrieval_query_set:
+            query_set_evidence_result = self._evaluate_evidence(
+                query_set_evidence,
+                min_score=request.min_score,
+                no_evidence_reason_code=query_set_step.no_evidence_reason_code,
+            )
+            if query_set_evidence_result.status == "passed":
+                return KnowledgeRetrievalResult(
+                    evidence=query_set_evidence,
+                    evidence_result=query_set_evidence_result,
+                )
 
         planner_provider = (
             self._model_resolver(request.planner_model)
@@ -334,15 +366,26 @@ class KnowledgeRetrievalService:
             else None
         )
         if planner_provider is None or evaluator_provider is None:
-            self._trace.emit(
-                "retrieval_step",
-                status="ok",
-                payload={
-                    "fallback_reason": "planner or evaluator model not configured",
-                    "fallback_strategy": "single_step",
-                    "provider": self._knowledge_provider.provider_name,
-                },
-            )
+            if not request.retrieval_query_set:
+                self._trace.emit(
+                    "retrieval_step",
+                    status="ok",
+                    payload={
+                        "fallback_reason": "planner or evaluator model not configured",
+                        "fallback_strategy": "single_step",
+                        "provider": self._knowledge_provider.provider_name,
+                    },
+                )
+            if request.retrieval_query_set:
+                evidence_result = self._evaluate_evidence(
+                    query_set_evidence,
+                    min_score=request.min_score,
+                    no_evidence_reason_code=query_set_step.no_evidence_reason_code,
+                )
+                return KnowledgeRetrievalResult(
+                    evidence=query_set_evidence,
+                    evidence_result=evidence_result,
+                )
             return self._run_reviewed_or_step_gated_single_step(
                 request,
                 reviewed=reviewed,
@@ -385,7 +428,7 @@ class KnowledgeRetrievalService:
         evidence = (
             ()
             if request.force_empty or provider_adapter.required_provider_failed
-            else planned.evidence
+            else (*query_set_evidence, *planned.evidence)
         )
         evidence_result = self._evaluate_evidence(
             evidence,
@@ -394,6 +437,40 @@ class KnowledgeRetrievalService:
         )
         return KnowledgeRetrievalResult(evidence=evidence, evidence_result=evidence_result)
 
+    def _execute_agentic_query_set(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        execution_mode: str | None,
+    ) -> _ProviderStepResult:
+        items = _ordered_query_items(request)
+        if not items:
+            return _ProviderStepResult(evidence=())
+        evidence: list[EvidenceChunk] = []
+        no_evidence_reason_code: str | None = None
+        for index, item in enumerate(items, start=1):
+            round_id = f"query_set_{index:02d}"
+            try:
+                provider_step = self._execute_agentic_round(
+                    request,
+                    query=item.query,
+                    round_id=round_id,
+                    execution_mode=execution_mode,
+                    query_item=item,
+                )
+            except Exception:
+                return _ProviderStepResult(
+                    evidence=tuple(evidence),
+                    no_evidence_reason_code="required_provider_failure",
+                    required_provider_failed=True,
+                )
+            evidence.extend(provider_step.evidence)
+            no_evidence_reason_code = provider_step.no_evidence_reason_code
+        return _ProviderStepResult(
+            evidence=tuple(evidence),
+            no_evidence_reason_code=no_evidence_reason_code,
+        )
+
     def _run_reviewed_or_step_gated_single_step(
         self,
         request: KnowledgeRetrievalRequest,
@@ -401,7 +478,13 @@ class KnowledgeRetrievalService:
         reviewed: bool,
         execution_mode: str | None,
     ) -> KnowledgeRetrievalResult:
-        step_context = self._step_context(request, execution_mode=execution_mode)
+        query_item = _single_step_query_item(request)
+        step_context = self._step_context(
+            request,
+            execution_mode=execution_mode,
+            question=_query_text(request, query_item),
+            query_item=query_item,
+        )
         if not reviewed:
             step_decision = self._policy.evaluate(
                 EnforcementPoint.BEFORE_RETRIEVAL_STEP,
@@ -418,6 +501,7 @@ class KnowledgeRetrievalService:
             request,
             step_context=step_context,
             step_id="step_1",
+            query_item=query_item,
         )
 
     def _execute_single_step(
@@ -426,11 +510,12 @@ class KnowledgeRetrievalService:
         *,
         step_context: dict[str, Any],
         step_id: str,
+        query_item: RetrievalQueryItem | None = None,
     ) -> KnowledgeRetrievalResult:
         self._trace.emit("retrieval_step", status="ok", payload=step_context)
         provider_step = self._execute_provider_step(
             request,
-            query=request.question,
+            query=_query_text(request, query_item),
             step_id=step_id,
         )
         evidence_result = self._evaluate_evidence(
@@ -450,12 +535,14 @@ class KnowledgeRetrievalService:
         query: str,
         round_id: str,
         execution_mode: str | None,
+        query_item: RetrievalQueryItem | None = None,
     ) -> _ProviderStepResult:
         step_context = self._step_context(
             request,
             execution_mode=execution_mode,
             question=query,
             step_id=round_id,
+            query_item=query_item,
         )
         step_context["round_id"] = round_id
         step_context["strategy"] = "agentic"
@@ -708,6 +795,7 @@ class KnowledgeRetrievalService:
         execution_mode: str | None,
         question: str | None = None,
         step_id: str = "step_1",
+        query_item: RetrievalQueryItem | None = None,
     ) -> dict[str, Any]:
         context: dict[str, Any] = {
             "question": question or request.question,
@@ -715,11 +803,68 @@ class KnowledgeRetrievalService:
             "provider": self._knowledge_provider.provider_name,
             "top_k": request.top_k,
         }
+        if query_item is not None:
+            context["retrieval_query_item"] = _query_item_payload(query_item)
         if request.max_steps is not None:
             context["max_steps"] = request.max_steps
         if execution_mode is not None:
             context["execution_mode"] = execution_mode
         return context
+
+
+def _single_step_query_item(
+    request: KnowledgeRetrievalRequest,
+) -> RetrievalQueryItem | None:
+    items = _ordered_query_items(request)
+    if not items:
+        return None
+    required = tuple(item for item in items if item.required)
+    return (required or items)[0]
+
+
+def _ordered_query_items(
+    request: KnowledgeRetrievalRequest,
+) -> tuple[RetrievalQueryItem, ...]:
+    if not request.retrieval_query_set:
+        return ()
+    if request.max_queries < 1 or request.max_queries > 5:
+        raise ProofAgentError(
+            "PA_RETRIEVAL_001",
+            "retrieval.max_queries must be between 1 and 5.",
+            "Set retrieval.max_queries to a value from 1 through 5.",
+        )
+    if len(request.retrieval_query_set) > request.max_queries:
+        raise ProofAgentError(
+            "PA_RETRIEVAL_001",
+            "Retrieval Query Set exceeds retrieval.max_queries.",
+            "Reduce the Query Set size or increase retrieval.max_queries up to 5.",
+        )
+    required = tuple(item for item in request.retrieval_query_set if item.required)
+    optional = tuple(item for item in request.retrieval_query_set if not item.required)
+    if len(required) > request.max_queries:
+        raise ProofAgentError(
+            "PA_RETRIEVAL_001",
+            "Required Retrieval Query Items exceed retrieval.max_queries.",
+            "Reduce required query items or increase retrieval.max_queries up to 5.",
+        )
+    remaining = request.max_queries - len(required)
+    return (*required, *optional[:remaining])
+
+
+def _query_text(
+    request: KnowledgeRetrievalRequest,
+    query_item: RetrievalQueryItem | None,
+) -> str:
+    return query_item.query if query_item is not None else request.question
+
+
+def _query_item_payload(item: RetrievalQueryItem) -> dict[str, Any]:
+    return {
+        "query": item.query,
+        "intent_angle": item.intent_angle,
+        "required": item.required,
+        "reason": item.reason,
+    }
 
 
 def _emit_policy(trace: TraceWriter, decision: PolicyDecision) -> None:

@@ -166,6 +166,7 @@ from proof_agent.contracts.react_workflow import (
     ReActActionProposal,
     ReActActionType,
     ReasoningSummary,
+    RetrievalQueryItem,
     ReviewDecision,
 )
 from proof_agent.contracts.dashboard import (
@@ -362,6 +363,7 @@ __all__ = [
     "ResolvedKnowledgeBindingSet",
     "ResolvedWorkflowStageRuntimeConfiguration",
     "RetrievalConfig",
+    "RetrievalQueryItem",
     "ReviewConfig",
     "ReviewDecision",
     "ReviewSubagentConfig",
