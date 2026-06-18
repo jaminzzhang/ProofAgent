@@ -102,6 +102,7 @@ admission: {}
         encoding="utf-8",
     )
     manifest_path = tmp_path / "agent.yaml"
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
     manifest = AgentManifest(
         name="skill_pack_stage_test",
         purpose="Reject unknown Skill Pack stages.",
@@ -139,3 +140,68 @@ admission: {}
 
     assert exc.value.code == "PA_CONFIG_002"
     assert "unsupported workflow stage id: invented_stage" in exc.value.message
+
+
+def test_business_flow_skill_pack_rejects_intent_resolution_addendum_slot(
+    tmp_path: Path,
+) -> None:
+    definition_path = tmp_path / "claims.yaml"
+    definition_path.write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns:
+  - "claim status"
+stage_prompt_addenda:
+  intent_resolution:
+    business_context: "Classify claim-servicing intent only."
+knowledge_binding_refs: []
+tool_contract_refs: []
+policy_rule_refs: []
+validator_refs: []
+admission: {}
+""",
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "agent.yaml"
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    manifest = AgentManifest(
+        name="skill_pack_stage_test",
+        purpose="Reject pre-admission Skill Pack addenda.",
+        workflow=WorkflowConfig(runtime="langgraph", template="react_enterprise_qa_v2"),
+        package_knowledge_sources=(),
+        knowledge_bindings=(),
+        retrieval=RetrievalConfig(strategy="agentic", max_steps=2),
+        model=ModelConfig(provider="deterministic", name="demo"),
+        policy=PolicyConfig(file=tmp_path / "policy.yaml"),
+        capabilities=CapabilitiesConfig(
+            tools=ToolCapabilityConfig(enabled=False),
+            memory=MemoryCapabilityConfig(enabled=True, provider="session"),
+            skills=SkillsCapabilityConfig(
+                enabled=True,
+                business_flows=(
+                    BusinessFlowSkillPackBindingConfig(
+                        id="claims_qa",
+                        definition=definition_path,
+                    ),
+                ),
+            ),
+        ),
+        audit=AuditConfig(
+            trace_path=tmp_path / "runs" / "trace.jsonl",
+            receipt_path=tmp_path / "runs" / "governance_receipt.md",
+        ),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_business_flow_skill_pack_set(
+            manifest,
+            template=resolve_workflow_template("react_enterprise_qa_v2"),
+            manifest_path=manifest_path,
+        )
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "unsupported Business Flow Skill Pack addendum stage" in exc.value.message
+    assert "intent_resolution" in exc.value.message

@@ -39,7 +39,7 @@ export function AgentDetailShell({
     },
     {
       title: 'Design',
-      items: ['workflow', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response']
+      items: ['workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response']
         .map((id) => moduleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
     },

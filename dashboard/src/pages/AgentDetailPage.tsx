@@ -4,6 +4,9 @@ import {
   bindKnowledgeSourceToDraft,
   chatUrl,
   createModelConnection,
+  createConfigDraftSkillPack,
+  deleteConfigDraftSkillPack,
+  fetchConfigDraftSkills,
   fetchWorkflowTemplate,
   fetchKnowledgeSources,
   fetchModelConnections,
@@ -12,11 +15,19 @@ import {
   rollbackConfigVersion,
   unbindKnowledgeSourceFromDraft,
   updateConfigDraft,
+  updateConfigDraftSkillPack,
   updateConfigDraftContract,
   updateWorkflowStages,
   validateConfigDraft,
 } from '../api/client'
-import type { SharedModelConnection, KnowledgeSource, WorkflowTemplateDescriptor } from '../api/types'
+import type {
+  BusinessFlowSkillPackConfiguration,
+  BusinessFlowSkillPackCreateRequest,
+  BusinessFlowSkillPackUpdateRequest,
+  SharedModelConnection,
+  KnowledgeSource,
+  WorkflowTemplateDescriptor,
+} from '../api/types'
 import { CodeBlock } from '../components/CodeBlock'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
@@ -26,6 +37,7 @@ import { ModuleEditor } from '../components/agent/ModuleEditor'
 import { ModelModuleEditor } from '../components/agent/ModelModuleEditor'
 import { KnowledgeModuleEditor } from '../components/agent/KnowledgeModuleEditor'
 import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
+import { SkillsModuleEditor } from '../components/agent/SkillsModuleEditor'
 import { WorkflowModuleEditor } from '../components/agent/WorkflowModuleEditor'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
@@ -42,7 +54,7 @@ import {
   updateAgentYamlField,
 } from '../utils/agentYaml'
 
-type Tab = 'general' | 'workflow' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
+type Tab = 'general' | 'workflow' | 'skills' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
 
 export function AgentDetailPage() {
   const { agentId, draftId } = useParams<{ agentId: string; draftId: string }>()
@@ -68,6 +80,9 @@ export function AgentDetailPage() {
   const [modelConnectionsLoaded, setModelConnectionsLoaded] = useState(false)
   const [workflowDescriptor, setWorkflowDescriptor] = useState<WorkflowTemplateDescriptor | null>(null)
   const [workflowDescriptorError, setWorkflowDescriptorError] = useState<string | null>(null)
+  const [skillsConfig, setSkillsConfig] = useState<BusinessFlowSkillPackConfiguration | null>(null)
+  const [skillsLoaded, setSkillsLoaded] = useState(false)
+  const [skillsError, setSkillsError] = useState<string | null>(null)
 
   useEffect(() => {
     if (draft) {
@@ -149,6 +164,25 @@ export function AgentDetailPage() {
     }
   }, [activeTab, workflowTemplateName])
 
+  useEffect(() => {
+    if (activeTab !== 'skills' || skillsLoaded || !agentId || !draftId) return
+    let mounted = true
+    fetchConfigDraftSkills(agentId, draftId)
+      .then((response) => {
+        if (!mounted) return
+        setSkillsConfig(response)
+        setSkillsLoaded(true)
+        setSkillsError(null)
+      })
+      .catch((err) => {
+        if (!mounted) return
+        setSkillsError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      mounted = false
+    }
+  }, [activeTab, agentId, draftId, skillsLoaded])
+
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
   const isCustomerFacing = Boolean(extractAgentYamlSection(agentYaml, 'customer'))
 
@@ -206,6 +240,42 @@ export function AgentDetailPage() {
     return previewWorkflowStageContext(agentId, draftId, stageId, payload)
   }
 
+  async function createSkillPack(payload: BusinessFlowSkillPackCreateRequest) {
+    if (!agentId || !draftId) return
+    await runAction('skills', async () => {
+      const updated = await createConfigDraftSkillPack(agentId, draftId, payload)
+      setSkillsConfig(updated)
+      setSkillsLoaded(true)
+      setSkillsError(null)
+      setStatus('Skill Pack created.')
+      refresh()
+    })
+  }
+
+  async function updateSkillPack(packId: string, payload: BusinessFlowSkillPackUpdateRequest) {
+    if (!agentId || !draftId) return
+    await runAction('skills', async () => {
+      const updated = await updateConfigDraftSkillPack(agentId, draftId, packId, payload)
+      setSkillsConfig(updated)
+      setSkillsLoaded(true)
+      setSkillsError(null)
+      setStatus('Skill Pack saved.')
+      refresh()
+    })
+  }
+
+  async function deleteSkillPack(packId: string) {
+    if (!agentId || !draftId) return
+    await runAction('skills', async () => {
+      const updated = await deleteConfigDraftSkillPack(agentId, draftId, packId)
+      setSkillsConfig(updated)
+      setSkillsLoaded(true)
+      setSkillsError(null)
+      setStatus('Skill Pack deleted.')
+      refresh()
+    })
+  }
+
   async function bindKnowledgeSource(payload: Parameters<typeof bindKnowledgeSourceToDraft>[2]) {
     if (!agentId || !draftId || !payload.source_id) return
     await runAction('knowledge-binding', async () => {
@@ -249,6 +319,7 @@ export function AgentDetailPage() {
   const CONFIGURE_MODULES = [
     { id: 'general', label: 'Overview' },
     { id: 'workflow', label: 'Workflow' },
+    { id: 'skills', label: 'Skills' },
     { id: 'knowledge', label: 'Knowledge' },
     { id: 'tools', label: 'Tools' },
     { id: 'policy', label: 'Policy' },
@@ -377,6 +448,18 @@ export function AgentDetailPage() {
           onPreviewStage={previewWorkflowStage}
           busy={busy === 'workflow'}
           stageBusy={busy === 'workflow-stages'}
+        />
+      )}
+
+      {activeTab === 'skills' && (
+        <SkillsModuleEditor
+          config={skillsConfig}
+          loading={!skillsLoaded && !skillsError}
+          error={skillsError}
+          busy={busy === 'skills'}
+          onCreatePack={createSkillPack}
+          onUpdatePack={updateSkillPack}
+          onDeletePack={deleteSkillPack}
         />
       )}
 
@@ -585,6 +668,7 @@ function agentDetailTab(value: string | null): Tab {
   const tabs: Tab[] = [
     'general',
     'workflow',
+    'skills',
     'knowledge',
     'tools',
     'policy',

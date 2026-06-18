@@ -23,6 +23,13 @@ SUPPORTED_BUSINESS_FLOW_VALIDATOR_REFS = {
     "no_secret_strings",
 }
 
+SUPPORTED_BUSINESS_FLOW_ADDENDUM_STAGE_IDS = (
+    "plan",
+    "retrieval_review",
+    "tool_review",
+    "model_answer",
+)
+
 
 def load_business_flow_skill_pack_set(
     manifest: AgentManifest,
@@ -116,6 +123,17 @@ def _validate_stage_prompt_addenda(
 ) -> None:
     for stage_id, prompt in definition.stage_prompt_addenda.items():
         stage_descriptor = template.stage(stage_id)
+        if stage_id not in SUPPORTED_BUSINESS_FLOW_ADDENDUM_STAGE_IDS:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"unsupported Business Flow Skill Pack addendum stage: {stage_id}",
+                (
+                    "Use post-admission addendum stages only: "
+                    + ", ".join(sorted(SUPPORTED_BUSINESS_FLOW_ADDENDUM_STAGE_IDS))
+                    + ". Configure Intent Resolution through routing-safe Skill Pack fields."
+                ),
+                artifact_path=definition_path,
+            )
         validate_workflow_stage_prompt_config(
             stage_id=stage_id,
             prompt=prompt,

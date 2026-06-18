@@ -1,18 +1,22 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindKnowledgeSourceToDraft,
   createModelConnection,
+  fetchConfigDraftSkills,
   fetchValidationCapture,
   fetchRuns,
   fetchWorkflowTemplate,
   fetchKnowledgeSources,
   fetchModelConnections,
   previewWorkflowStageContext,
+  createConfigDraftSkillPack,
+  deleteConfigDraftSkillPack,
   updateConfigDraft,
+  updateConfigDraftSkillPack,
   updateConfigDraftContract,
   updateWorkflowStages,
   validateConfigDraft,
@@ -24,6 +28,9 @@ vi.mock('../../api/client', () => ({
   bindKnowledgeSourceToDraft: vi.fn(),
   chatUrl: (path: string) => `http://localhost:5174${path}`,
   createModelConnection: vi.fn(),
+  createConfigDraftSkillPack: vi.fn(),
+  deleteConfigDraftSkillPack: vi.fn(),
+  fetchConfigDraftSkills: vi.fn(),
   fetchRuns: vi.fn(),
   fetchValidationCapture: vi.fn(),
   fetchWorkflowTemplate: vi.fn(),
@@ -34,6 +41,7 @@ vi.mock('../../api/client', () => ({
   rollbackConfigVersion: vi.fn(),
   unbindKnowledgeSourceFromDraft: vi.fn(),
   updateConfigDraft: vi.fn(),
+  updateConfigDraftSkillPack: vi.fn(),
   updateConfigDraftContract: vi.fn(),
   updateWorkflowStages: vi.fn(),
   validateConfigDraft: vi.fn(),
@@ -115,6 +123,110 @@ describe('AgentDetailPage', () => {
     vi.clearAllMocks()
     vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchConfigDraftSkills).mockResolvedValue({
+      enabled: true,
+      template_name: 'react_enterprise_qa_v2',
+      template_descriptor_version: 'react_enterprise_qa.v2',
+      addendum_slots: [
+        { stage_id: 'plan', stage_label: 'Plan' },
+        { stage_id: 'retrieval_review', stage_label: 'Retrieval Review' },
+        { stage_id: 'tool_review', stage_label: 'Tool Review' },
+        { stage_id: 'model_answer', stage_label: 'Model Answer' },
+      ],
+      packs: [
+        {
+          id: 'claims_qa',
+          label: 'Claims QA',
+          description: 'Claim handling guidance.',
+          definition: 'skills/claims.yaml',
+          default: true,
+          routing_admission: {
+            intent_patterns: ['claim status'],
+            intent_taxonomy_refs: [],
+            admission: { min_confidence: 0.6 },
+            routing_safe_summary: {
+              id: 'claims_qa',
+              label: 'Claims QA',
+              default: true,
+              admission: { min_confidence: 0.6 },
+            },
+          },
+          capability_refs: {
+            knowledge_binding_refs: ['kb_local'],
+            tool_contract_refs: [],
+            policy_rule_refs: ['answering.require_retrieval'],
+            validator_refs: [],
+          },
+          stage_addenda: [
+            {
+              stage_id: 'plan',
+              stage_label: 'Plan',
+              configured: true,
+              prompt: {
+                business_context: 'Claims stage context.',
+                task_instructions: ['Prefer retrieval.'],
+                output_preferences: [],
+              },
+              preview: {
+                merge_mode: 'append',
+                business_context: 'Base plan context.\n\nClaims stage context.',
+                task_instructions: ['Use governed planning.', 'Prefer retrieval.'],
+                output_preferences: [],
+              },
+            },
+            {
+              stage_id: 'retrieval_review',
+              stage_label: 'Retrieval Review',
+              configured: false,
+              prompt: { business_context: '', task_instructions: [], output_preferences: [] },
+              preview: {
+                merge_mode: 'append',
+                business_context: '',
+                task_instructions: [],
+                output_preferences: [],
+              },
+            },
+            {
+              stage_id: 'tool_review',
+              stage_label: 'Tool Review',
+              configured: false,
+              prompt: { business_context: '', task_instructions: [], output_preferences: [] },
+              preview: {
+                merge_mode: 'append',
+                business_context: '',
+                task_instructions: [],
+                output_preferences: [],
+              },
+            },
+            {
+              stage_id: 'model_answer',
+              stage_label: 'Model Answer',
+              configured: false,
+              prompt: { business_context: '', task_instructions: [], output_preferences: [] },
+              preview: {
+                merge_mode: 'append',
+                business_context: '',
+                task_instructions: [],
+                output_preferences: [],
+              },
+            },
+          ],
+          coverage: {
+            configured_stage_ids: ['plan'],
+            missing_stage_ids: ['retrieval_review', 'tool_review', 'model_answer'],
+          },
+        },
+      ],
+    })
+    vi.mocked(createConfigDraftSkillPack).mockImplementation(async () =>
+      vi.mocked(fetchConfigDraftSkills).getMockImplementation()?.('agent-1', 'draft-1') as never,
+    )
+    vi.mocked(updateConfigDraftSkillPack).mockImplementation(async () =>
+      vi.mocked(fetchConfigDraftSkills).getMockImplementation()?.('agent-1', 'draft-1') as never,
+    )
+    vi.mocked(deleteConfigDraftSkillPack).mockImplementation(async () =>
+      vi.mocked(fetchConfigDraftSkills).getMockImplementation()?.('agent-1', 'draft-1') as never,
+    )
     vi.mocked(updateConfigDraft).mockImplementation(async (_agentId, _draftId, payload) => ({
       ...mockDraft,
       ...payload,
@@ -630,6 +742,225 @@ workflow:
       expect(updateConfigDraftContract).toHaveBeenCalled()
     })
     expect(latestSavedAgentYaml()).toContain('uri: "sqlite:///runs/config/checkpoints-v2.db"')
+  })
+
+  it('renders Business Flow Skill Packs as the default Skills list view', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    expect(await screen.findByText('Skills Configuration')).toBeInTheDocument()
+    expect(fetchConfigDraftSkills).toHaveBeenCalledWith('agent-1', 'draft-1')
+    expect(screen.getByText('Business Flow Skill Packs')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New Skill Pack' })).toBeInTheDocument()
+    expect(screen.getByText('Claims QA')).toBeInTheDocument()
+    expect(screen.getByText('claims_qa')).toBeInTheDocument()
+    expect(screen.getByText('skills/claims.yaml')).toBeInTheDocument()
+    expect(screen.getByText('Default')).toBeInTheDocument()
+    expect(screen.getByText('claim status')).toBeInTheDocument()
+    expect(screen.getByText('1/4 stages configured')).toBeInTheDocument()
+    expect(screen.getByText('1 knowledge / 0 tools / 1 policy / 0 validators')).toBeInTheDocument()
+    expect(screen.getByText('min confidence 0.6')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit Claims QA' })).toBeInTheDocument()
+    expect(screen.queryByText('Routing & Admission')).not.toBeInTheDocument()
+    expect(screen.queryByDisplayValue('Claims stage context.')).not.toBeInTheDocument()
+  })
+
+  it('shows available Skill Pack addendum slots before any pack exists', async () => {
+    vi.mocked(fetchConfigDraftSkills).mockResolvedValueOnce({
+      enabled: false,
+      template_name: 'react_enterprise_qa_v2',
+      template_descriptor_version: 'react_enterprise_qa.v2',
+      addendum_slots: [
+        { stage_id: 'plan', stage_label: 'Plan' },
+        { stage_id: 'retrieval_review', stage_label: 'Retrieval Review' },
+        { stage_id: 'tool_review', stage_label: 'Tool Review' },
+        { stage_id: 'model_answer', stage_label: 'Model Answer' },
+      ],
+      packs: [],
+    })
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    expect(await screen.findByText('Business Flow Skill Packs')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New Skill Pack' })).toBeInTheDocument()
+    expect(screen.getByText('No Business Flow Skill Packs configured.')).toBeInTheDocument()
+    expect(screen.getByText('Available Addendum Slots')).toBeInTheDocument()
+    expect(screen.getByText('Plan')).toBeInTheDocument()
+    expect(screen.getByText('Retrieval Review')).toBeInTheDocument()
+    expect(screen.getByText('Tool Review')).toBeInTheDocument()
+    expect(screen.getByText('Model Answer')).toBeInTheDocument()
+  })
+
+  it('opens new Skill Pack creation in a right-side drawer', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    expect(await screen.findByText('Business Flow Skill Packs')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'New Skill Pack' }))
+
+    const drawer = screen.getByRole('dialog', { name: 'Create Business Flow Skill Pack' })
+    expect(within(drawer).getByText('Basics')).toBeInTheDocument()
+    expect(within(drawer).getByLabelText('Pack ID')).toBeInTheDocument()
+    expect(within(drawer).getByLabelText('Label')).toBeInTheDocument()
+    expect(within(drawer).getByText('Routing')).toBeInTheDocument()
+    expect(within(drawer).getByLabelText('Intent Patterns')).toBeInTheDocument()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Capability References' }))
+    expect(within(drawer).getByLabelText('Knowledge Bindings')).toBeInTheDocument()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addenda' }))
+    expect(within(drawer).getByLabelText('Plan Business Context')).toBeInTheDocument()
+    expect(within(drawer).getByRole('button', { name: 'Preview' })).toBeInTheDocument()
+    expect(within(drawer).getByRole('button', { name: 'Create Skill Pack' })).toBeDisabled()
+    expect(screen.getByText('Claims QA')).toBeInTheDocument()
+  })
+
+  it('keeps advanced new Skill Pack sections collapsed until selected', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New Skill Pack' }))
+    const drawer = screen.getByRole('dialog', { name: 'Create Business Flow Skill Pack' })
+    const capabilitySection = within(drawer).getByRole('button', { name: 'Capability References' })
+
+    expect(capabilitySection).toHaveAttribute('aria-expanded', 'false')
+    expect(within(drawer).queryByLabelText('Knowledge Bindings')).not.toBeInTheDocument()
+
+    fireEvent.click(capabilitySection)
+
+    expect(capabilitySection).toHaveAttribute('aria-expanded', 'true')
+    expect(within(drawer).getByLabelText('Knowledge Bindings')).toBeInTheDocument()
+  })
+
+  it('previews a new Skill Pack deterministically before saving it', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New Skill Pack' }))
+    const drawer = screen.getByRole('dialog', { name: 'Create Business Flow Skill Pack' })
+    fireEvent.change(within(drawer).getByLabelText('Pack ID'), { target: { value: 'appeals_qa' } })
+    fireEvent.change(within(drawer).getByLabelText('Label'), { target: { value: 'Appeals QA' } })
+    fireEvent.change(within(drawer).getByLabelText('Intent Patterns'), {
+      target: { value: 'appeal status\nappeal escalation' },
+    })
+    fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), { target: { value: '0.75' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Capability References' }))
+    fireEvent.change(within(drawer).getByLabelText('Knowledge Bindings'), { target: { value: 'kb_appeals' } })
+    fireEvent.change(within(drawer).getByLabelText('Policy Rules'), {
+      target: { value: 'answering.require_retrieval' },
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addenda' }))
+    fireEvent.change(within(drawer).getByLabelText('Plan Business Context'), {
+      target: { value: 'Appeals stage context.' },
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Preview' }))
+
+    expect(within(drawer).getByText('Routing-Safe Preview')).toBeInTheDocument()
+    expect(within(drawer).getByText('appeals_qa')).toBeInTheDocument()
+    expect(within(drawer).getByText('Appeals QA')).toBeInTheDocument()
+    expect(within(drawer).getByText('2 intent patterns')).toBeInTheDocument()
+    expect(within(drawer).getByText('min confidence 0.75')).toBeInTheDocument()
+    expect(within(drawer).getByText('1 knowledge / 0 tools / 1 policy / 0 validators')).toBeInTheDocument()
+    expect(within(drawer).getByText('Affected Addendum Slots')).toBeInTheDocument()
+    expect(within(drawer).getAllByText('Plan').length).toBeGreaterThan(0)
+    expect(within(drawer).getByText('append-only addendum configured')).toBeInTheDocument()
+    expect(createConfigDraftSkillPack).not.toHaveBeenCalled()
+    expect(updateConfigDraftSkillPack).not.toHaveBeenCalled()
+  })
+
+  it('opens existing Skill Pack configuration in a right-side drawer', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Claims QA' }))
+
+    const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
+    expect(within(drawer).getByText('Basics')).toBeInTheDocument()
+    expect(within(drawer).getByDisplayValue('Claims QA')).toBeInTheDocument()
+    expect(within(drawer).getByText('Routing & Admission')).toBeInTheDocument()
+    expect(within(drawer).getByDisplayValue('claim status')).toBeInTheDocument()
+    expect(within(drawer).getByText('Routing-Safe Summary')).toBeInTheDocument()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Capability References' }))
+    expect(within(drawer).getByDisplayValue('kb_local')).toBeInTheDocument()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addendum Slots' }))
+    expect(within(drawer).getByDisplayValue('Claims stage context.')).toBeInTheDocument()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Prompt Preview' }))
+    expect(within(drawer).getByText('Prompt Preview')).toBeInTheDocument()
+    expect(within(drawer).getByRole('button', { name: 'Save Skill Pack' })).toBeInTheDocument()
+    expect(screen.getByText('Business Flow Skill Packs')).toBeInTheDocument()
+  })
+
+  it('previews unsaved Skill Pack addendum edits before saving them', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Claims QA' }))
+    const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addendum Slots' }))
+    fireEvent.change(within(drawer).getByLabelText('Plan Business Context'), {
+      target: { value: 'Updated claims context.' },
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addendum Slots' }))
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Prompt Preview' }))
+
+    expect(within(drawer).getByText(/Base plan context\./)).toBeInTheDocument()
+    expect(within(drawer).getByText(/Updated claims context\./)).toBeInTheDocument()
+    expect(within(drawer).queryByText(/Claims stage context\./)).not.toBeInTheDocument()
+    expect(updateConfigDraftSkillPack).not.toHaveBeenCalled()
+  })
+
+  it('creates a Skill Pack with complete drawer configuration', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New Skill Pack' }))
+    const drawer = screen.getByRole('dialog', { name: 'Create Business Flow Skill Pack' })
+    fireEvent.change(within(drawer).getByLabelText('Pack ID'), { target: { value: 'appeals_qa' } })
+    fireEvent.change(within(drawer).getByLabelText('Label'), { target: { value: 'Appeals QA' } })
+    fireEvent.change(within(drawer).getByLabelText('Intent Patterns'), { target: { value: 'appeal status' } })
+    fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), { target: { value: '0.75' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Capability References' }))
+    fireEvent.change(within(drawer).getByLabelText('Knowledge Bindings'), { target: { value: 'kb_appeals' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addenda' }))
+    fireEvent.change(within(drawer).getByLabelText('Plan Business Context'), { target: { value: 'Appeals stage context.' } })
+
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Create Skill Pack' }))
+
+    await waitFor(() => {
+      expect(createConfigDraftSkillPack).toHaveBeenCalledWith('agent-1', 'draft-1', {
+        id: 'appeals_qa',
+        label: 'Appeals QA',
+        description: '',
+        intent_patterns: ['appeal status'],
+        intent_taxonomy_refs: [],
+        default: false,
+      })
+    })
+    expect(updateConfigDraftSkillPack).toHaveBeenCalledWith('agent-1', 'draft-1', 'appeals_qa', expect.objectContaining({
+      admission: { min_confidence: 0.75 },
+      knowledge_binding_refs: ['kb_appeals'],
+      stage_prompt_addenda: {
+        plan: {
+          business_context: 'Appeals stage context.',
+          task_instructions: [],
+          output_preferences: [],
+        },
+      },
+    }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Create Business Flow Skill Pack' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('saves existing Skill Pack edits from the drawer', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Claims QA' }))
+    const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
+    fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), { target: { value: '0.8' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addendum Slots' }))
+    fireEvent.change(within(drawer).getByLabelText('Plan Business Context'), { target: { value: 'Updated claims context.' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save Skill Pack' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftSkillPack).toHaveBeenCalledWith('agent-1', 'draft-1', 'claims_qa', expect.objectContaining({
+        admission: { min_confidence: 0.8 },
+        stage_prompt_addenda: expect.objectContaining({
+          plan: expect.objectContaining({ business_context: 'Updated claims context.' }),
+        }),
+      }))
+    })
   })
 
   it('shows chat entry actions for the active Published Agent version', () => {

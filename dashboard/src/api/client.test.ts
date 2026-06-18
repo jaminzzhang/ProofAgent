@@ -14,7 +14,10 @@ import {
   fetchModelConnectionReferences,
   fetchModelConnections,
   createKnowledgeSource,
+  createConfigDraftSkillPack,
+  deleteConfigDraftSkillPack,
   fetchConfigAgents,
+  fetchConfigDraftSkills,
   fetchKnowledgeIngestionJobs,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSources,
@@ -34,6 +37,7 @@ import {
   rollbackConfigVersion,
   smokeTestModelConnection,
   updateModelConnection,
+  updateConfigDraftSkillPack,
   updateConfigDraftContract,
   updateWorkflowStages,
   updateKnowledgeDocumentRoutingMetadata,
@@ -931,4 +935,109 @@ test('updateConfigDraftContract patches Contract View files', async () => {
       }),
     },
   )
+})
+
+test('fetchConfigDraftSkills requests structured Skill Pack projection', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ enabled: true, packs: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  const response = await fetchConfigDraftSkills('enterprise_qa', 'draft_1')
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/config/agents/enterprise_qa/drafts/draft_1/skills',
+    undefined,
+  )
+  expect(response.enabled).toBe(true)
+})
+
+test('createConfigDraftSkillPack posts draft-local Skill Pack creation request', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ enabled: true, packs: [{ id: 'claims_qa' }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  const response = await createConfigDraftSkillPack('enterprise_qa', 'draft_1', {
+    id: 'claims_qa',
+    label: 'Claims QA',
+    description: 'Claim handling guidance.',
+    intent_patterns: ['claim status'],
+  })
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/config/agents/enterprise_qa/drafts/draft_1/skills/business-flows',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'claims_qa',
+        label: 'Claims QA',
+        description: 'Claim handling guidance.',
+        intent_patterns: ['claim status'],
+      }),
+    },
+  )
+  expect(response.packs[0].id).toBe('claims_qa')
+})
+
+test('updateConfigDraftSkillPack patches a draft-local Skill Pack', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ enabled: true, packs: [{ id: 'claims_qa' }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  await updateConfigDraftSkillPack('enterprise_qa', 'draft_1', 'claims_qa', {
+    label: 'Claims QA Updated',
+    stage_prompt_addenda: {
+      plan: {
+        business_context: 'Claims context',
+        task_instructions: [],
+        output_preferences: [],
+      },
+    },
+  })
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/config/agents/enterprise_qa/drafts/draft_1/skills/business-flows/claims_qa',
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        label: 'Claims QA Updated',
+        stage_prompt_addenda: {
+          plan: {
+            business_context: 'Claims context',
+            task_instructions: [],
+            output_preferences: [],
+          },
+        },
+      }),
+    },
+  )
+})
+
+test('deleteConfigDraftSkillPack deletes a draft-local Skill Pack', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ enabled: false, packs: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  const response = await deleteConfigDraftSkillPack('enterprise_qa', 'draft_1', 'claims_qa')
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/config/agents/enterprise_qa/drafts/draft_1/skills/business-flows/claims_qa',
+    {
+      method: 'DELETE',
+    },
+  )
+  expect(response.packs).toEqual([])
 })

@@ -896,6 +896,458 @@ audit:
     assert "model_archived_answer" in response.json()["detail"]["message"]
 
 
+def test_fetch_config_draft_skills_projects_runtime_ordered_pack(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    store = _configuration_store(client)
+    (tmp_path / "knowledge").mkdir()
+    draft = store.create_draft(
+        agent_id="skill_pack_agent",
+        display_name="Skill Pack Agent",
+        purpose="Configure stage-scoped skills.",
+        contract_bundle=ContractBundle(
+            agent_yaml=f"""
+name: skill_pack_agent
+purpose: "Configure stage-scoped skills."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v2
+  stages:
+    - id: plan
+      prompt:
+        business_context: "Base plan context."
+        task_instructions:
+          - "Use governed planning."
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: {tmp_path / "knowledge"}
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: agentic
+  max_steps: 2
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skills/claims.yaml
+        default: true
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+            policy_yaml="""
+rules:
+  - rule_id: answering.require_retrieval
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Answers require evidence."
+""",
+            tools_yaml="tools: []\n",
+            extra_files={
+                "skills/claims.yaml": """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns:
+  - "claim status"
+stage_prompt_addenda:
+  plan:
+    business_context: "Claims stage context."
+    task_instructions:
+      - "Prefer retrieval before answering claim process questions."
+  model_answer:
+    output_preferences:
+      - "Separate operator-facing answer from external wording."
+knowledge_binding_refs:
+  - kb_local
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.6
+""",
+                "knowledge/claims.md": "# Claims\nClaims require evidence.\n",
+            },
+        ),
+        actor="operator",
+    )
+
+    response = client.get(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["addendum_slots"] == [
+        {"stage_id": "plan", "stage_label": "Plan"},
+        {"stage_id": "retrieval_review", "stage_label": "Retrieval Review"},
+        {"stage_id": "tool_review", "stage_label": "Tool Review"},
+        {"stage_id": "model_answer", "stage_label": "Model Answer"},
+    ]
+    pack = payload["packs"][0]
+    assert pack["id"] == "claims_qa"
+    assert pack["default"] is True
+    assert pack["definition"] == "skills/claims.yaml"
+    assert pack["routing_admission"]["intent_patterns"] == ["claim status"]
+    assert pack["routing_admission"]["admission"]["min_confidence"] == 0.6
+    assert pack["capability_refs"]["knowledge_binding_refs"] == ["kb_local"]
+    assert pack["capability_refs"]["policy_rule_refs"] == [
+        "answering.require_retrieval"
+    ]
+    stages = {stage["stage_id"]: stage for stage in pack["stage_addenda"]}
+    assert set(stages) == {"plan", "retrieval_review", "tool_review", "model_answer"}
+    assert stages["plan"]["configured"] is True
+    assert stages["plan"]["prompt"]["business_context"] == "Claims stage context."
+    assert stages["plan"]["prompt"]["task_instructions"] == [
+        "Prefer retrieval before answering claim process questions."
+    ]
+    assert stages["plan"]["preview"]["merge_mode"] == "append"
+    assert stages["plan"]["preview"]["business_context"] == (
+        "Base plan context.\n\nClaims stage context."
+    )
+    assert stages["plan"]["preview"]["task_instructions"] == [
+        "Use governed planning.",
+        "Prefer retrieval before answering claim process questions.",
+    ]
+    assert stages["retrieval_review"]["configured"] is False
+    assert pack["coverage"] == {
+        "configured_stage_ids": ["plan", "model_answer"],
+        "missing_stage_ids": ["retrieval_review", "tool_review"],
+    }
+
+
+def test_fetch_config_draft_skills_handles_template_without_addendum_slots(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+
+    response = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/skills"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is False
+    assert payload["addendum_slots"] == []
+    assert payload["packs"] == []
+
+
+def test_create_config_draft_skill_pack_writes_package_local_definition(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    store = _configuration_store(client)
+    draft = store.create_draft(
+        agent_id="skill_pack_agent",
+        display_name="Skill Pack Agent",
+        purpose="Configure stage-scoped skills.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: skill_pack_agent
+purpose: "Configure stage-scoped skills."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v2
+package_knowledge_sources: []
+knowledge_bindings: []
+retrieval:
+  strategy: agentic
+  max_steps: 2
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: []\n",
+        ),
+        actor="operator",
+    )
+
+    response = client.post(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills/business-flows",
+        json={
+            "id": "claims_qa",
+            "label": "Claims QA",
+            "description": "Governed routing addenda for claim questions.",
+            "intent_patterns": ["claim status"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert [pack["id"] for pack in payload["packs"]] == ["claims_qa"]
+    assert payload["packs"][0]["definition"] == "skills/claims_qa.yaml"
+    contract = client.get(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/contract"
+    ).json()
+    agent_yaml = yaml.safe_load(contract["agent_yaml"])
+    assert agent_yaml["capabilities"]["skills"] == {
+        "enabled": True,
+        "business_flows": [
+            {
+                "id": "claims_qa",
+                "definition": "./skills/claims_qa.yaml",
+            }
+        ],
+    }
+    assert "skills/claims_qa.yaml" in contract["extra_files"]
+    definition = yaml.safe_load(contract["extra_files"]["skills/claims_qa.yaml"])
+    assert definition["schema_version"] == "business_flow_skill_pack.v1"
+    assert definition["stage_prompt_addenda"] == {}
+    assert definition["intent_patterns"] == ["claim status"]
+
+
+def test_update_config_draft_skill_pack_rewrites_definition(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    store = _configuration_store(client)
+    draft = store.create_draft(
+        agent_id="skill_pack_agent",
+        display_name="Skill Pack Agent",
+        purpose="Configure stage-scoped skills.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: skill_pack_agent
+purpose: "Configure stage-scoped skills."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v2
+package_knowledge_sources: []
+knowledge_bindings: []
+retrieval:
+  strategy: agentic
+  max_steps: 2
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skills/claims.yaml
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: []\n",
+            extra_files={
+                "skills/claims.yaml": """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns:
+  - "claim status"
+intent_taxonomy_refs: []
+stage_prompt_addenda: {}
+knowledge_binding_refs: []
+tool_contract_refs: []
+policy_rule_refs: []
+validator_refs: []
+admission: {}
+""",
+            },
+        ),
+        actor="operator",
+    )
+
+    response = client.patch(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills/business-flows/claims_qa",
+        json={
+            "label": "Claims QA Updated",
+            "intent_patterns": ["claim status", "claim documents"],
+            "stage_prompt_addenda": {
+                "plan": {
+                    "task_instructions": [
+                        "Prefer retrieval before answering claim questions."
+                    ],
+                }
+            },
+            "admission": {"min_confidence": 0.7},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    pack = payload["packs"][0]
+    assert pack["label"] == "Claims QA Updated"
+    assert pack["routing_admission"]["intent_patterns"] == [
+        "claim status",
+        "claim documents",
+    ]
+    assert pack["routing_admission"]["admission"]["min_confidence"] == 0.7
+    stages = {stage["stage_id"]: stage for stage in pack["stage_addenda"]}
+    assert stages["plan"]["configured"] is True
+    assert stages["plan"]["prompt"]["task_instructions"] == [
+        "Prefer retrieval before answering claim questions."
+    ]
+    contract = client.get(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/contract"
+    ).json()
+    definition = yaml.safe_load(contract["extra_files"]["skills/claims.yaml"])
+    assert definition["label"] == "Claims QA Updated"
+    assert definition["intent_patterns"] == ["claim status", "claim documents"]
+    assert definition["stage_prompt_addenda"] == {
+        "plan": {
+            "task_instructions": [
+                "Prefer retrieval before answering claim questions."
+            ],
+            "output_preferences": [],
+        }
+    }
+
+
+def test_delete_config_draft_skill_pack_removes_binding_and_definition(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    store = _configuration_store(client)
+    draft = store.create_draft(
+        agent_id="skill_pack_agent",
+        display_name="Skill Pack Agent",
+        purpose="Configure stage-scoped skills.",
+        contract_bundle=ContractBundle(
+            agent_yaml="""
+name: skill_pack_agent
+purpose: "Configure stage-scoped skills."
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v2
+package_knowledge_sources: []
+knowledge_bindings: []
+retrieval:
+  strategy: agentic
+  max_steps: 2
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skills/claims.yaml
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+            policy_yaml="rules: []\n",
+            tools_yaml="tools: []\n",
+            extra_files={
+                "skills/claims.yaml": """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claim questions.
+intent_patterns: []
+intent_taxonomy_refs: []
+stage_prompt_addenda: {}
+knowledge_binding_refs: []
+tool_contract_refs: []
+policy_rule_refs: []
+validator_refs: []
+admission: {}
+""",
+            },
+        ),
+        actor="operator",
+    )
+
+    response = client.delete(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills/business-flows/claims_qa"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is False
+    assert payload["packs"] == []
+    contract = client.get(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/contract"
+    ).json()
+    agent_yaml = yaml.safe_load(contract["agent_yaml"])
+    assert agent_yaml["capabilities"]["skills"] == {
+        "enabled": False,
+        "business_flows": [],
+    }
+    assert "skills/claims.yaml" not in contract["extra_files"]
+
+
 def test_knowledge_source_routes_map_invalid_source_id_to_structured_error(
     tmp_path: Path,
 ) -> None:

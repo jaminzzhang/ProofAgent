@@ -403,6 +403,86 @@ export interface WorkflowStageContextPreview {
   summary: Record<string, unknown>
 }
 
+export interface BusinessFlowSkillAddendumSlot {
+  stage_id: string
+  stage_label: string
+}
+
+export interface BusinessFlowSkillPackPromptPreview {
+  merge_mode: 'append'
+  business_context: string
+  task_instructions: string[]
+  output_preferences: string[]
+}
+
+export interface BusinessFlowSkillPackStageAddendum {
+  stage_id: string
+  stage_label: string
+  configured: boolean
+  prompt: WorkflowStagePromptConfig
+  preview: BusinessFlowSkillPackPromptPreview
+}
+
+export interface BusinessFlowSkillPackRoutingAdmission {
+  intent_patterns: string[]
+  intent_taxonomy_refs: string[]
+  admission: Record<string, unknown>
+  routing_safe_summary: Record<string, unknown>
+}
+
+export interface BusinessFlowSkillPackCapabilityRefs {
+  knowledge_binding_refs: string[]
+  tool_contract_refs: string[]
+  policy_rule_refs: string[]
+  validator_refs: string[]
+}
+
+export interface BusinessFlowSkillPackProjection {
+  id: string
+  label: string
+  description: string
+  definition: string
+  default: boolean
+  routing_admission: BusinessFlowSkillPackRoutingAdmission
+  capability_refs: BusinessFlowSkillPackCapabilityRefs
+  stage_addenda: BusinessFlowSkillPackStageAddendum[]
+  coverage: {
+    configured_stage_ids: string[]
+    missing_stage_ids: string[]
+  }
+}
+
+export interface BusinessFlowSkillPackConfiguration {
+  enabled: boolean
+  template_name: string
+  template_descriptor_version: string
+  addendum_slots: BusinessFlowSkillAddendumSlot[]
+  packs: BusinessFlowSkillPackProjection[]
+}
+
+export interface BusinessFlowSkillPackCreateRequest {
+  id: string
+  label: string
+  description: string
+  intent_patterns?: string[]
+  intent_taxonomy_refs?: string[]
+  default?: boolean
+}
+
+export interface BusinessFlowSkillPackUpdateRequest {
+  label?: string | null
+  description?: string | null
+  intent_patterns?: string[] | null
+  intent_taxonomy_refs?: string[] | null
+  stage_prompt_addenda?: Record<string, WorkflowStagePromptConfig> | null
+  knowledge_binding_refs?: string[] | null
+  tool_contract_refs?: string[] | null
+  policy_rule_refs?: string[] | null
+  validator_refs?: string[] | null
+  admission?: Record<string, unknown> | null
+  default?: boolean | null
+}
+
 export type ConfigurationOperation =
   | 'created'
   | 'imported'

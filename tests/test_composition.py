@@ -90,8 +90,6 @@ description: Governed routing addenda for claim questions.
 intent_patterns:
   - "claim status"
 stage_prompt_addenda:
-  intent_resolution:
-    business_context: "Classify claim-servicing intent only."
   plan:
     task_instructions:
       - "Prefer retrieval before answering claim process questions."
@@ -163,9 +161,6 @@ audit:
     skill_pack = invocation.business_flow_skill_packs[0]
     assert skill_pack.id == "claims_qa"
     assert skill_pack.label == "Claims QA"
-    assert skill_pack.stage_prompt_addenda["intent_resolution"].business_context == (
-        "Classify claim-servicing intent only."
-    )
     assert skill_pack.stage_prompt_addenda["plan"].task_instructions == (
         "Prefer retrieval before answering claim process questions.",
     )

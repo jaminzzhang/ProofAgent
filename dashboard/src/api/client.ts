@@ -1,6 +1,9 @@
 import type {
   ActiveAgentVersion,
   ApprovalsResponse,
+  BusinessFlowSkillPackConfiguration,
+  BusinessFlowSkillPackCreateRequest,
+  BusinessFlowSkillPackUpdateRequest,
   CandidateKnowledgeSourceSnapshot,
   ConfigAgentsResponse,
   ConfigVersionsResponse,
@@ -588,6 +591,59 @@ export function fetchConfigDraftContract(
   draftId: string,
 ): Promise<ContractBundle> {
   return fetchJson<ContractBundle>(`${BASE}/config/agents/${agentId}/drafts/${draftId}/contract`)
+}
+
+export function fetchConfigDraftSkills(
+  agentId: string,
+  draftId: string,
+): Promise<BusinessFlowSkillPackConfiguration> {
+  return fetchJson<BusinessFlowSkillPackConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/skills`,
+  )
+}
+
+export function createConfigDraftSkillPack(
+  agentId: string,
+  draftId: string,
+  payload: BusinessFlowSkillPackCreateRequest,
+): Promise<BusinessFlowSkillPackConfiguration> {
+  return fetchJson<BusinessFlowSkillPackConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/skills/business-flows`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function updateConfigDraftSkillPack(
+  agentId: string,
+  draftId: string,
+  packId: string,
+  payload: BusinessFlowSkillPackUpdateRequest,
+): Promise<BusinessFlowSkillPackConfiguration> {
+  return fetchJson<BusinessFlowSkillPackConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/skills/business-flows/${packId}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function deleteConfigDraftSkillPack(
+  agentId: string,
+  draftId: string,
+  packId: string,
+): Promise<BusinessFlowSkillPackConfiguration> {
+  return fetchJson<BusinessFlowSkillPackConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/skills/business-flows/${packId}`,
+    {
+      method: 'DELETE',
+    },
+  )
 }
 
 export function updateConfigDraftContract(

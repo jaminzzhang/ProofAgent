@@ -18,6 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.skills import (
+    SUPPORTED_BUSINESS_FLOW_ADDENDUM_STAGE_IDS,
+    load_business_flow_skill_pack_set,
+)
 from proof_agent.bootstrap.validation import validate_workflow_stage_prompt_config
 from proof_agent.bootstrap.knowledge_resolution import (
     ConfigurationStoreKnowledgeBindingResolver,
@@ -54,6 +58,8 @@ from proof_agent.contracts import (
     ValidationCaptureResultSummary,
     ValidationCaptureSourceReference,
     ValidationCaptureV2Payload,
+    WorkflowStageConfigurationRuntimeSource,
+    WorkflowStageConfigurationRuntimeSourceType,
     WorkflowStageContextApplicationProjection,
     WorkflowStageContextConfigurationCapture,
     WorkflowStageFailureDiagnosticProjection,
@@ -65,6 +71,9 @@ from proof_agent.contracts import (
     WorkflowTemplateExecutionResult,
 )
 from proof_agent.control.workflow.stage_context import build_workflow_stage_context_preview
+from proof_agent.control.workflow.stage_configuration import (
+    resolve_workflow_stage_runtime_configuration,
+)
 from proof_agent.control.workflow.templates import (
     list_workflow_templates,
     resolve_workflow_template,
@@ -133,6 +142,19 @@ class ContractUpdateRequest(BaseModel):
     tools_yaml: str | None = None
 
 
+class BusinessFlowSkillPackCreateRequest(BaseModel):
+    """Request body for creating one draft-local Business Flow Skill Pack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
+    label: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    intent_patterns: list[str] = Field(default_factory=list)
+    intent_taxonomy_refs: list[str] = Field(default_factory=list)
+    default: bool = False
+
+
 class WorkflowStagePromptRequest(BaseModel):
     """Request body fragment for stage-level business Prompt settings."""
 
@@ -141,6 +163,24 @@ class WorkflowStagePromptRequest(BaseModel):
     business_context: str | None = None
     task_instructions: list[str] = Field(default_factory=list)
     output_preferences: list[str] = Field(default_factory=list)
+
+
+class BusinessFlowSkillPackUpdateRequest(BaseModel):
+    """Request body for updating one draft-local Business Flow Skill Pack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None = Field(default=None, min_length=1)
+    description: str | None = Field(default=None, min_length=1)
+    intent_patterns: list[str] | None = None
+    intent_taxonomy_refs: list[str] | None = None
+    stage_prompt_addenda: dict[str, WorkflowStagePromptRequest] | None = None
+    knowledge_binding_refs: list[str] | None = None
+    tool_contract_refs: list[str] | None = None
+    policy_rule_refs: list[str] | None = None
+    validator_refs: list[str] | None = None
+    admission: dict[str, Any] | None = None
+    default: bool | None = None
 
 
 class WorkflowStageUpdateItemRequest(BaseModel):
@@ -1672,6 +1712,138 @@ def unbind_knowledge_source_from_draft(
     return updated.contract_bundle.model_dump(mode="json")
 
 
+@router.get("/config/agents/{agent_id}/drafts/{draft_id}/skills")
+def fetch_config_draft_skills(
+    agent_id: str,
+    draft_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return structured Business Flow Skill Pack configuration for Dashboard."""
+
+    _require_operator(identity, OperatorPermission.AGENT_VIEW)
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+    try:
+        return _business_flow_skill_pack_configuration_payload(draft, store)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+
+
+@router.post("/config/agents/{agent_id}/drafts/{draft_id}/skills/business-flows")
+def create_config_draft_business_flow_skill_pack(
+    agent_id: str,
+    draft_id: str,
+    request: BusinessFlowSkillPackCreateRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Create a package-local Business Flow Skill Pack in one Draft Agent."""
+
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+    try:
+        bundle = _create_business_flow_skill_pack_bundle(draft, request)
+        candidate = _draft_with_contract_bundle(draft, bundle)
+        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        load_business_flow_skill_pack_set(
+            manifest,
+            template=resolve_workflow_template(manifest.workflow.template),
+            manifest_path=package_dir / "agent.yaml",
+        )
+        _resolve_draft_knowledge_bindings(store, manifest)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    updated = store.update_draft(
+        agent_id=agent_id,
+        draft_id=draft_id,
+        contract_bundle=bundle,
+        actor=actor,
+    )
+    return _business_flow_skill_pack_configuration_payload(updated, store)
+
+
+@router.patch("/config/agents/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}")
+def update_config_draft_business_flow_skill_pack(
+    agent_id: str,
+    draft_id: str,
+    pack_id: str,
+    request: BusinessFlowSkillPackUpdateRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Update one package-local Business Flow Skill Pack in a Draft Agent."""
+
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+    try:
+        bundle = _update_business_flow_skill_pack_bundle(draft, pack_id, request)
+        candidate = _draft_with_contract_bundle(draft, bundle)
+        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        load_business_flow_skill_pack_set(
+            manifest,
+            template=resolve_workflow_template(manifest.workflow.template),
+            manifest_path=package_dir / "agent.yaml",
+        )
+        _resolve_draft_knowledge_bindings(store, manifest)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    updated = store.update_draft(
+        agent_id=agent_id,
+        draft_id=draft_id,
+        contract_bundle=bundle,
+        actor=actor,
+    )
+    return _business_flow_skill_pack_configuration_payload(updated, store)
+
+
+@router.delete("/config/agents/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}")
+def delete_config_draft_business_flow_skill_pack(
+    agent_id: str,
+    draft_id: str,
+    pack_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Delete one package-local Business Flow Skill Pack from a Draft Agent."""
+
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+    try:
+        bundle = _delete_business_flow_skill_pack_bundle(draft, pack_id)
+        candidate = _draft_with_contract_bundle(draft, bundle)
+        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        load_business_flow_skill_pack_set(
+            manifest,
+            template=resolve_workflow_template(manifest.workflow.template),
+            manifest_path=package_dir / "agent.yaml",
+        )
+        _resolve_draft_knowledge_bindings(store, manifest)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    updated = store.update_draft(
+        agent_id=agent_id,
+        draft_id=draft_id,
+        contract_bundle=bundle,
+        actor=actor,
+    )
+    return _business_flow_skill_pack_configuration_payload(updated, store)
+
+
 @router.patch("/config/agents/{agent_id}/drafts/{draft_id}/contract")
 def update_config_draft_contract(
     agent_id: str,
@@ -2391,6 +2563,394 @@ def _draft_with_contract_bundle(draft: DraftAgent, bundle: ContractBundle) -> Dr
         validation_records=draft.validation_records,
         operation_audit=draft.operation_audit,
     )
+
+
+def _business_flow_skill_pack_configuration_payload(
+    draft: DraftAgent,
+    store: LocalAgentConfigurationStore,
+) -> dict[str, Any]:
+    package_dir = compile_draft_agent(draft, store.root_dir / "compiled_projection")
+    manifest_path = package_dir / "agent.yaml"
+    manifest = load_agent_manifest(manifest_path)
+    template = resolve_workflow_template(manifest.workflow.template)
+    skill_packs = load_business_flow_skill_pack_set(
+        manifest,
+        template=template,
+        manifest_path=manifest_path,
+    )
+    stage_runtime = resolve_workflow_stage_runtime_configuration(
+        manifest_path.read_text(encoding="utf-8"),
+        source=WorkflowStageConfigurationRuntimeSource(
+            source_type=WorkflowStageConfigurationRuntimeSourceType.PACKAGE_LOCAL_LATEST,
+            reference=draft.draft_id,
+        ),
+    )
+    base_prompts: dict[str, WorkflowStagePromptConfig] = {}
+    if stage_runtime is not None:
+        base_prompts = {
+            stage.id: WorkflowStagePromptConfig.model_validate(stage.prompt)
+            for stage in stage_runtime.effective_stage_configuration.stages
+        }
+    bindings_by_id = {
+        binding.id: binding for binding in manifest.capabilities.skills.business_flows
+    }
+    slots: list[dict[str, str]] = []
+    for stage_id in SUPPORTED_BUSINESS_FLOW_ADDENDUM_STAGE_IDS:
+        try:
+            stage = template.stage(stage_id)
+        except ProofAgentError:
+            continue
+        slots.append(
+            {
+                "stage_id": stage_id,
+                "stage_label": stage.label,
+            }
+        )
+    return {
+        "enabled": manifest.capabilities.skills.enabled,
+        "template_name": template.name,
+        "template_descriptor_version": template.descriptor_version,
+        "addendum_slots": slots,
+        "packs": [
+            _business_flow_skill_pack_payload(
+                skill_pack,
+                binding=bindings_by_id[skill_pack.id],
+                package_dir=package_dir,
+                slots=slots,
+                base_prompts=base_prompts,
+            )
+            for skill_pack in skill_packs
+        ],
+    }
+
+
+def _create_business_flow_skill_pack_bundle(
+    draft: DraftAgent,
+    request: BusinessFlowSkillPackCreateRequest,
+) -> ContractBundle:
+    raw = yaml.safe_load(draft.contract_bundle.agent_yaml)
+    if not isinstance(raw, dict):
+        raise ValueError("agent_yaml must be a mapping.")
+    capabilities = raw.setdefault("capabilities", {})
+    if not isinstance(capabilities, dict):
+        raise ValueError("agent_yaml capabilities must be a mapping.")
+    skills = capabilities.get("skills")
+    if skills is None:
+        skills = {}
+    if not isinstance(skills, dict):
+        raise ValueError("agent_yaml capabilities.skills must be a mapping.")
+    business_flows = skills.get("business_flows") or []
+    if not isinstance(business_flows, list):
+        raise ValueError("agent_yaml capabilities.skills.business_flows must be a list.")
+    if any(
+        isinstance(item, Mapping) and item.get("id") == request.id
+        for item in business_flows
+    ):
+        raise ValueError(f"Business Flow Skill Pack already exists: {request.id}")
+    if request.default and any(
+        isinstance(item, Mapping) and item.get("default") is True
+        for item in business_flows
+    ):
+        raise ValueError("Only one Business Flow Skill Pack can be marked default.")
+
+    definition_path = f"skills/{request.id}.yaml"
+    extra_files = dict(draft.contract_bundle.extra_files)
+    if definition_path in extra_files:
+        raise ValueError(f"Business Flow Skill Pack definition already exists: {definition_path}")
+
+    flow_binding: dict[str, Any] = {
+        "id": request.id,
+        "definition": f"./{definition_path}",
+    }
+    if request.default:
+        flow_binding["default"] = True
+    business_flows.append(flow_binding)
+    skills["enabled"] = True
+    skills["business_flows"] = business_flows
+    capabilities["skills"] = skills
+    raw["capabilities"] = capabilities
+
+    definition = {
+        "schema_version": "business_flow_skill_pack.v1",
+        "id": request.id,
+        "label": request.label,
+        "description": request.description,
+        "intent_patterns": request.intent_patterns,
+        "intent_taxonomy_refs": request.intent_taxonomy_refs,
+        "stage_prompt_addenda": {},
+        "knowledge_binding_refs": [],
+        "tool_contract_refs": [],
+        "policy_rule_refs": [],
+        "validator_refs": [],
+        "admission": {},
+    }
+    extra_files[definition_path] = yaml.safe_dump(
+        definition,
+        sort_keys=False,
+        allow_unicode=False,
+    )
+    return ContractBundle(
+        agent_yaml=_dump_agent_yaml(raw),
+        policy_yaml=draft.contract_bundle.policy_yaml,
+        tools_yaml=draft.contract_bundle.tools_yaml,
+        extra_files=extra_files,
+        advanced_fields=draft.contract_bundle.advanced_fields,
+    )
+
+
+def _update_business_flow_skill_pack_bundle(
+    draft: DraftAgent,
+    pack_id: str,
+    request: BusinessFlowSkillPackUpdateRequest,
+) -> ContractBundle:
+    raw = yaml.safe_load(draft.contract_bundle.agent_yaml)
+    if not isinstance(raw, dict):
+        raise ValueError("agent_yaml must be a mapping.")
+    binding = _business_flow_binding(raw, pack_id)
+    if request.default is True and _has_other_default_business_flow(raw, pack_id):
+        raise ValueError("Only one Business Flow Skill Pack can be marked default.")
+    if request.default is True:
+        binding["default"] = True
+    elif request.default is False:
+        binding.pop("default", None)
+
+    definition_path = _package_extra_file_path(str(binding.get("definition", "")))
+    extra_files = dict(draft.contract_bundle.extra_files)
+    raw_definition = yaml.safe_load(extra_files.get(definition_path, ""))
+    if not isinstance(raw_definition, dict):
+        raise ValueError(f"Business Flow Skill Pack definition is missing: {definition_path}")
+
+    if request.label is not None:
+        raw_definition["label"] = request.label
+    if request.description is not None:
+        raw_definition["description"] = request.description
+    if request.intent_patterns is not None:
+        raw_definition["intent_patterns"] = request.intent_patterns
+    if request.intent_taxonomy_refs is not None:
+        raw_definition["intent_taxonomy_refs"] = request.intent_taxonomy_refs
+    if request.stage_prompt_addenda is not None:
+        raw_definition["stage_prompt_addenda"] = {
+            stage_id: prompt.model_dump(mode="json", exclude_none=True)
+            for stage_id, prompt in request.stage_prompt_addenda.items()
+        }
+    if request.knowledge_binding_refs is not None:
+        raw_definition["knowledge_binding_refs"] = request.knowledge_binding_refs
+    if request.tool_contract_refs is not None:
+        raw_definition["tool_contract_refs"] = request.tool_contract_refs
+    if request.policy_rule_refs is not None:
+        raw_definition["policy_rule_refs"] = request.policy_rule_refs
+    if request.validator_refs is not None:
+        raw_definition["validator_refs"] = request.validator_refs
+    if request.admission is not None:
+        raw_definition["admission"] = request.admission
+
+    extra_files[definition_path] = yaml.safe_dump(
+        raw_definition,
+        sort_keys=False,
+        allow_unicode=False,
+    )
+    return ContractBundle(
+        agent_yaml=_dump_agent_yaml(raw),
+        policy_yaml=draft.contract_bundle.policy_yaml,
+        tools_yaml=draft.contract_bundle.tools_yaml,
+        extra_files=extra_files,
+        advanced_fields=draft.contract_bundle.advanced_fields,
+    )
+
+
+def _delete_business_flow_skill_pack_bundle(
+    draft: DraftAgent,
+    pack_id: str,
+) -> ContractBundle:
+    raw = yaml.safe_load(draft.contract_bundle.agent_yaml)
+    if not isinstance(raw, dict):
+        raise ValueError("agent_yaml must be a mapping.")
+    capabilities = raw.get("capabilities")
+    if not isinstance(capabilities, dict):
+        raise ValueError("agent_yaml capabilities must be a mapping.")
+    skills = capabilities.get("skills")
+    if not isinstance(skills, dict):
+        raise ValueError("agent_yaml capabilities.skills must be a mapping.")
+    business_flows = _business_flow_bindings(raw)
+    kept_flows: list[Any] = []
+    removed_definition_path: str | None = None
+    for item in business_flows:
+        if isinstance(item, Mapping) and item.get("id") == pack_id:
+            removed_definition_path = _package_extra_file_path(str(item.get("definition", "")))
+            continue
+        kept_flows.append(item)
+    if removed_definition_path is None:
+        raise ValueError(f"Business Flow Skill Pack binding not found: {pack_id}")
+
+    skills["business_flows"] = kept_flows
+    if not kept_flows:
+        skills["enabled"] = False
+    capabilities["skills"] = skills
+    raw["capabilities"] = capabilities
+    extra_files = dict(draft.contract_bundle.extra_files)
+    extra_files.pop(removed_definition_path, None)
+    return ContractBundle(
+        agent_yaml=_dump_agent_yaml(raw),
+        policy_yaml=draft.contract_bundle.policy_yaml,
+        tools_yaml=draft.contract_bundle.tools_yaml,
+        extra_files=extra_files,
+        advanced_fields=draft.contract_bundle.advanced_fields,
+    )
+
+
+def _business_flow_binding(raw: dict[str, Any], pack_id: str) -> dict[str, Any]:
+    business_flows = _business_flow_bindings(raw)
+    for item in business_flows:
+        if isinstance(item, dict) and item.get("id") == pack_id:
+            return item
+    raise ValueError(f"Business Flow Skill Pack binding not found: {pack_id}")
+
+
+def _business_flow_bindings(raw: dict[str, Any]) -> list[Any]:
+    capabilities = raw.get("capabilities")
+    if not isinstance(capabilities, Mapping):
+        raise ValueError("agent_yaml capabilities must be a mapping.")
+    skills = capabilities.get("skills")
+    if not isinstance(skills, Mapping):
+        raise ValueError("agent_yaml capabilities.skills must be a mapping.")
+    business_flows = skills.get("business_flows") or []
+    if not isinstance(business_flows, list):
+        raise ValueError("agent_yaml capabilities.skills.business_flows must be a list.")
+    return business_flows
+
+
+def _has_other_default_business_flow(raw: dict[str, Any], pack_id: str) -> bool:
+    return any(
+        isinstance(item, Mapping)
+        and item.get("id") != pack_id
+        and item.get("default") is True
+        for item in _business_flow_bindings(raw)
+    )
+
+
+def _package_extra_file_path(reference: str) -> str:
+    return reference[2:] if reference.startswith("./") else reference
+
+
+def _business_flow_skill_pack_payload(
+    skill_pack: Any,
+    *,
+    binding: Any,
+    package_dir: Path,
+    slots: list[dict[str, str]],
+    base_prompts: Mapping[str, WorkflowStagePromptConfig],
+) -> dict[str, Any]:
+    stage_addenda = [
+        _business_flow_stage_addendum_payload(
+            stage_id=slot["stage_id"],
+            stage_label=slot["stage_label"],
+            addendum=skill_pack.stage_prompt_addenda.get(slot["stage_id"]),
+            base_prompt=base_prompts.get(slot["stage_id"], WorkflowStagePromptConfig()),
+        )
+        for slot in slots
+    ]
+    configured_stage_ids = [
+        item["stage_id"] for item in stage_addenda if item["configured"]
+    ]
+    missing_stage_ids = [
+        item["stage_id"] for item in stage_addenda if not item["configured"]
+    ]
+    return {
+        "id": skill_pack.id,
+        "label": skill_pack.label,
+        "description": skill_pack.description,
+        "definition": _package_relative_path(binding.definition, package_dir),
+        "default": binding.default,
+        "routing_admission": {
+            "intent_patterns": list(skill_pack.intent_patterns),
+            "intent_taxonomy_refs": list(skill_pack.intent_taxonomy_refs),
+            "admission": skill_pack.admission.model_dump(mode="json"),
+            "routing_safe_summary": {
+                "id": skill_pack.id,
+                "label": skill_pack.label,
+                "description": skill_pack.description,
+                "intent_patterns": list(skill_pack.intent_patterns),
+                "intent_taxonomy_refs": list(skill_pack.intent_taxonomy_refs),
+                "default": binding.default,
+                "admission": skill_pack.admission.model_dump(mode="json"),
+            },
+        },
+        "capability_refs": {
+            "knowledge_binding_refs": list(skill_pack.knowledge_binding_refs),
+            "tool_contract_refs": list(skill_pack.tool_contract_refs),
+            "policy_rule_refs": list(skill_pack.policy_rule_refs),
+            "validator_refs": list(skill_pack.validator_refs),
+        },
+        "stage_addenda": stage_addenda,
+        "coverage": {
+            "configured_stage_ids": configured_stage_ids,
+            "missing_stage_ids": missing_stage_ids,
+        },
+    }
+
+
+def _business_flow_stage_addendum_payload(
+    *,
+    stage_id: str,
+    stage_label: str,
+    addendum: WorkflowStagePromptConfig | None,
+    base_prompt: WorkflowStagePromptConfig,
+) -> dict[str, Any]:
+    prompt = addendum or WorkflowStagePromptConfig()
+    merged = _append_workflow_stage_prompt(base_prompt, prompt)
+    return {
+        "stage_id": stage_id,
+        "stage_label": stage_label,
+        "configured": addendum is not None,
+        "prompt": _workflow_stage_prompt_payload(prompt),
+        "preview": {
+            "merge_mode": "append",
+            **_workflow_stage_prompt_payload(merged),
+        },
+    }
+
+
+def _append_workflow_stage_prompt(
+    base: WorkflowStagePromptConfig,
+    addendum: WorkflowStagePromptConfig,
+) -> WorkflowStagePromptConfig:
+    return WorkflowStagePromptConfig(
+        business_context=_join_prompt_text(
+            base.business_context,
+            addendum.business_context,
+        ),
+        task_instructions=(
+            *base.task_instructions,
+            *addendum.task_instructions,
+        ),
+        output_preferences=(
+            *base.output_preferences,
+            *addendum.output_preferences,
+        ),
+    )
+
+
+def _workflow_stage_prompt_payload(prompt: WorkflowStagePromptConfig) -> dict[str, Any]:
+    return {
+        "business_context": prompt.business_context,
+        "task_instructions": list(prompt.task_instructions),
+        "output_preferences": list(prompt.output_preferences),
+    }
+
+
+def _join_prompt_text(base: str, addendum: str) -> str:
+    if not base:
+        return addendum
+    if not addendum:
+        return base
+    return f"{base}\n\n{addendum}"
+
+
+def _package_relative_path(path: Path, package_dir: Path) -> str:
+    try:
+        return path.resolve().relative_to(package_dir.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _version_payload(version: Any) -> dict[str, Any]:
