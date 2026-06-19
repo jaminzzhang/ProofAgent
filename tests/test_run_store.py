@@ -37,8 +37,12 @@ def _seed_run(store: RunStore, run_id: str, outcome: ReceiptOutcome, question: s
         run_id,
         [
             {"event_type": "run_started", "sequence": 1, "timestamp": "2026-05-10T14:32:18Z"},
-            {"event_type": "final_output", "sequence": 2, "timestamp": "2026-05-10T14:32:19Z",
-             "payload": {"outcome": outcome.value, "question": question}},
+            {
+                "event_type": "final_output",
+                "sequence": 2,
+                "timestamp": "2026-05-10T14:32:19Z",
+                "payload": {"outcome": outcome.value, "question": question},
+            },
         ],
     )
     _write_receipt(run_dir / "governance_receipt.md")
@@ -205,6 +209,178 @@ def test_get_run_detail_builds_workflow_projection_from_trace_events(
     }
 
 
+def test_workflow_projection_attributes_runtime_events_by_stage_sequence_window(
+    store: RunStore,
+) -> None:
+    """Runtime events without an explicit ``stage_id`` are attributed to the stage
+    whose ``workflow_stage_context_applied`` sequence they fall under.
+
+    This mirrors real runs like ``run_f2cc8fc0`` where only ``context_applied``
+    events carry ``stage_id`` and the bulk of operational events
+    (policy/model/review/retrieval) do not. Attribution uses sequence windows,
+    not wall-clock timestamps, so near-simultaneous stage boundaries stay clean.
+    """
+    run_dir = store.create_run_dir("run_window")
+    _write_trace(
+        run_dir / "trace.jsonl",
+        "run_window",
+        [
+            # --- run setup: before the first stage boundary (not owned by any stage) ---
+            {
+                "event_id": "evt_started",
+                "event_type": "run_started",
+                "sequence": 1,
+                "timestamp": "2026-06-17T15:54:05Z",
+                "status": "ok",
+                "payload": {},
+            },
+            {
+                "event_id": "evt_conn",
+                "event_type": "model_connection_resolution",
+                "sequence": 2,
+                "timestamp": "2026-06-17T15:54:05Z",
+                "status": "ok",
+                "payload": {},
+            },
+            {
+                "event_id": "evt_config",
+                "event_type": "workflow_stage_configuration_trace_summary",
+                "sequence": 3,
+                "timestamp": "2026-06-17T15:54:06Z",
+                "status": "ok",
+                "payload": {
+                    "template_name": "react_enterprise_qa_v2",
+                    "template_descriptor_version": "react_enterprise_qa.v2",
+                    "source": {
+                        "source_type": "published_agent_version",
+                        "reference": "published_version:version_x",
+                    },
+                    "stages": [
+                        {"stage_id": "intent_resolution"},
+                        {"stage_id": "plan"},
+                        {"stage_id": "clarification"},  # configured but never visited
+                    ],
+                },
+            },
+            # --- intent_resolution stage: boundary at seq 4, runtime events follow ---
+            {
+                "event_id": "evt_ctx_intent",
+                "event_type": "workflow_stage_context_applied",
+                "sequence": 4,
+                "timestamp": "2026-06-17T15:54:06Z",
+                "status": "ok",
+                "payload": {
+                    "stage_id": "intent_resolution",
+                    "stage_label": "Intent Resolution",
+                    "prompt_fields": ["business_context"],
+                },
+            },
+            {
+                "event_id": "evt_model_req_intent",
+                "event_type": "model_request",
+                "sequence": 5,
+                "timestamp": "2026-06-17T15:54:06Z",
+                "status": "ok",
+                "payload": {},  # no stage_id
+            },
+            {
+                "event_id": "evt_model_resp_intent",
+                "event_type": "model_response",
+                "sequence": 6,
+                "timestamp": "2026-06-17T15:54:07Z",
+                "status": "ok",
+                "payload": {},  # no stage_id
+            },
+            {
+                "event_id": "evt_intent",
+                "event_type": "intent_resolution",
+                "sequence": 7,
+                "timestamp": "2026-06-17T15:54:07Z",
+                "status": "ok",
+                "payload": {},  # no stage_id
+            },
+            # --- plan stage: boundary at seq 8 ---
+            {
+                "event_id": "evt_ctx_plan",
+                "event_type": "workflow_stage_context_applied",
+                "sequence": 8,
+                "timestamp": "2026-06-17T15:54:09Z",
+                "status": "ok",
+                "payload": {
+                    "stage_id": "plan",
+                    "stage_label": "Plan",
+                    "prompt_fields": ["business_context"],
+                },
+            },
+            {
+                "event_id": "evt_policy_plan",
+                "event_type": "policy_decision",
+                "sequence": 9,
+                "timestamp": "2026-06-17T15:54:09Z",
+                "status": "ok",
+                "payload": {"decision": "allow"},  # no stage_id
+            },
+            # --- final_output lands after the last stage boundary (plan) ---
+            {
+                "event_id": "evt_final",
+                "event_type": "final_output",
+                "sequence": 10,
+                "timestamp": "2026-06-17T15:54:45Z",
+                "status": "ok",
+                "payload": {"outcome": "ANSWERED_WITH_CITATIONS"},  # no stage_id
+            },
+        ],
+    )
+    _write_receipt(run_dir / "governance_receipt.md")
+    store.write_run_meta(
+        RunIndex(
+            run_id="run_window",
+            question="主要优缺点",
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            created_at="2026-06-17T15:54:05Z",
+            updated_at="2026-06-17T15:54:45Z",
+        )
+    )
+
+    detail = store.get_run_detail("run_window")
+    assert detail is not None
+    projection = detail.workflow_projection
+    by_stage = {stage.stage_id: stage for stage in projection.stages}
+
+    # Configured-but-unvisited stage exists and owns nothing but the shared config event.
+    assert by_stage["clarification"].visited is False
+    assert set(by_stage["clarification"].related_event_ids) == {"evt_config"}
+
+    # intent_resolution owns its context boundary + the runtime events that fell
+    # within its sequence window [4, 8).
+    intent = by_stage["intent_resolution"]
+    assert intent.visited is True
+    assert set(intent.related_event_ids) == {
+        "evt_config",
+        "evt_ctx_intent",
+        "evt_model_req_intent",
+        "evt_model_resp_intent",
+        "evt_intent",
+    }
+
+    # plan owns its boundary + the runtime events in [8, end).
+    plan = by_stage["plan"]
+    assert plan.visited is True
+    assert set(plan.related_event_ids) == {
+        "evt_config",
+        "evt_ctx_plan",
+        "evt_policy_plan",
+        "evt_final",
+    }
+
+    # Run-setup events (before the first stage boundary) are NOT owned by any stage.
+    all_owned = set()
+    for stage in projection.stages:
+        all_owned.update(stage.related_event_ids)
+    assert "evt_started" not in all_owned
+    assert "evt_conn" not in all_owned
+
+
 def test_get_run_detail_nonexistent(store: RunStore) -> None:
     assert store.get_run_detail("run_nosuch") is None
 
@@ -281,9 +457,13 @@ def test_get_stats(store: RunStore) -> None:
 def test_save_run_artifacts(store: RunStore, tmp_path: Path) -> None:
     trace_src = tmp_path / "trace.jsonl"
     receipt_src = tmp_path / "governance_receipt.md"
-    _write_trace(trace_src, "run_copied", [
-        {"event_type": "run_started", "sequence": 1, "timestamp": "2026-05-10T14:32:18Z"},
-    ])
+    _write_trace(
+        trace_src,
+        "run_copied",
+        [
+            {"event_type": "run_started", "sequence": 1, "timestamp": "2026-05-10T14:32:18Z"},
+        ],
+    )
     _write_receipt(receipt_src, "# Receipt\nCopied run")
 
     index = store.save_run_artifacts(

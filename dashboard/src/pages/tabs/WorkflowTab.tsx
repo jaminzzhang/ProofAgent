@@ -1,4 +1,5 @@
 import { CodeBlock, CopyButton } from '@proofagent/ui'
+import { useState, type ReactNode } from 'react'
 import type {
   TraceEvent,
   WorkflowRunProjection,
@@ -9,6 +10,55 @@ import { formatTraceTime, stringifyTraceValue, traceEventLabel } from './traceDi
 interface WorkflowTabProps {
   projection: WorkflowRunProjection
   events?: TraceEvent[]
+}
+
+// Runtime event types that are folded into the "model" badge (a request/response
+// pair is one model call, so both map to the same readable noun).
+const MODEL_EVENT_TYPES = new Set(['model_request', 'model_response', 'model_error'])
+
+// Map raw trace event types to short, scannable badge nouns. Types not listed
+// here are shown verbatim via traceEventLabel so nothing is silently dropped.
+const BADGE_NOUN: Record<string, string> = {
+  policy_decision: 'policy',
+  review_requested: 'review',
+  review_decision: 'review',
+  review_error: 'review',
+  review_overridden: 'review',
+  retrieval_step: 'retrieval',
+  retrieval_result: 'retrieval',
+  retrieval_plan: 'retrieval',
+  retrieval_query_set: 'retrieval',
+  retrieval_started: 'retrieval',
+  evidence_evaluation: 'evidence',
+  intent_resolution: 'intent',
+  reasoning_summary: 'reasoning',
+  action_proposal: 'action',
+  tool_request: 'tool',
+  tool_result: 'tool',
+  memory_write_decision: 'memory',
+  memory_admission: 'memory',
+  memory_read: 'memory',
+  final_output: 'output',
+  final_output_disclosure: 'disclosure',
+  approval_requested: 'approval',
+  pending_approval_created: 'approval',
+  approval_granted: 'approval',
+  approval_denied: 'approval',
+  workflow_stage_result: 'result',
+}
+
+function stageBadgeCounts(events: TraceEvent[]): { noun: string; count: number }[] {
+  const counts = new Map<string, number>()
+  for (const event of events) {
+    const noun = MODEL_EVENT_TYPES.has(event.event_type)
+      ? 'model'
+      : (BADGE_NOUN[event.event_type] ?? null)
+    if (!noun) continue
+    counts.set(noun, (counts.get(noun) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([noun, count]) => ({ noun, count }))
+    .sort((a, b) => b.count - a.count || a.noun.localeCompare(b.noun))
 }
 
 export function WorkflowTab({ projection, events = [] }: WorkflowTabProps) {
@@ -56,6 +106,17 @@ function WorkflowStageCard({
   stage: WorkflowRunStageProjection
   traceEvents: TraceEvent[]
 }) {
+  const [expanded, setExpanded] = useState(false)
+  const badges = stageBadgeCounts(traceEvents)
+  const stageName = stage.label ?? stage.stage_id
+  const hasDetails =
+    Object.keys(stage.safe_summary).length > 0 ||
+    Object.keys(stage.context_application_summary).length > 0 ||
+    stage.produced_fact_refs.length > 0 ||
+    stage.related_event_ids.length > 0 ||
+    stage.approval_pause_summary !== null ||
+    stage.clarification_need_summary !== null
+
   return (
     <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
       <div className="flex flex-col gap-3 border-b border-[var(--border)] pb-4 sm:flex-row sm:items-start sm:justify-between">
@@ -72,27 +133,72 @@ function WorkflowStageCard({
         </div>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <WorkflowMap title="Stage Summary" values={stage.safe_summary} />
-        <WorkflowMap title="Context Application" values={stage.context_application_summary} />
-      </div>
+      {badges.length > 0 && (
+        <p
+          data-testid={`stage-badges-${stage.stage_id}`}
+          className="mt-3 text-xs text-[var(--text-secondary)]"
+        >
+          {badges
+            .map(({ noun, count }) => (
+              <span key={noun} className="mr-1.5 inline-block">
+                <span className="font-semibold text-[var(--text-primary)]">{count}</span> {noun}
+              </span>
+            ))
+            .reduce<ReactNode[]>((acc, node, i) => {
+              if (i > 0) acc.push(<span key={`sep-${i}`}> · </span>)
+              acc.push(node)
+              return acc
+            }, [])}
+        </p>
+      )}
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <TokenList title="Produced Fact Refs" values={stage.produced_fact_refs} />
-        <TokenList title="Related Trace Events" values={stage.related_event_ids} />
-      </div>
+      {hasDetails && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={expanded ? `Collapse ${stageName} stage` : `Expand ${stageName} stage`}
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+        >
+          <span
+            className="inline-block transition-transform"
+            style={{ transform: expanded ? 'rotate(90deg)' : 'none' }}
+            aria-hidden="true"
+          >
+            ▸
+          </span>
+          Details
+        </button>
+      )}
 
-      <div className="mt-4">
-        <StageTraceList events={traceEvents} />
-      </div>
-
-      {(stage.approval_pause_summary || stage.clarification_need_summary) && (
-        <div className="mt-4 grid gap-4 lg:grid-cols-2">
-          {stage.approval_pause_summary && (
-            <WorkflowMap title="Approval Pause" values={stage.approval_pause_summary} />
+      {expanded && hasDetails && (
+        <div className="mt-3 space-y-4">
+          {(Object.keys(stage.safe_summary).length > 0 ||
+            Object.keys(stage.context_application_summary).length > 0) && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <WorkflowMap title="Stage Summary" values={stage.safe_summary} />
+              <ContextApplication values={stage.context_application_summary} />
+            </div>
           )}
-          {stage.clarification_need_summary && (
-            <WorkflowMap title="Clarification Need" values={stage.clarification_need_summary} />
+
+          {(stage.produced_fact_refs.length > 0 || stage.related_event_ids.length > 0) && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <TokenList title="Produced Fact Refs" values={stage.produced_fact_refs} />
+              <TokenList title="Related Trace Events" values={stage.related_event_ids} />
+            </div>
+          )}
+
+          <StageTraceList events={traceEvents} />
+
+          {(stage.approval_pause_summary || stage.clarification_need_summary) && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              {stage.approval_pause_summary && (
+                <WorkflowMap title="Approval Pause" values={stage.approval_pause_summary} />
+              )}
+              {stage.clarification_need_summary && (
+                <WorkflowMap title="Clarification Need" values={stage.clarification_need_summary} />
+              )}
+            </div>
           )}
         </div>
       )}
@@ -203,6 +309,99 @@ function WorkflowMap({ title, values }: { title: string; values: Record<string, 
       )}
     </div>
   )
+}
+
+// Count-style keys (already self-describing via their name) are collapsed into a
+// single human sentence so the key and value no longer duplicate each other.
+const CONTEXT_COUNT_KEYS: { key: string; noun: string }[] = [
+  { key: 'business_context_length', noun: 'business-context chars' },
+  { key: 'task_instruction_count', noun: 'task instructions' },
+  { key: 'output_preference_count', noun: 'output preferences' },
+]
+
+// Constants that are template-wide, not stage-specific: shown once at the
+// Workflow top, never repeated inside every stage card.
+const CONTEXT_TEMPLATE_CONSTANT_KEYS = new Set([
+  'template_descriptor_version',
+  'template_name',
+])
+
+// Option-list keys rendered as chips. The `prompt_fields` list is a subset of
+// the same context that `context_options` already enumerates, so when both are
+// present we keep only the fuller `context_options` to avoid restating tokens.
+const CONTEXT_OPTION_KEYS = ['context_options', 'prompt_fields']
+
+function ContextApplication({ values }: { values: Record<string, unknown> }) {
+  const counts = CONTEXT_COUNT_KEYS
+    .map(({ key, noun }) => ({ noun, value: values[key] }))
+    .filter(({ value }) => typeof value === 'number')
+
+  const optionKey = CONTEXT_OPTION_KEYS.find((key) => Array.isArray(values[key]))
+  const options = optionKey ? (values[optionKey] as unknown[]).map(String) : []
+
+  const remaining = Object.entries(values).filter(
+    ([key, value]) =>
+      !CONTEXT_TEMPLATE_CONSTANT_KEYS.has(key) &&
+      !CONTEXT_COUNT_KEYS.some((c) => c.key === key) &&
+      !(optionKey && key === optionKey) &&
+      hasDisplayValue(value),
+  )
+
+  return (
+    <div>
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        Context Application
+      </h4>
+      {counts.length === 0 && options.length === 0 && remaining.length === 0 ? (
+        <p className="mt-2 text-xs text-[var(--text-muted)]">None</p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {counts.length > 0 && (
+            <p className="text-xs text-[var(--text-primary)]">
+              {counts
+                .filter(({ value }) => value !== 0)
+                .map(({ value, noun }) => `${value} ${noun}`)
+                .join(' · ')}
+            </p>
+          )}
+          {options.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {options.map((option) => (
+                <span
+                  key={option}
+                  className="rounded bg-[var(--bg-hover)] px-1.5 py-0.5 text-[var(--text-secondary)] text-xs"
+                >
+                  {humanizeContextOption(option)}
+                </span>
+              ))}
+            </div>
+          )}
+          {remaining.length > 0 && (
+            <dl className="space-y-1.5">
+              {remaining.map(([key, value]) => (
+                <div
+                  key={key}
+                  className="grid gap-1 text-xs sm:grid-cols-[140px_minmax(0,1fr)]"
+                >
+                  <dt className="font-mono text-[var(--text-muted)]">{key}</dt>
+                  <dd className="break-words text-[var(--text-primary)]">
+                    {formatValue(value)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function humanizeContextOption(option: string): string {
+  return option
+    .replace(/^include_/, '')
+    .replace(/^bound_/, '')
+    .replace(/_/g, ' ')
 }
 
 function TokenList({ title, values }: { title: string; values: string[] }) {

@@ -189,54 +189,62 @@ function buildTraceGroups(
   }
 
   const eventsById = new Map(sortedEvents.map((event) => [event.event_id, event]))
-  const stageRefsByEventId = new Map<string, Set<string>>()
-
-  for (const stage of projection.stages) {
-    for (const eventId of stage.related_event_ids) {
-      if (!eventsById.has(eventId)) continue
-      const refs = stageRefsByEventId.get(eventId) ?? new Set<string>()
-      refs.add(stage.stage_id)
-      stageRefsByEventId.set(eventId, refs)
-    }
-  }
-
-  const sharedEventIds = new Set(
-    [...stageRefsByEventId.entries()]
-      .filter(([, stageIds]) => stageIds.size > 1)
-      .map(([eventId]) => eventId),
-  )
-  const groupedEventIds = new Set<string>()
+  const ownedEventIds = new Set<string>()
   const groups: TraceGroup[] = []
-  const sharedEvents = sortedEvents.filter((event) => sharedEventIds.has(event.event_id))
+  const visitedStages = projection.stages.filter((stage) => stage.visited)
+  const configuredOnlyStages = projection.stages.filter((stage) => !stage.visited)
 
-  for (const event of sharedEvents) groupedEventIds.add(event.event_id)
-  if (sharedEvents.length > 0) {
-    groups.push({
-      key: 'run-level-shared',
-      title: 'Run-level / shared trace',
-      subtitle: 'Events linked to more than one workflow stage',
-      events: sharedEvents,
-    })
-  }
-
-  for (const stage of projection.stages) {
+  // Each visited stage group: all events the projection links to it.
+  for (const stage of visitedStages) {
     const stageEvents = stage.related_event_ids
-      .filter((eventId) => !sharedEventIds.has(eventId))
       .map((eventId) => eventsById.get(eventId))
       .filter((event): event is TraceEvent => Boolean(event))
       .sort((left, right) => left.sequence - right.sequence)
 
-    for (const event of stageEvents) groupedEventIds.add(event.event_id)
+    for (const event of stageEvents) ownedEventIds.add(event.event_id)
     groups.push(traceGroupForStage(stage, stageEvents))
   }
 
-  const unassignedEvents = sortedEvents.filter((event) => !groupedEventIds.has(event.event_id))
-  if (unassignedEvents.length > 0) {
+  // Run setup: events that fall before the first visited stage's first event
+  // and are not owned by any stage (e.g. run_started, manifest_loaded,
+  // model_connection_resolution, plus the workflow_stage_configuration_trace_summary).
+  const runSetupEvents = sortedEvents.filter(
+    (event) => !ownedEventIds.has(event.event_id),
+  )
+  if (runSetupEvents.length > 0) {
+    groups.unshift({
+      key: 'run-setup',
+      title: 'Run setup',
+      subtitle: 'Run bootstrap before the first stage',
+      events: runSetupEvents,
+    })
+  }
+
+  // Configured but never visited stages are collapsed into one group so they
+  // don't create empty noise when no events are attached.
+  if (configuredOnlyStages.length > 0) {
+    groups.push({
+      key: 'configured-only',
+      title: 'Configured but not visited',
+      subtitle: configuredOnlyStages.map((stage) => stage.stage_id).join(', '),
+      events: [],
+      badges: [{ label: `${configuredOnlyStages.length} stages` }],
+      emptyMessage: 'These stages were present in the configuration but not executed during this run.',
+    })
+  }
+
+  // Defensive: any events that somehow escaped the attribution above.
+  const remaining = sortedEvents.filter(
+    (event) =>
+      !ownedEventIds.has(event.event_id) &&
+      !runSetupEvents.includes(event),
+  )
+  if (remaining.length > 0) {
     groups.push({
       key: 'unassigned',
       title: 'Unassigned trace events',
       subtitle: 'Events not linked by the workflow projection',
-      events: unassignedEvents,
+      events: remaining,
     })
   }
 

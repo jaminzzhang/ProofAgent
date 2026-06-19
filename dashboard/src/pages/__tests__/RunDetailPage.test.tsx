@@ -166,8 +166,20 @@ describe('RunDetailPage navigation', () => {
             },
           }),
           traceEvent({
-            event_id: 'evt_stage_plan',
+            event_id: 'evt_model_req_plan',
             sequence: 3,
+            event_type: 'model_request',
+            payload: { role: 'planner', message_count: 2 },
+          }),
+          traceEvent({
+            event_id: 'evt_model_resp_plan',
+            sequence: 4,
+            event_type: 'model_response',
+            payload: { content_length: 48 },
+          }),
+          traceEvent({
+            event_id: 'evt_stage_plan',
+            sequence: 5,
             event_type: 'workflow_stage_result',
             payload: {
               stage_id: 'plan',
@@ -177,7 +189,7 @@ describe('RunDetailPage navigation', () => {
           }),
           traceEvent({
             event_id: 'evt_stage_tool',
-            sequence: 4,
+            sequence: 6,
             event_type: 'workflow_stage_result',
             status: 'waiting',
             payload: {
@@ -207,7 +219,13 @@ describe('RunDetailPage navigation', () => {
               safe_summary: { action_type: 'plan_retrieval' },
               context_application_summary: { prompt_fields: ['business_context'] },
               produced_fact_refs: ['action_proposal'],
-              related_event_ids: ['evt_context_plan', 'evt_stage_plan'],
+              related_event_ids: [
+                'evt_config',
+                'evt_context_plan',
+                'evt_model_req_plan',
+                'evt_model_resp_plan',
+                'evt_stage_plan',
+              ],
               approval_pause_summary: null,
               clarification_need_summary: null,
             },
@@ -274,17 +292,22 @@ describe('RunDetailPage navigation', () => {
     expect(screen.getByText('Clarification')).toBeInTheDocument()
     expect(screen.getByText('completed')).toBeInTheDocument()
     expect(screen.getByText('ANSWERED_WITH_CITATIONS')).toBeInTheDocument()
-    expect(screen.getByText('business_context')).toBeInTheDocument()
-    expect(screen.getByText('action_proposal')).toBeInTheDocument()
-    expect(screen.getByText('appr_customer_lookup')).toBeInTheDocument()
+    // badge counts summarize each visited stage's runtime events at a glance
+    // (model request+response collapse into one "model"; the stage result is "result")
+    const planBadges = screen.getByTestId('stage-badges-plan')
+    expect(planBadges.textContent).toMatch(/model/)
+    expect(planBadges.textContent).toMatch(/result/)
     expect(screen.getAllByText('visited').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('configured only')).toBeInTheDocument()
-    expect(screen.getAllByText('Stage Trace').length).toBeGreaterThanOrEqual(3)
+    // details (Stage Trace / Context Application) are collapsed by default
+    expect(screen.queryByText('Stage Trace')).not.toBeInTheDocument()
+    // expanding a stage reveals its runtime trace
+    fireEvent.click(screen.getByRole('button', { name: /Expand Plan stage/ }))
+    expect(screen.getAllByText('Stage Trace').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Stage context applied')).toBeInTheDocument()
-    expect(screen.getAllByText('Stage result').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('Stage result').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('#2')).toBeInTheDocument()
-    expect(screen.getByText('#3')).toBeInTheDocument()
-    expect(screen.getByText('No runtime trace events were linked to this stage.')).toBeInTheDocument()
+    expect(screen.getByText('#5')).toBeInTheDocument()
   })
 
   it('groups JSONL trace by workflow stage and shows call inputs and outputs', () => {
@@ -377,12 +400,7 @@ describe('RunDetailPage navigation', () => {
               safe_summary: {},
               context_application_summary: {},
               produced_fact_refs: ['action_proposal'],
-              related_event_ids: [
-                'evt_config',
-                'evt_action',
-                'evt_model_request',
-                'evt_model_response',
-              ],
+              related_event_ids: ['evt_action', 'evt_model_request', 'evt_model_response'],
               approval_pause_summary: null,
               clarification_need_summary: null,
             },
@@ -395,7 +413,7 @@ describe('RunDetailPage navigation', () => {
               safe_summary: {},
               context_application_summary: {},
               produced_fact_refs: ['approval_pause'],
-              related_event_ids: ['evt_config', 'evt_pending', 'evt_tool_result'],
+              related_event_ids: ['evt_pending', 'evt_tool_result'],
               approval_pause_summary: null,
               clarification_need_summary: null,
             },
@@ -420,7 +438,7 @@ describe('RunDetailPage navigation', () => {
     fireEvent.mouseDown(traceTab)
     fireEvent.click(traceTab)
 
-    expect(screen.getByText('Run-level / shared trace')).toBeInTheDocument()
+    expect(screen.getByText('Run setup')).toBeInTheDocument()
     expect(screen.getByText('Workflow stage configuration')).toBeInTheDocument()
     expect(screen.getByText('Plan')).toBeInTheDocument()
     expect(screen.getByText('Tool')).toBeInTheDocument()

@@ -257,8 +257,7 @@ class RunStore:
         pending_count = sum(
             1
             for run in all_runs
-            if run.outcome == ReceiptOutcome.WAITING_FOR_APPROVAL
-            or run.approval_status is not None
+            if run.outcome == ReceiptOutcome.WAITING_FOR_APPROVAL or run.approval_status is not None
         )
 
         return {
@@ -282,18 +281,16 @@ class RunStore:
                 continue
             for pending in detail.pending_approvals:
                 parameters = pending.get("parameters")
-                parameter_keys = (
-                    list(parameters.keys()) if isinstance(parameters, Mapping) else []
-                )
+                parameter_keys = list(parameters.keys()) if isinstance(parameters, Mapping) else []
                 items.append(
                     {
                         "run_id": detail.run_id,
                         "approval_id": pending.get("approval_id"),
                         "tool_name": pending.get("tool_name"),
                         "action_id": pending.get("action_id"),
-                    "question": detail.question,
-                    "agent_id": detail.agent_id,
-                    "agent_version_id": detail.agent_version_id,
+                        "question": detail.question,
+                        "agent_id": detail.agent_id,
+                        "agent_version_id": detail.agent_version_id,
                         "run_purpose": detail.run_purpose.value,
                         "created_at": pending.get("created_at"),
                         "expires_at": pending.get("expires_at"),
@@ -427,14 +424,16 @@ class RunStore:
         scores = eval_meta.get("admission_scores") or eval_meta.get("scores") or []
         chunks: list[dict[str, Any]] = []
         for i, source in enumerate(sources):
-            chunks.append({
-                "index": i,
-                "source": source,
-                "admission_score": scores[i] if i < len(scores) else None,
-                "status": "accepted"
-                if i < eval_meta.get("accepted_count", chunk_count)
-                else "rejected",
-            })
+            chunks.append(
+                {
+                    "index": i,
+                    "source": source,
+                    "admission_score": scores[i] if i < len(scores) else None,
+                    "status": "accepted"
+                    if i < eval_meta.get("accepted_count", chunk_count)
+                    else "rejected",
+                }
+            )
         return chunks
 
     def _extract_policy_decisions(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -457,9 +456,7 @@ class RunStore:
         response = next(
             (e for e in reversed(events) if e.get("event_type") == "model_response"), None
         )
-        error = next(
-            (e for e in reversed(events) if e.get("event_type") == "model_error"), None
-        )
+        error = next((e for e in reversed(events) if e.get("event_type") == "model_error"), None)
         if request is None and response is None and error is None:
             return {}
 
@@ -488,9 +485,7 @@ class RunStore:
 
     def _extract_approval_state(self, events: list[dict[str, Any]]) -> dict[str, Any] | None:
         """Derive current approval state from approval events."""
-        approval_events = [
-            e for e in events if e.get("event_type", "").startswith("approval_")
-        ]
+        approval_events = [e for e in events if e.get("event_type", "").startswith("approval_")]
         if not approval_events:
             return None
         last = approval_events[-1]
@@ -598,11 +593,7 @@ class RunStore:
             "candidate_count",
             "failure_reason",
         }
-        return {
-            field: payload[field]
-            for field in allowed_fields
-            if field in payload
-        }
+        return {field: payload[field] for field in allowed_fields if field in payload}
 
     def _extract_review_results(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         review_event_types = {"review_decision", "review_error", "review_overridden"}
@@ -620,11 +611,7 @@ class RunStore:
         events: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
         event = next(
-            (
-                e
-                for e in reversed(events)
-                if e.get("event_type") == "clarification_requested"
-            ),
+            (e for e in reversed(events) if e.get("event_type") == "clarification_requested"),
             None,
         )
         if event is None:
@@ -643,9 +630,7 @@ class RunStore:
         if intent_resolution:
             details["intent_resolution"] = intent_resolution
 
-        business_flow_admission = self._extract_business_flow_skill_pack_admission(
-            events
-        )
+        business_flow_admission = self._extract_business_flow_skill_pack_admission(events)
         if business_flow_admission:
             details["business_flow_skill_pack_admission"] = business_flow_admission
 
@@ -730,9 +715,7 @@ class RunStore:
                     for key, value in payload.items()
                     if key not in {"stage_id", "stage_label", "model_bearing"}
                 }
-                stage["context_application_summary"] = _safe_projection_mapping(
-                    context_summary
-                )
+                stage["context_application_summary"] = _safe_projection_mapping(context_summary)
                 add_related_event(stage, event)
                 continue
 
@@ -774,6 +757,8 @@ class RunStore:
                 stage["visited"] = True
                 add_related_event(stage, event)
 
+        _attribute_runtime_events_by_stage_window(events, stage_data, stage_order)
+
         return WorkflowRunProjection(
             template_name=template_name,
             template_descriptor_version=template_descriptor_version,
@@ -789,15 +774,9 @@ class RunStore:
                     context_application_summary=stage_data[stage_id].get(
                         "context_application_summary", {}
                     ),
-                    produced_fact_refs=tuple(
-                        stage_data[stage_id].get("produced_fact_refs", ())
-                    ),
-                    related_event_ids=tuple(
-                        stage_data[stage_id].get("related_event_ids", ())
-                    ),
-                    approval_pause_summary=stage_data[stage_id].get(
-                        "approval_pause_summary"
-                    ),
+                    produced_fact_refs=tuple(stage_data[stage_id].get("produced_fact_refs", ())),
+                    related_event_ids=tuple(stage_data[stage_id].get("related_event_ids", ())),
+                    approval_pause_summary=stage_data[stage_id].get("approval_pause_summary"),
                     clarification_need_summary=stage_data[stage_id].get(
                         "clarification_need_summary"
                     ),
@@ -805,6 +784,131 @@ class RunStore:
                 for stage_id in stage_order
             ),
         )
+
+
+# Runtime event types that carry a stage's real work but historically do not
+# include ``stage_id`` in their payload. They are attributed to a stage by the
+# sequence window of the surrounding ``workflow_stage_context_applied`` events.
+_RUNTIME_STAGE_WINDOW_EVENT_TYPES = frozenset(
+    {
+        "policy_decision",
+        "model_request",
+        "model_response",
+        "model_error",
+        "review_requested",
+        "review_decision",
+        "review_error",
+        "review_overridden",
+        "retrieval_query_set",
+        "retrieval_plan",
+        "retrieval_step",
+        "retrieval_started",
+        "retrieval_result",
+        "evidence_evaluation",
+        "context_admission",
+        "intent_resolution",
+        "reasoning_summary",
+        "action_proposal",
+        "clarification_requested",
+        "approval_requested",
+        "pending_approval_created",
+        "approval_granted",
+        "approval_denied",
+        "approval_timeout",
+        "memory_read",
+        "memory_candidate_generated",
+        "memory_write_requested",
+        "memory_write_decision",
+        "memory_admission",
+        "memory_export_decision",
+        "memory_delete_decision",
+        "tool_request",
+        "tool_result",
+        "final_output",
+        "final_output_disclosure",
+    }
+)
+
+
+def _attribute_runtime_events_by_stage_window(
+    events: list[dict[str, Any]],
+    stage_data: dict[str, dict[str, Any]],
+    stage_order: list[str],
+) -> None:
+    """Attribute runtime events lacking an explicit ``stage_id`` by sequence window.
+
+    Each visited stage's ``workflow_stage_context_applied`` event marks the start
+    of its ownership window in trace sequence order; the window ends at the next
+    visited stage's boundary (or the end of the trace). Operational runtime events
+    that carry no ``stage_id`` are attributed to whichever stage window their
+    sequence falls into. Explicit ``stage_id`` attribution (handled by the caller)
+    always wins: events already owned by a stage are not re-attributed here.
+
+    Events that fall before the first stage boundary are left unowned; the
+    Dashboard renders them as a "Run setup" group. Sequence, not wall-clock
+    time, defines the windows so near-simultaneous stage transitions stay clean.
+    """
+    ordered = sorted(events, key=lambda event: _event_sequence(event))
+    boundaries: list[tuple[int, str]] = []  # (sequence, stage_id)
+    for event in ordered:
+        if event.get("event_type") != "workflow_stage_context_applied":
+            continue
+        payload = _payload_dict(event)
+        stage_id = _string_or_none(payload.get("stage_id"))
+        if stage_id and stage_id in stage_data and stage_data[stage_id].get("visited"):
+            boundaries.append((_event_sequence(event), stage_id))
+    if not boundaries:
+        return
+
+    # Event ids already claimed via explicit stage_id attribution.
+    owned_event_ids: set[str] = set()
+    for stage in stage_data.values():
+        owned_event_ids.update(stage.get("related_event_ids", ()))
+
+    for event in ordered:
+        event_type = event.get("event_type")
+        if event_type not in _RUNTIME_STAGE_WINDOW_EVENT_TYPES:
+            continue
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or event_id in owned_event_ids:
+            continue
+        payload = _payload_dict(event)
+        if _string_or_none(payload.get("stage_id")) is not None:
+            # Has an explicit stage_id but that stage was not recognized above;
+            # leave it rather than guessing.
+            continue
+        sequence = _event_sequence(event)
+        owner_stage_id = _stage_for_sequence(sequence, boundaries)
+        if owner_stage_id is None:
+            continue
+        stage = stage_data[owner_stage_id]
+        stage["visited"] = True
+        related = stage.setdefault("related_event_ids", [])
+        if event_id not in related:
+            related.append(event_id)
+        owned_event_ids.add(event_id)
+
+
+def _event_sequence(event: dict[str, Any]) -> int:
+    raw = event.get("sequence")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        # Preserve insertion order for malformed traces instead of crashing.
+        return 0
+    return raw
+
+
+def _stage_for_sequence(
+    sequence: int,
+    boundaries: list[tuple[int, str]],
+) -> str | None:
+    """Return the stage whose window ``sequence`` falls into, or None if before all."""
+    owner: str | None = None
+    for boundary_sequence, stage_id in boundaries:
+        if sequence >= boundary_sequence:
+            owner = stage_id
+        else:
+            break
+    return owner
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
