@@ -162,6 +162,79 @@ def test_configuration_store_resolver_maps_published_local_index_snapshot(
     assert binding.provider_params["document_selection_budget"] == 6
 
 
+def test_configuration_store_resolver_maps_mixed_package_and_shared_sources(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    source = store.create_knowledge_source(
+        source_id="ks_shared",
+        name="Shared Knowledge",
+        provider="local_index",
+        params={"ingestion_model": {"provider": "deterministic", "name": "routing"}},
+        actor="operator",
+    )
+    assert source.source_draft_version_id is not None
+    snapshot = KnowledgeSourceSnapshotManifest(
+        schema_version="local_index.snapshot.v2",
+        snapshot_id="kssnapshot_001",
+        source_id=source.source_id,
+        state="READY",
+        validation_level="foundation",
+        source_draft_version_id=source.source_draft_version_id,
+        candidate_digest="digest",
+        foundation_validation_id="ksvalidation_001",
+        documents=(),
+        created_at="2026-06-04T00:00:00Z",
+        created_by="operator",
+    )
+    store._write_knowledge_source_snapshot(snapshot)
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id})
+    )
+    agent_yaml = _write_agent_manifest(tmp_path, source_ref_scope="package")
+    raw = agent_yaml.read_text(encoding="utf-8")
+    raw = raw.replace(
+        """  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+    alias: policy_docs
+    failure_mode: required
+    fusion_weight: 1.25
+    top_k: 2
+""",
+        """  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+    alias: policy_docs
+    failure_mode: required
+    fusion_weight: 1.25
+    top_k: 2
+  - binding_id: kb_shared
+    source_ref:
+      scope: shared
+      source_id: ks_shared
+    alias: supplemental
+    failure_mode: advisory
+    fusion_weight: 0.75
+    top_k: 3
+""",
+    )
+    agent_yaml.write_text(raw, encoding="utf-8")
+
+    resolved = ConfigurationStoreKnowledgeBindingResolver(store).resolve(
+        load_agent_manifest(agent_yaml)
+    )
+
+    by_id = {binding.binding_id: binding for binding in resolved.bindings}
+    assert by_id["kb_local"].source_scope == "package"
+    assert by_id["kb_local"].provider == "local_markdown"
+    assert by_id["kb_shared"].source_scope == "shared"
+    assert by_id["kb_shared"].provider == "local_index"
+    assert by_id["kb_shared"].source_version_id == snapshot.snapshot_id
+
+
 def test_configuration_store_resolver_maps_published_http_json_remote_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -31,6 +31,12 @@ export function ApprovalTab({ state, pendingApprovals, runId, onResolved }: Appr
       }
       await onResolved()
     } catch (err) {
+      if (isTerminalApprovalRefreshError(err)) {
+        await onResolved()
+        setError(null)
+        setLoading(false)
+        return
+      }
       setError(err instanceof Error ? err.message : 'Action failed')
       setLoading(false)
     }
@@ -150,4 +156,17 @@ function formatTimestamp(value: string | undefined): string {
 function parameterSummary(parameters: Record<string, unknown>): string {
   const keys = Object.keys(parameters)
   return keys.length ? keys.join(', ') : 'none'
+}
+
+function isTerminalApprovalRefreshError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const candidate = err as { status?: unknown; detail?: unknown; message?: unknown }
+  if (candidate.status !== 409) return false
+  const detail =
+    typeof candidate.detail === 'string'
+      ? candidate.detail
+      : typeof candidate.message === 'string'
+        ? candidate.message
+        : ''
+  return detail.includes('Approval already resolved') || detail.includes('Approval expired')
 }

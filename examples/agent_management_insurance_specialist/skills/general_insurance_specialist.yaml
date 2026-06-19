@@ -1,0 +1,24 @@
+schema_version: business_flow_skill_pack.v1
+id: general_insurance_specialist
+label: General Insurance Specialist
+description: "处理一般保险内勤咨询和无法唯一归类但仍在受控范围内的问题。"
+intent_patterns:
+  - 一般咨询
+  - 保险业务问题
+  - 业务规则
+  - 流程说明
+admission:
+  min_confidence: 0.35
+  require_authorization_context: false
+knowledge_binding_refs:
+  - general_insurance_knowledge
+policy_rule_refs:
+  - answering.require_evidence_or_authorized_read
+stage_prompt_addenda:
+  plan:
+    business_context: "该业务流是安全默认流，只能处理通用咨询和流程解释，不能扩大查数、客户记录或代理人记录权限。"
+    task_instructions:
+      - "如果问题实际需要具体业务记录或报表数据，转为澄清或拒绝权限外查询。"
+  model_answer:
+    output_preferences:
+      - "默认给内勤专员简短结论和依据；没有证据时明确说明无法支持。"

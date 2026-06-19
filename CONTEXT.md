@@ -1083,7 +1083,7 @@ A customer-facing response shape that exposes only the governed reply, safe sour
 _Avoid_: Governance Detail Projection, raw Run Detail, internal audit response
 
 **Institution Specialist Response Projection**:
-An operator-facing assisted-service response shape for Institution Insurance Specialist runs that may include the answer, source basis, missing-information boundaries, authorized-read availability, and safe audit links according to Response Detail Policy.
+An operator-facing assisted-service response shape for Institution Insurance Specialist runs that starts with a concise conclusion or recommendation, then includes source basis, missing-information or boundary notes, and safe audit links according to Response Detail Policy; an External Wording Draft appears only when customer or agent wording is requested.
 _Avoid_: Customer-safe response, raw trace dump, direct external customer wording
 
 **External Wording Draft**:
@@ -1303,7 +1303,7 @@ The first Approval Console action surface embedded in a Run Detail view. It reso
 _Avoid_: Frontend-scanned approval queue, separate follow-up run, page reload as state management
 
 **Global Approval Queue Projection**:
-An operator-facing Dashboard API projection and `/approvals` triage page that lists unresolved PendingApproval items across runs for approval work triage. Its primary object is the pending approval request, enriched with run metadata for navigation; it is not a filtered Run list, stats payload, or approval execution surface. The first version sorts by `expires_at` ascending, returns parameter keys and count rather than raw parameters, marks expired items without writing trace, paginates with `limit` and `offset`, and navigates to Run Detail Approval Action for approve or deny.
+An operator-facing Dashboard API projection and `/approvals` triage page that lists unresolved PendingApproval items across runs for approval work triage. Its primary object is the pending approval request, enriched with run metadata for navigation; it is not a filtered Run list, stats payload, or approval execution surface. The first version sorts by `created_at` descending, returns parameter keys and count rather than raw parameters, marks expired items without writing trace, paginates with `limit` and `offset`, and navigates to Run Detail Approval Action for approve or deny.
 _Avoid_: Frontend-scanned run history, stats-expanded queue, run summary as approval command object, direct approve or deny from the queue page
 
 **Enterprise QA Reference Agent**:
@@ -1333,6 +1333,10 @@ _Avoid_: Write tool, transaction tool, generic web search, ungoverned system que
 **Institution Authorization Context**:
 The trace-safe institution staff permission summary admitted into an assisted-service Harness run as Structured Control Context, including institution, branch, role, business-line scope, and data-scope constraints used by PolicyEngine and Tool Gateway.
 _Avoid_: Raw staff credential, customer authorization context, prompt-only permission note
+
+**Managed Agent Scope**:
+The default read boundary for an Institution Insurance Specialist's performance and activity lookups: the set of insurance agents the current staff member is authorized to manage, narrowed by request filters such as branch, team, agent, business line, report period, metric, or aggregation level without expanding beyond Institution Authorization Context.
+_Avoid_: User-entered permission scope, prompt-expanded agent list, unrestricted agent performance search
 
 **Public Insurance Knowledge Query**:
 A generic insurance question that can be answered from public or enterprise-approved knowledge sources without reading customer, agent, policy, claim, report, or other scoped business records.

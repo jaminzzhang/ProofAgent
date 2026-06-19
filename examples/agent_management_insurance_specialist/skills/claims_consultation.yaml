@@ -1,0 +1,38 @@
+schema_version: business_flow_skill_pack.v1
+id: claims_consultation
+label: Claims Consultation
+description: "解答理赔流程、材料、责任认定说明、免赔、等待期、理赔状态解释和待决案件话术。"
+intent_patterns:
+  - 理赔
+  - 赔案
+  - 理赔材料
+  - 待决
+  - 拒赔
+  - 免赔
+  - 理赔进度
+admission:
+  min_confidence: 0.68
+  require_authorization_context: false
+knowledge_binding_refs:
+  - claims_sop_docs
+  - product_clause_docs
+tool_contract_refs:
+  - claim_record_lookup
+policy_rule_refs:
+  - answering.require_evidence_or_authorized_read
+  - tools.claim_record_lookup.read_only
+  - response.no_coverage_or_payment_guarantee
+stage_prompt_addenda:
+  plan:
+    business_context: "该业务流处理理赔咨询。流程和材料用知识来源，当前赔案状态用授权只读记录。"
+    task_instructions:
+      - "如果用户询问具体赔案进度或待决原因，检查是否有 claim_id 和权限范围。"
+      - "如果缺少赔案标识，仍可先回答通用理赔流程或材料要求。"
+  retrieval_review:
+    business_context: "理赔流程、材料和条款责任说明优先检索 SOP 和条款；当前状态不能只靠文档回答。"
+  tool_review:
+    business_context: "具体赔案状态查询只能使用只读赔案工具，并要求稳定赔案标识和权限范围。"
+  model_answer:
+    output_preferences:
+      - "区分流程解释、条款依据和当前赔案状态。"
+      - "待决或拒赔相关话术应保守表达，不承诺赔付结果或时限。"

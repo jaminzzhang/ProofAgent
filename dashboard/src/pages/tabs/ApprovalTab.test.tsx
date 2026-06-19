@@ -93,6 +93,31 @@ describe('ApprovalTab', () => {
     await waitFor(() => expect(onResolved).toHaveBeenCalled())
   })
 
+  it('refreshes stale approval state when approval was already resolved', async () => {
+    vi.mocked(approveRun).mockRejectedValue({
+      status: 409,
+      detail: 'Approval already resolved: appr_customer_lookup',
+    })
+    const onResolved = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <ApprovalTab
+        runId="run_1"
+        state={{ state: 'requested', tool_name: 'customer_lookup' }}
+        pendingApprovals={[pendingApproval]}
+        onResolved={onResolved}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Approve Execution/i }))
+
+    await waitFor(() => {
+      expect(approveRun).toHaveBeenCalledWith('run_1', 'appr_customer_lookup')
+    })
+    await waitFor(() => expect(onResolved).toHaveBeenCalled())
+    expect(screen.queryByText(/API error/i)).not.toBeInTheDocument()
+  })
+
   it('does not render action buttons without a pending approval operation source', () => {
     render(
       <ApprovalTab

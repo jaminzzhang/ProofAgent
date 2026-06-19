@@ -47,6 +47,7 @@ def _seed_pending_approval(
     run_id: str,
     approval_id: str,
     *,
+    created_at: str = "2026-05-10T14:32:18Z",
     expires_at: str = "2099-05-10T14:33:18Z",
 ) -> None:
     """Seed a run with one unresolved PendingApproval trace snapshot."""
@@ -102,7 +103,7 @@ def _seed_pending_approval(
                 },
                 "checkpoint_id": "checkpoint_test",
                 "status": "pending",
-                "created_at": "2026-05-10T14:32:18Z",
+                "created_at": created_at,
                 "expires_at": expires_at,
             },
             "redaction": {"applied": False, "fields": []},
@@ -287,3 +288,26 @@ def test_approving_expired_pending_approval_records_timeout_without_tool_resume(
     assert event_types.count("approval_timeout") == 1
     assert "approval_granted" not in event_types
     assert "tool_result" not in event_types
+
+
+def test_global_approval_queue_lists_newest_pending_approvals_first(client, app) -> None:
+    _seed_pending_approval(
+        app,
+        "run_older",
+        "appr_older",
+        created_at="2026-05-10T14:00:00Z",
+        expires_at="2099-05-10T14:01:00Z",
+    )
+    _seed_pending_approval(
+        app,
+        "run_newer",
+        "appr_newer",
+        created_at="2026-05-10T15:00:00Z",
+        expires_at="2099-05-10T15:01:00Z",
+    )
+
+    resp = client.get("/api/approvals")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [item["approval_id"] for item in body["data"]] == ["appr_newer", "appr_older"]
