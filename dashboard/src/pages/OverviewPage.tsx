@@ -5,6 +5,7 @@ import {
   EmptyState,
   OutcomeBadge,
   OUTCOME_STYLES,
+  outcomeCategory,
   Skeleton,
   Table,
   TableBody,
@@ -37,19 +38,15 @@ const OUTCOME_ORDER: ReceiptOutcome[] = [
 ]
 
 /**
- * Outcome → bar color, derived from its semantic category. Each outcome gets a
- * distinct hue via the chart palette (previously two different outcomes shared
- * the same token and collapsed into one color).
+ * Bar color per outcome. Monochrome + success emphasis: the "answered" success
+ * outcome wears the accent blue so the eye reads "how much succeeded"; every
+ * other outcome uses a single neutral tone so the chart stays calm and the
+ * success bar pops against an undifferentiated field.
  */
-const OUTCOME_COLOR: Record<ReceiptOutcome, string> = {
-  ANSWERED_WITH_CITATIONS: 'var(--chart-1)',
-  ESCALATED_WEAK_EVIDENCE: 'var(--chart-5)',
-  WAITING_FOR_APPROVAL: 'var(--warning)',
-  WAITING_FOR_USER_CLARIFICATION: 'var(--neutral)',
-  REFUSED_NO_EVIDENCE: 'var(--chart-2)',
-  TOOL_APPROVAL_DENIED: 'var(--chart-4)',
-  FAILED_WITH_TRACE: 'var(--danger)',
-  FAILED_RECEIPT_UNAVAILABLE: 'var(--neutral)',
+function barColor(outcome: ReceiptOutcome): string {
+  return outcomeCategory(outcome) === 'success'
+    ? 'var(--accent)'
+    : 'var(--border-strong)'
 }
 
 interface OutcomeRow {
@@ -72,7 +69,7 @@ function OutcomeChart({ stats }: { stats: StatsResponse }) {
       label: t(OUTCOME_STYLES[key].labelKey, OUTCOME_STYLES[key].defaultLabel),
       count: dist[key as keyof typeof dist] ?? 0,
       pct: 0,
-      color: OUTCOME_COLOR[key],
+      color: barColor(key),
     }))
     .filter((d) => d.count > 0)
     .map((d) => ({ ...d, pct: Math.round((d.count / total) * 100) }))
@@ -83,43 +80,32 @@ function OutcomeChart({ stats }: { stats: StatsResponse }) {
 
   return (
     <Card className="p-5">
-      <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-primary)]">
-        {t('overview.outcomeDistribution')}
-      </h3>
-
-      {/* segmented proportion bar (compact overview) */}
-      <div className="flex h-2.5 overflow-hidden rounded-full bg-[var(--bg-hover)]">
-        {rows.map((d) => (
-          <div
-            key={d.key}
-            style={{ width: `${(d.count / total) * 100}%`, backgroundColor: d.color }}
-            title={`${d.label}: ${formatNumber(d.count)}`}
-          />
-        ))}
+      <div className="mb-5 flex items-baseline justify-between gap-4">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-primary)]">
+          {t('overview.outcomeDistribution')}
+        </h3>
+        <span className="text-xs text-[var(--text-muted)]">
+          {formatNumber(total)} {t('overview.totalRuns')}
+        </span>
       </div>
 
       {/* horizontal bars — pure CSS, no chart lib. Animates width on mount. */}
-      <ul className="mt-6 space-y-2.5" role="list">
+      <ul className="space-y-3" role="list">
         {rows.map((d) => (
-          <li key={d.key} className="grid grid-cols-[150px_1fr_auto] items-center gap-3">
-            <span className="flex items-center gap-2 truncate text-xs font-medium text-[var(--text-secondary)]">
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                style={{ backgroundColor: d.color }}
-                aria-hidden="true"
-              />
-              <span className="truncate">{d.label}</span>
+          <li key={d.key} className="grid grid-cols-[140px_1fr_auto] items-center gap-3">
+            <span className="truncate text-xs font-medium text-[var(--text-secondary)]">
+              {d.label}
             </span>
-            <div className="h-5 overflow-hidden rounded-md bg-[var(--bg-hover)]">
+            <div className="h-2 overflow-hidden rounded-full bg-[var(--bg-hover)]">
               <div
-                className="outcome-bar-fill h-full rounded-md"
+                className="outcome-bar-fill h-full rounded-full"
                 style={{ width: `${(d.count / maxCount) * 100}%`, backgroundColor: d.color }}
                 title={`${formatNumber(d.count)} runs`}
               />
             </div>
             <span className="text-right font-mono text-xs tabular-nums text-[var(--text-primary)]">
               {formatNumber(d.count)}
-              <span className="ml-1 text-[var(--text-muted)]">({formatNumber(d.pct)}%)</span>
+              <span className="ml-1.5 text-[var(--text-muted)]">({formatNumber(d.pct)}%)</span>
             </span>
           </li>
         ))}
