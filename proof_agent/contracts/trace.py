@@ -22,6 +22,7 @@ class TraceEventType(str, Enum):
     BUSINESS_FLOW_SKILL_PACK_ADMISSION = "business_flow_skill_pack_admission"
     REASONING_SUMMARY = "reasoning_summary"
     ACTION_PROPOSAL = "action_proposal"
+    ACTION_CONSTRAINED = "action_constrained"
     REVIEW_REQUESTED = "review_requested"
     REVIEW_DECISION = "review_decision"
     REVIEW_ERROR = "review_error"

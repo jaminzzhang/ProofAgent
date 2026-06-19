@@ -758,6 +758,8 @@ def test_loads_react_enterprise_qa_contract(tmp_path: Path) -> None:
     assert manifest.workflow.template == "react_enterprise_qa"
     assert manifest.react is not None
     assert manifest.react.max_steps == 5
+    # max_plan_rounds defaults to max_steps when not declared (ADR-0032 alias).
+    assert manifest.react.max_plan_rounds == 5
     assert manifest.react.max_tool_calls == 1
     assert manifest.react.planner.provider == "deterministic"
     assert manifest.review is not None
@@ -1044,6 +1046,8 @@ def test_loads_react_enterprise_qa_example_manifest() -> None:
     assert manifest.workflow.checkpointer.uri == "memory"
     assert manifest.react is not None
     assert manifest.react.max_steps == 5
+    # max_plan_rounds defaults to max_steps when not declared (ADR-0032 alias).
+    assert manifest.react.max_plan_rounds == 5
     assert manifest.react.max_tool_calls == 1
     assert manifest.react.planner.provider == "deterministic"
     assert manifest.review is not None
@@ -1208,6 +1212,51 @@ def test_react_template_requires_react_config(tmp_path: Path) -> None:
 
     assert exc.value.code == "PA_CONFIG_002"
     assert "react config is required" in exc.value.message
+
+
+def test_react_max_plan_rounds_explicit_value_overrides_max_steps_alias(
+    tmp_path: Path,
+) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        react_section="""
+react:
+  max_steps: 5
+  max_plan_rounds: 8
+  max_tool_calls: 1
+  planner:
+    provider: deterministic
+    name: react-planner
+""",
+    )
+
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.react is not None
+    # Explicit max_plan_rounds wins over the max_steps alias.
+    assert manifest.react.max_plan_rounds == 8
+    assert manifest.react.max_steps == 5
+
+
+def test_react_max_plan_rounds_must_be_positive(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(
+        tmp_path,
+        react_section="""
+react:
+  max_steps: 5
+  max_plan_rounds: 0
+  max_tool_calls: 1
+  planner:
+    provider: deterministic
+    name: react-planner
+""",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "max_plan_rounds must be greater than 0" in exc.value.message
 
 
 def test_auto_review_requires_subagent_config(tmp_path: Path) -> None:

@@ -354,8 +354,17 @@ def _react_config_from_mapping(raw: Any) -> ReActConfig | None:
     if not isinstance(planner, dict):
         raise TypeError("react.planner must be a mapping")
     planner_config = _required_model_config_from_mapping(planner, field_name="react.planner")
+    # max_plan_rounds is the authoritative loop budget (ADR-0032). max_steps is a
+    # backward-compatible alias: an Agent Contract that only declares max_steps
+    # is read as max_plan_rounds so existing YAML keeps working.
+    max_steps = raw["max_steps"]
+    raw_max_plan_rounds = raw.get("max_plan_rounds")
+    max_plan_rounds = (
+        int(raw_max_plan_rounds) if raw_max_plan_rounds is not None else max_steps
+    )
     return ReActConfig(
-        max_steps=raw["max_steps"],
+        max_steps=max_steps,
+        max_plan_rounds=max_plan_rounds,
         max_tool_calls=raw.get("max_tool_calls", 1),
         record_reasoning_summary=raw.get("record_reasoning_summary", True),
         planner=ReActPlannerConfig(

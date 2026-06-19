@@ -156,10 +156,14 @@ def run_with_langgraph(
         "question": question,
         "messages": [],
         "step_count": 0,
+        "plan_rounds": 0,
         "tool_call_count": 0,
         "review_results": [],
         "stage_results": [],
         "stage_context_applications": [],
+        # Controlled ReAct Loop control state (ADR-0032).
+        "action_history": [],
+        "evidence_trajectory": [],
     }
     config = {"configurable": {"thread_id": actual_run_id}}
 
@@ -382,11 +386,12 @@ def _ensure_executable_template(manifest: AgentManifest, agent_yaml: Path) -> No
         "enterprise_qa",
         "react_enterprise_qa",
         "react_enterprise_qa_v2",
+        "react_enterprise_qa_v3",
     }:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"workflow template is not executable yet: {manifest.workflow.template}",
-            "Use workflow.template: enterprise_qa, react_enterprise_qa, or react_enterprise_qa_v2.",
+            "Use workflow.template: enterprise_qa, react_enterprise_qa, react_enterprise_qa_v2, or react_enterprise_qa_v3.",
             artifact_path=agent_yaml,
         )
 

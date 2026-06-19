@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
@@ -286,6 +287,142 @@ def clarification_message(proposal: ReActActionProposal) -> str:
 
 def should_stop_for_step_budget(step_count: int, max_steps: int) -> bool:
     return step_count >= max_steps
+
+
+def should_stop_for_plan_budget(plan_rounds: int, max_plan_rounds: int) -> bool:
+    """Return True when the Controlled ReAct Loop must stop for the plan budget.
+
+    Counts Plan Rounds (``plan`` invocations); ``max_plan_rounds`` is the
+    dual-axis budget that guards thinking divergence (ADR-0032).
+    """
+
+    return plan_rounds >= max_plan_rounds
+
+
+# Actions the plan stage may legitimately choose from when unrestricted. The
+# synthetic actions (RUN_RETRIEVAL_STEP, STOP, ESCALATE) are produced by stage
+# behavior or routing, never emitted by the planner, so they are excluded.
+_PLAN_ELIGIBLE_ACTIONS: frozenset[ReActActionType] = frozenset(
+    {
+        ReActActionType.PLAN_RETRIEVAL,
+        ReActActionType.PROPOSE_TOOL_CALL,
+        ReActActionType.GENERATE_FINAL_ANSWER,
+        ReActActionType.ASK_CLARIFICATION,
+        ReActActionType.REFUSE,
+    }
+)
+
+# Converged eligible set: once saturation or repetition fires, plan may only
+# answer with what it has or refuse. Observation actions are removed so the
+# loop cannot keep gathering without progress.
+_TERMINAL_NARROWED_ACTIONS: frozenset[ReActActionType] = frozenset(
+    {ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE}
+)
+
+# Eligible set when the plan budget is exhausted: the loop must end, and the
+# only honest terminal action is refuse (no evidence synthesis is possible).
+_REFUSE_ONLY_ACTIONS: frozenset[ReActActionType] = frozenset({ReActActionType.REFUSE})
+
+_EVIDENCE_SATURATION_WINDOW = 2
+_ACTION_REPETITION_WINDOW = 2
+
+
+def compute_eligible_action_set(
+    *,
+    plan_rounds: int,
+    max_plan_rounds: int,
+    action_history: list[Mapping[str, Any]],
+    evidence_trajectory: list[int],
+) -> tuple[frozenset[ReActActionType], str | None]:
+    """Deterministically narrow the plan eligible action set (ADR-0032).
+
+    Pure function over control state, no LLM call. Returns the eligible action
+    set for the upcoming plan round and the convergence signal that fired
+    (``None`` when unrestricted). Signal precedence is, strictest first:
+    plan-budget exhaustion, action repetition, evidence saturation.
+    """
+
+    if should_stop_for_plan_budget(plan_rounds, max_plan_rounds):
+        return _REFUSE_ONLY_ACTIONS, "plan_budget_exhausted"
+
+    if _detect_action_repetition(action_history):
+        return _TERMINAL_NARROWED_ACTIONS, "action_repetition"
+
+    if _detect_evidence_saturation(evidence_trajectory):
+        return _TERMINAL_NARROWED_ACTIONS, "evidence_saturation"
+
+    return _PLAN_ELIGIBLE_ACTIONS, None
+
+
+def _detect_evidence_saturation(evidence_trajectory: list[int]) -> bool:
+    """True when accepted evidence did not grow across the saturation window."""
+
+    if len(evidence_trajectory) <= _EVIDENCE_SATURATION_WINDOW:
+        return False
+    window = evidence_trajectory[-(_EVIDENCE_SATURATION_WINDOW + 1) :]
+    baseline = window[0]
+    return all(count <= baseline for count in window[1:])
+
+
+def _detect_action_repetition(action_history: list[Mapping[str, Any]]) -> bool:
+    """True when the most recent two rounds chose the same action and parameters."""
+
+    if len(action_history) < _ACTION_REPETITION_WINDOW:
+        return False
+    recent = action_history[-_ACTION_REPETITION_WINDOW:]
+    return _action_fingerprint(recent[0]) == _action_fingerprint(recent[1])
+
+
+def _action_fingerprint(entry: Mapping[str, Any]) -> tuple[Any, Any]:
+    parameters = entry.get("parameters", {})
+    normalized = tuple(sorted(parameters.items(), key=lambda item: str(item[0])))
+    return entry.get("action_type"), normalized
+
+
+# Convergence signals that indicate the loop cannot make further progress and
+# must end. Under these signals the Action Constraint default is REFUSE.
+_DIVERGENCE_SIGNALS: frozenset[str] = frozenset({"plan_budget_exhausted"})
+
+
+@dataclass(frozen=True)
+class ActionRewrite:
+    """Trace-safe record of an Action Constraint rewrite (ADR-0032 Layer 2)."""
+
+    original_action_type: ReActActionType
+    constrained_to: ReActActionType
+    reason: str
+    eligible_set: tuple[ReActActionType, ...]
+
+
+def constrain_action(
+    proposal: ReActActionProposal,
+    eligible_set: frozenset[ReActActionType],
+    *,
+    convergence_signal: str | None,
+) -> tuple[ReActActionProposal, ActionRewrite | None]:
+    """Return the proposal unchanged when in-set, otherwise rewrite it (ADR-0032).
+
+    Layer 2 eligibility enforcement: a provider-neutral, deterministic rewrite.
+    The default for an out-of-set action follows the convergence context:
+    divergence signals (budget exhaustion) default to REFUSE; everything else
+    (saturation, repetition, or no signal) defaults to GENERATE_FINAL_ANSWER.
+    """
+
+    if proposal.action_type in eligible_set:
+        return proposal, None
+
+    if convergence_signal in _DIVERGENCE_SIGNALS:
+        default = ReActActionType.REFUSE
+    else:
+        default = ReActActionType.GENERATE_FINAL_ANSWER
+    constrained = proposal.model_copy(update={"action_type": default})
+    rewrite = ActionRewrite(
+        original_action_type=proposal.action_type,
+        constrained_to=default,
+        reason="outside_eligible_set",
+        eligible_set=tuple(sorted(eligible_set, key=lambda action: action.value)),
+    )
+    return constrained, rewrite
 
 
 def _jsonable(value: Any) -> Any:

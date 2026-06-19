@@ -56,7 +56,10 @@ from proof_agent.control.workflow.react_enterprise_qa import (
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.demo.scenarios import UNSUPPORTED_QUESTION
 from proof_agent.observability.audit.trace import TraceWriter
-from proof_agent.runtime.graph import _format_untrusted_web_supplement, _maybe_untrusted_web_supplement
+from proof_agent.runtime.graph import (
+    _format_untrusted_web_supplement,
+    _maybe_untrusted_web_supplement,
+)
 
 
 class ReActEnterpriseQAStageBehavior:
@@ -87,8 +90,7 @@ class ReActEnterpriseQAStageBehavior:
             self.manifest.review and self.manifest.review.low_risk_fast_path
         )
         self.workflow_stage_configs = {
-            stage.id: stage
-            for stage in self.execution_input.effective_stage_configuration.stages
+            stage.id: stage for stage in self.execution_input.effective_stage_configuration.stages
         }
 
     def configured_stage_context(
@@ -124,9 +126,7 @@ class ReActEnterpriseQAStageBehavior:
                 **summary,
                 "stage_label": descriptor_stage.label,
                 "model_bearing": descriptor_stage.model_bearing,
-                "template_descriptor_version": (
-                    self.execution_input.template_descriptor_version
-                ),
+                "template_descriptor_version": (self.execution_input.template_descriptor_version),
             }
             if business_flow_skill_pack_id is not None:
                 application["context_source"] = "business_flow_skill_pack"
@@ -137,14 +137,16 @@ class ReActEnterpriseQAStageBehavior:
         # carrying just the fields the projection reads (stage_id / label /
         # model_bearing). Suppressing the boundary would leave the Workflow tab
         # empty even though the stage ran.
-        boundary_payload = application if application is not None else {
-            "stage_id": stage_id,
-            "stage_label": descriptor_stage.label,
-            "model_bearing": descriptor_stage.model_bearing,
-            "template_descriptor_version": (
-                self.execution_input.template_descriptor_version
-            ),
-        }
+        boundary_payload = (
+            application
+            if application is not None
+            else {
+                "stage_id": stage_id,
+                "stage_label": descriptor_stage.label,
+                "model_bearing": descriptor_stage.model_bearing,
+                "template_descriptor_version": (self.execution_input.template_descriptor_version),
+            }
+        )
         self.trace.emit(
             "workflow_stage_context_applied",
             status="ok",
@@ -240,12 +242,8 @@ class ReActEnterpriseQAStageBehavior:
             default_pack_id=_default_business_flow_skill_pack_id(self.invocation),
             authorization_context_present=False,
         )
-        recommendation = _jsonable(
-            result.recommendation.model_dump(mode="python", warnings=False)
-        )
-        admission = _jsonable(
-            result.admission.model_dump(mode="python", warnings=False)
-        )
+        recommendation = _jsonable(result.recommendation.model_dump(mode="python", warnings=False))
+        admission = _jsonable(result.admission.model_dump(mode="python", warnings=False))
         self.trace.emit(
             "business_flow_skill_pack_admission",
             status=(
@@ -272,6 +270,129 @@ class ReActEnterpriseQAStageBehavior:
         }
 
     def plan(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        if self._uses_loop():
+            return self._plan_loop(state)
+        return self._plan_single_pass(state)
+
+    def _uses_loop(self) -> bool:
+        return self.invocation.template.descriptor_version == "react_enterprise_qa.v3"
+
+    def _plan_loop(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """Controlled ReAct Loop plan pipeline (ADR-0032).
+
+        Budget short-circuit -> Convergence Check (eligible set) -> planner ->
+        Action Constraint -> emit. Accumulates control state
+        (plan_rounds, action_history, evidence_trajectory).
+        """
+
+        from proof_agent.control.workflow.react_enterprise_qa import (
+            compute_eligible_action_set,
+            constrain_action,
+            should_stop_for_plan_budget,
+        )
+
+        if self.react is None or self.invocation.react_planner is None:
+            return _refusal("ReAct planner is not configured.")
+
+        plan_rounds = int(state.get("plan_rounds", 0))
+        max_plan_rounds = self.react.max_plan_rounds if self.react is not None else 0
+        if should_stop_for_plan_budget(plan_rounds, max_plan_rounds):
+            return _refusal(
+                "The plan round budget was exhausted before an answer could be produced."
+            )
+
+        action_history = list(state.get("action_history", []))
+        evidence_trajectory = list(state.get("evidence_trajectory", []))
+        eligible_set, convergence_signal = compute_eligible_action_set(
+            plan_rounds=plan_rounds,
+            max_plan_rounds=max_plan_rounds,
+            action_history=action_history,
+            evidence_trajectory=evidence_trajectory,
+        )
+
+        stage_context: Mapping[str, Any] | None = None
+        try:
+            stage_context = self.configured_stage_context("plan", state)
+            proposal = self.invocation.react_planner.plan(
+                question=state["question"],
+                system_prompt="Use governed ReAct planning without raw chain-of-thought.",
+                context_summary=_intent_context_summary(state),
+                workflow_stage_context=stage_context,
+            )
+        except ModelOutputNormalizationError as exc:
+            return self._plan_normalization_failure(state, stage_context, exc)
+
+        llm_interactions = _drain_stage_llm_interactions(
+            self.invocation.react_planner,
+            stage_id="plan",
+            stage_label=self._stage_label("plan"),
+        )
+
+        proposal, rewrite = constrain_action(
+            proposal, eligible_set, convergence_signal=convergence_signal
+        )
+        if rewrite is not None:
+            self.trace.emit(
+                "action_constrained",
+                status="ok",
+                payload={
+                    "action_id": proposal.action_id,
+                    "original_action_type": rewrite.original_action_type.value,
+                    "constrained_to": rewrite.constrained_to.value,
+                    "reason": rewrite.reason,
+                    "eligible_set": [action.value for action in rewrite.eligible_set],
+                    "convergence_signal": convergence_signal,
+                },
+            )
+
+        emit_reasoning_summary(self.trace, proposal)
+        emit_action_proposal(self.trace, proposal)
+        return {
+            "plan_rounds": plan_rounds + 1,
+            "action": _proposal_state_dict(proposal),
+            "reasoning_summary": _reasoning_summary_state_dict(proposal),
+            "action_history": [
+                {
+                    "action_type": proposal.action_type.value,
+                    "parameters": dict(proposal.parameters),
+                }
+            ],
+            "last_convergence_signal": convergence_signal,
+            **_stage_context_applications_delta(state, stage_context),
+            "stage_llm_interactions": llm_interactions,
+        }
+
+    def _plan_normalization_failure(
+        self,
+        state: Mapping[str, Any],
+        stage_context: Mapping[str, Any] | None,
+        exc: ModelOutputNormalizationError,
+    ) -> dict[str, Any]:
+        llm_interactions = _drain_stage_llm_interactions(
+            self.invocation.react_planner,
+            stage_id="plan",
+            stage_label=self._stage_label("plan"),
+        )
+        event = self.trace.emit(
+            "model_output_normalization_failed",
+            status="blocked",
+            payload=_model_output_failure_payload(exc),
+        )
+        return {
+            **_refusal("The planner output failed validation and the run was stopped."),
+            **_stage_context_applications_delta(state, stage_context),
+            "stage_llm_interactions": llm_interactions,
+            "stage_failure_diagnostics": [
+                _model_output_failure_diagnostic(
+                    stage_id="plan",
+                    stage_label=self._stage_label("plan"),
+                    event_id=event.event_id,
+                    exc=exc,
+                )
+            ],
+        }
+
+    def _plan_single_pass(self, state: Mapping[str, Any]) -> dict[str, Any]:
         step_count = int(state.get("step_count", 0))
         if self.react is None or self.invocation.react_planner is None:
             return _refusal("ReAct planner is not configured.")
@@ -290,29 +411,7 @@ class ReActEnterpriseQAStageBehavior:
                 workflow_stage_context=stage_context,
             )
         except ModelOutputNormalizationError as exc:
-            llm_interactions = _drain_stage_llm_interactions(
-                self.invocation.react_planner,
-                stage_id="plan",
-                stage_label=self._stage_label("plan"),
-            )
-            event = self.trace.emit(
-                "model_output_normalization_failed",
-                status="blocked",
-                payload=_model_output_failure_payload(exc),
-            )
-            return {
-                **_refusal("The planner output failed validation and the run was stopped."),
-                **_stage_context_applications_delta(state, stage_context),
-                "stage_llm_interactions": llm_interactions,
-                "stage_failure_diagnostics": [
-                    _model_output_failure_diagnostic(
-                        stage_id="plan",
-                        stage_label=self._stage_label("plan"),
-                        event_id=event.event_id,
-                        exc=exc,
-                    )
-                ],
-            }
+            return self._plan_normalization_failure(state, stage_context, exc)
         llm_interactions = _drain_stage_llm_interactions(
             self.invocation.react_planner,
             stage_id="plan",
@@ -492,9 +591,11 @@ class ReActEnterpriseQAStageBehavior:
                     memory_stage_context,
                 ),
             }
+        accepted_count = int(evidence_result.metadata.get("accepted_count", len(evidence)))
         return {
             "review_results": [step_review_event],
             "evidence": [_evidence_state_dict(chunk) for chunk in evidence],
+            "evidence_trajectory": [accepted_count],
             **_stage_context_applications_delta(
                 state,
                 retrieval_stage_context,
@@ -572,7 +673,9 @@ class ReActEnterpriseQAStageBehavior:
                 exc,
             )
             raise
-        self.trace.emit("model_response", status="ok", payload=model_response_payload(model_response))
+        self.trace.emit(
+            "model_response", status="ok", payload=model_response_payload(model_response)
+        )
         llm_interactions = [
             _llm_interaction_capture(
                 stage_id="model_answer",
@@ -635,8 +738,7 @@ class ReActEnterpriseQAStageBehavior:
     def review_tool(self, state: Mapping[str, Any]) -> dict[str, Any]:
         proposal = proposal_from_state(state)
         if not (
-            self.workflow_stage_available("tool_review")
-            and self.workflow_stage_available("tool")
+            self.workflow_stage_available("tool_review") and self.workflow_stage_available("tool")
         ):
             return _tool_capability_disabled_delta()
         if int(state.get("tool_call_count", 0)) >= self.max_tool_calls:
@@ -712,9 +814,7 @@ class ReActEnterpriseQAStageBehavior:
                 }
             return {
                 "governance_refusal": ReceiptOutcome.WAITING_FOR_APPROVAL,
-                "governance_message": (
-                    f"Waiting for approval before {tool_name} can execute."
-                ),
+                "governance_message": (f"Waiting for approval before {tool_name} can execute."),
                 "tool_approval_action_id": proposal.action_id,
                 "tool_approval_checkpoint_ref": f"thread:{self.trace.run_id}",
                 "tool_approval_parameters": parameters,
@@ -1350,9 +1450,7 @@ def _workflow_stage_runtime_sample_context(
         "bound_tools": tool_contract_path,
         "policy_outline": str(manifest.policy.file),
         "missing_field_schema": (
-            list(proposal.parameters.get("missing_fields", ()))
-            if proposal is not None
-            else []
+            list(proposal.parameters.get("missing_fields", ())) if proposal is not None else []
         ),
         "retrieval_intent": (
             proposal.parameters.get("query", state.get("question", ""))
@@ -1467,12 +1565,8 @@ def _stage_prompt_config(
         return prompt
     return WorkflowStagePromptConfig(
         business_context=str(prompt.get("business_context", "") or ""),
-        task_instructions=tuple(
-            str(item) for item in prompt.get("task_instructions", ()) or ()
-        ),
-        output_preferences=tuple(
-            str(item) for item in prompt.get("output_preferences", ()) or ()
-        ),
+        task_instructions=tuple(str(item) for item in prompt.get("task_instructions", ()) or ()),
+        output_preferences=tuple(str(item) for item in prompt.get("output_preferences", ()) or ()),
     )
 
 
@@ -1524,9 +1618,7 @@ def _blocked_business_flow_delta(delta: Mapping[str, Any]) -> dict[str, Any] | N
         BusinessFlowSkillPackAdmissionDecision.REFUSED.value,
         BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED.value,
     }:
-        return _refusal(
-            "The Business Flow Skill Pack recommendation could not be admitted safely."
-        )
+        return _refusal("The Business Flow Skill Pack recommendation could not be admitted safely.")
     return None
 
 

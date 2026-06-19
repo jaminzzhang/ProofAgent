@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -37,6 +38,7 @@ from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_
 
 REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_V2_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml")
+REACT_V3_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
 
 
 def _trace_events(path: Path) -> list[dict[str, Any]]:
@@ -1290,3 +1292,165 @@ class FakeControlPlaneProvider:
             model_name=self.model_name,
             finish_reason="stop",
         )
+
+
+def _loop_proposal(action_type: ReActActionType, *, action_id: str) -> ReActActionProposal:
+    return ReActActionProposal(
+        action_id=action_id,
+        action_type=action_type,
+        reasoning_summary=ReasoningSummary(
+            goal="Controlled ReAct Loop test proposal.",
+            observations=(),
+            candidate_actions=(action_type,),
+            selected_action=action_type,
+            rationale_summary="loop test",
+            risk_flags=(),
+            required_evidence=(),
+        ),
+        parameters={"query": "travel meal reimbursement"} if action_type is ReActActionType.PLAN_RETRIEVAL else {},
+        risk_level="low",
+    )
+
+
+class _SequencePlanner:
+    """ReAct planner returning a scripted proposal sequence for loop tests."""
+
+    def __init__(self, proposals: list[ReActActionProposal]) -> None:
+        self._proposals = list(proposals)
+        self.calls = 0
+
+    def plan(
+        self,
+        *,
+        question: str,
+        system_prompt: str,
+        context_summary: str,
+        workflow_stage_context: Any = None,
+    ) -> ReActActionProposal:
+        _ = (question, system_prompt, context_summary, workflow_stage_context)
+        index = min(self.calls, len(self._proposals) - 1)
+        self.calls += 1
+        return self._proposals[index]
+
+
+def test_v3_loop_returns_to_plan_after_retrieval_then_converges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED (slice 4): the v3 loop returns to plan after retrieval and converges.
+
+    Sequence [PLAN_RETRIEVAL, GENERATE_FINAL_ANSWER] must produce two plan
+    rounds: round 1 retrieves, round 2 generates. The retrieval back-edge is
+    the load-bearing loop mechanic under test.
+    """
+
+    planner = _SequencePlanner(
+        [
+            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
+            _loop_proposal(ReActActionType.GENERATE_FINAL_ANSWER, action_id="act_round_2"),
+        ]
+    )
+    monkeypatch.setattr(
+        "proof_agent.bootstrap.composition.resolve_react_planner",
+        lambda *args, **kwargs: planner,
+    )
+
+    result = run_with_langgraph(
+        REACT_V3_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
+    stage_ids = [event["payload"]["stage_id"] for event in stage_events]
+
+    # Loop must visit plan twice: round 1 (retrieval) -> plan -> round 2 (generate).
+    assert stage_ids.count("plan") == 2
+    assert "retrieval" in stage_ids
+    assert "model_answer" in stage_ids
+    # Retrieval is followed by a return to plan, not directly by model_answer.
+    assert stage_ids.index("retrieval") < stage_ids.index("model_answer")
+    # The planner was invoked exactly twice (two plan rounds).
+    assert planner.calls == 2
+
+
+def test_v3_loop_runs_multiple_retrieval_rounds_before_answering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED (slice 5): the loop runs multiple retrieval rounds before answering.
+
+    Sequence [PLAN_RETRIEVAL, PLAN_RETRIEVAL, GENERATE_FINAL_ANSWER] must
+    produce three plan rounds with two retrieval rounds before the final
+    answer. Proves the loop accumulates across rounds (a behavior the
+    single-pass topology structurally could not perform).
+    """
+
+    planner = _SequencePlanner(
+        [
+            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
+            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_2"),
+            _loop_proposal(ReActActionType.GENERATE_FINAL_ANSWER, action_id="act_round_3"),
+        ]
+    )
+    monkeypatch.setattr(
+        "proof_agent.bootstrap.composition.resolve_react_planner",
+        lambda *args, **kwargs: planner,
+    )
+
+    result = run_with_langgraph(
+        REACT_V3_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
+    stage_ids = [event["payload"]["stage_id"] for event in stage_events]
+
+    assert stage_ids.count("plan") == 3
+    assert stage_ids.count("retrieval") == 2
+    assert "model_answer" in stage_ids
+    assert planner.calls == 3
+
+
+def test_v3_loop_action_constraint_rewrites_repeated_retrieval_to_generate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED (slice 5): Action Constraint rewrites an out-of-set repeated retrieval to GENERATE.
+
+    Sequence [PLAN_RETRIEVAL(q), PLAN_RETRIEVAL(q)] triggers action repetition
+    at round 2, narrowing the eligible set to {GENERATE, REFUSE}. The planner
+    still proposes PLAN_RETRIEVAL (out of set), so the Action Constraint
+    rewrites it to GENERATE_FINAL_ANSWER and emits an ``action_constrained``
+    trace event. The loop then answers rather than diverging.
+    """
+
+    planner = _SequencePlanner(
+        [
+            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
+            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_2"),
+        ]
+    )
+    monkeypatch.setattr(
+        "proof_agent.bootstrap.composition.resolve_react_planner",
+        lambda *args, **kwargs: planner,
+    )
+
+    result = run_with_langgraph(
+        REACT_V3_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    constraint_events = [
+        event for event in events if event["event_type"] == "action_constrained"
+    ]
+    assert len(constraint_events) == 1
+    payload = constraint_events[0]["payload"]
+    assert payload["original_action_type"] == "plan_retrieval"
+    assert payload["constrained_to"] == "generate_final_answer"
+    assert payload["reason"] == "outside_eligible_set"

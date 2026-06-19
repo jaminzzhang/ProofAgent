@@ -293,6 +293,21 @@ TEMPLATES["react_enterprise_qa_v2"] = WorkflowTemplate(
 )
 
 
+TEMPLATES["react_enterprise_qa_v3"] = WorkflowTemplate(
+    name="react_enterprise_qa_v3",
+    description=(
+        "Controlled ReAct Loop enterprise question answering: observation "
+        "actions return to plan under a dual-axis budget and deterministic "
+        "Convergence Check (ADR-0032)."
+    ),
+    descriptor_version="react_enterprise_qa.v3",
+    stages=_react_enterprise_qa_v2_stages(),
+)
+
+
+LOOP_DESCRIPTOR_VERSION = "react_enterprise_qa.v3"
+
+
 def list_workflow_templates() -> tuple[WorkflowTemplate, ...]:
     """Return all registered workflow template descriptors."""
 
