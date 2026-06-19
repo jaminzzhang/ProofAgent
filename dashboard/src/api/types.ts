@@ -69,6 +69,7 @@ export interface WorkflowRunProjection {
 
 export interface WorkflowRunStageProjection {
   stage_id: string
+  visited: boolean
   label: string | null
   status: WorkflowStageStatus | string | null
   outcome: ReceiptOutcome | null

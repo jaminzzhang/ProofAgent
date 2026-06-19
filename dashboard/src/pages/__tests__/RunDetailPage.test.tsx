@@ -145,6 +145,48 @@ describe('RunDetailPage navigation', () => {
   it('shows workflow projection as the primary run detail tab', () => {
     vi.mocked(useRunDetail).mockReturnValue({
       detail: runDetail({
+        trace_events: [
+          traceEvent({
+            event_id: 'evt_config',
+            sequence: 1,
+            event_type: 'workflow_stage_configuration_trace_summary',
+            payload: {
+              template_name: 'react_enterprise_qa',
+              stages: [{ stage_id: 'plan' }, { stage_id: 'clarification' }, { stage_id: 'tool' }],
+            },
+          }),
+          traceEvent({
+            event_id: 'evt_context_plan',
+            sequence: 2,
+            event_type: 'workflow_stage_context_applied',
+            payload: {
+              stage_id: 'plan',
+              stage_label: 'Plan',
+              prompt_fields: ['business_context'],
+            },
+          }),
+          traceEvent({
+            event_id: 'evt_stage_plan',
+            sequence: 3,
+            event_type: 'workflow_stage_result',
+            payload: {
+              stage_id: 'plan',
+              status: 'completed',
+              outcome: 'ANSWERED_WITH_CITATIONS',
+            },
+          }),
+          traceEvent({
+            event_id: 'evt_stage_tool',
+            sequence: 4,
+            event_type: 'workflow_stage_result',
+            status: 'waiting',
+            payload: {
+              stage_id: 'tool',
+              status: 'waiting',
+              outcome: 'WAITING_FOR_APPROVAL',
+            },
+          }),
+        ],
         governance_details: {
           reasoning_summary: { selected_action: 'plan_retrieval' },
         },
@@ -159,6 +201,7 @@ describe('RunDetailPage navigation', () => {
             {
               stage_id: 'plan',
               label: 'Plan',
+              visited: true,
               status: 'completed',
               outcome: 'ANSWERED_WITH_CITATIONS',
               safe_summary: { action_type: 'plan_retrieval' },
@@ -169,8 +212,22 @@ describe('RunDetailPage navigation', () => {
               clarification_need_summary: null,
             },
             {
+              stage_id: 'clarification',
+              label: 'Clarification',
+              visited: false,
+              status: null,
+              outcome: null,
+              safe_summary: {},
+              context_application_summary: {},
+              produced_fact_refs: [],
+              related_event_ids: ['evt_config'],
+              approval_pause_summary: null,
+              clarification_need_summary: null,
+            },
+            {
               stage_id: 'tool',
               label: 'Tool',
+              visited: true,
               status: 'waiting',
               outcome: 'WAITING_FOR_APPROVAL',
               safe_summary: { tool_name: 'customer_lookup' },
@@ -214,11 +271,20 @@ describe('RunDetailPage navigation', () => {
     expect(screen.getByText('react_enterprise_qa')).toBeInTheDocument()
     expect(screen.getByText('react_enterprise_qa.v1')).toBeInTheDocument()
     expect(screen.getByText('Plan')).toBeInTheDocument()
+    expect(screen.getByText('Clarification')).toBeInTheDocument()
     expect(screen.getByText('completed')).toBeInTheDocument()
     expect(screen.getByText('ANSWERED_WITH_CITATIONS')).toBeInTheDocument()
     expect(screen.getByText('business_context')).toBeInTheDocument()
     expect(screen.getByText('action_proposal')).toBeInTheDocument()
     expect(screen.getByText('appr_customer_lookup')).toBeInTheDocument()
+    expect(screen.getAllByText('visited').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('configured only')).toBeInTheDocument()
+    expect(screen.getAllByText('Stage Trace').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByText('Stage context applied')).toBeInTheDocument()
+    expect(screen.getAllByText('Stage result').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('#2')).toBeInTheDocument()
+    expect(screen.getByText('#3')).toBeInTheDocument()
+    expect(screen.getByText('No runtime trace events were linked to this stage.')).toBeInTheDocument()
   })
 
   it('groups JSONL trace by workflow stage and shows call inputs and outputs', () => {
@@ -305,6 +371,7 @@ describe('RunDetailPage navigation', () => {
             {
               stage_id: 'plan',
               label: 'Plan',
+              visited: true,
               status: 'completed',
               outcome: 'ANSWERED_WITH_CITATIONS',
               safe_summary: {},
@@ -322,6 +389,7 @@ describe('RunDetailPage navigation', () => {
             {
               stage_id: 'tool',
               label: 'Tool',
+              visited: true,
               status: 'waiting',
               outcome: 'WAITING_FOR_APPROVAL',
               safe_summary: {},

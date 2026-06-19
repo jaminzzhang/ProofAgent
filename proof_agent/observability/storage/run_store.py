@@ -669,6 +669,7 @@ class RunStore:
         def ensure_stage(stage_id: str) -> dict[str, Any]:
             if stage_id not in stage_data:
                 stage_data[stage_id] = {
+                    "visited": False,
                     "related_event_ids": [],
                     "produced_fact_refs": (),
                 }
@@ -720,6 +721,7 @@ class RunStore:
 
             if event_type == "workflow_stage_context_applied":
                 stage = ensure_stage(stage_id)
+                stage["visited"] = True
                 label = _string_or_none(payload.get("stage_label"))
                 if label:
                     stage["label"] = label
@@ -741,6 +743,7 @@ class RunStore:
                 "workflow_stage_waiting",
             }:
                 stage = ensure_stage(stage_id)
+                stage["visited"] = True
                 stage["status"] = _string_or_none(payload.get("status")) or _string_or_none(
                     event.get("status")
                 )
@@ -768,6 +771,7 @@ class RunStore:
                 "clarification_requested",
             }:
                 stage = ensure_stage(stage_id)
+                stage["visited"] = True
                 add_related_event(stage, event)
 
         return WorkflowRunProjection(
@@ -777,6 +781,7 @@ class RunStore:
             stages=tuple(
                 WorkflowRunStageProjection(
                     stage_id=stage_id,
+                    visited=bool(stage_data[stage_id].get("visited")),
                     label=_string_or_none(stage_data[stage_id].get("label")),
                     status=_string_or_none(stage_data[stage_id].get("status")),
                     outcome=stage_data[stage_id].get("outcome"),

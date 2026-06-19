@@ -162,7 +162,10 @@ export function RunDetailPage() {
 
         {hasWorkflowProjection && (
           <TabsContent value="workflow">
-            <WorkflowTab projection={detail.workflow_projection} />
+            <WorkflowTab
+              projection={detail.workflow_projection}
+              events={detail.trace_events}
+            />
           </TabsContent>
         )}
         <TabsContent value="receipt">

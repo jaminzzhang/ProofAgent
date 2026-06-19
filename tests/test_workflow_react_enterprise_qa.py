@@ -272,6 +272,30 @@ def test_run_start_emits_workflow_stage_configuration_trace_summary(
         assert "context" not in stage
 
 
+def test_react_run_emits_workflow_stage_result_trace_events(tmp_path: Path) -> None:
+    result = run_with_langgraph(
+        REACT_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+    )
+
+    events = _trace_events(result.trace_path)
+    stage_events = [
+        event for event in events if event["event_type"] == "workflow_stage_result"
+    ]
+
+    assert [event["payload"]["stage_id"] for event in stage_events] == [
+        "plan",
+        "retrieval_review",
+        "retrieval",
+        "model_answer",
+    ]
+    assert all("continuation" not in event["payload"] for event in stage_events)
+    assert stage_events[0]["payload"]["status"] == "completed"
+    assert stage_events[0]["payload"]["summary"]["action_type"] == "plan_retrieval"
+    assert stage_events[-1]["payload"]["outcome"] == "ANSWERED_WITH_CITATIONS"
+
+
 def test_v2_resolves_intent_before_react_planning(tmp_path: Path) -> None:
     result = run_with_langgraph(
         REACT_V2_AGENT,

@@ -46,6 +46,7 @@ class WorkflowRunStageProjection(FrozenModel):
     """Trace-safe Workflow Template Stage projection for Dashboard run detail."""
 
     stage_id: str
+    visited: bool = False
     label: str | None = None
     status: str | None = None
     outcome: ReceiptOutcome | None = None
