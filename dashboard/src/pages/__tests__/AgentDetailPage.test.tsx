@@ -2,6 +2,7 @@
 import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { ThemeProvider } from '@proofagent/ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindKnowledgeSourceToDraft,
@@ -126,13 +127,15 @@ vi.mock('../../hooks/useConfigVersions', () => ({
 
 function renderPage(initialEntry = '/agents/agent-1/drafts/draft-1') {
   return render(
-    <LocaleProvider>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <Routes>
-          <Route path="/agents/:agentId/drafts/:draftId" element={<AgentDetailPage />} />
-        </Routes>
-      </MemoryRouter>
-    </LocaleProvider>,
+    <ThemeProvider>
+      <LocaleProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/agents/:agentId/drafts/:draftId" element={<AgentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </LocaleProvider>
+    </ThemeProvider>,
   )
 }
 

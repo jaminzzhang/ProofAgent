@@ -3,10 +3,17 @@ import '@testing-library/jest-dom/vitest'
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
+import { ThemeProvider } from '@proofagent/ui'
 import { AgentDetailShell } from '../../agent/AgentDetailShell'
 
+// TopNav now renders the theme toggle (consistent with the main shell), so the
+// render helper mirrors the real provider stack (BrowserRouter + ThemeProvider).
 const renderWithRouter = (ui: React.ReactNode) =>
-  render(<BrowserRouter>{ui}</BrowserRouter>)
+  render(
+    <ThemeProvider>
+      <BrowserRouter>{ui}</BrowserRouter>
+    </ThemeProvider>,
+  )
 
 describe('AgentDetailShell', () => {
   const mockModules = [
@@ -184,7 +191,7 @@ describe('AgentDetailShell', () => {
     expect(handleChange).toHaveBeenCalledWith('workflow')
   })
 
-  it('highlights active module', () => {
+  it('highlights active module with the unified accent-subtle active idiom', () => {
     renderWithRouter(
       <AgentDetailShell
         agentName="Test Agent"
@@ -199,11 +206,31 @@ describe('AgentDetailShell', () => {
 
     const workflowTab = screen.getByRole('button', { name: 'Workflow' })
     expect(workflowTab).toHaveAttribute('aria-current', 'page')
-    expect(workflowTab).toHaveStyle({
-      backgroundColor: 'var(--accent)',
-      borderColor: 'var(--accent)',
-      color: 'var(--accent-fg)',
-    })
+    // unified active idiom: accent-tinted background (not solid accent fill)
+    expect(workflowTab).toHaveClass('bg-[var(--accent-subtle)]')
+    expect(workflowTab).toHaveClass('text-[var(--text-primary)]')
+    // left 2px accent indicator rendered only when active
+    expect(workflowTab.querySelector('span[aria-hidden="true"]')).toHaveClass(
+      'bg-[var(--accent)]',
+    )
+  })
+
+  it('does not use the old solid-accent inline-style active treatment', () => {
+    renderWithRouter(
+      <AgentDetailShell
+        agentName="Test Agent"
+        modules={mockModules}
+        lifecycle={mockLifecycle}
+        activeModule="workflow"
+        onModuleChange={() => {}}
+      >
+        <div>Content</div>
+      </AgentDetailShell>
+    )
+
+    const workflowTab = screen.getByRole('button', { name: 'Workflow' })
+    // no inline backgroundColor override (the old approach used var(--accent))
+    expect(workflowTab).not.toHaveStyle({ backgroundColor: 'var(--accent)' })
   })
 
   it('renders children in content area', () => {

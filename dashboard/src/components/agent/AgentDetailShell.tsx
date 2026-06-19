@@ -1,4 +1,22 @@
 import { Link } from 'react-router-dom'
+import {
+  Activity,
+  Boxes,
+  Brain,
+  ClipboardList,
+  Cpu,
+  Eye,
+  FileText,
+  GitBranch,
+  LayoutDashboard,
+  type LucideIcon,
+  ScrollText,
+  Settings2,
+  ShieldCheck,
+  Workflow,
+  Wrench,
+} from 'lucide-react'
+import { cn } from '@proofagent/ui'
 import { useLocale } from '../../i18n/locale'
 import { TopNav } from '../TopNav'
 
@@ -19,6 +37,27 @@ interface AgentDetailShellProps {
   activeModule: string
   onModuleChange: (moduleId: string) => void
   children: React.ReactNode
+}
+
+/** Icon per module/lifecycle id — gives the secondary nav visual parity with the main Sidebar. */
+const TAB_ICON: Record<string, LucideIcon> = {
+  general: LayoutDashboard,
+  workflow: Workflow,
+  skills: Boxes,
+  knowledge: FileText,
+  tools: Wrench,
+  policy: ShieldCheck,
+  model: Cpu,
+  memory: Brain,
+  response: ScrollText,
+  validate: ClipboardList,
+  versions: GitBranch,
+  contract: Settings2,
+  monitor: Eye,
+}
+
+function tabIcon(id: string): LucideIcon {
+  return TAB_ICON[id] ?? Activity
 }
 
 export function AgentDetailShell({
@@ -68,8 +107,9 @@ export function AgentDetailShell({
   return (
     <div
       data-testid="agent-detail-layout"
-      className="grid h-screen w-screen min-w-0 grid-rows-[4rem_minmax(0,1fr)] overflow-hidden bg-[var(--bg-base)]"
+      className="flex h-screen w-screen min-w-0 flex-col overflow-hidden bg-[var(--bg-base)]"
     >
+      {/* Unified TopNav: theme toggle stays on (consistent with the rest of the app). */}
       <TopNav
         title={
           <nav aria-label={t('agentDetail.breadcrumb')}>
@@ -91,42 +131,51 @@ export function AgentDetailShell({
             </ol>
           </nav>
         }
-        status={null}
-        showThemeToggle={false}
       />
 
-      <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)] lg:grid-rows-1">
-        <aside className="min-w-0 overflow-y-auto border-b border-[var(--border)] bg-[var(--bg-surface)] lg:border-b-0 lg:border-r">
-          <nav
-            aria-label={t('agentDetail.navigation')}
-            className="p-3"
-          >
-            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5 lg:block lg:space-y-5">
+      {/* Workspace: secondary sidebar + content. Width/padding aligned with the main Sidebar. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
+        <aside className="min-w-0 shrink-0 overflow-y-auto border-b border-[var(--border)] bg-[var(--bg-surface)] pb-4 pt-5 lg:w-56 lg:border-b-0 lg:border-r max-md:w-full">
+          <nav aria-label={t('agentDetail.navigation')} className="px-3">
+            <div className="space-y-5 max-md:flex max-md:flex-wrap max-md:gap-x-6 max-md:space-y-0">
               {groups.map((group) => (
                 <section key={group.title}>
-                  <h3 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                  <h3 className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                     {group.title}
                   </h3>
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {group.items.map((item) => {
                       const isActive = activeModule === item.id
+                      const Icon = tabIcon(item.id)
                       return (
                         <button
                           key={item.id}
                           onClick={() => onModuleChange(item.id)}
-                          className={`w-full cursor-pointer rounded-md border-l-2 px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
+                          className={cn(
+                            'group relative flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]',
                             isActive
-                              ? 'shadow-sm'
-                              : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
-                          }`}
-                          style={isActive ? {
-                            backgroundColor: 'var(--accent)',
-                            borderColor: 'var(--accent)',
-                            color: 'var(--accent-fg)',
-                          } : undefined}
+                              ? 'bg-[var(--accent-subtle)] text-[var(--text-primary)]'
+                              : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
+                          )}
                           aria-current={isActive ? 'page' : undefined}
                         >
-                          {item.label}
+                          {isActive && (
+                            <span
+                              aria-hidden="true"
+                              className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-full bg-[var(--accent)]"
+                            />
+                          )}
+                          <Icon
+                            size={16}
+                            strokeWidth={2}
+                            className={cn(
+                              'shrink-0 transition-colors',
+                              isActive
+                                ? 'text-[var(--text-primary)]'
+                                : 'text-[var(--text-muted)] group-hover:text-current',
+                            )}
+                          />
+                          <span className="truncate">{item.label}</span>
                         </button>
                       )
                     })}
@@ -137,7 +186,7 @@ export function AgentDetailShell({
           </nav>
         </aside>
 
-        <main className="min-w-0 overflow-y-auto px-5 py-5 lg:px-8 lg:py-6">
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5 lg:px-8 lg:py-6">
           <div className="min-w-0 pb-12">
             {children}
           </div>

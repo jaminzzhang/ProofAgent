@@ -77,3 +77,33 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   ;(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
     ResizeObserverStub as unknown as typeof ResizeObserver
 }
+
+/**
+ * Minimal in-memory localStorage stub for tests whose components persist theme
+ * or locale (ThemeProvider / LocaleProvider read+write localStorage). jsdom
+ * usually provides this, but some configurations expose it on `window` only.
+ */
+const globalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+
+if (!globalLocalStorageDescriptor || typeof globalLocalStorageDescriptor.get === 'function') {
+  const store = new Map<string, string>()
+  const localStorageStub = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, String(value))
+    },
+    removeItem: (key: string) => {
+      store.delete(key)
+    },
+    clear: () => store.clear(),
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    get length() {
+      return store.size
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: localStorageStub,
+    configurable: true,
+    writable: true,
+  })
+}
