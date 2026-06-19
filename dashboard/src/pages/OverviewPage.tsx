@@ -1,18 +1,10 @@
 import { Link } from 'react-router-dom'
-import {
-  Bar,
-  BarChart,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 import { Activity, Clock, FileText, ShieldQuestion } from 'lucide-react'
 import {
   Card,
   EmptyState,
   OutcomeBadge,
+  OUTCOME_STYLES,
   Skeleton,
   Table,
   TableBody,
@@ -29,15 +21,43 @@ import { SectionHeader } from '../components/SectionHeader'
 import type { StatsResponse } from '../api/types'
 import { useLocale } from '../i18n/locale'
 
-/** Outcome → chart palette token (theme-aware, replaces hardcoded colors). */
-const OUTCOME_COLOR: Record<string, string> = {
+/**
+ * Fixed display order: success → warning → neutral → danger (failures sink to
+ * the bottom). Row order is stable regardless of which outcomes have counts.
+ */
+const OUTCOME_ORDER: ReceiptOutcome[] = [
+  'ANSWERED_WITH_CITATIONS',
+  'ESCALATED_WEAK_EVIDENCE',
+  'WAITING_FOR_APPROVAL',
+  'WAITING_FOR_USER_CLARIFICATION',
+  'REFUSED_NO_EVIDENCE',
+  'TOOL_APPROVAL_DENIED',
+  'FAILED_WITH_TRACE',
+  'FAILED_RECEIPT_UNAVAILABLE',
+]
+
+/**
+ * Outcome → bar color, derived from its semantic category. Each outcome gets a
+ * distinct hue via the chart palette (previously two different outcomes shared
+ * the same token and collapsed into one color).
+ */
+const OUTCOME_COLOR: Record<ReceiptOutcome, string> = {
   ANSWERED_WITH_CITATIONS: 'var(--chart-1)',
+  ESCALATED_WEAK_EVIDENCE: 'var(--chart-5)',
+  WAITING_FOR_APPROVAL: 'var(--warning)',
+  WAITING_FOR_USER_CLARIFICATION: 'var(--neutral)',
   REFUSED_NO_EVIDENCE: 'var(--chart-2)',
-  ESCALATED_WEAK_EVIDENCE: 'var(--chart-2)',
-  WAITING_FOR_APPROVAL: 'var(--chart-3)',
   TOOL_APPROVAL_DENIED: 'var(--chart-4)',
-  FAILED_WITH_TRACE: 'var(--chart-4)',
-  FAILED_RECEIPT_UNAVAILABLE: 'var(--chart-5)',
+  FAILED_WITH_TRACE: 'var(--danger)',
+  FAILED_RECEIPT_UNAVAILABLE: 'var(--neutral)',
+}
+
+interface OutcomeRow {
+  key: ReceiptOutcome
+  label: string
+  count: number
+  pct: number
+  color: string
 }
 
 function OutcomeChart({ stats }: { stats: StatsResponse }) {
@@ -46,14 +66,20 @@ function OutcomeChart({ stats }: { stats: StatsResponse }) {
   if (total === 0) return null
 
   const dist = stats.outcome_distribution
-  const data = Object.keys(OUTCOME_COLOR)
+  const rows: OutcomeRow[] = OUTCOME_ORDER
     .map((key) => ({
       key,
-      label: key.replace(/_/g, ' ').toLowerCase(),
+      label: t(OUTCOME_STYLES[key].labelKey, OUTCOME_STYLES[key].defaultLabel),
       count: dist[key as keyof typeof dist] ?? 0,
+      pct: 0,
       color: OUTCOME_COLOR[key],
     }))
     .filter((d) => d.count > 0)
+    .map((d) => ({ ...d, pct: Math.round((d.count / total) * 100) }))
+
+  // Widest bar sets the scale; bars are proportional within it (never full width
+  // unless that outcome is 100%, which keeps the relative comparison readable).
+  const maxCount = Math.max(...rows.map((r) => r.count), 1)
 
   return (
     <Card className="p-5">
@@ -61,9 +87,9 @@ function OutcomeChart({ stats }: { stats: StatsResponse }) {
         {t('overview.outcomeDistribution')}
       </h3>
 
-      {/* segmented bar (compact, theme-token-driven) */}
+      {/* segmented proportion bar (compact overview) */}
       <div className="flex h-2.5 overflow-hidden rounded-full bg-[var(--bg-hover)]">
-        {data.map((d) => (
+        {rows.map((d) => (
           <div
             key={d.key}
             style={{ width: `${(d.count / total) * 100}%`, backgroundColor: d.color }}
@@ -72,53 +98,32 @@ function OutcomeChart({ stats }: { stats: StatsResponse }) {
         ))}
       </div>
 
-      {/* horizontal bar chart with counts */}
-      <div className="mt-6" style={{ height: `${Math.max(data.length * 36, 72)}px` }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} layout="vertical" margin={{ left: 0, right: 16, top: 0, bottom: 0 }}>
-            <XAxis type="number" hide />
-            <YAxis
-              type="category"
-              dataKey="label"
-              width={150}
-              tick={{ fill: 'var(--text-secondary)', fontSize: 12 }}
-              axisLine={false}
-              tickLine={false}
-            />
-            <Tooltip
-              cursor={{ fill: 'var(--bg-hover)' }}
-              contentStyle={{
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                fontSize: '12px',
-                color: 'var(--text-primary)',
-              }}
-              formatter={(value: number) => [formatNumber(value), 'Runs']}
-            />
-            <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-              {data.map((d) => (
-                <Cell key={d.key} fill={d.color} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2 text-xs font-medium text-[var(--text-secondary)]">
-        {data.map((d) => (
-          <span key={d.key} className="flex items-center gap-2">
-            <span
-              className="h-2.5 w-2.5 rounded-sm"
-              style={{ backgroundColor: d.color }}
-            />
-            {d.label}
-            <span className="text-[var(--text-muted)]">
-              ({formatNumber(Math.round((d.count / total) * 100))}%)
+      {/* horizontal bars — pure CSS, no chart lib. Animates width on mount. */}
+      <ul className="mt-6 space-y-2.5" role="list">
+        {rows.map((d) => (
+          <li key={d.key} className="grid grid-cols-[150px_1fr_auto] items-center gap-3">
+            <span className="flex items-center gap-2 truncate text-xs font-medium text-[var(--text-secondary)]">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                style={{ backgroundColor: d.color }}
+                aria-hidden="true"
+              />
+              <span className="truncate">{d.label}</span>
             </span>
-          </span>
+            <div className="h-5 overflow-hidden rounded-md bg-[var(--bg-hover)]">
+              <div
+                className="outcome-bar-fill h-full rounded-md"
+                style={{ width: `${(d.count / maxCount) * 100}%`, backgroundColor: d.color }}
+                title={`${formatNumber(d.count)} runs`}
+              />
+            </div>
+            <span className="text-right font-mono text-xs tabular-nums text-[var(--text-primary)]">
+              {formatNumber(d.count)}
+              <span className="ml-1 text-[var(--text-muted)]">({formatNumber(d.pct)}%)</span>
+            </span>
+          </li>
         ))}
-      </div>
+      </ul>
     </Card>
   )
 }

@@ -24,7 +24,7 @@ interface OutcomeStyle {
   defaultLabel: string
 }
 
-const OUTCOME_STYLES: Record<ReceiptOutcome, OutcomeStyle> = {
+export const OUTCOME_STYLES: Record<ReceiptOutcome, OutcomeStyle> = {
   ANSWERED_WITH_CITATIONS: {
     category: 'success',
     labelKey: 'outcome.answered',

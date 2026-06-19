@@ -45,9 +45,9 @@ HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
 }
 
 /**
- * jsdom does not implement ResizeObserver, which recharts' ResponsiveContainer
- * (and other libs) depend on. Return a stable non-zero size so chart tests do
- * not emit layout warnings.
+ * jsdom does not implement ResizeObserver, which some libs (e.g. Radix
+ * overflow detection, virtualized lists) depend on. Return a stable non-zero
+ * size so layout-dependent tests do not emit warnings.
  */
 class ResizeObserverStub {
   private readonly callback: ResizeObserverCallback

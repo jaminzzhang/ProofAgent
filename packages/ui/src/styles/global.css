@@ -257,3 +257,13 @@ pre,
 [data-state='open'][data-side] {
   animation-duration: 150ms;
 }
+
+/* ── Bar chart fill grow-in (e.g. outcome distribution) ────────────────── */
+@keyframes pa-bar-grow {
+  from { width: 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .outcome-bar-fill {
+    animation: pa-bar-grow 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}

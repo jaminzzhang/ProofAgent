@@ -114,6 +114,7 @@ export { Markdown } from './components/markdown'
 // Domain-aligned shared components
 export {
   OutcomeBadge,
+  OUTCOME_STYLES,
   outcomeCategory,
   type ReceiptOutcome,
 } from './components/outcome-badge'
