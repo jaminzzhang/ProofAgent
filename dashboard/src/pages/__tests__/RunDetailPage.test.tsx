@@ -221,6 +221,154 @@ describe('RunDetailPage navigation', () => {
     expect(screen.getByText('appr_customer_lookup')).toBeInTheDocument()
   })
 
+  it('groups JSONL trace by workflow stage and shows call inputs and outputs', () => {
+    vi.mocked(useRunDetail).mockReturnValue({
+      detail: runDetail({
+        trace_events: [
+          traceEvent({
+            event_id: 'evt_config',
+            sequence: 1,
+            event_type: 'workflow_stage_configuration_trace_summary',
+            payload: {
+              template_name: 'react_enterprise_qa',
+              stages: [{ stage_id: 'plan' }, { stage_id: 'tool' }],
+            },
+          }),
+          traceEvent({
+            event_id: 'evt_action',
+            sequence: 2,
+            event_type: 'action_proposal',
+            payload: {
+              action_id: 'act_plan',
+              action_type: 'plan_retrieval',
+              risk_level: 'low',
+              parameters: { query: 'claim status' },
+            },
+          }),
+          traceEvent({
+            event_id: 'evt_model_request',
+            sequence: 3,
+            event_type: 'model_request',
+            payload: {
+              role: 'planner',
+              provider: 'demo',
+              model: 'demo-model',
+              message_count: 2,
+              prompt_length: 120,
+            },
+          }),
+          traceEvent({
+            event_id: 'evt_model_response',
+            sequence: 4,
+            event_type: 'model_response',
+            payload: {
+              provider: 'demo',
+              model: 'demo-model',
+              finish_reason: 'stop',
+              content_length: 48,
+              token_usage: { input_tokens: 20, output_tokens: 10 },
+            },
+          }),
+          traceEvent({
+            event_id: 'evt_pending',
+            sequence: 5,
+            event_type: 'pending_approval_created',
+            status: 'waiting',
+            payload: {
+              approval_id: 'appr_lookup',
+              action_id: 'act_tool',
+              tool_name: 'customer_lookup',
+              parameters: { customer_id: 'C-100', policy_id: 'P-200' },
+              policy_decision: 'require_approval',
+              checkpoint_id: 'checkpoint_1',
+            },
+          }),
+          traceEvent({
+            event_id: 'evt_tool_result',
+            sequence: 6,
+            event_type: 'tool_result',
+            payload: {
+              tool_name: 'customer_lookup',
+              result_count: 1,
+              status: 'active',
+            },
+          }),
+        ],
+        workflow_projection: {
+          template_name: 'react_enterprise_qa',
+          template_descriptor_version: 'react_enterprise_qa.v1',
+          stage_configuration_source: {
+            source_type: 'published_agent_version',
+            reference: 'published_version:version_1',
+          },
+          stages: [
+            {
+              stage_id: 'plan',
+              label: 'Plan',
+              status: 'completed',
+              outcome: 'ANSWERED_WITH_CITATIONS',
+              safe_summary: {},
+              context_application_summary: {},
+              produced_fact_refs: ['action_proposal'],
+              related_event_ids: [
+                'evt_config',
+                'evt_action',
+                'evt_model_request',
+                'evt_model_response',
+              ],
+              approval_pause_summary: null,
+              clarification_need_summary: null,
+            },
+            {
+              stage_id: 'tool',
+              label: 'Tool',
+              status: 'waiting',
+              outcome: 'WAITING_FOR_APPROVAL',
+              safe_summary: {},
+              context_application_summary: {},
+              produced_fact_refs: ['approval_pause'],
+              related_event_ids: ['evt_config', 'evt_pending', 'evt_tool_result'],
+              approval_pause_summary: null,
+              clarification_need_summary: null,
+            },
+          ],
+        },
+      }),
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-1']}>
+        <Routes>
+          <Route path="/runs/:runId" element={<RunDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const traceTab = screen.getByRole('tab', { name: 'JSONL Trace' })
+    fireEvent.pointerDown(traceTab, { button: 0, pointerType: 'mouse' })
+    fireEvent.mouseDown(traceTab)
+    fireEvent.click(traceTab)
+
+    expect(screen.getByText('Run-level / shared trace')).toBeInTheDocument()
+    expect(screen.getByText('Workflow stage configuration')).toBeInTheDocument()
+    expect(screen.getByText('Plan')).toBeInTheDocument()
+    expect(screen.getByText('Tool')).toBeInTheDocument()
+    expect(screen.getByText('Action proposal')).toBeInTheDocument()
+    expect(screen.getByText('Model request')).toBeInTheDocument()
+    expect(screen.getByText('Model response')).toBeInTheDocument()
+    expect(screen.getByText('Pending approval created')).toBeInTheDocument()
+    expect(screen.getByText('Tool result')).toBeInTheDocument()
+    expect(screen.getAllByText('Parameters').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('Input').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText(/"query": "claim status"/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/"customer_id": "C-100"/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/"result_count": 1/).length).toBeGreaterThan(0)
+  })
+
   it('shows validation capture tab when the run has an attached capture', () => {
     vi.mocked(useRunDetail).mockReturnValue({
       detail: runDetail({ validation_capture_id: 'vcap_1' }),
@@ -251,6 +399,22 @@ describe('RunDetailPage navigation', () => {
 function LocationProbe() {
   const location = useLocation()
   return <span data-testid="location-probe">{`${location.pathname}${location.search}`}</span>
+}
+
+function traceEvent(overrides: Partial<RunDetail['trace_events'][number]> = {}): RunDetail['trace_events'][number] {
+  return {
+    schema_version: 'trace.v1',
+    run_id: 'run-1',
+    event_id: 'evt_0001',
+    sequence: 1,
+    timestamp: '2026-06-07T00:00:00Z',
+    event_type: 'run_started',
+    span_id: 'span_run_started',
+    status: 'ok',
+    payload: {},
+    redaction: { applied: false, fields: [] },
+    ...overrides,
+  }
 }
 
 function runDetail(overrides: Partial<RunDetail> = {}): RunDetail {

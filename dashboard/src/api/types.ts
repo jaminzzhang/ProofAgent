@@ -203,6 +203,7 @@ export interface ValidationCaptureResponse {
 }
 
 export interface TraceEvent {
+  schema_version?: string
   event_type: string
   event_id: string
   sequence: number
@@ -210,6 +211,9 @@ export interface TraceEvent {
   status: 'ok' | 'blocked' | 'waiting' | 'error'
   payload: Record<string, unknown>
   run_id: string
+  span_id?: string
+  parent_span_id?: string | null
+  redaction?: Record<string, unknown>
 }
 
 export interface EvidenceChunk {

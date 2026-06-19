@@ -198,7 +198,10 @@ export function RunDetailPage() {
           <ModelUsageTab usage={detail.model_usage} />
         </TabsContent>
         <TabsContent value="timeline">
-          <TimelineTab events={detail.trace_events} />
+          <TimelineTab
+            events={detail.trace_events}
+            projection={detail.workflow_projection}
+          />
         </TabsContent>
       </Tabs>
     </div>
