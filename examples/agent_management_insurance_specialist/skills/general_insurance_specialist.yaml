@@ -22,3 +22,4 @@ stage_prompt_addenda:
   model_answer:
     output_preferences:
       - "默认给内勤专员简短结论和依据；没有证据时明确说明无法支持。"
+

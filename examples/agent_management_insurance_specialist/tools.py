@@ -218,3 +218,4 @@ def _business_scope_result(parameters: Mapping[str, Any]) -> dict[str, str]:
         "branch_id": branch_id,
         "business_line": business_line,
     }
+

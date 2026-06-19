@@ -1,6 +1,6 @@
 # Insurance Specialist Agent Configuration Design
 
-Status: Grill-with-docs draft
+Status: Grill-with-docs draft  
 Date: 2026-06-19
 
 ## Purpose
@@ -687,6 +687,13 @@ intent_patterns:
   - 等待期
   - 赔付范围
   - 产品解释
+  - 产品咨询
+  - 产品说明
+  - 产品介绍
+  - 产品优缺点
+  - 优缺点
+  - 卖点
+  - 不足
 admission:
   min_confidence: 0.65
   require_authorization_context: false

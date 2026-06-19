@@ -111,3 +111,4 @@ rules:
       on_match: deny
       on_pass: allow
     reason_template: "Institution specialist memory stores current-case context only."
+

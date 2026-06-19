@@ -382,6 +382,66 @@ admission:
     assert "business_flow_skill_pack_admission" in intent_stage.produced_fact_refs
 
 
+def test_v2_business_flow_clarification_waits_for_user_input(
+    tmp_path: Path,
+) -> None:
+    example_dir = tmp_path / "react_enterprise_qa_v2"
+    shutil.copytree(REACT_V2_AGENT.parent, example_dir)
+    skill_pack_dir = example_dir / "skill_packs"
+    skill_pack_dir.mkdir()
+    (skill_pack_dir / "claims.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_escalation
+label: Claims Escalation
+description: Claims escalation routing addenda.
+intent_patterns:
+  - claims_escalation
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - react_enterprise_qa_v2_knowledge_binding
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.5
+""",
+        encoding="utf-8",
+    )
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"]["skills"] = {
+        "enabled": True,
+        "business_flows": [
+            {
+                "id": "claims_escalation",
+                "definition": "./skill_packs/claims.yaml",
+            }
+        ],
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "run",
+    )
+
+    assert result.outcome == "WAITING_FOR_USER_CLARIFICATION"
+    events = _trace_events(result.trace_path)
+    assert "clarification_requested" in _event_types(events)
+    assert result.workflow_template_execution_result is not None
+    assert result.workflow_template_execution_result.clarification_need is not None
+    intent_stage = next(
+        stage
+        for stage in result.workflow_template_execution_result.stage_results
+        if stage.stage_id == "intent_resolution"
+    )
+    assert intent_stage.status is WorkflowStageStatus.WAITING
+    assert "clarification_need" in intent_stage.produced_fact_refs
+
+
 def test_admitted_business_flow_stage_prompt_addendum_applies_to_plan_context(
     tmp_path: Path,
 ) -> None:

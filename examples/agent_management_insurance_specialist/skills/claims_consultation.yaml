@@ -36,3 +36,4 @@ stage_prompt_addenda:
     output_preferences:
       - "区分流程解释、条款依据和当前赔案状态。"
       - "待决或拒赔相关话术应保守表达，不承诺赔付结果或时限。"
+

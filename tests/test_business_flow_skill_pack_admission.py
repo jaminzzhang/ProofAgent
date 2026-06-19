@@ -7,6 +7,7 @@ from proof_agent.contracts import (
     BusinessFlowSkillPackDefinition,
     IntentResolution,
     ReActActionType,
+    RetrievalQueryItem,
 )
 
 
@@ -122,6 +123,43 @@ def test_missing_business_flow_skill_pack_match_needs_clarification() -> None:
     )
     assert result.admission.selected_pack_id is None
     assert result.admission.failure_reason == "missing"
+
+
+def test_admits_business_flow_skill_pack_from_retrieval_query_set() -> None:
+    skill_pack = BusinessFlowSkillPackDefinition(
+        schema_version="business_flow_skill_pack.v1",
+        id="product_clause_consultation",
+        label="Product Clause Consultation",
+        description="Product clause routing addenda.",
+        intent_patterns=("优缺点",),
+        stage_prompt_addenda={},
+    )
+    resolution = IntentResolution(
+        resolution_id="intent_product",
+        user_goal="Answer an enterprise policy question.",
+        domain_intent="enterprise_policy_question",
+        known_facts=("The user asks a question that should be grounded in knowledge.",),
+        missing_fields=(),
+        ambiguities=(),
+        risk_flags=(),
+        confidence=0.84,
+        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+        retrieval_query_set=(
+            RetrievalQueryItem(
+                query="介绍平安御享的主要优缺点",
+                intent_angle="primary_policy_question",
+                required=True,
+                reason="The user asks a knowledge-backed enterprise policy question.",
+            ),
+        ),
+    )
+
+    result = admit_business_flow_skill_pack(resolution, (skill_pack,))
+
+    assert result.recommendation.recommended_pack_id == "product_clause_consultation"
+    assert result.recommendation.candidate_pack_ids == ("product_clause_consultation",)
+    assert result.admission.decision == BusinessFlowSkillPackAdmissionDecision.ADMITTED
+    assert result.admission.selected_pack_id == "product_clause_consultation"
 
 
 def test_not_admissible_business_flow_skill_pack_uses_safe_default() -> None:
