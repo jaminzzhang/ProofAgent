@@ -80,3 +80,37 @@ test('ChatShell renders shared conversation flow and mode-specific slots', () =>
   expect(screen.getByPlaceholderText('Ask about a policy')).toHaveValue('next question')
   expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
 })
+
+test('ChatShell gives the conversation region enough width and an internal scroll boundary', () => {
+  const { container } = render(
+    <ChatShell
+      title="Customer Chat"
+      subtitle="Customer-safe service chat"
+      turns={Array.from({ length: 20 }, (_, index) => ({
+        id: `turn_${index}`,
+        question: `Question ${index}`,
+        createdAt: '2026-05-21T00:00:00Z',
+        assistant: {
+          content: `Answer ${index}`,
+        },
+      }))}
+      inputValue=""
+      onInputChange={vi.fn()}
+      onSubmit={vi.fn()}
+      sending={false}
+      placeholder="Ask about a policy"
+      submitLabel="Send"
+      emptyTitle="Start a Conversation"
+      emptyDescription="Ask a customer-safe question."
+      sidePanel={<div>Customer context</div>}
+    />,
+  )
+
+  expect(container.firstElementChild).toHaveClass('max-w-6xl')
+
+  const conversationSection = container.querySelector('section')
+  expect(conversationSection).toHaveClass('h-full')
+
+  const messageScroller = conversationSection?.firstElementChild
+  expect(messageScroller).toHaveClass('flex-1', 'overflow-y-auto')
+})

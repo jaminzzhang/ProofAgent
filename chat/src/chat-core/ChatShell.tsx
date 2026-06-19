@@ -91,7 +91,7 @@ export function ChatShell({
   }
 
   return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col px-4">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col px-4">
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <h1 className="truncate text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
@@ -102,8 +102,8 @@ export function ChatShell({
         {footer}
       </div>
 
-      <div className={sidePanel ? 'grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_280px]' : 'min-h-0 flex-1'}>
-        <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]">
+      <div className={sidePanel ? 'grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_280px]' : 'grid min-h-0 flex-1'}>
+        <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]">
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
             {turns.length === 0 && !sending ? (
               <div className="flex h-full min-h-[320px] flex-col justify-end gap-3">
