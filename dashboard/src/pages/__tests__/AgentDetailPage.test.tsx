@@ -1156,11 +1156,11 @@ workflow:
     renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
     expect(await screen.findByText('Global Retrieval Settings')).toBeInTheDocument()
 
-    fireEvent.change(screen.getByDisplayValue('single_step'), {
-      target: { value: 'agentic' },
-    })
     fireEvent.change(screen.getByDisplayValue('3'), {
       target: { value: '8' },
+    })
+    fireEvent.change(screen.getByDisplayValue('single_step'), {
+      target: { value: 'agentic' },
     })
 
     expect(screen.queryByRole('button', { name: 'Save Workflow' })).not.toBeInTheDocument()
@@ -1172,6 +1172,7 @@ workflow:
     const savedYaml = latestSavedAgentYaml()
     expect(savedYaml).toContain('strategy: agentic')
     expect(savedYaml).toContain('top_k: 8')
+    expect(savedYaml).toContain('max_steps: 3')
   })
 
   it.each([

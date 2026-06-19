@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
 import { KnowledgeSource } from '../../api/types'
-import { KNOWLEDGE_FIELDS } from './module-configs/knowledge'
+import { DEFAULT_AGENTIC_RETRIEVAL_MAX_STEPS, KNOWLEDGE_FIELDS } from './module-configs/knowledge'
 import { EmptyState } from '../EmptyState'
 import { useLocale } from '../../i18n/locale'
 
@@ -82,6 +82,17 @@ export function KnowledgeModuleEditor({
     setBindingTopK('')
     setBindingFailureMode('required')
     setBindingFusionWeight('1.0')
+  }
+
+  function handleRetrievalFieldChange(path: string[], value: string) {
+    onFieldChange(path, value)
+    if (
+      path.join('.') === 'retrieval.strategy'
+      && value === 'agentic'
+      && !readAgentYamlField(agentYaml, ['retrieval', 'max_steps'])
+    ) {
+      onFieldChange(['retrieval', 'max_steps'], DEFAULT_AGENTIC_RETRIEVAL_MAX_STEPS)
+    }
   }
 
   return (
@@ -271,7 +282,7 @@ export function KnowledgeModuleEditor({
           {t('knowledgeEditor.globalRetrievalDescription')}
         </p>
 
-        <div className="grid gap-6 md:grid-cols-3">
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
           {KNOWLEDGE_FIELDS.map((field) => {
             const currentValue = readAgentYamlField(agentYaml, field.path)
             return (
@@ -282,7 +293,7 @@ export function KnowledgeModuleEditor({
                 {field.input === 'select' && field.options ? (
                   <select
                     value={currentValue}
-                    onChange={(e) => onFieldChange(field.path, e.target.value)}
+                    onChange={(e) => handleRetrievalFieldChange(field.path, e.target.value)}
                     className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                   >
                     {field.options.map((opt) => (
@@ -295,7 +306,7 @@ export function KnowledgeModuleEditor({
                   <input
                     type={field.input === 'number' ? 'number' : 'text'}
                     value={currentValue}
-                    onChange={(e) => onFieldChange(field.path, e.target.value)}
+                    onChange={(e) => handleRetrievalFieldChange(field.path, e.target.value)}
                     className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                   />
                 )}

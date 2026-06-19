@@ -24,6 +24,7 @@ describe('module configuration field options', () => {
       'retrieval.strategy',
       'retrieval.top_k',
       'retrieval.min_score',
+      'retrieval.max_steps',
     ]))
   })
 
