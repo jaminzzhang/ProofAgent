@@ -3397,3 +3397,27 @@ _Avoid_: Evidence content dump
 - "Multi-round trace" could mean one summary event, per-round detail, or full LLM conversation. Resolved: each round emits `retrieval_step`, `model_request`, `model_response` events with `round_id` correlation, and a final `agentic_retrieval_completed` summary event records total rounds, candidates, accepted count, final action, and per-round history.
 - "Planner-Provider boundary" could mean Planner sees merged results, per-source results, or both. Resolved: V1 **RetrievalPlanner** operates above **BlendedKnowledgeProvider** and sees only merged evidence; V2 will evolve to per-source awareness for `narrow_scope` and `try_different_source` actions, accepting the architectural rework cost.
 - "Planner LLM calls" could mean bypassing governance, sharing the final-answer model, or using dedicated governed roles. Resolved per ADR-0005 amendment: **ModelCallRole.RETRIEVAL_PLANNER** and **ModelCallRole.RETRIEVAL_EVALUATOR** are separate LLM roles with independent trace identity, and **ModelCallRole.INGESTION** and **ModelCallRole.ROUTING** govern index-build and tree-traversal LLM calls respectively.
+
+## List Pagination Vocabulary
+
+Presentation vocabulary for any paginated Dashboard list (Runs Explorer, Approval Queue, Knowledge Source Documents). Pure presentation terms — they describe how a result slice is addressed and navigated, not run/approval semantics.
+
+- **Page** — the 1-based index of the currently displayed slice of list results. Derived as `floor(offset / pageSize) + 1`. For an empty result set the sole valid Page is 1. Synchronized to the URL as `?page` so a list position is shareable and bookmarkable, which matters for audit tools.
+- **Page Size** (`pageSize`) — the number of rows rendered per Page. User-selectable from a fixed set (25 / 50 / 100), defaulting to 50. Synchronized to the URL as `?pageSize`. Changing Page Size while Page exceeds the new maximum triggers convergence to the last valid Page.
+- **Offset** — the zero-based count of results skipped from the start of the result set before the current Page begins. Derived as `(page - 1) * pageSize`. Passed to the backend as the `offset` query parameter; not synchronized to the URL.
+- **Last Page** — the highest valid Page for a result set of a given total and Page Size, computed as `max(1, ceil(total / pageSize))`. A requested Page greater than Last Page is out of range and must converge to Last Page via history replacement (no spurious back-stack entry), distinct from the empty state where `total === 0`.
+
+## Approval Queue Status Vocabulary
+
+Presentation vocabulary that narrows the Approval Queue view. These describe how an operator scopes the triage list, not the lifecycle of a PendingApproval itself (which remains PendingApproval → ApprovalDecision regardless of view).
+
+- **Approval Status (view filter)** — a three-valued scoping of the Approval Queue projection: `pending` (expires_at is in the future), `expired` (expires_at has passed while still unresolved), or `all` (no expiry predicate). Applied as a backend `status` query parameter so the projected `total` and Pagination reflect the scoped set, not the full queue. Distinct from the approval's lifecycle state.
+- **Pending (queue view)** — an Approval Queue row whose `expires_at` has not passed. The default Approval Status, because triage answers "what needs me now" rather than "what has already lapsed". Do not confuse with the PendingApproval lifecycle state: a PendingApproval lifecycle row can appear under either the `pending` or `expired` queue view depending on its `expires_at`.
+- **Expired (queue view)** — an Approval Queue row whose `expires_at` has passed while still unresolved (no ApprovalDecision recorded). Surfaced for audit of lapsed items but not the default triage view.
+
+## Chinese (zh-CN) Navigation Terminology
+
+Resolved translation policy for the Dashboard navigation labels, anchored to the established vocabulary in `docs/zh/prd.md` rather than to literal dictionary equivalence. The PRD is the source of truth for which terms are translated vs. preserved as English in Chinese text.
+
+- **Translated terms** — `nav.policies` → 策略, `nav.knowledge` → 知识库, `nav.models` → 模型, `nav.tools` → 工具. These match PRD usage where the underlying concept (policy, knowledge base, model, tool) has a settled, unambiguous Chinese term.
+- **English-preserved terms** — `nav.runs` stays "Runs" and `nav.agents` stays "Agents" in the zh-CN locale, by deliberate PRD precedent. The PRD retains "Agent" as a proper, branded framework term (Proof Agent, Controlled Agent Harness Framework, Agent 应用) even inside Chinese sentences; translating to 代理 would sever it from that established use. "Runs" is a trace/run-record concept the PRD does not translate, and 运行 is an ambiguous verb form unsuitable as a nav label. The resulting mixed-script nav is intentional, not a gap to "fix" by full translation.

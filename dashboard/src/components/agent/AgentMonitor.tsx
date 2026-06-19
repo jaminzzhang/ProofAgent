@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchRuns } from '../../api/client'
 import type { RunSummary, ReceiptOutcome } from '../../api/types'
@@ -9,9 +10,10 @@ import { useLocale } from '../../i18n/locale'
 
 interface AgentMonitorProps {
   agentId: string
+  onOpenRunDetail?: (runId: string) => void
 }
 
-export function AgentMonitor({ agentId }: AgentMonitorProps) {
+export function AgentMonitor({ agentId, onOpenRunDetail }: AgentMonitorProps) {
   const { t, formatDateTime } = useLocale()
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -81,9 +83,13 @@ export function AgentMonitor({ agentId }: AgentMonitorProps) {
               {summary.agentRuns.slice(0, 20).map((run) => (
                 <tr key={run.run_id} className="hover:bg-[var(--bg-hover)] transition-colors">
                   <td className="px-5 py-3">
-                    <Link to={`/runs/${run.run_id}`} className="text-[var(--text-primary)] hover:text-[var(--accent)] font-medium truncate block max-w-xs">
+                    <RunDetailEntry
+                      runId={run.run_id}
+                      onOpenRunDetail={onOpenRunDetail}
+                      className="block max-w-xs truncate text-left font-medium text-[var(--text-primary)] hover:text-[var(--accent)]"
+                    >
                       {run.question}
-                    </Link>
+                    </RunDetailEntry>
                   </td>
                   <td className="px-5 py-3">
                     <OutcomeBadge outcome={run.outcome} />
@@ -102,7 +108,7 @@ export function AgentMonitor({ agentId }: AgentMonitorProps) {
   )
 }
 
-export function AgentMonitorSummary({ agentId }: AgentMonitorProps) {
+export function AgentMonitorSummary({ agentId, onOpenRunDetail }: AgentMonitorProps) {
   const { t, formatDateTime } = useLocale()
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -164,10 +170,11 @@ export function AgentMonitorSummary({ agentId }: AgentMonitorProps) {
         ) : (
           <div className="divide-y divide-[var(--border)]">
             {summary.agentRuns.slice(0, 5).map((run) => (
-              <Link
+              <RunDetailEntry
                 key={run.run_id}
-                to={`/runs/${run.run_id}`}
-                className="grid gap-2 px-5 py-3 transition-colors hover:bg-[var(--bg-hover)] md:grid-cols-[minmax(0,1fr)_auto]"
+                runId={run.run_id}
+                onOpenRunDetail={onOpenRunDetail}
+                className="grid w-full gap-2 px-5 py-3 text-left transition-colors hover:bg-[var(--bg-hover)] md:grid-cols-[minmax(0,1fr)_auto]"
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium text-[var(--text-primary)]">
@@ -180,12 +187,37 @@ export function AgentMonitorSummary({ agentId }: AgentMonitorProps) {
                 <div className="flex items-center">
                   <OutcomeBadge outcome={run.outcome} />
                 </div>
-              </Link>
+              </RunDetailEntry>
             ))}
           </div>
         )}
       </div>
     </section>
+  )
+}
+
+function RunDetailEntry({
+  runId,
+  onOpenRunDetail,
+  className,
+  children,
+}: {
+  runId: string
+  onOpenRunDetail?: (runId: string) => void
+  className: string
+  children: ReactNode
+}) {
+  if (!onOpenRunDetail) {
+    return (
+      <Link to={`/runs/${runId}`} className={className}>
+        {children}
+      </Link>
+    )
+  }
+  return (
+    <button type="button" className={className} onClick={() => onOpenRunDetail(runId)}>
+      {children}
+    </button>
   )
 }
 

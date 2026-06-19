@@ -40,6 +40,7 @@ import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
 import { SkillsModuleEditor } from '../components/agent/SkillsModuleEditor'
 import { WorkflowModuleEditor } from '../components/agent/WorkflowModuleEditor'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
+import { RunDetailDrawer } from '../components/agent/RunDetailDrawer'
 import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
 import { TOOLS_FIELDS } from '../components/agent/module-configs/tools'
 import { POLICY_FIELDS } from '../components/agent/module-configs/policy'
@@ -85,6 +86,7 @@ export function AgentDetailPage() {
   const [skillsConfig, setSkillsConfig] = useState<BusinessFlowSkillPackConfiguration | null>(null)
   const [skillsLoaded, setSkillsLoaded] = useState(false)
   const [skillsError, setSkillsError] = useState<string | null>(null)
+  const [selectedRunDetailId, setSelectedRunDetailId] = useState<string | null>(null)
 
   useEffect(() => {
     if (draft) {
@@ -437,7 +439,12 @@ export function AgentDetailPage() {
             </div>
           </section>
 
-          {agentId && <AgentMonitorSummary agentId={agentId} />}
+          {agentId && (
+            <AgentMonitorSummary
+              agentId={agentId}
+              onOpenRunDetail={setSelectedRunDetailId}
+            />
+          )}
         </div>
       )}
 
@@ -549,6 +556,7 @@ export function AgentDetailPage() {
           agentId={agentId}
           draftId={draftId}
           validationRecords={draft.validation_records}
+          onOpenRunDetail={setSelectedRunDetailId}
           onValidate={(question, options) =>
             runAction('validation', async () => {
               const result = await validateConfigDraft(agentId, draftId, {
@@ -658,8 +666,16 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'monitor' && agentId && (
-        <AgentMonitor agentId={agentId} />
+        <AgentMonitor agentId={agentId} onOpenRunDetail={setSelectedRunDetailId} />
       )}
+
+      <RunDetailDrawer
+        runId={selectedRunDetailId}
+        open={selectedRunDetailId !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedRunDetailId(null)
+        }}
+      />
 
       {(status || actionError) && (
         <div className={`fixed bottom-4 right-4 rounded-md border px-4 py-3 text-sm shadow-lg ${

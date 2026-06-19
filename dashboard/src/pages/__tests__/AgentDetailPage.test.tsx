@@ -8,6 +8,7 @@ import {
   bindKnowledgeSourceToDraft,
   createModelConnection,
   fetchConfigDraftSkills,
+  fetchRunDetail,
   fetchValidationCapture,
   fetchRuns,
   fetchWorkflowTemplate,
@@ -22,7 +23,7 @@ import {
   updateWorkflowStages,
   validateConfigDraft,
 } from '../../api/client'
-import type { DraftAgent, DraftValidationResponse } from '../../api/types'
+import type { DraftAgent, DraftValidationResponse, RunDetail } from '../../api/types'
 import { LocaleProvider } from '../../i18n/locale'
 import { AgentDetailPage } from '../AgentDetailPage'
 
@@ -33,6 +34,7 @@ vi.mock('../../api/client', () => ({
   createConfigDraftSkillPack: vi.fn(),
   deleteConfigDraftSkillPack: vi.fn(),
   fetchConfigDraftSkills: vi.fn(),
+  fetchRunDetail: vi.fn(),
   fetchRuns: vi.fn(),
   fetchValidationCapture: vi.fn(),
   fetchWorkflowTemplate: vi.fn(),
@@ -143,6 +145,43 @@ function latestSavedAgentYaml(): string {
   const payload = vi.mocked(updateConfigDraftContract).mock.calls.at(-1)?.[2]
   if (!payload?.agent_yaml) throw new Error('No agent_yaml payload was saved.')
   return payload.agent_yaml
+}
+
+function runDetail(overrides: Partial<RunDetail> = {}): RunDetail {
+  return {
+    run_id: 'run-1',
+    question: 'What documents are required?',
+    outcome: 'ANSWERED_WITH_CITATIONS',
+    run_purpose: 'validation',
+    agent_id: 'agent-1',
+    agent_version_id: null,
+    draft_id: 'draft-1',
+    created_at: '2026-05-28T01:00:00Z',
+    updated_at: '2026-05-28T01:00:00Z',
+    approval_status: null,
+    error_code: null,
+    trace_events: [],
+    receipt_markdown: '# Receipt',
+    evidence_chunks: [],
+    policy_decisions: [],
+    model_usage: {},
+    approval_state: null,
+    pending_approvals: [],
+    governance_details: {},
+    workflow_projection: {
+      template_name: null,
+      template_descriptor_version: null,
+      stage_configuration_source: {},
+      stages: [],
+    },
+    ...overrides,
+  }
+}
+
+function skillPackArticle(label: string): HTMLElement {
+  const article = screen.getByRole('heading', { name: label }).closest('article')
+  if (!article) throw new Error(`Skill Pack row not found: ${label}`)
+  return article
 }
 
 describe('AgentDetailPage', () => {
@@ -307,6 +346,13 @@ describe('AgentDetailPage', () => {
       ],
       meta: { total: 3, limit: 50, offset: 0 },
     })
+    vi.mocked(fetchRunDetail).mockResolvedValue(runDetail({
+      run_id: 'run-production-1',
+      question: 'What documents are required?',
+      run_purpose: 'production',
+      agent_version_id: 'version-1',
+      draft_id: null,
+    }))
     vi.mocked(createModelConnection).mockRejectedValue(new Error('not mocked'))
     vi.mocked(fetchWorkflowTemplate).mockResolvedValue({
       name: 'react_enterprise_qa',
@@ -411,6 +457,19 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText('Recent Agent Runs')).toBeInTheDocument()
     expect(screen.getByText('What documents are required?')).toBeInTheDocument()
     expect(screen.queryByText('Other agent question')).not.toBeInTheDocument()
+  })
+
+  it('opens Agent run detail in a right-side drawer without leaving Agent detail', async () => {
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /What documents are required/ }))
+
+    const drawer = await screen.findByRole('dialog', { name: 'Run detail' })
+    expect(fetchRunDetail).toHaveBeenCalledWith('run-production-1')
+    expect(within(drawer).getByText('run-production-1')).toBeInTheDocument()
+    expect(within(drawer).getByText('Governance Receipt')).toBeInTheDocument()
+    expect(screen.getByText('Agent Overview')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Back to Runs/ })).not.toBeInTheDocument()
   })
 
   it('renders Agent Detail shell and overview in Chinese when locale is zh-CN', async () => {
@@ -818,7 +877,9 @@ workflow:
     expect(screen.getByText('1/4 stages configured')).toBeInTheDocument()
     expect(screen.getByText('1 knowledge / 0 tools / 1 policy / 0 validators')).toBeInTheDocument()
     expect(screen.getByText('min confidence 0.6')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Edit Claims QA' })).toBeInTheDocument()
+    const claimsRow = skillPackArticle('Claims QA')
+    expect(within(claimsRow).getByRole('button', { name: 'Edit' })).toBeInTheDocument()
+    expect(within(claimsRow).getByRole('button', { name: 'Delete' })).toBeInTheDocument()
     expect(screen.queryByText('Routing & Admission')).not.toBeInTheDocument()
     expect(screen.queryByDisplayValue('Claims stage context.')).not.toBeInTheDocument()
   })
@@ -924,7 +985,8 @@ workflow:
   it('opens existing Skill Pack configuration in a right-side drawer', async () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit Claims QA' }))
+    await screen.findByText('Business Flow Skill Packs')
+    fireEvent.click(within(skillPackArticle('Claims QA')).getByRole('button', { name: 'Edit' }))
 
     const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
     expect(within(drawer).getByText('Basics')).toBeInTheDocument()
@@ -945,7 +1007,8 @@ workflow:
   it('previews unsaved Skill Pack addendum edits before saving them', async () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit Claims QA' }))
+    await screen.findByText('Business Flow Skill Packs')
+    fireEvent.click(within(skillPackArticle('Claims QA')).getByRole('button', { name: 'Edit' }))
     const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
     fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addendum Slots' }))
     fireEvent.change(within(drawer).getByLabelText('Plan Business Context'), {
@@ -1005,7 +1068,8 @@ workflow:
   it('saves existing Skill Pack edits from the drawer', async () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit Claims QA' }))
+    await screen.findByText('Business Flow Skill Packs')
+    fireEvent.click(within(skillPackArticle('Claims QA')).getByRole('button', { name: 'Edit' }))
     const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
     fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), { target: { value: '0.8' } })
     fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addendum Slots' }))

@@ -14,6 +14,7 @@ interface ValidateWorkspaceProps {
     options: { full_capture: boolean; retain_for_audit: boolean },
   ) => Promise<void>
   busy: boolean
+  onOpenRunDetail?: (runId: string) => void
 }
 
 export function ValidateWorkspace({
@@ -22,6 +23,7 @@ export function ValidateWorkspace({
   validationRecords,
   onValidate,
   busy,
+  onOpenRunDetail,
 }: ValidateWorkspaceProps) {
   const { t } = useLocale()
   const [question, setQuestion] = useState('')
@@ -124,6 +126,7 @@ export function ValidateWorkspace({
                 record={latestValidation}
                 agentId={agentId}
                 draftId={draftId}
+                onOpenRunDetail={onOpenRunDetail}
                 showCaptureState
               />
               <ValidationCapturePanel
@@ -155,6 +158,7 @@ export function ValidateWorkspace({
                 record={record}
                 agentId={agentId}
                 draftId={draftId}
+                onOpenRunDetail={onOpenRunDetail}
               />
             ))}
           </div>
@@ -193,11 +197,13 @@ function ValidationRecordSummary({
   agentId,
   draftId,
   showCaptureState = false,
+  onOpenRunDetail,
 }: {
   record: AgentValidationRecord
   agentId: string
   draftId: string
   showCaptureState?: boolean
+  onOpenRunDetail?: (runId: string) => void
 }) {
   const { t, formatDateTime } = useLocale()
   const returnTo = `/agents/${agentId}/drafts/${draftId}?tab=validate`
@@ -207,16 +213,12 @@ function ValidationRecordSummary({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <StatusDot status={record.status} />
-            <Link
-              to={`/runs/${record.run_id}`}
-              state={{
-                returnTo,
-                returnLabel: t('validate.backToDraft'),
-              }}
-              className="truncate font-mono text-xs text-[var(--accent)] hover:underline"
-            >
-              {record.run_id}
-            </Link>
+            <ValidationRunDetailEntry
+              runId={record.run_id}
+              returnTo={returnTo}
+              returnLabel={t('validate.backToDraft')}
+              onOpenRunDetail={onOpenRunDetail}
+            />
             {showCaptureState && (
               <span className="rounded-full bg-[var(--bg-hover)] px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)]">
                 {record.validation_capture_id ? t('validate.captureAvailable') : t('validate.captureNotAttached')}
@@ -249,15 +251,48 @@ function ValidationRecordRow({
   record,
   agentId,
   draftId,
+  onOpenRunDetail,
 }: {
   record: AgentValidationRecord
   agentId: string
   draftId: string
+  onOpenRunDetail?: (runId: string) => void
 }) {
   return (
     <div className="px-5 py-4">
-      <ValidationRecordSummary record={record} agentId={agentId} draftId={draftId} />
+      <ValidationRecordSummary
+        record={record}
+        agentId={agentId}
+        draftId={draftId}
+        onOpenRunDetail={onOpenRunDetail}
+      />
     </div>
+  )
+}
+
+function ValidationRunDetailEntry({
+  runId,
+  returnTo,
+  returnLabel,
+  onOpenRunDetail,
+}: {
+  runId: string
+  returnTo: string
+  returnLabel: string
+  onOpenRunDetail?: (runId: string) => void
+}) {
+  const className = 'truncate font-mono text-xs text-[var(--accent)] hover:underline'
+  if (!onOpenRunDetail) {
+    return (
+      <Link to={`/runs/${runId}`} state={{ returnTo, returnLabel }} className={className}>
+        {runId}
+      </Link>
+    )
+  }
+  return (
+    <button type="button" className={className} onClick={() => onOpenRunDetail(runId)}>
+      {runId}
+    </button>
   )
 }
 

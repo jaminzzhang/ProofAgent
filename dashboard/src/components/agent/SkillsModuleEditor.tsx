@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { CodeBlock } from '../CodeBlock'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
 import { useLocale } from '../../i18n/locale'
+import { AgentDetailDrawer } from './AgentDetailDrawer'
 import type {
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
@@ -642,44 +643,19 @@ function SkillPackDrawer({
   footer: ReactNode
   onClose: () => void
 }) {
-  const titleId = useId()
   return (
-    <div className="fixed inset-0 z-50">
-      <button
-        type="button"
-        aria-label="Close Skill Pack drawer"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/30"
-      />
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="absolute inset-y-0 right-0 flex w-full flex-col border-l border-[var(--border)] bg-[var(--bg-surface)] shadow-2xl lg:w-[70vw]"
-      >
-        <header className="flex items-start justify-between gap-4 border-b border-[var(--border)] px-5 py-4">
-          <div>
-            <h3 id={titleId} className="text-sm font-semibold text-[var(--text-primary)]">
-              {title}
-            </h3>
-            <p className="mt-1 text-sm text-[var(--text-muted)]">
-              Configure the Pack without leaving the Business Flow Skill Packs list.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
-          >
-            Close
-          </button>
-        </header>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">{children}</div>
-        <footer className="flex justify-end gap-3 border-t border-[var(--border)] px-5 py-4">
-          {footer}
-        </footer>
-      </section>
-    </div>
+    <AgentDetailDrawer
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      title={title}
+      description="Configure the Pack without leaving the Business Flow Skill Packs list."
+      footer={footer}
+      bodyClassName="space-y-4"
+    >
+      {children}
+    </AgentDetailDrawer>
   )
 }
 
@@ -735,7 +711,7 @@ function SkillPackListRow({
 }) {
   return (
     <article className="border border-[var(--border)] bg-[var(--bg-surface)] p-4">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_168px] xl:items-start">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h5 className="text-sm font-semibold text-[var(--text-primary)]">{pack.label}</h5>
@@ -753,21 +729,21 @@ function SkillPackListRow({
             <p className="mt-2 text-sm text-[var(--text-muted)]">{pack.description}</p>
           ) : null}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-2 gap-2 xl:w-[168px]">
           <button
             type="button"
             onClick={onEdit}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
           >
-            Edit {pack.label}
+            Edit
           </button>
           <button
             type="button"
             onClick={onDelete}
             disabled={busy}
-            className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm font-medium text-[var(--danger)] hover:bg-[var(--danger)]/15 disabled:opacity-50"
+            className="w-full rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm font-medium text-[var(--danger)] hover:bg-[var(--danger)]/15 disabled:opacity-50"
           >
-            Delete {pack.label}
+            Delete
           </button>
         </div>
       </div>

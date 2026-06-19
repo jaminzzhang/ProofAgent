@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import {
@@ -10,6 +10,7 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  cn,
   type ReceiptOutcome,
 } from '@proofagent/ui'
 import { useRunDetail } from '../hooks/useRunDetail'
@@ -36,11 +37,43 @@ type Tab =
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>()
   const location = useLocation()
+  const initialTab = location.hash === '#approval' ? 'approval' : 'workflow'
+  const returnState = runDetailReturnState(location.state)
+
+  return (
+    <RunDetailContent
+      runId={runId}
+      initialTab={initialTab}
+      returnTo={returnState?.returnTo ?? '/runs'}
+      returnLabel={returnState?.returnLabel ?? 'Back to Runs'}
+    />
+  )
+}
+
+interface RunDetailContentProps {
+  runId: string | undefined
+  initialTab?: Tab
+  returnTo?: string
+  returnLabel?: string
+  showBackLink?: boolean
+  className?: string
+}
+
+export function RunDetailContent({
+  runId,
+  initialTab = 'workflow',
+  returnTo = '/runs',
+  returnLabel = 'Back to Runs',
+  showBackLink = true,
+  className,
+}: RunDetailContentProps) {
   const { t, formatDateTime } = useLocale()
   const { detail, loading, error, refetch } = useRunDetail(runId)
-  const [activeTab, setActiveTab] = useState<Tab>(
-    location.hash === '#approval' ? 'approval' : 'workflow',
-  )
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab)
+
+  useEffect(() => {
+    setActiveTab(initialTab)
+  }, [initialTab, runId])
 
   if (loading)
     return (
@@ -59,9 +92,6 @@ export function RunDetailPage() {
       </Card>
     )
 
-  const returnState = runDetailReturnState(location.state)
-  const returnTo = returnState?.returnTo ?? '/runs'
-  const returnLabel = returnState?.returnLabel ?? 'Back to Runs'
   const needsApproval =
     detail.outcome === 'WAITING_FOR_APPROVAL' || detail.approval_state
   const hasWorkflowProjection = detail.workflow_projection.stages.length > 0
@@ -85,17 +115,19 @@ export function RunDetailPage() {
   )
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className={cn('max-w-5xl space-y-6', className)}>
       {/* Header card: breadcrumb + run id (with copy) + outcome + question + meta */}
       <Card className="p-6">
         <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <Link
-              to={returnTo}
-              className="inline-flex items-center gap-1 text-xs font-medium tracking-wide text-[var(--text-muted)] uppercase transition-colors hover:text-[var(--text-primary)]"
-            >
-              <ArrowLeft size={13} /> {returnLabel}
-            </Link>
+            {showBackLink && (
+              <Link
+                to={returnTo}
+                className="inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+              >
+                <ArrowLeft size={13} /> {returnLabel}
+              </Link>
+            )}
             <h1 className="mt-3 flex items-center gap-2 text-xl font-semibold tracking-tight text-[var(--text-primary)]">
               <span>{t('common.runId')}:</span>
               <span className="font-mono text-base font-normal text-[var(--text-secondary)]">
