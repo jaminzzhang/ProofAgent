@@ -6,7 +6,7 @@ export function ModeSelectionPage() {
   const { t } = useLocale()
 
   return (
-    <main className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-3xl flex-col justify-center px-6 py-12">
+    <main className="mx-auto flex h-full w-full max-w-3xl flex-col justify-center px-6 py-12">
       <div className="space-y-8">
         <div className="space-y-3">
           <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">

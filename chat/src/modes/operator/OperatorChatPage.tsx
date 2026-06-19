@@ -184,7 +184,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
 
   if (!routeConversationId && !isNewChat) {
     return (
-      <div className="flex h-[calc(100vh-160px)] flex-col px-4">
+      <div className="flex h-full flex-col px-4">
         <div className="flex flex-1 flex-col items-center justify-center space-y-4 text-center">
           <div>
             <h1 className="text-xl font-semibold text-[var(--text-primary)]">{t('operator.title')}</h1>
@@ -246,7 +246,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
 
   if (error && !conversation && !isNewChat) {
     return (
-      <div className="flex h-[calc(100vh-160px)] flex-col px-4">
+      <div className="flex h-full flex-col px-4">
         <div className="flex flex-1 flex-col items-center justify-center space-y-4 text-center">
           <div>
             <h1 className="text-lg font-semibold text-[var(--text-primary)]">{t('operator.loadErrorTitle')}</h1>

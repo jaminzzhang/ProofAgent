@@ -36,7 +36,7 @@ export function AgentSelectionPanel({
   }
 
   return (
-    <section className="mx-auto flex min-h-[calc(100vh-160px)] w-full max-w-3xl flex-col justify-center px-4">
+    <section className="mx-auto flex h-full w-full max-w-3xl flex-col justify-center px-4">
       <div className="space-y-2">
         <h1 className="text-xl font-semibold text-[var(--text-primary)]">{title}</h1>
         <p className="text-sm leading-6 text-[var(--text-secondary)]">{description}</p>
@@ -73,7 +73,7 @@ function CenteredPanel({
   description: string
 }) {
   return (
-    <section className="flex min-h-[calc(100vh-160px)] flex-col items-center justify-center px-4 text-center">
+    <section className="flex h-full flex-col items-center justify-center px-4 text-center">
       <h1 className="text-lg font-semibold text-[var(--text-primary)]">{title}</h1>
       <p className="mt-2 max-w-[360px] text-sm leading-6 text-[var(--text-secondary)]">
         {description}

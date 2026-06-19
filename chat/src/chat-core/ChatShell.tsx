@@ -91,7 +91,7 @@ export function ChatShell({
   }
 
   return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col px-4">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col px-4">
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <h1 className="truncate text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
