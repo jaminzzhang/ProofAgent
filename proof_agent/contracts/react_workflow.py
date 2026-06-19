@@ -18,6 +18,7 @@ class ReActActionType(str, Enum):
     GENERATE_FINAL_ANSWER = "generate_final_answer"
     ESCALATE = "escalate"
     STOP = "stop"
+    REFUSE = "refuse"
 
 
 class BusinessFlowSkillPackAdmissionDecision(str, Enum):

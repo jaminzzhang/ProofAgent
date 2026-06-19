@@ -48,6 +48,7 @@ def test_list_workflow_templates_is_json_safe() -> None:
         "enterprise_qa",
         "react_enterprise_qa",
         "react_enterprise_qa_v2",
+        "react_enterprise_qa_v3",
     }
     assert all(
         isinstance(stage.context_options, tuple)

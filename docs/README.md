@@ -27,6 +27,7 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | `concepts/trace-event-contract.md` | JSONL trace event contract |
 | `concepts/governance-receipt-contract.md` | Human-readable receipt contract |
 | `concepts/trust-boundaries.md` | Security scope, assumptions, and non-claims |
+| `concepts/react-loop-control.md` | Controlled ReAct Loop control contract: action set, budget, convergence, eligibility, Observation Records |
 
 ## Developer Guide
 

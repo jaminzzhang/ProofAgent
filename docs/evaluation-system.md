@@ -369,6 +369,41 @@ The built-in decision profile is `core_analyzer_release.v1`. It is a post-run de
 
 Otherwise the decision is `blocked` and includes stable blocking reason strings such as `required_case_pass_rate below release threshold` or `artifact_sufficiency_rate below release threshold`.
 
+## ReAct Loop Evaluation
+
+This section defines the loop-specific evaluation regime mandated by [ADR-0033](adr/0033-react-loop-verification-regime.md). The Controlled ReAct Loop ([ADR-0032](adr/0032-controlled-react-loop-and-convergence-governance.md), [concepts/react-loop-control.md](concepts/react-loop-control.md)) has failure modes — divergence, ignored eligibility, non-convergence, oscillation — that only manifest under real LLM non-determinism. The deterministic baseline is therefore necessary but not sufficient for any loop-affecting release.
+
+### Four-layer verification
+
+| Layer | Verifies | Release role |
+| --- | --- | --- |
+| V1 | Deterministic control machinery: Convergence Check rules, Action Constraint rewrite, three-layer Observation Records, dual-axis budget accounting | Extended unit tests (deterministic, no network) |
+| V2 | Loop topology with scripted LLM sequences via `MockLLMSequenceProvider`: observation-returns-to-plan, terminal-only-exit, approval-resume-returns-to-plan, eligibility violation triggers Action Constraint, Convergence Check narrows Eligible Action Set | Development scaffold; loop features are written test-first against V2 (deterministic, no network) |
+| V3 | Real-LLM behavior inside the loop against behavioral thresholds on the `openai_compatible` provider | **Product release gate** (real API key, real cost) |
+| V4 | Adversarial / red-team: divergence-inducing prompt injection, eligibility-bypass attempts | Later phase; doubles as enterprise sales asset |
+
+### V3 behavioral thresholds
+
+V3 asserts behavioral metrics, not exact outputs, against a fixed suite covering failure-prone cases: compound requests, insufficient evidence, denied approval, and oscillation-inducing prompts.
+
+| Metric | Threshold | Failure mode guarded |
+| --- | --- | --- |
+| Eligibility rewrite rate (rewrites / total plan rounds) | < 5% | Plan ignoring Eligible Action Set |
+| Hard-budget exhaustion rate | < 2% | Plan failing to converge before `max_plan_rounds` |
+| Compound-request resolution rate | > 70% | Compound requests (tool + retrieval) not completing |
+| Mean plan rounds (simple requests) | 2–3 | Simple requests over-iterated |
+| Mean plan rounds (compound requests) | 3–4 | Compound requests under- or over-iterated |
+
+A V3 run is `passed` only when every applicable threshold holds for every required loop case. A single threshold breach on a required case blocks the release.
+
+### Separation principle
+
+The deterministic-baseline rule ("deterministic demo must remain runnable without network, API keys, or external services") is preserved and applies to V1 and V2. V3 and V4 are a separate regime that deliberately spends real money on real models. The two regimes are never conflated: deterministic-provider success is necessary but not sufficient for a loop release.
+
+### Integration with the release decision
+
+V3 is a release gate, not a diagnostic. It composes with `core_analyzer_release.v1`: a loop-affecting release requires both the existing analyzer release decision (`passed`) and a `passed` V3 loop regression run within threshold. V3 lives in a separate `tests/llm_regression/` directory, is marked so CI does not run it by default, and is skipped automatically when no API key is present.
+
 ## Failure Ownership
 
 Each failed case may contain gate-level owners and one `primary_failure_owner` derived from gates plus node results.

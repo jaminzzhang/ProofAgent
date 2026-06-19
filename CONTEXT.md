@@ -483,8 +483,8 @@ A Workflow Template Stage that does not directly call a model, where Workflow St
 _Avoid_: Hidden model call, prompt-driven tool execution, prompt-driven retrieval behavior
 
 **Controlled ReAct Workflow**:
-A Workflow Template where a model proposes reasoning steps and action proposals, while the Control Envelope governs whether each step may execute.
-_Avoid_: Autonomous ReAct agent, direct model executor
+A Workflow Template where a model proposes reasoning steps and action proposals, while the Control Envelope governs whether each step may execute. Per ADR-0032, the product baseline is the real **Controlled ReAct Loop** (observe-then-replan), not the earlier single-pass wiring.
+_Avoid_: Autonomous ReAct agent, direct model executor, single-pass DAG mislabeled as a loop
 
 **Intent Resolution**:
 The governed understanding step that turns a user turn and admitted conversation context into an audit-safe summary of user goal, domain intent, known facts, missing fields, ambiguities, risk flags, and the recommended next action before ReAct planning.
@@ -693,6 +693,54 @@ _Avoid_: Remote-only ReAct demo, provider-dependent MVP
 **Deterministic ReAct Baseline**:
 The deterministic regression baseline for Proof Agent's primary React Enterprise QA Workflow Template, using deterministic planner, reviewer, model, retrieval, and tool implementations.
 _Avoid_: Legacy linear Enterprise QA baseline, remote-model release gate, separate workflow world
+
+**Controlled ReAct Loop**:
+The real Think→Act→Observe→Replan loop shape for React Enterprise QA Template V2, in which each `plan` round emits one governed ReAct Action Proposal, executes one observation action, writes an Observation Record, and returns to plan until plan emits a terminal action. Distinct from the earlier single-pass ReAct wiring where retrieval and tool were terminal branches.
+_Avoid_: Single-pass ReAct DAG, classification pipeline mislabeled as ReAct, plan-and-execute batch
+
+**Plan Round**:
+One invocation of the `plan` stage in the Controlled ReAct Loop. The unit counted by the `max_plan_rounds` budget. Replaces the older `max_steps` concept; `react.max_steps` is read as a backward-compatible alias for `max_plan_rounds`.
+_Avoid_: Graph node, retrieval step, tool call
+
+**Observation Action**:
+A Controlled ReAct Loop action that gathers information and then returns control to `plan`: `PLAN_RETRIEVAL` and `PROPOSE_TOOL_CALL`. Observation actions are never terminal.
+_Avoid_: Terminal action, one-shot branch
+
+**Terminal Action**:
+A Controlled ReAct Loop action that ends the loop: `GENERATE_FINAL_ANSWER`, `ASK_CLARIFICATION`, `REFUSE`. Terminal actions are the only loop exit.
+_Avoid_: Observation action, mid-loop stop
+
+**Observation Record**:
+The structured control-state record written into state after each observation action, carrying the full retrieval evidence or tool result (truth layer), a deterministic no-LLM summary (decision layer), and a reference into the evidence list. Observation Records are control state, not logs; they are read by `plan` (summaries) and by `model_answer` (full content) and are receipt-replayable.
+_Avoid_: Discarded tool output, trace-only observation, unstructured planner scratchpad
+
+**Eligible Action Set**:
+The runtime-computed subset of ReAct actions that `plan` is permitted to choose in a given round, narrowed by the Convergence Check. Enforced structurally by `_constrain_action`, not by prompt wording.
+_Avoid_: Prompt suggestion, advisory action list, LLM self-policed constraint
+
+**Convergence Check**:
+The deterministic, plan-precondition Control Plane enforcement point that inspects control state (Plan Round count, Evidence Trajectory, Action History) and narrows the Eligible Action Set to force the loop to converge. It never emits a terminal outcome directly; it only constrains what `plan` may choose.
+_Avoid_: LLM-driven convergence, heuristic hint, soft prompt guidance
+
+**Action Constraint**:
+The deterministic rewrite performed when a plan proposal falls outside the Eligible Action Set: the action is replaced by a default (`GENERATE_FINAL_ANSWER` in convergence contexts, `REFUSE` in divergence contexts) and an `action_constrained` trace event records the original, the constrained value, and the reason. Permanent provider-neutral backstop even after function-calling enforcement lands.
+_Avoid_: Silent rewrite, retry-the-LLM, prompt re-negotiation
+
+**Evidence Trajectory**:
+The per-round sequence of accepted-evidence counts used by the Convergence Check to detect evidence saturation. Control state, not a log.
+_Avoid_: Final evidence list, retrieval debug log
+
+**Action History**:
+The per-round sequence of selected action types and parameter hashes used by the Convergence Check to detect action repetition and oscillation. Control state, not a log.
+_Avoid_: Trace event stream, audit-only history
+
+**Tiered Loop Models**:
+The Controlled ReAct Loop model assignment policy where `intent_resolution` and `plan` use a smaller, faster model and `model_answer` uses a larger model, so that loop cost and latency stay bounded as plan rounds grow.
+_Avoid_: Single model for all stages, unbounded per-round cost
+
+**Deterministic Plan Short-Circuit**:
+A bounded, audited rule path that selects the first plan action without calling the planner model when the request is unambiguous, so that simple requests are not forced through multiple plan rounds.
+_Avoid_: Hidden second planner, unaudited fast path, silent behavioral drift from the LLM planner
 
 **ReAct Planner**:
 The planning capability that turns user input, system prompt, and admitted context into Reasoning Summary and ReAct Action Proposal values.
@@ -3397,6 +3445,12 @@ _Avoid_: Evidence content dump
 - "Multi-round trace" could mean one summary event, per-round detail, or full LLM conversation. Resolved: each round emits `retrieval_step`, `model_request`, `model_response` events with `round_id` correlation, and a final `agentic_retrieval_completed` summary event records total rounds, candidates, accepted count, final action, and per-round history.
 - "Planner-Provider boundary" could mean Planner sees merged results, per-source results, or both. Resolved: V1 **RetrievalPlanner** operates above **BlendedKnowledgeProvider** and sees only merged evidence; V2 will evolve to per-source awareness for `narrow_scope` and `try_different_source` actions, accepting the architectural rework cost.
 - "Planner LLM calls" could mean bypassing governance, sharing the final-answer model, or using dedicated governed roles. Resolved per ADR-0005 amendment: **ModelCallRole.RETRIEVAL_PLANNER** and **ModelCallRole.RETRIEVAL_EVALUATOR** are separate LLM roles with independent trace identity, and **ModelCallRole.INGESTION** and **ModelCallRole.ROUTING** govern index-build and tree-traversal LLM calls respectively.
+- "ReAct loop" could mean the single-pass DAG shipped under `react_enterprise_qa.v1/v2`, a plan-and-execute batch, or a real observe-then-replan loop. Resolved per ADR-0032: the product baseline is the real **Controlled ReAct Loop** (single action per **Plan Round**, observe, return to plan); the single-pass wiring is a compatibility path only.
+- "`max_steps`" could count plan invocations, retrieval steps, or tool calls. Resolved per ADR-0032: it is a backward-compatible alias for **`max_plan_rounds`**; tool calls are counted by the separate `max_tool_calls` budget; retrieval has no independent call budget.
+- "Convergence" could mean the planner LLM deciding to stop, a hard budget firing, or a deterministic Control Plane check. Resolved per ADR-0032: convergence is a deterministic **Convergence Check** enforcement point that narrows the **Eligible Action Set**; the LLM never owns the stop decision.
+- "Eligibility enforcement" could mean prompt wording, output validation, or provider function-calling. Resolved per ADR-0032: a deterministic **Action Constraint** rewrite (Layer 2) is the permanent provider-neutral backstop; provider function-calling (Layer 3) is a later optimization that never replaces Layer 2.
+- "Tool result" could be terminal output, trace-only data, or loop control state. Resolved per ADR-0032: a tool result becomes an **Observation Record** and returns to plan; `WAITING_FOR_APPROVAL` is a suspension outcome, not a terminal, and approval resume returns to plan whether granted or denied.
+- "Loop verification" could mean reusing the deterministic-provider test suite or adding real-LLM tests. Resolved per ADR-0033: the deterministic path (V1/V2) is necessary but not sufficient; **V3 real-LLM regression** with behavioral thresholds is the product release gate.
 
 ## List Pagination Vocabulary
 

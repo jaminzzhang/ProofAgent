@@ -144,23 +144,36 @@ CLI / Docker
   -> expose Dashboard API read projections
 ```
 
-Controlled ReAct Enterprise QA adds a planner loop around the same Control Plane:
+Controlled ReAct Enterprise QA runs as a real Control Envelope-governed loop (ADR-0032), not a single-pass DAG:
 
 ```text
 CLI / API / Conversation turn
   -> load react_enterprise_qa_v2 Agent Contract
   -> resolve intent into an audit-safe summary and bounded Retrieval Query Set
-  -> ReAct planner proposes a fixed action
-  -> emit reasoning_summary and action_proposal
-  -> Harness Review Subagent suggests a decision for reviewed points
-  -> PolicyEngine/Harness makes the final decision
-  -> execute allowed retrieval/model/tool/clarification behavior
+  -> LOOP:
+       -> deterministic Convergence Check narrows the Eligible Action Set
+          from Plan Round count, Evidence Trajectory, and Action History
+       -> optional Deterministic Plan Short-Circuit selects first action
+       -> otherwise ReAct planner proposes one governed action from the Eligible Action Set
+       -> emit reasoning_summary and action_proposal
+       -> Action Constraint rewrites any out-of-set proposal + emits action_constrained
+       -> Harness Review Subagent suggests a decision for reviewed points
+       -> PolicyEngine/Harness makes the final decision
+       -> OBSERVATION ACTION (PLAN_RETRIEVAL / PROPOSE_TOOL_CALL):
+            execute allowed retrieval or tool, write an Observation Record
+            (full truth layer + deterministic summary layer), return to plan
+       -> APPROVAL: WAITING_FOR_APPROVAL suspends; resume returns to plan
+            whether granted or denied (denial becomes an Observation Record)
+       -> TERMINAL ACTION (GENERATE_FINAL_ANSWER / ASK_CLARIFICATION / REFUSE): exit loop
+  -> on GENERATE_FINAL_ANSWER: model_answer synthesizes from full Observation Records
   -> deterministic before_answer evidence and citation gate
   -> final_output with answer, refusal, approval wait, clarification wait, or escalation
   -> persist trace and Governance Receipt
 ```
 
-The Intent Resolution Retrieval Query Set is a non-executing candidate query summary. The planner, Retrieval Query Set, and review subagent are inputs to governance, not governance authorities.
+The loop is bounded by a dual-axis budget: `max_plan_rounds` (thinking divergence) and `max_tool_calls` (action divergence); retrieval has no independent call budget. The planner, Retrieval Query Set, review subagent, and Convergence Check are inputs to governance, not governance authorities. The earlier single-pass `react_enterprise_qa.v1` wiring and the linear `enterprise_qa` template remain as compatibility/regression paths only (ADR-0029).
+
+The Intent Resolution Retrieval Query Set is a non-executing candidate query summary.
 
 Workflow Stage Prompt Configuration is a governed extension to the Agent Contract, not a
 new execution path. The backend-owned Workflow Template Descriptor publishes the fixed
@@ -540,6 +553,7 @@ It owns:
 - output admission through validators
 - memory write policy
 - outcome mapping and refusal behavior
+- Controlled ReAct Loop control state and convergence governance (ADR-0032)
 
 It does not own:
 - SDK clients
@@ -549,12 +563,44 @@ It does not own:
 - Dashboard read APIs
 - provider-specific error payloads
 
+### Controlled ReAct Loop governance (ADR-0032)
+
+The React Enterprise QA Template V2 runs as a real loop. The Control Plane owns the loop's control state and all of its convergence decisions; the Runtime Plane only executes the graph mechanics.
+
+Action set — five actions, partitioned by post-execution behavior:
+- Observation actions (`PLAN_RETRIEVAL`, `PROPOSE_TOOL_CALL`): execute, write an Observation Record, and return to `plan`.
+- Terminal actions (`GENERATE_FINAL_ANSWER`, `ASK_CLARIFICATION`, `REFUSE`): the only loop exits.
+
+Control state — required on the runtime state object, read by the Control Plane, not logs:
+- `observations` — Observation Records (full truth layer + deterministic summary layer + evidence reference).
+- `action_history` — per-round selected action type and parameter hash, for repetition detection.
+- `evidence_trajectory` — per-round accepted-evidence counts, for saturation detection.
+- `last_convergence_signal` — most recent Convergence Check signal, for trace and prompt injection.
+
+Dual-axis budget:
+- `max_plan_rounds` (default 4) — counts plan invocations, guards thinking divergence. `react.max_steps` is a backward-compatible alias.
+- `max_tool_calls` — counts executed tool calls, guards action divergence. Retrieval has no independent call budget.
+
+Convergence Check — a deterministic, plan-precondition enforcement point that inspects control state and narrows the Eligible Action Set. It uses three signals: evidence saturation, action repetition, and hard-budget thresholds. It never emits a terminal outcome directly; it only constrains what `plan` may choose, preserving "plan is the only decision exit."
+
+Action Constraint — deterministic rewrite of any plan proposal that falls outside the Eligible Action Set. The default is `GENERATE_FINAL_ANSWER` in convergence contexts and `REFUSE` in divergence contexts. An `action_constrained` trace event records the original action, the constrained value, the reason, and the eligible set. This is the permanent provider-neutral backstop; provider function-calling enforcement (Layer 3) is a later optimization that does not replace it.
+
+Tool branch in the loop:
+- After a tool executes, control returns to `plan` (the Convergence Check then typically narrows to `{GENERATE_FINAL_ANSWER, REFUSE}` because tool data is frequently terminal).
+- Approval resume returns to `plan` whether granted or denied; a denied approval becomes an Observation Record, not a terminal. `WAITING_FOR_APPROVAL` remains a suspension outcome; the true terminal outcome is decided by plan after resume.
+- Tool Observation Record summaries are extracted from the `summary_fields` declared on the tool contract, so the capability layer does not decide what `plan` may see.
+
+Tiered models and short-circuit:
+- `intent_resolution` and `plan` use a smaller, faster model; `model_answer` uses a larger model (Tiered Loop Models).
+- A bounded, audited Deterministic Plan Short-Circuit may select the first plan action without calling the planner model when the request is unambiguous.
+
 Current MVP:
 - `control/workflow/orchestrator.py` preserves the plain Python Enterprise QA Harness behavior.
 - `control/workflow/templates.py` registers the supported workflow templates.
 - `control/policy/` evaluates policy rules.
 - `control/validators/` admit or block candidate outputs and tool results.
 - `capabilities/tools/approval.py` defines approval state, while `capabilities/tools/gateway.py` is the governed tool entry.
+
 
 Future templates should use a workflow registry or separate workflow modules. Do not keep adding template-specific branches to Enterprise QA orchestrator.
 
@@ -577,6 +623,12 @@ Runtime adapter strategy:
 - Runtime details must not leak into config, policy, trace, receipt, dashboard contracts, or public DTOs.
 - Runtime cannot bypass PolicyEngine, ApprovalState, Validators, ToolGateway, or trace emission.
 
+Controlled ReAct Loop mechanics (ADR-0032):
+- The Runtime Plane implements the loop as graph edges: observation actions return to `plan`; only terminal actions and hard-budget exhaustion reach `END`.
+- The Runtime Plane persists loop control state (`observations`, `action_history`, `evidence_trajectory`, `last_convergence_signal`) across checkpoint and interrupt/resume so that an approval suspension does not lose loop progress.
+- Convergence and eligibility decisions are Control Plane semantics. The Runtime Plane only consumes the Eligible Action Set and the Convergence Check output; it must not recompute them.
+- `WAITING_FOR_APPROVAL` is a suspension state; approval resume re-enters `plan`, so the Runtime must not treat a denied approval as a terminal graph exit.
+
 Current MVP:
 - `runtime/langgraph_runner.py` executes the Enterprise QA LangGraph `StateGraph` with a composed `HarnessInvocation`.
 - This keeps runtime mechanics in the Runtime Plane while deterministic Harness behavior remains the regression baseline.
@@ -592,7 +644,10 @@ before_answer
 before_tool_call
 before_memory_write
 before_model_call
+before_plan_round        (Controlled ReAct Loop — Convergence Check, ADR-0032)
 ```
+
+`before_plan_round` is the plan-precondition enforcement point consumed by the Convergence Check. It is deterministic (no model call), inspects loop control state, and narrows the Eligible Action Set for the upcoming plan round. Like the other points, every handled evaluation emits a `policy_decision`.
 
 Decision types:
 ```text
@@ -1310,6 +1365,7 @@ Remote provider tests must mock SDK clients and never require real API keys.
 | 3 | RunStore and Dashboard API |
 | 4 | production adapters: LangChain/LangGraph, real MCP, local index, governed remote retrieval, Azure/Anthropic, streaming |
 | 5 | Agent Control Platform: Dashboard UI, Approval Console, RBAC, multi-template, external observability |
+| 6 | Controlled ReAct Loop (ADR-0032): real observe-then-replan loop, dual-axis budget, Convergence Check, three-layer Observation Records, tool-in-the-loop, Action Constraint, tiered models, and the ADR-0033 verification regime (V2 scripted-LLM scaffold as release-enabling, V3 real-LLM regression as release gate) |
 
 ## 26. Stability Rules
 
@@ -1321,3 +1377,4 @@ Remote provider tests must mock SDK clients and never require real API keys.
 6. New API routes must not create alternate execution semantics.
 7. New memory providers must define retention, deletion, redaction, and tenant boundary.
 8. New evaluators must define the control path for failure.
+9. Controlled ReAct Loop changes must keep convergence and eligibility decisions in the Control Plane; the Runtime Plane may only consume the Eligible Action Set and Convergence Check output (ADR-0032). Loop-affecting releases must pass the ADR-0033 V3 real-LLM regression gate; deterministic-provider success alone is not sufficient (ADR-0033).

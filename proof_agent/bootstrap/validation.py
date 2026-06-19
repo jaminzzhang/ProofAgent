@@ -83,8 +83,9 @@ SUPPORTED_WORKFLOW_TEMPLATES = {
     "enterprise_qa",
     "react_enterprise_qa",
     "react_enterprise_qa_v2",
+    "react_enterprise_qa_v3",
 }
-REACT_WORKFLOW_TEMPLATES = {"react_enterprise_qa", "react_enterprise_qa_v2"}
+REACT_WORKFLOW_TEMPLATES = {"react_enterprise_qa", "react_enterprise_qa_v2", "react_enterprise_qa_v3"}
 
 
 def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> None:
@@ -886,6 +887,13 @@ def _validate_react_config(manifest: AgentManifest, *, manifest_path: Path) -> N
             "PA_CONFIG_002",
             "react.max_steps must be greater than 0",
             "Set react.max_steps to a positive integer.",
+            artifact_path=manifest_path,
+        )
+    if react.max_plan_rounds <= 0:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "react.max_plan_rounds must be greater than 0",
+            "Set react.max_plan_rounds (or react.max_steps as its alias) to a positive integer.",
             artifact_path=manifest_path,
         )
     if react.max_tool_calls not in {0, 1}:

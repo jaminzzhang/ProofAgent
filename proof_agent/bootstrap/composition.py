@@ -128,7 +128,10 @@ def compose_harness_invocation(
                 params=resolved_planner_model.model_config.params,
             )
         )
-        if template.descriptor_version == "react_enterprise_qa.v2":
+        if template.descriptor_version in (
+            "react_enterprise_qa.v2",
+            "react_enterprise_qa.v3",
+        ):
             resolved_intent_model = resolve_model_role_config(
                 resolved_manifest.react.planner,
                 role=ModelCallRole.INTENT_RESOLUTION,

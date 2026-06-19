@@ -100,9 +100,7 @@ class BusinessFlowSkillPackDefinition(FrozenModel):
 
 class SkillsCapabilityConfig(FrozenModel):
     enabled: bool = False
-    business_flows: tuple[BusinessFlowSkillPackBindingConfig, ...] = Field(
-        default_factory=tuple
-    )
+    business_flows: tuple[BusinessFlowSkillPackBindingConfig, ...] = Field(default_factory=tuple)
 
 
 class CapabilitiesConfig(FrozenModel):
@@ -190,6 +188,7 @@ class ReActPlannerConfig(FrozenModel):
 
 class ReActConfig(FrozenModel):
     max_steps: int
+    max_plan_rounds: int = 4
     max_tool_calls: int = 1
     record_reasoning_summary: bool = True
     planner: ReActPlannerConfig
