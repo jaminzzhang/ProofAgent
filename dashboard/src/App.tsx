@@ -37,7 +37,7 @@ function AppFrame() {
       <div className="flex flex-1 overflow-hidden max-md:flex-col">
         <Sidebar />
         <main className="flex-1 w-full min-w-0 overflow-y-auto px-8 py-8 relative max-md:px-4 max-md:py-5">
-          <div className="mx-auto w-full min-w-0 max-w-6xl pb-12">
+          <div className="mx-auto w-full min-w-0 max-w-7xl pb-12">
             <AppRoutes />
           </div>
         </main>

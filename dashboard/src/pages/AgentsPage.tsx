@@ -42,7 +42,7 @@ export function AgentsPage() {
   }
 
   return (
-    <div className="max-w-6xl space-y-5">
+    <div className="max-w-7xl space-y-5">
       <PageHeader
         title={t('agents.title')}
         description={t('agents.description')}

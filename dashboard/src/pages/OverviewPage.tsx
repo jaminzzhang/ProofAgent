@@ -149,7 +149,7 @@ export function OverviewPage() {
   const pendingCount = stats?.pending_approvals ?? 0
 
   return (
-    <div className="max-w-6xl space-y-8">
+    <div className="max-w-7xl space-y-8">
       <div className="mb-2">
         <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
           {t('overview.title')}

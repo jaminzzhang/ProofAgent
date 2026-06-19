@@ -37,7 +37,7 @@ export function HandoffsPage() {
   }, [])
 
   return (
-    <div className="max-w-6xl space-y-5">
+    <div className="max-w-7xl space-y-5">
       <PageHeader title={t('handoffs.title')} description={t('handoffs.description')} />
 
       {loading ? (

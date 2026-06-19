@@ -187,7 +187,7 @@ export function AgentDetailShell({
         </aside>
 
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-8 py-8 max-md:px-4 max-md:py-5">
-          <div className="mx-auto min-w-0 max-w-6xl pb-12">
+          <div className="mx-auto min-w-0 max-w-7xl pb-12">
             {children}
           </div>
         </main>

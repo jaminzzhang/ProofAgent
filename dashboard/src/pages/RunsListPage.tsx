@@ -52,7 +52,7 @@ export function RunsListPage() {
   )
 
   return (
-    <div className="max-w-6xl space-y-5">
+    <div className="max-w-7xl space-y-5">
       <PageHeader title={t('runs.title')} description={t('runs.description')} />
 
       {/* Toolbar: search + Radix Select filters */}

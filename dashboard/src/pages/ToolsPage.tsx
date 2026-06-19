@@ -66,7 +66,7 @@ export function ToolsPage() {
 
   if (loading) {
     return (
-      <div className="max-w-6xl space-y-5">
+      <div className="max-w-7xl space-y-5">
         <PageHeader title={t('tools.title')} description={t('tools.description')} />
         <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -78,7 +78,7 @@ export function ToolsPage() {
   }
 
   return (
-    <div className="w-full max-w-6xl space-y-5 overflow-hidden max-md:max-w-[calc(100vw-2rem)]">
+    <div className="w-full max-w-7xl space-y-5 overflow-hidden max-md:max-w-[calc(100vw-2rem)]">
       <PageHeader title={t('tools.title')} description={t('tools.description')} />
 
       {error ? (

@@ -328,7 +328,7 @@ export function KnowledgeDetailPage() {
   const isUploadStatus = status?.includes('upload') ?? false
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <div className="max-w-7xl space-y-6">
       <div>
         <Link
           to="/knowledge"

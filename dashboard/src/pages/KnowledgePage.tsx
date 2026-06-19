@@ -121,7 +121,7 @@ export function KnowledgePage() {
 
   if (loading)
     return (
-      <div className="max-w-6xl space-y-5">
+      <div className="max-w-7xl space-y-5">
         <PageHeader title={t('knowledge.title')} description={t('knowledge.description')} />
         <Card className="p-0">
           <TableSkeleton rows={4} columns={4} />
@@ -130,7 +130,7 @@ export function KnowledgePage() {
     )
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <div className="max-w-7xl space-y-6">
       <PageHeader title={t('knowledge.title')} description={t('knowledge.description')} />
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">

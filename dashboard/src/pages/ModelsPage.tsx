@@ -130,7 +130,7 @@ export function ModelsPage() {
 
   if (loading)
     return (
-      <div className="max-w-6xl space-y-5">
+      <div className="max-w-7xl space-y-5">
         <PageHeader title={t('models.title')} />
         <Card className="p-0">
           <TableSkeleton rows={5} columns={7} />
@@ -139,7 +139,7 @@ export function ModelsPage() {
     )
 
   return (
-    <div className="max-w-6xl space-y-5">
+    <div className="max-w-7xl space-y-5">
       <PageHeader title={t('models.title')} />
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
