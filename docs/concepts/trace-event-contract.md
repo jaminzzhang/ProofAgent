@@ -49,6 +49,7 @@ Every trace line is one JSON object:
 | --- | --- |
 | `run_started` | run metadata and manifest path |
 | `manifest_loaded` | resolved `agent.yaml` config |
+| `workflow_stage_result` | trace-safe Workflow Template Stage result summary; excludes continuation and runtime state |
 | `reasoning_summary` | audit-safe ReAct Reasoning Summary; never raw chain-of-thought |
 | `action_proposal` | planner-proposed governed ReAct action |
 | `review_requested` | Harness Review Subagent request metadata |

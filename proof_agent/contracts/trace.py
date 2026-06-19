@@ -16,6 +16,7 @@ class TraceEventType(str, Enum):
     MANIFEST_LOADED = "manifest_loaded"
     WORKFLOW_STAGE_CONFIGURATION_TRACE_SUMMARY = "workflow_stage_configuration_trace_summary"
     WORKFLOW_STAGE_CONTEXT_APPLIED = "workflow_stage_context_applied"
+    WORKFLOW_STAGE_RESULT = "workflow_stage_result"
     INTENT_RESOLUTION = "intent_resolution"
     RETRIEVAL_QUERY_SET = "retrieval_query_set"
     BUSINESS_FLOW_SKILL_PACK_ADMISSION = "business_flow_skill_pack_admission"

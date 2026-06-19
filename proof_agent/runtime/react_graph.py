@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Mapping
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -13,6 +13,8 @@ from proof_agent.contracts import (
     ReActActionProposal,
     ReActActionType,
     ReceiptOutcome,
+    WorkflowStageResult,
+    WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
 )
 from proof_agent.control.workflow.react_enterprise_qa_execution import (
@@ -73,19 +75,23 @@ def build_react_enterprise_qa_graph(
         _add_node(
             builder,
             "intent_resolution",
-            _adapt_stage_result(execution.intent_resolution, stage_adapter),
+            _adapt_stage_result(execution.intent_resolution, stage_adapter, trace),
         )
-    _add_node(builder, "plan", _adapt_stage_result(execution.plan, stage_adapter))
-    _add_node(builder, "clarify", _adapt_stage_result(execution.clarify, stage_adapter))
+    _add_node(builder, "plan", _adapt_stage_result(execution.plan, stage_adapter, trace))
+    _add_node(builder, "clarify", _adapt_stage_result(execution.clarify, stage_adapter, trace))
     _add_node(
         builder,
         "review_retrieval_plan",
-        _adapt_stage_result(execution.review_retrieval_plan, stage_adapter),
+        _adapt_stage_result(execution.review_retrieval_plan, stage_adapter, trace),
     )
-    _add_node(builder, "retrieval", _adapt_stage_result(execution.retrieval, stage_adapter))
-    _add_node(builder, "model", _adapt_stage_result(execution.model, stage_adapter))
-    _add_node(builder, "review_tool", _adapt_stage_result(execution.review_tool, stage_adapter))
-    _add_node(builder, "tool", _adapt_tool_stage_result(execution.tool, stage_adapter))
+    _add_node(builder, "retrieval", _adapt_stage_result(execution.retrieval, stage_adapter, trace))
+    _add_node(builder, "model", _adapt_stage_result(execution.model, stage_adapter, trace))
+    _add_node(
+        builder,
+        "review_tool",
+        _adapt_stage_result(execution.review_tool, stage_adapter, trace),
+    )
+    _add_node(builder, "tool", _adapt_tool_stage_result(execution.tool, stage_adapter, trace))
 
     if uses_intent_resolution:
         builder.add_edge(START, "intent_resolution")
@@ -160,9 +166,15 @@ def _add_node(builder: StateGraph, name: str, node: Any) -> None:  # type: ignor
     builder.add_node(name, node)
 
 
-def _adapt_stage_result(stage_handler: Any, adapter: WorkflowStageResultRuntimeAdapter) -> Any:
+def _adapt_stage_result(
+    stage_handler: Any,
+    adapter: WorkflowStageResultRuntimeAdapter,
+    trace: TraceWriter,
+) -> Any:
     def adapted(state: ReActGraphState) -> dict[str, Any]:
-        return adapter.to_state_delta(stage_handler(state))
+        result = stage_handler(state)
+        _emit_stage_result(trace, result)
+        return adapter.to_state_delta(result)
 
     return adapted
 
@@ -170,13 +182,40 @@ def _adapt_stage_result(stage_handler: Any, adapter: WorkflowStageResultRuntimeA
 def _adapt_tool_stage_result(
     stage_handler: Any,
     adapter: WorkflowStageResultRuntimeAdapter,
+    trace: TraceWriter,
 ) -> Any:
     def adapted(state: ReActGraphState) -> dict[str, Any]:
         result = stage_handler(state)
         interrupt_payload = result.continuation.get("approval_interrupt")
         if isinstance(interrupt_payload, Mapping):
+            _emit_stage_result(trace, result)
             approval_decision = interrupt(thaw_state_value(interrupt_payload))
             result = stage_handler(state, approval_decision=approval_decision)
+        _emit_stage_result(trace, result)
         return adapter.to_state_delta(result)
 
     return adapted
+
+
+def _emit_stage_result(trace: TraceWriter, result: WorkflowStageResult) -> None:
+    trace.emit(
+        "workflow_stage_result",
+        status=_trace_status_for_stage_result(result),
+        payload={
+            "stage_id": result.stage_id,
+            "status": result.status.value,
+            "outcome": result.outcome.value if result.outcome is not None else None,
+            "summary": dict(result.summary),
+            "produced_fact_refs": list(result.produced_fact_refs),
+        },
+    )
+
+
+def _trace_status_for_stage_result(
+    result: WorkflowStageResult,
+) -> Literal["ok", "blocked", "waiting", "error"]:
+    if result.status is WorkflowStageStatus.BLOCKED:
+        return "blocked"
+    if result.status is WorkflowStageStatus.WAITING:
+        return "waiting"
+    return "ok"

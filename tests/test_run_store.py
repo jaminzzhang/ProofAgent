@@ -103,6 +103,7 @@ def test_get_run_detail_builds_workflow_projection_from_trace_events(
                     "template_descriptor_version": "react_enterprise_qa.v1",
                     "stages": [
                         {"stage_id": "plan", "redacted": True},
+                        {"stage_id": "clarification", "redacted": True},
                         {"stage_id": "tool", "redacted": True},
                     ],
                 },
@@ -171,8 +172,13 @@ def test_get_run_detail_builds_workflow_projection_from_trace_events(
         "source_type": "published_agent_version",
         "reference": "published_version:version_001",
     }
-    assert [stage.stage_id for stage in projection.stages] == ["plan", "tool"]
+    assert [stage.stage_id for stage in projection.stages] == [
+        "plan",
+        "clarification",
+        "tool",
+    ]
     plan_stage = projection.stages[0]
+    assert plan_stage.visited is True
     assert plan_stage.label == "Plan"
     assert plan_stage.status == "completed"
     assert plan_stage.outcome == ReceiptOutcome.ANSWERED_WITH_CITATIONS
@@ -187,7 +193,11 @@ def test_get_run_detail_builds_workflow_projection_from_trace_events(
         "evt_context_plan",
         "evt_stage_plan",
     )
-    tool_stage = projection.stages[1]
+    clarification_stage = projection.stages[1]
+    assert clarification_stage.visited is False
+    assert clarification_stage.related_event_ids == ("evt_config",)
+    tool_stage = projection.stages[2]
+    assert tool_stage.visited is True
     assert tool_stage.approval_pause_summary == {
         "present": True,
         "approval_id": "appr_lookup",
