@@ -17,12 +17,20 @@ def list_approvals(
     *,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    status: str = Query("all", pattern="^(all|pending|expired)$"),
     store: RunStore = Depends(get_store),
 ) -> dict[str, Any]:
-    """List unresolved pending approval queue items."""
+    """List unresolved pending approval queue items.
 
-    approvals, total = store.list_pending_approvals(limit=limit, offset=offset)
+    `status` scopes the queue: `pending` (not lapsed), `expired` (lapsed
+    while unresolved), or `all`. The returned `total` reflects the scoped
+    set so the dashboard pager stays consistent.
+    """
+
+    approvals, total = store.list_pending_approvals(
+        limit=limit, offset=offset, status=status  # type: ignore[arg-type]
+    )
     return {
         "data": approvals,
-        "meta": {"total": total, "limit": limit, "offset": offset},
+        "meta": {"total": total, "limit": limit, "offset": offset, "status": status},
     }

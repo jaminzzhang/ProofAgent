@@ -296,6 +296,59 @@ def test_react_run_emits_workflow_stage_result_trace_events(tmp_path: Path) -> N
     assert stage_events[-1]["payload"]["outcome"] == "ANSWERED_WITH_CITATIONS"
 
 
+def test_react_run_emits_workflow_stage_context_applied_for_visited_stages(
+    tmp_path: Path,
+) -> None:
+    """Every visited stage must emit a workflow_stage_context_applied boundary
+    event so the Workflow tab can attribute runtime events to stages. This is
+    the root-cause fix for an empty Workflow tab (CONTEXT.md "Approval Queue
+    Status Vocabulary" neighbor: the stage-boundary contract).
+    """
+    result = run_with_langgraph(
+        REACT_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path,
+    )
+
+    events = _trace_events(result.trace_path)
+    context_applied = [
+        event
+        for event in events
+        if event["event_type"] == "workflow_stage_context_applied"
+    ]
+
+    # The same visited stages as workflow_stage_result above.
+    stage_ids = [event["payload"]["stage_id"] for event in context_applied]
+    for visited in ("plan", "retrieval_review", "retrieval", "model_answer"):
+        assert visited in stage_ids, (
+            f"stage {visited!r} did not emit workflow_stage_context_applied; "
+            f"got {stage_ids}"
+        )
+
+
+def test_configured_stage_context_emits_boundary_even_without_rich_summary(
+    tmp_path: Path,
+) -> None:
+    """A stage whose context summary has no substance must still emit the
+    workflow_stage_context_applied boundary (with a minimal payload), so the
+    projection can mark the stage visited and attribute runtime events.
+    """
+    execution = _react_execution(tmp_path)
+
+    execution.plan({"question": "What is the reimbursement rule for travel meals?", "step_count": 0})
+
+    events = _trace_events(tmp_path / "trace.jsonl")
+    boundary = next(
+        (e for e in events if e["event_type"] == "workflow_stage_context_applied"),
+        None,
+    )
+    assert boundary is not None, "workflow_stage_context_applied was not emitted for plan stage"
+    payload = boundary["payload"]
+    assert payload["stage_id"] == "plan"
+    # Minimal fields the projection reads for visited/label/model_bearing.
+    assert "stage_label" in payload
+
+
 def test_v2_resolves_intent_before_react_planning(tmp_path: Path) -> None:
     result = run_with_langgraph(
         REACT_V2_AGENT,

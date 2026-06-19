@@ -97,6 +97,20 @@ describe('Dashboard static UI locale', () => {
     expect(screen.getByText('设置')).toBeInTheDocument()
   })
 
+  it('translates Configuration nav per the PRD glossary, preserves brand terms', () => {
+    // Anchored to docs/zh/prd.md: 策略/知识库/模型/工具 are translated;
+    // "Runs" and "Agents" stay English (PRD precedent — branded framework terms).
+    renderZh(<Sidebar />)
+
+    expect(screen.getByText('策略')).toBeInTheDocument()
+    expect(screen.getByText('知识库')).toBeInTheDocument()
+    expect(screen.getByText('模型')).toBeInTheDocument()
+    expect(screen.getByText('工具')).toBeInTheDocument()
+    // English-preserved brand/trace terms, by deliberate PRD precedent.
+    expect(screen.getAllByText('Runs').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Agents').length).toBeGreaterThan(0)
+  })
+
   it('renders Overview page copy in Simplified Chinese', () => {
     renderZh(<OverviewPage />)
 
@@ -112,7 +126,7 @@ describe('Dashboard static UI locale', () => {
     expect(screen.getByRole('heading', { name: 'Runs Explorer' })).toBeInTheDocument()
     expect(screen.getByText('检索、筛选并查看治理执行 Trace。')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('按问题或 Run ID 搜索...')).toBeInTheDocument()
-    expect(screen.getByText('显示 1 / 1 条结果')).toBeInTheDocument()
+    expect(screen.getByText('显示 1–1 条，共 1 条')).toBeInTheDocument()
     expect(screen.getByText(/2026/)).toBeInTheDocument()
     expect(screen.getByText(/6月/)).toBeInTheDocument()
   })

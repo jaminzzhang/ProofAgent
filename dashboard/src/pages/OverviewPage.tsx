@@ -132,7 +132,7 @@ function RecentActivitySkeleton() {
 
 export function OverviewPage() {
   const { stats, loading: statsLoading } = useStats()
-  const { runs, loading: runsLoading } = useRuns()
+  const { runs, loading: runsLoading } = useRuns({ limit: 10 })
   const { t, formatNumber } = useLocale()
 
   const answeredCount = stats?.outcome_distribution['ANSWERED_WITH_CITATIONS'] ?? 0

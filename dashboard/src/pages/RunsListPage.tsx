@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import {
@@ -20,10 +20,24 @@ import {
   type ReceiptOutcome,
 } from '@proofagent/ui'
 import { useRuns } from '../hooks/useRuns'
+import { usePagination } from '../hooks/usePagination'
+import { PaginationBar } from '../components/PaginationBar'
 import type { RunPurposeFilter } from '../api/types'
 import { useLocale } from '../i18n/locale'
 import { PageHeader } from '../components/PageHeader'
 import { TableSkeleton } from '../components/TableSkeleton'
+
+const PAGE_SIZE_OPTIONS = [25, 50, 100]
+
+/** Debounce a fast-changing value (e.g. a search box) by `delayMs`. */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delayMs)
+    return () => clearTimeout(id)
+  }, [value, delayMs])
+  return debounced
+}
 
 const OUTCOME_FILTERS: { value: ReceiptOutcome | 'all'; labelKey: string }[] = [
   { value: 'all', labelKey: 'runs.allOutcomes' },
@@ -44,12 +58,41 @@ export function RunsListPage() {
   const [search, setSearch] = useState('')
   const [outcomeFilter, setOutcomeFilter] = useState<ReceiptOutcome | 'all'>('all')
   const [runPurpose, setRunPurpose] = useState<RunPurposeFilter>('production')
-  const { t, formatDateTime, formatNumber } = useLocale()
-  const { runs, total, loading } = useRuns(
-    outcomeFilter === 'all' ? undefined : outcomeFilter,
-    search || undefined,
+  // Persisted filtered total so the pager knows the page count before the
+  // next fetch resolves.
+  const [total, setTotal] = useState(0)
+  const { t, formatDateTime } = useLocale()
+
+  // Debounce the search so fast typing does not fire a request per keystroke.
+  const debouncedSearch = useDebouncedValue(search, 300)
+
+  // The values that, when changed, reset the list back to page 1.
+  const outcomeParam = outcomeFilter === 'all' ? undefined : outcomeFilter
+  const searchParam = debouncedSearch || undefined
+
+  const pagination = usePagination({ total, pageSizeOptions: PAGE_SIZE_OPTIONS })
+  const { page, pageSize, offset, setPage } = pagination
+
+  // One fetch with limit/offset: returns both the page slice and the
+  // filtered total (meta.total) so the pager's page count stays correct.
+  const { runs, total: fetchedTotal, loading } = useRuns({
+    outcome: outcomeParam,
+    search: searchParam,
     runPurpose,
-  )
+    limit: pageSize,
+    offset,
+  })
+
+  // Mirror the filtered total into state for the pager (render N+1).
+  useEffect(() => {
+    setTotal(fetchedTotal)
+  }, [fetchedTotal])
+
+  // Reset to page 1 whenever a content filter changes.
+  useEffect(() => {
+    setPage(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outcomeParam, searchParam, runPurpose])
 
   return (
     <div className="max-w-7xl space-y-5">
@@ -104,14 +147,6 @@ export function RunsListPage() {
         </Select>
       </Card>
 
-      <div className="flex items-center justify-between px-1 text-sm text-[var(--text-muted)]">
-        <span>
-          {t('runs.showing')
-            .replace('{shown}', formatNumber(runs.length))
-            .replace('{total}', formatNumber(total))}
-        </span>
-      </div>
-
       {loading ? (
         <Card className="p-0">
           <TableSkeleton rows={6} columns={5} />
@@ -159,6 +194,18 @@ export function RunsListPage() {
               ))}
             </TableBody>
           </Table>
+          <div className="px-3">
+            <PaginationBar
+              page={page}
+              pageSize={pageSize}
+              totalPages={pagination.totalPages}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              shown={runs.length}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={pagination.setPageSize}
+            />
+          </div>
         </Card>
       )}
     </div>

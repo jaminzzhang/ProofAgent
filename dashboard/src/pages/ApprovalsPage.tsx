@@ -1,8 +1,14 @@
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Badge,
   Card,
   EmptyState,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Table,
   TableBody,
   TableCell,
@@ -10,15 +16,68 @@ import {
   TableHeader,
   TableRow,
 } from '@proofagent/ui'
-import type { ApprovalQueueItem } from '../api/types'
+import type { ApprovalQueueItem, ApprovalStatusFilter } from '../api/types'
 import { useApprovals } from '../hooks/useApprovals'
+import { usePagination } from '../hooks/usePagination'
+import { PaginationBar } from '../components/PaginationBar'
 import { useLocale } from '../i18n/locale'
 import { PageHeader } from '../components/PageHeader'
 import { TableSkeleton } from '../components/TableSkeleton'
 
+const PAGE_SIZE_OPTIONS = [25, 50, 100]
+const STATUS_FILTERS: { value: ApprovalStatusFilter; labelKey: string }[] = [
+  { value: 'pending', labelKey: 'approvals.pending' },
+  { value: 'expired', labelKey: 'approvals.expired' },
+  { value: 'all', labelKey: 'approvals.filterAll' },
+]
+
 export function ApprovalsPage() {
-  const { approvals, total, loading, error } = useApprovals()
   const { t, formatNumber } = useLocale()
+
+  // Status filter mirrors ?status (defaults to "pending" — triage view).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const rawStatus = searchParams.get('status')
+  const status: ApprovalStatusFilter =
+    rawStatus === 'all' || rawStatus === 'expired' || rawStatus === 'pending'
+      ? rawStatus
+      : 'pending'
+
+  const setStatus = (next: ApprovalStatusFilter) => {
+    setSearchParams(
+      (prev) => {
+        const sp = new URLSearchParams(prev)
+        if (next === 'pending') sp.delete('status')
+        else sp.set('status', next)
+        // changing status resets to page 1
+        sp.delete('page')
+        return sp
+      },
+      { replace: false },
+    )
+  }
+
+  const [total, setTotal] = useState(0)
+  const pagination = usePagination({ total, pageSizeOptions: PAGE_SIZE_OPTIONS })
+  const { page, pageSize, offset, setPage } = pagination
+
+  // One fetch with limit/offset: returns the page slice and the
+  // status-scoped total (meta.total) so the pager stays consistent.
+  const { approvals, total: fetchedTotal, loading, error } = useApprovals({
+    status,
+    limit: pageSize,
+    offset,
+  })
+
+  // Mirror the status-scoped total into state for the pager (render N+1).
+  useEffect(() => {
+    setTotal(fetchedTotal)
+  }, [fetchedTotal])
+
+  // Reset to page 1 whenever the status filter changes.
+  useEffect(() => {
+    setPage(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status])
 
   return (
     <div className="max-w-7xl space-y-5">
@@ -33,6 +92,21 @@ export function ApprovalsPage() {
           </Badge>
         }
       />
+
+      <Card className="flex flex-wrap items-center gap-3 p-3">
+        <Select value={status} onValueChange={(v) => setStatus(v as ApprovalStatusFilter)}>
+          <SelectTrigger className="h-9 w-[200px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {STATUS_FILTERS.map((f) => (
+              <SelectItem key={f.value} value={f.value}>
+                {t(f.labelKey)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Card>
 
       {loading ? (
         <Card className="p-0">
@@ -65,6 +139,18 @@ export function ApprovalsPage() {
               ))}
             </TableBody>
           </Table>
+          <div className="px-3">
+            <PaginationBar
+              page={page}
+              pageSize={pageSize}
+              totalPages={pagination.totalPages}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              shown={approvals.length}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={pagination.setPageSize}
+            />
+          </div>
         </Card>
       )}
     </div>

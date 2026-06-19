@@ -21,6 +21,9 @@ export interface GovernanceDetails {
 
 export type ApprovalStatus = 'requested' | 'granted' | 'denied' | 'timed_out'
 
+/** Approval Queue view filter (queue scoping), not the approval lifecycle. */
+export type ApprovalStatusFilter = 'all' | 'pending' | 'expired'
+
 export interface RunSummary {
   run_id: string
   question: string

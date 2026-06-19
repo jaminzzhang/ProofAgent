@@ -1,5 +1,6 @@
 import type {
   ActiveAgentVersion,
+  ApprovalStatusFilter,
   ApprovalsResponse,
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
@@ -122,10 +123,12 @@ export function fetchHandoffs(): Promise<HandoffsResponse> {
 export function fetchApprovals(params?: {
   limit?: number
   offset?: number
+  status?: ApprovalStatusFilter
 }): Promise<ApprovalsResponse> {
   const searchParams = new URLSearchParams()
   if (params?.limit) searchParams.set('limit', String(params.limit))
   if (params?.offset) searchParams.set('offset', String(params.offset))
+  if (params?.status) searchParams.set('status', params.status)
   const query = searchParams.toString()
   return fetchJson<ApprovalsResponse>(`${BASE}/approvals${query ? `?${query}` : ''}`)
 }

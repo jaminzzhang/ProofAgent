@@ -31,6 +31,7 @@ def _seed_pending_approval(
     question: str,
     expires_at: str,
     agent_id: str | None = "enterprise_qa",
+    created_at: str = "2026-06-10T10:00:00Z",
 ) -> None:
     from proof_agent.observability.storage.run_store import RunStore
 
@@ -41,8 +42,8 @@ def _seed_pending_approval(
         outcome=ReceiptOutcome.WAITING_FOR_APPROVAL,
         agent_id=agent_id,
         agent_version_id="version_1",
-        created_at="2026-06-10T10:00:00Z",
-        updated_at="2026-06-10T10:00:10Z",
+        created_at=created_at,
+        updated_at=created_at,
     )
     store.write_run_meta(index)
     run_dir = store.create_run_dir(run_id)
@@ -52,7 +53,7 @@ def _seed_pending_approval(
             "run_id": run_id,
             "event_id": f"evt_{run_id}_1",
             "sequence": 1,
-            "timestamp": "2026-06-10T10:00:00Z",
+            "timestamp": created_at,
             "event_type": "pending_approval_created",
             "span_id": "span_pending_approval_created",
             "status": "waiting",
@@ -66,7 +67,7 @@ def _seed_pending_approval(
                 "policy_decision": "require_approval",
                 "checkpoint_id": f"checkpoint_{run_id}",
                 "status": "requested",
-                "created_at": "2026-06-10T10:00:00Z",
+                "created_at": created_at,
                 "expires_at": expires_at,
             },
             "redaction": {"applied": False, "fields": []},
@@ -86,6 +87,7 @@ def test_list_approvals_returns_pending_approval_projection_sorted_by_expiry(cli
         approval_id="appr_later",
         question="Later approval",
         expires_at="2099-06-10T10:05:00Z",
+        created_at="2026-06-10T10:01:00Z",
     )
     _seed_pending_approval(
         app,
@@ -93,30 +95,32 @@ def test_list_approvals_returns_pending_approval_projection_sorted_by_expiry(cli
         approval_id="appr_earlier",
         question="Earlier approval",
         expires_at="2099-06-10T10:01:00Z",
+        created_at="2026-06-10T10:00:00Z",
     )
 
     resp = client.get("/api/approvals")
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["meta"] == {"total": 2, "limit": 50, "offset": 0}
-    assert [item["approval_id"] for item in body["data"]] == ["appr_earlier", "appr_later"]
+    assert body["meta"] == {"total": 2, "limit": 50, "offset": 0, "status": "all"}
+    # Sorted newest-first by created_at: run_later (10:01) before run_earlier (10:00).
+    assert [item["approval_id"] for item in body["data"]] == ["appr_later", "appr_earlier"]
     first = body["data"][0]
     assert first == {
-        "run_id": "run_earlier",
-        "approval_id": "appr_earlier",
+        "run_id": "run_later",
+        "approval_id": "appr_later",
         "tool_name": "customer_lookup",
         "action_id": "act_customer_lookup",
-        "question": "Earlier approval",
+        "question": "Later approval",
         "agent_id": "enterprise_qa",
         "agent_version_id": "version_1",
         "run_purpose": "production",
-        "created_at": "2026-06-10T10:00:00Z",
-        "expires_at": "2099-06-10T10:01:00Z",
+        "created_at": "2026-06-10T10:01:00Z",
+        "expires_at": "2099-06-10T10:05:00Z",
         "expired": False,
         "parameter_keys": ["customer_id", "policy_id"],
         "parameter_count": 2,
-        "links": {"run_detail": "/api/runs/run_earlier"},
+        "links": {"run_detail": "/api/runs/run_later"},
     }
     assert "parameters" not in first
 
@@ -152,17 +156,99 @@ def test_list_approvals_paginates_after_filtering(client, app) -> None:
             approval_id=approval_id,
             question=f"Approval {index}",
             expires_at=f"2099-06-10T10:0{index}:00Z",
+            created_at=f"2026-06-10T10:0{index}:00Z",
         )
 
     resp = client.get("/api/approvals?limit=1&offset=1")
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["meta"] == {"total": 3, "limit": 1, "offset": 1}
+    assert body["meta"] == {"total": 3, "limit": 1, "offset": 1, "status": "all"}
     assert [item["approval_id"] for item in body["data"]] == ["appr_2"]
 
 
 def test_list_approvals_rejects_invalid_pagination(client) -> None:
     resp = client.get("/api/approvals?limit=0")
+
+    assert resp.status_code == 422
+
+
+def test_list_approvals_status_pending_excludes_expired(client, app) -> None:
+    _seed_pending_approval(
+        app,
+        run_id="run_future",
+        approval_id="appr_future",
+        question="Still pending",
+        expires_at="2099-06-10T10:00:00Z",
+    )
+    _seed_pending_approval(
+        app,
+        run_id="run_past",
+        approval_id="appr_past",
+        question="Lapsed",
+        expires_at="2000-01-01T00:00:00Z",
+    )
+
+    resp = client.get("/api/approvals?status=pending")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["meta"] == {"total": 1, "limit": 50, "offset": 0, "status": "pending"}
+    assert [item["approval_id"] for item in body["data"]] == ["appr_future"]
+    assert body["data"][0]["expired"] is False
+
+
+def test_list_approvals_status_expired_excludes_pending(client, app) -> None:
+    _seed_pending_approval(
+        app,
+        run_id="run_future",
+        approval_id="appr_future",
+        question="Still pending",
+        expires_at="2099-06-10T10:00:00Z",
+    )
+    _seed_pending_approval(
+        app,
+        run_id="run_past",
+        approval_id="appr_past",
+        question="Lapsed",
+        expires_at="2000-01-01T00:00:00Z",
+    )
+
+    resp = client.get("/api/approvals?status=expired")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["meta"]["total"] == 1
+    assert body["meta"]["status"] == "expired"
+    assert [item["approval_id"] for item in body["data"]] == ["appr_past"]
+    assert body["data"][0]["expired"] is True
+
+
+def test_list_approvals_status_default_is_all(client, app) -> None:
+    _seed_pending_approval(
+        app,
+        run_id="run_future",
+        approval_id="appr_future",
+        question="Still pending",
+        expires_at="2099-06-10T10:00:00Z",
+    )
+    _seed_pending_approval(
+        app,
+        run_id="run_past",
+        approval_id="appr_past",
+        question="Lapsed",
+        expires_at="2000-01-01T00:00:00Z",
+    )
+
+    resp = client.get("/api/approvals")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["meta"]["status"] == "all"
+    assert body["meta"]["total"] == 2
+
+
+def test_list_approvals_status_rejects_invalid_value(client) -> None:
+    resp = client.get("/api/approvals?status=unknown")
 
     assert resp.status_code == 422

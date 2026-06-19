@@ -271,8 +271,15 @@ class RunStore:
         *,
         limit: int = 50,
         offset: int = 0,
+        status: Literal["all", "pending", "expired"] = "all",
     ) -> tuple[list[dict[str, Any]], int]:
-        """Return pending approval queue items sorted newest first."""
+        """Return pending approval queue items sorted newest first.
+
+        `status` scopes the view: `pending` (not yet lapsed), `expired`
+        (lapsed while unresolved), or `all` (no expiry predicate). The
+        returned `total` reflects the scoped set so the caller's pager
+        stays consistent. See CONTEXT.md "Approval Queue Status Vocabulary".
+        """
 
         items: list[dict[str, Any]] = []
         for summary in self._load_all_summaries():
@@ -282,6 +289,11 @@ class RunStore:
             for pending in detail.pending_approvals:
                 parameters = pending.get("parameters")
                 parameter_keys = list(parameters.keys()) if isinstance(parameters, Mapping) else []
+                expired = _timestamp_expired(pending.get("expires_at"))
+                if status == "pending" and expired:
+                    continue
+                if status == "expired" and not expired:
+                    continue
                 items.append(
                     {
                         "run_id": detail.run_id,
@@ -294,7 +306,7 @@ class RunStore:
                         "run_purpose": detail.run_purpose.value,
                         "created_at": pending.get("created_at"),
                         "expires_at": pending.get("expires_at"),
-                        "expired": _timestamp_expired(pending.get("expires_at")),
+                        "expired": expired,
                         "parameter_keys": parameter_keys,
                         "parameter_count": len(parameter_keys),
                         "links": {"run_detail": f"/api/runs/{detail.run_id}"},

@@ -117,9 +117,9 @@ class ReActEnterpriseQAStageBehavior:
             ),
         )
         summary = workflow_stage_context_summary(preview)
+        descriptor_stage = self.invocation.template.stage(stage_id)
         application: dict[str, Any] | None = None
         if _workflow_stage_summary_has_context(summary):
-            descriptor_stage = self.invocation.template.stage(stage_id)
             application = {
                 **summary,
                 "stage_label": descriptor_stage.label,
@@ -131,11 +131,25 @@ class ReActEnterpriseQAStageBehavior:
             if business_flow_skill_pack_id is not None:
                 application["context_source"] = "business_flow_skill_pack"
                 application["business_flow_skill_pack_id"] = business_flow_skill_pack_id
-            self.trace.emit(
-                "workflow_stage_context_applied",
-                status="ok",
-                payload=application,
-            )
+        # Always emit a workflow_stage_context_applied boundary so the Workflow
+        # projection can mark the stage visited and attribute runtime events to
+        # it. When the context summary has no substance, emit a minimal payload
+        # carrying just the fields the projection reads (stage_id / label /
+        # model_bearing). Suppressing the boundary would leave the Workflow tab
+        # empty even though the stage ran.
+        boundary_payload = application if application is not None else {
+            "stage_id": stage_id,
+            "stage_label": descriptor_stage.label,
+            "model_bearing": descriptor_stage.model_bearing,
+            "template_descriptor_version": (
+                self.execution_input.template_descriptor_version
+            ),
+        }
+        self.trace.emit(
+            "workflow_stage_context_applied",
+            status="ok",
+            payload=boundary_payload,
+        )
         return {
             "business_context_addendum": preview["business_context_addendum"],
             "structured_control_context": preview["structured_control_context"],
