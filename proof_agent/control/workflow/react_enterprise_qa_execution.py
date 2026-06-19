@@ -98,23 +98,36 @@ class ReActEnterpriseQAWorkflowExecution:
         delta = self._behavior.intent_resolution(state)
         resolution = _mapping(delta.get("intent_resolution"))
         outcome = _outcome(delta.get("governance_refusal"))
+        clarification_need = _mapping(delta.get("clarification_need"))
         produced_fact_refs = ["intent_resolution"] if resolution else []
         if delta.get("business_flow_skill_pack_recommendation"):
             produced_fact_refs.append("business_flow_skill_pack_recommendation")
         if delta.get("business_flow_skill_pack_admission"):
             produced_fact_refs.append("business_flow_skill_pack_admission")
+        if clarification_need:
+            produced_fact_refs.append("clarification_need")
+        summary = {
+            "resolution_id": str(resolution.get("resolution_id", "")),
+            "domain_intent": str(resolution.get("domain_intent", "")),
+            "recommended_next_action": str(
+                resolution.get("recommended_next_action", "")
+            ),
+            "confidence": resolution.get("confidence", 0),
+        }
+        if clarification_need:
+            need_summary = _mapping(clarification_need.get("summary"))
+            summary["reason"] = str(need_summary.get("reason", "clarification"))
         return WorkflowStageResult(
             stage_id="intent_resolution",
-            status=WorkflowStageStatus.BLOCKED if outcome else WorkflowStageStatus.COMPLETED,
+            status=(
+                WorkflowStageStatus.WAITING
+                if outcome and clarification_need
+                else WorkflowStageStatus.BLOCKED
+                if outcome
+                else WorkflowStageStatus.COMPLETED
+            ),
             outcome=outcome,
-            summary={
-                "resolution_id": str(resolution.get("resolution_id", "")),
-                "domain_intent": str(resolution.get("domain_intent", "")),
-                "recommended_next_action": str(
-                    resolution.get("recommended_next_action", "")
-                ),
-                "confidence": resolution.get("confidence", 0),
-            },
+            summary=summary,
             produced_fact_refs=tuple(produced_fact_refs),
             continuation=delta,
         )

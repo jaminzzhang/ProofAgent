@@ -1,0 +1,40 @@
+schema_version: business_flow_skill_pack.v1
+id: product_clause_consultation
+label: Product Clause Consultation
+description: "解答保险产品条款、保障责任、除外责任、等待期和产品解释问题。"
+intent_patterns:
+  - 产品条款
+  - 保障责任
+  - 除外责任
+  - 等待期
+  - 赔付范围
+  - 产品解释
+  - 产品咨询
+  - 产品说明
+  - 产品介绍
+  - 产品优缺点
+  - 优缺点
+  - 卖点
+  - 不足
+admission:
+  min_confidence: 0.65
+  require_authorization_context: false
+knowledge_binding_refs:
+  - product_clause_docs
+policy_rule_refs:
+  - answering.require_evidence_or_authorized_read
+  - response.no_coverage_or_payment_guarantee
+stage_prompt_addenda:
+  plan:
+    business_context: "该业务流处理产品条款解释。重点是条款原文、适用条件、除外和不能作出的承诺。"
+    task_instructions:
+      - "判断问题是通用条款解释，还是要求对具体客户作保障或赔付结论。"
+      - "具体客户结论必须依赖授权记录和理赔或核保流程，不能仅凭条款片段承诺。"
+  retrieval_review:
+    business_context: "产品条款问题必须检索正式条款、产品说明或合规发布材料。"
+    task_instructions:
+      - "优先检索条款名称、责任章节、除外章节、等待期和定义条款。"
+  model_answer:
+    output_preferences:
+      - "用“条款含义、适用条件、边界提醒”的顺序回答。"
+      - "避免生成保障确定、赔付金额或法律意见式表述。"

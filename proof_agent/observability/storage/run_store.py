@@ -273,7 +273,7 @@ class RunStore:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
-        """Return pending approval queue items sorted by nearest expiry."""
+        """Return pending approval queue items sorted newest first."""
 
         items: list[dict[str, Any]] = []
         for summary in self._load_all_summaries():
@@ -291,9 +291,9 @@ class RunStore:
                         "approval_id": pending.get("approval_id"),
                         "tool_name": pending.get("tool_name"),
                         "action_id": pending.get("action_id"),
-                    "question": detail.question,
-                    "agent_id": detail.agent_id,
-                    "agent_version_id": detail.agent_version_id,
+                        "question": detail.question,
+                        "agent_id": detail.agent_id,
+                        "agent_version_id": detail.agent_version_id,
                         "run_purpose": detail.run_purpose.value,
                         "created_at": pending.get("created_at"),
                         "expires_at": pending.get("expires_at"),
@@ -304,7 +304,10 @@ class RunStore:
                     }
                 )
 
-        items.sort(key=lambda item: _timestamp_sort_key(item.get("expires_at")))
+        items.sort(
+            key=lambda item: _timestamp_desc_sort_key(item.get("created_at")),
+            reverse=True,
+        )
         total = len(items)
         return items[offset : offset + limit], total
 
@@ -893,3 +896,10 @@ def _timestamp_sort_key(value: Any) -> str:
     if parsed is None:
         return "9999-12-31T23:59:59+00:00"
     return parsed.isoformat()
+
+
+def _timestamp_desc_sort_key(value: Any) -> datetime:
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return parsed

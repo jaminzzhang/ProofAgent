@@ -2294,9 +2294,9 @@ def test_bind_shared_knowledge_source_to_agent_draft(
     assert bound.status_code == 200
     parsed = yaml.safe_load(bound.json()["agent_yaml"])
     assert "knowledge_sources" not in parsed
-    assert parsed["package_knowledge_sources"] == []
-    assert all(
-        binding["source_ref"]["scope"] == "shared" for binding in parsed["knowledge_bindings"]
+    assert parsed["package_knowledge_sources"]
+    assert any(
+        binding["source_ref"]["scope"] == "package" for binding in parsed["knowledge_bindings"]
     )
     assert any(
         binding["source_ref"] == {"scope": "shared", "source_id": "ks_local_index"}
@@ -2309,7 +2309,7 @@ def test_bind_shared_knowledge_source_to_agent_draft(
     assert loaded.json()["agent_yaml"] == bound.json()["agent_yaml"]
 
 
-def test_update_model_contract_after_binding_shared_source_does_not_resolve_package_sources(
+def test_update_model_contract_after_binding_shared_source_preserves_package_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2339,13 +2339,16 @@ def test_update_model_contract_after_binding_shared_source_does_not_resolve_pack
     assert updated.status_code == 200
     parsed = yaml.safe_load(updated.json()["agent_yaml"])
     assert parsed["model"]["name"] == "demo-updated"
-    assert parsed["package_knowledge_sources"] == []
-    assert all(
+    assert parsed["package_knowledge_sources"]
+    assert any(
+        binding["source_ref"]["scope"] == "package" for binding in parsed["knowledge_bindings"]
+    )
+    assert any(
         binding["source_ref"]["scope"] == "shared" for binding in parsed["knowledge_bindings"]
     )
 
 
-def test_update_model_contract_normalizes_existing_mixed_package_and_shared_bindings(
+def test_update_model_contract_preserves_existing_mixed_package_and_shared_bindings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2374,10 +2377,48 @@ def test_update_model_contract_normalizes_existing_mixed_package_and_shared_bind
     assert updated.status_code == 200
     parsed = yaml.safe_load(updated.json()["agent_yaml"])
     assert parsed["model"]["name"] == "demo-updated"
-    assert parsed["package_knowledge_sources"] == []
-    assert all(
+    assert parsed["package_knowledge_sources"]
+    assert any(
+        binding["source_ref"]["scope"] == "package" for binding in parsed["knowledge_bindings"]
+    )
+    assert any(
         binding["source_ref"]["scope"] == "shared" for binding in parsed["knowledge_bindings"]
     )
+
+
+def test_bind_shared_knowledge_source_keeps_business_flow_skill_refs_valid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    draft = client.post(
+        "/api/config/agents/import",
+        json={"manifest_path": "examples/agent_management_insurance_specialist/agent.yaml"},
+    ).json()
+    _publish_local_index_source(client, monkeypatch)
+
+    bound = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
+        json={
+            "source_id": "ks_local_index",
+            "alias": "supplemental",
+            "failure_mode": "advisory",
+            "fusion_weight": 0.5,
+        },
+    )
+    skills = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/skills"
+    )
+
+    assert bound.status_code == 200
+    parsed = yaml.safe_load(bound.json()["agent_yaml"])
+    binding_ids = {binding["binding_id"] for binding in parsed["knowledge_bindings"]}
+    assert "general_insurance_knowledge" in binding_ids
+    assert "ks_local_index_binding" in binding_ids
+    assert skills.status_code == 200
+    assert {
+        pack["id"] for pack in skills.json()["packs"]
+    } >= {"general_insurance_specialist", "agent_basic_law_consultation"}
 
 
 def test_bind_unpublished_knowledge_source_to_agent_draft_is_rejected(

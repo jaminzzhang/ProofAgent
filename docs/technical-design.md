@@ -1188,7 +1188,7 @@ Dashboard routes:
 | `/api/runs/{run_id}` | run detail, including backend-owned `workflow_projection` when Workflow stage facts exist |
 | `/api/runs/{run_id}/trace` | trace events |
 | `/api/runs/{run_id}/receipt` | receipt markdown |
-| `GET /api/approvals` | global pending approval queue projection sorted by expiry |
+| `GET /api/approvals` | global pending approval queue projection sorted by newest request first |
 | `POST /api/runs/{run_id}/approvals/{approval_id}/approve` | append approval-granted decision to the original run trace; requires Operator Identity Context with `approval.resolve` |
 | `POST /api/runs/{run_id}/approvals/{approval_id}/deny` | append approval-denied decision to the original run trace; requires Operator Identity Context with `approval.resolve` |
 | `/api/stats` | outcome distribution and pending approvals |

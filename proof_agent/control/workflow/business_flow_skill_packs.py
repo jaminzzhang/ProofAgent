@@ -189,6 +189,11 @@ def _matches_intent(
             intent_resolution.domain_intent,
             intent_resolution.user_goal,
             *intent_resolution.known_facts,
+            *(
+                part
+                for item in intent_resolution.retrieval_query_set
+                for part in (item.query, item.intent_angle, item.reason)
+            ),
         )
     ).lower()
     return any(pattern.lower() in searchable for pattern in skill_pack.intent_patterns)

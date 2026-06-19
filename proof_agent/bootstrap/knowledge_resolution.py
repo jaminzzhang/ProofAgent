@@ -61,14 +61,35 @@ class ConfigurationStoreKnowledgeBindingResolver:
         self._store = store
 
     def resolve(self, manifest: AgentManifest) -> ResolvedKnowledgeBindingSet:
+        package_sources_by_id = {
+            source.source_id: source for source in manifest.package_knowledge_sources
+        }
         resolved: list[ResolvedKnowledgeBinding] = []
         for binding in manifest.knowledge_bindings:
             ref = binding.source_ref
+            if ref.scope == "package":
+                source = package_sources_by_id[ref.source_id]
+                resolved.append(
+                    ResolvedKnowledgeBinding(
+                        binding_id=binding.binding_id,
+                        source_scope="package",
+                        source_id=source.source_id,
+                        source_version_id="package",
+                        provider=source.provider,
+                        provider_params=source.params,
+                        alias=binding.alias,
+                        failure_mode=binding.failure_mode,
+                        fusion_weight=binding.fusion_weight,
+                        top_k=binding.top_k,
+                        routing_metadata=binding.routing_metadata,
+                    )
+                )
+                continue
             if ref.scope != "shared":
                 raise ProofAgentError(
                     "PA_CONFIG_002",
-                    "Configuration Store execution cannot resolve package Knowledge Sources.",
-                    "Use the package resolver for source_ref.scope: package.",
+                    f"Configuration Store execution cannot resolve Knowledge Source scope: {ref.scope}",
+                    "Use source_ref.scope package or shared.",
                 )
             source = self._store.get_knowledge_source(ref.source_id)
             if source is None:

@@ -196,6 +196,10 @@ class ReActEnterpriseQAStageBehavior:
         )
         blocked_business_flow_delta = _blocked_business_flow_delta(business_flow_delta)
         if blocked_business_flow_delta is not None:
+            _emit_business_flow_clarification_requested(
+                self.trace,
+                blocked_business_flow_delta,
+            )
             return {
                 "intent_resolution": _intent_resolution_state_dict(resolution),
                 **business_flow_delta,
@@ -1476,13 +1480,31 @@ def _blocked_business_flow_delta(delta: Mapping[str, Any]) -> dict[str, Any] | N
     decision = admission.get("decision")
     if decision == BusinessFlowSkillPackAdmissionDecision.NEEDS_CLARIFICATION.value:
         message = (
-            "The request matches multiple or no Business Flow Skill Packs. "
-            "Please clarify the intended business flow before the run continues."
+            "I need one intended business flow before I can continue. "
+            "Please name the relevant Skill Pack or restate the request with a "
+            "more specific business domain."
         )
+        recommendation = delta.get("business_flow_skill_pack_recommendation")
+        recommendation_map = recommendation if isinstance(recommendation, Mapping) else {}
+        candidate_pack_ids = recommendation_map.get("candidate_pack_ids", ())
+        candidate_count = (
+            len(candidate_pack_ids) if isinstance(candidate_pack_ids, list | tuple) else 0
+        )
+        summary = {
+            "reason": "business_flow_skill_pack",
+            "failure_reason": admission.get("failure_reason"),
+            "candidate_count": candidate_count,
+        }
         return {
             "governance_refusal": ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION,
             "governance_message": message,
             "final_output": message,
+            "clarification_need": {
+                "action_id": admission.get("admission_id"),
+                "missing_fields": ("business_flow_skill_pack",),
+                "message": message,
+                "summary": summary,
+            },
         }
     if decision in {
         BusinessFlowSkillPackAdmissionDecision.REFUSED.value,
@@ -1492,6 +1514,24 @@ def _blocked_business_flow_delta(delta: Mapping[str, Any]) -> dict[str, Any] | N
             "The Business Flow Skill Pack recommendation could not be admitted safely."
         )
     return None
+
+
+def _emit_business_flow_clarification_requested(
+    trace: TraceWriter,
+    delta: Mapping[str, Any],
+) -> None:
+    clarification_need = delta.get("clarification_need")
+    if not isinstance(clarification_need, Mapping):
+        return
+    trace.emit(
+        "clarification_requested",
+        status="waiting",
+        payload={
+            "action_id": clarification_need.get("action_id"),
+            "missing_fields": list(clarification_need.get("missing_fields", ())),
+            "clarification_type": "business_flow_skill_pack",
+        },
+    )
 
 
 def _refusal(message: str) -> dict[str, Any]:

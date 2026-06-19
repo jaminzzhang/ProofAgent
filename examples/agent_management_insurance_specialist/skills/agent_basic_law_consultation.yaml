@@ -1,0 +1,35 @@
+schema_version: business_flow_skill_pack.v1
+id: agent_basic_law_consultation
+label: Agent Basic Law Consultation
+description: "解答代理人基本法、职级、考核、佣金规则和资格进度相关咨询。"
+intent_patterns:
+  - 代理人基本法
+  - 基本法
+  - 职级考核
+  - 晋升
+  - 维持考核
+  - 佣金规则
+  - 资格进度
+admission:
+  min_confidence: 0.65
+  require_authorization_context: false
+knowledge_binding_refs:
+  - agent_basic_law_docs
+  - metric_definition_docs
+policy_rule_refs:
+  - answering.require_evidence_or_authorized_read
+stage_prompt_addenda:
+  plan:
+    business_context: "该业务流处理代理人基本法咨询。重点是制度解释、适用条件、缺失事实和是否需要另行查数。"
+    task_instructions:
+      - "区分制度解释和具体代理人当前资格判断；后者如果需要实时数据，应提出只读查数需求。"
+      - "不要把制度规则解释成对某个代理人的最终晋升、降级或佣金调整决定。"
+  retrieval_review:
+    business_context: "代理人基本法、考核口径和佣金规则应优先检索正式制度或口径文件。"
+    task_instructions:
+      - "检索制度章节、适用期间、职级条件和指标定义。"
+  model_answer:
+    output_preferences:
+      - "说明制度名称、适用对象、关键条件和仍需核对的数据项。"
+      - "如涉及具体代理人资格，标注这是规则解释或数据支持建议，不是最终人事或佣金决定。"
+

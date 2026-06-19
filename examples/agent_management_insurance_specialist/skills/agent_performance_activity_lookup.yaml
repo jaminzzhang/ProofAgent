@@ -1,0 +1,50 @@
+schema_version: business_flow_skill_pack.v1
+id: agent_performance_activity_lookup
+label: Agent Performance And Activity Lookup
+description: "查询当前内勤专员可管理代理人范围内的业绩、活动量、质量和目标进度指标。"
+intent_patterns:
+  - 查业绩
+  - 活动量
+  - 拜访量
+  - 保费
+  - FYC
+  - 继续率
+  - 转化率
+  - 达成率
+  - 名下代理人
+admission:
+  min_confidence: 0.72
+  require_authorization_context: true
+knowledge_binding_refs:
+  - metric_definition_docs
+tool_contract_refs:
+  - agent_performance_lookup
+  - agent_activity_lookup
+  - agent_profile_lookup
+policy_rule_refs:
+  - tools.agent_performance_lookup.read_only
+  - tools.agent_activity_lookup.read_only
+  - tools.agent_profile_lookup.read_only
+  - answering.require_evidence_or_authorized_read
+stage_prompt_addenda:
+  plan:
+    business_context: "该业务流处理授权查数。默认范围是当前专员可管理代理人集合，用户只能通过机构、团队、代理人、业务线等条件缩小范围。"
+    task_instructions:
+      - "必须确认 report_period、metric 和 aggregation_level；缺少时先澄清。"
+      - "仅支持 V1 指标集合，不支持的指标不能临时改写成相近指标。"
+      - "如果用户要求跨权限范围查询，规划拒绝或要求重新限定范围。"
+  retrieval_review:
+    business_context: "查数前可检索指标定义和报表口径，但实际数值必须来自授权报表或业务系统。"
+    task_instructions:
+      - "检索 metric_definition_docs 用于解释指标口径。"
+  tool_review:
+    business_context: "查数工具必须是只读报表或代理人记录查询，参数必须被 Tool Contract 允许且不超过可管理代理人范围。"
+    task_instructions:
+      - "允许参数包括 institution_id、branch_id、team_id、agent_id、business_line、report_period、metric、aggregation_level。"
+      - "拒绝手机号、密码、令牌、自由 SQL、写操作或导出全量明细。"
+  model_answer:
+    output_preferences:
+      - "回答必须显示统计周期、范围、指标口径、筛选条件和汇总粒度。"
+      - "如果查数结果为空，说明是无数据、权限不足、字段缺失还是工具失败。"
+      - "不得把报表结果写成长期记忆或作为未来查询的事实来源。"
+

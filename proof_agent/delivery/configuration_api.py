@@ -3120,15 +3120,7 @@ def _normalize_shared_knowledge_mode(raw: dict[str, Any]) -> bool:
     package_knowledge_sources = raw.get("package_knowledge_sources", [])
     if not isinstance(package_knowledge_sources, list):
         raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
-    shared_bindings = [
-        binding
-        for binding in knowledge_bindings
-        if _knowledge_binding_scope(binding) != "package"
-    ]
-    changed = raw.get("package_knowledge_sources") != [] or shared_bindings != knowledge_bindings
-    raw["package_knowledge_sources"] = []
-    raw["knowledge_bindings"] = shared_bindings
-    return changed
+    return False
 
 
 def _knowledge_binding_scope(binding: Any) -> str | None:

@@ -1,0 +1,34 @@
+schema_version: business_flow_skill_pack.v1
+id: customer_agent_question_support
+label: Customer Or Agent Question Support
+description: "为客户或代理人问题生成内勤处理建议，并在触发条件满足时生成可审核的外部话术草稿。"
+intent_patterns:
+  - 怎么回复客户
+  - 怎么回复代理人
+  - 客户问
+  - 代理人问
+  - 话术
+  - 对外说明
+admission:
+  min_confidence: 0.62
+  require_authorization_context: false
+knowledge_binding_refs:
+  - customer_agent_wording_docs
+  - product_clause_docs
+  - claims_sop_docs
+policy_rule_refs:
+  - answering.require_evidence_or_authorized_read
+  - response.external_wording_safety
+stage_prompt_addenda:
+  plan:
+    business_context: "该业务流处理客户或代理人问题支持。先给内勤处理建议，只有明确需要对外回复时才生成外部话术草稿。"
+    task_instructions:
+      - "判断请求是否真的触发外部话术；普通咨询不自动生成话术。"
+      - "外部话术只能基于已采信依据或授权记录，不能暴露内部治理细节。"
+  retrieval_review:
+    business_context: "对外话术应检索正式条款、流程说明、常见问答或合规话术来源。"
+  model_answer:
+    output_preferences:
+      - "先输出内勤处理建议，再在需要时输出“对外话术草稿”。"
+      - "外部话术应自然、克制、可人工审核，不包含内部系统名、参数、权限或审核细节。"
+

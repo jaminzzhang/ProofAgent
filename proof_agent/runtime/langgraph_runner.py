@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     AgentManifest,
     ApprovalPause,
     ApprovalStatus,
+    ClarificationNeed,
     ContextAdmission,
     EvidenceChunk,
     PolicyDecisionType,
@@ -447,6 +448,7 @@ def _workflow_execution_result_from_state(
             EvidenceChunk.model_validate(item)
             for item in final_state.get("evidence", ())
         ),
+        clarification_need=_clarification_need_from_state(final_state),
         stage_results=tuple(
             WorkflowStageResult.model_validate(item)
             for item in final_state.get("stage_results", ())
@@ -473,6 +475,15 @@ def _workflow_execution_result_from_state(
             else ()
         ),
     )
+
+
+def _clarification_need_from_state(
+    final_state: Mapping[str, Any],
+) -> ClarificationNeed | None:
+    value = final_state.get("clarification_need")
+    if not isinstance(value, Mapping):
+        return None
+    return ClarificationNeed.model_validate(value)
 
 
 def _workflow_execution_result_from_interrupt(
