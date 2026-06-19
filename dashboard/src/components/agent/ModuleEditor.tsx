@@ -107,8 +107,10 @@ export function ModuleEditor({
                   onChange={(e) => onFieldChange(field.path, e.target.value)}
                   className="h-9 w-full appearance-none rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 pr-9 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
                   style={{
+                    // Native <select> chevron via data-URI. Can't read CSS vars,
+                    // so use a mid-gray that stays legible in both light/dark.
                     backgroundImage:
-                      "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a8a8a' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
+                      "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
                     backgroundRepeat: 'no-repeat',
                     backgroundPosition: 'right 0.625rem center',
                   }}

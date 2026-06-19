@@ -38,14 +38,15 @@ const OUTCOME_ORDER: ReceiptOutcome[] = [
 ]
 
 /**
- * Bar color per outcome. Monochrome + success emphasis: the "answered" success
- * outcome wears the accent blue so the eye reads "how much succeeded"; every
- * other outcome uses a single neutral tone so the chart stays calm and the
- * success bar pops against an undifferentiated field.
+ * Bar color per outcome. The "answered" success outcome wears the blue data
+ * emphasis (var(--success)) so the eye reads "how much succeeded"; every other
+ * outcome uses a single neutral tone so the chart stays calm and the success
+ * bar pops against an undifferentiated field. Brand UI stays neutral — blue is
+ * reserved for data emphasis.
  */
 function barColor(outcome: ReceiptOutcome): string {
   return outcomeCategory(outcome) === 'success'
-    ? 'var(--accent)'
+    ? 'var(--success)'
     : 'var(--border-strong)'
 }
 

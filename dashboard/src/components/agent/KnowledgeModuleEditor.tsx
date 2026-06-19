@@ -132,7 +132,7 @@ export function KnowledgeModuleEditor({
                       <button
                         onClick={() => onUnbindSource(binding.binding_id)}
                         disabled={busy}
-                        className="text-[var(--danger)] hover:text-red-500 font-medium disabled:opacity-50 transition-colors"
+                        className="text-[var(--danger)] hover:text-[var(--danger-fg)] font-medium disabled:opacity-50 transition-colors"
                       >
                         {t('knowledgeEditor.remove')}
                       </button>

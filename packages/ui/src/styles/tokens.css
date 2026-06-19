@@ -38,39 +38,38 @@
   --accent-fg: #ffffff;
   --accent-subtle: rgba(0, 0, 0, 0.04); /* tinted accent surface for active nav */
 
-  /* ── Semantic: success ────────────────────────────────────── */
-  --success: #0070f3;
-  --success-fg: #0070f3;
-  --success-bg: rgba(0, 112, 243, 0.10);
-  --success-border: rgba(0, 112, 243, 0.25);
+  /* ── Semantic: success ──────────────────────────────────────
+   * Blue is the project's "data emphasis" color — it backs success
+   * semantics AND chart emphasis, so data viz pops against a neutral,
+   * undifferentiated brand surface. Calibrated lower saturation than
+   * raw #0070f3 for a more product-grade feel. */
+  --success: #1d6fe0;
+  --success-fg: #1d6fe0;
+  --success-bg: rgba(29, 111, 224, 0.10);
+  --success-border: rgba(29, 111, 224, 0.26);
 
-  /* ── Semantic: warning ────────────────────────────────────── */
-  --warning: #c47a08;
-  --warning-fg: #9a6208;
-  --warning-bg: rgba(245, 166, 35, 0.14);
-  --warning-border: rgba(245, 166, 35, 0.30);
+  /* ── Semantic: warning ──────────────────────────────────────
+   * Amber hue tuned to sit on the same lightness/saturation scale as
+   * success/danger so the three read as a designed family, not a mix. */
+  --warning: #b4692d;
+  --warning-fg: #935620;
+  --warning-bg: rgba(180, 105, 45, 0.12);
+  --warning-border: rgba(180, 105, 45, 0.28);
 
   /* ── Semantic: danger ─────────────────────────────────────── */
-  --danger: #d93b41;
-  --danger-fg: #c1282e;
-  --danger-bg: rgba(217, 59, 65, 0.10);
-  --danger-border: rgba(217, 59, 65, 0.25);
+  --danger: #cf3a3f;
+  --danger-fg: #bd2f34;
+  --danger-bg: rgba(207, 58, 63, 0.10);
+  --danger-border: rgba(207, 58, 63, 0.26);
 
   /* ── Semantic: neutral (informational / waiting) ──────────── */
-  --neutral: #6b7280;
-  --neutral-fg: #525252;
-  --neutral-bg: rgba(107, 114, 128, 0.10);
-  --neutral-border: rgba(107, 114, 128, 0.25);
+  --neutral: #64707d;
+  --neutral-fg: #525c66;
+  --neutral-bg: rgba(100, 112, 125, 0.11);
+  --neutral-border: rgba(100, 112, 125, 0.26);
 
   /* Legacy aliases kept for compatibility during migration */
   --info: var(--success);
-
-  /* ── Chart palette (outcome distribution, sparklines) ─────── */
-  --chart-1: #0070f3; /* success / answered   */
-  --chart-2: #c47a08; /* warning / refused    */
-  --chart-3: #6b7280; /* neutral / waiting    */
-  --chart-4: #d93b41; /* danger  / denied     */
-  --chart-5: #8b5cf6; /* accent  / other      */
 
   /* ── Depth ────────────────────────────────────────────────── */
   --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
@@ -114,44 +113,39 @@
   --text-muted: #8a8a8a;
   --text-inverse: #000000;
 
-  /* ── Accent ───────────────────────────────────────────────── */
-  --accent: #ffffff;
-  --accent-hover: #e5e5e5;
+  /* ── Accent ─────────────────────────────────────────────────
+   * Soft off-white instead of pure #ffffff so the brand surface does not
+   * glare against the black background. */
+  --accent: #fafafa;
+  --accent-hover: #e8e8e8;
   --accent-fg: #000000;
   --accent-subtle: rgba(255, 255, 255, 0.06);
 
-  /* ── Semantic: success ────────────────────────────────────── */
-  --success: #3291ff;
-  --success-fg: #5ba6ff;
-  --success-bg: rgba(50, 145, 255, 0.12);
-  --success-border: rgba(50, 145, 255, 0.30);
+  /* ── Semantic: success (blue data emphasis, brightened for dark) */
+  --success: #4d8dee;
+  --success-fg: #6fa2f2;
+  --success-bg: rgba(77, 141, 238, 0.14);
+  --success-border: rgba(77, 141, 238, 0.32);
 
   /* ── Semantic: warning ────────────────────────────────────── */
-  --warning: #f0a93a;
-  --warning-fg: #f5be63;
-  --warning-bg: rgba(245, 166, 35, 0.14);
-  --warning-border: rgba(245, 166, 35, 0.30);
+  --warning: #d99a52;
+  --warning-fg: #e0ac72;
+  --warning-bg: rgba(217, 154, 82, 0.14);
+  --warning-border: rgba(217, 154, 82, 0.30);
 
   /* ── Semantic: danger ─────────────────────────────────────── */
-  --danger: #ff5c5c;
-  --danger-fg: #ff7878;
-  --danger-bg: rgba(255, 60, 60, 0.12);
-  --danger-border: rgba(255, 60, 60, 0.28);
+  --danger: #e86b6f;
+  --danger-fg: #ef8387;
+  --danger-bg: rgba(232, 107, 111, 0.13);
+  --danger-border: rgba(232, 107, 111, 0.30);
 
   /* ── Semantic: neutral ────────────────────────────────────── */
-  --neutral: #9ca3af;
-  --neutral-fg: #b3b9c2;
-  --neutral-bg: rgba(156, 163, 175, 0.12);
-  --neutral-border: rgba(156, 163, 175, 0.28);
+  --neutral: #a3acb6;
+  --neutral-fg: #b8bfc7;
+  --neutral-bg: rgba(163, 172, 182, 0.13);
+  --neutral-border: rgba(163, 172, 182, 0.30);
 
   --info: var(--success);
-
-  /* ── Chart palette ────────────────────────────────────────── */
-  --chart-1: #3291ff;
-  --chart-2: #f0a93a;
-  --chart-3: #9ca3af;
-  --chart-4: #ff5c5c;
-  --chart-5: #a78bfa;
 
   /* ── Depth (lighter shadows on dark surfaces) ─────────────── */
   --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.40);
