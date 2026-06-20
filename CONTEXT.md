@@ -362,6 +362,14 @@ _Avoid_: Tool stage without review, review stage without tool, provider-native t
 The backend-owned, read-only description of a registered Workflow Template's stages, stage availability rules, branch relationships, governed handoff points, editable Prompt fields, and allowed context options used by Dashboard to render the Workflow Relationship Map and Stage Inspector.
 _Avoid_: Frontend-hardcoded workflow graph, Agent-authored node registry, runtime graph source of truth
 
+**Dynamic Workflow Template Catalog**:
+The live list of registered Workflow Templates served by `GET /api/config/workflow-templates` and consumed by Dashboard via `fetchWorkflowTemplates()` / `useWorkflowTemplates` to populate the Template selector dynamically. The frontend static template option list is a fallback only, used when the catalog cannot be loaded; it is no longer the source of truth for the template inventory.
+_Avoid_: Hardcoded template dropdown, frontend-only template registry, per-Agent template enumeration
+
+**Template Selector Fallback**:
+The static Workflow Template name list kept in the Dashboard module config as a last-resort option set, shown only when the Dynamic Workflow Template Catalog fails to load (network/permission/availability). It guarantees the selector is never empty but is maintained for degradation, not as the primary inventory.
+_Avoid_: Primary template list, canonical template registry, always-visible static options
+
 **Workflow Template Descriptor Version**:
 The immutable version identifier for the Workflow Template Descriptor used to validate, render, publish, and later explain a Published Agent Version's Workflow Stage Prompt Configuration.
 _Avoid_: Latest template lookup for historical runs, mutable Dashboard graph version, frontend descriptor version
@@ -3451,6 +3459,7 @@ _Avoid_: Evidence content dump
 - "Eligibility enforcement" could mean prompt wording, output validation, or provider function-calling. Resolved per ADR-0032: a deterministic **Action Constraint** rewrite (Layer 2) is the permanent provider-neutral backstop; provider function-calling (Layer 3) is a later optimization that never replaces Layer 2.
 - "Tool result" could be terminal output, trace-only data, or loop control state. Resolved per ADR-0032: a tool result becomes an **Observation Record** and returns to plan; `WAITING_FOR_APPROVAL` is a suspension outcome, not a terminal, and approval resume returns to plan whether granted or denied.
 - "Loop verification" could mean reusing the deterministic-provider test suite or adding real-LLM tests. Resolved per ADR-0033: the deterministic path (V1/V2) is necessary but not sufficient; **V3 real-LLM regression** with behavioral thresholds is the product release gate.
+- "Workflow Template list" could mean the Dashboard static option array, the backend registry, or a per-Agent enumeration. Resolved: the **Dynamic Workflow Template Catalog** (`GET /api/config/workflow-templates`) is the source of truth; the Dashboard static option list is a **Template Selector Fallback** used only when the catalog fails to load.
 
 ## List Pagination Vocabulary
 
