@@ -679,7 +679,7 @@ function workflowFieldHelp(path: string): string {
     case 'workflow.runtime':
       return 'Selects the workflow runtime that executes this Agent flow. This should match a backend-supported orchestrator.'
     case 'workflow.template':
-      return 'Selects the backend-owned workflow template. Use react_enterprise_qa_v2 for new Agents. enterprise_qa remains a compatibility path for older fixtures.'
+      return 'Selects the backend-owned workflow template. Use react_enterprise_qa_v3 (Controlled ReAct Loop) for new Agents. react_enterprise_qa_v2 is the single-pass baseline; enterprise_qa remains a compatibility path for older fixtures.'
     case 'workflow.checkpointer.provider':
       return 'Chooses where workflow state is checkpointed so multi-step runs can resume or inspect state consistently.'
     case 'workflow.checkpointer.uri':

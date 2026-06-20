@@ -32,6 +32,7 @@ describe('module configuration field options', () => {
     const modelProviders = ['deterministic', 'openai_compatible', 'openai', 'deepseek', 'azure_openai', 'anthropic']
 
     expect(optionsFor(WORKFLOW_FIELDS, 'Template')).toEqual([
+      'react_enterprise_qa_v3',
       'react_enterprise_qa_v2',
       'react_enterprise_qa',
       'enterprise_qa',

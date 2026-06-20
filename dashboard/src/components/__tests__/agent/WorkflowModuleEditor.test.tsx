@@ -114,7 +114,7 @@ describe('WorkflowModuleEditor', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Explain Template' }))
 
-    expect(screen.getByRole('note')).toHaveTextContent('Use react_enterprise_qa_v2 for new Agents')
+    expect(screen.getByRole('note')).toHaveTextContent('Use react_enterprise_qa_v3 (Controlled ReAct Loop) for new Agents')
     expect(screen.getByRole('note')).toHaveTextContent('enterprise_qa remains a compatibility path')
   })
 
@@ -142,7 +142,7 @@ workflow:
     )
 
     expect(screen.getByText('Compatibility Template')).toBeInTheDocument()
-    expect(screen.getByText(/Use react_enterprise_qa_v2 for new Agents/)).toBeInTheDocument()
+    expect(screen.getByText(/Use react_enterprise_qa_v3/)).toBeInTheDocument()
   })
 
   it('shows governed handoff points in the read-only relationship map', () => {
