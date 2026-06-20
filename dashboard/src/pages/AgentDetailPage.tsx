@@ -229,6 +229,15 @@ export function AgentDetailPage() {
   async function saveWorkflowStages(payload: Parameters<typeof updateWorkflowStages>[2]) {
     if (!agentId || !draftId) return
     await runAction('workflow-stages', async () => {
+      // Persist the core contract first so the server-side workflow.template
+      // matches the template_descriptor_version sent with the stages. Without
+      // this, switching the Template dropdown and saving stages sends a
+      // descriptor_version for a template the server has not stored yet, which
+      // the backend rejects with a 400 "template_descriptor_version does not
+      // match registered template descriptor".
+      await updateConfigDraftContract(agentId, draftId, {
+        agent_yaml: agentYaml,
+      })
       const updated = await updateWorkflowStages(agentId, draftId, payload)
       setAgentYaml(updated.agent_yaml)
       setStatus(t('agentDetail.workflowStagesSaved'))

@@ -52,7 +52,8 @@ export function WorkflowModuleEditor({
   // Template options come from the Dynamic Workflow Template Catalog, falling
   // back to the static list when the catalog fails to load (Template Selector
   // Fallback) so the selector is never empty.
-  const { names: catalogTemplateNames } = useWorkflowTemplates()
+  const { templates: catalogTemplates, names: catalogTemplateNames } =
+    useWorkflowTemplates()
   const templateOptions = catalogTemplateNames.length
     ? catalogTemplateNames
     : WORKFLOW_TEMPLATE_FALLBACK
@@ -130,8 +131,19 @@ export function WorkflowModuleEditor({
 
   async function saveStages() {
     if (!descriptor) return
+    // The descriptor_version sent with stages must match the currently selected
+    // Template (the value being persisted by the core save), NOT the descriptor
+    // prop, which can describe a previously-loaded template after the dropdown
+    // changes. Resolve it from the catalog by the selected template name; fall
+    // back to the loaded descriptor's version when the catalog lacks an entry.
+    const selectedTemplateName = workflowTemplate
+    const catalogDescriptorVersion =
+      catalogTemplates.find((entry) => entry.name === selectedTemplateName)
+        ?.descriptor_version ?? null
+    const descriptorVersion =
+      catalogDescriptorVersion ?? descriptor.descriptor_version
     await onSaveStages({
-      template_descriptor_version: descriptor.descriptor_version,
+      template_descriptor_version: descriptorVersion,
       stages: stages.map((stage) => sanitizeStageConfigForDescriptor(stage, descriptor)),
     })
   }

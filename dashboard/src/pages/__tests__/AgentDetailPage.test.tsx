@@ -38,11 +38,18 @@ vi.mock('../../api/client', () => ({
   fetchRuns: vi.fn(),
   fetchValidationCapture: vi.fn(),
   fetchWorkflowTemplate: vi.fn(),
-  // useWorkflowTemplates (consumed by WorkflowModuleEditor) fetches the catalog.
-  // Default to an empty catalog so the Template selector falls back to the
-  // static list; individual tests override this when they need the catalog.
-  fetchWorkflowTemplates: vi.fn().mockResolvedValue({ data: [], meta: { total: 0 } }),
-  fetchKnowledgeSources: vi.fn(),
+  // useWorkflowTemplates (consumed by WorkflowModuleEditor) fetches the catalog
+  // once and caches it module-side. Return the full registry so the catalog
+  // lookup in saveStages can resolve any selected template's descriptor_version.
+  fetchWorkflowTemplates: vi.fn().mockResolvedValue({
+    data: [
+      { name: 'enterprise_qa', description: 'Legacy.', descriptor_version: 'enterprise_qa.v1', stages: [] },
+      { name: 'react_enterprise_qa', description: 'React v1.', descriptor_version: 'react_enterprise_qa.v1', stages: [] },
+      { name: 'react_enterprise_qa_v2', description: 'React v2.', descriptor_version: 'react_enterprise_qa.v2', stages: [] },
+      { name: 'react_enterprise_qa_v3', description: 'React v3 loop.', descriptor_version: 'react_enterprise_qa.v3', stages: [] },
+    ],
+    meta: { total: 4 },
+  }),  fetchKnowledgeSources: vi.fn(),
   fetchModelConnections: vi.fn(),
   previewWorkflowStageContext: vi.fn(),
   publishConfigDraft: vi.fn(),
@@ -836,6 +843,69 @@ workflow:
           },
         ],
       })
+    })
+  })
+
+  it('persists the Workflow core before saving stages when the template changed', async () => {
+    // Regression: switching the Template dropdown to react_enterprise_qa_v3 and
+    // clicking Save Stages previously sent template_descriptor_version=v3 while
+    // the server-side template was still v1 (core not persisted), causing a
+    // 400 "template_descriptor_version does not match registered template".
+    mockContract = {
+      ...mockContract,
+      agent_yaml: `name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    type: memory
+`,
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+
+    vi.mocked(updateConfigDraftContract).mockResolvedValue({
+      agent_yaml: `name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v3
+  checkpointer:
+    type: memory
+`,
+      policy_yaml: '',
+      tools_yaml: '',
+      extra_files: {},
+      advanced_fields: {},
+    })
+    vi.mocked(updateWorkflowStages).mockResolvedValue({
+      agent_yaml: `name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v3
+  checkpointer:
+    type: memory
+`,
+      policy_yaml: '',
+      tools_yaml: '',
+      extra_files: {},
+      advanced_fields: {},
+    })
+
+    const templateSelect = await screen.findByLabelText('Template')
+    fireEvent.change(templateSelect, { target: { value: 'react_enterprise_qa_v3' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
+
+    // The core contract must be persisted first so the server-side template
+    // matches the descriptor_version sent with the stages.
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
+        agent_yaml: expect.stringContaining('template: react_enterprise_qa_v3'),
+      }))
+    })
+    await waitFor(() => {
+      expect(updateWorkflowStages).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
+        template_descriptor_version: 'react_enterprise_qa.v3',
+      }))
     })
   })
 
