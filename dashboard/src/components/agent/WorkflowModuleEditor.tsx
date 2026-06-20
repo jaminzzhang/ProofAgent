@@ -12,7 +12,8 @@ import {
   readWorkflowStageConfigs,
   replaceWorkflowStages,
 } from '../../utils/agentYaml'
-import { WORKFLOW_FIELDS } from './module-configs/workflow'
+import { WORKFLOW_FIELDS, WORKFLOW_TEMPLATE_FALLBACK } from './module-configs/workflow'
+import { useWorkflowTemplates } from '../../hooks/useWorkflowTemplates'
 import { useLocale } from '../../i18n/locale'
 
 interface WorkflowModuleEditorProps {
@@ -48,6 +49,13 @@ export function WorkflowModuleEditor({
   stageBusy,
 }: WorkflowModuleEditorProps) {
   const { t } = useLocale()
+  // Template options come from the Dynamic Workflow Template Catalog, falling
+  // back to the static list when the catalog fails to load (Template Selector
+  // Fallback) so the selector is never empty.
+  const { names: catalogTemplateNames } = useWorkflowTemplates()
+  const templateOptions = catalogTemplateNames.length
+    ? catalogTemplateNames
+    : WORKFLOW_TEMPLATE_FALLBACK
   const [showYaml, setShowYaml] = useState(false)
   const [selectedStageId, setSelectedStageId] = useState('')
   const [stages, setStages] = useState<WorkflowStageConfig[]>([])
@@ -230,20 +238,27 @@ export function WorkflowModuleEditor({
 
       <div className="border-b border-[var(--border)] p-5">
         <div className="grid gap-4 md:grid-cols-4">
-          {WORKFLOW_FIELDS.map((field) => (
+          {WORKFLOW_FIELDS.map((field) => {
+            // The Template selector uses the dynamic catalog (or its static
+            // fallback) instead of a hardcoded field.options list.
+            const fieldOptions =
+              field.path.join('.') === 'workflow.template'
+                ? templateOptions
+                : field.options
+            return (
             <div key={field.path.join('.')} className="block">
               <FieldHeader
                 label={field.label}
                 help={workflowFieldHelp(field.path.join('.'))}
               />
-              {field.input === 'select' && field.options ? (
+              {field.input === 'select' && fieldOptions ? (
                 <select
                   aria-label={field.label}
                   value={readAgentYamlField(agentYaml, field.path)}
                   onChange={(event) => onFieldChange(field.path, event.target.value)}
                   className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                 >
-                  {field.options.map((option) => (
+                  {fieldOptions.map((option) => (
                     <option key={option} value={option}>{option}</option>
                   ))}
                 </select>
@@ -257,7 +272,8 @@ export function WorkflowModuleEditor({
                 />
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 

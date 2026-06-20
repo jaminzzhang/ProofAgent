@@ -38,6 +38,10 @@ vi.mock('../../api/client', () => ({
   fetchRuns: vi.fn(),
   fetchValidationCapture: vi.fn(),
   fetchWorkflowTemplate: vi.fn(),
+  // useWorkflowTemplates (consumed by WorkflowModuleEditor) fetches the catalog.
+  // Default to an empty catalog so the Template selector falls back to the
+  // static list; individual tests override this when they need the catalog.
+  fetchWorkflowTemplates: vi.fn().mockResolvedValue({ data: [], meta: { total: 0 } }),
   fetchKnowledgeSources: vi.fn(),
   fetchModelConnections: vi.fn(),
   previewWorkflowStageContext: vi.fn(),

@@ -3,7 +3,21 @@ import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkflowTemplateDescriptor } from '../../../api/types'
+
+// The Template selector loads its options from useWorkflowTemplates. Mock it
+// so tests do not hit the network; default to the fallback list so existing
+// assertions that rely on the static template inventory still hold.
+vi.mock('../../../hooks/useWorkflowTemplates', () => ({
+  useWorkflowTemplates: vi.fn(() => ({
+    templates: [],
+    names: ['react_enterprise_qa_v3', 'react_enterprise_qa_v2', 'react_enterprise_qa', 'enterprise_qa'],
+    loaded: true,
+    error: null,
+  })),
+}))
+
 import { WorkflowModuleEditor } from '../../agent/WorkflowModuleEditor'
+import { useWorkflowTemplates } from '../../../hooks/useWorkflowTemplates'
 
 const DESCRIPTOR: WorkflowTemplateDescriptor = {
   name: 'react_enterprise_qa',
@@ -315,5 +329,61 @@ workflow:
         ]),
       })
     })
+  })
+
+  it('renders the dynamic catalog as the Template selector options', () => {
+    vi.mocked(useWorkflowTemplates).mockReturnValue({
+      templates: [],
+      names: ['react_enterprise_qa_v3', 'react_enterprise_qa_v2'],
+      loaded: true,
+      error: null,
+    })
+
+    render(
+      <WorkflowModuleEditor
+        agentYaml={AGENT_YAML}
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    const select = screen.getByLabelText('Template') as HTMLSelectElement
+    const optionValues = Array.from(select.options).map((option) => option.value)
+    expect(optionValues).toEqual(['react_enterprise_qa_v3', 'react_enterprise_qa_v2'])
+  })
+
+  it('falls back to the static template list when the catalog fails to load', () => {
+    vi.mocked(useWorkflowTemplates).mockReturnValue({
+      templates: [],
+      names: [],
+      loaded: true,
+      error: 'network down',
+    })
+
+    render(
+      <WorkflowModuleEditor
+        agentYaml={AGENT_YAML}
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    const select = screen.getByLabelText('Template') as HTMLSelectElement
+    const optionValues = Array.from(select.options).map((option) => option.value)
+    // Fallback static list is shown so the selector is never empty.
+    expect(optionValues).toContain('react_enterprise_qa_v3')
+    expect(optionValues).toContain('react_enterprise_qa_v2')
+    expect(optionValues).toContain('react_enterprise_qa')
+    expect(optionValues).toContain('enterprise_qa')
   })
 })

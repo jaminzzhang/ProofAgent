@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { KNOWLEDGE_FIELDS } from './knowledge'
 import { MEMORY_FIELDS } from './memory'
 import { MODEL_FIELDS } from './model'
-import { WORKFLOW_FIELDS } from './workflow'
+import { WORKFLOW_FIELDS, WORKFLOW_TEMPLATE_FALLBACK } from './workflow'
 
 function optionsFor(fields: readonly { label: string; options?: readonly string[] }[], label: string): readonly string[] {
   const field = fields.find((candidate) => candidate.label === label)
@@ -31,7 +31,11 @@ describe('module configuration field options', () => {
   it('uses backend-supported workflow, model, review, and memory values', () => {
     const modelProviders = ['deterministic', 'openai_compatible', 'openai', 'deepseek', 'azure_openai', 'anthropic']
 
-    expect(optionsFor(WORKFLOW_FIELDS, 'Template')).toEqual([
+    // Template options are supplied dynamically from useWorkflowTemplates()
+    // at render time, so the field config carries no static template list.
+    expect(optionsFor(WORKFLOW_FIELDS, 'Template')).toEqual([])
+    // The Template Selector Fallback is the degradation safety net.
+    expect(WORKFLOW_TEMPLATE_FALLBACK).toEqual([
       'react_enterprise_qa_v3',
       'react_enterprise_qa_v2',
       'react_enterprise_qa',
