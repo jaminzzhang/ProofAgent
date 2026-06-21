@@ -12,7 +12,11 @@ import {
   readWorkflowStageConfigs,
   replaceWorkflowStages,
 } from '../../utils/agentYaml'
-import { WORKFLOW_FIELDS, WORKFLOW_TEMPLATE_FALLBACK } from './module-configs/workflow'
+import {
+  WORKFLOW_FIELDS,
+  WORKFLOW_TEMPLATE_DESCRIPTOR_VERSION_FALLBACK,
+  WORKFLOW_TEMPLATE_FALLBACK,
+} from './module-configs/workflow'
 import { useWorkflowTemplates } from '../../hooks/useWorkflowTemplates'
 import { useLocale } from '../../i18n/locale'
 
@@ -127,6 +131,18 @@ export function WorkflowModuleEditor({
     setStages((current) => current.map((stage) => (
       stage.id === selectedConfig.id ? updater(stage) : stage
     )))
+  }
+
+  function updateWorkflowField(path: string[], value: string) {
+    onFieldChange(path, value)
+    if (path.join('.') !== 'workflow.template') return
+
+    const descriptorVersion =
+      catalogTemplates.find((entry) => entry.name === value)?.descriptor_version
+      ?? WORKFLOW_TEMPLATE_DESCRIPTOR_VERSION_FALLBACK[value]
+    if (descriptorVersion) {
+      onFieldChange(['workflow', 'template_descriptor_version'], descriptorVersion)
+    }
   }
 
   async function saveStages() {
@@ -267,7 +283,7 @@ export function WorkflowModuleEditor({
                 <select
                   aria-label={field.label}
                   value={readAgentYamlField(agentYaml, field.path)}
-                  onChange={(event) => onFieldChange(field.path, event.target.value)}
+                  onChange={(event) => updateWorkflowField(field.path, event.target.value)}
                   className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                 >
                   {fieldOptions.map((option) => (
@@ -279,7 +295,7 @@ export function WorkflowModuleEditor({
                   aria-label={field.label}
                   type={field.input}
                   value={readAgentYamlField(agentYaml, field.path)}
-                  onChange={(event) => onFieldChange(field.path, event.target.value)}
+                  onChange={(event) => updateWorkflowField(field.path, event.target.value)}
                   className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                 />
               )}

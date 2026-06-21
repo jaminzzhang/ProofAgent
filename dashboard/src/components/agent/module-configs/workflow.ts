@@ -9,6 +9,13 @@ export const WORKFLOW_TEMPLATE_FALLBACK = [
   'enterprise_qa',
 ] as const
 
+export const WORKFLOW_TEMPLATE_DESCRIPTOR_VERSION_FALLBACK: Record<string, string> = {
+  enterprise_qa: 'enterprise_qa.v1',
+  react_enterprise_qa: 'react_enterprise_qa.v1',
+  react_enterprise_qa_v2: 'react_enterprise_qa.v2',
+  react_enterprise_qa_v3: 'react_enterprise_qa.v3',
+}
+
 export const WORKFLOW_FIELDS = [
   { label: 'Runtime', path: ['workflow', 'runtime'], input: 'select' as const, options: ['langgraph'] },
   {

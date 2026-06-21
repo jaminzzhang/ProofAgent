@@ -936,6 +936,35 @@ workflow:
     expect(latestSavedAgentYaml()).toContain('uri: "sqlite:///runs/config/checkpoints-v2.db"')
   })
 
+  it('keeps Workflow core template_descriptor_version aligned when changing templates', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: `name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v2
+  template_descriptor_version: react_enterprise_qa.v2
+  checkpointer:
+    provider: sqlite
+    uri: sqlite:///runs/config/checkpoints.db
+`,
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+
+    const templateSelect = await screen.findByLabelText('Template')
+    fireEvent.change(templateSelect, { target: { value: 'react_enterprise_qa_v3' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Core' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
+        agent_yaml: expect.stringContaining('template: react_enterprise_qa_v3'),
+      }))
+    })
+    expect(latestSavedAgentYaml()).toContain('template_descriptor_version: react_enterprise_qa.v3')
+    expect(latestSavedAgentYaml()).not.toContain('template_descriptor_version: react_enterprise_qa.v2')
+  })
+
   it('renders Business Flow Skill Packs as the default Skills list view', async () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
