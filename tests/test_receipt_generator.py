@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import shutil
 
@@ -40,6 +41,76 @@ def test_receipt_renders_evidence_summary_without_raw_content(tmp_path: Path) ->
     assert "policy://travel#meals" in text
     assert "travel-policy.md#meals:L10-L18" in text
     assert "Travel meals require receipts." not in text
+
+
+def test_receipt_renders_mcp_tool_result_summary_without_raw_payload(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    receipt_path = tmp_path / "governance_receipt.md"
+    events = [
+        {
+            "schema_version": "trace.v1",
+            "run_id": "run_test",
+            "event_id": "evt_0001",
+            "sequence": 1,
+            "timestamp": "2026-06-21T00:00:00Z",
+            "event_type": "tool_result",
+            "span_id": "span_tool_result",
+            "parent_span_id": None,
+            "status": "ok",
+            "payload": {
+                "provider": "mcp",
+                "tool_source_id": "tool_mcp_claims_http",
+                "tool_contract_id": "claim_status_lookup",
+                "mcp_tool_name": "claim.status.lookup",
+                "contract_snapshot_digest": "sha256:contract",
+                "result_schema_validation": "passed",
+                "result_classification": "authorized_tool_result",
+                "summary_fields": ["claim_id", "status"],
+                "summary": {"claim_id": "CLM-001", "status": "open"},
+                "raw_payload": {
+                    "internal_note": "adjuster-only note",
+                    "access_token": "secret-token",
+                },
+            },
+            "redaction": {"applied": False, "fields": []},
+        },
+        {
+            "schema_version": "trace.v1",
+            "run_id": "run_test",
+            "event_id": "evt_0002",
+            "sequence": 2,
+            "timestamp": "2026-06-21T00:00:01Z",
+            "event_type": "final_output",
+            "span_id": "span_final",
+            "parent_span_id": None,
+            "status": "ok",
+            "payload": {
+                "agent_name": "enterprise_qa",
+                "question": "What is the claim status?",
+                "outcome": "ANSWERED_WITH_CITATIONS",
+            },
+            "redaction": {"applied": False, "fields": []},
+        },
+    ]
+    trace_path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    generate_receipt(trace_path, receipt_path)
+    text = receipt_path.read_text(encoding="utf-8")
+
+    assert "claim_status_lookup" in text
+    assert "tool_mcp_claims_http" in text
+    assert "claim.status.lookup" in text
+    assert "authorized_tool_result" in text
+    assert "sha256:contract" in text
+    assert "claim_id=CLM-001; status=open" in text
+    assert "adjuster-only note" not in text
+    assert "secret-token" not in text
+    assert "raw_payload" not in text
 
 
 def test_receipt_renders_react_review_sections(tmp_path: Path) -> None:

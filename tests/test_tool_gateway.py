@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 from typing import Any
 from collections.abc import Mapping
 
@@ -187,6 +188,838 @@ tools:
     assert result.result["results"][0]["provider"] == "brave_search"
     assert result.result["sanitization_applied"] is True
     assert "secret-token" not in str(result.result)
+
+
+def test_mcp_tool_contract_snapshot_metadata_loads_without_runtime_handler(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id, customer_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id, customer_id]
+    result_schema:
+      type: object
+      required: [claim_id, status]
+    summary_fields: [claim_id, status]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+
+    gateway = ToolGateway.from_file(tools_yaml, configuration_store=store)
+
+    config = gateway.tools["claim_status_lookup"]
+    assert config.source == "mcp"
+    assert config.tool_source_id == "tool_mcp_claims_http"
+    assert config.mcp_tool_name == "claim.status.lookup"
+    assert config.mcp_contract_snapshot["digest"] == "sha256:contract"
+    assert config.input_schema["required"] == ("claim_id", "customer_id")
+    assert config.result_schema["required"] == ("claim_id", "status")
+    assert config.summary_fields == ("claim_id", "status")
+    assert config.result_authority == "authoritative_read"
+
+
+def test_mcp_read_tool_executes_through_gateway_runtime_transport(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    seen_requests: list[Any] = []
+
+    def transport(request: Any) -> Mapping[str, Any]:
+        seen_requests.append(request)
+        return {
+            "claim_id": request.arguments["claim_id"],
+            "status": "open",
+            "internal_note": "raw MCP payload must not reach planner summary",
+        }
+
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      required: [claim_id, status]
+    summary_fields: [claim_id, status]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+    gateway = ToolGateway.from_file(
+        tools_yaml,
+        configuration_store=store,
+        tool_source_env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        mcp_tool_transport=transport,
+    )
+
+    result = gateway.request_tool(
+        tool_name="claim_status_lookup",
+        parameters={"claim_id": "CLM-001"},
+        approved=False,
+    )
+
+    assert result.executed is True
+    assert result.approval_state.state == ApprovalStatus.GRANTED
+    assert len(seen_requests) == 1
+    request = seen_requests[0]
+    assert request.mcp_tool_name == "claim.status.lookup"
+    assert request.arguments == {"claim_id": "CLM-001"}
+    assert request.connection.trace_safe_metadata["endpoint_host"] == "mcp.example.internal"
+    assert request.connection.http_headers == {"Authorization": "Bearer secret-token"}
+    assert result.result is not None
+    assert result.result["provider"] == "mcp"
+    assert result.result["tool_source_id"] == "tool_mcp_claims_http"
+    assert result.result["tool_contract_id"] == "claim_status_lookup"
+    assert result.result["mcp_tool_name"] == "claim.status.lookup"
+    assert result.result["contract_snapshot_digest"] == "sha256:contract"
+    assert result.result["result_schema_validation"] == "passed"
+    assert result.result["result_classification"] == "authorized_tool_result"
+    assert result.result["summary_fields"] == ("claim_id", "status")
+    assert result.result["summary"] == {"claim_id": "CLM-001", "status": "open"}
+    assert "internal_note" not in str(result.result)
+    assert "secret-token" not in str(result.result)
+
+
+def test_mcp_tool_result_schema_type_mismatch_fails_closed(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+
+    def transport(_request: Any) -> Mapping[str, Any]:
+        return {"claim_id": "CLM-001", "status": 7}
+
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      properties:
+        claim_id:
+          type: string
+        status:
+          type: string
+      required: [claim_id, status]
+    summary_fields: [claim_id, status]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+    gateway = ToolGateway.from_file(
+        tools_yaml,
+        configuration_store=store,
+        tool_source_env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        mcp_tool_transport=transport,
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        gateway.request_tool(
+            tool_name="claim_status_lookup",
+            parameters={"claim_id": "CLM-001"},
+            approved=False,
+        )
+
+    assert exc.value.code == "PA_TOOL_SOURCE_002"
+    assert "result_schema validation" in exc.value.message
+
+
+def test_mcp_tool_input_schema_required_parameter_missing_fails_before_call(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    seen_requests: list[Any] = []
+
+    def transport(request: Any) -> Mapping[str, Any]:
+        seen_requests.append(request)
+        return {"claim_id": "CLM-001", "status": "open"}
+
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id, customer_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id, customer_id]
+    result_schema:
+      type: object
+      required: [claim_id, status]
+    summary_fields: [claim_id, status]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+    gateway = ToolGateway.from_file(
+        tools_yaml,
+        configuration_store=store,
+        tool_source_env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        mcp_tool_transport=transport,
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        gateway.request_tool(
+            tool_name="claim_status_lookup",
+            parameters={"claim_id": "CLM-001"},
+            approved=False,
+        )
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "missing required parameter(s): customer_id" in exc.value.message
+    assert seen_requests == []
+
+
+def test_mcp_stdio_read_tool_executes_with_default_sdk_transport(
+    tmp_path: Path,
+) -> None:
+    server_path = tmp_path / "claims_mcp_server.py"
+    server_path.write_text(
+        """
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("Claims MCP")
+
+@mcp.tool(name="claim.status.lookup", description="Lookup claim status")
+def claim_status_lookup(claim_id: str) -> dict[str, str]:
+    return {"claim_id": claim_id, "status": "open"}
+
+if __name__ == "__main__":
+    mcp.run("stdio")
+""",
+        encoding="utf-8",
+    )
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_tool_source(
+        source_id="tool_mcp_claims_stdio",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref=None,
+        params={
+            "transport": "stdio",
+            "server_label": "claims_mcp_stdio",
+            "command": sys.executable,
+            "args": [str(server_path)],
+        },
+        actor="operator",
+    )
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    tool_source_id: tool_mcp_claims_stdio
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      properties:
+        claim_id:
+          type: string
+        status:
+          type: string
+      required: [claim_id, status]
+    summary_fields: [claim_id, status]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+    gateway = ToolGateway.from_file(tools_yaml, configuration_store=store)
+
+    result = gateway.request_tool(
+        tool_name="claim_status_lookup",
+        parameters={"claim_id": "CLM-001"},
+        approved=False,
+    )
+
+    assert result.executed is True
+    assert result.result is not None
+    assert result.result["provider"] == "mcp"
+    assert result.result["summary"] == {"claim_id": "CLM-001", "status": "open"}
+
+
+def test_mcp_action_tool_waits_for_approval_then_returns_action_audit_metadata(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("create_service_ticket",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    seen_requests: list[Any] = []
+
+    def transport(request: Any) -> Mapping[str, Any]:
+        seen_requests.append(request)
+        return {"ticket_id": "TCK-001", "status": "created"}
+
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: create_service_ticket
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: ticket.create
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: high
+    requires_approval: true
+    read_only: false
+    allowed_parameters: [subject, customer_id, idempotency_key]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [subject, customer_id, idempotency_key]
+    result_schema:
+      type: object
+      properties:
+        ticket_id:
+          type: string
+        status:
+          type: string
+      required: [ticket_id, status]
+    summary_fields: [ticket_id, status]
+    side_effect_class: create_ticket
+""",
+        encoding="utf-8",
+    )
+    gateway = ToolGateway.from_file(
+        tools_yaml,
+        configuration_store=store,
+        tool_source_env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        mcp_tool_transport=transport,
+    )
+
+    pending = gateway.request_tool(
+        tool_name="create_service_ticket",
+        parameters={
+            "subject": "Claim follow-up",
+            "customer_id": "CUST-001",
+            "idempotency_key": "idem-raw-secret",
+        },
+        approved=False,
+    )
+
+    assert pending.executed is False
+    assert pending.approval_state.state == ApprovalStatus.REQUESTED
+    assert seen_requests == []
+
+    result = gateway.request_tool(
+        tool_name="create_service_ticket",
+        parameters={
+            "subject": "Claim follow-up",
+            "customer_id": "CUST-001",
+            "idempotency_key": "idem-raw-secret",
+        },
+        approved=True,
+    )
+
+    assert result.executed is True
+    assert result.approval_state.state == ApprovalStatus.GRANTED
+    assert len(seen_requests) == 1
+    assert result.result is not None
+    assert result.result["result_classification"] == "action_confirmation"
+    assert result.result["side_effect_class"] == "create_ticket"
+    assert str(result.result["idempotency_key_digest"]).startswith("sha256:")
+    assert result.result["summary"] == {"ticket_id": "TCK-001", "status": "created"}
+    assert "idem-raw-secret" not in str(result.result)
+
+
+def test_mcp_action_tool_requires_idempotency_key(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: create_service_ticket
+    source: mcp
+    mcp_tool_name: ticket.create
+    mcp_contract_snapshot:
+      digest: sha256:contract
+    risk_level: high
+    requires_approval: true
+    read_only: false
+    allowed_parameters: [subject, customer_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [subject, customer_id]
+    result_schema:
+      type: object
+      required: [ticket_id]
+    summary_fields: [ticket_id]
+    side_effect_class: create_ticket
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "MCP action tools require idempotency_key" in exc.value.message
+
+
+def test_mcp_tool_contract_requires_import_snapshot(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    mcp_tool_name: claim.status.lookup
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      required: [claim_id]
+    summary_fields: [claim_id]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "MCP tools require mcp_contract_snapshot" in exc.value.message
+
+
+def test_mcp_tool_contract_snapshot_requires_digest(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      imported_at: "2026-06-20T00:00:00Z"
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      required: [claim_id]
+    summary_fields: [claim_id]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "MCP contract snapshot requires digest" in exc.value.message
+
+
+def test_mcp_tool_contract_requires_summary_fields(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      required: [claim_id]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "MCP tools require summary_fields" in exc.value.message
+
+
+def test_mcp_tool_contract_requires_summary_fields_list(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      required: [claim_id]
+    summary_fields: claim_id
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "summary_fields must be a list" in exc.value.message
+
+
+def test_mcp_tool_contract_requires_result_schema(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    summary_fields: [claim_id]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "MCP tools require result_schema" in exc.value.message
+
+
+def test_mcp_tool_contract_requires_input_schema(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    result_schema:
+      type: object
+      required: [claim_id]
+    summary_fields: [claim_id]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "MCP tools require input_schema" in exc.value.message
+
+
+def test_mcp_tool_contract_requires_mcp_tool_name(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    mcp_contract_snapshot:
+      digest: sha256:contract
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      required: [claim_id]
+    summary_fields: [claim_id]
+    result_authority: authoritative_read
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "MCP tools require mcp_tool_name" in exc.value.message
+
+
+def test_mcp_read_tool_contract_requires_result_authority(tmp_path: Path) -> None:
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      required: [claim_id]
+    summary_fields: [claim_id]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(tools_yaml)
+
+    assert exc.value.code == "PA_TOOL_001"
+    assert "MCP read tools require result_authority" in exc.value.message
+
+
+def test_mcp_tool_contract_rejects_non_mcp_tool_source(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_tool_source(
+        source_id="tool_brave_default",
+        name="Brave Search Default",
+        source_type="search_vendor",
+        provider="brave_search",
+        tool_contract_ids=("untrusted_web_search",),
+        credential_env_ref="BRAVE_SEARCH_API_KEY",
+        params={"timeout_seconds": 8, "default_max_results": 3},
+        actor="operator",
+    )
+    tools_yaml = tmp_path / "tools.yaml"
+    tools_yaml.write_text(
+        """
+tools:
+  - name: untrusted_web_search
+    source: mcp
+    tool_source_id: tool_brave_default
+    mcp_tool_name: search.query
+    mcp_contract_snapshot:
+      digest: sha256:contract
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [query, max_results]
+    denied_parameters: [api_key, access_token]
+    input_schema:
+      type: object
+      required: [query]
+    result_schema:
+      type: object
+      required: [results]
+    summary_fields: [results]
+    result_authority: advisory_read
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        ToolGateway.from_file(
+            tools_yaml,
+            configuration_store=store,
+            tool_source_env={"BRAVE_SEARCH_API_KEY": "secret-token"},
+        )
+
+    assert exc.value.code == "PA_TOOL_SOURCE_001"
+    assert "MCP tools require an MCP Tool Source" in exc.value.message
 
 
 def test_untrusted_web_search_tool_rejects_unsearchable_sanitized_query(tmp_path: Path) -> None:

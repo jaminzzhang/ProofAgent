@@ -12,6 +12,17 @@ def test_brave_search_tool_source_descriptor_exposes_untrusted_web_search() -> N
     assert descriptor.supports_validation is True
 
 
+def test_mcp_tool_source_descriptor_accepts_curated_tool_contracts() -> None:
+    descriptor = get_tool_source_descriptor("mcp")
+
+    assert isinstance(descriptor, ToolSourceDescriptor)
+    assert descriptor.provider == "mcp"
+    assert descriptor.display_name == "MCP Server"
+    assert descriptor.exposed_tool_contracts == ()
+    assert descriptor.credential_env_vars == ()
+    assert descriptor.supports_validation is True
+
+
 def test_tool_source_contract_represents_live_search_vendor_connection() -> None:
     source = ToolSource(
         source_id="ts_brave",

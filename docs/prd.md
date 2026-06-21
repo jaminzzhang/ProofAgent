@@ -81,7 +81,8 @@ For the current phase, we do not commit to:
 - Production OAuth/OIDC/IAM for customer sessions.
 - Customer-visible human escalation states.
 - Transactional insurance actions such as canceling policies, submitting claims, or approving payments.
-- Compatibility with all MCP servers.
+- Compatibility with all MCP servers or all MCP protocol capabilities. V1 MCP
+  integration is tools-only and governed through Tool Gateway.
 - Complete immunity against arbitrary prompt injections.
 - LLM-as-judge replacing deterministic validators.
 - Multi-Agent platforms, template marketplaces, or hosted control planes.
@@ -93,7 +94,8 @@ These are directions for platform evolution but must be added gradually after th
 - Enterprise reviewers can run the CLI or Docker demo successfully within 30 minutes.
 - The deterministic demo requires no API keys and covers answer, refusal, and approval-wait scenarios.
 - Remote model paths cannot bypass policies, evidence, validators, traces, and receipts.
-- The Tool Gateway can prove that tool governance semantics remain consistent before and after real MCP integration.
+- The Tool Gateway can prove that tool governance semantics remain consistent
+  before and after real MCP tools are integrated.
 - The Dashboard API can query execution history based on run artifacts, rather than spawning a separate execution semantic.
 - The evaluation system measures Governed Resolution Rate through deterministic gates, while LLM or human judges remain diagnostic and cannot replace governance validators.
 - Documentation system is clear: AI reads `docs/README.md` first; architecture reads `docs/technical-design.md` first.

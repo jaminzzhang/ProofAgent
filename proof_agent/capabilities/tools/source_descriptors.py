@@ -12,7 +12,15 @@ _DESCRIPTORS: dict[str, ToolSourceDescriptor] = {
         exposed_tool_contracts=("untrusted_web_search",),
         credential_env_vars=("BRAVE_SEARCH_API_KEY",),
         supports_validation=True,
-    )
+    ),
+    "mcp": ToolSourceDescriptor(
+        provider="mcp",
+        display_name="MCP Server",
+        description="Governed MCP stdio/http server with curated Tool Contract imports.",
+        exposed_tool_contracts=(),
+        credential_env_vars=(),
+        supports_validation=True,
+    ),
 }
 
 

@@ -55,14 +55,16 @@ These are valid platform directions, but they are not guaranteed by the current 
 
 ## MCP Boundary
 
-The current demo uses one MCP mock tool to prove controlled invocation. Real MCP adapters must preserve the same Harness approval contract. The tool boundary must show:
+The current demo uses one MCP mock tool to prove controlled invocation. Real MCP adapters must preserve the same Harness approval contract and stay behind Tool Gateway. The V1 MCP boundary supports MCP tools only, over stdio and HTTP transports, using curated Tool Contract snapshots rather than live server catalogs as runtime authority. MCP resources and prompts do not enter Knowledge Source or Prompt Configuration paths in V1.
+
+The tool boundary must show:
 
 - requested approval before execution
 - granted, denied, and timed-out approval states
 - trace events for each approval state
 - receipt summary of the tool decision
 
-The mock tool does not prove compatibility with every MCP server or production OAuth deployment. MCP authorization remains transport/provider-specific; Proof Agent owns the Harness approval state around tool use.
+The mock tool does not prove compatibility with every MCP server or production OAuth deployment. HTTP MCP V1 supports only no-auth or static environment-variable credential references, not OAuth, refresh-token management, or per-user delegated authorization. MCP authorization remains transport/provider-specific; Proof Agent owns the Harness approval state, Tool Contract mapping, result classification, trace, and receipt around tool use.
 
 ## Prompt Injection Boundary
 

@@ -931,7 +931,21 @@ Tool development principles:
 - High-risk tools must enter the approval state.
 - Parameters must have allowlists / denylists.
 - Tool results must pass through validators.
-- Real MCP stdio/http transports should be adapters behind ToolGateway, not new execution paths.
+- Real MCP stdio/http transports are adapters behind ToolGateway, not new
+  execution paths.
+- MCP discovery does not grant Agent authority. Operators must curate discovered
+  MCP tools into Tool Contract snapshots before Agent Tool Bindings can use
+  them.
+- V1 supports MCP tools only; MCP resources and prompts do not enter Knowledge
+  Source or Prompt Configuration paths.
+- HTTP MCP credentials use environment-variable references. Inline secrets,
+  OAuth flows, refresh tokens, and per-user delegated authorization are outside
+  V1.
+- MCP results are Observation Records by default. Only authorized read results
+  that pass result validation and redaction may support claims as Authorized
+  Tool Results; they are not Accepted Evidence.
+- See `docs/specs/mcp-tool-gateway-support.md` for implementation slices and
+  test coverage.
 
 ### Skills
 A Skill is a capability pack, not a shortcut around Control. A Skill can contain:

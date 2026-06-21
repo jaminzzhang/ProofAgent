@@ -5,6 +5,7 @@ returned slice must reflect the scoped set so the dashboard pager stays
 consistent. See CONTEXT.md "Approval Queue Status Vocabulary".
 """
 
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 
@@ -98,16 +99,24 @@ def _seed_resolved_approval_run(
     _write_run_meta(store, run_id, f"question {run_id}", created_at)
 
 
-# Reference "now" for the fixtures: a fixed point the expiries are measured
-# against. Future expiry => pending; past expiry => expired.
-NOW = "2026-06-19T12:00:00Z"
+def _timestamp(delta: timedelta) -> str:
+    """Return a stable UTC timestamp relative to the test's actual run time."""
+    return (datetime.now(UTC) + delta).isoformat().replace("+00:00", "Z")
+
+
+def _future_expiry(days: int = 1) -> str:
+    return _timestamp(timedelta(days=days))
+
+
+def _past_expiry(days: int = 1) -> str:
+    return _timestamp(-timedelta(days=days))
 
 
 def test_status_all_returns_pending_and_expired_but_not_resolved(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
-    _seed_pending_approval_run(store, "run_pending", "appr_future", "2026-06-20T12:00:00Z")
-    _seed_pending_approval_run(store, "run_expired", "appr_past", "2026-06-18T12:00:00Z")
-    _seed_resolved_approval_run(store, "run_resolved", "appr_granted", "2026-06-20T12:00:00Z")
+    _seed_pending_approval_run(store, "run_pending", "appr_future", _future_expiry())
+    _seed_pending_approval_run(store, "run_expired", "appr_past", _past_expiry())
+    _seed_resolved_approval_run(store, "run_resolved", "appr_granted", _future_expiry())
 
     items, total = store.list_pending_approvals(status="all")
     assert total == 2
@@ -117,8 +126,8 @@ def test_status_all_returns_pending_and_expired_but_not_resolved(tmp_path: Path)
 
 def test_status_pending_excludes_expired(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
-    _seed_pending_approval_run(store, "run_pending", "appr_future", "2026-06-20T12:00:00Z")
-    _seed_pending_approval_run(store, "run_expired", "appr_past", "2026-06-18T12:00:00Z")
+    _seed_pending_approval_run(store, "run_pending", "appr_future", _future_expiry())
+    _seed_pending_approval_run(store, "run_expired", "appr_past", _past_expiry())
 
     items, total = store.list_pending_approvals(status="pending")
     assert total == 1
@@ -128,8 +137,8 @@ def test_status_pending_excludes_expired(tmp_path: Path) -> None:
 
 def test_status_expired_excludes_pending(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
-    _seed_pending_approval_run(store, "run_pending", "appr_future", "2026-06-20T12:00:00Z")
-    _seed_pending_approval_run(store, "run_expired", "appr_past", "2026-06-18T12:00:00Z")
+    _seed_pending_approval_run(store, "run_pending", "appr_future", _future_expiry())
+    _seed_pending_approval_run(store, "run_expired", "appr_past", _past_expiry())
 
     items, total = store.list_pending_approvals(status="expired")
     assert total == 1
@@ -139,21 +148,19 @@ def test_status_expired_excludes_pending(tmp_path: Path) -> None:
 
 def test_status_default_matches_all(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
-    _seed_pending_approval_run(store, "run_pending", "appr_future", "2026-06-20T12:00:00Z")
-    _seed_pending_approval_run(store, "run_expired", "appr_past", "2026-06-18T12:00:00Z")
+    _seed_pending_approval_run(store, "run_pending", "appr_future", _future_expiry())
+    _seed_pending_approval_run(store, "run_expired", "appr_past", _past_expiry())
 
     items_default, total_default = store.list_pending_approvals()
     items_all, total_all = store.list_pending_approvals(status="all")
     assert total_default == total_all == 2
-    assert {i["run_id"] for i in items_default} == {
-        i["run_id"] for i in items_all
-    }
+    assert {i["run_id"] for i in items_default} == {i["run_id"] for i in items_all}
 
 
 def test_status_filter_respects_limit_and_offset(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
-    _seed_pending_approval_run(store, "run_a", "appr_a", "2026-06-20T12:00:00Z", sequence=1)
-    _seed_pending_approval_run(store, "run_b", "appr_b", "2026-06-21T12:00:00Z", sequence=2)
+    _seed_pending_approval_run(store, "run_a", "appr_a", _future_expiry(days=1), sequence=1)
+    _seed_pending_approval_run(store, "run_b", "appr_b", _future_expiry(days=2), sequence=2)
 
     items, total = store.list_pending_approvals(status="pending", limit=1, offset=0)
     assert total == 2

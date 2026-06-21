@@ -864,9 +864,29 @@ Current behavior:
 - example Agent packages provide deterministic local handlers to prove requested/granted/denied/timeout paths.
 
 Real MCP strategy:
-- MCP stdio/HTTP transport is an adapter behind ToolGateway.
-- MCP schemas map into Proof Agent tool config and result contracts.
-- LangGraph interrupt may implement pause/resume, but `ApprovalState` and trace remain the facts.
+- MCP stdio and HTTP transports are adapters behind ToolGateway; V1 uses the
+  official MCP SDK for protocol operations, not LangChain Tool execution.
+- V1 supports MCP tools only: initialize, `tools/list`, and `tools/call`.
+  MCP resources, prompts, sampling, and elicitation remain outside V1.
+- MCP Tool Discovery can inspect server schemas, but only Curated MCP Tool
+  Import creates governed Tool Contract snapshots. Discovery does not grant
+  Agent execution authority.
+- MCP Tool Contract snapshots are frozen at import and captured by Published
+  Agent Version bindings. Runtime does not rewrite contracts from live schemas.
+- HTTP MCP uses static env-ref credential references only; OAuth, refresh-token
+  management, and per-user delegated auth are outside V1.
+- Runtime uses run-scoped MCP sessions without cross-run pooling. Approval pause
+  must not hold an MCP session open; resume re-initializes from frozen approved
+  parameters.
+- MCP results become Observation Records by default. Only authorized, redacted,
+  schema-validated read results can become Authorized Tool Results; MCP results
+  never become Accepted Evidence.
+- State-changing MCP tools are allowed only with explicit enablement, approval,
+  idempotency, side-effect classification, and no automatic retry.
+- LangGraph interrupt may implement pause/resume, but `ApprovalState`, Tool
+  Gateway decisions, trace, and receipt remain the governance facts.
+- Detailed implementation slices and tests live in
+  `docs/specs/mcp-tool-gateway-support.md`.
 
 ## 17. Memory Boundary
 

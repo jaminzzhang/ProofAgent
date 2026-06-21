@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_only_insurance_customer_service_is_public_example() -> None:
+def test_public_example_directories_are_registered() -> None:
     public_examples = sorted(
         path.name
         for path in Path("examples").iterdir()
@@ -9,6 +9,7 @@ def test_only_insurance_customer_service_is_public_example() -> None:
     )
 
     assert public_examples == [
+        "agent_management_insurance_specialist",
         "institution_insurance_specialist",
         "insurance_customer_service",
     ]

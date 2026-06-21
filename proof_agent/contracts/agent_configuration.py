@@ -579,6 +579,31 @@ class ToolSource(FrozenModel):
         return cast(dict[str, Any], _jsonable(value))
 
 
+class MCPToolSourcePublicationValidation(FrozenModel):
+    """Passed MCP Tool Source validation eligible for Agent publication."""
+
+    validation_id: str
+    source_id: str
+    config_revision: int
+    status: Literal["passed"]
+    tool_contract_ids: tuple[str, ...] = Field(default_factory=tuple)
+    mcp_tool_names: tuple[str, ...] = Field(default_factory=tuple)
+    contract_snapshot_digests: tuple[str, ...] = Field(default_factory=tuple)
+    discovered_tool_count: int
+    trace_safe_metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    created_at: str
+    created_by: str
+
+    @field_validator("trace_safe_metadata", mode="after")
+    @classmethod
+    def freeze_trace_safe_metadata(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("trace_safe_metadata")
+    def serialize_trace_safe_metadata(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
+
+
 class ToolSourceDescriptor(FrozenModel):
     """Trusted descriptor for one reusable Tool Source provider type."""
 

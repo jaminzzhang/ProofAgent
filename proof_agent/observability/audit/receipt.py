@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,7 @@ def _build_context(
         "evidence_summaries": _extract_evidence_summaries(evidence_events),
         "retrieval_events": retrieval_events,
         "tool_events": tool_events,
+        "tool_result_summaries": _extract_tool_result_summaries(tool_events),
         "memory_events": memory_events,
         "intent_resolution_events": intent_resolution_events,
         "reasoning_summary_events": reasoning_summary_events,
@@ -185,6 +187,56 @@ def _extract_model_usage(events: list[dict[str, Any]]) -> dict[str, str] | None:
         "error_class": _audit_value(error_payload.get("error_class")),
         "retryable": _audit_value(error_payload.get("retryable")),
     }
+
+
+def _extract_tool_result_summaries(
+    events: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    summaries: list[dict[str, str]] = []
+    for event in events:
+        if event.get("event_type") != "tool_result":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        summaries.append(
+            {
+                "tool_contract_id": _audit_value(
+                    payload.get("tool_contract_id") or payload.get("tool_name")
+                ),
+                "provider": _audit_value(payload.get("provider")),
+                "tool_source_id": _audit_value(payload.get("tool_source_id")),
+                "mcp_tool_name": _audit_value(payload.get("mcp_tool_name")),
+                "classification": _audit_value(payload.get("result_classification")),
+                "schema_validation": _audit_value(
+                    payload.get("result_schema_validation")
+                ),
+                "contract_snapshot_digest": _audit_value(
+                    payload.get("contract_snapshot_digest")
+                ),
+                "side_effect_class": _audit_value(payload.get("side_effect_class")),
+                "idempotency_key_digest": _audit_value(
+                    payload.get("idempotency_key_digest")
+                ),
+                "summary": _format_tool_result_summary(
+                    payload.get("summary"),
+                    payload.get("summary_fields"),
+                ),
+            }
+        )
+    return summaries
+
+
+def _format_tool_result_summary(summary: Any, summary_fields: Any) -> str:
+    if not isinstance(summary, Mapping):
+        return "n/a"
+    fields = summary_fields if isinstance(summary_fields, list | tuple) else summary.keys()
+    items = [
+        f"{field}={_audit_value(summary.get(field))}"
+        for field in fields
+        if field in summary
+    ]
+    return "; ".join(items) or "n/a"
 
 
 def _extract_evidence_summaries(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

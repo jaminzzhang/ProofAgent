@@ -68,15 +68,15 @@ class ConfigurationStoreKnowledgeBindingResolver:
         for binding in manifest.knowledge_bindings:
             ref = binding.source_ref
             if ref.scope == "package":
-                source = package_sources_by_id[ref.source_id]
+                package_source = package_sources_by_id[ref.source_id]
                 resolved.append(
                     ResolvedKnowledgeBinding(
                         binding_id=binding.binding_id,
                         source_scope="package",
-                        source_id=source.source_id,
+                        source_id=package_source.source_id,
                         source_version_id="package",
-                        provider=source.provider,
-                        provider_params=source.params,
+                        provider=package_source.provider,
+                        provider_params=package_source.params,
                         alias=binding.alias,
                         failure_mode=binding.failure_mode,
                         fusion_weight=binding.fusion_weight,
@@ -91,45 +91,47 @@ class ConfigurationStoreKnowledgeBindingResolver:
                     f"Configuration Store execution cannot resolve Knowledge Source scope: {ref.scope}",
                     "Use source_ref.scope package or shared.",
                 )
-            source = self._store.get_knowledge_source(ref.source_id)
-            if source is None:
+            shared_source = self._store.get_knowledge_source(ref.source_id)
+            if shared_source is None:
                 raise ProofAgentError(
                     "PA_CONFIG_002",
                     f"shared Knowledge Source not found: {ref.source_id}",
                     "Create and publish the shared Knowledge Source before binding it.",
                 )
-            if source.lifecycle_state is KnowledgeSourceLifecycleState.ARCHIVED:
+            if shared_source.lifecycle_state is KnowledgeSourceLifecycleState.ARCHIVED:
                 raise ProofAgentError(
                     "PA_CONFIG_002",
                     f"shared Knowledge Source is archived: {ref.source_id}",
                     "Restore the Knowledge Source or unbind it from the Draft Agent.",
                 )
-            if source.published_snapshot_id is None:
+            if shared_source.published_snapshot_id is None:
                 raise ProofAgentError(
                     "PA_CONFIG_002",
                     f"shared Knowledge Source is not published: {ref.source_id}",
                     "Publish the Knowledge Source before binding it to an Agent.",
                 )
-            if source.provider == "http_json":
+            if shared_source.provider == "http_json":
                 publication = _published_remote_config_publication(
                     store=self._store,
-                    source=source,
+                    source=shared_source,
                 )
                 resource_id = publication.resource_id
                 if resource_id is None:
                     raise ProofAgentError(
                         "PA_CONFIG_002",
-                        f"published remote Knowledge Source config is missing: {source.source_id}",
+                        f"published remote Knowledge Source config is missing: {shared_source.source_id}",
                         "Publish the Knowledge Source again or repair the Configuration Store.",
                     )
-                provider_params = _provider_params_for_published_remote_source(source)
+                provider_params = _provider_params_for_published_remote_source(
+                    shared_source
+                )
                 resolved.append(
                     ResolvedKnowledgeBinding(
                         binding_id=binding.binding_id,
                         source_scope="shared",
-                        source_id=source.source_id,
+                        source_id=shared_source.source_id,
                         source_version_id=resource_id,
-                        provider=source.provider,
+                        provider=shared_source.provider,
                         provider_params=provider_params,
                         alias=binding.alias,
                         failure_mode=binding.failure_mode,
@@ -140,8 +142,8 @@ class ConfigurationStoreKnowledgeBindingResolver:
                 )
                 continue
             snapshot = self._store.get_knowledge_source_snapshot(
-                source_id=source.source_id,
-                snapshot_id=source.published_snapshot_id,
+                source_id=shared_source.source_id,
+                snapshot_id=shared_source.published_snapshot_id,
             )
             if snapshot is None:
                 raise ProofAgentError(
@@ -151,16 +153,16 @@ class ConfigurationStoreKnowledgeBindingResolver:
                 )
             provider_params = _provider_params_for_published_source(
                 store_root=self._store.root_dir,
-                source=source,
+                source=shared_source,
                 snapshot=snapshot,
             )
             resolved.append(
                 ResolvedKnowledgeBinding(
                     binding_id=binding.binding_id,
                     source_scope="shared",
-                    source_id=source.source_id,
+                    source_id=shared_source.source_id,
                     source_version_id=snapshot.snapshot_id,
-                    provider=source.provider,
+                    provider=shared_source.provider,
                     provider_params=provider_params,
                     alias=binding.alias,
                     failure_mode=binding.failure_mode,

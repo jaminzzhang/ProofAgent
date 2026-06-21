@@ -7,8 +7,14 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 from proof_agent.capabilities.knowledge.ingestion import ParsedKnowledgeDocument, ParserMetadata
+from proof_agent.capabilities.tools.mcp_discovery import (
+    MCPDiscoveredTool,
+    discover_mcp_tools,
+    import_mcp_tool_contract,
+)
 from proof_agent.configuration.file_locking import locked as file_locked
 from proof_agent.configuration.local_store import (
     KnowledgeUploadStagingInput,
@@ -328,6 +334,557 @@ capabilities:
 
     assert blocked.value.code == "PA_CONFIG_002"
     assert "unavailable workflow stage configuration" in blocked.value.message
+
+
+def test_publish_version_rejects_archived_mcp_tool_source_binding(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    store.archive_tool_source(
+        source_id="tool_mcp_claims_http",
+        actor="operator",
+        reason="No longer maintained.",
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="name: enterprise_qa\n",
+            policy_yaml="rules: []\n",
+            tools_yaml="""
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id, customer_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id, customer_id]
+    result_schema:
+      type: object
+      required: [claim_id, status]
+    summary_fields: [claim_id, status]
+    result_authority: authoritative_read
+""",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "Tool Source tool_mcp_claims_http is archived" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+    assert store.get_active_version(draft.agent_id) is None
+
+
+def test_publish_version_rejects_mcp_action_tool_without_idempotency_key(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("create_service_ticket",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="name: enterprise_qa\n",
+            policy_yaml="rules: []\n",
+            tools_yaml="""
+tools:
+  - name: create_service_ticket
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: ticket.create
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: high
+    requires_approval: true
+    read_only: false
+    allowed_parameters: [subject, customer_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [subject, customer_id]
+    result_schema:
+      type: object
+      required: [ticket_id]
+    summary_fields: [ticket_id]
+    side_effect_class: create_ticket
+""",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+        )
+
+    assert blocked.value.code == "PA_TOOL_001"
+    assert "MCP action tools require idempotency_key" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+    assert store.get_active_version(draft.agent_id) is None
+
+
+def test_publish_version_requires_mcp_tool_source_publication_validation(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="name: enterprise_qa\n",
+            policy_yaml="rules: []\n",
+            tools_yaml="""
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id, customer_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id, customer_id]
+    result_schema:
+      type: object
+      required: [claim_id, status]
+    summary_fields: [claim_id, status]
+    result_authority: authoritative_read
+""",
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "passed MCP Tool Source publication validation" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+    assert store.get_active_version(draft.agent_id) is None
+
+
+def test_mcp_tool_source_publication_validation_allows_agent_publish(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    imported_preview = discover_mcp_tools(
+        store.get_tool_source("tool_mcp_claims_http"),
+        env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        transport=lambda _connection: (
+            MCPDiscoveredTool(
+                name="claim.status.lookup",
+                description="Lookup claim status",
+                input_schema={
+                    "type": "object",
+                    "properties": {"claim_id": {"type": "string"}},
+                    "required": ["claim_id"],
+                },
+            ),
+        ),
+    )
+    tool_contract = import_mcp_tool_contract(
+        imported_preview,
+        mcp_tool_name="claim.status.lookup",
+        contract_name="claim_status_lookup",
+        tool_source_id="tool_mcp_claims_http",
+        risk_level="medium",
+        read_only=True,
+        requires_approval=False,
+        allowed_parameters=("claim_id",),
+        denied_parameters=("access_token",),
+        result_schema={
+            "type": "object",
+            "properties": {
+                "claim_id": {"type": "string"},
+                "status": {"type": "string"},
+            },
+            "required": ["claim_id", "status"],
+        },
+        summary_fields=("claim_id", "status"),
+        result_authority="authoritative_read",
+        imported_at="2026-06-20T00:00:00Z",
+    )
+    validation = store.validate_mcp_tool_source_publication(
+        source_id="tool_mcp_claims_http",
+        tool_contracts=(tool_contract,),
+        env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        actor="operator",
+        transport=lambda _connection: (
+            MCPDiscoveredTool(
+                name="claim.status.lookup",
+                description="Lookup claim status",
+                input_schema={
+                    "type": "object",
+                    "properties": {"claim_id": {"type": "string"}},
+                    "required": ["claim_id"],
+                },
+            ),
+        ),
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="name: enterprise_qa\n",
+            policy_yaml="rules: []\n",
+            tools_yaml=yaml.safe_dump({"tools": [tool_contract]}, sort_keys=False),
+        ),
+        actor="local-user",
+    )
+
+    version = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_001",
+        actor="publisher",
+    )
+
+    assert validation.validation_id.startswith("mcptspubval_")
+    assert validation.source_id == "tool_mcp_claims_http"
+    assert validation.config_revision == 1
+    assert validation.contract_snapshot_digests == (
+        tool_contract["mcp_contract_snapshot"]["digest"],
+    )
+    assert store.list_mcp_tool_source_publication_validations(
+        "tool_mcp_claims_http"
+    ) == [validation]
+    assert version.validation_run_id == "run_validation_001"
+    active = store.get_active_version("enterprise_qa")
+    assert active is not None
+    assert active.version_id == version.version_id
+
+
+def test_publish_version_rejects_stale_mcp_tool_source_publication_validation(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    imported_preview = discover_mcp_tools(
+        store.get_tool_source("tool_mcp_claims_http"),
+        env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        transport=lambda _connection: (
+            MCPDiscoveredTool(
+                name="claim.status.lookup",
+                description="Lookup claim status",
+                input_schema={
+                    "type": "object",
+                    "properties": {"claim_id": {"type": "string"}},
+                    "required": ["claim_id"],
+                },
+            ),
+        ),
+    )
+    tool_contract = import_mcp_tool_contract(
+        imported_preview,
+        mcp_tool_name="claim.status.lookup",
+        contract_name="claim_status_lookup",
+        tool_source_id="tool_mcp_claims_http",
+        risk_level="medium",
+        read_only=True,
+        requires_approval=False,
+        allowed_parameters=("claim_id",),
+        denied_parameters=("access_token",),
+        result_schema={
+            "type": "object",
+            "properties": {
+                "claim_id": {"type": "string"},
+                "status": {"type": "string"},
+            },
+            "required": ["claim_id", "status"],
+        },
+        summary_fields=("claim_id", "status"),
+        result_authority="authoritative_read",
+        imported_at="2026-06-20T00:00:00Z",
+    )
+    store.validate_mcp_tool_source_publication(
+        source_id="tool_mcp_claims_http",
+        tool_contracts=(tool_contract,),
+        env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        actor="operator",
+        transport=lambda _connection: (
+            MCPDiscoveredTool(
+                name="claim.status.lookup",
+                description="Lookup claim status",
+                input_schema={
+                    "type": "object",
+                    "properties": {"claim_id": {"type": "string"}},
+                    "required": ["claim_id"],
+                },
+            ),
+        ),
+    )
+    store.update_tool_source(
+        source_id="tool_mcp_claims_http",
+        actor="operator",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+            "timeout_seconds": 8,
+        },
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="name: enterprise_qa\n",
+            policy_yaml="rules: []\n",
+            tools_yaml=yaml.safe_dump({"tools": [tool_contract]}, sort_keys=False),
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "stale MCP Tool Source publication validation" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+    assert store.get_active_version(draft.agent_id) is None
+
+
+def test_publish_version_requires_mcp_validation_for_bound_contract_snapshot(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_tool_source(
+        source_id="tool_mcp_claims_http",
+        name="Claims MCP",
+        source_type="mcp_server",
+        provider="mcp",
+        tool_contract_ids=("claim_status_lookup",),
+        credential_env_ref="CLAIMS_MCP_TOKEN",
+        params={
+            "transport": "http",
+            "server_label": "claims_mcp",
+            "endpoint": "https://mcp.example.internal",
+            "auth": {"type": "bearer_env", "env": "CLAIMS_MCP_TOKEN"},
+        },
+        actor="operator",
+    )
+    imported_preview = discover_mcp_tools(
+        store.get_tool_source("tool_mcp_claims_http"),
+        env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        transport=lambda _connection: (
+            MCPDiscoveredTool(
+                name="claim.status.lookup",
+                description="Lookup claim status",
+                input_schema={
+                    "type": "object",
+                    "properties": {"claim_id": {"type": "string"}},
+                    "required": ["claim_id"],
+                },
+            ),
+        ),
+    )
+    validated_contract = import_mcp_tool_contract(
+        imported_preview,
+        mcp_tool_name="claim.status.lookup",
+        contract_name="claim_status_lookup",
+        tool_source_id="tool_mcp_claims_http",
+        risk_level="medium",
+        read_only=True,
+        requires_approval=False,
+        allowed_parameters=("claim_id",),
+        denied_parameters=("access_token",),
+        result_schema={
+            "type": "object",
+            "properties": {
+                "claim_id": {"type": "string"},
+                "status": {"type": "string"},
+            },
+            "required": ["claim_id", "status"],
+        },
+        summary_fields=("claim_id", "status"),
+        result_authority="authoritative_read",
+        imported_at="2026-06-20T00:00:00Z",
+    )
+    bound_contract = import_mcp_tool_contract(
+        imported_preview,
+        mcp_tool_name="claim.status.lookup",
+        contract_name="claim_status_lookup",
+        tool_source_id="tool_mcp_claims_http",
+        risk_level="medium",
+        read_only=True,
+        requires_approval=False,
+        allowed_parameters=("claim_id",),
+        denied_parameters=("access_token",),
+        result_schema={
+            "type": "object",
+            "properties": {
+                "claim_id": {"type": "string"},
+                "status": {"type": "string"},
+                "updated_at": {"type": "string"},
+            },
+            "required": ["claim_id", "status", "updated_at"],
+        },
+        summary_fields=("claim_id", "status"),
+        result_authority="authoritative_read",
+        imported_at="2026-06-20T00:00:00Z",
+    )
+    store.validate_mcp_tool_source_publication(
+        source_id="tool_mcp_claims_http",
+        tool_contracts=(validated_contract,),
+        env={"CLAIMS_MCP_TOKEN": "secret-token"},
+        actor="operator",
+        transport=lambda _connection: (
+            MCPDiscoveredTool(
+                name="claim.status.lookup",
+                description="Lookup claim status",
+                input_schema={
+                    "type": "object",
+                    "properties": {"claim_id": {"type": "string"}},
+                    "required": ["claim_id"],
+                },
+            ),
+        ),
+    )
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=ContractBundle(
+            agent_yaml="name: enterprise_qa\n",
+            policy_yaml="rules: []\n",
+            tools_yaml=yaml.safe_dump({"tools": [bound_contract]}, sort_keys=False),
+        ),
+        actor="local-user",
+    )
+
+    with pytest.raises(ProofAgentError) as blocked:
+        store.publish_version(
+            agent_id=draft.agent_id,
+            draft_id=draft.draft_id,
+            validation_run_id="run_validation_001",
+            actor="publisher",
+        )
+
+    assert blocked.value.code == "PA_CONFIG_002"
+    assert "does not cover MCP Tool Contract snapshot" in blocked.value.message
+    assert store.list_versions(draft.agent_id) == []
+    assert store.get_active_version(draft.agent_id) is None
 
 
 def test_records_sensitive_validation_capture_artifact_with_default_ttl(

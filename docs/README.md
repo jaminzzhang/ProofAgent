@@ -47,6 +47,12 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | --- | --- |
 | `evaluation-system.md` | Governed Agent evaluation model, including Governed Resolution Rate, deterministic gates, judge-led diagnostic scoring, release thresholds, and production curation |
 
+## Implementation Specs
+
+| Document | Purpose |
+| --- | --- |
+| `specs/mcp-tool-gateway-support.md` | Implementation slices and test plan for accepted MCP Tool Gateway support decisions. Specs must stay subordinate to ADRs, concept contracts, and `technical-design.md`. |
+
 ## Examples
 
 | Document | Purpose |

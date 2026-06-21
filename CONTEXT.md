@@ -190,6 +190,78 @@ _Avoid_: One tool admin boolean, Agent edit permission reuse, request-body actor
 The Dashboard-managed plugin-like contract that describes a reusable Tool Source's provider type, configuration schema, credential references, available Tool Contracts, validation behavior, and binding options.
 _Avoid_: Ad hoc tool form, hardcoded Dashboard tool config, executable plugin script
 
+**MCP Tool Source Adapter**:
+A Capability Layer adapter that connects to an MCP server and exposes selected MCP tools as governed Tool Contracts behind Tool Gateway.
+_Avoid_: Direct model-to-MCP execution, provider-native tool call executor, separate MCP execution path
+
+**Dashboard-Managed MCP Tool Source**:
+A reusable Shared Asset Library Tool Source for an MCP server, administered through Dashboard configuration and bound to Agents through Agent Tool Bindings.
+_Avoid_: Package-local fixture, inline Agent-owned production connection, unvalidated shared MCP endpoint
+
+**Package-Local MCP Tool Source**:
+An MCP Tool Source definition carried inside a reviewable Agent Package for examples, tests, local development, or package-scoped execution outside the Dashboard Configuration Store.
+_Avoid_: Shared Asset Library Tool Source, production reusable connection, inline secret-bearing MCP config
+
+**MCP Transport Adapter**:
+The transport-specific MCP connection implementation for stdio or HTTP, responsible for protocol exchange while Tool Gateway owns governance and execution admission.
+_Avoid_: Tool authorization layer, provider-native agent runtime, ungoverned MCP client
+
+**Run-Scoped MCP Session**:
+A short-lived MCP connection lifecycle that may be reused for one Tool Source within one active governed run and must close at run completion, approval pause, or failure without cross-run pooling.
+_Avoid_: Global MCP connection pool, approval-wait held session, cross-tenant MCP session reuse
+
+**MCP SDK Protocol Boundary**:
+The dependency boundary where the official MCP SDK performs protocol operations such as initialize, tools/list, and tools/call, while Proof Agent owns Tool Contract mapping, authorization, approval, result validation, retry, trace, and receipt semantics.
+_Avoid_: LangChain tool execution path, SDK-owned governance, provider-native tool semantics
+
+**MCP HTTP Credential Boundary**:
+The V1 authentication boundary for HTTP MCP Tool Sources: no auth or static environment-variable credential references are allowed, while OAuth, refresh-token management, and per-user delegated authorization are excluded.
+_Avoid_: Raw secret in Agent Contract, runtime OAuth flow, customer-delegated MCP authorization
+
+**MCP Tool Discovery**:
+The adapter-owned inspection of an MCP server's available tool schemas for operator review before any Agent may propose or execute them.
+_Avoid_: Automatic Agent tool enablement, runtime permission grant, model-visible full MCP catalog
+
+**MCP Tools-Only V1 Boundary**:
+The first MCP integration boundary that supports MCP tool discovery and calls while excluding MCP resources, prompts, sampling, elicitation, and other protocol capabilities.
+_Avoid_: MCP resource as Knowledge Source, MCP prompt as Harness prompt, full MCP capability import
+
+**Curated MCP Tool Import**:
+The explicit operator action that converts selected discovered MCP tool schemas into governed Tool Contracts before Agent Tool Bindings can reference them.
+_Avoid_: Auto-import all MCP tools, implicit Tool Contract creation, discovery-time Agent authorization
+
+**MCP Tool Contract Snapshot**:
+The immutable Tool Contract version produced by Curated MCP Tool Import from one discovered MCP tool schema, used for parameter and result validation during governed runs.
+_Avoid_: Live MCP schema as runtime authority, mutable discovered schema, latest-server-schema replay
+
+**MCP Tool Source Validation**:
+The pre-publication check that an MCP Tool Source can initialize over its configured transport, list tools, authenticate through allowed credential references, and prove discovered tool schemas remain compatible with imported Tool Contract snapshots.
+_Avoid_: Save-only connection trust, runtime-only MCP health check, schema drift ignored until execution
+
+**MCP Agent Tool Publication Validation**:
+The Agent Publication gate that verifies Agent Tool Bindings reference active MCP Tool Sources, valid MCP Tool Contract Snapshots, compatible live schemas, complete result and summary rules, and stricter MCP Action Tool Governance when state-changing tools are bound.
+_Avoid_: Publish with stale MCP binding, best-effort tool availability, post-publication schema repair
+
+**MCP Tool Result Classification**:
+The Control Plane classification that treats MCP tool results as Observation Records by default and admits only authorized, redacted, schema-validated read results as Authorized Tool Results for claim support.
+_Avoid_: MCP result as Accepted Evidence, raw MCP payload in answer, automatic evidence admission
+
+**MCP Tool Summary Projection**:
+The deterministic planner-visible summary of an MCP tool result, extracted only from Tool Contract `summary_fields` after result validation and redaction.
+_Avoid_: MCP server-selected summary, adapter-selected prompt context, raw MCP result in planner context
+
+**MCP Tool Audit Projection**:
+The trace and Governance Receipt projection for governed MCP tool use, recording source, transport, contract, approval, redacted parameter, validation, latency, retry, failure, and action-governance facts without secrets or raw payloads.
+_Avoid_: Raw MCP transcript in receipt, secret-bearing endpoint log, unstructured tool debug dump
+
+**MCP Tool Execution Failure**:
+The fail-closed execution fact recorded when an MCP transport, server response, authorization state, timeout, process exit, or schema validation prevents a governed MCP tool call from producing an admitted result.
+_Avoid_: Silent retry, model-invented tool result, successful tool observation
+
+**MCP Action Tool Governance**:
+The stricter publication and runtime rule set for state-changing MCP tools, requiring explicit enablement, approval, idempotency parameters, side-effect classification, no automatic retry, and action-confirmation result handling.
+_Avoid_: Default-enabled write tool, retryable side effect, action result as evidence
+
 **Agent Tool Binding**:
 The Agent-specific configuration that enables selected Tool Contracts and constrains their proposal scope, approval behavior, call budget, and authorization conditions.
 _Avoid_: Tool Source, ungoverned tool list, provider-native tool call
@@ -937,6 +1009,10 @@ _Avoid_: Per-disabled-stage execution event, hidden capability omission, Dashboa
 **Tool Proposal Scope**:
 The run-specific set of Tool Contract identifiers that a ReAct Planner may mention in ReAct Action Proposal values before Harness policy decides whether execution is allowed.
 _Avoid_: Tool execution permission, provider-native tool list, prompt-only allowlist
+
+**Effective Tool Proposal Scope**:
+The planner-visible, run-time subset of Tool Proposal Scope after intent admission, Workflow Template stage context, caller audience, policy prechecks, and tool budget constraints are applied.
+_Avoid_: Full Agent tool catalog, full MCP tool catalog, complete parameter schema dump
 
 **Auto Review Mode**:
 A Harness operating mode where configured rules and, when enabled, a Harness Review Subagent review control nodes without human approval unless a decision requires it.

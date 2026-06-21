@@ -11,7 +11,8 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -52,6 +53,7 @@ from proof_agent.contracts import (
     KnowledgeSourceReferenceSummary,
     KnowledgeSourceSnapshotDocument,
     KnowledgeSourceSnapshotManifest,
+    MCPToolSourcePublicationValidation,
     PublishedAgentVersion,
     PublishedWorkflowStageConfigurationSnapshot,
     QuarantinedKnowledgeUpload,
@@ -108,6 +110,9 @@ VALIDATION_CAPTURE_EXCLUSION_METADATA = {
     "runtime_state_dicts": "excluded",
     "intermediate_results": "summary_only",
 }
+
+if TYPE_CHECKING:
+    from proof_agent.capabilities.tools.mcp_discovery import MCPDiscoveryTransport
 
 
 @dataclass(frozen=True)
@@ -230,9 +235,7 @@ class LocalAgentConfigurationStore:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             draft = self._require_draft(agent_id, draft_id)
             self._require_shared_model_connections_active_unlocked(draft.contract_bundle.agent_yaml)
-            _require_no_unavailable_workflow_stage_configuration(
-                draft.contract_bundle.agent_yaml
-            )
+            _require_no_unavailable_workflow_stage_configuration(draft.contract_bundle.agent_yaml)
             if resolved_knowledge_bindings is not None:
                 _require_resolved_shared_bindings_cover_draft(
                     draft.contract_bundle.agent_yaml,
@@ -246,6 +249,9 @@ class LocalAgentConfigurationStore:
                     "Published Agent Version requires resolved shared Knowledge Source bindings. "
                     "Revalidate the Draft Agent before publishing."
                 )
+            self._require_mcp_tool_sources_publishable_unlocked(
+                draft.contract_bundle.tools_yaml
+            )
             version = PublishedAgentVersion(
                 agent_id=agent_id,
                 version_id=f"version_{uuid4().hex[:8]}",
@@ -261,9 +267,7 @@ class LocalAgentConfigurationStore:
                     draft.contract_bundle.agent_yaml
                 ),
                 effective_workflow_stage_configuration=(
-                    _build_effective_workflow_stage_configuration(
-                        draft.contract_bundle.agent_yaml
-                    )
+                    _build_effective_workflow_stage_configuration(draft.contract_bundle.agent_yaml)
                 ),
                 operation_audit=(
                     _audit(
@@ -762,6 +766,12 @@ class LocalAgentConfigurationStore:
             params,
             field_prefix=f"tool_sources[{source_id}].params",
         )
+        _validate_tool_source_configuration(
+            provider=provider,
+            source_type=source_type,
+            params=params,
+            credential_env_ref=credential_env_ref,
+        )
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             if self.get_tool_source(source_id) is not None:
                 raise ValueError(f"Tool Source already exists: {source_id}")
@@ -815,6 +825,97 @@ class LocalAgentConfigurationStore:
                 sources.append(source)
         return sorted(sources, key=lambda source: source.created_at)
 
+    def get_mcp_tool_source_publication_validation(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+    ) -> MCPToolSourcePublicationValidation | None:
+        path = self._tool_source_publication_validation_path(source_id, validation_id)
+        if not path.exists():
+            return None
+        try:
+            return MCPToolSourcePublicationValidation.model_validate(_read_json(path))
+        except (OSError, json.JSONDecodeError, ValidationError) as exc:
+            raise _tool_source_lifecycle_conflict(
+                "MCP Tool Source Publication Validation record is malformed."
+            ) from exc
+
+    def list_mcp_tool_source_publication_validations(
+        self,
+        source_id: str,
+    ) -> list[MCPToolSourcePublicationValidation]:
+        self._require_tool_source(source_id)
+        validations_root = self._tool_source_publication_validations_root(source_id)
+        if not validations_root.exists():
+            return []
+        validations = []
+        for path in validations_root.glob("*.json"):
+            validation = self.get_mcp_tool_source_publication_validation(
+                source_id=source_id,
+                validation_id=path.stem,
+            )
+            if validation is not None:
+                validations.append(validation)
+        return sorted(validations, key=lambda validation: validation.created_at)
+
+    def validate_mcp_tool_source_publication(
+        self,
+        *,
+        source_id: str,
+        tool_contracts: tuple[Mapping[str, Any], ...],
+        actor: str,
+        env: Mapping[str, str] | None = None,
+        transport: MCPDiscoveryTransport | None = None,
+    ) -> MCPToolSourcePublicationValidation:
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            source = self._require_tool_source(source_id)
+            source_config_revision = source.config_revision
+
+        from proof_agent.capabilities.tools.mcp_discovery import (
+            validate_mcp_tool_source_publication as validate_live_mcp_tool_source_publication,
+        )
+
+        preview = validate_live_mcp_tool_source_publication(
+            source,
+            tool_contracts=tool_contracts,
+            env=env,
+            transport=transport,
+        )
+        relevant_contracts = tuple(
+            contract
+            for contract in tool_contracts
+            if contract.get("source") == "mcp" and contract.get("tool_source_id") == source_id
+        )
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            current_source = self._require_tool_source(source_id)
+            if current_source.config_revision != source_config_revision:
+                raise _tool_source_lifecycle_conflict(
+                    "MCP Tool Source changed during publication validation."
+                )
+            validation = MCPToolSourcePublicationValidation(
+                validation_id=f"mcptspubval_{uuid4().hex[:8]}",
+                source_id=current_source.source_id,
+                config_revision=current_source.config_revision,
+                status="passed",
+                tool_contract_ids=tuple(
+                    str(contract.get("name", "")) for contract in relevant_contracts
+                ),
+                mcp_tool_names=tuple(
+                    str(contract.get("mcp_tool_name", "")) for contract in relevant_contracts
+                ),
+                contract_snapshot_digests=tuple(
+                    _mcp_contract_snapshot_digest(contract) for contract in relevant_contracts
+                ),
+                discovered_tool_count=preview.tool_count,
+                trace_safe_metadata=preview.trace_safe_metadata,
+                created_at=_now(),
+                created_by=actor,
+            )
+            self._write_mcp_tool_source_publication_validation(validation)
+            return validation
+
     def update_tool_source(
         self,
         *,
@@ -849,9 +950,7 @@ class LocalAgentConfigurationStore:
             updated = existing.model_copy(
                 update={
                     "name": name if name is not None else existing.name,
-                    "source_type": source_type
-                    if source_type is not None
-                    else existing.source_type,
+                    "source_type": source_type if source_type is not None else existing.source_type,
                     "provider": provider if provider is not None else existing.provider,
                     "tool_contract_ids": tool_contract_ids
                     if tool_contract_ids is not None
@@ -863,6 +962,12 @@ class LocalAgentConfigurationStore:
                     "config_revision": existing.config_revision + 1,
                     "updated_at": _now(),
                 }
+            )
+            _validate_tool_source_configuration(
+                provider=updated.provider,
+                source_type=updated.source_type,
+                params=updated.params,
+                credential_env_ref=updated.credential_env_ref,
             )
             self._write_tool_source(updated)
             self._record_configuration_operation_unlocked(
@@ -3176,6 +3281,16 @@ class LocalAgentConfigurationStore:
     def _tool_source_path(self, source_id: str) -> Path:
         return self._tool_source_root(source_id) / "source.json"
 
+    def _tool_source_publication_validations_root(self, source_id: str) -> Path:
+        return self._tool_source_root(source_id) / "publication_validations"
+
+    def _tool_source_publication_validation_path(
+        self,
+        source_id: str,
+        validation_id: str,
+    ) -> Path:
+        return self._tool_source_publication_validations_root(source_id) / f"{validation_id}.json"
+
     def _knowledge_source_root(self, source_id: str) -> Path:
         raw_source_id = source_id.strip()
         source_path = Path(raw_source_id)
@@ -3246,6 +3361,63 @@ class LocalAgentConfigurationStore:
         if source is None:
             raise KeyError(f"Tool Source not found: {source_id}")
         return source
+
+    def _require_mcp_tool_sources_publishable_unlocked(self, tools_yaml: str) -> None:
+        for tool in _mcp_tool_contracts(tools_yaml):
+            _require_mcp_action_tool_governance(tool)
+            tool_name = tool.get("name")
+            tool_contract_id = tool_name if isinstance(tool_name, str) else ""
+            tool_source_id = tool.get("tool_source_id")
+            if not isinstance(tool_source_id, str) or not tool_source_id.strip():
+                raise _tool_source_lifecycle_conflict(
+                    "MCP Tool Contract requires an active Tool Source binding."
+                )
+            source_id = tool_source_id.strip()
+            source = self.get_tool_source(source_id)
+            if source is None:
+                raise _tool_source_lifecycle_conflict(f"Tool Source {source_id} is missing.")
+            if source.provider != "mcp":
+                raise _tool_source_lifecycle_conflict(
+                    f"Tool Source {source_id} is not an MCP Tool Source."
+                )
+            if source.lifecycle_state is ToolSourceLifecycleState.ARCHIVED:
+                raise _tool_source_lifecycle_conflict(f"Tool Source {source_id} is archived.")
+            if tool_contract_id not in source.tool_contract_ids:
+                raise _tool_source_lifecycle_conflict(
+                    f"Tool Source {source_id} has not imported Tool Contract {tool_contract_id}."
+                )
+            self._require_mcp_tool_source_publication_validation_unlocked(source, tool)
+
+    def _require_mcp_tool_source_publication_validation_unlocked(
+        self,
+        source: ToolSource,
+        tool: Mapping[str, Any],
+    ) -> None:
+        validations = self.list_mcp_tool_source_publication_validations(source.source_id)
+        if not validations:
+            raise _tool_source_lifecycle_conflict(
+                f"Published Agent Version requires passed MCP Tool Source publication "
+                f"validation for {source.source_id}."
+            )
+        current_revision_validations = tuple(
+            validation
+            for validation in validations
+            if validation.config_revision == source.config_revision
+        )
+        if not current_revision_validations:
+            raise _tool_source_lifecycle_conflict(
+                f"Published Agent Version has stale MCP Tool Source publication validation "
+                f"for {source.source_id}."
+            )
+        snapshot_digest = _mcp_contract_snapshot_digest(tool)
+        if not any(
+            snapshot_digest in validation.contract_snapshot_digests
+            for validation in current_revision_validations
+        ):
+            raise _tool_source_lifecycle_conflict(
+                f"MCP Tool Source publication validation for {source.source_id} "
+                "does not cover MCP Tool Contract snapshot."
+            )
 
     def _require_shared_model_connections_active_unlocked(self, value: Any) -> None:
         for connection_id in sorted(_shared_model_connection_ids(value)):
@@ -3415,6 +3587,18 @@ class LocalAgentConfigurationStore:
         _write_json_atomic(
             self._tool_source_path(source.source_id),
             source.model_dump(mode="json"),
+        )
+
+    def _write_mcp_tool_source_publication_validation(
+        self,
+        validation: MCPToolSourcePublicationValidation,
+    ) -> None:
+        _write_json_atomic(
+            self._tool_source_publication_validation_path(
+                validation.source_id,
+                validation.validation_id,
+            ),
+            validation.model_dump(mode="json"),
         )
 
     def _write_model_connection_validation(
@@ -3759,6 +3943,55 @@ def _shared_knowledge_binding_sources(agent_yaml: str) -> dict[str, str]:
     return binding_sources
 
 
+def _mcp_tool_contracts(tools_yaml: str) -> tuple[Mapping[str, Any], ...]:
+    raw = yaml.safe_load(tools_yaml) or {}
+    if not isinstance(raw, Mapping):
+        return ()
+    tools = raw.get("tools")
+    if not isinstance(tools, list | tuple):
+        return ()
+    return tuple(
+        tool
+        for tool in tools
+        if isinstance(tool, Mapping) and tool.get("source") == "mcp"
+    )
+
+
+def _mcp_contract_snapshot_digest(contract: Mapping[str, Any]) -> str:
+    snapshot = contract.get("mcp_contract_snapshot")
+    if not isinstance(snapshot, Mapping):
+        return ""
+    digest = snapshot.get("digest")
+    return digest.strip() if isinstance(digest, str) else ""
+
+
+def _require_mcp_action_tool_governance(tool: Mapping[str, Any]) -> None:
+    if bool(tool.get("read_only", False)):
+        return
+    if not bool(tool.get("requires_approval", False)):
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "MCP action tools require approval.",
+            "Set requires_approval: true for state-changing MCP tools.",
+        )
+    allowed_parameters = tool.get("allowed_parameters")
+    if not isinstance(allowed_parameters, list | tuple) or "idempotency_key" not in {
+        str(parameter) for parameter in allowed_parameters
+    }:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "MCP action tools require idempotency_key in allowed_parameters.",
+            "Add idempotency_key to the Tool Contract parameter schema and allowlist.",
+        )
+    side_effect_class = tool.get("side_effect_class")
+    if not isinstance(side_effect_class, str) or not side_effect_class.strip():
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "MCP action tools require side_effect_class.",
+            "Declare the action side effect class for audit and retry governance.",
+        )
+
+
 def _now() -> str:
     return _format_timestamp(datetime.now(UTC))
 
@@ -4095,6 +4328,86 @@ def _invalid_tool_source_id(source_id: str) -> ProofAgentError:
         f"Tool Source source_id is invalid: {source_id!r}.",
         "Use a non-empty Source id without path separators, '.' or '..'.",
     )
+
+
+def _validate_tool_source_configuration(
+    *,
+    provider: str,
+    source_type: str,
+    params: Mapping[str, Any],
+    credential_env_ref: str | None,
+) -> None:
+    if provider != "mcp":
+        return
+    if source_type != "mcp_server":
+        raise _invalid_mcp_tool_source(
+            "MCP Tool Source requires source_type=mcp_server.",
+            "Use source_type=mcp_server for provider=mcp Tool Sources.",
+        )
+    transport = params.get("transport")
+    if transport not in {"stdio", "http"}:
+        raise _invalid_mcp_tool_source(
+            "MCP Tool Source requires params.transport to be stdio or http.",
+            "Set params.transport: stdio or params.transport: http.",
+        )
+    server_label = params.get("server_label")
+    if not isinstance(server_label, str) or not server_label.strip():
+        raise _invalid_mcp_tool_source(
+            "MCP Tool Source requires params.server_label.",
+            "Set a trace-safe MCP server label.",
+        )
+    if transport == "stdio":
+        command = params.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise _invalid_mcp_tool_source(
+                "stdio MCP Tool Source requires params.command.",
+                "Set params.command to the MCP server command.",
+            )
+    if transport == "http":
+        endpoint = params.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise _invalid_mcp_tool_source(
+                "HTTP MCP Tool Source requires params.endpoint.",
+                "Set params.endpoint to an absolute http(s) URL.",
+            )
+        parsed = urlparse(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise _invalid_mcp_tool_source(
+                "HTTP MCP Tool Source params.endpoint must be an absolute http(s) URL.",
+                "Set params.endpoint to an absolute http(s) URL.",
+            )
+    if transport == "http":
+        _validate_mcp_http_auth(params.get("auth"), credential_env_ref=credential_env_ref)
+
+
+def _validate_mcp_http_auth(
+    auth: Any,
+    *,
+    credential_env_ref: str | None,
+) -> None:
+    if auth is None:
+        return
+    if not isinstance(auth, Mapping):
+        raise _invalid_mcp_tool_source(
+            "HTTP MCP auth must be a mapping.",
+            "Use auth.type with optional env references, or omit auth for no auth.",
+        )
+    auth_type = auth.get("type", "no_auth")
+    if auth_type not in {"no_auth", "bearer_env", "header_env"}:
+        raise _invalid_mcp_tool_source(
+            "HTTP MCP auth.type is not supported in V1.",
+            "Use no_auth, bearer_env, or header_env with environment-variable references.",
+        )
+    env = auth.get("env")
+    if credential_env_ref is not None and env is not None and env != credential_env_ref:
+        raise _invalid_mcp_tool_source(
+            "HTTP MCP auth env must match credential_env_ref.",
+            "Use one environment-variable credential reference for the Tool Source.",
+        )
+
+
+def _invalid_mcp_tool_source(message: str, remediation: str) -> ProofAgentError:
+    return ProofAgentError("PA_TOOL_SOURCE_001", message, remediation)
 
 
 def _invalid_configuration_operation_id(operation_id: str) -> ProofAgentError:

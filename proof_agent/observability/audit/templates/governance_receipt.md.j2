@@ -162,6 +162,18 @@ Question: {{ question }}
 
 ## Tools
 
+{% if tool_result_summaries %}
+### Result Summaries
+
+| Tool Contract | Provider | Tool Source | MCP Tool | Classification | Schema | Contract Snapshot | Side Effect | Idempotency Key | Summary |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+{% for result in tool_result_summaries %}
+| {{ result.tool_contract_id }} | {{ result.provider }} | {{ result.tool_source_id }} | {{ result.mcp_tool_name }} | {{ result.classification }} | {{ result.schema_validation }} | {{ result.contract_snapshot_digest }} | {{ result.side_effect_class }} | {{ result.idempotency_key_digest }} | {{ result.summary }} |
+{% endfor %}
+{% endif %}
+
+### Events
+
 {% if tool_events %}
 {% for event in tool_events %}
 - {{ event.event_type }}: {{ event.status }}
