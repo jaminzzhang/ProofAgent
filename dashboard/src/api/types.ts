@@ -348,6 +348,51 @@ export interface HandoffsResponse {
   data: HandoffProjection[]
 }
 
+export type EvaluationCampaignReadinessStatus = 'ready' | 'blocked'
+export type EvaluationCampaignCapabilityStatus = 'passed' | 'failed' | 'not_covered'
+
+export interface EvaluationCampaignSuiteRun {
+  source: string
+  suite_id: string
+  suite_version: string
+  analysis_id: string
+  release_decision_status: 'passed' | 'blocked'
+  total_required_cases: number
+  passed_required_cases: number
+  governed_resolution_rate: number
+  artifact_dir: string
+}
+
+export interface EvaluationCampaignCapabilityCoverage {
+  capability_path: string
+  status: EvaluationCampaignCapabilityStatus
+  required_cases: number
+  passed_required_cases: number
+  failed_required_cases: number
+}
+
+export interface EvaluationCampaignSummary {
+  campaign_id: string
+  version: string
+  target_agent_id: string
+  target_agent_version_id: string | null
+  readiness_status: EvaluationCampaignReadinessStatus
+  blocking_reasons: string[]
+  governed_resolution_rate: number
+  artifact_sufficiency_rate: number
+  deterministic_gate_pass_rate: number
+  suite_runs: EvaluationCampaignSuiteRun[]
+  capability_coverage: EvaluationCampaignCapabilityCoverage[]
+  artifact_dir: string
+}
+
+export interface EvaluationCampaignsResponse {
+  data: EvaluationCampaignSummary[]
+  meta: {
+    total: number
+  }
+}
+
 export interface ContractBundle {
   agent_yaml: string
   policy_yaml: string

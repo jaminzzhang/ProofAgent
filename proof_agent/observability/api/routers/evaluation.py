@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -16,12 +16,17 @@ from proof_agent.contracts import (
     EvaluationResponseProjectionAudience,
     EvaluationSubjectExportSelection,
 )
+from proof_agent.evaluation.campaign_store import EvaluationCampaignStore
 from proof_agent.evaluation.errors import EvaluationInputError
 from proof_agent.evaluation.subject_exports import (
     export_evaluation_subject_manifest_from_run_store,
 )
 from proof_agent.evaluation.store import EvaluationStore
-from proof_agent.observability.api.dependencies import get_evaluation_store, get_store
+from proof_agent.observability.api.dependencies import (
+    get_evaluation_campaign_store,
+    get_evaluation_store,
+    get_store,
+)
 from proof_agent.observability.storage.run_store import RunStore
 
 router = APIRouter(tags=["evaluation"])
@@ -40,6 +45,33 @@ def list_evaluation_analyses(
         "data": [_jsonable(analysis.model_dump(mode="python", warnings=False)) for analysis in analyses],
         "meta": {"total": len(analyses)},
     }
+
+
+@router.get("/evaluation/campaigns")
+def list_evaluation_campaigns(
+    store: EvaluationCampaignStore = Depends(get_evaluation_campaign_store),
+) -> dict[str, Any]:
+    """List Evaluation Campaign page-data summaries."""
+
+    campaigns = store.list_campaigns()
+    return {
+        "data": [_jsonable(campaign) for campaign in campaigns],
+        "meta": {"total": len(campaigns)},
+    }
+
+
+@router.get("/evaluation/campaigns/{campaign_id}")
+def get_evaluation_campaign(
+    campaign_id: str,
+    store: EvaluationCampaignStore = Depends(get_evaluation_campaign_store),
+) -> dict[str, Any]:
+    """Read one Evaluation Campaign page-data summary."""
+
+    try:
+        campaign = store.get_campaign(campaign_id)
+    except EvaluationInputError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return cast(dict[str, Any], _jsonable(campaign))
 
 
 @router.get("/evaluation/analyses/{analysis_id}/cases")

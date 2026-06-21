@@ -20,6 +20,7 @@ from proof_agent.evaluation.demo.scenarios import (
     REACT_DEMO_SCENARIOS,
     SUPPORTED_QUESTION,
 )
+from proof_agent.evaluation.campaigns import run_evaluation_campaign
 from proof_agent.evaluation.errors import EvaluationInputError
 from proof_agent.evaluation.frozen_bundles import (
     freeze_evaluation_subject_bundle,
@@ -35,7 +36,9 @@ if TYPE_CHECKING:
 
 app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
+campaign_app = typer.Typer(no_args_is_help=True)
 app.add_typer(evaluate_app, name="evaluate")
+evaluate_app.add_typer(campaign_app, name="campaign")
 
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
@@ -241,6 +244,36 @@ def evaluate_analyze(
             + ", ".join(summary.release_decision.blocking_reasons)
         )
     if summary.release_decision.status == EvaluationReleaseDecisionStatus.BLOCKED:
+        raise typer.Exit(code=1)
+
+
+@campaign_app.command("run")
+def evaluate_campaign_run(
+    campaign: str = typer.Option(..., "--campaign", help="Evaluation Campaign YAML path"),
+    output_dir: str = typer.Option(
+        "runs/evaluation_campaigns",
+        "--output-dir",
+        help="Directory for Evaluation Campaign artifacts",
+    ),
+) -> None:
+    """Run a manifest-driven Evaluation Campaign over declared subjects."""
+
+    try:
+        summary = run_evaluation_campaign(
+            campaign_path=Path(campaign),
+            output_dir=Path(output_dir),
+        )
+    except EvaluationInputError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"Campaign: {summary.campaign_id}")
+    typer.echo(f"Readiness: {summary.readiness_status.value}")
+    typer.echo(f"Artifacts: {summary.artifact_dir}")
+    typer.echo(f"Governed Resolution Rate: {summary.governed_resolution_rate:.3f}")
+    if summary.blocking_reasons:
+        typer.echo("Blocking Reasons: " + ", ".join(summary.blocking_reasons))
+    if summary.readiness_status.value == "blocked":
         raise typer.Exit(code=1)
 
 

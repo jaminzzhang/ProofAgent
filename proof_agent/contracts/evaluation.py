@@ -96,6 +96,17 @@ class EvaluationReleaseDecisionStatus(str, Enum):
     BLOCKED = "blocked"
 
 
+class EvaluationCampaignReadinessStatus(str, Enum):
+    READY = "ready"
+    BLOCKED = "blocked"
+
+
+class EvaluationCampaignCapabilityStatus(str, Enum):
+    PASSED = "passed"
+    FAILED = "failed"
+    NOT_COVERED = "not_covered"
+
+
 class EvaluationResponseAssertions(FrozenModel):
     must_include_any: tuple[str, ...] = Field(default_factory=tuple)
     must_not_include: tuple[str, ...] = Field(default_factory=tuple)
@@ -391,3 +402,40 @@ class EvaluationAnalysisSummary(FrozenModel):
     @classmethod
     def freeze_agent(cls, value: Any) -> Any:
         return freeze_value(value)
+
+
+class EvaluationCampaignSuiteRun(FrozenModel):
+    source: str
+    suite_id: str
+    suite_version: str
+    analysis_id: str
+    release_decision_status: EvaluationReleaseDecisionStatus
+    total_required_cases: int
+    passed_required_cases: int
+    governed_resolution_rate: float
+    artifact_dir: Path | None = None
+
+
+class EvaluationCampaignCapabilityCoverage(FrozenModel):
+    capability_path: str
+    status: EvaluationCampaignCapabilityStatus
+    required_cases: int
+    passed_required_cases: int
+    failed_required_cases: int
+
+
+class EvaluationCampaignSummary(FrozenModel):
+    campaign_id: str
+    version: str
+    target_agent_id: str
+    target_agent_version_id: str | None = None
+    readiness_status: EvaluationCampaignReadinessStatus
+    blocking_reasons: tuple[str, ...] = Field(default_factory=tuple)
+    governed_resolution_rate: float
+    artifact_sufficiency_rate: float
+    deterministic_gate_pass_rate: float
+    suite_runs: tuple[EvaluationCampaignSuiteRun, ...] = Field(default_factory=tuple)
+    capability_coverage: tuple[EvaluationCampaignCapabilityCoverage, ...] = Field(
+        default_factory=tuple
+    )
+    artifact_dir: Path

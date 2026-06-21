@@ -290,7 +290,7 @@ Architecture layer mapping:
 | Capability Layer | `capabilities/models/`, `capabilities/knowledge/`, `capabilities/memory/`, `capabilities/tools/`, future Skill packs |
 | Contracts & Ports | `contracts/`, provider protocols |
 | Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/`, configuration audit records |
-| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, internal fixtures under `evaluation/demo/fixtures/`, public packages under `examples/insurance_customer_service/` and `examples/institution_insurance_specialist/`, and the post-run Evaluation Analyzer described in `docs/evaluation-system.md` |
+| Evaluation / Demo | `evaluation/demo/`, `evaluation/compare/`, internal fixtures under `evaluation/demo/fixtures/`, public packages under `examples/insurance_customer_service/` and `examples/institution_insurance_specialist/`, the post-run Evaluation Analyzer described in `docs/evaluation-system.md`, and the future Evaluation Campaign orchestration described in `docs/evaluation-campaign-system.md` |
 
 Boundary rules:
 - `contracts/` cannot import adapter SDKs.
@@ -303,6 +303,7 @@ Boundary rules:
 - `observability/api/` and `observability/storage/` expose read-only observability and must not create a second execution path.
 - Evaluation Analyzer is post-run analysis only. It reads Evaluation Subject Manifest, Trace, Governance Receipt, run metadata, and audience-safe response projection artifacts; it must not start runs, call models, retrieve knowledge, execute tools, invoke PolicyEngine, or import Runtime/Control Workflow/Capability/Bootstrap execution paths.
 - Evaluation Run Producer is a future helper, separate from Analyzer. It may create sample subjects only through existing execution surfaces and must not own gate logic or evaluation semantics.
+- Evaluation Campaign is an orchestration layer for the Active Published Agent Version. Its first implementation runs declared suites and subject manifests through the post-run Analyzer and writes Campaign/page-data artifacts. Future sample production may create `evaluation_sample` runs only through application-facing execution surfaces, and future coding-agent diagnostics may read only safe artifacts; Campaign must not create a hidden Harness runtime or let subjective diagnostics override deterministic gates.
 
 ## 7. Agent Contract
 
@@ -1188,6 +1189,10 @@ Dashboard routes:
 | `/api/runs/{run_id}` | run detail, including backend-owned `workflow_projection` when Workflow stage facts exist |
 | `/api/runs/{run_id}/trace` | trace events |
 | `/api/runs/{run_id}/receipt` | receipt markdown |
+| `GET /api/evaluation/campaigns` | future read-only Evaluation Campaign list for private Evaluation Lab |
+| `GET /api/evaluation/campaigns/{campaign_id}` | future read-only Evaluation Campaign summary and readiness projection |
+| `GET /api/evaluation/campaigns/{campaign_id}/cases` | future read-only Evaluation Campaign case and diagnostic projection |
+| `GET /api/evaluation/campaigns/{campaign_id}/trends` | future read-only version-aware campaign trend projection |
 | `GET /api/approvals` | global pending approval queue projection sorted by newest request first |
 | `POST /api/runs/{run_id}/approvals/{approval_id}/approve` | append approval-granted decision to the original run trace; requires Operator Identity Context with `approval.resolve` |
 | `POST /api/runs/{run_id}/approvals/{approval_id}/deny` | append approval-denied decision to the original run trace; requires Operator Identity Context with `approval.resolve` |
@@ -1215,6 +1220,7 @@ CLI commands:
 | `proof-agent inspect` | summarize trace or receipt |
 | `proof-agent compare` | Plain RAG vs Harness RAG |
 | `proof-agent evaluate analyze` | planned post-run Evaluation Analyzer over an Evaluation Suite and Evaluation Subject Manifest; does not create Agent runs |
+| `proof-agent evaluate campaign run` | manifest-driven Evaluation Campaign command that invokes the Analyzer over declared suite and subject refs, writes Campaign summary artifacts, and produces private Evaluation Lab page data; future slices add fresh `evaluation_sample` production and coding-agent diagnostics |
 | `proof-agent dev` | start the local backend API and Knowledge Worker with `.env` loaded |
 | `proof-agent server` | start only the Dashboard API |
 

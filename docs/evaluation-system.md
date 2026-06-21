@@ -1,8 +1,10 @@
 # Proof Agent Evaluation System
 
-This document defines the Proof Agent evaluation system. Evaluation is post-run analysis: it evaluates completed governed runs from their artifacts and audience-safe response projections. It does not create Agent runs, call models, retrieve knowledge, execute tools, or become a second Harness runtime.
+This document defines the Proof Agent evaluation system. Evaluation Analysis is post-run analysis: it evaluates completed governed runs from their artifacts and audience-safe response projections. It does not create Agent runs, call models, retrieve knowledge, execute tools, or become a second Harness runtime.
 
 The first concrete target is the Insurance QA Evaluation Target, which applies the React Enterprise QA Template to the Insurance Service QA Domain and evaluates both business answer quality and Control Envelope behavior.
+
+For the repeatable coding-agent-led workflow that produces fresh evaluation sample runs, invokes this Analyzer, gathers diagnostics, and feeds the private Evaluation Lab page, see [evaluation-campaign-system.md](evaluation-campaign-system.md).
 
 See also [ADR-0023](adr/0023-evaluation-analyzer-decoupled-from-execution.md), which records the decision to decouple Evaluation Analyzer from execution.
 
@@ -24,12 +26,13 @@ See also [ADR-0023](adr/0023-evaluation-analyzer-decoupled-from-execution.md), w
 
 ## Architecture Boundary
 
-Evaluation has two separate capabilities:
+Evaluation has separate capabilities with explicit boundaries:
 
 | Capability | Responsibility | Boundary |
 | --- | --- | --- |
 | Evaluation Analyzer | Reads existing subjects and produces Evaluation Artifact Set files. | Must not call runtime, workflow, model, retrieval, policy, tool, or bootstrap execution paths. |
 | Evaluation Run Producer | Optional helper that creates sample runs through existing execution surfaces and exports subjects. | Must not own gate logic or evaluation semantics. Deferred beyond Analyzer V1. |
+| Evaluation Campaign | Repeatable orchestration that selects suites, produces sample runs through application-facing execution surfaces, invokes the Analyzer, gathers coding-agent diagnostics, and writes page data. | Owns orchestration and reporting only; Analyzer semantics and deterministic gates stay here. |
 
 Dashboard and RunStore may export Evaluation Subjects, but they do not evaluate. Evaluation Store contains analysis artifacts only, not copies of case run artifacts by default.
 
@@ -215,6 +218,8 @@ Reports must also include:
 
 Missing required subjects and insufficient required artifacts fail release/safety analysis. Monitoring analysis may report legacy or partial subjects separately, but they do not become release passes.
 
+Evaluation Campaigns may add Capability Coverage, Intelligent Resolution Quality, Resolved Case Efficiency, and Version-Aware Evaluation Trend on top of Analyzer output. These Campaign metrics must remain separate from deterministic gate results and must identify whether they are formal readiness blockers or diagnostics.
+
 ## Analyzer V1 Scope
 
 Analyzer V1 is intentionally small:
@@ -341,6 +346,8 @@ V1 does not execute LLM or human judges. Judge fields are reserved and reported 
 
 Judge diagnostics may later score correctness, completeness, groundedness clarity, usefulness, and safe wording from an Evaluation-Safe Judge Projection. Judge output remains diagnostic unless a future ADR defines a reviewed quality gate.
 
+Coding Agent Evaluation Assist, when used by an Evaluation Campaign, is a private diagnostic review over safe analysis artifacts and response projections. It may explain Intelligent Resolution Quality and suggest repair direction, but it does not directly change Analyzer gate status, release decision, or Active Agent Evaluation Readiness.
+
 ## Release Thresholds
 
 Analyzer V1 hard release checks are deterministic:
@@ -409,6 +416,8 @@ GET /api/evaluation/analyses/{analysis_id}/cases
 
 These APIs expose read-only projections over Analyzer artifacts. They do not re-run analysis or load full evaluated response text.
 
+Evaluation Campaigns write additional campaign-level artifacts under `runs/evaluation_campaigns/{campaign_id}/`, including Campaign summaries, coding-agent diagnostic summaries, private Evaluation Lab page data, and static Campaign reports. Those artifacts reference or embed Analyzer outputs rather than replacing the Evaluation Artifact Set.
+
 ### Evaluation Analysis Receipt
 
 The receipt records:
@@ -440,7 +449,8 @@ When suite, gate profile, subject manifest, or rubric versions change, trend rep
 ## Future Work
 
 - Evaluation Run Producer using existing execution surfaces.
+- Fresh sample production inside Coding-Agent-Led Evaluation Campaigns and private Evaluation Lab route.
 - Full scenario continuation linkage gates.
 - Audited Evaluation Judge and claim-level support diagnostics.
 - Production curation workflow with Domain Evaluation Reviewer and Harness Evaluation Reviewer confirmation.
-- Dashboard UI for evaluation overview, case drilldown, export selection, and curation workflows.
+- Dashboard UI for evaluation overview, case drilldown, export selection, campaign diagnostics, and curation workflows.

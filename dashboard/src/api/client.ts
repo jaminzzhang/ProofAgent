@@ -11,6 +11,8 @@ import type {
   ContractBundle,
   DraftAgent,
   DraftValidationResponse,
+  EvaluationCampaignsResponse,
+  EvaluationCampaignSummary,
   FoundationKnowledgeSourceValidation,
   HandoffsResponse,
   HealthResponse,
@@ -118,6 +120,14 @@ export function fetchHealth(): Promise<HealthResponse> {
 
 export function fetchHandoffs(): Promise<HandoffsResponse> {
   return fetchJson<HandoffsResponse>(`${BASE}/handoffs`)
+}
+
+export function fetchEvaluationCampaigns(): Promise<EvaluationCampaignsResponse> {
+  return fetchJson<EvaluationCampaignsResponse>(`${BASE}/evaluation/campaigns`)
+}
+
+export function fetchEvaluationCampaign(campaignId: string): Promise<EvaluationCampaignSummary> {
+  return fetchJson<EvaluationCampaignSummary>(`${BASE}/evaluation/campaigns/${campaignId}`)
 }
 
 export function fetchApprovals(params?: {
