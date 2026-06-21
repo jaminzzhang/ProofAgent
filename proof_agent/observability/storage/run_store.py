@@ -602,8 +602,9 @@ class RunStore:
         allowed_fields = {
             "decision",
             "selected_pack_id",
-            "recommended_pack_id",
-            "candidate_pack_ids",
+            "recommendation_type",
+            "route_confidence",
+            "candidate_packs",
             "intent_resolution_id",
             "candidate_count",
             "failure_reason",

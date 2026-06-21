@@ -603,8 +603,15 @@ def test_run_store_extracts_business_flow_skill_pack_trace_summary(
                 "payload": {
                     "decision": "admitted",
                     "selected_pack_id": "enterprise_policy_qa",
-                    "recommended_pack_id": "enterprise_policy_qa",
-                    "candidate_pack_ids": ["enterprise_policy_qa"],
+                    "recommendation_type": "single_pack",
+                    "route_confidence": 0.86,
+                    "candidate_packs": [
+                        {
+                            "pack_id": "enterprise_policy_qa",
+                            "confidence": 0.84,
+                            "reason": "Policy QA is relevant.",
+                        }
+                    ],
                     "intent_resolution_id": "intent_retrieval_1",
                     "candidate_count": 1,
                     "stage_prompt_addenda": {
@@ -641,8 +648,15 @@ def test_run_store_extracts_business_flow_skill_pack_trace_summary(
     assert summary == {
         "decision": "admitted",
         "selected_pack_id": "enterprise_policy_qa",
-        "recommended_pack_id": "enterprise_policy_qa",
-        "candidate_pack_ids": ["enterprise_policy_qa"],
+        "recommendation_type": "single_pack",
+        "route_confidence": 0.86,
+        "candidate_packs": [
+            {
+                "pack_id": "enterprise_policy_qa",
+                "confidence": 0.84,
+                "reason": "Policy QA is relevant.",
+            }
+        ],
         "intent_resolution_id": "intent_retrieval_1",
         "candidate_count": 1,
     }

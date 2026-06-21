@@ -25,6 +25,7 @@ from proof_agent.contracts import (
     RetrievalConfig,
     ReviewConfig,
     ReviewSubagentConfig,
+    SkillsAdmissionConfig,
     SkillsCapabilityConfig,
     ToolCapabilityConfig,
     WorkflowConfig,
@@ -275,8 +276,14 @@ def _skills_capability_config_from_mapping(
         business_flows = ()
     if not isinstance(business_flows, list | tuple):
         raise TypeError("capabilities.skills.business_flows must be a list")
+    admission = raw.get("admission", {})
+    if admission is None:
+        admission = {}
+    if not isinstance(admission, dict):
+        raise TypeError("capabilities.skills.admission must be a mapping")
     return SkillsCapabilityConfig(
         enabled=raw.get("enabled", False),
+        admission=SkillsAdmissionConfig(**admission),
         business_flows=tuple(
             _business_flow_skill_pack_binding_from_mapping(item, base_dir=base_dir)
             for item in business_flows

@@ -75,11 +75,11 @@ The first package-local Business Flow Skill Pack fields: id, label, description,
 _Avoid_: Executable steps, edges, scripts, model provider overrides, raw prompts, tool parameter templates, dynamic imports, inline tool schema, inline policy rule body
 
 **Business Flow Skill Pack Routing-Safe Summary**:
-The bounded selection-time summary of a Business Flow Skill Pack exposed to Intent Resolution, limited to identity, label, description, intent patterns or taxonomy references, default marker, and admission hints.
-_Avoid_: Full stage Prompt addenda, full tool scope summary, policy details, validator details, raw business instructions
+The only Business Flow Skill Pack content exposed to Intent Resolution for selection-time recommendation, limited to identity, label, description, intent patterns or taxonomy references, admission hints, and bounded capability reference counts or summaries.
+_Avoid_: Full stage Prompt addenda, full tool scope summary, policy details, validator details, raw business instructions, raw pack YAML
 
 **Business Flow Skill Pack Routing And Admission Configuration**:
-The pre-admission configuration used by Intent Resolution and the Control Plane to recommend and admit a Primary Business Flow Skill Pack, including intent patterns or taxonomy references, default marker, admission thresholds, ambiguity policy, and routing-safe summary preview.
+The pre-admission configuration used by Intent Resolution and the Control Plane to recommend and admit a Primary Business Flow Skill Pack, including Agent-level route confidence threshold, intent patterns or taxonomy references, pack-level admission thresholds, ambiguity policy, and routing-safe summary preview.
 _Avoid_: Stage Prompt addendum, full business guidance, Harness control prompt, selected-pack context application, model-answer instruction
 
 **Business Flow Skill Pack Binding**:
@@ -90,16 +90,80 @@ _Avoid_: Runtime discovery, latest pack lookup, unbound skill import, implicit i
 The immutable set of Business Flow Skill Pack Bindings captured inside a Published Agent Version and copied into each run so Intent Resolution can choose only among prevalidated packs.
 _Avoid_: Mutable skill catalog, runtime pack loading, latest pack resolution, unpublished business flow
 
+**Business Flow Recommendation Eligibility**:
+The run condition that Business Flow Skill Pack Recommendation is required only when the Agent has enabled skills and has a non-empty Published Business Flow Skill Pack Set; skills-disabled runs produce Intent Resolution without a Business Flow Skill Pack Recommendation.
+_Avoid_: Empty routing prompt, recommendation for disabled skills, optional recommendation with enabled skills
+
 **Primary Business Flow Skill Pack**:
 The single Business Flow Skill Pack selected or recommended for one governed run from the Published Business Flow Skill Pack Set, used to frame domain context and business-plan projection without combining multiple pack authorities.
 _Avoid_: Multi-pack merge, tool scope union, policy rule union, validator stacking by intent
 
+**Composite Business Flow Request**:
+A user request that spans multiple business concerns that could relate to more than one Business Flow Skill Pack; V1 handles it through a purpose-built composite pack, a No Business Flow Skill Pack Run, or clarification to split the task, not by admitting multiple packs into one run.
+_Avoid_: Multi-pack admission, pack union, merged stage addenda, capability union
+
+**Composite Business Flow Split Clarification**:
+A clarification outcome for a Composite Business Flow Request whose sub-tasks map to materially different Business Flow Skill Pack candidates; V1 asks the user to split or choose the intended task rather than admitting one pack or merging multiple packs.
+_Avoid_: Partial pack admission, arbitrary primary task, silent no-pack, multi-pack merge
+
+**No Business Flow Skill Pack Run**:
+A governed run where Intent Resolution explicitly recommends no suitable Business Flow Skill Pack, or Business Flow Skill Pack Admission records no admitted pack; the Agent continues through the base Workflow Template without pack-specific context.
+_Avoid_: Missing-skill clarification, default pack catch-all, ungoverned fallback, silent permission expansion
+
 **Business Flow Skill Pack Recommendation**:
-The structured recommendation contract emitted alongside Intent Resolution that names a candidate Primary Business Flow Skill Pack with confidence, missing-field, ambiguity, and risk signals, without becoming part of the Intent Resolution Contract or granting execution authority.
-_Avoid_: IntentResolution field, admitted pack, direct capability selection, policy decision, runtime loader command
+The structured recommendation contract emitted from the same Intent Resolution model response as the Intent Resolution Contract, using the user's request and the Published Business Flow Skill Pack routing-safe summaries; it remains an independent fact that must either name candidate Business Flow Skill Packs or explicitly emit a no-pack recommendation, without granting execution authority.
+_Avoid_: IntentResolution field, admitted pack, direct capability selection, policy decision, runtime loader command, omitted recommendation
+
+**Business Flow Skill Pack Recommendation Type**:
+The explicit classification on a Business Flow Skill Pack Recommendation, with V1 values `single_pack`, `no_pack`, and `ambiguous`, used by Business Flow Skill Pack Admission instead of inferring meaning from null ids or candidate counts.
+_Avoid_: Null inference, candidate-count semantics, implicit ambiguity, omitted route type
+
+**Business Flow Candidate Pack**:
+One candidate entry inside a Business Flow Skill Pack Recommendation, carrying the pack id, candidate-level confidence, and bounded rationale for why that pack may fit the user request or a sub-task. Candidate packs are ordered by confidence descending.
+_Avoid_: Parallel candidate id and score arrays, unsynchronized candidates, raw model rationale, arbitrary candidate order
+
+**Business Flow Route Confidence**:
+The top-level Business Flow Skill Pack Recommendation confidence value that describes how confident the model is in the recommendation type, distinct from per-candidate pack confidence values.
+_Avoid_: Candidate confidence, admission confidence, answer confidence, evidence score
+
+**Business Flow Route Confidence Gate**:
+The Control Plane admission gate that requires Business Flow Route Confidence to meet the Agent skills admission `route_min_confidence` before any recommendation type can admit, clarify, or split; low route confidence proceeds as a No Business Flow Skill Pack Run.
+_Avoid_: Low-confidence admission, low-confidence clarification, candidate-only threshold, model-trusted route type
+
+**Business Flow Candidate Confidence Gate**:
+The pack-level admission gate that checks a Business Flow Candidate Pack confidence against that Business Flow Skill Pack's own admission `min_confidence` after the route confidence gate has passed.
+_Avoid_: Agent-level pack threshold, route confidence reuse, low-confidence pack admission
+
+**Business Flow Candidate Cardinality Contract**:
+The validation rule that `single_pack` recommendations carry exactly one Business Flow Candidate Pack, `ambiguous` recommendations carry two or more, and `no_pack` recommendations carry none, with no parallel recommended-pack id field.
+_Avoid_: recommended_pack_id duplication, nullable primary id, inconsistent candidate arrays, inferred route type
+
+**Business Flow Task Split Signal**:
+The top-level Business Flow Skill Pack Recommendation flag that indicates an ambiguous recommendation represents a composite request that should be split or clarified before a pack is admitted; it may be true only for `ambiguous` recommendations.
+_Avoid_: Reason-text split hint, hidden composite task, task split on single-pack, task split on no-pack
+
+**Business Flow Recommendation Normalization**:
+The Control Plane normalization step that may reorder Business Flow Candidate Pack entries by confidence descending and records that normalization, while invalid candidate fields such as missing ids, non-numeric confidence, or out-of-range confidence fail contract validation.
+_Avoid_: Trusting model order, failing on reorderable output, silently repairing invalid fields
+
+**Business Flow Recommendation Contract Failure**:
+A fail-closed model output failure when Business Flow Skill Pack Recommendation is required but absent, malformed, uses an unsupported recommendation type, or contains invalid candidate fields; it must not be converted into a No Business Flow Skill Pack Run.
+_Avoid_: Silent no-pack downgrade, contract failure as routing result, hidden model output failure
+
+**Business Flow Recommendation Rationale**:
+The bounded top-level rationale explaining why the recommendation has its route type, paired with bounded per-candidate rationales explaining why each Business Flow Candidate Pack may fit; neither rationale may include raw chain-of-thought.
+_Avoid_: Candidate-only rationale, route rationale as hidden reasoning, unbounded model explanation
+
+**No-Pack Business Flow Skill Pack Recommendation**:
+The explicit Business Flow Skill Pack Recommendation value that says no published Business Flow Skill Pack is suitable for the request while the Agent may still handle the request through its base Workflow Template; it carries Business Flow Route Confidence, no candidate packs, and a bounded top-level rationale.
+_Avoid_: Null-as-missing, empty recommendation, clarification trigger, default pack fallback
+
+**Ambiguous Business Flow Skill Pack Recommendation**:
+A Business Flow Skill Pack Recommendation that names multiple plausible candidate packs; the LLM may provide ambiguity and materiality hints, but the Control Plane makes the final materiality decision from Published Business Flow Skill Pack metadata and requests clarification when it cannot safely determine non-materiality.
+_Avoid_: Always-clarify ambiguity, arbitrary first match, silent multi-pack merge, ambiguity-as-no-pack, LLM-owned materiality
 
 **Business Flow Skill Pack Admission**:
-The independent Control Plane fact that accepts or rejects a Business Flow Skill Pack Recommendation against the Published Business Flow Skill Pack Set, authorization context, confidence threshold, ambiguity rules, and readiness checks.
+The independent Control Plane fact that accepts a Business Flow Skill Pack Recommendation against the Published Business Flow Skill Pack Set, authorization context, confidence threshold, ambiguity rules, and readiness checks, or records that the run proceeds with no Primary Business Flow Skill Pack.
 _Avoid_: IntentResolution field, LLM self-selection, prompt-owned routing, best-effort pack match, untraced fallback
 
 **Intent Resolution Business Flow Admission Substep**:
@@ -154,25 +218,33 @@ _Avoid_: YAML-field-order layout, arbitrary tab grouping, stage addenda before a
 The trace-safe projection of Business Flow Skill Pack binding, recommendation, admission, and stage context application facts, limited to references, ids, decisions, failure reasons, digests, counts, stage ids, default or fallback markers, and redaction flags.
 _Avoid_: Raw pack YAML, full stage Prompt addenda, full intent patterns, full business instructions, tool details, policy details, validator details
 
+**Business Flow Historical Trace Preservation**:
+The rule that existing run artifacts remain auditable historical facts and must not be recomputed or reinterpreted when Business Flow Skill Pack routing semantics are corrected for future executions.
+_Avoid_: Historical receipt rewrite, Dashboard semantic backfill, trace reinterpretation, hidden migration of run outcomes
+
 **Business Flow Skill Pack Governance Receipt Summary**:
 The human-readable Governance Receipt section rendered from Business Flow Skill Pack Trace Summary, showing admission outcome and affected Workflow Stage context application summaries without exposing raw pack content.
 _Avoid_: Raw pack excerpt, full business instructions, prompt addenda dump, tool or policy details, second admission decision, unmarked generic stage context summary
 
 **Business Flow Skill Pack Publication Validation**:
-The fail-closed Agent Publication gate that validates Business Flow Skill Pack enablement, ids, default count, package-local definition references, allowed fields, governed capability references, stage addenda targets, Prompt safety, routing summary bounds, admission settings, and frozen definition digests.
+The fail-closed Agent Publication gate that validates Business Flow Skill Pack enablement, non-empty bindings when skills are enabled, ids, package-local definition references, allowed fields, governed capability references, stage addenda targets, Prompt safety, routing summary bounds, admission settings, and frozen definition digests.
 _Avoid_: Runtime-only validation, UI warning, best-effort missing reference repair, publish with disabled pack errors
 
 **Business Flow Skill Pack Evaluation Gate**:
-A deterministic Evaluation Gate that checks expected Business Flow Skill Pack recommendation, admission, fallback, clarification, refusal, stage context application, and no-unauthorized-fallback facts without replacing answer-quality, evidence, tool, policy, or response safety gates.
+A deterministic Evaluation Gate that checks expected Business Flow Skill Pack recommendation, admission, no-pack, clarification, refusal, stage context application, and no-unauthorized-fallback facts without replacing answer-quality, evidence, tool, policy, or response safety gates.
 _Avoid_: Answer quality score, judge preference, evidence gate replacement, business-flow-only pass
 
 **Default Business Flow Skill Pack**:
-An Agent-declared safe fallback Business Flow Skill Pack that may be admitted only when a recommendation is not admissible for non-authorization reasons and the fallback does not broaden tool, policy, validator, or data-scope authority.
+An Agent-declared broad Business Flow Skill Pack marker for configuration, validation, and operator understanding; it is not automatically admitted when another recommendation is missing or below confidence.
 _Avoid_: Catch-all permission expansion, hidden default, broadest pack, runtime inferred fallback
 
+**Low-Confidence Business Flow Recommendation**:
+A Business Flow Skill Pack Recommendation that names a candidate pack but does not meet that pack's admission confidence threshold; it proceeds as a No Business Flow Skill Pack Run rather than falling back to a default pack.
+_Avoid_: Default-pack fallback, silent broadening, forced clarification, low-confidence admission
+
 **Business Flow Skill Pack Admission Failure Policy**:
-The Control Plane rule for rejected Business Flow Skill Pack Recommendations: missing or ambiguous facts request clarification, non-admissible recommendations may use a Default Business Flow Skill Pack or refusal, and unauthorized or not-ready packs fail closed without broader fallback.
-_Avoid_: Single generic fallback, silent defaulting, authorization bypass, readiness bypass
+The Control Plane rule for Business Flow Skill Pack Recommendations that cannot be admitted: no suitable and low-confidence recommendations proceed as a No Business Flow Skill Pack Run, materially ambiguous recommendations request clarification, non-material ambiguous recommendations may proceed as no-pack, and unauthorized or not-ready recommendations fail closed without broader fallback.
+_Avoid_: Single generic fallback, silent defaulting, authorization bypass, readiness bypass, missing-skill clarification
 
 **Tool Contract**:
 The public capability contract that declares a governed tool's purpose, risk level, read/write class, authorization conditions, parameter bounds, and audit behavior.
@@ -3362,15 +3434,31 @@ _Avoid_: Evidence content dump
 - "Institution specialist intent routing" could mean a fixed business taxonomy only, unrestricted LLM-defined execution, or dynamic business planning inside a governed workflow. Resolved: use **Insurance Specialist Intent Taxonomy** as a baseline anchor, allow the **LLM ReAct Planner** to create a **Dynamic Insurance Business Subplan** for any insurance-related intent, and keep executable actions, tool scope, Workflow Template topology, and policy authority under the Control Envelope.
 - "Intent-routed business flow" could mean dynamically loading an executable workflow topology or selecting a domain capability pack. Resolved: use **Business Flow Skill Pack** for intent-routed domain configuration and governed capability contributions while the selected **Workflow Template** remains the execution shape.
 - "Business Flow Skill Pack availability" could mean runtime discovery from a mutable skill catalog or predeclared Agent configuration. Resolved: use **Business Flow Skill Pack Binding** in the Agent Contract and freeze the **Published Business Flow Skill Pack Set** into each Published Agent Version; Intent Resolution can select or recommend only from that frozen set.
-- "Business Flow Skill Pack selection cardinality" could mean selecting one primary pack per run or composing multiple packs by intent. Resolved: select at most one **Primary Business Flow Skill Pack** per run; mixed business needs are represented inside that pack's business subplan and governed bindings rather than by dynamically merging pack authorities.
-- "Business Flow Skill Pack selection authority" could mean Intent Resolution directly selecting the run's pack or only recommending a candidate. Resolved: Intent Resolution emits a **Business Flow Skill Pack Recommendation**, while **Business Flow Skill Pack Admission** in the Control Plane determines whether that recommendation becomes the run's **Primary Business Flow Skill Pack**.
-- "Business Flow Skill Pack admission failure" could mean always refusing, always falling back, or branching by failure reason. Resolved: use **Business Flow Skill Pack Admission Failure Policy**: missing or ambiguous facts request clarification, non-admissible recommendations may use a safe **Default Business Flow Skill Pack** or refusal, and unauthorized or not-ready packs fail closed without fallback to broader authority.
+- "Business Flow recommendation eligibility" could mean requiring recommendation fields for every Intent Resolution run or only when skills are enabled. Resolved: use **Business Flow Recommendation Eligibility**; skills-disabled runs do not prompt for or emit Business Flow Skill Pack Recommendation, while skills-enabled runs with a non-empty Published Business Flow Skill Pack Set must emit one.
+- "Enabled skills with no business flows" could mean treating skills as disabled, proceeding as no-pack, or rejecting configuration. Resolved: **Business Flow Skill Pack Publication Validation** fails closed when `capabilities.skills.enabled` is true but no Business Flow Skill Pack bindings publish into the Published Business Flow Skill Pack Set.
+- "Business Flow Skill Pack selection cardinality" could mean selecting one primary pack per run or composing multiple packs by intent. Resolved: select at most one **Primary Business Flow Skill Pack** per run; a **Composite Business Flow Request** is handled through a purpose-built composite pack, a **No Business Flow Skill Pack Run**, or **Composite Business Flow Split Clarification** rather than by dynamically merging pack authorities.
+- "Business Flow Skill Pack selection authority" could mean Intent Resolution directly selecting the run's pack, rule-matching pack patterns after Intent Resolution, or only recommending a candidate. Resolved: Intent Resolution emits a **Business Flow Skill Pack Recommendation** from the user request and Published Business Flow Skill Pack routing-safe summaries, while **Business Flow Skill Pack Admission** in the Control Plane determines whether that recommendation becomes the run's **Primary Business Flow Skill Pack**.
+- "Business Flow Skill Pack recommendation shape" could mean deriving route semantics from nullable ids and candidate counts or carrying an explicit route type. Resolved: use **Business Flow Skill Pack Recommendation Type** with `single_pack`, `no_pack`, and `ambiguous` so Control Plane admission does not infer meaning from nulls or collection length.
+- "Business Flow Skill Pack candidate scoring" could mean separate candidate id and score arrays or one structured candidate list. Resolved: use **Business Flow Candidate Pack** entries ordered by confidence descending so each candidate pack carries its own id, confidence, and bounded rationale while the recommendation keeps **Business Flow Route Confidence** as the top-level route-type confidence.
+- "Low route confidence" could mean trusting candidate packs anyway, asking the user to clarify a weak route, or declining pack admission. Resolved: use **Business Flow Route Confidence Gate**; route confidence below the configured minimum proceeds as a **No Business Flow Skill Pack Run** before recommendation type or candidate admission is considered.
+- "Business Flow confidence configuration" could mean one global threshold for both route and pack matching or separate ownership. Resolved: configure route confidence at Agent skills admission level through `route_min_confidence`, and candidate confidence at each Business Flow Skill Pack's admission settings through the **Business Flow Candidate Confidence Gate**.
+- "Low candidate confidence for a single-pack recommendation" could mean asking the user to confirm the pack, admitting it weakly, or proceeding without a pack. Resolved: when **Business Flow Candidate Confidence Gate** fails for a `single_pack` recommendation, proceed as a **No Business Flow Skill Pack Run** rather than clarification or weak admission.
+- "Business Flow Skill Pack recommended id" could mean duplicating a primary `recommended_pack_id` beside the candidate list or using candidate cardinality. Resolved: use **Business Flow Candidate Cardinality Contract** and do not carry a parallel recommended-pack id.
+- "Composite request split signal" could mean burying split intent in rationale text or making it a structured routing signal. Resolved: use **Business Flow Task Split Signal** as a top-level flag that may be true only for `ambiguous` recommendations.
+- "Business Flow Skill Pack candidate order validation" could mean trusting model order, failing on any ordering mistake, or normalizing harmless order drift. Resolved: use **Business Flow Recommendation Normalization**: reorder candidates by confidence descending and record the normalization, but fail validation for missing ids, invalid confidence values, or other non-repairable contract violations.
+- "Business Flow Skill Pack recommendation contract failure" could mean falling back to no-pack or failing closed. Resolved: use **Business Flow Recommendation Contract Failure**; absent or malformed required recommendations fail closed as model output failures and must not be converted into **No Business Flow Skill Pack Run**.
+- "Business Flow Skill Pack recommendation rationale" could mean only explaining individual candidates or separately explaining route classification. Resolved: use **Business Flow Recommendation Rationale** with a bounded top-level route rationale and bounded per-candidate rationales.
+- "No suitable Business Flow Skill Pack" could mean omitting recommendation fields, requesting clarification, or emitting an explicit normal routing result. Resolved: Intent Resolution emits a **No-Pack Business Flow Skill Pack Recommendation**, and Business Flow Skill Pack Admission records a **No Business Flow Skill Pack Run** so trace, receipt, Dashboard, and evaluation can distinguish normal no-pack routing from missing data.
+- "No-pack recommendation payload" could mean an empty object or a fully explained normal recommendation. Resolved: **No-Pack Business Flow Skill Pack Recommendation** carries route confidence, no candidate packs, and bounded top-level rationale.
+- "Low-confidence Business Flow Skill Pack recommendation" could mean admitting the pack anyway, requesting clarification, or falling back to the default pack. Resolved: use **Low-Confidence Business Flow Recommendation** and proceed as a **No Business Flow Skill Pack Run** rather than admitting or defaulting.
+- "Ambiguous Business Flow Skill Pack recommendation" could mean always asking the user, silently choosing the first match, proceeding without a pack, or letting the LLM decide materiality. Resolved: use **Ambiguous Business Flow Skill Pack Recommendation**; LLM may provide ambiguity and materiality hints, but Control Plane makes the final materiality decision from Published Business Flow Skill Pack metadata. Request clarification when candidate packs materially differ in business context, capability references, authorization posture, or downstream stage guidance, or when materiality cannot be safely determined; otherwise proceed as a **No Business Flow Skill Pack Run**.
+- "Business Flow Skill Pack admission failure" could mean always refusing, always falling back, requesting clarification for any missing match, or branching by failure reason. Resolved: use **Business Flow Skill Pack Admission Failure Policy**: no suitable and low-confidence recommendations proceed as a **No Business Flow Skill Pack Run**, materially ambiguous recommendations request clarification, non-material ambiguous recommendations may proceed as no-pack, and unauthorized or not-ready packs fail closed without fallback to broader authority.
 - "Business Flow Skill Pack Agent Contract location" could mean putting bindings under Workflow Template stage configuration, a top-level skills section, or capability configuration. Resolved: use **Agent Contract Skills Capability Configuration** under `capabilities.skills`; `workflow.stages[]` remains limited to Workflow Stage Prompt and context overrides.
 - "Business Flow Skill Pack capability contribution" could mean implicit installation of tools, knowledge, policy rules, or validators, or references to already-governed capabilities. Resolved: use **Business Flow Skill Pack Capability Reference Boundary**; a pack may reference, prioritize, constrain, and explain explicit frozen capabilities, but must not implicitly create, enable, or broaden them.
 - "Business Flow Skill Pack capability references" could mean pack-level governed capability references or per-stage ability bindings. Resolved: use **Business Flow Skill Pack Capability Reference Scope**; Knowledge, Tool, Policy, and Validator references belong to the pack definition, while stage addenda may only explain stage-specific use of those references.
 - "Business Flow Skill Pack storage" could mean a package-local definition or a Dashboard-managed global reusable registry. Resolved: first use **Package-Local Business Flow Skill Pack Definition** referenced from `capabilities.skills` and frozen at Agent Publication; defer a global Skill Pack Registry until the contract, admission, trace, and validation path are proven.
 - "Business Flow Skill Pack definition shape" could mean a minimal domain configuration record or a workflow/script DSL. Resolved: use **Business Flow Skill Pack Definition Field Set** for V1 and exclude executable steps, edges, scripts, model provider overrides, raw prompts, tool parameter templates, dynamic imports, and inline governed capability definitions.
-- "Business Flow Skill Pack context layering" could mean giving Intent Resolution every pack's full content or separating selection summaries from post-admission stage context. Resolved: Intent Resolution sees only **Business Flow Skill Pack Routing-Safe Summary** values, and later stages receive admitted **Business Flow Skill Pack Stage Context Application** for the Primary Business Flow Skill Pack.
+- "Business Flow Skill Pack context layering" could mean giving Intent Resolution every pack's full content or separating selection summaries from post-admission stage context. Resolved: Intent Resolution sees only **Business Flow Skill Pack Routing-Safe Summary** values, never full stage Prompt addenda, raw pack YAML, policy details, validator details, or tool schemas; later stages receive admitted **Business Flow Skill Pack Stage Context Application** for the Primary Business Flow Skill Pack.
 - "Stage-based Skills configuration" could mean Workflow Template stages own skill snippets or Skill Packs own stage-scoped addenda. Resolved: use **Stage-Scoped Business Flow Skill Pack Addendum** values owned by the Business Flow Skill Pack definition while Dashboard may render a stage-first editor grouped by embeddable Workflow Template Stages.
 - "Intent Resolution as a Skills stage slot" could mean injecting a Skill Pack's full stage guidance into the same stage that recommends and admits that pack. Resolved: `intent_resolution` uses **Business Flow Skill Pack Routing And Admission Configuration** and **Business Flow Skill Pack Routing-Safe Summary** only; ordinary **Stage-Scoped Business Flow Skill Pack Addendum** values begin after admission.
 - "Business Flow Skill Pack embeddable stages" could mean every Workflow Template Stage, every stage with configurable context, or only post-admission model-bearing Prompt stages. Resolved: V1 exposes **Business Flow Skill Pack Addendum Slot** values only for `plan`, `retrieval_review`, `tool_review`, and `model_answer`; `intent_resolution` remains routing/admission only, and execution/projection stages do not receive ordinary Skill Pack addenda.
@@ -3384,7 +3472,9 @@ _Avoid_: Evidence content dump
 - "Business Flow Skill Pack observability" could mean ordinary trace stores the full pack definition or only a safe projection. Resolved: ordinary trace, receipt, and Dashboard projections use **Business Flow Skill Pack Trace Summary**; full pack content belongs only in gated validation capture or explicit reveal paths.
 - "Business Flow Skill Pack publication validation" could mean warning-only checks or a fail-closed publication gate. Resolved: use **Business Flow Skill Pack Publication Validation** before Agent Publication; invalid enablement, duplicate ids, multiple defaults, missing definitions, unsupported fields, unresolved capability references, invalid stage addenda targets, unsafe Prompt text, oversized routing summaries, invalid admission settings, or missing definition digests block publication.
 - "Business Flow Skill Pack admission topology" could mean adding a new public Workflow Template Stage or keeping admission inside Intent Resolution. Resolved: use **Intent Resolution Business Flow Admission Substep** in the existing `intent_resolution` stage for V1; do not add a `business_flow_admission` Workflow Template Stage or change the Workflow Template Descriptor Version only for this admission decision.
-- "Business Flow Skill Pack recommendation contract placement" could mean adding fields to **Intent Resolution Contract** or emitting separate recommendation and admission facts. Resolved: keep **Intent Resolution Contract** focused on user intent and use independent **Business Flow Skill Pack Recommendation** and **Business Flow Skill Pack Admission** facts linked from the `intent_resolution` Workflow Template Stage result.
+- "Business Flow Skill Pack recommendation descriptor versioning" could mean introducing `react_enterprise_qa.v4` or replacing defective V3 routing semantics in place. Resolved: treat LLM-authored Business Flow Skill Pack Recommendation with Control Plane Admission as a corrective replacement for `react_enterprise_qa.v3`; do not introduce `react_enterprise_qa.v4` only for this fix.
+- "Business Flow Skill Pack historical run interpretation" could mean applying corrected V3 semantics to old traces or preserving recorded audit facts. Resolved: use **Business Flow Historical Trace Preservation**; old run artifacts are displayed as recorded and only future V3 executions use the corrected recommendation-and-admission semantics.
+- "Business Flow Skill Pack recommendation contract placement" could mean adding fields to **Intent Resolution Contract**, making a second model call, or emitting separate recommendation and admission facts. Resolved: one Intent Resolution model response may produce both the **Intent Resolution Contract** and an independent **Business Flow Skill Pack Recommendation** fact, while **Business Flow Skill Pack Admission** remains a deterministic Control Plane fact linked from the `intent_resolution` Workflow Template Stage result.
 - "Business Flow Skill Pack evaluation" could mean ignoring pack routing in release gates or treating it as a replacement answer-quality metric. Resolved: use **Business Flow Skill Pack Evaluation Gate** for deterministic routing-governance checks while existing evidence, tool, policy, response safety, and answer-quality gates remain authoritative for answer correctness.
 - "Institution specialist memory" could mean current-case follow-up context or a long-lived business fact store. Resolved: use **Institution Specialist Case Memory** for current task focus, clarified identifiers, scoped filters, and response-format preferences only; policy status, claim status, report values, tool payloads, and customer or agent identity facts remain live business records, not memory facts.
 - "Payment guarantee" could mean an ordinary unsupported question or a high-risk service commitment request. Resolved: use **Payment Or Coverage Guarantee Request** and create an internal **Customer Escalation Handoff** while returning customer-safe refusal wording.

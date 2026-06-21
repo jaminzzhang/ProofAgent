@@ -2,6 +2,9 @@ import pytest
 from pydantic import ValidationError
 
 from proof_agent.contracts import (
+    BusinessFlowCandidatePack,
+    BusinessFlowSkillPackRecommendation,
+    BusinessFlowSkillPackRecommendationType,
     EnforcementPoint,
     IntentResolution,
     PolicyDecisionType,
@@ -101,6 +104,84 @@ def test_retrieval_query_item_rejects_empty_audit_fields() -> None:
             intent_angle="required_documents",
             required=True,
             reason=" ",
+        )
+
+
+def test_business_flow_recommendation_accepts_single_candidate_pack() -> None:
+    recommendation = BusinessFlowSkillPackRecommendation(
+        recommendation_id="bfsp_rec_1",
+        intent_resolution_id="intent_1",
+        recommendation_type=BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+        confidence=0.86,
+        reason="The request maps to one product clause business flow.",
+        candidate_packs=(
+            BusinessFlowCandidatePack(
+                pack_id="product_clause_consultation",
+                confidence=0.84,
+                reason="The user asks for product pros and cons.",
+            ),
+        ),
+    )
+
+    assert recommendation.recommendation_type is (
+        BusinessFlowSkillPackRecommendationType.SINGLE_PACK
+    )
+    assert recommendation.candidate_packs[0].pack_id == "product_clause_consultation"
+
+
+def test_business_flow_recommendation_accepts_explicit_no_pack() -> None:
+    recommendation = BusinessFlowSkillPackRecommendation(
+        recommendation_id="bfsp_rec_no_pack",
+        intent_resolution_id="intent_1",
+        recommendation_type=BusinessFlowSkillPackRecommendationType.NO_PACK,
+        confidence=0.74,
+        reason="The request is in scope for the Agent but does not need a pack.",
+        candidate_packs=(),
+    )
+
+    assert recommendation.recommendation_type is (
+        BusinessFlowSkillPackRecommendationType.NO_PACK
+    )
+    assert recommendation.candidate_packs == ()
+
+
+def test_business_flow_recommendation_validates_candidate_cardinality() -> None:
+    with pytest.raises(ValidationError):
+        BusinessFlowSkillPackRecommendation(
+            recommendation_id="bfsp_rec_bad_single",
+            intent_resolution_id="intent_1",
+            recommendation_type=BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+            confidence=0.86,
+            reason="Invalid single-pack recommendation has no candidate.",
+            candidate_packs=(),
+        )
+
+    with pytest.raises(ValidationError):
+        BusinessFlowSkillPackRecommendation(
+            recommendation_id="bfsp_rec_bad_no_pack",
+            intent_resolution_id="intent_1",
+            recommendation_type=BusinessFlowSkillPackRecommendationType.NO_PACK,
+            confidence=0.86,
+            reason="Invalid no-pack recommendation includes a candidate.",
+            candidate_packs=(
+                BusinessFlowCandidatePack(
+                    pack_id="product_clause_consultation",
+                    confidence=0.84,
+                    reason="The user asks for product pros and cons.",
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1, float("nan")])
+def test_business_flow_candidate_pack_rejects_invalid_confidence(
+    confidence: float,
+) -> None:
+    with pytest.raises(ValidationError):
+        BusinessFlowCandidatePack(
+            pack_id="product_clause_consultation",
+            confidence=confidence,
+            reason="The user asks for product pros and cons.",
         )
 
 

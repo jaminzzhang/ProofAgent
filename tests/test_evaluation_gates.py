@@ -237,7 +237,9 @@ def test_business_flow_skill_pack_gate_passes_when_admission_matches_expected_pa
             '{"run_id":"run_123","event_type":"business_flow_skill_pack_admission",'
             '"sequence":6,"status":"ok","payload":{"decision":"admitted",'
             '"selected_pack_id":"enterprise_policy_qa",'
-            '"recommended_pack_id":"enterprise_policy_qa"}}\n'
+            '"recommendation_type":"single_pack",'
+            '"candidate_packs":[{"pack_id":"enterprise_policy_qa",'
+            '"confidence":0.9,"reason":"Relevant."}]}}\n'
             '{"run_id":"run_123","event_type":"final_output"',
         ),
         encoding="utf-8",
@@ -275,7 +277,9 @@ def test_business_flow_skill_pack_gate_fails_when_selected_pack_differs(
             '{"run_id":"run_123","event_type":"business_flow_skill_pack_admission",'
             '"sequence":6,"status":"ok","payload":{"decision":"admitted",'
             '"selected_pack_id":"general_qa",'
-            '"recommended_pack_id":"general_qa"}}\n'
+            '"recommendation_type":"single_pack",'
+            '"candidate_packs":[{"pack_id":"general_qa",'
+            '"confidence":0.9,"reason":"Relevant."}]}}\n'
             '{"run_id":"run_123","event_type":"final_output"',
         ),
         encoding="utf-8",

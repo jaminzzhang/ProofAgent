@@ -427,7 +427,10 @@ admission:
     )
     assert admission_event["payload"]["decision"] == "admitted"
     assert admission_event["payload"]["selected_pack_id"] == "enterprise_policy_qa"
-    assert admission_event["payload"]["recommended_pack_id"] == "enterprise_policy_qa"
+    assert admission_event["payload"]["recommendation_type"] == "single_pack"
+    assert admission_event["payload"]["candidate_packs"][0]["pack_id"] == (
+        "enterprise_policy_qa"
+    )
     assert result.workflow_template_execution_result is not None
     intent_stage = next(
         stage
@@ -464,6 +467,26 @@ admission:
 """,
         encoding="utf-8",
     )
+    (skill_pack_dir / "billing.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: billing_review
+label: Billing Review
+description: Billing review routing addenda.
+intent_patterns:
+  - billing_review
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - react_enterprise_qa_v2_knowledge_binding
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.5
+""",
+        encoding="utf-8",
+    )
     manifest_path = example_dir / "agent.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["capabilities"]["skills"] = {
@@ -472,6 +495,10 @@ admission:
             {
                 "id": "claims_escalation",
                 "definition": "./skill_packs/claims.yaml",
+            },
+            {
+                "id": "billing_review",
+                "definition": "./skill_packs/billing.yaml",
             }
         ],
     }
@@ -488,6 +515,12 @@ admission:
     assert "clarification_requested" in _event_types(events)
     assert result.workflow_template_execution_result is not None
     assert result.workflow_template_execution_result.clarification_need is not None
+    assert (
+        result.workflow_template_execution_result.clarification_need.summary[
+            "candidate_count"
+        ]
+        == 2
+    )
     intent_stage = next(
         stage
         for stage in result.workflow_template_execution_result.stage_results
@@ -505,7 +538,6 @@ def test_admitted_business_flow_stage_prompt_addendum_applies_to_plan_context(
     skill_pack_dir = example_dir / "skill_packs"
     skill_pack_dir.mkdir()
     admitted_context = "Use the admitted enterprise policy QA business flow."
-    non_admitted_context = "This unrelated claims escalation flow must not apply."
     (skill_pack_dir / "enterprise.yaml").write_text(
         f"""
 schema_version: business_flow_skill_pack.v1
@@ -530,28 +562,6 @@ admission:
 """,
         encoding="utf-8",
     )
-    (skill_pack_dir / "claims.yaml").write_text(
-        f"""
-schema_version: business_flow_skill_pack.v1
-id: claims_escalation
-label: Claims Escalation
-description: Unrelated claims escalation addenda.
-intent_patterns:
-  - claims_escalation
-stage_prompt_addenda:
-  plan:
-    business_context: "{non_admitted_context}"
-knowledge_binding_refs:
-  - react_enterprise_qa_v2_knowledge_binding
-tool_contract_refs: []
-policy_rule_refs:
-  - answering.require_retrieval
-validator_refs: []
-admission:
-  min_confidence: 0.5
-""",
-        encoding="utf-8",
-    )
     manifest_path = example_dir / "agent.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["capabilities"]["skills"] = {
@@ -560,10 +570,6 @@ admission:
             {
                 "id": "enterprise_policy_qa",
                 "definition": "./skill_packs/enterprise.yaml",
-            },
-            {
-                "id": "claims_escalation",
-                "definition": "./skill_packs/claims.yaml",
             },
         ],
     }
@@ -591,7 +597,6 @@ admission:
     assert plan_context["payload"]["task_instruction_count"] == 1
     trace_text = result.trace_path.read_text(encoding="utf-8")
     assert admitted_context not in trace_text
-    assert non_admitted_context not in trace_text
 
 
 def test_workflow_stage_context_extends_model_prompt_without_replacing_system_prompt(

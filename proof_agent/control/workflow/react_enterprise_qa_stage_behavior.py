@@ -16,6 +16,7 @@ from proof_agent.contracts import (
     EvidenceChunk,
     BusinessFlowSkillPackAdmissionDecision,
     IntentResolution,
+    IntentResolutionResult,
     ModelCallRole,
     ModelRequest,
     ModelResponse,
@@ -165,11 +166,12 @@ class ReActEnterpriseQAStageBehavior:
         stage_context: Mapping[str, Any] | None = None
         try:
             stage_context = self.configured_stage_context("intent_resolution", state)
-            resolution = self.invocation.intent_resolver.resolve(
+            intent_result = self.invocation.intent_resolver.resolve(
                 question=state["question"],
                 system_prompt="Resolve user intent without raw chain-of-thought.",
                 context_summary=_conversation_context_summary(self.conversation_context),
                 workflow_stage_context=stage_context,
+                business_flow_skill_packs=self.invocation.business_flow_skill_packs,
             )
         except ModelOutputNormalizationError as exc:
             llm_interactions = _drain_stage_llm_interactions(
@@ -202,13 +204,14 @@ class ReActEnterpriseQAStageBehavior:
             stage_id="intent_resolution",
             stage_label=self._stage_label("intent_resolution"),
         )
+        resolution = intent_result.intent_resolution
         emit_intent_resolution(
             self.trace,
             resolution,
             max_queries=self.manifest.retrieval.max_queries,
         )
         business_flow_delta = self._business_flow_skill_pack_admission_delta(
-            resolution,
+            intent_result,
         )
         blocked_business_flow_delta = _blocked_business_flow_delta(business_flow_delta)
         if blocked_business_flow_delta is not None:
@@ -232,17 +235,24 @@ class ReActEnterpriseQAStageBehavior:
 
     def _business_flow_skill_pack_admission_delta(
         self,
-        resolution: IntentResolution,
+        intent_result: IntentResolutionResult,
     ) -> dict[str, Any]:
         if not self.invocation.business_flow_skill_packs:
             return {}
+        recommendation = intent_result.business_flow_skill_pack_recommendation
+        if recommendation is None:
+            return {}
         result = admit_business_flow_skill_pack(
-            resolution,
+            recommendation,
             self.invocation.business_flow_skill_packs,
-            default_pack_id=_default_business_flow_skill_pack_id(self.invocation),
+            route_min_confidence=(
+                self.invocation.manifest.capabilities.skills.admission.route_min_confidence
+            ),
             authorization_context_present=False,
         )
-        recommendation = _jsonable(result.recommendation.model_dump(mode="python", warnings=False))
+        recommendation_payload = _jsonable(
+            result.recommendation.model_dump(mode="python", warnings=False)
+        )
         admission = _jsonable(result.admission.model_dump(mode="python", warnings=False))
         self.trace.emit(
             "business_flow_skill_pack_admission",
@@ -258,13 +268,11 @@ class ReActEnterpriseQAStageBehavior:
             payload={
                 **dict(result.admission.trace_summary),
                 "recommendation_id": result.recommendation.recommendation_id,
-                "recommended_pack_id": result.recommendation.recommended_pack_id,
-                "candidate_pack_ids": list(result.recommendation.candidate_pack_ids),
                 "intent_resolution_id": result.recommendation.intent_resolution_id,
             },
         )
         return {
-            "business_flow_skill_pack_recommendation": recommendation,
+            "business_flow_skill_pack_recommendation": recommendation_payload,
             "business_flow_skill_pack_admission": admission,
             "primary_business_flow_skill_pack_id": result.admission.selected_pack_id,
         }
@@ -1574,13 +1582,6 @@ def _join_prompt_text(*parts: str) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
-def _default_business_flow_skill_pack_id(invocation: HarnessInvocation) -> str | None:
-    for binding in invocation.manifest.capabilities.skills.business_flows:
-        if binding.default:
-            return binding.id
-    return None
-
-
 def _blocked_business_flow_delta(delta: Mapping[str, Any]) -> dict[str, Any] | None:
     admission = delta.get("business_flow_skill_pack_admission")
     if not isinstance(admission, Mapping):
@@ -1592,12 +1593,9 @@ def _blocked_business_flow_delta(delta: Mapping[str, Any]) -> dict[str, Any] | N
             "Please name the relevant Skill Pack or restate the request with a "
             "more specific business domain."
         )
-        recommendation = delta.get("business_flow_skill_pack_recommendation")
-        recommendation_map = recommendation if isinstance(recommendation, Mapping) else {}
-        candidate_pack_ids = recommendation_map.get("candidate_pack_ids", ())
-        candidate_count = (
-            len(candidate_pack_ids) if isinstance(candidate_pack_ids, list | tuple) else 0
-        )
+        trace_summary = admission.get("trace_summary")
+        trace_summary_map = trace_summary if isinstance(trace_summary, Mapping) else {}
+        candidate_count = trace_summary_map.get("candidate_count", 0)
         summary = {
             "reason": "business_flow_skill_pack",
             "failure_reason": admission.get("failure_reason"),

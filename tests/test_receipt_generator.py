@@ -150,7 +150,6 @@ def test_receipt_renders_business_flow_skill_pack_summary_without_raw_pack_conte
     skill_pack_dir = example_dir / "skill_packs"
     skill_pack_dir.mkdir()
     admitted_context = "Use the admitted enterprise policy QA business flow."
-    non_admitted_context = "This unrelated claims escalation flow must not apply."
     (skill_pack_dir / "enterprise.yaml").write_text(
         f"""
 schema_version: business_flow_skill_pack.v1
@@ -175,28 +174,6 @@ admission:
 """,
         encoding="utf-8",
     )
-    (skill_pack_dir / "claims.yaml").write_text(
-        f"""
-schema_version: business_flow_skill_pack.v1
-id: claims_escalation
-label: Claims Escalation
-description: Unrelated claims escalation addenda.
-intent_patterns:
-  - claims_escalation
-stage_prompt_addenda:
-  plan:
-    business_context: "{non_admitted_context}"
-knowledge_binding_refs:
-  - react_enterprise_qa_v2_knowledge_binding
-tool_contract_refs: []
-policy_rule_refs:
-  - answering.require_retrieval
-validator_refs: []
-admission:
-  min_confidence: 0.5
-""",
-        encoding="utf-8",
-    )
     manifest_path = example_dir / "agent.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["capabilities"]["skills"] = {
@@ -205,10 +182,6 @@ admission:
             {
                 "id": "enterprise_policy_qa",
                 "definition": "./skill_packs/enterprise.yaml",
-            },
-            {
-                "id": "claims_escalation",
-                "definition": "./skill_packs/claims.yaml",
             },
         ],
     }
@@ -225,13 +198,15 @@ admission:
     assert "## Business Flow Skill Pack" in receipt
     assert "| Decision | admitted |" in receipt
     assert "| Selected Pack | enterprise_policy_qa |" in receipt
-    assert "| Recommended Pack | enterprise_policy_qa |" in receipt
+    assert "| Recommendation Type | single_pack |" in receipt
+    assert "| enterprise_policy_qa | 0.84 | Only published Business Flow Skill Pack. |" in (
+        receipt
+    )
     assert (
         "| plan | enterprise_policy_qa | business_context, task_instructions |"
         in receipt
     )
     assert admitted_context not in receipt
-    assert non_admitted_context not in receipt
 
 
 def test_receipt_renders_business_flow_admission_failure_without_stage_application(

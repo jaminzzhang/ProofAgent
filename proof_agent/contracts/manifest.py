@@ -72,6 +72,12 @@ class BusinessFlowSkillPackAdmissionConfig(FrozenModel):
     require_authorization_context: bool = False
 
 
+class SkillsAdmissionConfig(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    route_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class BusinessFlowSkillPackDefinition(FrozenModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -100,6 +106,7 @@ class BusinessFlowSkillPackDefinition(FrozenModel):
 
 class SkillsCapabilityConfig(FrozenModel):
     enabled: bool = False
+    admission: SkillsAdmissionConfig = Field(default_factory=SkillsAdmissionConfig)
     business_flows: tuple[BusinessFlowSkillPackBindingConfig, ...] = Field(default_factory=tuple)
 
 

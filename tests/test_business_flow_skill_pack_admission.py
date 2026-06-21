@@ -2,276 +2,184 @@ from proof_agent.control.workflow.business_flow_skill_packs import (
     admit_business_flow_skill_pack,
 )
 from proof_agent.contracts import (
+    BusinessFlowCandidatePack,
     BusinessFlowSkillPackAdmissionConfig,
     BusinessFlowSkillPackAdmissionDecision,
     BusinessFlowSkillPackDefinition,
-    IntentResolution,
-    ReActActionType,
-    RetrievalQueryItem,
+    BusinessFlowSkillPackRecommendation,
+    BusinessFlowSkillPackRecommendationType,
 )
 
 
-def test_admits_single_matching_business_flow_skill_pack() -> None:
-    skill_pack = BusinessFlowSkillPackDefinition(
+def _skill_pack(
+    pack_id: str,
+    *,
+    min_confidence: float = 0.0,
+    require_authorization_context: bool = False,
+) -> BusinessFlowSkillPackDefinition:
+    return BusinessFlowSkillPackDefinition(
         schema_version="business_flow_skill_pack.v1",
-        id="claims_qa",
-        label="Claims QA",
-        description="Claims question routing addenda.",
-        intent_patterns=("claims_question",),
+        id=pack_id,
+        label=pack_id.replace("_", " ").title(),
+        description=f"{pack_id} routing addenda.",
         stage_prompt_addenda={},
-        knowledge_binding_refs=("kb_claims",),
-        tool_contract_refs=(),
-        policy_rule_refs=("answering.require_retrieval",),
-        validator_refs=(),
-    )
-    resolution = IntentResolution(
-        resolution_id="intent_1",
-        user_goal="Answer a claims question.",
-        domain_intent="claims_question",
-        known_facts=("The user asks about a claims process.",),
-        missing_fields=(),
-        ambiguities=(),
-        risk_flags=(),
-        confidence=0.84,
-        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+        admission=BusinessFlowSkillPackAdmissionConfig(
+            min_confidence=min_confidence,
+            require_authorization_context=require_authorization_context,
+        ),
     )
 
-    result = admit_business_flow_skill_pack(resolution, (skill_pack,))
 
-    assert result.recommendation.intent_resolution_id == "intent_1"
-    assert result.recommendation.recommended_pack_id == "claims_qa"
-    assert result.recommendation.candidate_pack_ids == ("claims_qa",)
+def _recommendation(
+    recommendation_type: BusinessFlowSkillPackRecommendationType,
+    *,
+    route_confidence: float = 0.91,
+    candidates: tuple[tuple[str, float], ...] = (),
+    requires_task_split: bool = False,
+) -> BusinessFlowSkillPackRecommendation:
+    return BusinessFlowSkillPackRecommendation(
+        recommendation_id="bfsp_rec_intent_1",
+        intent_resolution_id="intent_1",
+        recommendation_type=recommendation_type,
+        confidence=route_confidence,
+        reason="LLM resolved the Business Flow Skill Pack route.",
+        candidate_packs=tuple(
+            BusinessFlowCandidatePack(
+                pack_id=pack_id,
+                confidence=confidence,
+                reason=f"{pack_id} is relevant.",
+            )
+            for pack_id, confidence in candidates
+        ),
+        requires_task_split=requires_task_split,
+    )
+
+
+def test_admits_llm_recommended_single_business_flow_skill_pack() -> None:
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+        candidates=(("claims_qa", 0.86),),
+    )
+    skill_pack = _skill_pack("claims_qa", min_confidence=0.8)
+
+    result = admit_business_flow_skill_pack(
+        recommendation,
+        (skill_pack,),
+        route_min_confidence=0.6,
+    )
+
+    assert result.recommendation == recommendation
     assert result.admission.decision == BusinessFlowSkillPackAdmissionDecision.ADMITTED
     assert result.admission.selected_pack_id == "claims_qa"
+    assert result.admission.trace_summary["candidate_count"] == 1
 
 
-def test_ambiguous_business_flow_skill_pack_match_needs_clarification() -> None:
-    claims_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="claims_qa",
-        label="Claims QA",
-        description="Claims question routing addenda.",
-        intent_patterns=("claims_question",),
-        stage_prompt_addenda={},
-    )
-    specialist_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="specialist_claims",
-        label="Specialist Claims",
-        description="Specialist claim routing addenda.",
-        intent_patterns=("claims_question",),
-        stage_prompt_addenda={},
-    )
-    resolution = IntentResolution(
-        resolution_id="intent_ambiguous",
-        user_goal="Answer a claims question.",
-        domain_intent="claims_question",
-        known_facts=("The user asks about a claims process.",),
-        missing_fields=(),
-        ambiguities=(),
-        risk_flags=(),
-        confidence=0.82,
-        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+def test_explicit_no_pack_recommendation_runs_without_business_flow_pack() -> None:
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.NO_PACK,
+        route_confidence=0.82,
     )
 
     result = admit_business_flow_skill_pack(
-        resolution,
-        (claims_pack, specialist_pack),
+        recommendation,
+        (_skill_pack("claims_qa"),),
+        route_min_confidence=0.6,
     )
 
-    assert result.recommendation.recommended_pack_id is None
-    assert result.recommendation.candidate_pack_ids == (
-        "claims_qa",
-        "specialist_claims",
+    assert result.admission.decision == BusinessFlowSkillPackAdmissionDecision.NO_PACK
+    assert result.admission.selected_pack_id is None
+    assert result.admission.failure_reason is None
+    assert result.admission.trace_summary["candidate_count"] == 0
+
+
+def test_low_route_confidence_becomes_no_pack_before_clarification() -> None:
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.AMBIGUOUS,
+        route_confidence=0.39,
+        candidates=(("claims_qa", 0.88), ("billing_qa", 0.84)),
+        requires_task_split=True,
     )
+
+    result = admit_business_flow_skill_pack(
+        recommendation,
+        (_skill_pack("claims_qa"), _skill_pack("billing_qa")),
+        route_min_confidence=0.6,
+    )
+
+    assert result.admission.decision == BusinessFlowSkillPackAdmissionDecision.NO_PACK
+    assert result.admission.failure_reason == "route_confidence_below_threshold"
+    assert result.admission.selected_pack_id is None
+
+
+def test_candidate_below_pack_confidence_gate_becomes_no_pack() -> None:
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+        candidates=(("claims_qa", 0.72),),
+    )
+
+    result = admit_business_flow_skill_pack(
+        recommendation,
+        (_skill_pack("claims_qa", min_confidence=0.9),),
+        route_min_confidence=0.6,
+    )
+
+    assert result.admission.decision == BusinessFlowSkillPackAdmissionDecision.NO_PACK
+    assert result.admission.failure_reason == "candidate_confidence_below_threshold"
+    assert result.admission.selected_pack_id is None
+
+
+def test_ambiguous_recommendation_needs_clarification() -> None:
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.AMBIGUOUS,
+        candidates=(("claims_qa", 0.88), ("billing_qa", 0.84)),
+        requires_task_split=True,
+    )
+
+    result = admit_business_flow_skill_pack(
+        recommendation,
+        (_skill_pack("claims_qa"), _skill_pack("billing_qa")),
+        route_min_confidence=0.6,
+    )
+
     assert (
         result.admission.decision
         == BusinessFlowSkillPackAdmissionDecision.NEEDS_CLARIFICATION
     )
     assert result.admission.selected_pack_id is None
     assert result.admission.failure_reason == "ambiguous"
+    assert result.admission.trace_summary["candidate_count"] == 2
 
 
-def test_missing_business_flow_skill_pack_match_needs_clarification() -> None:
-    skill_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="claims_qa",
-        label="Claims QA",
-        description="Claims question routing addenda.",
-        intent_patterns=("claims_question",),
-        stage_prompt_addenda={},
-    )
-    resolution = IntentResolution(
-        resolution_id="intent_missing",
-        user_goal="Answer a billing question.",
-        domain_intent="billing_question",
-        known_facts=("The user asks about billing.",),
-        missing_fields=(),
-        ambiguities=(),
-        risk_flags=(),
-        confidence=0.82,
-        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
-    )
-
-    result = admit_business_flow_skill_pack(resolution, (skill_pack,))
-
-    assert result.recommendation.recommended_pack_id is None
-    assert result.recommendation.candidate_pack_ids == ()
-    assert (
-        result.admission.decision
-        == BusinessFlowSkillPackAdmissionDecision.NEEDS_CLARIFICATION
-    )
-    assert result.admission.selected_pack_id is None
-    assert result.admission.failure_reason == "missing"
-
-
-def test_admits_business_flow_skill_pack_from_retrieval_query_set() -> None:
-    skill_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="product_clause_consultation",
-        label="Product Clause Consultation",
-        description="Product clause routing addenda.",
-        intent_patterns=("优缺点",),
-        stage_prompt_addenda={},
-    )
-    resolution = IntentResolution(
-        resolution_id="intent_product",
-        user_goal="Answer an enterprise policy question.",
-        domain_intent="enterprise_policy_question",
-        known_facts=("The user asks a question that should be grounded in knowledge.",),
-        missing_fields=(),
-        ambiguities=(),
-        risk_flags=(),
-        confidence=0.84,
-        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
-        retrieval_query_set=(
-            RetrievalQueryItem(
-                query="介绍平安御享的主要优缺点",
-                intent_angle="primary_policy_question",
-                required=True,
-                reason="The user asks a knowledge-backed enterprise policy question.",
-            ),
-        ),
-    )
-
-    result = admit_business_flow_skill_pack(resolution, (skill_pack,))
-
-    assert result.recommendation.recommended_pack_id == "product_clause_consultation"
-    assert result.recommendation.candidate_pack_ids == ("product_clause_consultation",)
-    assert result.admission.decision == BusinessFlowSkillPackAdmissionDecision.ADMITTED
-    assert result.admission.selected_pack_id == "product_clause_consultation"
-
-
-def test_not_admissible_business_flow_skill_pack_uses_safe_default() -> None:
-    claims_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="claims_qa",
-        label="Claims QA",
-        description="Claims question routing addenda.",
-        intent_patterns=("claims_question",),
-        stage_prompt_addenda={},
-        admission=BusinessFlowSkillPackAdmissionConfig(min_confidence=0.9),
-    )
-    default_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="general_qa",
-        label="General QA",
-        description="Safe default routing addenda.",
-        intent_patterns=("general_question",),
-        stage_prompt_addenda={},
-    )
-    resolution = IntentResolution(
-        resolution_id="intent_low_confidence",
-        user_goal="Answer a claims question.",
-        domain_intent="claims_question",
-        known_facts=("The user asks about a claims process.",),
-        missing_fields=(),
-        ambiguities=(),
-        risk_flags=(),
-        confidence=0.72,
-        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+def test_unknown_recommended_business_flow_skill_pack_fails_closed() -> None:
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+        candidates=(("missing_qa", 0.86),),
     )
 
     result = admit_business_flow_skill_pack(
-        resolution,
-        (claims_pack, default_pack),
-        default_pack_id="general_qa",
+        recommendation,
+        (_skill_pack("claims_qa"),),
+        route_min_confidence=0.6,
     )
 
     assert (
         result.admission.decision
-        == BusinessFlowSkillPackAdmissionDecision.SAFE_DEFAULT
+        == BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED
     )
-    assert result.admission.selected_pack_id == "general_qa"
-    assert result.admission.failure_reason == "not_admissible"
-
-
-def test_not_admissible_business_flow_skill_pack_refuses_without_default() -> None:
-    claims_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="claims_qa",
-        label="Claims QA",
-        description="Claims question routing addenda.",
-        intent_patterns=("claims_question",),
-        stage_prompt_addenda={},
-        admission=BusinessFlowSkillPackAdmissionConfig(min_confidence=0.9),
-    )
-    resolution = IntentResolution(
-        resolution_id="intent_low_confidence_no_default",
-        user_goal="Answer a claims question.",
-        domain_intent="claims_question",
-        known_facts=("The user asks about a claims process.",),
-        missing_fields=(),
-        ambiguities=(),
-        risk_flags=(),
-        confidence=0.72,
-        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
-    )
-
-    result = admit_business_flow_skill_pack(resolution, (claims_pack,))
-
-    assert result.admission.decision == BusinessFlowSkillPackAdmissionDecision.REFUSED
     assert result.admission.selected_pack_id is None
-    assert result.admission.failure_reason == "not_admissible"
+    assert result.admission.failure_reason == "unknown_pack"
 
 
 def test_unauthorized_business_flow_skill_pack_fails_closed_without_fallback() -> None:
-    claims_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="claims_qa",
-        label="Claims QA",
-        description="Claims question routing addenda.",
-        intent_patterns=("claims_question",),
-        stage_prompt_addenda={},
-        admission=BusinessFlowSkillPackAdmissionConfig(
-            min_confidence=0.5,
-            require_authorization_context=True,
-        ),
-    )
-    default_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="general_qa",
-        label="General QA",
-        description="Safe default routing addenda.",
-        intent_patterns=("general_question",),
-        stage_prompt_addenda={},
-    )
-    resolution = IntentResolution(
-        resolution_id="intent_unauthorized",
-        user_goal="Answer a claims question.",
-        domain_intent="claims_question",
-        known_facts=("The user asks about a claims process.",),
-        missing_fields=(),
-        ambiguities=(),
-        risk_flags=(),
-        confidence=0.82,
-        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+        candidates=(("claims_qa", 0.86),),
     )
 
     result = admit_business_flow_skill_pack(
-        resolution,
-        (claims_pack, default_pack),
-        default_pack_id="general_qa",
+        recommendation,
+        (_skill_pack("claims_qa", require_authorization_context=True),),
+        route_min_confidence=0.6,
         authorization_context_present=False,
     )
 
@@ -284,38 +192,15 @@ def test_unauthorized_business_flow_skill_pack_fails_closed_without_fallback() -
 
 
 def test_not_ready_business_flow_skill_pack_fails_closed_without_fallback() -> None:
-    claims_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="claims_qa",
-        label="Claims QA",
-        description="Claims question routing addenda.",
-        intent_patterns=("claims_question",),
-        stage_prompt_addenda={},
-    )
-    default_pack = BusinessFlowSkillPackDefinition(
-        schema_version="business_flow_skill_pack.v1",
-        id="general_qa",
-        label="General QA",
-        description="Safe default routing addenda.",
-        intent_patterns=("general_question",),
-        stage_prompt_addenda={},
-    )
-    resolution = IntentResolution(
-        resolution_id="intent_not_ready",
-        user_goal="Answer a claims question.",
-        domain_intent="claims_question",
-        known_facts=("The user asks about a claims process.",),
-        missing_fields=(),
-        ambiguities=(),
-        risk_flags=(),
-        confidence=0.82,
-        recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+        candidates=(("claims_qa", 0.86),),
     )
 
     result = admit_business_flow_skill_pack(
-        resolution,
-        (claims_pack, default_pack),
-        default_pack_id="general_qa",
+        recommendation,
+        (_skill_pack("claims_qa"), _skill_pack("general_qa")),
+        route_min_confidence=0.6,
         ready_pack_ids=("general_qa",),
     )
 
@@ -325,3 +210,23 @@ def test_not_ready_business_flow_skill_pack_fails_closed_without_fallback() -> N
     )
     assert result.admission.selected_pack_id is None
     assert result.admission.failure_reason == "not_ready"
+
+
+def test_normalizes_candidate_pack_order_by_confidence_descending() -> None:
+    recommendation = _recommendation(
+        BusinessFlowSkillPackRecommendationType.AMBIGUOUS,
+        candidates=(("billing_qa", 0.74), ("claims_qa", 0.91)),
+        requires_task_split=True,
+    )
+
+    result = admit_business_flow_skill_pack(
+        recommendation,
+        (_skill_pack("claims_qa"), _skill_pack("billing_qa")),
+        route_min_confidence=0.6,
+    )
+
+    assert [pack.pack_id for pack in result.recommendation.candidate_packs] == [
+        "claims_qa",
+        "billing_qa",
+    ]
+    assert result.admission.trace_summary["candidate_count"] == 2

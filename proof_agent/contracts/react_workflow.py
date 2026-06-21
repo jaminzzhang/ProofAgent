@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.policy import EnforcementPoint, PolicyDecisionType
@@ -23,10 +23,17 @@ class ReActActionType(str, Enum):
 
 class BusinessFlowSkillPackAdmissionDecision(str, Enum):
     ADMITTED = "admitted"
+    NO_PACK = "no_pack"
     NEEDS_CLARIFICATION = "needs_clarification"
     SAFE_DEFAULT = "safe_default"
     REFUSED = "refused"
     FAILED_CLOSED = "failed_closed"
+
+
+class BusinessFlowSkillPackRecommendationType(str, Enum):
+    SINGLE_PACK = "single_pack"
+    NO_PACK = "no_pack"
+    AMBIGUOUS = "ambiguous"
 
 
 class ReasoningSummary(FrozenModel):
@@ -77,15 +84,77 @@ class IntentResolution(FrozenModel):
         return freeze_value(value)
 
 
+class BusinessFlowCandidatePack(FrozenModel):
+    """One candidate pack in an intent-derived business flow recommendation."""
+
+    pack_id: str
+    confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    reason: str
+
+    @field_validator("pack_id", "reason", mode="after")
+    @classmethod
+    def require_non_empty_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must be non-empty")
+        return value
+
+
 class BusinessFlowSkillPackRecommendation(FrozenModel):
     """Intent-derived recommendation from the published Business Flow Skill Pack set."""
 
     recommendation_id: str
     intent_resolution_id: str
-    recommended_pack_id: str | None
-    candidate_pack_ids: tuple[str, ...]
+    recommendation_type: BusinessFlowSkillPackRecommendationType
     confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     reason: str
+    candidate_packs: tuple[BusinessFlowCandidatePack, ...] = Field(default_factory=tuple)
+    requires_task_split: bool = False
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def require_non_empty_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must be non-empty")
+        return value
+
+    @field_validator("candidate_packs", mode="after")
+    @classmethod
+    def freeze_candidate_packs(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @model_validator(mode="after")
+    def validate_candidate_cardinality(self) -> BusinessFlowSkillPackRecommendation:
+        candidate_count = len(self.candidate_packs)
+        if (
+            self.recommendation_type
+            is BusinessFlowSkillPackRecommendationType.SINGLE_PACK
+            and candidate_count != 1
+        ):
+            raise ValueError("single_pack recommendations require exactly one candidate")
+        if (
+            self.recommendation_type is BusinessFlowSkillPackRecommendationType.NO_PACK
+            and candidate_count != 0
+        ):
+            raise ValueError("no_pack recommendations cannot include candidates")
+        if (
+            self.recommendation_type is BusinessFlowSkillPackRecommendationType.AMBIGUOUS
+            and candidate_count < 2
+        ):
+            raise ValueError("ambiguous recommendations require at least two candidates")
+        if (
+            self.recommendation_type
+            is not BusinessFlowSkillPackRecommendationType.AMBIGUOUS
+            and self.requires_task_split
+        ):
+            raise ValueError("requires_task_split is only valid for ambiguous recommendations")
+        return self
+
+
+class IntentResolutionResult(FrozenModel):
+    """Intent Resolution model output with optional Business Flow recommendation."""
+
+    intent_resolution: IntentResolution
+    business_flow_skill_pack_recommendation: BusinessFlowSkillPackRecommendation | None = None
 
 
 class BusinessFlowSkillPackAdmission(FrozenModel):

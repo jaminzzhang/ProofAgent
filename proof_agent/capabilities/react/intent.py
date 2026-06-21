@@ -11,7 +11,12 @@ from proof_agent.capabilities.models.normalization import (
 )
 from proof_agent.capabilities.react.planner import _deterministic_query
 from proof_agent.contracts import (
+    BusinessFlowCandidatePack,
+    BusinessFlowSkillPackDefinition,
+    BusinessFlowSkillPackRecommendation,
+    BusinessFlowSkillPackRecommendationType,
     IntentResolution,
+    IntentResolutionResult,
     ModelMessage,
     ModelRequest,
     ModelRole,
@@ -50,7 +55,8 @@ class IntentResolver(Protocol):
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
-    ) -> IntentResolution:
+        business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
+    ) -> IntentResolutionResult:
         """Resolve user intent into an audit-safe structured summary."""
 
 
@@ -64,11 +70,12 @@ class DeterministicIntentResolver:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
-    ) -> IntentResolution:
+        business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
+    ) -> IntentResolutionResult:
         _ = (system_prompt, context_summary, workflow_stage_context)
         normalized_question = question.lower()
         if "can this customer" in normalized_question or "claim it" in normalized_question:
-            return IntentResolution(
+            resolution = IntentResolution(
                 resolution_id="intent_clarify_1",
                 user_goal="Resolve a customer-specific claim question.",
                 domain_intent="customer_claim_question",
@@ -79,8 +86,17 @@ class DeterministicIntentResolver:
                 confidence=0.55,
                 recommended_next_action=ReActActionType.ASK_CLARIFICATION,
             )
+            return IntentResolutionResult(
+                intent_resolution=resolution,
+                business_flow_skill_pack_recommendation=(
+                    _deterministic_business_flow_recommendation(
+                        resolution,
+                        business_flow_skill_packs,
+                    )
+                ),
+            )
         if "look up customer policy status" in normalized_question:
-            return IntentResolution(
+            resolution = IntentResolution(
                 resolution_id="intent_tool_1",
                 user_goal="Look up a customer policy status.",
                 domain_intent="customer_policy_status_lookup",
@@ -91,7 +107,16 @@ class DeterministicIntentResolver:
                 confidence=0.86,
                 recommended_next_action=ReActActionType.PROPOSE_TOOL_CALL,
             )
-        return IntentResolution(
+            return IntentResolutionResult(
+                intent_resolution=resolution,
+                business_flow_skill_pack_recommendation=(
+                    _deterministic_business_flow_recommendation(
+                        resolution,
+                        business_flow_skill_packs,
+                    )
+                ),
+            )
+        resolution = IntentResolution(
             resolution_id="intent_retrieval_1",
             user_goal="Answer an enterprise policy question.",
             domain_intent="enterprise_policy_question",
@@ -108,6 +133,15 @@ class DeterministicIntentResolver:
                     required=True,
                     reason="The user asks a knowledge-backed enterprise policy question.",
                 ),
+            ),
+        )
+        return IntentResolutionResult(
+            intent_resolution=resolution,
+            business_flow_skill_pack_recommendation=(
+                _deterministic_business_flow_recommendation(
+                    resolution,
+                    business_flow_skill_packs,
+                )
             ),
         )
 
@@ -139,49 +173,18 @@ class LLMIntentResolver:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
-    ) -> IntentResolution:
+        business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
+    ) -> IntentResolutionResult:
+        business_flow_routing = _business_flow_skill_pack_routing_payload(
+            business_flow_skill_packs
+        )
         payload: dict[str, Any] = {
             "question": question,
             "system_prompt_summary": system_prompt,
             "context_summary": context_summary,
-            "required_output_contract": {
-                "name": "IntentResolution",
-                "required_fields": list(_INTENT_REQUIRED_FIELDS),
-                "field_types": {
-                    "resolution_id": "string",
-                    "user_goal": "string",
-                    "domain_intent": "string",
-                    "known_facts": "array of strings",
-                    "missing_fields": "array of strings",
-                    "ambiguities": "array of strings",
-                    "risk_flags": "array of strings",
-                    "confidence": "number between 0 and 1",
-                    "recommended_next_action": "one of allowed_recommended_next_actions",
-                    "retrieval_query_set": (
-                        "array of RetrievalQueryItem objects with query, "
-                        "intent_angle, required, and reason"
-                    ),
-                },
-                "example": {
-                    "resolution_id": "intent_1",
-                    "user_goal": "Understand the user's insurance knowledge request.",
-                    "domain_intent": "public_insurance_knowledge_query",
-                    "known_facts": ["The user asks for an insurance product explanation."],
-                    "missing_fields": [],
-                    "ambiguities": [],
-                    "risk_flags": [],
-                    "confidence": 0.82,
-                    "recommended_next_action": "plan_retrieval",
-                    "retrieval_query_set": [
-                        {
-                            "query": "insurance product explanation",
-                            "intent_angle": "primary_policy_question",
-                            "required": True,
-                            "reason": "The user asks for a knowledge-backed explanation.",
-                        }
-                    ],
-                },
-            },
+            "required_output_contract": _intent_required_output_contract(
+                include_business_flow_recommendation=bool(business_flow_routing)
+            ),
             "retrieval_query_set_budget": {
                 "max_queries": self.max_queries,
                 "required_when": (
@@ -202,6 +205,8 @@ class LLMIntentResolver:
         }
         if workflow_stage_context:
             payload["workflow_stage_context"] = dict(workflow_stage_context)
+        if business_flow_routing:
+            payload["business_flow_skill_pack_routing"] = business_flow_routing
         request = ModelRequest(
             provider=self.model_provider.provider_name,
             model=self.model_provider.model_name,
@@ -218,9 +223,10 @@ class LLMIntentResolver:
         )
         response = self.model_provider.generate(request)
         try:
-            return _parse_and_validate_intent_resolution(
+            return _parse_and_validate_intent_resolution_result(
                 response.content,
                 max_queries=self.max_queries,
+                require_business_flow_recommendation=bool(business_flow_routing),
             )
         except ModelOutputNormalizationError as exc:
             repair_request = _intent_repair_request(
@@ -232,26 +238,137 @@ class LLMIntentResolver:
                 error=exc,
             )
         repair_response = self.model_provider.generate(repair_request)
-        return _parse_and_validate_intent_resolution(
+        return _parse_and_validate_intent_resolution_result(
             repair_response.content,
             max_queries=self.max_queries,
+            require_business_flow_recommendation=bool(business_flow_routing),
         )
 
 
-def _parse_and_validate_intent_resolution(
+def _intent_required_output_contract(
+    *,
+    include_business_flow_recommendation: bool,
+) -> dict[str, Any]:
+    intent_contract = {
+        "name": "IntentResolution",
+        "required_fields": list(_INTENT_REQUIRED_FIELDS),
+        "field_types": {
+            "resolution_id": "string",
+            "user_goal": "string",
+            "domain_intent": "string",
+            "known_facts": "array of strings",
+            "missing_fields": "array of strings",
+            "ambiguities": "array of strings",
+            "risk_flags": "array of strings",
+            "confidence": "number between 0 and 1",
+            "recommended_next_action": "one of allowed_recommended_next_actions",
+            "retrieval_query_set": (
+                "array of RetrievalQueryItem objects with query, "
+                "intent_angle, required, and reason"
+            ),
+        },
+        "example": {
+            "resolution_id": "intent_1",
+            "user_goal": "Understand the user's insurance knowledge request.",
+            "domain_intent": "public_insurance_knowledge_query",
+            "known_facts": ["The user asks for an insurance product explanation."],
+            "missing_fields": [],
+            "ambiguities": [],
+            "risk_flags": [],
+            "confidence": 0.82,
+            "recommended_next_action": "plan_retrieval",
+            "retrieval_query_set": [
+                {
+                    "query": "insurance product explanation",
+                    "intent_angle": "primary_policy_question",
+                    "required": True,
+                    "reason": "The user asks for a knowledge-backed explanation.",
+                }
+            ],
+        },
+    }
+    if not include_business_flow_recommendation:
+        return intent_contract
+    return {
+        "name": "IntentResolutionResult",
+        "required_fields": [
+            "intent_resolution",
+            "business_flow_skill_pack_recommendation",
+        ],
+        "field_types": {
+            "intent_resolution": "IntentResolution object",
+            "business_flow_skill_pack_recommendation": (
+                "BusinessFlowSkillPackRecommendation object with recommendation_type "
+                "single_pack, no_pack, or ambiguous; top-level route confidence; "
+                "candidate_packs sorted by confidence descending; candidate pack_id, "
+                "confidence, and reason"
+            ),
+        },
+        "intent_resolution_contract": intent_contract,
+    }
+
+
+def _business_flow_skill_pack_routing_payload(
+    skill_packs: tuple[BusinessFlowSkillPackDefinition, ...],
+) -> dict[str, Any] | None:
+    if not skill_packs:
+        return None
+    return {
+        "required": True,
+        "instruction": (
+            "Recommend a Business Flow Skill Pack from candidate_packs, return no_pack "
+            "when none fits, or ambiguous when multiple business flows are materially "
+            "needed. Do not execute or apply any pack content."
+        ),
+        "candidate_packs": [
+            {
+                "pack_id": pack.id,
+                "label": pack.label,
+                "description": pack.description,
+                "intent_patterns": list(pack.intent_patterns),
+                "intent_taxonomy_refs": list(pack.intent_taxonomy_refs),
+                "admission": {
+                    "min_confidence": pack.admission.min_confidence,
+                    "require_authorization_context": (
+                        pack.admission.require_authorization_context
+                    ),
+                },
+            }
+            for pack in skill_packs
+        ],
+        "allowed_recommendation_types": [
+            BusinessFlowSkillPackRecommendationType.SINGLE_PACK.value,
+            BusinessFlowSkillPackRecommendationType.NO_PACK.value,
+            BusinessFlowSkillPackRecommendationType.AMBIGUOUS.value,
+        ],
+    }
+
+
+def _parse_and_validate_intent_resolution_result(
     content: str,
     *,
     max_queries: int,
-) -> IntentResolution:
-    resolution = parse_model_contract(
-        content=content,
-        contract_type=IntentResolution,
-        role="intent_resolution",
-    )
-    return _validate_intent_resolution(
-        resolution,
+    require_business_flow_recommendation: bool,
+) -> IntentResolutionResult:
+    if '"intent_resolution"' in content:
+        result = parse_model_contract(
+            content=content,
+            contract_type=IntentResolutionResult,
+            role="intent_resolution",
+        )
+    else:
+        result = IntentResolutionResult(
+            intent_resolution=parse_model_contract(
+                content=content,
+                contract_type=IntentResolution,
+                role="intent_resolution",
+            )
+        )
+    return _validate_intent_resolution_result(
+        result,
         raw_content_length=len(content),
         max_queries=max_queries,
+        require_business_flow_recommendation=require_business_flow_recommendation,
     )
 
 
@@ -269,7 +386,8 @@ def _intent_repair_request(
         "question": question,
         "instruction": (
             "Repair the previous intent_resolution output. Return only one JSON object "
-            "matching IntentResolution. Preserve the user's meaning; do not answer the user."
+            "matching the required_output_contract. Preserve the user's meaning; do not "
+            "answer the user."
         ),
         "required_output_contract": original_payload["required_output_contract"],
         "allowed_recommended_next_actions": original_payload[
@@ -318,7 +436,7 @@ def _json_or_parse_error(content: str) -> tuple[Any | None, str | None]:
 
 def _intent_repair_prompt() -> str:
     return (
-        "You are repairing a Proof Agent IntentResolution JSON object. "
+        "You are repairing a Proof Agent intent resolution JSON object. "
         "Return exactly one JSON object with every required field present. "
         "Do not include markdown, explanations, final answers, tool calls, or chain-of-thought."
     )
@@ -337,8 +455,11 @@ def resolve_intent_resolver(
 def _intent_control_prompt() -> str:
     return (
         "You are the Proof Agent Intent Resolver. "
-        "Return exactly one JSON object matching IntentResolution with all required fields: "
+        "Return exactly one JSON object matching the required output contract. "
+        "When the contract is IntentResolution, include all required fields: "
         f"{', '.join(_INTENT_REQUIRED_FIELDS)}. "
+        "When the contract is IntentResolutionResult, return intent_resolution plus an "
+        "independent business_flow_skill_pack_recommendation. "
         "Summarize user intent, known facts, missing fields, ambiguities, risk flags, "
         "confidence, and a recommended_next_action. "
         "Use only allowed recommended_next_action values from the user message. "
@@ -347,6 +468,93 @@ def _intent_control_prompt() -> str:
         "Do not return raw chain-of-thought, markdown, tool calls, executable retrieval "
         "plans, final answers, or policy decisions."
     )
+
+
+def _deterministic_business_flow_recommendation(
+    resolution: IntentResolution,
+    skill_packs: tuple[BusinessFlowSkillPackDefinition, ...],
+) -> BusinessFlowSkillPackRecommendation | None:
+    if not skill_packs:
+        return None
+    if len(skill_packs) == 1:
+        return BusinessFlowSkillPackRecommendation(
+            recommendation_id=f"bfsp_rec_{resolution.resolution_id}",
+            intent_resolution_id=resolution.resolution_id,
+            recommendation_type=BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+            confidence=resolution.confidence,
+            reason="Deterministic resolver selected the only published Business Flow Skill Pack.",
+            candidate_packs=(
+                BusinessFlowCandidatePack(
+                    pack_id=skill_packs[0].id,
+                    confidence=resolution.confidence,
+                    reason="Only published Business Flow Skill Pack.",
+                ),
+            ),
+        )
+    return BusinessFlowSkillPackRecommendation(
+        recommendation_id=f"bfsp_rec_{resolution.resolution_id}",
+        intent_resolution_id=resolution.resolution_id,
+        recommendation_type=BusinessFlowSkillPackRecommendationType.AMBIGUOUS,
+        confidence=resolution.confidence,
+        reason="Deterministic resolver found multiple published Business Flow Skill Packs.",
+        candidate_packs=tuple(
+            BusinessFlowCandidatePack(
+                pack_id=pack.id,
+                confidence=resolution.confidence,
+                reason="Published Business Flow Skill Pack candidate.",
+            )
+            for pack in skill_packs
+        ),
+        requires_task_split=True,
+    )
+
+
+def _validate_intent_resolution_result(
+    result: IntentResolutionResult,
+    *,
+    raw_content_length: int,
+    max_queries: int,
+    require_business_flow_recommendation: bool,
+) -> IntentResolutionResult:
+    _validate_intent_resolution(
+        result.intent_resolution,
+        raw_content_length=raw_content_length,
+        max_queries=max_queries,
+    )
+    recommendation = result.business_flow_skill_pack_recommendation
+    if require_business_flow_recommendation and recommendation is None:
+        raise ModelOutputNormalizationError(
+            role="intent_resolution",
+            error_code="model_output_contract_validation_failed",
+            message=(
+                "intent_resolution result requires "
+                "business_flow_skill_pack_recommendation when Business Flow Skill "
+                "Packs are provided."
+            ),
+            raw_content_length=raw_content_length,
+            contract_name="IntentResolutionResult",
+            violation_codes=("business_flow_recommendation_required",),
+            field_paths=("business_flow_skill_pack_recommendation",),
+            violation_count=1,
+        )
+    if (
+        recommendation is not None
+        and recommendation.intent_resolution_id != result.intent_resolution.resolution_id
+    ):
+        raise ModelOutputNormalizationError(
+            role="intent_resolution",
+            error_code="model_output_contract_validation_failed",
+            message=(
+                "business_flow_skill_pack_recommendation.intent_resolution_id must "
+                "match intent_resolution.resolution_id."
+            ),
+            raw_content_length=raw_content_length,
+            contract_name="IntentResolutionResult",
+            violation_codes=("business_flow_recommendation_intent_mismatch",),
+            field_paths=("business_flow_skill_pack_recommendation.intent_resolution_id",),
+            violation_count=1,
+        )
+    return result
 
 
 def _validate_intent_resolution(

@@ -95,6 +95,8 @@ capabilities:
     provider: session
   skills:
     enabled: true
+    admission:
+      route_min_confidence: 0.72
     business_flows:
       - id: claims_qa
         definition: ./skill_packs/claims.yaml
@@ -109,11 +111,82 @@ audit:
     manifest = load_agent_manifest(agent_yaml)
 
     assert manifest.capabilities.skills.enabled is True
+    assert manifest.capabilities.skills.admission.route_min_confidence == 0.72
     assert len(manifest.capabilities.skills.business_flows) == 1
     binding = manifest.capabilities.skills.business_flows[0]
     assert binding.id == "claims_qa"
     assert binding.definition == pack_definition.resolve()
     assert binding.default is True
+
+
+def test_rejects_unknown_skills_admission_field(tmp_path: Path) -> None:
+    agent_yaml = tmp_path / "agent.yaml"
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
+    pack_dir = tmp_path / "skill_packs"
+    pack_dir.mkdir()
+    (pack_dir / "claims.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Governed routing addenda for claims questions.
+stage_prompt_addenda: {}
+admission: {}
+""",
+        encoding="utf-8",
+    )
+    agent_yaml.write_text(
+        """
+name: invalid_skill_admission_manifest
+purpose: "Reject misplaced Skill Pack admission fields."
+workflow:
+  runtime: langgraph
+  template: enterprise_qa
+package_knowledge_sources:
+  - source_id: ks_local
+    name: Local Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+knowledge_bindings:
+  - binding_id: kb_local
+    source_ref:
+      scope: package
+      source_id: ks_local
+retrieval:
+  strategy: single_step
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    admission:
+      route_min_confidence: 0.72
+      candidate_min_confidence: 0.5
+    business_flows:
+      - id: claims_qa
+        definition: ./skill_packs/claims.yaml
+audit:
+  trace_path: ./runs/trace.jsonl
+  receipt_path: ./runs/governance_receipt.md
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_SCHEMA_001"
+    assert "candidate_min_confidence" in exc.value.message
 
 
 def test_rejects_business_flow_skill_packs_when_skills_disabled(

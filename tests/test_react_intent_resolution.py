@@ -9,6 +9,9 @@ from proof_agent.capabilities.react import (
 )
 from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.contracts import (
+    BusinessFlowSkillPackAdmissionConfig,
+    BusinessFlowSkillPackDefinition,
+    BusinessFlowSkillPackRecommendationType,
     ModelRequest,
     ModelResponse,
     ReActActionType,
@@ -46,11 +49,12 @@ class FakeIntentProvider:
 def test_deterministic_intent_resolver_recommends_clarification_for_missing_fields() -> None:
     resolver = DeterministicIntentResolver()
 
-    resolution = resolver.resolve(
+    result = resolver.resolve(
         question="Can this customer claim it?",
         system_prompt="Resolve intent safely.",
         context_summary="",
     )
+    resolution = result.intent_resolution
 
     assert resolution.recommended_next_action == ReActActionType.ASK_CLARIFICATION
     assert resolution.missing_fields == ("customer_id", "policy_id", "claim_type")
@@ -60,11 +64,12 @@ def test_deterministic_intent_resolver_recommends_clarification_for_missing_fiel
 def test_deterministic_intent_resolver_recommends_retrieval_for_policy_question() -> None:
     resolver = DeterministicIntentResolver()
 
-    resolution = resolver.resolve(
+    result = resolver.resolve(
         question="What documents are required for inpatient reimbursement?",
         system_prompt="Resolve intent safely.",
         context_summary="",
     )
+    resolution = result.intent_resolution
 
     assert resolution.recommended_next_action == ReActActionType.PLAN_RETRIEVAL
     assert resolution.domain_intent == "enterprise_policy_question"
@@ -104,11 +109,12 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
         model_provider=provider,
     )
 
-    resolution = resolver.resolve(
+    result = resolver.resolve(
         question="What documents are required for inpatient reimbursement?",
         system_prompt="Resolve intent safely.",
         context_summary="Recent turn summary.",
     )
+    resolution = result.intent_resolution
 
     assert resolution.recommended_next_action == ReActActionType.PLAN_RETRIEVAL
     assert provider.last_request is not None
@@ -131,6 +137,104 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
     assert resolution.retrieval_query_set[0].query == (
         "inpatient reimbursement required documents"
     )
+
+
+def test_llm_intent_resolver_includes_business_flow_pack_summaries() -> None:
+    provider = FakeIntentProvider(
+        """
+        {
+          "intent_resolution": {
+            "resolution_id": "intent_llm_1",
+            "user_goal": "Understand product pros and cons.",
+            "domain_intent": "insurance_product_explanation",
+            "known_facts": ["The user asks about an insurance product."],
+            "missing_fields": [],
+            "ambiguities": [],
+            "risk_flags": [],
+            "confidence": 0.91,
+            "recommended_next_action": "plan_retrieval",
+            "retrieval_query_set": [
+              {
+                "query": "Ping An Yu Xiang pros cons",
+                "intent_angle": "product_explanation",
+                "required": true,
+                "reason": "The user asks for product pros and cons."
+              }
+            ]
+          },
+          "business_flow_skill_pack_recommendation": {
+            "recommendation_id": "bfsp_rec_intent_llm_1",
+            "intent_resolution_id": "intent_llm_1",
+            "recommendation_type": "single_pack",
+            "confidence": 0.88,
+            "reason": "The request is about insurance product clause consultation.",
+            "candidate_packs": [
+              {
+                "pack_id": "product_clause_consultation",
+                "confidence": 0.86,
+                "reason": "Product pros and cons require clause consultation flow."
+              }
+            ],
+            "requires_task_split": false
+          }
+        }
+        """
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+    skill_pack = BusinessFlowSkillPackDefinition(
+        schema_version="business_flow_skill_pack.v1",
+        id="product_clause_consultation",
+        label="Product Clause Consultation",
+        description="Answer product clause questions with governed evidence.",
+        intent_patterns=("产品咨询", "优缺点"),
+        intent_taxonomy_refs=("insurance.product_clause",),
+        stage_prompt_addenda={
+            "plan": {
+                "business_context": "This must never be exposed during intent resolution."
+            }
+        },
+        tool_contract_refs=("internal_tool",),
+        policy_rule_refs=("internal_policy",),
+        validator_refs=("evidence",),
+        admission=BusinessFlowSkillPackAdmissionConfig(min_confidence=0.75),
+    )
+
+    result = resolver.resolve(
+        question="介绍平安御享的主要优缺点",
+        system_prompt="Resolve intent safely.",
+        context_summary="Recent turn summary.",
+        business_flow_skill_packs=(skill_pack,),
+    )
+
+    assert result.intent_resolution.resolution_id == "intent_llm_1"
+    assert result.business_flow_skill_pack_recommendation is not None
+    assert (
+        result.business_flow_skill_pack_recommendation.recommendation_type
+        == BusinessFlowSkillPackRecommendationType.SINGLE_PACK
+    )
+    user_payload = json.loads(provider.last_request.messages[1].content)
+    routing = user_payload["business_flow_skill_pack_routing"]
+    assert routing["required"] is True
+    assert routing["candidate_packs"] == [
+        {
+            "pack_id": "product_clause_consultation",
+            "label": "Product Clause Consultation",
+            "description": "Answer product clause questions with governed evidence.",
+            "intent_patterns": ["产品咨询", "优缺点"],
+            "intent_taxonomy_refs": ["insurance.product_clause"],
+            "admission": {
+                "min_confidence": 0.75,
+                "require_authorization_context": False,
+            },
+        }
+    ]
+    serialized_payload = provider.last_request.messages[1].content
+    assert "stage_prompt_addenda" not in serialized_payload
+    assert "internal_tool" not in serialized_payload
+    assert "internal_policy" not in serialized_payload
 
 
 def test_llm_intent_resolver_repairs_missing_contract_fields_once() -> None:
@@ -174,11 +278,12 @@ def test_llm_intent_resolver_repairs_missing_contract_fields_once() -> None:
         model_provider=provider,
     )
 
-    resolution = resolver.resolve(
+    result = resolver.resolve(
         question="简单介绍下平安御享的主要优缺点",
         system_prompt="Resolve intent safely.",
         context_summary="",
     )
+    resolution = result.intent_resolution
 
     assert resolution.resolution_id == "intent_repaired_1"
     assert len(provider.requests) == 2

@@ -37,11 +37,22 @@ Question: {{ question }}
 | --- | --- |
 | Decision | {{ business_flow_skill_pack_admission.decision }} |
 | Selected Pack | {{ business_flow_skill_pack_admission.selected_pack_id }} |
-| Recommended Pack | {{ business_flow_skill_pack_admission.recommended_pack_id }} |
+| Recommendation Type | {{ business_flow_skill_pack_admission.recommendation_type }} |
+| Route Confidence | {{ business_flow_skill_pack_admission.route_confidence }} |
 | Candidate Count | {{ business_flow_skill_pack_admission.candidate_count }} |
 | Failure Reason | {{ business_flow_skill_pack_admission.failure_reason }} |
 | Recommendation ID | {{ business_flow_skill_pack_admission.recommendation_id }} |
 | Intent Resolution ID | {{ business_flow_skill_pack_admission.intent_resolution_id }} |
+
+{% if business_flow_skill_pack_admission.candidate_packs %}
+### Candidate Packs
+
+| Pack | Confidence | Reason |
+| --- | --- | --- |
+{% for candidate in business_flow_skill_pack_admission.candidate_packs %}
+| {{ candidate.pack_id }} | {{ candidate.confidence }} | {{ candidate.reason }} |
+{% endfor %}
+{% endif %}
 
 ### Stage Context Applications
 

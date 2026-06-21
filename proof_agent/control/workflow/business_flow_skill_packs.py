@@ -1,121 +1,90 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from proof_agent.contracts import (
+    BusinessFlowCandidatePack,
     BusinessFlowSkillPackAdmission,
     BusinessFlowSkillPackAdmissionDecision,
     BusinessFlowSkillPackAdmissionResult,
     BusinessFlowSkillPackDefinition,
     BusinessFlowSkillPackRecommendation,
-    IntentResolution,
+    BusinessFlowSkillPackRecommendationType,
 )
 
 
 def admit_business_flow_skill_pack(
-    intent_resolution: IntentResolution,
+    recommendation: BusinessFlowSkillPackRecommendation,
     skill_packs: tuple[BusinessFlowSkillPackDefinition, ...],
     *,
-    default_pack_id: str | None = None,
+    route_min_confidence: float = 0.0,
     authorization_context_present: bool = True,
     ready_pack_ids: tuple[str, ...] | None = None,
 ) -> BusinessFlowSkillPackAdmissionResult:
-    """Recommend and admit a Primary Business Flow Skill Pack from a frozen set."""
+    """Admit a Primary Business Flow Skill Pack from an LLM recommendation."""
 
-    matched_packs = tuple(
-        pack for pack in skill_packs if _matches_intent(intent_resolution, pack)
-    )
-    candidate_pack_ids = tuple(pack.id for pack in matched_packs)
-    recommended_pack_id = candidate_pack_ids[0] if len(candidate_pack_ids) == 1 else None
-    recommendation = BusinessFlowSkillPackRecommendation(
-        recommendation_id=f"bfsp_rec_{intent_resolution.resolution_id}",
-        intent_resolution_id=intent_resolution.resolution_id,
-        recommended_pack_id=recommended_pack_id,
-        candidate_pack_ids=candidate_pack_ids,
-        confidence=intent_resolution.confidence,
-        reason=_recommendation_reason(candidate_pack_ids),
-    )
-    if len(candidate_pack_ids) != 1:
-        failure_reason = "ambiguous" if candidate_pack_ids else "missing"
-        admission = BusinessFlowSkillPackAdmission(
-            admission_id=f"bfsp_adm_{intent_resolution.resolution_id}",
-            recommendation_id=recommendation.recommendation_id,
+    normalized_recommendation = _normalize_recommendation(recommendation)
+    if normalized_recommendation.confidence < route_min_confidence:
+        return _result(
+            normalized_recommendation,
+            decision=BusinessFlowSkillPackAdmissionDecision.NO_PACK,
+            selected_pack_id=None,
+            reason=(
+                "Business Flow Skill Pack route confidence did not meet the "
+                "agent-level admission threshold."
+            ),
+            failure_reason="route_confidence_below_threshold",
+        )
+    if (
+        normalized_recommendation.recommendation_type
+        is BusinessFlowSkillPackRecommendationType.NO_PACK
+    ):
+        return _result(
+            normalized_recommendation,
+            decision=BusinessFlowSkillPackAdmissionDecision.NO_PACK,
+            selected_pack_id=None,
+            reason="No Business Flow Skill Pack was recommended for this request.",
+        )
+    if (
+        normalized_recommendation.recommendation_type
+        is BusinessFlowSkillPackRecommendationType.AMBIGUOUS
+    ):
+        return _result(
+            normalized_recommendation,
             decision=BusinessFlowSkillPackAdmissionDecision.NEEDS_CLARIFICATION,
             selected_pack_id=None,
-            reason=_clarification_reason(candidate_pack_ids),
-            failure_reason=failure_reason,
-            trace_summary={
-                "decision": BusinessFlowSkillPackAdmissionDecision.NEEDS_CLARIFICATION.value,
-                "selected_pack_id": None,
-                "candidate_count": len(candidate_pack_ids),
-                "failure_reason": failure_reason,
-            },
+            reason=(
+                "Multiple Business Flow Skill Packs were plausible and require "
+                "task splitting or user clarification."
+            ),
+            failure_reason="ambiguous",
         )
-        return BusinessFlowSkillPackAdmissionResult(
-            recommendation=recommendation,
-            admission=admission,
+
+    candidate = normalized_recommendation.candidate_packs[0]
+    skill_pack_by_id = {pack.id: pack for pack in skill_packs}
+    skill_pack = skill_pack_by_id.get(candidate.pack_id)
+    if skill_pack is None:
+        return _result(
+            normalized_recommendation,
+            decision=BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED,
+            selected_pack_id=None,
+            reason="Recommended Business Flow Skill Pack is not in the published set.",
+            failure_reason="unknown_pack",
         )
-    admission = _admission_for_match(
-        intent_resolution,
-        matched_packs[0],
-        admission_id=f"bfsp_adm_{intent_resolution.resolution_id}",
-        recommendation_id=recommendation.recommendation_id,
-        default_pack_id=default_pack_id,
-        available_pack_ids={pack.id for pack in skill_packs},
-        authorization_context_present=authorization_context_present,
-        ready_pack_ids=ready_pack_ids,
-    )
-    return BusinessFlowSkillPackAdmissionResult(
-        recommendation=recommendation,
-        admission=admission,
-    )
-
-
-def _recommendation_reason(candidate_pack_ids: tuple[str, ...]) -> str:
-    if len(candidate_pack_ids) == 1:
-        return "Matched Business Flow Skill Pack intent patterns."
-    if len(candidate_pack_ids) > 1:
-        return "Multiple Business Flow Skill Packs matched the resolved intent."
-    return "No Business Flow Skill Pack matched the resolved intent."
-
-
-def _clarification_reason(candidate_pack_ids: tuple[str, ...]) -> str:
-    if candidate_pack_ids:
-        return "Multiple Business Flow Skill Packs matched the resolved intent."
-    return "No Business Flow Skill Pack matched the resolved intent."
-
-
-def _admission_for_match(
-    intent_resolution: IntentResolution,
-    skill_pack: BusinessFlowSkillPackDefinition,
-    *,
-    admission_id: str,
-    recommendation_id: str,
-    default_pack_id: str | None,
-    available_pack_ids: set[str],
-    authorization_context_present: bool,
-    ready_pack_ids: tuple[str, ...] | None,
-) -> BusinessFlowSkillPackAdmission:
     if ready_pack_ids is not None and skill_pack.id not in set(ready_pack_ids):
-        return BusinessFlowSkillPackAdmission(
-            admission_id=admission_id,
-            recommendation_id=recommendation_id,
+        return _result(
+            normalized_recommendation,
             decision=BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED,
             selected_pack_id=None,
             reason="Recommended Business Flow Skill Pack is not ready for admission.",
             failure_reason="not_ready",
-            trace_summary={
-                "decision": BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED.value,
-                "selected_pack_id": None,
-                "candidate_count": 1,
-                "failure_reason": "not_ready",
-            },
         )
     if (
         skill_pack.admission.require_authorization_context
         and not authorization_context_present
     ):
-        return BusinessFlowSkillPackAdmission(
-            admission_id=admission_id,
-            recommendation_id=recommendation_id,
+        return _result(
+            normalized_recommendation,
             decision=BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED,
             selected_pack_id=None,
             reason=(
@@ -123,77 +92,105 @@ def _admission_for_match(
                 "authorized context was available."
             ),
             failure_reason="unauthorized",
-            trace_summary={
-                "decision": BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED.value,
-                "selected_pack_id": None,
-                "candidate_count": 1,
-                "failure_reason": "unauthorized",
-            },
         )
-    if intent_resolution.confidence < skill_pack.admission.min_confidence:
-        if default_pack_id is not None and default_pack_id in available_pack_ids:
-            return BusinessFlowSkillPackAdmission(
-                admission_id=admission_id,
-                recommendation_id=recommendation_id,
-                decision=BusinessFlowSkillPackAdmissionDecision.SAFE_DEFAULT,
-                selected_pack_id=default_pack_id,
-                reason=(
-                    "Recommended Business Flow Skill Pack did not meet admission "
-                    "confidence; selected the configured safe default."
-                ),
-                failure_reason="not_admissible",
-                trace_summary={
-                    "decision": BusinessFlowSkillPackAdmissionDecision.SAFE_DEFAULT.value,
-                    "selected_pack_id": default_pack_id,
-                    "candidate_count": 1,
-                    "failure_reason": "not_admissible",
-                },
-            )
-        return BusinessFlowSkillPackAdmission(
-            admission_id=admission_id,
-            recommendation_id=recommendation_id,
-            decision=BusinessFlowSkillPackAdmissionDecision.REFUSED,
+    if candidate.confidence < skill_pack.admission.min_confidence:
+        return _result(
+            normalized_recommendation,
+            decision=BusinessFlowSkillPackAdmissionDecision.NO_PACK,
             selected_pack_id=None,
             reason=(
-                "Recommended Business Flow Skill Pack did not meet admission "
-                "confidence and no safe default was configured."
+                "Recommended Business Flow Skill Pack candidate confidence did "
+                "not meet the pack-level admission threshold."
             ),
-            failure_reason="not_admissible",
-            trace_summary={
-                "decision": BusinessFlowSkillPackAdmissionDecision.REFUSED.value,
-                "selected_pack_id": None,
-                "candidate_count": 1,
-                "failure_reason": "not_admissible",
-            },
+            failure_reason="candidate_confidence_below_threshold",
         )
-    return BusinessFlowSkillPackAdmission(
-        admission_id=admission_id,
-        recommendation_id=recommendation_id,
+    return _result(
+        normalized_recommendation,
         decision=BusinessFlowSkillPackAdmissionDecision.ADMITTED,
         selected_pack_id=skill_pack.id,
-        reason="Admitted the uniquely recommended Business Flow Skill Pack.",
-        trace_summary={
-            "decision": BusinessFlowSkillPackAdmissionDecision.ADMITTED.value,
-            "selected_pack_id": skill_pack.id,
-            "candidate_count": 1,
-        },
+        reason="Admitted the recommended Business Flow Skill Pack.",
     )
 
 
-def _matches_intent(
-    intent_resolution: IntentResolution,
-    skill_pack: BusinessFlowSkillPackDefinition,
-) -> bool:
-    searchable = " ".join(
-        (
-            intent_resolution.domain_intent,
-            intent_resolution.user_goal,
-            *intent_resolution.known_facts,
-            *(
-                part
-                for item in intent_resolution.retrieval_query_set
-                for part in (item.query, item.intent_angle, item.reason)
-            ),
+def _normalize_recommendation(
+    recommendation: BusinessFlowSkillPackRecommendation,
+) -> BusinessFlowSkillPackRecommendation:
+    candidate_packs = tuple(
+        sorted(
+            recommendation.candidate_packs,
+            key=lambda candidate: candidate.confidence,
+            reverse=True,
         )
-    ).lower()
-    return any(pattern.lower() in searchable for pattern in skill_pack.intent_patterns)
+    )
+    if candidate_packs == recommendation.candidate_packs:
+        return recommendation
+    return BusinessFlowSkillPackRecommendation(
+        recommendation_id=recommendation.recommendation_id,
+        intent_resolution_id=recommendation.intent_resolution_id,
+        recommendation_type=recommendation.recommendation_type,
+        confidence=recommendation.confidence,
+        reason=recommendation.reason,
+        candidate_packs=candidate_packs,
+        requires_task_split=recommendation.requires_task_split,
+    )
+
+
+def _result(
+    recommendation: BusinessFlowSkillPackRecommendation,
+    *,
+    decision: BusinessFlowSkillPackAdmissionDecision,
+    selected_pack_id: str | None,
+    reason: str,
+    failure_reason: str | None = None,
+) -> BusinessFlowSkillPackAdmissionResult:
+    admission = BusinessFlowSkillPackAdmission(
+        admission_id=f"bfsp_adm_{recommendation.intent_resolution_id}",
+        recommendation_id=recommendation.recommendation_id,
+        decision=decision,
+        selected_pack_id=selected_pack_id,
+        reason=reason,
+        failure_reason=failure_reason,
+        trace_summary=_trace_summary(
+            recommendation,
+            decision=decision,
+            selected_pack_id=selected_pack_id,
+            failure_reason=failure_reason,
+        ),
+    )
+    return BusinessFlowSkillPackAdmissionResult(
+        recommendation=recommendation,
+        admission=admission,
+    )
+
+
+def _trace_summary(
+    recommendation: BusinessFlowSkillPackRecommendation,
+    *,
+    decision: BusinessFlowSkillPackAdmissionDecision,
+    selected_pack_id: str | None,
+    failure_reason: str | None,
+) -> Mapping[str, object]:
+    summary: dict[str, object] = {
+        "decision": decision.value,
+        "selected_pack_id": selected_pack_id,
+        "candidate_count": len(recommendation.candidate_packs),
+        "recommendation_type": recommendation.recommendation_type.value,
+        "route_confidence": recommendation.confidence,
+        "requires_task_split": recommendation.requires_task_split,
+    }
+    if failure_reason is not None:
+        summary["failure_reason"] = failure_reason
+    if recommendation.candidate_packs:
+        summary["candidate_packs"] = [
+            _candidate_pack_trace(candidate)
+            for candidate in recommendation.candidate_packs
+        ]
+    return summary
+
+
+def _candidate_pack_trace(candidate: BusinessFlowCandidatePack) -> Mapping[str, object]:
+    return {
+        "pack_id": candidate.pack_id,
+        "confidence": candidate.confidence,
+        "reason": candidate.reason,
+    }
