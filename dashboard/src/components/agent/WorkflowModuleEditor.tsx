@@ -12,7 +12,7 @@ import {
   readWorkflowStageConfigs,
   replaceWorkflowStages,
 } from '../../utils/agentYaml'
-import { WORKFLOW_FIELDS, WORKFLOW_TEMPLATE_FALLBACK } from './module-configs/workflow'
+import { WORKFLOW_FIELDS, WORKFLOW_TEMPLATE_FALLBACK, WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS } from './module-configs/workflow'
 import { useWorkflowTemplates } from '../../hooks/useWorkflowTemplates'
 import { useLocale } from '../../i18n/locale'
 
@@ -132,16 +132,20 @@ export function WorkflowModuleEditor({
   async function saveStages() {
     if (!descriptor) return
     // The descriptor_version sent with stages must match the currently selected
-    // Template (the value being persisted by the core save), NOT the descriptor
-    // prop, which can describe a previously-loaded template after the dropdown
-    // changes. Resolve it from the catalog by the selected template name; fall
-    // back to the loaded descriptor's version when the catalog lacks an entry.
+    // Template (the value persisted by the core save), NOT the descriptor prop,
+    // which can describe a previously-loaded template after the dropdown changes.
+    // Resolve it in three layers so the persisted template always wins:
+    //   1. Dynamic Workflow Template Catalog (authoritative, live).
+    //   2. WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS map (catalog failed to load).
+    //   3. The loaded descriptor's version (last resort).
     const selectedTemplateName = workflowTemplate
     const catalogDescriptorVersion =
       catalogTemplates.find((entry) => entry.name === selectedTemplateName)
         ?.descriptor_version ?? null
     const descriptorVersion =
-      catalogDescriptorVersion ?? descriptor.descriptor_version
+      catalogDescriptorVersion
+      ?? WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS[selectedTemplateName]
+      ?? descriptor.descriptor_version
     await onSaveStages({
       template_descriptor_version: descriptorVersion,
       stages: stages.map((stage) => sanitizeStageConfigForDescriptor(stage, descriptor)),

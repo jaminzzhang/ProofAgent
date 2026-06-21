@@ -386,4 +386,50 @@ workflow:
     expect(optionValues).toContain('react_enterprise_qa')
     expect(optionValues).toContain('enterprise_qa')
   })
+
+  it('saves the descriptor_version for the persisted template even when catalog and descriptor are stale', async () => {
+    // Regression for the 400 "template_descriptor_version does not match
+    // registered template descriptor" seen when switching to v3 and saving
+    // stages. The agent YAML has the persisted v3 template, but the descriptor
+    // prop can lag (describes the previously-loaded template) and the catalog
+    // may be empty (network/permission failure). The saved version must still
+    // come from the selected template name via the fallback name->version map,
+    // never from the stale descriptor.
+    vi.mocked(useWorkflowTemplates).mockReturnValue({
+      templates: [],
+      names: ['react_enterprise_qa_v3', 'react_enterprise_qa_v2', 'react_enterprise_qa', 'enterprise_qa'],
+      loaded: true,
+      error: null,
+    })
+
+    const saveStages = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <WorkflowModuleEditor
+        agentYaml={`name: institution_insurance_specialist
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v3
+  checkpointer:
+    type: memory
+`}
+        // Stale descriptor still describing the previously-loaded v1 template.
+        descriptor={DESCRIPTOR}
+        onFieldChange={vi.fn()}
+        onSaveCore={vi.fn()}
+        onSaveStages={saveStages}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
+
+    await waitFor(() => {
+      expect(saveStages).toHaveBeenCalledWith(expect.objectContaining({
+        template_descriptor_version: 'react_enterprise_qa.v3',
+      }))
+    })
+  })
 })

@@ -9,6 +9,18 @@ export const WORKFLOW_TEMPLATE_FALLBACK = [
   'enterprise_qa',
 ] as const
 
+// Deterministic template name -> descriptor_version map. Used as the final
+// fallback when the Dynamic Workflow Template Catalog fails to load, so that
+// saveStages can still resolve the descriptor_version matching the persisted
+// template instead of a stale descriptor prop. Keep aligned with the backend
+// registry (templates.py descriptor_version values).
+export const WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS: Record<string, string> = {
+  react_enterprise_qa_v3: 'react_enterprise_qa.v3',
+  react_enterprise_qa_v2: 'react_enterprise_qa.v2',
+  react_enterprise_qa: 'react_enterprise_qa.v1',
+  enterprise_qa: 'enterprise_qa.v1',
+}
+
 export const WORKFLOW_FIELDS = [
   { label: 'Runtime', path: ['workflow', 'runtime'], input: 'select' as const, options: ['langgraph'] },
   {
