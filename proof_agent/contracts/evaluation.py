@@ -105,6 +105,10 @@ class EvaluationResponseAssertions(FrozenModel):
 class EvaluationCaseExpected(FrozenModel):
     outcome: ReceiptOutcome
     required_citation_refs: tuple[str, ...] = Field(default_factory=tuple)
+    required_tool_contract_ids: tuple[str, ...] = Field(default_factory=tuple)
+    required_mcp_tool_names: tuple[str, ...] = Field(default_factory=tuple)
+    required_tool_result_classifications: tuple[str, ...] = Field(default_factory=tuple)
+    required_tool_failure_codes: tuple[str, ...] = Field(default_factory=tuple)
     expected_business_flow_skill_pack_id: str | None = None
     forbidden_claim_categories: tuple[str, ...] = Field(default_factory=tuple)
     required_business_claims: tuple[str, ...] = Field(default_factory=tuple)

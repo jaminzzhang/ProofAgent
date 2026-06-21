@@ -1,5 +1,8 @@
 from pathlib import Path
+import socket
+import subprocess
 import sys
+import time
 from typing import Any
 from collections.abc import Mapping
 
@@ -496,21 +499,8 @@ tools:
 def test_mcp_stdio_read_tool_executes_with_default_sdk_transport(
     tmp_path: Path,
 ) -> None:
-    server_path = tmp_path / "claims_mcp_server.py"
-    server_path.write_text(
-        """
-from mcp.server.fastmcp import FastMCP
-
-mcp = FastMCP("Claims MCP")
-
-@mcp.tool(name="claim.status.lookup", description="Lookup claim status")
-def claim_status_lookup(claim_id: str) -> dict[str, str]:
-    return {"claim_id": claim_id, "status": "open"}
-
-if __name__ == "__main__":
-    mcp.run("stdio")
-""",
-        encoding="utf-8",
+    server_path = Path(
+        "proof_agent/evaluation/demo/fixtures/mcp_servers/claims_mcp_server.py"
     )
     store = LocalAgentConfigurationStore(tmp_path / "config")
     store.create_tool_source(
@@ -524,7 +514,7 @@ if __name__ == "__main__":
             "transport": "stdio",
             "server_label": "claims_mcp_stdio",
             "command": sys.executable,
-            "args": [str(server_path)],
+            "args": [str(server_path), "--transport", "stdio"],
         },
         actor="operator",
     )
@@ -574,6 +564,96 @@ tools:
     assert result.result is not None
     assert result.result["provider"] == "mcp"
     assert result.result["summary"] == {"claim_id": "CLM-001", "status": "open"}
+
+
+def test_mcp_http_read_tool_executes_with_default_sdk_transport(
+    tmp_path: Path,
+) -> None:
+    server_path = Path(
+        "proof_agent/evaluation/demo/fixtures/mcp_servers/claims_mcp_server.py"
+    )
+    port = _unused_tcp_port()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(server_path),
+            "--transport",
+            "streamable-http",
+            "--port",
+            str(port),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for_tcp_port("127.0.0.1", port, process)
+        store = LocalAgentConfigurationStore(tmp_path / "config")
+        store.create_tool_source(
+            source_id="tool_mcp_claims_http",
+            name="Claims MCP",
+            source_type="mcp_server",
+            provider="mcp",
+            tool_contract_ids=("claim_status_lookup",),
+            credential_env_ref=None,
+            params={
+                "transport": "http",
+                "server_label": "claims_mcp_http",
+                "endpoint": f"http://127.0.0.1:{port}/mcp",
+            },
+            actor="operator",
+        )
+        tools_yaml = tmp_path / "tools.yaml"
+        tools_yaml.write_text(
+            """
+tools:
+  - name: claim_status_lookup
+    source: mcp
+    tool_source_id: tool_mcp_claims_http
+    mcp_tool_name: claim.status.lookup
+    mcp_contract_snapshot:
+      digest: sha256:contract
+      imported_at: "2026-06-20T00:00:00Z"
+      input_schema_digest: sha256:input
+      result_schema_digest: sha256:result
+    risk_level: medium
+    requires_approval: false
+    read_only: true
+    allowed_parameters: [claim_id]
+    denied_parameters: [access_token]
+    input_schema:
+      type: object
+      required: [claim_id]
+    result_schema:
+      type: object
+      properties:
+        claim_id:
+          type: string
+        status:
+          type: string
+      required: [claim_id, status]
+    summary_fields: [claim_id, status]
+    result_authority: authoritative_read
+""",
+            encoding="utf-8",
+        )
+        gateway = ToolGateway.from_file(tools_yaml, configuration_store=store)
+
+        result = gateway.request_tool(
+            tool_name="claim_status_lookup",
+            parameters={"claim_id": "CLM-HTTP-001"},
+            approved=False,
+        )
+    finally:
+        _stop_process(process)
+
+    assert result.executed is True
+    assert result.result is not None
+    assert result.result["provider"] == "mcp"
+    assert result.result["summary"] == {
+        "claim_id": "CLM-HTTP-001",
+        "status": "open",
+    }
 
 
 def test_mcp_action_tool_waits_for_approval_then_returns_action_audit_metadata(
@@ -1057,3 +1137,41 @@ tools:
             parameters={"query": "CUST-12345 CLM-98765", "max_results": 3},
             approved=False,
         )
+
+
+def _unused_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_tcp_port(
+    host: str,
+    port: int,
+    process: subprocess.Popen[str],
+    *,
+    timeout_seconds: float = 10.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            _, stderr = process.communicate(timeout=1)
+            raise AssertionError(f"MCP server exited early: {stderr}")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.1)
+            if sock.connect_ex((host, port)) == 0:
+                return
+        time.sleep(0.05)
+    _stop_process(process)
+    raise AssertionError(f"MCP server did not listen on {host}:{port}")
+
+
+def _stop_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate(timeout=5)

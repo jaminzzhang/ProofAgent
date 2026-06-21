@@ -82,6 +82,31 @@ def test_evaluation_contract_collections_are_immutable() -> None:
         case.metadata["new"] = "value"
 
 
+def test_evaluation_expected_tool_governance_fields_are_contract_data() -> None:
+    case = EvaluationCase(
+        case_id="mcp_claim_status",
+        question="What is the claim status?",
+        intent_type="tool_required",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="tool_governed",
+        capability_path="retrieval_plus_tool",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            required_tool_contract_ids=("claim_status_lookup",),
+            required_mcp_tool_names=("claim.status.lookup",),
+            required_tool_result_classifications=("authorized_tool_result",),
+            required_tool_failure_codes=("PA_TOOL_SOURCE_002",),
+        ),
+    )
+
+    assert case.expected.required_tool_contract_ids == ("claim_status_lookup",)
+    assert case.expected.required_mcp_tool_names == ("claim.status.lookup",)
+    assert case.expected.required_tool_result_classifications == (
+        "authorized_tool_result",
+    )
+    assert case.expected.required_tool_failure_codes == ("PA_TOOL_SOURCE_002",)
+
+
 def test_evaluation_gate_and_node_results_carry_sufficiency() -> None:
     gate = EvaluationGateResult(
         gate=EvaluationGateName.ARTIFACT_SUFFICIENCY,

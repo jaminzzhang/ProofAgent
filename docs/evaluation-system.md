@@ -94,6 +94,25 @@ cases:
 
 V1 may load `required_business_claims` and `forbidden_claim_categories`, but it does not perform semantic claim-level or category-level judging. Those fields are reported as not evaluated unless an explicit phrase or marker assertion applies.
 
+Tool and MCP cases may also declare deterministic tool governance expectations
+inside `expected`:
+
+```yaml
+expected:
+  outcome: ANSWERED_WITH_CITATIONS
+  required_tool_contract_ids:
+    - claim_status_lookup
+  required_mcp_tool_names:
+    - claim.status.lookup
+  required_tool_result_classifications:
+    - authorized_tool_result
+  required_tool_failure_codes:
+    - PA_TOOL_SOURCE_002
+```
+
+The Analyzer checks these expectations only against completed trace artifacts. It
+does not rediscover MCP servers, rerun Tool Gateway, or call external tools.
+
 ### Subject Manifest Shape
 
 ```yaml
