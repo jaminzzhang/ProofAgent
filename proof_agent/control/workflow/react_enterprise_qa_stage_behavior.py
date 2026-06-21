@@ -255,13 +255,20 @@ class ReActEnterpriseQAStageBehavior:
         )
         admission = _jsonable(result.admission.model_dump(mode="python", warnings=False))
         self.trace.emit(
+            "business_flow_skill_pack_recommendation",
+            status="ok",
+            payload=_business_flow_skill_pack_recommendation_trace_payload(
+                recommendation_payload
+            ),
+        )
+        self.trace.emit(
             "business_flow_skill_pack_admission",
             status=(
                 "ok"
                 if result.admission.decision
                 in {
                     BusinessFlowSkillPackAdmissionDecision.ADMITTED,
-                    BusinessFlowSkillPackAdmissionDecision.SAFE_DEFAULT,
+                    BusinessFlowSkillPackAdmissionDecision.NO_PACK,
                 }
                 else "blocked"
             ),
@@ -324,7 +331,14 @@ class ReActEnterpriseQAStageBehavior:
             proposal = self.invocation.react_planner.plan(
                 question=state["question"],
                 system_prompt="Use governed ReAct planning without raw chain-of-thought.",
-                context_summary=_intent_context_summary(state),
+                context_summary=_planner_context_summary(
+                    state,
+                    plan_rounds=plan_rounds,
+                    eligible_set=eligible_set,
+                    convergence_signal=convergence_signal,
+                    action_history=action_history,
+                    evidence_trajectory=evidence_trajectory,
+                ),
                 workflow_stage_context=stage_context,
             )
         except ModelOutputNormalizationError as exc:
@@ -1428,6 +1442,45 @@ def _intent_context_summary(state: Mapping[str, Any]) -> str:
     )
 
 
+def _planner_context_summary(
+    state: Mapping[str, Any],
+    *,
+    plan_rounds: int,
+    eligible_set: frozenset[ReActActionType],
+    convergence_signal: str | None,
+    action_history: list[Mapping[str, Any]],
+    evidence_trajectory: list[int],
+) -> str:
+    intent_summary = _intent_context_summary(state)
+    eligible_actions = ",".join(
+        action.value for action in sorted(eligible_set, key=lambda item: item.value)
+    )
+    accepted_evidence_count = (
+        evidence_trajectory[-1]
+        if evidence_trajectory
+        else len(state.get("evidence", ()) or ())
+    )
+    previous_evidence_count = (
+        evidence_trajectory[-2]
+        if len(evidence_trajectory) > 1
+        else 0
+    )
+    evidence_growth = accepted_evidence_count - previous_evidence_count
+    last_action = action_history[-1] if action_history else {}
+    loop_summary = (
+        "Loop Control: "
+        f"plan_round={plan_rounds}; "
+        f"eligible_actions={eligible_actions}; "
+        f"last_convergence_signal={convergence_signal or 'none'}; "
+        f"accepted_evidence_count={accepted_evidence_count}; "
+        f"evidence_growth_since_last_round={evidence_growth}; "
+        f"last_action_type={last_action.get('action_type', 'none')}."
+    )
+    if intent_summary:
+        return f"{intent_summary}\n{loop_summary}"
+    return loop_summary
+
+
 def _workflow_stage_runtime_sample_context(
     *,
     invocation: HarnessInvocation,
@@ -1523,6 +1576,35 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _business_flow_skill_pack_recommendation_trace_payload(
+    recommendation: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw_candidate_packs = recommendation.get("candidate_packs", ())
+    candidate_packs = (
+        raw_candidate_packs
+        if isinstance(raw_candidate_packs, list | tuple)
+        else ()
+    )
+    return {
+        "recommendation_id": recommendation.get("recommendation_id"),
+        "intent_resolution_id": recommendation.get("intent_resolution_id"),
+        "recommendation_type": recommendation.get("recommendation_type"),
+        "route_confidence": recommendation.get("confidence"),
+        "reason": recommendation.get("reason"),
+        "candidate_count": len(candidate_packs),
+        "candidate_packs": [
+            {
+                "pack_id": candidate.get("pack_id"),
+                "confidence": candidate.get("confidence"),
+                "reason": candidate.get("reason"),
+            }
+            for candidate in candidate_packs
+            if isinstance(candidate, Mapping)
+        ],
+        "requires_task_split": recommendation.get("requires_task_split", False),
+    }
 
 
 def _stage_prompt_with_business_flow_addendum(

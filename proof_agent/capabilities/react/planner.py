@@ -22,12 +22,14 @@ from proof_agent.contracts import (
 from proof_agent.contracts.manifest import ModelConfig, ReActPlannerConfig
 
 
-_INITIAL_PLANNER_ACTION_TYPES = (
+_PLANNER_ACTION_TYPES = (
     ReActActionType.ASK_CLARIFICATION,
+    ReActActionType.GENERATE_FINAL_ANSWER,
     ReActActionType.PLAN_RETRIEVAL,
     ReActActionType.PROPOSE_TOOL_CALL,
+    ReActActionType.REFUSE,
 )
-_INITIAL_PLANNER_ACTION_TYPE_SET = frozenset(_INITIAL_PLANNER_ACTION_TYPES)
+_PLANNER_ACTION_TYPE_SET = frozenset(_PLANNER_ACTION_TYPES)
 _MAX_CANONICAL_STRING_LENGTH = 512
 _V1_TOOL_PARAMETER_ALLOWLIST = {
     "customer_lookup": frozenset({"customer_id", "policy_id"}),
@@ -96,6 +98,29 @@ class DeterministicReActPlanner:
                 risk_level="medium",
             )
 
+        if _context_has_answerable_accepted_evidence(context_summary):
+            return ReActActionProposal(
+                action_id="act_generate_1",
+                action_type=ReActActionType.GENERATE_FINAL_ANSWER,
+                reasoning_summary=ReasoningSummary(
+                    goal="Generate a final answer from accepted evidence.",
+                    observations=("Accepted evidence is available for answer generation.",),
+                    candidate_actions=(
+                        ReActActionType.GENERATE_FINAL_ANSWER,
+                        ReActActionType.REFUSE,
+                    ),
+                    selected_action=ReActActionType.GENERATE_FINAL_ANSWER,
+                    rationale_summary=(
+                        "The loop already has accepted evidence and can produce "
+                        "the governed final answer."
+                    ),
+                    risk_flags=(),
+                    required_evidence=("accepted evidence",),
+                ),
+                parameters={},
+                risk_level="low",
+            )
+
         return ReActActionProposal(
             action_id="act_retrieval_1",
             action_type=ReActActionType.PLAN_RETRIEVAL,
@@ -111,6 +136,20 @@ class DeterministicReActPlanner:
             parameters={"query": _deterministic_query(question)},
             risk_level="low",
         )
+
+
+def _context_has_answerable_accepted_evidence(context_summary: str) -> bool:
+    if "generate_final_answer" not in context_summary:
+        return False
+    marker = "accepted_evidence_count="
+    if marker not in context_summary:
+        return False
+    tail = context_summary.split(marker, maxsplit=1)[1]
+    value = tail.split(";", maxsplit=1)[0].strip()
+    try:
+        return int(value) > 0
+    except ValueError:
+        return False
 
 
 class LLMReActPlanner:
@@ -143,7 +182,7 @@ class LLMReActPlanner:
             "context_summary": context_summary,
             "allowed_actions": [
                 action.value
-                for action in _INITIAL_PLANNER_ACTION_TYPES
+                for action in _PLANNER_ACTION_TYPES
             ],
         }
         if workflow_stage_context:
@@ -253,9 +292,9 @@ def _validate_planner_proposal(
     *,
     raw_content_length: int,
 ) -> ReActActionProposal:
-    if proposal.action_type not in _INITIAL_PLANNER_ACTION_TYPE_SET:
+    if proposal.action_type not in _PLANNER_ACTION_TYPE_SET:
         raise _planner_semantic_error(
-            f"unsupported initial planner action: {proposal.action_type.value}.",
+            f"unsupported planner action: {proposal.action_type.value}.",
             raw_content_length=raw_content_length,
         )
 
@@ -342,6 +381,21 @@ def _canonicalize_planner_proposal(
             parameters={"missing_fields": missing_fields},
             risk_level="low",
         )
+    if action_type in {
+        ReActActionType.GENERATE_FINAL_ANSWER,
+        ReActActionType.REFUSE,
+    }:
+        return ReActActionProposal(
+            action_id=(
+                "act_llm_generate_1"
+                if action_type == ReActActionType.GENERATE_FINAL_ANSWER
+                else "act_llm_refuse_1"
+            ),
+            action_type=action_type,
+            reasoning_summary=_safe_reasoning_summary(action_type),
+            parameters={},
+            risk_level="low",
+        )
 
     target_tool_name = _canonical_string(
         proposal.target_tool_name,
@@ -421,6 +475,26 @@ def _safe_reasoning_summary(action_type: ReActActionType) -> ReasoningSummary:
             candidate_actions=(action_type,),
             selected_action=action_type,
             rationale_summary="Ask for the missing fields before any governed action.",
+            risk_flags=(),
+            required_evidence=(),
+        )
+    if action_type == ReActActionType.GENERATE_FINAL_ANSWER:
+        return ReasoningSummary(
+            goal="Generate a governed final answer.",
+            observations=("Accepted evidence or tool observations are ready for synthesis.",),
+            candidate_actions=(action_type,),
+            selected_action=action_type,
+            rationale_summary="Proceed to final answer synthesis through the model answer stage.",
+            risk_flags=(),
+            required_evidence=("accepted evidence",),
+        )
+    if action_type == ReActActionType.REFUSE:
+        return ReasoningSummary(
+            goal="Refuse because a governed answer cannot be supported.",
+            observations=("The run should stop instead of gathering more unsupported context.",),
+            candidate_actions=(action_type,),
+            selected_action=action_type,
+            rationale_summary="Refuse when evidence or authority is insufficient.",
             risk_flags=(),
             required_evidence=(),
         )

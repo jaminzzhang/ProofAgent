@@ -230,3 +230,4 @@ def test_normalizes_candidate_pack_order_by_confidence_descending() -> None:
         "billing_qa",
     ]
     assert result.admission.trace_summary["candidate_count"] == 2
+    assert result.admission.trace_summary["normalization_applied"] is True

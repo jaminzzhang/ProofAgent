@@ -19,6 +19,9 @@ class TraceEventType(str, Enum):
     WORKFLOW_STAGE_RESULT = "workflow_stage_result"
     INTENT_RESOLUTION = "intent_resolution"
     RETRIEVAL_QUERY_SET = "retrieval_query_set"
+    BUSINESS_FLOW_SKILL_PACK_RECOMMENDATION = (
+        "business_flow_skill_pack_recommendation"
+    )
     BUSINESS_FLOW_SKILL_PACK_ADMISSION = "business_flow_skill_pack_admission"
     REASONING_SUMMARY = "reasoning_summary"
     ACTION_PROPOSAL = "action_proposal"

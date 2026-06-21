@@ -12,6 +12,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import (
+    BusinessFlowSkillPackRecommendation,
+    BusinessFlowSkillPackRecommendationType,
+    IntentResolution,
+    IntentResolutionResult,
     ModelConfig,
     ModelRequest,
     ModelResponse,
@@ -20,6 +24,7 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
+    RetrievalQueryItem,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowStageConfigurationRuntimeSource,
@@ -39,6 +44,9 @@ from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_
 REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_V2_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml")
 REACT_V3_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
+REACT_V3_BFSP_AGENT = Path(
+    "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3_bfsp/agent.yaml"
+)
 
 
 def _trace_events(path: Path) -> list[dict[str, Any]]:
@@ -418,7 +426,20 @@ admission:
     events = _trace_events(result.trace_path)
     event_types = _event_types(events)
     assert event_types.index("intent_resolution") < event_types.index(
+        "business_flow_skill_pack_recommendation"
+    )
+    assert event_types.index("business_flow_skill_pack_recommendation") < event_types.index(
         "business_flow_skill_pack_admission"
+    )
+    recommendation_event = next(
+        event
+        for event in events
+        if event["event_type"] == "business_flow_skill_pack_recommendation"
+    )
+    assert recommendation_event["payload"]["recommendation_type"] == "single_pack"
+    assert recommendation_event["payload"]["route_confidence"] == 0.84
+    assert recommendation_event["payload"]["candidate_packs"][0]["pack_id"] == (
+        "enterprise_policy_qa"
     )
     admission_event = next(
         event
@@ -438,6 +459,154 @@ admission:
         if stage.stage_id == "intent_resolution"
     )
     assert "business_flow_skill_pack_admission" in intent_stage.produced_fact_refs
+
+
+def test_v2_no_pack_business_flow_admission_is_normal_routing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NoPackIntentResolver:
+        def resolve(self, **kwargs: Any) -> IntentResolutionResult:
+            _ = kwargs
+            resolution = IntentResolution(
+                resolution_id="intent_no_pack_1",
+                user_goal="Answer an enterprise policy question.",
+                domain_intent="enterprise_policy_question",
+                known_facts=("The user asks a knowledge-backed policy question.",),
+                missing_fields=(),
+                ambiguities=(),
+                risk_flags=(),
+                confidence=0.84,
+                recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+                retrieval_query_set=(
+                    RetrievalQueryItem(
+                        query="travel meals reimbursement rule",
+                        intent_angle="primary_policy_question",
+                        required=True,
+                        reason="The user asks about travel meals reimbursement.",
+                    ),
+                ),
+            )
+            return IntentResolutionResult(
+                intent_resolution=resolution,
+                business_flow_skill_pack_recommendation=(
+                    BusinessFlowSkillPackRecommendation(
+                        recommendation_id="bfsp_rec_no_pack_1",
+                        intent_resolution_id=resolution.resolution_id,
+                        recommendation_type=(
+                            BusinessFlowSkillPackRecommendationType.NO_PACK
+                        ),
+                        confidence=0.82,
+                        reason=(
+                            "No published Business Flow Skill Pack is suitable "
+                            "for this request."
+                        ),
+                    )
+                ),
+            )
+
+    example_dir = tmp_path / "react_enterprise_qa_v2"
+    shutil.copytree(REACT_V2_AGENT.parent, example_dir)
+    skill_pack_dir = example_dir / "skill_packs"
+    skill_pack_dir.mkdir()
+    (skill_pack_dir / "enterprise.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: enterprise_policy_qa
+label: Enterprise Policy QA
+description: Enterprise policy question routing addenda.
+intent_patterns:
+  - enterprise_policy_question
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - react_enterprise_qa_v2_knowledge_binding
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.5
+""",
+        encoding="utf-8",
+    )
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"]["skills"] = {
+        "enabled": True,
+        "business_flows": [
+            {
+                "id": "enterprise_policy_qa",
+                "definition": "./skill_packs/enterprise.yaml",
+            }
+        ],
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(
+        "proof_agent.bootstrap.composition.resolve_intent_resolver",
+        lambda *args, **kwargs: NoPackIntentResolver(),
+    )
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "run",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    event_types = _event_types(events)
+    assert "clarification_requested" not in event_types
+    admission_event = next(
+        event
+        for event in events
+        if event["event_type"] == "business_flow_skill_pack_admission"
+    )
+    assert admission_event["status"] == "ok"
+    assert admission_event["payload"]["decision"] == "no_pack"
+    assert admission_event["payload"]["selected_pack_id"] is None
+
+
+def test_v3_business_flow_fixture_admits_pack_and_applies_stage_context(
+    tmp_path: Path,
+) -> None:
+    result = run_with_langgraph(
+        REACT_V3_BFSP_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "run",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    event_types = _event_types(events)
+    config_event = next(
+        event
+        for event in events
+        if event["event_type"] == "workflow_stage_configuration_trace_summary"
+    )
+    assert config_event["payload"]["template_descriptor_version"] == (
+        "react_enterprise_qa.v3"
+    )
+    assert event_types.index("intent_resolution") < event_types.index(
+        "business_flow_skill_pack_recommendation"
+    )
+    assert event_types.index("business_flow_skill_pack_recommendation") < (
+        event_types.index("business_flow_skill_pack_admission")
+    )
+    admission_event = next(
+        event
+        for event in events
+        if event["event_type"] == "business_flow_skill_pack_admission"
+    )
+    assert admission_event["payload"]["decision"] == "admitted"
+    assert admission_event["payload"]["selected_pack_id"] == "enterprise_policy_qa"
+    assert any(
+        event["event_type"] == "workflow_stage_context_applied"
+        and event["payload"].get("stage_id") == "plan"
+        and event["payload"].get("context_source") == "business_flow_skill_pack"
+        and event["payload"].get("business_flow_skill_pack_id")
+        == "enterprise_policy_qa"
+        for event in events
+    )
 
 
 def test_v2_business_flow_clarification_waits_for_user_input(
@@ -1323,6 +1492,8 @@ class _SequencePlanner:
     def __init__(self, proposals: list[ReActActionProposal]) -> None:
         self._proposals = list(proposals)
         self.calls = 0
+        self.context_summaries: list[str] = []
+        self.workflow_stage_contexts: list[Any] = []
 
     def plan(
         self,
@@ -1332,7 +1503,9 @@ class _SequencePlanner:
         context_summary: str,
         workflow_stage_context: Any = None,
     ) -> ReActActionProposal:
-        _ = (question, system_prompt, context_summary, workflow_stage_context)
+        _ = (question, system_prompt)
+        self.context_summaries.append(context_summary)
+        self.workflow_stage_contexts.append(workflow_stage_context)
         index = min(self.calls, len(self._proposals) - 1)
         self.calls += 1
         return self._proposals[index]
@@ -1378,6 +1551,56 @@ def test_v3_loop_returns_to_plan_after_retrieval_then_converges(
     assert stage_ids.index("retrieval") < stage_ids.index("model_answer")
     # The planner was invoked exactly twice (two plan rounds).
     assert planner.calls == 2
+
+
+def test_v3_loop_planner_context_includes_observation_control_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planner = _SequencePlanner(
+        [
+            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
+            _loop_proposal(ReActActionType.GENERATE_FINAL_ANSWER, action_id="act_round_2"),
+        ]
+    )
+    monkeypatch.setattr(
+        "proof_agent.bootstrap.composition.resolve_react_planner",
+        lambda *args, **kwargs: planner,
+    )
+
+    result = run_with_langgraph(
+        REACT_V3_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    assert planner.calls == 2
+    second_round_context = planner.context_summaries[1]
+    assert "Loop Control:" in second_round_context
+    assert "plan_round=1" in second_round_context
+    assert "eligible_actions=" in second_round_context
+    assert "generate_final_answer" in second_round_context
+    assert "accepted_evidence_count=1" in second_round_context
+    assert "last_action_type=plan_retrieval" in second_round_context
+
+
+def test_v3_deterministic_planner_answers_after_evidence_without_constraint(
+    tmp_path: Path,
+) -> None:
+    result = run_with_langgraph(
+        REACT_V3_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    events = _trace_events(result.trace_path)
+    assert "action_constrained" not in _event_types(events)
+    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
+    stage_ids = [event["payload"]["stage_id"] for event in stage_events]
+    assert stage_ids.count("plan") == 2
+    assert "retrieval" in stage_ids
+    assert "model_answer" in stage_ids
 
 
 def test_v3_loop_runs_multiple_retrieval_rounds_before_answering(

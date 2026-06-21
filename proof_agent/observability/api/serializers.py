@@ -48,6 +48,7 @@ def serialize_run_detail(detail: RunDetail) -> dict[str, Any]:
         "trace_events": list(detail.trace_events),
         "receipt_markdown": detail.receipt_markdown,
         "evidence_chunks": list(detail.evidence_chunks),
+        "citation_refs": list(detail.citation_refs),
         "policy_decisions": list(detail.policy_decisions),
         "model_usage": detail.model_usage,
         "approval_state": detail.approval_state,

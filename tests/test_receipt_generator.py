@@ -196,6 +196,8 @@ admission:
     receipt = result.receipt_path.read_text(encoding="utf-8")
 
     assert "## Business Flow Skill Pack" in receipt
+    assert "### Recommendation" in receipt
+    assert "| Recommendation ID | bfsp_rec_intent_retrieval_1 |" in receipt
     assert "| Decision | admitted |" in receipt
     assert "| Selected Pack | enterprise_policy_qa |" in receipt
     assert "| Recommendation Type | single_pack |" in receipt

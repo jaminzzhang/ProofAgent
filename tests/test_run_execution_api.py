@@ -161,6 +161,71 @@ def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Pa
     assert detail.json()["question"] == "What is the reimbursement rule for travel meals?"
 
 
+def test_chat_run_response_includes_citation_refs_when_available(
+    tmp_path: Path,
+) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["citation_refs"]
+    assert body["citation_refs"][0]["citation"] == (
+        "customer-support-policy.md#travel-meals:L3-L7"
+    )
+    detail = client.get(f"/api/runs/{body['run_id']}")
+    assert detail.status_code == 200
+    assert detail.json()["citation_refs"] == body["citation_refs"]
+
+
+def test_chat_run_executes_v3_business_flow_agent_through_published_path(
+    tmp_path: Path,
+) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3_bfsp/agent.yaml"),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa_v3_bfsp",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
+
+    detail = client.get(f"/api/runs/{body['run_id']}")
+    assert detail.status_code == 200
+    detail_body = detail.json()
+    assert detail_body["workflow_projection"]["template_descriptor_version"] == (
+        "react_enterprise_qa.v3"
+    )
+    governance = detail_body["governance_details"]
+    assert governance["business_flow_skill_pack_recommendation"][
+        "recommendation_type"
+    ] == "single_pack"
+    assert governance["business_flow_skill_pack_admission"]["decision"] == "admitted"
+    assert governance["business_flow_skill_pack_admission"]["selected_pack_id"] == (
+        "enterprise_policy_qa"
+    )
+
+
 def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:
     app = _app_with_published_agent(
         tmp_path,

@@ -67,6 +67,9 @@ def _build_context(
     business_flow_skill_pack_admission = _extract_business_flow_skill_pack_admission(
         events
     )
+    business_flow_skill_pack_recommendation = (
+        _extract_business_flow_skill_pack_recommendation(events)
+    )
     business_flow_stage_context_applications = (
         _extract_business_flow_stage_context_applications(events)
     )
@@ -95,6 +98,9 @@ def _build_context(
         "action_proposal_events": action_proposal_events,
         "review_events": review_events,
         "clarification_events": clarification_events,
+        "business_flow_skill_pack_recommendation": (
+            business_flow_skill_pack_recommendation
+        ),
         "business_flow_skill_pack_admission": business_flow_skill_pack_admission,
         "business_flow_stage_context_applications": (
             business_flow_stage_context_applications
@@ -106,6 +112,26 @@ def _build_context(
     }
 
 
+def _extract_business_flow_skill_pack_recommendation(
+    events: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    event = _last_event(events, "business_flow_skill_pack_recommendation")
+    if event is None:
+        return None
+    payload = event.get("payload", {})
+    candidate_packs = _extract_business_flow_candidate_packs(payload)
+    return {
+        "recommendation_id": _audit_value(payload.get("recommendation_id")),
+        "intent_resolution_id": _audit_value(payload.get("intent_resolution_id")),
+        "recommendation_type": _audit_value(payload.get("recommendation_type")),
+        "route_confidence": _audit_value(payload.get("route_confidence")),
+        "candidate_count": _audit_value(payload.get("candidate_count")),
+        "candidate_packs": candidate_packs,
+        "requires_task_split": _audit_value(payload.get("requires_task_split")),
+        "reason": _audit_value(payload.get("reason")),
+    }
+
+
 def _extract_business_flow_skill_pack_admission(
     events: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
@@ -113,6 +139,23 @@ def _extract_business_flow_skill_pack_admission(
     if event is None:
         return None
     payload = event.get("payload", {})
+    candidate_packs = _extract_business_flow_candidate_packs(payload)
+    return {
+        "decision": _audit_value(payload.get("decision")),
+        "selected_pack_id": _audit_value(payload.get("selected_pack_id")),
+        "recommendation_type": _audit_value(payload.get("recommendation_type")),
+        "route_confidence": _audit_value(payload.get("route_confidence")),
+        "candidate_count": _audit_value(payload.get("candidate_count")),
+        "candidate_packs": candidate_packs,
+        "failure_reason": _audit_value(payload.get("failure_reason")),
+        "recommendation_id": _audit_value(payload.get("recommendation_id")),
+        "intent_resolution_id": _audit_value(payload.get("intent_resolution_id")),
+    }
+
+
+def _extract_business_flow_candidate_packs(
+    payload: Mapping[str, Any],
+) -> list[dict[str, str]]:
     candidate_packs: list[dict[str, str]] = []
     raw_candidate_packs = payload.get("candidate_packs")
     if isinstance(raw_candidate_packs, list | tuple):
@@ -126,17 +169,7 @@ def _extract_business_flow_skill_pack_admission(
                     "reason": _audit_value(item.get("reason")),
                 }
             )
-    return {
-        "decision": _audit_value(payload.get("decision")),
-        "selected_pack_id": _audit_value(payload.get("selected_pack_id")),
-        "recommendation_type": _audit_value(payload.get("recommendation_type")),
-        "route_confidence": _audit_value(payload.get("route_confidence")),
-        "candidate_count": _audit_value(payload.get("candidate_count")),
-        "candidate_packs": candidate_packs,
-        "failure_reason": _audit_value(payload.get("failure_reason")),
-        "recommendation_id": _audit_value(payload.get("recommendation_id")),
-        "intent_resolution_id": _audit_value(payload.get("intent_resolution_id")),
-    }
+    return candidate_packs
 
 
 def _extract_business_flow_stage_context_applications(

@@ -89,6 +89,7 @@ class RunDetail(FrozenModel):
     trace_events: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
     receipt_markdown: str = ""
     evidence_chunks: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
+    citation_refs: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
     policy_decisions: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
     model_usage: dict[str, Any] = Field(default_factory=dict)
     approval_state: dict[str, Any] | None = None

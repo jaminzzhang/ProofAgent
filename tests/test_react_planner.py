@@ -115,6 +115,32 @@ def test_deterministic_planner_plans_retrieval_for_travel_meals() -> None:
     assert proposal.reasoning_summary.selected_action == ReActActionType.PLAN_RETRIEVAL
 
 
+def test_deterministic_planner_generates_final_answer_after_accepted_evidence() -> None:
+    planner = DeterministicReActPlanner()
+
+    proposal = planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary=(
+            "Intent Resolution: domain_intent=enterprise_policy_question; "
+            "recommended_next_action=plan_retrieval.\n"
+            "Loop Control: plan_round=1; "
+            "eligible_actions=ask_clarification,generate_final_answer,"
+            "plan_retrieval,propose_tool_call,refuse; "
+            "last_convergence_signal=none; "
+            "accepted_evidence_count=1; "
+            "evidence_growth_since_last_round=1; "
+            "last_action_type=plan_retrieval."
+        ),
+    )
+
+    assert proposal.action_type == ReActActionType.GENERATE_FINAL_ANSWER
+    assert (
+        proposal.reasoning_summary.selected_action
+        == ReActActionType.GENERATE_FINAL_ANSWER
+    )
+
+
 def test_deterministic_planner_asks_clarification_for_underspecified_claim() -> None:
     planner = DeterministicReActPlanner()
 
@@ -432,7 +458,7 @@ def test_llm_react_planner_allowlists_tool_parameters_and_strips_tool_name() -> 
     assert sentinel not in _proposal_json(proposal)
 
 
-def test_llm_react_planner_advertises_only_routeable_initial_actions() -> None:
+def test_llm_react_planner_advertises_governed_planner_actions() -> None:
     provider = FakePlannerProvider(VALID_PLANNER_OUTPUT)
     planner = LLMReActPlanner(
         config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
@@ -448,8 +474,10 @@ def test_llm_react_planner_advertises_only_routeable_initial_actions() -> None:
     user_payload = json.loads(provider.requests[0].messages[1].content)
     assert user_payload["allowed_actions"] == [
         "ask_clarification",
+        "generate_final_answer",
         "plan_retrieval",
         "propose_tool_call",
+        "refuse",
     ]
 
 
@@ -486,7 +514,28 @@ def test_llm_react_planner_rejects_invalid_model_output() -> None:
     assert "Model output did not contain a valid JSON object" in str(exc.value)
 
 
-@pytest.mark.parametrize("action_type", ["stop", "generate_final_answer"])
+def test_llm_react_planner_accepts_generate_final_answer_terminal_action() -> None:
+    provider = FakePlannerProvider(
+        _planner_output(action_type="generate_final_answer")
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    proposal = planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary=(
+            "Loop Control: eligible_actions=generate_final_answer,refuse; "
+            "accepted_evidence_count=1."
+        ),
+    )
+
+    assert proposal.action_type == ReActActionType.GENERATE_FINAL_ANSWER
+
+
+@pytest.mark.parametrize("action_type", ["stop"])
 def test_llm_react_planner_rejects_unrouteable_initial_actions(
     action_type: str,
 ) -> None:
@@ -501,10 +550,10 @@ def test_llm_react_planner_rejects_unrouteable_initial_actions(
             question="What is the reimbursement rule for travel meals?",
             system_prompt="Use governed ReAct planning.",
             context_summary="No prior context.",
-        )
+    )
 
     assert exc.value.error_code == "model_output_contract_validation_failed"
-    assert "unsupported initial planner action" in str(exc.value)
+    assert "unsupported planner action" in str(exc.value)
 
 
 def test_llm_react_planner_rejects_mismatched_selected_action() -> None:

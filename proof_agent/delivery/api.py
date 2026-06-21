@@ -340,6 +340,7 @@ def _run_response(
         "outcome": detail.outcome.value,
         "final_output": final_output or _final_output_from_trace(detail),
         "evidence": list(detail.evidence_chunks),
+        "citation_refs": list(detail.citation_refs),
         "approval_state": detail.approval_state,
         "pending_approvals": list(detail.pending_approvals),
         "links": {

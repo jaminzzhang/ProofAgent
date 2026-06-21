@@ -65,6 +65,13 @@ def test_run_detail_construction() -> None:
         trace_events=({"event_type": "run_started", "status": "ok"},),
         receipt_markdown="# Receipt\n\nOutcome: ANSWERED",
         evidence_chunks=({"source": "policy.md", "status": "accepted"},),
+        citation_refs=(
+            {
+                "source": "policy.md",
+                "citation": "policy.md#L1-L4",
+                "status": "accepted",
+            },
+        ),
         policy_decisions=({"decision": "allow", "reason": "evidence sufficient"},),
         model_usage={"provider": "deterministic", "model": "demo"},
     )
@@ -72,6 +79,13 @@ def test_run_detail_construction() -> None:
     assert detail.receipt_markdown.startswith("# Receipt")
     assert detail.approval_state is None
     assert detail.governance_details == {}
+    assert serialize_run_detail(detail)["citation_refs"] == [
+        {
+            "source": "policy.md",
+            "citation": "policy.md#L1-L4",
+            "status": "accepted",
+        }
+    ]
 
 
 def test_run_detail_accepts_governance_details() -> None:

@@ -160,6 +160,7 @@ class RunStore:
         trace_events = self._load_trace_events(run_dir / "trace.jsonl")
         receipt_markdown = self._load_text(run_dir / "governance_receipt.md")
         evidence_chunks = self._extract_evidence(trace_events)
+        citation_refs = self._extract_citation_refs(evidence_chunks)
         policy_decisions = self._extract_policy_decisions(trace_events)
         model_usage = self._extract_model_usage(trace_events)
         approval_state = self._extract_approval_state(trace_events)
@@ -183,6 +184,7 @@ class RunStore:
             trace_events=tuple(trace_events),
             receipt_markdown=receipt_markdown,
             evidence_chunks=tuple(evidence_chunks),
+            citation_refs=tuple(citation_refs),
             policy_decisions=tuple(policy_decisions),
             model_usage=model_usage,
             approval_state=approval_state,
@@ -420,9 +422,7 @@ class RunStore:
         retrieval = next(
             (e for e in reversed(events) if e.get("event_type") == "retrieval_result"), None
         )
-        evaluation = next(
-            (e for e in reversed(events) if e.get("event_type") == "evidence_evaluation"), None
-        )
+        evaluation = self._evidence_admission_event(events)
         if retrieval is None:
             return []
 
@@ -450,6 +450,47 @@ class RunStore:
                 }
             )
         return chunks
+
+    def _evidence_admission_event(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        fallback: dict[str, Any] | None = None
+        for event in reversed(events):
+            if event.get("event_type") != "evidence_evaluation":
+                continue
+            if fallback is None:
+                fallback = event
+            metadata = event.get("payload", {}).get("metadata", {})
+            evidence = metadata.get("evidence") if isinstance(metadata, dict) else None
+            if isinstance(evidence, list | tuple):
+                return event
+        return fallback
+
+    def _extract_citation_refs(
+        self,
+        evidence_chunks: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        citation_refs: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for chunk in evidence_chunks:
+            citation = chunk.get("citation")
+            if not citation:
+                continue
+            source = str(chunk.get("source") or "")
+            status = str(chunk.get("status") or "")
+            key = (source, str(citation), status)
+            if key in seen:
+                continue
+            seen.add(key)
+            citation_refs.append(
+                {
+                    "source": source,
+                    "citation": str(citation),
+                    "status": status,
+                }
+            )
+        return citation_refs
 
     def _extract_policy_decisions(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
@@ -611,6 +652,35 @@ class RunStore:
         }
         return {field: payload[field] for field in allowed_fields if field in payload}
 
+    def _extract_business_flow_skill_pack_recommendation(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        event = next(
+            (
+                e
+                for e in reversed(events)
+                if e.get("event_type") == "business_flow_skill_pack_recommendation"
+            ),
+            None,
+        )
+        if event is None:
+            return None
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            return None
+        allowed_fields = {
+            "recommendation_id",
+            "intent_resolution_id",
+            "recommendation_type",
+            "route_confidence",
+            "candidate_count",
+            "candidate_packs",
+            "requires_task_split",
+            "reason",
+        }
+        return {field: payload[field] for field in allowed_fields if field in payload}
+
     def _extract_review_results(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         review_event_types = {"review_decision", "review_error", "review_overridden"}
         results: list[dict[str, Any]] = []
@@ -649,6 +719,14 @@ class RunStore:
         business_flow_admission = self._extract_business_flow_skill_pack_admission(events)
         if business_flow_admission:
             details["business_flow_skill_pack_admission"] = business_flow_admission
+
+        business_flow_recommendation = (
+            self._extract_business_flow_skill_pack_recommendation(events)
+        )
+        if business_flow_recommendation:
+            details["business_flow_skill_pack_recommendation"] = (
+                business_flow_recommendation
+            )
 
         review_results = self._extract_review_results(events)
         if review_results:

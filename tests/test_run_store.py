@@ -520,8 +520,19 @@ def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
                 },
             },
             {
-                "event_type": "final_output",
+                "event_type": "evidence_evaluation",
                 "sequence": 3,
+                "timestamp": "2026-05-10T14:32:19Z",
+                "payload": {
+                    "metadata": {
+                        "supported_sources": ["policy://travel#meals"],
+                        "unsupported_sources": [],
+                    }
+                },
+            },
+            {
+                "event_type": "final_output",
+                "sequence": 4,
                 "timestamp": "2026-05-10T14:32:20Z",
                 "payload": {
                     "outcome": ReceiptOutcome.ANSWERED_WITH_CITATIONS.value,
@@ -545,6 +556,13 @@ def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
 
     assert detail is not None
     assert detail.evidence_chunks[0]["citation"] == "travel-policy.md#meals:L10-L18"
+    assert detail.citation_refs == (
+        {
+            "source": "policy://travel#meals",
+            "citation": "travel-policy.md#meals:L10-L18",
+            "status": "accepted",
+        },
+    )
     assert "content" not in detail.evidence_chunks[0]
 
 
@@ -595,9 +613,32 @@ def test_run_store_extracts_business_flow_skill_pack_trace_summary(
         "run_bfsp",
         [
             {
+                "event_id": "evt_bfsp_rec",
+                "event_type": "business_flow_skill_pack_recommendation",
+                "sequence": 1,
+                "timestamp": "2026-05-10T14:32:18Z",
+                "status": "ok",
+                "payload": {
+                    "recommendation_id": "bfsp_rec_1",
+                    "intent_resolution_id": "intent_retrieval_1",
+                    "recommendation_type": "single_pack",
+                    "route_confidence": 0.86,
+                    "candidate_count": 1,
+                    "candidate_packs": [
+                        {
+                            "pack_id": "enterprise_policy_qa",
+                            "confidence": 0.84,
+                            "reason": "Policy QA is relevant.",
+                        }
+                    ],
+                    "reason": "The policy QA pack fits the request.",
+                    "full_stage_prompt_addenda": "must stay hidden",
+                },
+            },
+            {
                 "event_id": "evt_bfsp",
                 "event_type": "business_flow_skill_pack_admission",
-                "sequence": 1,
+                "sequence": 2,
                 "timestamp": "2026-05-10T14:32:18Z",
                 "status": "ok",
                 "payload": {
@@ -621,7 +662,7 @@ def test_run_store_extracts_business_flow_skill_pack_trace_summary(
             },
             {
                 "event_type": "final_output",
-                "sequence": 2,
+                "sequence": 3,
                 "timestamp": "2026-05-10T14:32:19Z",
                 "payload": {
                     "outcome": ReceiptOutcome.ANSWERED_WITH_CITATIONS.value,
@@ -644,6 +685,25 @@ def test_run_store_extracts_business_flow_skill_pack_trace_summary(
     detail = store.get_run_detail("run_bfsp")
 
     assert detail is not None
+    recommendation = detail.governance_details[
+        "business_flow_skill_pack_recommendation"
+    ]
+    assert recommendation == {
+        "recommendation_id": "bfsp_rec_1",
+        "intent_resolution_id": "intent_retrieval_1",
+        "recommendation_type": "single_pack",
+        "route_confidence": 0.86,
+        "candidate_count": 1,
+        "candidate_packs": [
+            {
+                "pack_id": "enterprise_policy_qa",
+                "confidence": 0.84,
+                "reason": "Policy QA is relevant.",
+            }
+        ],
+        "reason": "The policy QA pack fits the request.",
+    }
+    assert "full_stage_prompt_addenda" not in recommendation
     summary = detail.governance_details["business_flow_skill_pack_admission"]
     assert summary == {
         "decision": "admitted",

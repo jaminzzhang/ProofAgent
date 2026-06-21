@@ -28,9 +28,24 @@ Question: {{ question }}
 {% endfor %}
 {% endif %}
 
-{% if business_flow_skill_pack_admission %}
+{% if business_flow_skill_pack_recommendation or business_flow_skill_pack_admission %}
 ## Business Flow Skill Pack
 
+{% if business_flow_skill_pack_recommendation %}
+### Recommendation
+
+| Field | Value |
+| --- | --- |
+| Recommendation ID | {{ business_flow_skill_pack_recommendation.recommendation_id }} |
+| Intent Resolution ID | {{ business_flow_skill_pack_recommendation.intent_resolution_id }} |
+| Recommendation Type | {{ business_flow_skill_pack_recommendation.recommendation_type }} |
+| Route Confidence | {{ business_flow_skill_pack_recommendation.route_confidence }} |
+| Candidate Count | {{ business_flow_skill_pack_recommendation.candidate_count }} |
+| Requires Task Split | {{ business_flow_skill_pack_recommendation.requires_task_split }} |
+| Reason | {{ business_flow_skill_pack_recommendation.reason }} |
+
+{% endif %}
+{% if business_flow_skill_pack_admission %}
 ### Admission
 
 | Field | Value |
@@ -64,6 +79,7 @@ Question: {{ question }}
 {% endfor %}
 {% else %}
 - None recorded.
+{% endif %}
 {% endif %}
 {% endif %}
 
