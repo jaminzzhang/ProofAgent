@@ -1,0 +1,94 @@
+name: react_enterprise_qa_v3_bfsp_llm
+purpose: "Run V3 intent execution with LLM-backed intent resolution, planning, review, and Business Flow Skill Pack routing."
+
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+  checkpointer:
+    provider: sqlite
+    uri: memory
+
+package_knowledge_sources:
+  - source_id: react_enterprise_qa_v3_bfsp_knowledge
+    name: ReAct Enterprise QA V3 BFSP Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge
+
+knowledge_bindings:
+  - binding_id: react_enterprise_qa_v3_bfsp_knowledge_binding
+    source_ref:
+      scope: package
+      source_id: react_enterprise_qa_v3_bfsp_knowledge
+
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+
+react:
+  max_steps: 5
+  max_plan_rounds: 4
+  max_tool_calls: 1
+  record_reasoning_summary: true
+  planner:
+    provider: openai_compatible
+    name: qwen-plus
+    params:
+      api_key_env: OPENAI_COMPATIBLE_API_KEY
+      base_url_env: OPENAI_COMPATIBLE_BASE_URL
+      temperature: 0
+      max_output_tokens: 800
+      timeout_seconds: 20
+
+review:
+  mode: auto
+  subagent:
+    provider: openai_compatible
+    name: qwen-plus
+    fail_closed: true
+    params:
+      api_key_env: OPENAI_COMPATIBLE_API_KEY
+      base_url_env: OPENAI_COMPATIBLE_BASE_URL
+      temperature: 0
+      timeout_seconds: 10
+      max_output_tokens: 500
+
+response:
+  include_reasoning_summary: false
+  include_review_results: false
+
+model:
+  provider: openai_compatible
+  name: qwen-plus
+  params:
+    api_key_env: OPENAI_COMPATIBLE_API_KEY
+    base_url_env: OPENAI_COMPATIBLE_BASE_URL
+    temperature: 0
+    max_output_tokens: 800
+    timeout_seconds: 20
+
+policy:
+  file: ./policy.yaml
+
+capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    admission:
+      route_min_confidence: 0.6
+    business_flows:
+      - id: enterprise_policy_qa
+        definition: ./skill_packs/enterprise_policy_qa.yaml
+      - id: claim_performance_lookup
+        definition: ./skill_packs/claim_performance_lookup.yaml
+
+audit:
+  trace_path: ../../runs/latest/trace.jsonl
+  receipt_path: ../../runs/latest/governance_receipt.md

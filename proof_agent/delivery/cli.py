@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from shutil import which
 from typing import TYPE_CHECKING, Any
 
 import typer
+import yaml  # type: ignore[import-untyped]
 
 from proof_agent import __version__
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
@@ -25,6 +27,7 @@ from proof_agent.evaluation.frozen_bundles import (
     freeze_evaluation_subject_bundle,
     verify_evaluation_subject_bundle,
 )
+from proof_agent.evaluation.suites import load_evaluation_suite
 from proof_agent.observability.storage.run_store import RunStore
 
 if TYPE_CHECKING:
@@ -225,6 +228,106 @@ def evaluate_analyze(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
 
+    if summary.artifact_dir is not None:
+        typer.echo(f"Report: {summary.artifact_dir / 'evaluation_report.md'}")
+        typer.echo(f"Results: {summary.artifact_dir / 'evaluation_results.jsonl'}")
+        typer.echo(f"Receipt: {summary.artifact_dir / 'evaluation_analysis_receipt.md'}")
+    typer.echo(
+        "Governed Resolution Rate: "
+        f"{summary.passed_required_cases}/{summary.total_required_cases} "
+        f"({summary.governed_resolution_rate:.3f})"
+    )
+    typer.echo(f"Release Decision: {summary.release_decision.status.value}")
+    if summary.release_decision.blocking_reasons:
+        typer.echo(
+            "Release Blocking Reasons: "
+            + ", ".join(summary.release_decision.blocking_reasons)
+        )
+    if summary.release_decision.status == EvaluationReleaseDecisionStatus.BLOCKED:
+        raise typer.Exit(code=1)
+
+
+@evaluate_app.command("run-suite")
+def evaluate_run_suite(
+    suite: str = typer.Option(..., "--suite", help="Evaluation Suite YAML path or builtin id"),
+    agent: str = typer.Option(..., "--agent", help="Agent YAML path to run for each case"),
+    output_dir: str = typer.Option(
+        "runs/evaluations",
+        "--output-dir",
+        help="Directory for generated subjects and Evaluation Analysis artifacts",
+    ),
+) -> None:
+    """Run an Evaluation Suite against an Agent and analyze the generated subjects."""
+
+    try:
+        loaded_suite = load_evaluation_suite(suite)
+    except EvaluationInputError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    output_root = Path(output_dir)
+    suite_output_dir = output_root / _safe_path_segment(loaded_suite.suite_id)
+    artifacts_dir = suite_output_dir / "artifacts"
+    subjects_path = suite_output_dir / "evaluation_subjects.yaml"
+    agent_path = Path(agent)
+    store = RunStore(suite_output_dir / "run_history")
+    subject_entries: list[dict[str, Any]] = []
+
+    for case in loaded_suite.cases:
+        case_dir_name = _safe_path_segment(case.case_id)
+        case_dir = artifacts_dir / case_dir_name
+        case_dir.mkdir(parents=True, exist_ok=True)
+        result = run_with_langgraph(
+            agent_path,
+            question=case.question,
+            runs_dir=case_dir,
+            store=store,
+        )
+        response_path = case_dir / "evaluated_response.txt"
+        response_path.write_text(str(result.final_output), encoding="utf-8")
+        subject_entries.append(
+            {
+                "case_ref": {"case_id": case.case_id},
+                "artifacts": {
+                    "trace_ref": _relative_posix(result.trace_path, suite_output_dir),
+                    "trace_sha256": _sha256(result.trace_path),
+                    "receipt_ref": _relative_posix(result.receipt_path, suite_output_dir),
+                    "receipt_sha256": _sha256(result.receipt_path),
+                },
+                "projections": {
+                    "evaluated_response": {
+                        "audience": "operator",
+                        "ref": _relative_posix(response_path, suite_output_dir),
+                        "sha256": _sha256(response_path),
+                    }
+                },
+            }
+        )
+
+    suite_output_dir.mkdir(parents=True, exist_ok=True)
+    subjects_payload = {
+        "manifest_id": f"{loaded_suite.suite_id}_run_subjects",
+        "version": loaded_suite.version,
+        "suite_id": loaded_suite.suite_id,
+        "agent": {"agent_yaml": str(agent_path)},
+        "subjects": subject_entries,
+    }
+    subjects_path.write_text(
+        yaml.safe_dump(subjects_payload, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    try:
+        summary = analyze_evaluation(
+            suite_path=suite,
+            subjects_path=subjects_path,
+            output_dir=output_root,
+        )
+    except EvaluationInputError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"Subjects: {subjects_path}")
     if summary.artifact_dir is not None:
         typer.echo(f"Report: {summary.artifact_dir / 'evaluation_report.md'}")
         typer.echo(f"Results: {summary.artifact_dir / 'evaluation_results.jsonl'}")
@@ -517,6 +620,19 @@ def _seed_default_dev_agent(store: Any) -> bool:
         actor="proof-agent-dev",
     )
     return True
+
+
+def _safe_path_segment(value: str) -> str:
+    cleaned = "".join(character if character.isalnum() else "_" for character in value)
+    return cleaned.strip("_") or "item"
+
+
+def _relative_posix(path: Path, base_dir: Path) -> str:
+    return path.resolve().relative_to(base_dir.resolve()).as_posix()
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _terminate_dev_processes(processes: list[tuple[str, subprocess.Popen[bytes]]]) -> None:

@@ -11,6 +11,7 @@ from proof_agent.evaluation.errors import EvaluationInputError
 BUILTIN_SUITES = {
     "smoke": "insurance_qa_smoke.yaml",
     "insurance_qa_smoke": "insurance_qa_smoke.yaml",
+    "v3_intent_execution": "v3_intent_execution.yaml",
 }
 
 

@@ -114,6 +114,33 @@ def test_analyzer_warns_about_extra_subjects_without_affecting_grr(tmp_path: Pat
     assert summary.warnings == ("extra subject ignored: extra_case",)
 
 
+def test_analyzer_reports_v3_intent_execution_behavior_metrics(tmp_path: Path) -> None:
+    suite_path, subjects_path = _write_v3_intent_metrics_fixture(tmp_path)
+
+    summary = analyze_evaluation(
+        suite_path=suite_path,
+        subjects_path=subjects_path,
+        output_dir=tmp_path / "evaluations",
+    )
+
+    assert summary.behavior_metrics == {
+        "bfsp_recommendation_accuracy": 1.0,
+        "inappropriate_clarification_rate": 0.0,
+        "action_constraint_rewrite_rate": 0.0,
+        "repeated_identical_retrieval_rate": 0.0,
+        "evidence_support_rate": 1.0,
+        "citation_projection_completeness": 1.0,
+    }
+    report = (
+        tmp_path
+        / "evaluations"
+        / summary.analysis_id
+        / "evaluation_report.md"
+    ).read_text(encoding="utf-8")
+    assert "- bfsp_recommendation_accuracy: 1.000" in report
+    assert "- inappropriate_clarification_rate: 0.000" in report
+
+
 def test_analyzer_reports_scenario_ordered_outcomes(tmp_path: Path) -> None:
     suite_path, subjects_path = _write_scenario_fixture(tmp_path)
 
@@ -402,6 +429,84 @@ subjects:
         audience: operator
         ref: runs/history/run_supported/operator_response.txt
 {response_hash.rstrip()}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return suite_path, subjects_path
+
+
+def _write_v3_intent_metrics_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    suite_path = tmp_path / "v3-intent-suite.yaml"
+    subjects_path = tmp_path / "v3-intent-subjects.yaml"
+    run_dir = tmp_path / "runs" / "history" / "run_v3_policy"
+    run_dir.mkdir(parents=True)
+    run_dir.joinpath("trace.jsonl").write_text(
+        '{"event_type":"business_flow_skill_pack_recommendation","status":"ok",'
+        '"payload":{"recommendation_type":"single_pack",'
+        '"candidate_packs":[{"pack_id":"enterprise_policy_qa","confidence":0.9}]}}\n'
+        '{"event_type":"business_flow_skill_pack_admission","status":"ok",'
+        '"payload":{"decision":"admitted","selected_pack_id":"enterprise_policy_qa"}}\n'
+        '{"event_type":"retrieval_step","status":"ok",'
+        '"payload":{"query":"travel meal reimbursement"}}\n'
+        '{"event_type":"retrieval_result","status":"ok",'
+        '"payload":{"source_refs":["customer-support-policy"]}}\n'
+        '{"event_type":"evidence_evaluation","status":"ok",'
+        '"payload":{"metadata":{"accepted_count":1},'
+        '"accepted_sources":["customer-support-policy"]}}\n'
+        '{"event_type":"policy_decision","status":"ok"}\n'
+        '{"event_type":"final_output","status":"ok",'
+        '"payload":{"outcome":"ANSWERED_WITH_CITATIONS"}}\n',
+        encoding="utf-8",
+    )
+    run_dir.joinpath("governance_receipt.md").write_text(
+        "# Governance Receipt\n\n## Final Outcome\n\nANSWERED_WITH_CITATIONS\n",
+        encoding="utf-8",
+    )
+    run_dir.joinpath("operator_response.txt").write_text(
+        "Travel meals are reimbursed. citation_refs: customer-support-policy",
+        encoding="utf-8",
+    )
+    suite_path.write_text(
+        """
+suite_id: v3_intent_execution
+version: "2026-06-21"
+name: V3 Intent Execution
+cases:
+  - case_id: v3_bfsp_policy_answer
+    question: What is the reimbursement rule for travel meals?
+    intent_type: enterprise_policy_question
+    expected_resolution: answer_with_citations
+    risk_class: low_business_fact
+    capability_path: retrieval_only
+    expected:
+      outcome: ANSWERED_WITH_CITATIONS
+      required_citation_refs:
+        - customer-support-policy
+      expected_business_flow_skill_pack_recommendation_type: single_pack
+      expected_business_flow_skill_pack_decision: admitted
+      expected_business_flow_skill_pack_id: enterprise_policy_qa
+      forbid_clarification: true
+      max_action_constraint_rewrites: 0
+      forbid_repeated_retrieval_queries: true
+      require_response_citation_refs: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+    subjects_path.write_text(
+        """
+manifest_id: v3_intent_subjects
+version: "2026-06-21"
+suite_id: v3_intent_execution
+subjects:
+  - case_ref:
+      case_id: v3_bfsp_policy_answer
+    artifacts:
+      trace_ref: runs/history/run_v3_policy/trace.jsonl
+      receipt_ref: runs/history/run_v3_policy/governance_receipt.md
+    projections:
+      evaluated_response:
+        audience: operator
+        ref: runs/history/run_v3_policy/operator_response.txt
 """.lstrip(),
         encoding="utf-8",
     )

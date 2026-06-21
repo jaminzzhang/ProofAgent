@@ -296,6 +296,272 @@ def test_business_flow_skill_pack_gate_fails_when_selected_pack_differs(
     ].reason
 
 
+def test_business_flow_skill_pack_gate_fails_when_expected_decision_differs(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="supported_travel_meal",
+        question="What is the reimbursement rule for travel meals?",
+        intent_type="service_process_guidance",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="low_business_fact",
+        capability_path="retrieval_only",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            expected_business_flow_skill_pack_decision="no_pack",
+        ),
+    )
+    subject = _subject(tmp_path)
+    trace = subject.trace.ref.read_text(encoding="utf-8")
+    subject.trace.ref.write_text(
+        trace.replace(
+            '{"run_id":"run_123","event_type":"final_output"',
+            '{"run_id":"run_123","event_type":"business_flow_skill_pack_admission",'
+            '"sequence":6,"status":"blocked","payload":{"decision":"needs_clarification",'
+            '"selected_pack_id":null,'
+            '"recommendation_type":"ambiguous",'
+            '"candidate_packs":[{"pack_id":"enterprise_policy_qa",'
+            '"confidence":0.9,"reason":"Relevant."}]}}\n'
+            '{"run_id":"run_123","event_type":"final_output"',
+        ),
+        encoding="utf-8",
+    )
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].status == (
+        EvaluationGateStatus.FAILED
+    )
+    assert "expected Business Flow Skill Pack decision no_pack" in gates[
+        EvaluationGateName.BUSINESS_FLOW_SKILL_PACK
+    ].reason
+
+
+def test_business_flow_skill_pack_gate_passes_expected_no_pack_decision(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="supported_travel_meal",
+        question="What is the reimbursement rule for travel meals?",
+        intent_type="service_process_guidance",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="low_business_fact",
+        capability_path="retrieval_only",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            expected_business_flow_skill_pack_decision="no_pack",
+        ),
+    )
+    subject = _subject(tmp_path)
+    trace = subject.trace.ref.read_text(encoding="utf-8")
+    subject.trace.ref.write_text(
+        trace.replace(
+            '{"run_id":"run_123","event_type":"final_output"',
+            '{"run_id":"run_123","event_type":"business_flow_skill_pack_admission",'
+            '"sequence":6,"status":"ok","payload":{"decision":"no_pack",'
+            '"selected_pack_id":null,'
+            '"recommendation_type":"no_pack",'
+            '"candidate_packs":[]}}\n'
+            '{"run_id":"run_123","event_type":"final_output"',
+        ),
+        encoding="utf-8",
+    )
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].status == (
+        EvaluationGateStatus.PASSED
+    )
+
+
+def test_business_flow_skill_pack_gate_fails_when_expected_recommendation_differs(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="supported_travel_meal",
+        question="What is the reimbursement rule for travel meals?",
+        intent_type="service_process_guidance",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="low_business_fact",
+        capability_path="retrieval_only",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            expected_business_flow_skill_pack_recommendation_type="no_pack",
+        ),
+    )
+    subject = _subject(tmp_path)
+    trace = subject.trace.ref.read_text(encoding="utf-8")
+    subject.trace.ref.write_text(
+        trace.replace(
+            '{"run_id":"run_123","event_type":"final_output"',
+            '{"run_id":"run_123","event_type":"business_flow_skill_pack_recommendation",'
+            '"sequence":6,"status":"ok","payload":{"recommendation_type":"ambiguous",'
+            '"candidate_packs":[{"pack_id":"enterprise_policy_qa",'
+            '"confidence":0.9,"reason":"Relevant."}]}}\n'
+            '{"run_id":"run_123","event_type":"final_output"',
+        ),
+        encoding="utf-8",
+    )
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].status == (
+        EvaluationGateStatus.FAILED
+    )
+    assert "expected Business Flow Skill Pack recommendation no_pack" in gates[
+        EvaluationGateName.BUSINESS_FLOW_SKILL_PACK
+    ].reason
+
+
+def test_intent_execution_behavior_gate_fails_for_forbidden_clarification(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="supported_travel_meal",
+        question="What is the reimbursement rule for travel meals?",
+        intent_type="service_process_guidance",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="low_business_fact",
+        capability_path="retrieval_only",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            forbid_clarification=True,
+        ),
+    )
+    subject = _subject(tmp_path)
+    trace = subject.trace.ref.read_text(encoding="utf-8")
+    subject.trace.ref.write_text(
+        trace.replace(
+            '{"run_id":"run_123","event_type":"final_output"',
+            '{"run_id":"run_123","event_type":"clarification_requested",'
+            '"sequence":6,"status":"waiting","payload":{"question":"Which pack?"}}\n'
+            '{"run_id":"run_123","event_type":"final_output"',
+        ),
+        encoding="utf-8",
+    )
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].status == (
+        EvaluationGateStatus.FAILED
+    )
+    assert "clarification_requested" in gates[
+        EvaluationGateName.INTENT_EXECUTION_BEHAVIOR
+    ].reason
+
+
+def test_intent_execution_behavior_gate_fails_when_action_rewrites_exceed_limit(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="supported_travel_meal",
+        question="What is the reimbursement rule for travel meals?",
+        intent_type="service_process_guidance",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="low_business_fact",
+        capability_path="retrieval_only",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            max_action_constraint_rewrites=0,
+        ),
+    )
+    subject = _subject(tmp_path)
+    trace = subject.trace.ref.read_text(encoding="utf-8")
+    subject.trace.ref.write_text(
+        trace.replace(
+            '{"run_id":"run_123","event_type":"final_output"',
+            '{"run_id":"run_123","event_type":"action_constrained",'
+            '"sequence":6,"status":"ok","payload":{"original_action_type":"plan_retrieval",'
+            '"constrained_to":"generate_final_answer"}}\n'
+            '{"run_id":"run_123","event_type":"final_output"',
+        ),
+        encoding="utf-8",
+    )
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].status == (
+        EvaluationGateStatus.FAILED
+    )
+    assert "action_constrained count 1 exceeded limit 0" in gates[
+        EvaluationGateName.INTENT_EXECUTION_BEHAVIOR
+    ].reason
+
+
+def test_intent_execution_behavior_gate_fails_for_repeated_retrieval_query(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="supported_travel_meal",
+        question="What is the reimbursement rule for travel meals?",
+        intent_type="service_process_guidance",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="low_business_fact",
+        capability_path="retrieval_only",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            forbid_repeated_retrieval_queries=True,
+        ),
+    )
+    subject = _subject(tmp_path)
+    trace = subject.trace.ref.read_text(encoding="utf-8")
+    subject.trace.ref.write_text(
+        trace.replace(
+            '{"run_id":"run_123","event_type":"retrieval_result"',
+            '{"run_id":"run_123","event_type":"retrieval_step","sequence":2,'
+            '"status":"ok","payload":{"query":"Travel meal reimbursement"}}\n'
+            '{"run_id":"run_123","event_type":"retrieval_step","sequence":3,'
+            '"status":"ok","payload":{"query":" travel   meal reimbursement "}}\n'
+            '{"run_id":"run_123","event_type":"retrieval_result"',
+        ),
+        encoding="utf-8",
+    )
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].status == (
+        EvaluationGateStatus.FAILED
+    )
+    assert "repeated retrieval query: travel meal reimbursement" in gates[
+        EvaluationGateName.INTENT_EXECUTION_BEHAVIOR
+    ].reason
+
+
+def test_response_projection_safety_gate_fails_when_required_citation_ref_missing(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="supported_travel_meal",
+        question="What is the reimbursement rule for travel meals?",
+        intent_type="service_process_guidance",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="low_business_fact",
+        capability_path="retrieval_only",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            required_citation_refs=("customer-support-policy",),
+            require_response_citation_refs=True,
+        ),
+    )
+    subject = _subject(tmp_path)
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.RESPONSE_PROJECTION_SAFETY].status == (
+        EvaluationGateStatus.FAILED
+    )
+    assert "missing response citation refs: customer-support-policy" in gates[
+        EvaluationGateName.RESPONSE_PROJECTION_SAFETY
+    ].reason
+
+
 def test_gates_fail_when_trace_and_receipt_outcomes_disagree(tmp_path: Path) -> None:
     case = EvaluationCase(
         case_id="supported_travel_meal",

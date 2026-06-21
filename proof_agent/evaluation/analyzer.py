@@ -25,6 +25,7 @@ from proof_agent.contracts import (
     EvaluationScenarioResult,
     EvaluationScenarioStep,
     EvaluationSubject,
+    ReceiptOutcome,
 )
 from proof_agent.evaluation.artifact_reader import read_evaluation_artifacts
 from proof_agent.evaluation.artifacts import write_evaluation_analysis_artifacts
@@ -68,6 +69,11 @@ def analyze_evaluation(
     )
     required_results = tuple(
         result for case, result in zip(suite.cases, case_results, strict=True)
+        if case.required_for_release
+    )
+    required_pairs = tuple(
+        (case, result)
+        for case, result in zip(suite.cases, case_results, strict=True)
         if case.required_for_release
     )
     subject_covered = sum(1 for result in required_results if result.subject_present)
@@ -114,6 +120,7 @@ def analyze_evaluation(
             required_scenario_results=required_scenarios,
         ),
         warnings=warnings,
+        behavior_metrics=_behavior_metrics(required_pairs),
         agent=dict(manifest.agent),
         artifact_dir=artifact_dir,
     )
@@ -449,6 +456,138 @@ def _deterministic_gate_pass_rate(case_results: tuple[EvaluationCaseResult, ...]
     ]
     passed = sum(1 for gate in deterministic_gates if gate.status == EvaluationGateStatus.PASSED)
     return _rate(passed, len(deterministic_gates))
+
+
+def _behavior_metrics(
+    required_pairs: tuple[tuple[EvaluationCase, EvaluationCaseResult], ...],
+) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    bfsp_cases = tuple(
+        (case, result)
+        for case, result in required_pairs
+        if case.expected.expected_business_flow_skill_pack_recommendation_type
+        is not None
+    )
+    if bfsp_cases:
+        metrics["bfsp_recommendation_accuracy"] = _rate(
+            sum(
+                1
+                for _, result in bfsp_cases
+                if _gate_status(result, EvaluationGateName.BUSINESS_FLOW_SKILL_PACK)
+                == EvaluationGateStatus.PASSED
+            ),
+            len(bfsp_cases),
+        )
+    clarification_cases = tuple(
+        (case, result)
+        for case, result in required_pairs
+        if case.expected.forbid_clarification
+    )
+    if clarification_cases:
+        metrics["inappropriate_clarification_rate"] = _rate(
+            sum(
+                1
+                for _, result in clarification_cases
+                if _gate_failed_with_reason(
+                    result,
+                    EvaluationGateName.INTENT_EXECUTION_BEHAVIOR,
+                    "clarification_requested",
+                )
+            ),
+            len(clarification_cases),
+        )
+    rewrite_cases = tuple(
+        (case, result)
+        for case, result in required_pairs
+        if case.expected.max_action_constraint_rewrites is not None
+    )
+    if rewrite_cases:
+        metrics["action_constraint_rewrite_rate"] = _rate(
+            sum(
+                1
+                for _, result in rewrite_cases
+                if _gate_failed_with_reason(
+                    result,
+                    EvaluationGateName.INTENT_EXECUTION_BEHAVIOR,
+                    "action_constrained count",
+                )
+            ),
+            len(rewrite_cases),
+        )
+    repeated_retrieval_cases = tuple(
+        (case, result)
+        for case, result in required_pairs
+        if case.expected.forbid_repeated_retrieval_queries
+    )
+    if repeated_retrieval_cases:
+        metrics["repeated_identical_retrieval_rate"] = _rate(
+            sum(
+                1
+                for _, result in repeated_retrieval_cases
+                if _gate_failed_with_reason(
+                    result,
+                    EvaluationGateName.INTENT_EXECUTION_BEHAVIOR,
+                    "repeated retrieval query",
+                )
+            ),
+            len(repeated_retrieval_cases),
+        )
+    answered_cases = tuple(
+        result
+        for case, result in required_pairs
+        if case.expected.outcome == ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    )
+    if answered_cases:
+        metrics["evidence_support_rate"] = _rate(
+            sum(
+                1
+                for result in answered_cases
+                if _gate_status(result, EvaluationGateName.EVIDENCE_STRUCTURAL)
+                == EvaluationGateStatus.PASSED
+            ),
+            len(answered_cases),
+        )
+    citation_projection_cases = tuple(
+        (case, result)
+        for case, result in required_pairs
+        if case.expected.require_response_citation_refs
+    )
+    if citation_projection_cases:
+        metrics["citation_projection_completeness"] = _rate(
+            sum(
+                1
+                for _, result in citation_projection_cases
+                if _gate_status(result, EvaluationGateName.RESPONSE_PROJECTION_SAFETY)
+                == EvaluationGateStatus.PASSED
+            ),
+            len(citation_projection_cases),
+        )
+    return metrics
+
+
+def _gate_status(
+    result: EvaluationCaseResult,
+    gate_name: EvaluationGateName,
+) -> EvaluationGateStatus | None:
+    for gate in result.gates:
+        if gate.gate == gate_name:
+            return gate.status
+    return None
+
+
+def _gate_failed_with_reason(
+    result: EvaluationCaseResult,
+    gate_name: EvaluationGateName,
+    reason_fragment: str,
+) -> bool:
+    for gate in result.gates:
+        if gate.gate != gate_name:
+            continue
+        return (
+            gate.status == EvaluationGateStatus.FAILED
+            and reason_fragment in gate.reason
+        )
+    return False
 
 
 def _release_decision(

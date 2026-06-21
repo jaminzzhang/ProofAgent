@@ -1,7 +1,9 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
+from proof_agent.contracts import ReceiptOutcome
 from proof_agent.delivery.cli import app
 
 
@@ -65,6 +67,110 @@ def test_evaluate_analyze_cli_returns_one_when_release_decision_is_blocked(
 
     assert result.exit_code == 1
     assert "Release Decision: blocked" in result.output
+
+
+def test_evaluate_run_suite_cli_creates_subjects_and_analysis(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    suite_path = tmp_path / "suite.yaml"
+    agent_path = tmp_path / "agent.yaml"
+    output_dir = tmp_path / "evaluations"
+    agent_path.write_text("name: fake_agent\n", encoding="utf-8")
+    suite_path.write_text(
+        """
+suite_id: v3_intent_execution
+version: "2026-06-21"
+name: V3 Intent Execution
+cases:
+  - case_id: v3_bfsp_policy_answer
+    question: What is the reimbursement rule for travel meals?
+    intent_type: enterprise_policy_question
+    expected_resolution: answer_with_citations
+    risk_class: low_business_fact
+    capability_path: retrieval_only
+    expected:
+      outcome: ANSWERED_WITH_CITATIONS
+      required_citation_refs:
+        - customer-support-policy
+      expected_business_flow_skill_pack_recommendation_type: single_pack
+      expected_business_flow_skill_pack_decision: admitted
+      expected_business_flow_skill_pack_id: enterprise_policy_qa
+      forbid_clarification: true
+      max_action_constraint_rewrites: 0
+      forbid_repeated_retrieval_queries: true
+      require_response_citation_refs: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    def fake_run_with_langgraph(agent_yaml, *, question, runs_dir, store=None):
+        assert Path(agent_yaml) == agent_path
+        assert question == "What is the reimbursement rule for travel meals?"
+        Path(runs_dir).mkdir(parents=True, exist_ok=True)
+        trace_path = Path(runs_dir) / "trace.jsonl"
+        receipt_path = Path(runs_dir) / "governance_receipt.md"
+        trace_path.write_text(
+            '{"event_type":"business_flow_skill_pack_recommendation","status":"ok",'
+            '"payload":{"recommendation_type":"single_pack"}}\n'
+            '{"event_type":"business_flow_skill_pack_admission","status":"ok",'
+            '"payload":{"decision":"admitted","selected_pack_id":"enterprise_policy_qa"}}\n'
+            '{"event_type":"retrieval_step","status":"ok",'
+            '"payload":{"query":"travel meal reimbursement"}}\n'
+            '{"event_type":"retrieval_result","status":"ok",'
+            '"payload":{"source_refs":["customer-support-policy"]}}\n'
+            '{"event_type":"evidence_evaluation","status":"ok",'
+            '"payload":{"metadata":{"accepted_count":1},'
+            '"accepted_sources":["customer-support-policy"]}}\n'
+            '{"event_type":"policy_decision","status":"ok"}\n'
+            '{"event_type":"final_output","status":"ok",'
+            '"payload":{"outcome":"ANSWERED_WITH_CITATIONS"}}\n',
+            encoding="utf-8",
+        )
+        receipt_path.write_text(
+            "# Governance Receipt\n\n## Final Outcome\n\nANSWERED_WITH_CITATIONS\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(
+            final_output=(
+                "Travel meals are reimbursed. citation_refs: customer-support-policy"
+            ),
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            trace_path=trace_path,
+            receipt_path=receipt_path,
+        )
+
+    monkeypatch.setattr("proof_agent.delivery.cli.run_with_langgraph", fake_run_with_langgraph)
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "run-suite",
+            "--suite",
+            str(suite_path),
+            "--agent",
+            str(agent_path),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Subjects:" in result.output
+    assert "Release Decision: passed" in result.output
+    subject_manifest = (
+        output_dir
+        / "v3_intent_execution"
+        / "evaluation_subjects.yaml"
+    )
+    assert subject_manifest.exists()
+    assert "v3_bfsp_policy_answer" in subject_manifest.read_text(encoding="utf-8")
+    assert (
+        output_dir
+        / "v3_intent_execution-v3_intent_execution_run_subjects"
+        / "evaluation_report.md"
+    ).exists()
 
 
 def test_evaluate_freeze_bundle_cli_writes_portable_bundle(tmp_path: Path) -> None:

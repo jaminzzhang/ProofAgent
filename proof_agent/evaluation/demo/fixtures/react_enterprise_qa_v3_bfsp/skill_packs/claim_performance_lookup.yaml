@@ -1,0 +1,25 @@
+schema_version: business_flow_skill_pack.v1
+id: claim_performance_lookup
+label: Claim Performance Lookup
+description: Claim performance lookup routing addenda for requests that require operational claim metrics or status aggregation.
+intent_patterns:
+  - claim performance
+  - performance lookup
+  - operational metrics
+stage_prompt_addenda:
+  plan:
+    business_context: "Use claim performance lookup only when the request asks for claim metrics, performance, or operational status aggregation."
+    task_instructions:
+      - "Do not answer claim performance questions from policy documents alone."
+  retrieval_review:
+    task_instructions:
+      - "Reject policy-only evidence when the user asks for operational performance metrics."
+knowledge_binding_refs:
+  - react_enterprise_qa_v3_bfsp_knowledge_binding
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.5
+  require_authorization_context: false

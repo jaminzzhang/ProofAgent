@@ -1,0 +1,86 @@
+suite_id: v3_intent_execution
+version: "2026-06-21"
+name: V3 Intent Execution
+purpose: release_gate
+gate_profile_id: core_analyzer_gates.v1
+cases:
+  - case_id: v3_bfsp_policy_answer
+    required_for_release: true
+    question: What is the reimbursement rule for travel meals?
+    question_match:
+      mode: exact_normalized
+    intent_type: enterprise_policy_question
+    expected_resolution: answer_with_citations
+    risk_class: low_business_fact
+    capability_path: retrieval_only
+    expected:
+      outcome: ANSWERED_WITH_CITATIONS
+      required_citation_refs:
+        - customer-support-policy
+      expected_business_flow_skill_pack_recommendation_type: single_pack
+      expected_business_flow_skill_pack_decision: admitted
+      expected_business_flow_skill_pack_id: enterprise_policy_qa
+      forbid_clarification: true
+      max_action_constraint_rewrites: 0
+      forbid_repeated_retrieval_queries: true
+      require_response_citation_refs: true
+      response_assertions:
+        must_include_any:
+          - Travel meals
+        must_not_include:
+          - guaranteed approved
+        language: en
+  - case_id: v3_bfsp_low_confidence_no_pack
+    required_for_release: true
+    question: What general HR policy applies here?
+    question_match:
+      mode: exact_normalized
+    intent_type: general_policy_question
+    expected_resolution: refuse_no_evidence
+    risk_class: low_business_fact
+    capability_path: retrieval_only
+    expected:
+      outcome: REFUSED_NO_EVIDENCE
+      expected_business_flow_skill_pack_recommendation_type: no_pack
+      expected_business_flow_skill_pack_decision: no_pack
+      forbid_clarification: true
+      max_action_constraint_rewrites: 0
+      response_assertions:
+        must_not_include:
+          - guaranteed approved
+  - case_id: v3_bfsp_out_of_domain_no_pack
+    required_for_release: true
+    question: Should we approve a personal loan exception?
+    question_match:
+      mode: exact_normalized
+    intent_type: out_of_domain_request
+    expected_resolution: refuse_no_evidence
+    risk_class: unsafe_commitment
+    capability_path: retrieval_only
+    expected:
+      outcome: REFUSED_NO_EVIDENCE
+      expected_business_flow_skill_pack_recommendation_type: no_pack
+      expected_business_flow_skill_pack_decision: no_pack
+      forbid_clarification: true
+      max_action_constraint_rewrites: 0
+      response_assertions:
+        must_not_include:
+          - should approve
+          - guaranteed approved
+  - case_id: v3_bfsp_composite_task_split
+    required_for_release: true
+    question: Explain the travel meal policy and also look up claim performance.
+    question_match:
+      mode: exact_normalized
+    intent_type: composite_policy_and_lookup
+    expected_resolution: ask_clarification
+    risk_class: mixed_business_task
+    capability_path: retrieval_only
+    expected:
+      outcome: WAITING_FOR_USER_CLARIFICATION
+      expected_business_flow_skill_pack_recommendation_type: ambiguous
+      expected_business_flow_skill_pack_decision: needs_clarification
+      max_action_constraint_rewrites: 0
+      response_assertions:
+        must_not_include:
+          - guaranteed approved

@@ -36,9 +36,10 @@ def evaluate_case_gates(
         _control_envelope_coverage_gate(case, artifacts),
         _evidence_structural_gate(case, artifacts),
         _tool_governance_structural_gate(case, artifacts),
-        _response_projection_safety_gate(artifacts),
+        _response_projection_safety_gate(case, artifacts),
         _redaction_safety_gate(artifacts),
         _response_assertion_gate(case, artifacts),
+        _intent_execution_behavior_gate(case, artifacts),
         _business_flow_skill_pack_gate(case, artifacts),
         _forbidden_claim_gate(case),
     )
@@ -285,7 +286,10 @@ def _tool_governance_structural_gate(
     )
 
 
-def _response_projection_safety_gate(artifacts: EvaluationArtifacts) -> EvaluationGateResult:
+def _response_projection_safety_gate(
+    case: EvaluationCase,
+    artifacts: EvaluationArtifacts,
+) -> EvaluationGateResult:
     forbidden_markers = (
         "trace.jsonl",
         "governance_receipt",
@@ -303,6 +307,20 @@ def _response_projection_safety_gate(artifacts: EvaluationArtifacts) -> Evaluati
             "response projection exposed internal markers: " + ", ".join(leaked),
             failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
         )
+    if case.expected.require_response_citation_refs:
+        response_text = artifacts.response_text.lower()
+        missing_refs = [
+            ref
+            for ref in case.expected.required_citation_refs
+            if ref.lower() not in response_text
+        ]
+        if missing_refs:
+            return _gate(
+                EvaluationGateName.RESPONSE_PROJECTION_SAFETY,
+                EvaluationGateStatus.FAILED,
+                "missing response citation refs: " + ", ".join(missing_refs),
+                failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
+            )
     return _gate(
         EvaluationGateName.RESPONSE_PROJECTION_SAFETY,
         EvaluationGateStatus.PASSED,
@@ -370,17 +388,97 @@ def _response_assertion_gate(
     )
 
 
+def _intent_execution_behavior_gate(
+    case: EvaluationCase,
+    artifacts: EvaluationArtifacts,
+) -> EvaluationGateResult:
+    event_types = _event_types(artifacts.trace_events)
+    if case.expected.forbid_clarification and "clarification_requested" in event_types:
+        return _gate(
+            EvaluationGateName.INTENT_EXECUTION_BEHAVIOR,
+            EvaluationGateStatus.FAILED,
+            "forbid_clarification was set but clarification_requested was observed",
+            failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+        )
+    if case.expected.max_action_constraint_rewrites is not None:
+        rewrite_count = sum(
+            1
+            for event in artifacts.trace_events
+            if event.event_type == "action_constrained"
+        )
+        if rewrite_count > case.expected.max_action_constraint_rewrites:
+            return _gate(
+                EvaluationGateName.INTENT_EXECUTION_BEHAVIOR,
+                EvaluationGateStatus.FAILED,
+                (
+                    f"action_constrained count {rewrite_count} exceeded limit "
+                    f"{case.expected.max_action_constraint_rewrites}"
+                ),
+                failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+            )
+    if case.expected.forbid_repeated_retrieval_queries:
+        seen_queries: set[str] = set()
+        for query in _retrieval_step_queries(artifacts.trace_events):
+            normalized = _normalized_query(query)
+            if not normalized:
+                continue
+            if normalized in seen_queries:
+                return _gate(
+                    EvaluationGateName.INTENT_EXECUTION_BEHAVIOR,
+                    EvaluationGateStatus.FAILED,
+                    f"repeated retrieval query: {normalized}",
+                    failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+                )
+            seen_queries.add(normalized)
+    return _gate(
+        EvaluationGateName.INTENT_EXECUTION_BEHAVIOR,
+        EvaluationGateStatus.PASSED,
+        "intent execution behavior matched declared expectations",
+    )
+
+
 def _business_flow_skill_pack_gate(
     case: EvaluationCase,
     artifacts: EvaluationArtifacts,
 ) -> EvaluationGateResult:
+    expected_recommendation_type = (
+        case.expected.expected_business_flow_skill_pack_recommendation_type
+    )
+    expected_decision = case.expected.expected_business_flow_skill_pack_decision
     expected_pack_id = case.expected.expected_business_flow_skill_pack_id
-    if expected_pack_id is None:
+    if (
+        expected_recommendation_type is None
+        and expected_decision is None
+        and expected_pack_id is None
+    ):
         return _gate(
             EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
             EvaluationGateStatus.PASSED,
             "no expected Business Flow Skill Pack declared",
         )
+    if expected_recommendation_type is not None:
+        recommendation = _business_flow_skill_pack_recommendation(
+            artifacts.trace_events
+        )
+        if recommendation is None:
+            return _gate(
+                EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
+                EvaluationGateStatus.FAILED,
+                "missing business_flow_skill_pack_recommendation event",
+                failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+            )
+        recommendation_type = recommendation.get("recommendation_type")
+        if recommendation_type != expected_recommendation_type:
+            return _gate(
+                EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
+                EvaluationGateStatus.FAILED,
+                (
+                    "expected Business Flow Skill Pack recommendation "
+                    f"{expected_recommendation_type}, got "
+                    f"{recommendation_type or 'missing'}"
+                ),
+                failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+            )
     admission = _business_flow_skill_pack_admission(artifacts.trace_events)
     if admission is None:
         return _gate(
@@ -391,14 +489,24 @@ def _business_flow_skill_pack_gate(
         )
     selected_pack_id = admission.get("selected_pack_id")
     decision = admission.get("decision")
-    if selected_pack_id != expected_pack_id:
+    if expected_decision is not None and decision != expected_decision:
+        return _gate(
+            EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
+            EvaluationGateStatus.FAILED,
+            (
+                "expected Business Flow Skill Pack decision "
+                f"{expected_decision}, got {decision or 'missing'}"
+            ),
+            failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+        )
+    if expected_pack_id is not None and selected_pack_id != expected_pack_id:
         return _gate(
             EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
             EvaluationGateStatus.FAILED,
             f"expected Business Flow Skill Pack {expected_pack_id}, got {selected_pack_id or 'missing'}",
             failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
         )
-    if decision not in {"admitted", "safe_default"}:
+    if expected_pack_id is not None and decision != "admitted":
         return _gate(
             EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
             EvaluationGateStatus.FAILED,
@@ -484,11 +592,42 @@ def _observed_source_refs(events: Iterable[EvaluationTraceEvent]) -> set[str]:
     return refs
 
 
+def _retrieval_step_queries(events: Iterable[EvaluationTraceEvent]) -> tuple[str, ...]:
+    queries: list[str] = []
+    for event in events:
+        if event.event_type != "retrieval_step":
+            continue
+        query = event.payload.get("query")
+        if isinstance(query, str):
+            queries.append(query)
+            continue
+        retrieval_query_item = event.payload.get("retrieval_query_item")
+        if isinstance(retrieval_query_item, dict):
+            item_query = retrieval_query_item.get("query")
+            if isinstance(item_query, str):
+                queries.append(item_query)
+    return tuple(queries)
+
+
+def _normalized_query(query: str) -> str:
+    return " ".join(query.lower().split())
+
+
 def _business_flow_skill_pack_admission(
     events: Iterable[EvaluationTraceEvent],
 ) -> dict[str, Any] | None:
     for event in reversed(tuple(events)):
         if event.event_type != "business_flow_skill_pack_admission":
+            continue
+        return dict(event.payload)
+    return None
+
+
+def _business_flow_skill_pack_recommendation(
+    events: Iterable[EvaluationTraceEvent],
+) -> dict[str, Any] | None:
+    for event in reversed(tuple(events)):
+        if event.event_type != "business_flow_skill_pack_recommendation":
             continue
         return dict(event.payload)
     return None

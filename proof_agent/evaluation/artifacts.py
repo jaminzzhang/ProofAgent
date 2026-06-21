@@ -37,9 +37,13 @@ def _report_markdown(summary: EvaluationAnalysisSummary) -> str:
         f"- artifact_sufficiency_rate: {summary.artifact_sufficiency_rate:.3f}",
         f"- release_decision: {summary.release_decision.status.value}",
         "",
-        "## Case Results",
-        "",
     ]
+    if summary.behavior_metrics:
+        lines.extend(["## Behavior Metrics", ""])
+        for metric, value in sorted(summary.behavior_metrics.items()):
+            lines.append(f"- {metric}: {value:.3f}")
+        lines.append("")
+    lines.extend(["## Case Results", ""])
     for result in summary.case_results:
         lines.append(f"- {result.case_id}: {result.status.value}")
     if summary.scenario_results:

@@ -107,6 +107,37 @@ def test_evaluation_expected_tool_governance_fields_are_contract_data() -> None:
     assert case.expected.required_tool_failure_codes == ("PA_TOOL_SOURCE_002",)
 
 
+def test_evaluation_expected_intent_execution_fields_are_contract_data() -> None:
+    case = EvaluationCase(
+        case_id="v3_bfsp_policy_answer",
+        question="What is the reimbursement rule for travel meals?",
+        intent_type="enterprise_policy_question",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="low_business_fact",
+        capability_path="retrieval_only",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            expected_business_flow_skill_pack_recommendation_type="single_pack",
+            expected_business_flow_skill_pack_decision="admitted",
+            expected_business_flow_skill_pack_id="enterprise_policy_qa",
+            forbid_clarification=True,
+            max_action_constraint_rewrites=0,
+            forbid_repeated_retrieval_queries=True,
+            require_response_citation_refs=True,
+        ),
+    )
+
+    assert case.expected.expected_business_flow_skill_pack_recommendation_type == (
+        "single_pack"
+    )
+    assert case.expected.expected_business_flow_skill_pack_decision == "admitted"
+    assert case.expected.expected_business_flow_skill_pack_id == "enterprise_policy_qa"
+    assert case.expected.forbid_clarification is True
+    assert case.expected.max_action_constraint_rewrites == 0
+    assert case.expected.forbid_repeated_retrieval_queries is True
+    assert case.expected.require_response_citation_refs is True
+
+
 def test_evaluation_gate_and_node_results_carry_sufficiency() -> None:
     gate = EvaluationGateResult(
         gate=EvaluationGateName.ARTIFACT_SUFFICIENCY,

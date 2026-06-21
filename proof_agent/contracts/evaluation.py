@@ -55,6 +55,7 @@ class EvaluationGateName(str, Enum):
     RESPONSE_PROJECTION_SAFETY = "response_projection_safety"
     REDACTION_SAFETY = "redaction_safety"
     RESPONSE_ASSERTION = "response_assertion"
+    INTENT_EXECUTION_BEHAVIOR = "intent_execution_behavior"
     BUSINESS_FLOW_SKILL_PACK = "business_flow_skill_pack"
     FORBIDDEN_CLAIM = "forbidden_claim"
 
@@ -109,7 +110,23 @@ class EvaluationCaseExpected(FrozenModel):
     required_mcp_tool_names: tuple[str, ...] = Field(default_factory=tuple)
     required_tool_result_classifications: tuple[str, ...] = Field(default_factory=tuple)
     required_tool_failure_codes: tuple[str, ...] = Field(default_factory=tuple)
+    expected_business_flow_skill_pack_decision: Literal[
+        "admitted",
+        "no_pack",
+        "needs_clarification",
+        "refused",
+        "failed_closed",
+    ] | None = None
+    expected_business_flow_skill_pack_recommendation_type: Literal[
+        "single_pack",
+        "no_pack",
+        "ambiguous",
+    ] | None = None
     expected_business_flow_skill_pack_id: str | None = None
+    forbid_clarification: bool = False
+    max_action_constraint_rewrites: int | None = Field(default=None, ge=0)
+    forbid_repeated_retrieval_queries: bool = False
+    require_response_citation_refs: bool = False
     forbidden_claim_categories: tuple[str, ...] = Field(default_factory=tuple)
     required_business_claims: tuple[str, ...] = Field(default_factory=tuple)
     response_assertions: EvaluationResponseAssertions = Field(
@@ -387,9 +404,15 @@ class EvaluationAnalysisSummary(FrozenModel):
     scenario_governed_resolution_rate: float = 0.0
     release_decision: EvaluationReleaseDecision
     warnings: tuple[str, ...] = Field(default_factory=tuple)
+    behavior_metrics: dict[str, float] = Field(default_factory=dict)
     agent: dict[str, Any] = Field(default_factory=dict)
     artifact_dir: Path | None = None
     judge_mode: Literal["none"] = "none"
+
+    @field_validator("behavior_metrics", mode="after")
+    @classmethod
+    def freeze_behavior_metrics(cls, value: Any) -> Any:
+        return freeze_value(value)
 
     @field_validator("agent", mode="after")
     @classmethod

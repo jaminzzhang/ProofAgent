@@ -48,6 +48,28 @@ def test_suite_loader_supports_builtin_smoke_suite() -> None:
     assert path_suite.suite_id == suite.suite_id
 
 
+def test_suite_loader_supports_builtin_v3_intent_execution_suite() -> None:
+    suite = load_evaluation_suite("v3_intent_execution")
+
+    assert suite.suite_id == "v3_intent_execution"
+    assert suite.gate_profile_id == "core_analyzer_gates.v1"
+    assert len(suite.cases) >= 4
+    by_id = {case.case_id: case for case in suite.cases}
+    assert by_id[
+        "v3_bfsp_policy_answer"
+    ].expected.expected_business_flow_skill_pack_recommendation_type == "single_pack"
+    assert by_id[
+        "v3_bfsp_policy_answer"
+    ].expected.expected_business_flow_skill_pack_decision == "admitted"
+    assert by_id[
+        "v3_bfsp_policy_answer"
+    ].expected.max_action_constraint_rewrites == 0
+    assert by_id["v3_bfsp_low_confidence_no_pack"].expected.forbid_clarification is True
+    assert by_id[
+        "v3_bfsp_composite_task_split"
+    ].expected.expected_business_flow_skill_pack_decision == "needs_clarification"
+
+
 def test_suite_loader_rejects_duplicate_case_ids(tmp_path: Path) -> None:
     suite_path = tmp_path / "suite.yaml"
     suite_path.write_text(
