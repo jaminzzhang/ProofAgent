@@ -365,7 +365,7 @@ These routes are read-only. Any run production happens through the Campaign CLI 
 
 ## Implementation Slices
 
-Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Customer Run API sampling, Coding Agent Evaluation Assist, case drilldowns, and version-aware trends remain future slices.
+Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Customer Run API sampling and version-aware trends remain future slices.
 
 Slice 1: Campaign manifest and artifact model
 
@@ -399,13 +399,15 @@ Slice 5: Coding Agent Evaluation Assist
 - Define safe diagnostic input bundle.
 - Write structured diagnostic output.
 - Mark diagnostic blocker candidates separately from readiness blockers.
+- Show Intelligent Resolution Quality and blocker candidate count on the private Evaluation Lab first viewport.
 
-Slice 5: Evaluation Lab drilldowns
+Slice 6: Evaluation Lab drilldowns
 
-- Add case drilldowns.
-- Verify with fixtures and browser checks.
+- Write safe case row page data from Analyzer case results and coding-agent diagnostic summaries.
+- Expose `GET /api/evaluation/campaigns/{campaign_id}/cases`.
+- Render case status, outcome, diagnostic finding counts, and blocker candidates in the hidden Evaluation Lab.
 
-Slice 6: Trends and curated production samples
+Slice 7: Trends and curated production samples
 
 - Add version-aware comparison.
 - Add production sample import and promotion workflow.

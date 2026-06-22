@@ -19,6 +19,7 @@ import {
   fetchConfigAgents,
   fetchConfigDraftSkills,
   fetchEvaluationCampaign,
+  fetchEvaluationCampaignCases,
   fetchEvaluationCampaigns,
   fetchKnowledgeIngestionJobs,
   fetchKnowledgeSourceDeletionEligibility,
@@ -93,14 +94,28 @@ test('evaluation campaign client methods use dashboard campaign endpoints', asyn
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      campaign_id: 'active_agent_probe',
+      data: [],
+      meta: { total: 0 },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
 
   await fetchEvaluationCampaigns()
   await fetchEvaluationCampaign('active_agent_probe')
+  await fetchEvaluationCampaignCases('active_agent_probe')
 
   expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/evaluation/campaigns', undefined)
   expect(fetchMock).toHaveBeenNthCalledWith(
     2,
     '/api/evaluation/campaigns/active_agent_probe',
+    undefined,
+  )
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    '/api/evaluation/campaigns/active_agent_probe/cases',
     undefined,
   )
 })

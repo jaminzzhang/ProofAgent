@@ -346,7 +346,7 @@ V1 does not execute LLM or human judges. Judge fields are reserved and reported 
 
 Judge diagnostics may later score correctness, completeness, groundedness clarity, usefulness, and safe wording from an Evaluation-Safe Judge Projection. Judge output remains diagnostic unless a future ADR defines a reviewed quality gate.
 
-Coding Agent Evaluation Assist, when used by an Evaluation Campaign, is a private diagnostic review over safe analysis artifacts and response projections. It may explain Intelligent Resolution Quality and suggest repair direction, but it does not directly change Analyzer gate status, release decision, or Active Agent Evaluation Readiness.
+Coding Agent Evaluation Assist, when used by an Evaluation Campaign, is a private diagnostic review over a safe input bundle built from Campaign metrics, Analyzer case summaries, gate summaries, and response projection metadata. It writes `diagnostics/coding_agent_input_bundle.json` and `diagnostics/coding_agent_diagnostics.json`, may explain Intelligent Resolution Quality and suggest repair direction, but it does not directly change Analyzer gate status, release decision, or Active Agent Evaluation Readiness.
 
 ## Release Thresholds
 
@@ -416,7 +416,7 @@ GET /api/evaluation/analyses/{analysis_id}/cases
 
 These APIs expose read-only projections over Analyzer artifacts. They do not re-run analysis or load full evaluated response text.
 
-Evaluation Campaigns write additional campaign-level artifacts under `runs/evaluation_campaigns/{campaign_id}/`, including Campaign summaries, coding-agent diagnostic summaries, private Evaluation Lab page data, and static Campaign reports. Those artifacts reference or embed Analyzer outputs rather than replacing the Evaluation Artifact Set.
+Evaluation Campaigns write additional campaign-level artifacts under `runs/evaluation_campaigns/{campaign_id}/`, including Campaign summaries, case drilldown rows, coding-agent diagnostic summaries, private Evaluation Lab page data, and static Campaign reports. Those artifacts reference or embed Analyzer outputs rather than replacing the Evaluation Artifact Set. Coding-agent diagnostic inputs and case drilldown rows must remain safe summaries: no raw trace payloads, raw receipts, raw prompts, chain-of-thought, unredacted customer payloads, or full response text.
 
 ### Evaluation Analysis Receipt
 
@@ -448,8 +448,8 @@ When suite, gate profile, subject manifest, or rubric versions change, trend rep
 
 ## Future Work
 
-- Evaluation Run Producer using existing execution surfaces.
-- Concrete Run Execution API / Customer Run API sample adapters, Coding Agent Evaluation Assist, case drilldowns, and trends inside Coding-Agent-Led Evaluation Campaigns.
+- Customer Run API sample adapter for Coding-Agent-Led Evaluation Campaigns.
+- Version-aware trends inside Coding-Agent-Led Evaluation Campaigns.
 - Full scenario continuation linkage gates.
 - Audited Evaluation Judge and claim-level support diagnostics.
 - Production curation workflow with Domain Evaluation Reviewer and Harness Evaluation Reviewer confirmation.

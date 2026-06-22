@@ -11,6 +11,7 @@ import type {
   ContractBundle,
   DraftAgent,
   DraftValidationResponse,
+  EvaluationCampaignCasesResponse,
   EvaluationCampaignsResponse,
   EvaluationCampaignSummary,
   FoundationKnowledgeSourceValidation,
@@ -128,6 +129,14 @@ export function fetchEvaluationCampaigns(): Promise<EvaluationCampaignsResponse>
 
 export function fetchEvaluationCampaign(campaignId: string): Promise<EvaluationCampaignSummary> {
   return fetchJson<EvaluationCampaignSummary>(`${BASE}/evaluation/campaigns/${campaignId}`)
+}
+
+export function fetchEvaluationCampaignCases(
+  campaignId: string,
+): Promise<EvaluationCampaignCasesResponse> {
+  return fetchJson<EvaluationCampaignCasesResponse>(
+    `${BASE}/evaluation/campaigns/${campaignId}/cases`,
+  )
 }
 
 export function fetchApprovals(params?: {

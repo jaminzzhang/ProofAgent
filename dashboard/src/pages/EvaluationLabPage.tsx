@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Gauge, ShieldCheck, TestTubeDiagonal } from 'lucide-react'
+import { AlertTriangle, Brain, Gauge, ShieldCheck, TestTubeDiagonal } from 'lucide-react'
 import {
   Badge,
   Card,
@@ -14,9 +14,11 @@ import {
 } from '@proofagent/ui'
 import {
   fetchEvaluationCampaign,
+  fetchEvaluationCampaignCases,
   fetchEvaluationCampaigns,
 } from '../api/client'
 import type {
+  EvaluationCampaignCaseRow,
   EvaluationCampaignCapabilityCoverage,
   EvaluationCampaignSummary,
 } from '../api/types'
@@ -27,6 +29,7 @@ export function EvaluationLabPage() {
   const [campaigns, setCampaigns] = useState<EvaluationCampaignSummary[]>([])
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null)
   const [summary, setSummary] = useState<EvaluationCampaignSummary | null>(null)
+  const [caseRows, setCaseRows] = useState<EvaluationCampaignCaseRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -40,6 +43,7 @@ export function EvaluationLabPage() {
         setSelectedCampaignId(response.data[0]?.campaign_id ?? null)
         if (response.data.length === 0) {
           setSummary(null)
+          setCaseRows([])
           setLoading(false)
         }
       })
@@ -57,10 +61,14 @@ export function EvaluationLabPage() {
     if (!selectedCampaignId) return
     let cancelled = false
     setLoading(true)
-    fetchEvaluationCampaign(selectedCampaignId)
-      .then((campaign) => {
+    Promise.all([
+      fetchEvaluationCampaign(selectedCampaignId),
+      fetchEvaluationCampaignCases(selectedCampaignId),
+    ])
+      .then(([campaign, cases]) => {
         if (cancelled) return
         setSummary(campaign)
+        setCaseRows(cases.data)
         setError(null)
         setLoading(false)
       })
@@ -154,7 +162,7 @@ export function EvaluationLabPage() {
             </Card>
           </section>
 
-          <section className="grid grid-cols-1 gap-5 md:grid-cols-3">
+          <section className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Governed Resolution"
               value={formatRate(summary.governed_resolution_rate)}
@@ -173,7 +181,45 @@ export function EvaluationLabPage() {
               icon={Gauge}
               tone={summary.deterministic_gate_pass_rate >= 1 ? 'success' : 'warning'}
             />
+            {summary.coding_agent_diagnostics && (
+              <StatCard
+                label="Intelligent Resolution"
+                value={formatOptionalRate(
+                  summary.coding_agent_diagnostics.mean_quality_score,
+                )}
+                subtitle={`${summary.coding_agent_diagnostics.diagnostic_blocker_candidate_count} blocker candidates`}
+                icon={Brain}
+                tone={
+                  summary.coding_agent_diagnostics.diagnostic_blocker_candidate_count > 0
+                    ? 'warning'
+                    : 'success'
+                }
+              />
+            )}
           </section>
+
+          <Card className="overflow-hidden p-0">
+            <div className="border-b border-[var(--border)] bg-[var(--bg-subtle)] px-4 py-3">
+              <h2 className="text-sm font-semibold text-[var(--text-primary)]">
+                Case Drilldowns
+              </h2>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-[var(--bg-subtle)] hover:bg-[var(--bg-subtle)]">
+                  <TableHead>Case</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Actual Outcome</TableHead>
+                  <TableHead>Diagnostics</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {caseRows.map((row) => (
+                  <CaseDrilldownRow key={`${row.analysis_id}-${row.case_id}`} row={row} />
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
 
           <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <Card className="overflow-hidden p-0">
@@ -237,6 +283,32 @@ export function EvaluationLabPage() {
   )
 }
 
+function CaseDrilldownRow({ row }: { row: EvaluationCampaignCaseRow }) {
+  return (
+    <TableRow>
+      <TableCell>
+        <div className="font-mono text-xs font-semibold text-[var(--text-primary)]">
+          {row.case_id}
+        </div>
+        <div className="mt-1 text-xs text-[var(--text-muted)]">{row.suite_id}</div>
+      </TableCell>
+      <TableCell>
+        <Badge variant={row.status === 'passed' ? 'success' : 'danger'}>
+          {titleCase(row.status)}
+        </Badge>
+      </TableCell>
+      <TableCell className="font-mono text-xs text-[var(--text-primary)]">
+        {row.actual_outcome ?? 'none'}
+      </TableCell>
+      <TableCell className="text-xs text-[var(--text-secondary)]">
+        {row.diagnostic_blocker_candidate
+          ? 'Blocker candidate'
+          : `${row.diagnostic_findings.length} findings`}
+      </TableCell>
+    </TableRow>
+  )
+}
+
 function CapabilityRow({
   capability,
 }: {
@@ -284,6 +356,10 @@ function readinessLabel(status: EvaluationCampaignSummary['readiness_status']): 
 
 function formatRate(value: number): string {
   return `${Math.round(value * 100)}%`
+}
+
+function formatOptionalRate(value: number | null): string {
+  return value === null ? 'n/a' : formatRate(value)
 }
 
 function humanizeCapability(value: string): string {

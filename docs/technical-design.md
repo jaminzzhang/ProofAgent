@@ -303,7 +303,7 @@ Boundary rules:
 - `observability/api/` and `observability/storage/` expose read-only observability and must not create a second execution path.
 - Evaluation Analyzer is post-run analysis only. It reads Evaluation Subject Manifest, Trace, Governance Receipt, run metadata, and audience-safe response projection artifacts; it must not start runs, call models, retrieve knowledge, execute tools, invoke PolicyEngine, or import Runtime/Control Workflow/Capability/Bootstrap execution paths.
 - Evaluation Run Producer is separate from Analyzer. It may create sample subjects only through existing execution surfaces and must not own gate logic or evaluation semantics. The first concrete producer adapter uses the operator Run Execution API service for Active Published Agents; Customer Run API sampling remains a future adapter.
-- Evaluation Campaign is an orchestration layer for the Active Published Agent Version. It can run declared suites and subject manifests through the post-run Analyzer, write Campaign/page-data artifacts, expose those artifacts through a hidden Evaluation Lab route, and produce hashed Subject Manifests from injected or Run Execution API-backed `evaluation_sample` RunStore samples. Future coding-agent diagnostics may read only safe artifacts; Campaign must not create a hidden Harness runtime or let subjective diagnostics override deterministic gates.
+- Evaluation Campaign is an orchestration layer for the Active Published Agent Version. It can run declared suites and subject manifests through the post-run Analyzer, write Campaign/page-data artifacts, expose those artifacts through a hidden Evaluation Lab route, produce hashed Subject Manifests from injected or Run Execution API-backed `evaluation_sample` RunStore samples, and write Coding Agent Evaluation Assist diagnostics from safe summary inputs. Campaign must not create a hidden Harness runtime or let subjective diagnostics override deterministic gates.
 
 ## 7. Agent Contract
 
@@ -1191,7 +1191,7 @@ Dashboard routes:
 | `/api/runs/{run_id}/receipt` | receipt markdown |
 | `GET /api/evaluation/campaigns` | read-only Evaluation Campaign list for private Evaluation Lab |
 | `GET /api/evaluation/campaigns/{campaign_id}` | read-only Evaluation Campaign summary and readiness projection |
-| `GET /api/evaluation/campaigns/{campaign_id}/cases` | future read-only Evaluation Campaign case and diagnostic projection |
+| `GET /api/evaluation/campaigns/{campaign_id}/cases` | read-only Evaluation Campaign case and diagnostic projection |
 | `GET /api/evaluation/campaigns/{campaign_id}/trends` | future read-only version-aware campaign trend projection |
 | `GET /api/approvals` | global pending approval queue projection sorted by newest request first |
 | `POST /api/runs/{run_id}/approvals/{approval_id}/approve` | append approval-granted decision to the original run trace; requires Operator Identity Context with `approval.resolve` |
@@ -1220,7 +1220,7 @@ CLI commands:
 | `proof-agent inspect` | summarize trace or receipt |
 | `proof-agent compare` | Plain RAG vs Harness RAG |
 | `proof-agent evaluate analyze` | planned post-run Evaluation Analyzer over an Evaluation Suite and Evaluation Subject Manifest; does not create Agent runs |
-| `proof-agent evaluate campaign run` | manifest-driven Evaluation Campaign command that invokes the Analyzer over declared suite and subject refs, writes Campaign summary artifacts, and produces private Evaluation Lab page data; module-level Campaign execution also supports injected `evaluation_sample` production and a Run Execution API-backed sample adapter, while future adapters add Customer Run API sampling and coding-agent diagnostics |
+| `proof-agent evaluate campaign run` | manifest-driven Evaluation Campaign command that invokes the Analyzer over declared suite and subject refs, writes Campaign summary artifacts, and produces private Evaluation Lab page data; module-level Campaign execution also supports injected `evaluation_sample` production, a Run Execution API-backed sample adapter, and injected Coding Agent Evaluation Assist diagnostics, while future adapters add Customer Run API sampling |
 | `proof-agent dev` | start the local backend API and Knowledge Worker with `.env` loaded |
 | `proof-agent server` | start only the Dashboard API |
 

@@ -31,6 +31,24 @@ def test_dashboard_api_reads_evaluation_campaign_page_data(tmp_path: Path) -> No
     )
 
 
+def test_dashboard_api_reads_evaluation_campaign_case_rows(tmp_path: Path) -> None:
+    campaigns_dir = tmp_path / "runs" / "evaluation_campaigns"
+    _write_campaign_page_data(campaigns_dir)
+    app = create_app(
+        history_dir=tmp_path / "runs" / "history",
+        evaluation_campaigns_dir=campaigns_dir,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/evaluation/campaigns/active_agent_probe/cases")
+
+    assert response.status_code == 200
+    assert response.json()["campaign_id"] == "active_agent_probe"
+    assert response.json()["data"][0]["case_id"] == "supported"
+    assert response.json()["data"][0]["status"] == "passed"
+    assert response.json()["meta"] == {"total": 1}
+
+
 def test_dashboard_api_returns_404_for_missing_evaluation_campaign(tmp_path: Path) -> None:
     app = create_app(
         history_dir=tmp_path / "runs" / "history",
@@ -88,6 +106,30 @@ def _write_campaign_page_data(campaigns_dir: Path) -> None:
                     }
                 ],
                 "artifact_dir": str(campaign_dir),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (page_data_dir / "evaluation_lab_cases.jsonl").write_text(
+        json.dumps(
+            {
+                "analysis_id": "active_agent_smoke-active_agent_subjects",
+                "suite_id": "active_agent_smoke",
+                "suite_version": "2026-06-21",
+                "case_id": "supported",
+                "status": "passed",
+                "expected_outcome": "ANSWERED_WITH_CITATIONS",
+                "actual_outcome": "ANSWERED_WITH_CITATIONS",
+                "artifact_sufficiency": "sufficient",
+                "primary_failure_owner": None,
+                "response_projection": {
+                    "audience": "operator",
+                    "text_length": 18,
+                },
+                "gate_failures": [],
+                "diagnostic_findings": [],
+                "diagnostic_blocker_candidate": False,
             }
         )
         + "\n",

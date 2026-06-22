@@ -21,6 +21,11 @@ from proof_agent.contracts import (
     EvaluationSuite,
 )
 from proof_agent.evaluation.analyzer import analyze_evaluation
+from proof_agent.evaluation.diagnostics import (
+    CodingAgentDiagnosticReviewer,
+    run_coding_agent_diagnostics,
+    write_coding_agent_diagnostic_artifacts,
+)
 from proof_agent.evaluation.errors import EvaluationInputError
 from proof_agent.evaluation.sample_production import (
     EvaluationSampleRunner,
@@ -36,6 +41,7 @@ def run_evaluation_campaign(
     output_dir: Path | str | None = None,
     run_store: RunStore | None = None,
     sample_runner: EvaluationSampleRunner | None = None,
+    diagnostic_reviewer: CodingAgentDiagnosticReviewer | None = None,
 ) -> EvaluationCampaignSummary:
     """Run a manifest-driven Evaluation Campaign over existing formal subjects."""
 
@@ -47,7 +53,7 @@ def run_evaluation_campaign(
     target_agent_id = _required_string(target, "agent_id")
     target_agent_version_id = _optional_string(target, "agent_version_id")
     suite_specs = _formal_suite_specs(raw)
-    campaign_dir = (Path(output_dir) if output_dir is not None else Path("runs/evaluation_campaigns"))
+    campaign_dir = Path(output_dir) if output_dir is not None else Path("runs/evaluation_campaigns")
     artifact_dir = campaign_dir / campaign_id
     analyzer_output_dir = artifact_dir / "analyzer"
 
@@ -70,8 +76,7 @@ def run_evaluation_campaign(
                 sample_runner=sample_runner,
                 output_path=subjects_path,
                 manifest_id=str(
-                    spec.get("subject_manifest_id")
-                    or f"{campaign_id}_{suite.suite_id}_subjects"
+                    spec.get("subject_manifest_id") or f"{campaign_id}_{suite.suite_id}_subjects"
                 ),
                 version=version,
                 target_agent_id=target_agent_id,
@@ -128,7 +133,19 @@ def run_evaluation_campaign(
         capability_coverage=capability_coverage,
         artifact_dir=artifact_dir,
     )
-    _write_campaign_artifacts(summary)
+    if diagnostic_reviewer is not None:
+        input_bundle, diagnostics = run_coding_agent_diagnostics(
+            campaign=summary,
+            analyses=(analysis for _, _, analysis in analyses),
+            reviewer=diagnostic_reviewer,
+        )
+        summary = summary.model_copy(update={"coding_agent_diagnostics": diagnostics})
+        write_coding_agent_diagnostic_artifacts(
+            artifact_dir=artifact_dir,
+            input_bundle=input_bundle,
+            diagnostics=diagnostics,
+        )
+    _write_campaign_artifacts(summary, analyses=analyses)
     return summary
 
 
@@ -222,7 +239,11 @@ def _blocking_reasons(
     return tuple(reasons)
 
 
-def _write_campaign_artifacts(summary: EvaluationCampaignSummary) -> None:
+def _write_campaign_artifacts(
+    summary: EvaluationCampaignSummary,
+    *,
+    analyses: list[tuple[str, EvaluationSuite, EvaluationAnalysisSummary]],
+) -> None:
     artifact_dir = Path(summary.artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     page_data_dir = artifact_dir / "page_data"
@@ -236,10 +257,121 @@ def _write_campaign_artifacts(summary: EvaluationCampaignSummary) -> None:
         json.dumps(summary_data, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    (page_data_dir / "evaluation_lab_cases.jsonl").write_text(
+        "".join(
+            json.dumps(row, sort_keys=True) + "\n"
+            for row in _case_rows(summary=summary, analyses=analyses)
+        ),
+        encoding="utf-8",
+    )
     (artifact_dir / "campaign_report.md").write_text(
         _campaign_report(summary),
         encoding="utf-8",
     )
+
+
+def _case_rows(
+    *,
+    summary: EvaluationCampaignSummary,
+    analyses: list[tuple[str, EvaluationSuite, EvaluationAnalysisSummary]],
+) -> tuple[dict[str, Any], ...]:
+    artifact_dir = Path(summary.artifact_dir)
+    diagnostics_by_case_id = {
+        diagnostic.case_id: diagnostic
+        for diagnostic in (
+            summary.coding_agent_diagnostics.case_diagnostics
+            if summary.coding_agent_diagnostics is not None
+            else ()
+        )
+    }
+    rows: list[dict[str, Any]] = []
+    for source, _, analysis in analyses:
+        for case in analysis.case_results:
+            diagnostic = diagnostics_by_case_id.get(case.case_id)
+            rows.append(
+                {
+                    "analysis_id": analysis.analysis_id,
+                    "source": source,
+                    "suite_id": analysis.suite_id,
+                    "suite_version": analysis.suite_version,
+                    "case_id": case.case_id,
+                    "scenario_id": case.scenario_id,
+                    "scenario_step_id": case.scenario_step_id,
+                    "status": case.status.value,
+                    "expected_outcome": case.expected_outcome.value,
+                    "actual_outcome": (
+                        case.actual_outcome.value if case.actual_outcome is not None else None
+                    ),
+                    "artifact_sufficiency": (
+                        case.artifact_sufficiency.value
+                        if case.artifact_sufficiency is not None
+                        else None
+                    ),
+                    "primary_failure_owner": (
+                        case.primary_failure_owner.value
+                        if case.primary_failure_owner is not None
+                        else None
+                    ),
+                    "response_projection": (
+                        _response_projection_summary_json(
+                            case.response_projection,
+                            artifact_dir=artifact_dir,
+                        )
+                        if case.response_projection is not None
+                        else None
+                    ),
+                    "gate_failures": [
+                        {
+                            "gate": gate.gate.value,
+                            "status": gate.status.value,
+                            "reason": gate.reason,
+                            "failure_owner": (
+                                gate.failure_owner.value if gate.failure_owner is not None else None
+                            ),
+                        }
+                        for gate in case.gates
+                        if gate.status == EvaluationGateStatus.FAILED
+                    ],
+                    "diagnostic_findings": (
+                        [
+                            _jsonable(finding.model_dump(mode="python"))
+                            for finding in diagnostic.findings
+                        ]
+                        if diagnostic is not None
+                        else []
+                    ),
+                    "diagnostic_blocker_candidate": (
+                        diagnostic.diagnostic_blocker_candidate if diagnostic is not None else False
+                    ),
+                }
+            )
+    return tuple(rows)
+
+
+def _response_projection_summary_json(
+    response_projection: Any,
+    *,
+    artifact_dir: Path,
+) -> dict[str, Any]:
+    data_raw = _jsonable(response_projection.model_dump(mode="python"))
+    if not isinstance(data_raw, dict):
+        raise TypeError("response projection summary must serialize to a mapping")
+    data: dict[str, Any] = data_raw
+    ref = data.get("ref")
+    if ref is not None:
+        data["ref"] = _page_artifact_ref(Path(str(ref)), artifact_dir=artifact_dir)
+    return data
+
+
+def _page_artifact_ref(path: Path, *, artifact_dir: Path) -> str:
+    if not path.is_absolute():
+        return str(path)
+    for base in (Path.cwd(), artifact_dir.parent.parent, artifact_dir.parent, artifact_dir):
+        try:
+            return str(path.relative_to(base))
+        except ValueError:
+            continue
+    return str(path)
 
 
 def _summary_json(summary: EvaluationCampaignSummary) -> dict[str, Any]:
@@ -263,10 +395,28 @@ def _campaign_report(summary: EvaluationCampaignSummary) -> str:
         f"- deterministic_gate_pass_rate: {summary.deterministic_gate_pass_rate:.3f}",
         "blocking_reasons: "
         + (", ".join(summary.blocking_reasons) if summary.blocking_reasons else "none"),
-        "",
-        "## Capability Coverage",
-        "",
     ]
+    if summary.coding_agent_diagnostics is not None:
+        diagnostics = summary.coding_agent_diagnostics
+        mean_quality = (
+            f"{diagnostics.mean_quality_score:.3f}"
+            if diagnostics.mean_quality_score is not None
+            else "none"
+        )
+        lines.extend(
+            [
+                f"- intelligent_resolution_quality: {mean_quality}",
+                "- diagnostic_blocker_candidates: "
+                f"{diagnostics.diagnostic_blocker_candidate_count}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Capability Coverage",
+            "",
+        ]
+    )
     for capability in summary.capability_coverage:
         lines.append(
             "- "

@@ -107,6 +107,52 @@ class EvaluationCampaignCapabilityStatus(str, Enum):
     NOT_COVERED = "not_covered"
 
 
+class EvaluationDiagnosticFinding(FrozenModel):
+    severity: Literal["low", "medium", "high"]
+    category: str
+    summary: str
+
+
+class EvaluationCaseDiagnostic(FrozenModel):
+    case_id: str
+    status: Literal["passed_with_diagnostics", "needs_review"]
+    quality_score: float
+    findings: tuple[EvaluationDiagnosticFinding, ...] = Field(default_factory=tuple)
+    diagnostic_blocker_candidate: bool = False
+
+
+class EvaluationCampaignDiagnostics(FrozenModel):
+    diagnostics_version: str = "coding-agent-diagnostics.v1"
+    evaluated_case_count: int = 0
+    mean_quality_score: float | None = None
+    diagnostic_blocker_candidate_count: int = 0
+    case_diagnostics: tuple[EvaluationCaseDiagnostic, ...] = Field(default_factory=tuple)
+
+
+class EvaluationDiagnosticInputCase(FrozenModel):
+    case_id: str
+    expected_outcome: str
+    actual_outcome: str | None = None
+    status: str
+    primary_failure_owner: str | None = None
+    response_projection: EvaluationResponseProjectionSummary | None = None
+    gate_results: tuple[dict[str, str | None], ...] = Field(default_factory=tuple)
+    warnings: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class EvaluationDiagnosticInputBundle(FrozenModel):
+    diagnostics_input_version: str = "coding-agent-diagnostics-input.v1"
+    campaign_id: str
+    version: str
+    target_agent_id: str
+    target_agent_version_id: str | None = None
+    readiness_status: str
+    governed_resolution_rate: float
+    artifact_sufficiency_rate: float
+    deterministic_gate_pass_rate: float
+    cases: tuple[EvaluationDiagnosticInputCase, ...] = Field(default_factory=tuple)
+
+
 class EvaluationResponseAssertions(FrozenModel):
     must_include_any: tuple[str, ...] = Field(default_factory=tuple)
     must_not_include: tuple[str, ...] = Field(default_factory=tuple)
@@ -125,9 +171,7 @@ class EvaluationCaseExpected(FrozenModel):
 
 
 class EvaluationQuestionMatch(FrozenModel):
-    mode: Literal["exact_normalized", "accepted_variants", "intent_signature"] = (
-        "exact_normalized"
-    )
+    mode: Literal["exact_normalized", "accepted_variants", "intent_signature"] = "exact_normalized"
     accepted_variants: tuple[str, ...] = Field(default_factory=tuple)
     intent_signature: str | None = None
 
@@ -439,3 +483,4 @@ class EvaluationCampaignSummary(FrozenModel):
         default_factory=tuple
     )
     artifact_dir: Path
+    coding_agent_diagnostics: EvaluationCampaignDiagnostics | None = None

@@ -30,12 +30,18 @@ class EvaluationCampaignStore:
         return tuple(campaigns)
 
     def get_campaign(self, campaign_id: str) -> dict[str, Any]:
-        page_data_path = self._page_data_path(campaign_id)
+        page_data_path = self._page_data_dir(campaign_id) / "evaluation_lab_summary.json"
         if not page_data_path.is_file():
-            raise EvaluationInputError(
-                f"Evaluation Campaign artifacts not found: {campaign_id}"
-            )
+            raise EvaluationInputError(f"Evaluation Campaign artifacts not found: {campaign_id}")
         return _read_json_mapping(page_data_path)
+
+    def get_campaign_cases(self, campaign_id: str) -> tuple[dict[str, Any], ...]:
+        cases_path = self._page_data_dir(campaign_id) / "evaluation_lab_cases.jsonl"
+        if not cases_path.is_file():
+            raise EvaluationInputError(
+                f"Evaluation Campaign case artifacts not found: {campaign_id}"
+            )
+        return tuple(_read_jsonl_mappings(cases_path))
 
     def _load_campaign(self, campaign_dir: Path) -> dict[str, Any] | None:
         page_data_path = campaign_dir / "page_data" / "evaluation_lab_summary.json"
@@ -43,16 +49,10 @@ class EvaluationCampaignStore:
             return None
         return _read_json_mapping(page_data_path)
 
-    def _page_data_path(self, campaign_id: str) -> Path:
-        if (
-            not campaign_id
-            or campaign_id in {".", ".."}
-            or Path(campaign_id).name != campaign_id
-        ):
-            raise EvaluationInputError(
-                f"Evaluation Campaign artifacts not found: {campaign_id}"
-            )
-        return self._root_dir / campaign_id / "page_data" / "evaluation_lab_summary.json"
+    def _page_data_dir(self, campaign_id: str) -> Path:
+        if not campaign_id or campaign_id in {".", ".."} or Path(campaign_id).name != campaign_id:
+            raise EvaluationInputError(f"Evaluation Campaign artifacts not found: {campaign_id}")
+        return self._root_dir / campaign_id / "page_data"
 
 
 def _read_json_mapping(path: Path) -> dict[str, Any]:
@@ -60,3 +60,17 @@ def _read_json_mapping(path: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise EvaluationInputError(f"Evaluation Campaign page data must be a mapping: {path}")
     return raw
+
+
+def _read_jsonl_mappings(path: Path) -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        raw = json.loads(line)
+        if not isinstance(raw, dict):
+            raise EvaluationInputError(
+                f"Evaluation Campaign page data row must be a mapping: {path}"
+            )
+        rows.append(raw)
+    return tuple(rows)

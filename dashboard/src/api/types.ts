@@ -371,6 +371,72 @@ export interface EvaluationCampaignCapabilityCoverage {
   failed_required_cases: number
 }
 
+export interface EvaluationDiagnosticFinding {
+  severity: 'low' | 'medium' | 'high'
+  category: string
+  summary: string
+}
+
+export interface EvaluationCaseDiagnostic {
+  case_id: string
+  status: 'passed_with_diagnostics' | 'needs_review'
+  quality_score: number
+  findings: EvaluationDiagnosticFinding[]
+  diagnostic_blocker_candidate: boolean
+}
+
+export interface EvaluationCampaignDiagnostics {
+  diagnostics_version: string
+  evaluated_case_count: number
+  mean_quality_score: number | null
+  diagnostic_blocker_candidate_count: number
+  case_diagnostics: EvaluationCaseDiagnostic[]
+}
+
+export interface EvaluationCampaignCaseResponseProjection {
+  audience?: string
+  ref?: string
+  declared_sha256?: string
+  observed_text_sha256?: string
+  text_length?: number
+  source?: string
+  sensitivity?: string
+}
+
+export interface EvaluationCampaignCaseGateFailure {
+  gate: string
+  status: string
+  reason: string
+  failure_owner: string | null
+}
+
+export interface EvaluationCampaignCaseRow {
+  analysis_id: string
+  source?: string
+  suite_id: string
+  suite_version: string
+  case_id: string
+  scenario_id?: string | null
+  scenario_step_id?: string | null
+  status: string
+  expected_outcome: string
+  actual_outcome: string | null
+  artifact_sufficiency: string | null
+  primary_failure_owner: string | null
+  response_projection: EvaluationCampaignCaseResponseProjection | null
+  gate_failures: EvaluationCampaignCaseGateFailure[]
+  diagnostic_findings: EvaluationDiagnosticFinding[]
+  diagnostic_blocker_candidate: boolean
+}
+
+export interface EvaluationCampaignCasesResponse {
+  campaign_id: string
+  data: EvaluationCampaignCaseRow[]
+  meta: {
+    total: number
+  }
+}
+
 export interface EvaluationCampaignSummary {
   campaign_id: string
   version: string
@@ -383,6 +449,7 @@ export interface EvaluationCampaignSummary {
   deterministic_gate_pass_rate: number
   suite_runs: EvaluationCampaignSuiteRun[]
   capability_coverage: EvaluationCampaignCapabilityCoverage[]
+  coding_agent_diagnostics?: EvaluationCampaignDiagnostics | null
   artifact_dir: string
 }
 

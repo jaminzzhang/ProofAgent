@@ -42,7 +42,9 @@ def list_evaluation_analyses(
 
     analyses = store.list_analyses()
     return {
-        "data": [_jsonable(analysis.model_dump(mode="python", warnings=False)) for analysis in analyses],
+        "data": [
+            _jsonable(analysis.model_dump(mode="python", warnings=False)) for analysis in analyses
+        ],
         "meta": {"total": len(analyses)},
     }
 
@@ -72,6 +74,24 @@ def get_evaluation_campaign(
     except EvaluationInputError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return cast(dict[str, Any], _jsonable(campaign))
+
+
+@router.get("/evaluation/campaigns/{campaign_id}/cases")
+def list_evaluation_campaign_cases(
+    campaign_id: str,
+    store: EvaluationCampaignStore = Depends(get_evaluation_campaign_store),
+) -> dict[str, Any]:
+    """List case-level Evaluation Campaign page-data rows."""
+
+    try:
+        case_rows = store.get_campaign_cases(campaign_id)
+    except EvaluationInputError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "campaign_id": campaign_id,
+        "data": [_jsonable(row) for row in case_rows],
+        "meta": {"total": len(case_rows)},
+    }
 
 
 @router.get("/evaluation/analyses/{analysis_id}/cases")
