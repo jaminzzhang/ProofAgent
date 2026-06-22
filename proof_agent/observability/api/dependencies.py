@@ -11,6 +11,7 @@ from proof_agent.observability.api.operator_identity import (
     OperatorIdentityContext,
 )
 from proof_agent.observability.storage.run_store import RunStore
+from proof_agent.evaluation.campaign_store import EvaluationCampaignStore
 from proof_agent.evaluation.store import EvaluationStore
 
 
@@ -22,6 +23,11 @@ def get_store(request: Request) -> RunStore:
 def get_evaluation_store(request: Request) -> EvaluationStore:
     """Retrieve the shared EvaluationStore from application state."""
     return cast(EvaluationStore, request.app.state.evaluation_store)
+
+
+def get_evaluation_campaign_store(request: Request) -> EvaluationCampaignStore:
+    """Retrieve the shared EvaluationCampaignStore from application state."""
+    return cast(EvaluationCampaignStore, request.app.state.evaluation_campaign_store)
 
 
 def get_operator_identity(request: Request) -> OperatorIdentityContext:

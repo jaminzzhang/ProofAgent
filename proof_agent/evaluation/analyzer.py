@@ -68,7 +68,8 @@ def analyze_evaluation(
         for scenario in suite.scenarios
     )
     required_results = tuple(
-        result for case, result in zip(suite.cases, case_results, strict=True)
+        result
+        for case, result in zip(suite.cases, case_results, strict=True)
         if case.required_for_release
     )
     required_pairs = tuple(
@@ -81,16 +82,15 @@ def analyze_evaluation(
         1 for result in required_results if result.status == EvaluationGateStatus.PASSED
     )
     required_scenarios = tuple(
-        result for scenario, result in zip(suite.scenarios, scenario_results, strict=True)
+        result
+        for scenario, result in zip(suite.scenarios, scenario_results, strict=True)
         if scenario.required_for_release
     )
     passed_required_scenarios = sum(
         1 for result in required_scenarios if result.status == EvaluationGateStatus.PASSED
     )
     required_scenario_rate = (
-        _rate(passed_required_scenarios, len(required_scenarios))
-        if required_scenarios
-        else None
+        _rate(passed_required_scenarios, len(required_scenarios)) if required_scenarios else None
     )
     artifact_sufficient = sum(
         1
@@ -199,9 +199,7 @@ def _analyze_scenario(
         for step in scenario.steps
     )
     actual_ordered_outcomes = tuple(
-        result.actual_outcome.value
-        for result in step_results
-        if result.actual_outcome is not None
+        result.actual_outcome.value for result in step_results if result.actual_outcome is not None
     )
     expected_ordered_outcomes = tuple(
         outcome.value for outcome in scenario.expected_ordered_outcomes
@@ -259,11 +257,12 @@ def _scenario_linkage_status(
             EvaluationGateStatus.FAILED,
             "scenario linkage could not be evaluated because one or more step subjects were missing",
         )
+    resolved_subjects = tuple(subject for subject in subjects if subject is not None)
     if scenario.linkage.mode == EvaluationScenarioLinkageMode.SAME_CONVERSATION:
         conversation_ids = tuple(
             subject.run_ref.conversation_id
-            for subject in subjects
-            if subject is not None and subject.run_ref is not None
+            for subject in resolved_subjects
+            if subject.run_ref is not None
         )
         if len(conversation_ids) != len(subjects) or any(
             conversation_id is None for conversation_id in conversation_ids
@@ -278,6 +277,46 @@ def _scenario_linkage_status(
                 "same conversation linkage expected one shared conversation_id",
             )
         return EvaluationGateStatus.PASSED, "same conversation linkage matched"
+    if scenario.linkage.mode == EvaluationScenarioLinkageMode.SAME_CONTINUATION_GROUP:
+        continuation_group_ids = tuple(
+            subject.run_ref.continuation_group_id
+            for subject in resolved_subjects
+            if subject.run_ref is not None
+        )
+        turn_ids = tuple(
+            subject.run_ref.turn_id for subject in resolved_subjects if subject.run_ref is not None
+        )
+        if (
+            len(continuation_group_ids) != len(subjects)
+            or len(turn_ids) != len(subjects)
+            or any(group_id is None for group_id in continuation_group_ids)
+            or any(turn_id is None for turn_id in turn_ids)
+        ):
+            return (
+                EvaluationGateStatus.FAILED,
+                "same continuation group linkage requires every scenario step subject to declare "
+                "run_ref.continuation_group_id and run_ref.turn_id",
+            )
+        if len(set(continuation_group_ids)) != 1:
+            return (
+                EvaluationGateStatus.FAILED,
+                "same continuation group linkage expected one shared continuation_group_id",
+            )
+        if len(set(turn_ids)) != len(turn_ids):
+            return (
+                EvaluationGateStatus.FAILED,
+                "same continuation group linkage expected distinct turn_id values for scenario steps",
+            )
+        turn_id_values = tuple(str(turn_id) for turn_id in turn_ids)
+        for index, subject in enumerate(resolved_subjects[1:], start=1):
+            prior_turn_id = turn_id_values[index - 1]
+            if not _trace_context_admission_includes(subject, prior_turn_id):
+                return (
+                    EvaluationGateStatus.FAILED,
+                    "same continuation group linkage requires context_admission to include "
+                    f"prior turn_id: {prior_turn_id}",
+                )
+        return EvaluationGateStatus.PASSED, "same continuation group linkage matched"
     return (
         EvaluationGateStatus.FAILED,
         f"scenario linkage mode is not implemented: {scenario.linkage.mode.value}",
@@ -290,9 +329,7 @@ def _scenario_approval_linkage_status(
     subject_by_ref: dict[SubjectKey, EvaluationSubject],
 ) -> tuple[EvaluationGateStatus, str | None]:
     expected_by_step = {
-        step.step_id: step.approval_event_ids
-        for step in scenario.steps
-        if step.approval_event_ids
+        step.step_id: step.approval_event_ids for step in scenario.steps if step.approval_event_ids
     }
     if not expected_by_step:
         return EvaluationGateStatus.PASSED, None
@@ -325,6 +362,19 @@ def _scenario_approval_linkage_status(
             "missing approval event refs: " + ", ".join(sorted(missing_refs)),
         )
     return EvaluationGateStatus.PASSED, "approval event references matched"
+
+
+def _trace_context_admission_includes(subject: EvaluationSubject, turn_id: str) -> bool:
+    artifacts = read_evaluation_artifacts(subject)
+    for event in artifacts.trace_events:
+        if event.event_type != "context_admission":
+            continue
+        if event.payload.get("admitted") is not True:
+            continue
+        included_turn_ids = event.payload.get("included_turn_ids")
+        if isinstance(included_turn_ids, list | tuple) and turn_id in included_turn_ids:
+            return True
+    return False
 
 
 def _analyze_scenario_step(

@@ -41,9 +41,9 @@ def test_analyzer_writes_report_results_and_analysis_receipt(tmp_path: Path) -> 
     assert summary.artifact_dir == artifact_dir
     assert (artifact_dir / "evaluation_report.md").exists()
     assert (artifact_dir / "evaluation_analysis_receipt.md").exists()
-    result_lines = (artifact_dir / "evaluation_results.jsonl").read_text(
-        encoding="utf-8"
-    ).splitlines()
+    result_lines = (
+        (artifact_dir / "evaluation_results.jsonl").read_text(encoding="utf-8").splitlines()
+    )
     first_result = json.loads(result_lines[0])
     assert first_result["case_id"] == "supported"
     assert first_result["trace"]["ref"].endswith("runs/history/run_supported/trace.jsonl")
@@ -159,10 +159,7 @@ def test_analyzer_reports_scenario_ordered_outcomes(tmp_path: Path) -> None:
     )
     assert scenario.failed_step_ids == ()
     assert "supported_then_refused" in (
-        tmp_path
-        / "evaluations"
-        / summary.analysis_id
-        / "evaluation_report.md"
+        tmp_path / "evaluations" / summary.analysis_id / "evaluation_report.md"
     ).read_text(encoding="utf-8")
 
 
@@ -177,7 +174,9 @@ def test_analyzer_fails_scenario_when_same_conversation_linkage_is_broken(
         ),
         encoding="utf-8",
     )
-    _add_scenario_run_refs(subjects_path, first_conversation_id="convo_a", second_conversation_id="convo_b")
+    _add_scenario_run_refs(
+        subjects_path, first_conversation_id="convo_a", second_conversation_id="convo_b"
+    )
 
     summary = analyze_evaluation(
         suite_path=suite_path,
@@ -203,7 +202,9 @@ def test_analyzer_passes_same_conversation_linkage_when_step_subjects_match(
         ),
         encoding="utf-8",
     )
-    _add_scenario_run_refs(subjects_path, first_conversation_id="convo_a", second_conversation_id="convo_a")
+    _add_scenario_run_refs(
+        subjects_path, first_conversation_id="convo_a", second_conversation_id="convo_a"
+    )
 
     summary = analyze_evaluation(
         suite_path=suite_path,
@@ -214,6 +215,150 @@ def test_analyzer_passes_same_conversation_linkage_when_step_subjects_match(
     scenario = summary.scenario_results[0]
     assert scenario.status == EvaluationGateStatus.PASSED
     assert scenario.linkage_status == EvaluationGateStatus.PASSED
+
+
+def test_analyzer_passes_same_continuation_group_linkage_when_step_subjects_match(
+    tmp_path: Path,
+) -> None:
+    suite_path, subjects_path = _write_scenario_fixture(tmp_path)
+    suite_path.write_text(
+        suite_path.read_text(encoding="utf-8").replace(
+            "    expected_ordered_outcomes:\n",
+            "    linkage:\n      mode: same_continuation_group\n    expected_ordered_outcomes:\n",
+        ),
+        encoding="utf-8",
+    )
+    _add_scenario_run_refs(
+        subjects_path,
+        first_conversation_id="convo_a",
+        second_conversation_id="convo_b",
+        first_turn_id="turn_1",
+        second_turn_id="turn_2",
+        first_continuation_group_id="continuation_1",
+        second_continuation_group_id="continuation_1",
+    )
+    _add_context_admission_event(
+        tmp_path,
+        run_id="run_refused",
+        included_turn_ids=("turn_1",),
+    )
+
+    summary = analyze_evaluation(
+        suite_path=suite_path,
+        subjects_path=subjects_path,
+        output_dir=tmp_path / "evaluations",
+    )
+
+    scenario = summary.scenario_results[0]
+    assert scenario.status == EvaluationGateStatus.PASSED
+    assert scenario.linkage_status == EvaluationGateStatus.PASSED
+    assert scenario.linkage_reason == "same continuation group linkage matched"
+
+
+def test_analyzer_fails_same_continuation_group_without_context_admission_proof(
+    tmp_path: Path,
+) -> None:
+    suite_path, subjects_path = _write_scenario_fixture(tmp_path)
+    suite_path.write_text(
+        suite_path.read_text(encoding="utf-8").replace(
+            "    expected_ordered_outcomes:\n",
+            "    linkage:\n      mode: same_continuation_group\n    expected_ordered_outcomes:\n",
+        ),
+        encoding="utf-8",
+    )
+    _add_scenario_run_refs(
+        subjects_path,
+        first_conversation_id="convo_a",
+        second_conversation_id="convo_b",
+        first_turn_id="turn_1",
+        second_turn_id="turn_2",
+        first_continuation_group_id="continuation_1",
+        second_continuation_group_id="continuation_1",
+    )
+
+    summary = analyze_evaluation(
+        suite_path=suite_path,
+        subjects_path=subjects_path,
+        output_dir=tmp_path / "evaluations",
+    )
+
+    scenario = summary.scenario_results[0]
+    assert scenario.status == EvaluationGateStatus.FAILED
+    assert scenario.linkage_status == EvaluationGateStatus.FAILED
+    assert (
+        "same continuation group linkage requires context_admission to include prior turn_id: turn_1"
+        == scenario.linkage_reason
+    )
+
+
+def test_analyzer_fails_same_continuation_group_when_group_ids_differ(
+    tmp_path: Path,
+) -> None:
+    suite_path, subjects_path = _write_scenario_fixture(tmp_path)
+    suite_path.write_text(
+        suite_path.read_text(encoding="utf-8").replace(
+            "    expected_ordered_outcomes:\n",
+            "    linkage:\n      mode: same_continuation_group\n    expected_ordered_outcomes:\n",
+        ),
+        encoding="utf-8",
+    )
+    _add_scenario_run_refs(
+        subjects_path,
+        first_conversation_id="convo_a",
+        second_conversation_id="convo_b",
+        first_turn_id="turn_1",
+        second_turn_id="turn_2",
+        first_continuation_group_id="continuation_1",
+        second_continuation_group_id="continuation_2",
+    )
+
+    summary = analyze_evaluation(
+        suite_path=suite_path,
+        subjects_path=subjects_path,
+        output_dir=tmp_path / "evaluations",
+    )
+
+    scenario = summary.scenario_results[0]
+    assert scenario.status == EvaluationGateStatus.FAILED
+    assert (
+        "same continuation group linkage expected one shared continuation_group_id"
+        == scenario.linkage_reason
+    )
+
+
+def test_analyzer_fails_same_continuation_group_when_turn_id_is_reused(
+    tmp_path: Path,
+) -> None:
+    suite_path, subjects_path = _write_scenario_fixture(tmp_path)
+    suite_path.write_text(
+        suite_path.read_text(encoding="utf-8").replace(
+            "    expected_ordered_outcomes:\n",
+            "    linkage:\n      mode: same_continuation_group\n    expected_ordered_outcomes:\n",
+        ),
+        encoding="utf-8",
+    )
+    _add_scenario_run_refs(
+        subjects_path,
+        first_conversation_id="convo_a",
+        second_conversation_id="convo_b",
+        first_turn_id="turn_1",
+        second_turn_id="turn_1",
+        first_continuation_group_id="continuation_1",
+        second_continuation_group_id="continuation_1",
+    )
+
+    summary = analyze_evaluation(
+        suite_path=suite_path,
+        subjects_path=subjects_path,
+        output_dir=tmp_path / "evaluations",
+    )
+
+    scenario = summary.scenario_results[0]
+    assert scenario.status == EvaluationGateStatus.FAILED
+    assert (
+        "same continuation group linkage expected distinct turn_id values for scenario steps"
+        == scenario.linkage_reason
+    )
 
 
 def test_analyzer_fails_tool_scenario_when_approval_event_reference_is_missing(
@@ -604,9 +749,26 @@ def _add_scenario_run_refs(
     *,
     first_conversation_id: str,
     second_conversation_id: str,
+    first_turn_id: str | None = None,
+    second_turn_id: str | None = None,
+    first_continuation_group_id: str | None = None,
+    second_continuation_group_id: str | None = None,
 ) -> None:
+    first_turn_ref = f"      turn_id: {first_turn_id}\n" if first_turn_id is not None else ""
+    second_turn_ref = f"      turn_id: {second_turn_id}\n" if second_turn_id is not None else ""
+    first_continuation_group_ref = (
+        f"      continuation_group_id: {first_continuation_group_id}\n"
+        if first_continuation_group_id is not None
+        else ""
+    )
+    second_continuation_group_ref = (
+        f"      continuation_group_id: {second_continuation_group_id}\n"
+        if second_continuation_group_id is not None
+        else ""
+    )
     subjects_path.write_text(
-        subjects_path.read_text(encoding="utf-8").replace(
+        subjects_path.read_text(encoding="utf-8")
+        .replace(
             """    artifacts:
       trace_ref: runs/history/run_supported/trace.jsonl
       receipt_ref: runs/history/run_supported/governance_receipt.md
@@ -619,9 +781,11 @@ def _add_scenario_run_refs(
       run_id: run_supported
       source: run_store
       conversation_id: {first_conversation_id}
+{first_turn_ref}{first_continuation_group_ref.rstrip()}
     projections:
 """,
-        ).replace(
+        )
+        .replace(
             """    artifacts:
       trace_ref: runs/history/run_refused/trace.jsonl
       receipt_ref: runs/history/run_refused/governance_receipt.md
@@ -634,9 +798,35 @@ def _add_scenario_run_refs(
       run_id: run_refused
       source: run_store
       conversation_id: {second_conversation_id}
+{second_turn_ref}{second_continuation_group_ref.rstrip()}
     projections:
 """,
         ),
+        encoding="utf-8",
+    )
+
+
+def _add_context_admission_event(
+    tmp_path: Path,
+    *,
+    run_id: str,
+    included_turn_ids: tuple[str, ...],
+) -> None:
+    trace_path = tmp_path / "runs" / "history" / run_id / "trace.jsonl"
+    existing = trace_path.read_text(encoding="utf-8")
+    trace_path.write_text(
+        json.dumps(
+            {
+                "event_type": "context_admission",
+                "status": "ok",
+                "payload": {
+                    "admitted": True,
+                    "included_turn_ids": list(included_turn_ids),
+                },
+            }
+        )
+        + "\n"
+        + existing,
         encoding="utf-8",
     )
 

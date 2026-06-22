@@ -18,6 +18,10 @@ import {
   deleteConfigDraftSkillPack,
   fetchConfigAgents,
   fetchConfigDraftSkills,
+  fetchEvaluationCampaign,
+  fetchEvaluationCampaignCases,
+  fetchEvaluationCampaigns,
+  fetchEvaluationCampaignTrends,
   fetchKnowledgeIngestionJobs,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSources,
@@ -65,6 +69,76 @@ test('fetchHandoffs requests internal handoff projection', async () => {
 
   expect(fetchMock).toHaveBeenCalledWith('/api/handoffs', undefined)
   expect(response.data).toEqual([])
+})
+
+test('evaluation campaign client methods use dashboard campaign endpoints', async () => {
+  const campaign = {
+    campaign_id: 'active_agent_probe',
+    version: '2026-06-21',
+    target_agent_id: 'insurance_customer_service',
+    target_agent_version_id: 'published_v1',
+    readiness_status: 'ready',
+    blocking_reasons: [],
+    governed_resolution_rate: 1,
+    artifact_sufficiency_rate: 1,
+    deterministic_gate_pass_rate: 1,
+    suite_runs: [],
+    capability_coverage: [],
+    artifact_dir: '/tmp/campaigns/active_agent_probe',
+  }
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: [campaign], meta: { total: 1 } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(campaign), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      campaign_id: 'active_agent_probe',
+      data: [],
+      meta: { total: 0 },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      campaign_id: 'active_agent_probe',
+      current_version: '2026-06-21',
+      baseline_campaign_id: 'previous_probe',
+      baseline_version: '2026-06-20',
+      status: 'comparable',
+      comparison_basis: {
+        suite_versions: [],
+      },
+      metric_deltas: {},
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+  await fetchEvaluationCampaigns()
+  await fetchEvaluationCampaign('active_agent_probe')
+  await fetchEvaluationCampaignCases('active_agent_probe')
+  await fetchEvaluationCampaignTrends('active_agent_probe')
+
+  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/evaluation/campaigns', undefined)
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    '/api/evaluation/campaigns/active_agent_probe',
+    undefined,
+  )
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    '/api/evaluation/campaigns/active_agent_probe/cases',
+    undefined,
+  )
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    4,
+    '/api/evaluation/campaigns/active_agent_probe/trends',
+    undefined,
+  )
 })
 
 test('fetchApprovals requests the global pending approval queue projection', async () => {

@@ -12,6 +12,7 @@ import { KnowledgePage } from './pages/KnowledgePage'
 import { KnowledgeDetailPage } from './pages/KnowledgeDetailPage'
 import { ModelsPage } from './pages/ModelsPage'
 import { ModelConnectionDetailPage } from './pages/ModelConnectionDetailPage'
+import { EvaluationLabPage } from './pages/EvaluationLabPage'
 
 export { Routes, Route }
 
@@ -31,6 +32,7 @@ export function AppRoutes() {
       <Route path="/handoffs" element={<HandoffsPage />} />
       <Route path="/approvals" element={<ApprovalsPage />} />
       <Route path="/runs/:runId" element={<RunDetailPage />} />
+      <Route path="/evaluation-lab" element={<EvaluationLabPage />} />
     </Routes>
   )
 }

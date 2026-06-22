@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -251,6 +253,28 @@ def test_evaluate_verify_bundle_cli_reports_integrity_status(tmp_path: Path) -> 
     assert "artifacts/supported/evaluated_response.txt" in failed.output
 
 
+def test_evaluate_campaign_run_cli_writes_campaign_artifacts(tmp_path: Path) -> None:
+    campaign_path = _write_campaign_cli_fixture(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "campaign",
+            "run",
+            "--campaign",
+            str(campaign_path),
+            "--output-dir",
+            str(tmp_path / "campaigns"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Campaign: active_agent_probe" in result.output
+    assert "Readiness: ready" in result.output
+    assert (tmp_path / "campaigns" / "active_agent_probe" / "campaign_summary.json").exists()
+
+
 def _write_cli_fixture(
     tmp_path: Path,
     *,
@@ -327,3 +351,108 @@ subjects:
         encoding="utf-8",
     )
     return suite_path, subjects_path
+
+
+def _write_campaign_cli_fixture(tmp_path: Path) -> Path:
+    suite_path = tmp_path / "campaign_suite.yaml"
+    subjects_path = tmp_path / "campaign_subjects.yaml"
+    campaign_path = tmp_path / "campaign.yaml"
+    run_dir = tmp_path / "runs" / "history" / "run_campaign_supported"
+    run_dir.mkdir(parents=True)
+    trace_path = run_dir / "trace.jsonl"
+    receipt_path = run_dir / "governance_receipt.md"
+    response_path = run_dir / "operator_response.txt"
+    trace_path.write_text(
+        json.dumps({"event_type": "retrieval_result", "payload": {"source_refs": ["policy"]}})
+        + "\n"
+        + json.dumps(
+            {
+                "event_type": "evidence_evaluation",
+                "payload": {
+                    "metadata": {"accepted_count": 1},
+                    "accepted_sources": ["policy"],
+                },
+            }
+        )
+        + "\n"
+        + json.dumps({"event_type": "policy_decision"})
+        + "\n"
+        + json.dumps(
+            {
+                "event_type": "final_output",
+                "payload": {"outcome": "ANSWERED_WITH_CITATIONS"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    receipt_path.write_text(
+        "# Governance Receipt\n\n## Final Outcome\n\nANSWERED_WITH_CITATIONS\n",
+        encoding="utf-8",
+    )
+    response_path.write_text("Covered by policy.", encoding="utf-8")
+    suite_path.write_text(
+        """
+suite_id: campaign_smoke
+version: "2026-06-21"
+name: Campaign Smoke
+cases:
+  - case_id: supported
+    question: Supported?
+    intent_type: guidance
+    expected_resolution: answer_with_citations
+    risk_class: low
+    capability_path: evidence_answer
+    expected:
+      outcome: ANSWERED_WITH_CITATIONS
+      required_citation_refs:
+        - policy
+""".lstrip(),
+        encoding="utf-8",
+    )
+    subjects_path.write_text(
+        f"""
+manifest_id: campaign_subjects
+version: "2026-06-21"
+suite_id: campaign_smoke
+subjects:
+  - case_ref:
+      case_id: supported
+    artifacts:
+      trace_ref: runs/history/run_campaign_supported/trace.jsonl
+      trace_sha256: {_file_sha256(trace_path)}
+      receipt_ref: runs/history/run_campaign_supported/governance_receipt.md
+      receipt_sha256: {_file_sha256(receipt_path)}
+    projections:
+      evaluated_response:
+        audience: operator
+        ref: runs/history/run_campaign_supported/operator_response.txt
+        sha256: {_file_sha256(response_path)}
+        sensitivity: release_safe
+""".lstrip(),
+        encoding="utf-8",
+    )
+    campaign_path.write_text(
+        """
+campaign_id: active_agent_probe
+version: "2026-06-21"
+target:
+  agent_id: insurance_customer_service
+  agent_version_id: published_v1
+suites:
+  formal:
+    - source: core_regression
+      suite_ref: campaign_suite.yaml
+      subjects_ref: campaign_subjects.yaml
+thresholds:
+  governed_resolution_rate_min: 0.95
+  artifact_sufficiency_required: 1.0
+  deterministic_gate_pass_required: 1.0
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return campaign_path
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()

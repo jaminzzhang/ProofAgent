@@ -348,6 +348,152 @@ export interface HandoffsResponse {
   data: HandoffProjection[]
 }
 
+export type EvaluationCampaignReadinessStatus = 'ready' | 'blocked'
+export type EvaluationCampaignCapabilityStatus = 'passed' | 'failed' | 'not_covered'
+
+export interface EvaluationCampaignSuiteRun {
+  source: string
+  suite_id: string
+  suite_version: string
+  analysis_id: string
+  release_decision_status: 'passed' | 'blocked'
+  total_required_cases: number
+  passed_required_cases: number
+  governed_resolution_rate: number
+  artifact_dir: string
+}
+
+export interface EvaluationCampaignCapabilityCoverage {
+  capability_path: string
+  status: EvaluationCampaignCapabilityStatus
+  required_cases: number
+  passed_required_cases: number
+  failed_required_cases: number
+}
+
+export interface EvaluationDiagnosticFinding {
+  severity: 'low' | 'medium' | 'high'
+  category: string
+  summary: string
+}
+
+export interface EvaluationCaseDiagnostic {
+  case_id: string
+  status: 'passed_with_diagnostics' | 'needs_review'
+  quality_score: number
+  findings: EvaluationDiagnosticFinding[]
+  diagnostic_blocker_candidate: boolean
+}
+
+export interface EvaluationCampaignDiagnostics {
+  diagnostics_version: string
+  evaluated_case_count: number
+  mean_quality_score: number | null
+  diagnostic_blocker_candidate_count: number
+  case_diagnostics: EvaluationCaseDiagnostic[]
+}
+
+export interface EvaluationCampaignCaseResponseProjection {
+  audience?: string
+  ref?: string
+  declared_sha256?: string
+  observed_text_sha256?: string
+  text_length?: number
+  source?: string
+  sensitivity?: string
+}
+
+export interface EvaluationCampaignCaseGateFailure {
+  gate: string
+  status: string
+  reason: string
+  failure_owner: string | null
+}
+
+export interface EvaluationCampaignCaseRow {
+  analysis_id: string
+  source?: string
+  suite_id: string
+  suite_version: string
+  case_id: string
+  scenario_id?: string | null
+  scenario_step_id?: string | null
+  status: string
+  expected_outcome: string
+  actual_outcome: string | null
+  artifact_sufficiency: string | null
+  primary_failure_owner: string | null
+  response_projection: EvaluationCampaignCaseResponseProjection | null
+  gate_failures: EvaluationCampaignCaseGateFailure[]
+  diagnostic_findings: EvaluationDiagnosticFinding[]
+  diagnostic_blocker_candidate: boolean
+}
+
+export interface EvaluationCampaignCasesResponse {
+  campaign_id: string
+  data: EvaluationCampaignCaseRow[]
+  meta: {
+    total: number
+  }
+}
+
+export type EvaluationCampaignTrendStatus =
+  | 'comparable'
+  | 'benchmark_migration'
+  | 'no_baseline'
+
+export interface EvaluationCampaignTrendSuiteVersion {
+  source: string
+  suite_id: string
+  current_suite_version?: string | null
+  baseline_suite_version?: string | null
+  comparable: boolean
+}
+
+export interface EvaluationCampaignTrendBasis {
+  target_agent_id?: string | null
+  current_target_agent_version_id?: string | null
+  baseline_target_agent_version_id?: string | null
+  suite_versions: EvaluationCampaignTrendSuiteVersion[]
+}
+
+export interface EvaluationCampaignTrend {
+  campaign_id: string
+  current_version: string
+  baseline_campaign_id: string | null
+  baseline_version: string | null
+  status: EvaluationCampaignTrendStatus
+  comparison_basis: EvaluationCampaignTrendBasis
+  metric_deltas: {
+    governed_resolution_rate?: number
+    artifact_sufficiency_rate?: number
+    deterministic_gate_pass_rate?: number
+  }
+}
+
+export interface EvaluationCampaignSummary {
+  campaign_id: string
+  version: string
+  target_agent_id: string
+  target_agent_version_id: string | null
+  readiness_status: EvaluationCampaignReadinessStatus
+  blocking_reasons: string[]
+  governed_resolution_rate: number
+  artifact_sufficiency_rate: number
+  deterministic_gate_pass_rate: number
+  suite_runs: EvaluationCampaignSuiteRun[]
+  capability_coverage: EvaluationCampaignCapabilityCoverage[]
+  coding_agent_diagnostics?: EvaluationCampaignDiagnostics | null
+  artifact_dir: string
+}
+
+export interface EvaluationCampaignsResponse {
+  data: EvaluationCampaignSummary[]
+  meta: {
+    total: number
+  }
+}
+
 export interface ContractBundle {
   agent_yaml: string
   policy_yaml: string

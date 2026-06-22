@@ -11,8 +11,9 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 3. `feasibility-analysis.md` — feasibility, audience, stack options, and risks.
 4. `developer-guide.md` — developer workflow for building, configuring, deploying, and managing governed Agents.
 5. `evaluation-system.md` — V1 Agent evaluation metrics, deterministic gates, judge diagnostics, suites, thresholds, curation, and artifacts.
-6. `frontend-design-principles.md` — mandatory Dashboard and Unified Chat frontend IA, interaction, component, and review principles.
-7. `development-progress.md` — current codebase status; useful, but always verify against the code.
+6. `evaluation-campaign-system.md` — coding-agent-led Campaign workflow, Active Agent readiness, Evaluation Lab page, performance diagnostics, and repeatable artifact model.
+7. `frontend-design-principles.md` — mandatory Dashboard and Unified Chat frontend IA, interaction, component, and review principles.
+8. `development-progress.md` — current codebase status; useful, but always verify against the code.
 
 
 
@@ -46,6 +47,7 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | Document | Purpose |
 | --- | --- |
 | `evaluation-system.md` | Governed Agent evaluation model, including Governed Resolution Rate, deterministic gates, judge-led diagnostic scoring, release thresholds, and production curation |
+| `evaluation-campaign-system.md` | Repeatable Evaluation Campaign workflow for the Active Published Agent Version, including sample production, coding-agent diagnostics, private Evaluation Lab page data, and version-aware trends |
 
 ## Implementation Specs
 

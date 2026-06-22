@@ -10,26 +10,32 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.contracts import AgentManifest, ContextAdmission, ConversationRecord, ConversationTurn
+from proof_agent.contracts import (
+    AgentManifest,
+    ContextAdmission,
+    ConversationRecord,
+    ConversationTurn,
+    RunPurpose,
+)
 from proof_agent.contracts.conversation import (
     context_admission_payload,
     conversation_record_payload,
 )
 from proof_agent.control.conversation import admit_conversation_context
 from proof_agent.delivery.published_agents import (
+    PublishedAgent,
     PublishedAgentRegistry,
     published_agent_directory_payload,
+)
+from proof_agent.delivery.run_execution_service import (
+    RunExecutionDependencies,
+    execute_published_agent_run,
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.approval_resume import (
-    LangGraphApprovalResumeContext,
-    LangGraphApprovalResumeRegistry,
-)
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
+from proof_agent.runtime.approval_resume import LangGraphApprovalResumeRegistry
 
 
 router = APIRouter(tags=["execution"])
@@ -98,14 +104,9 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
 
     _, detail, manifest = _execute_published_agent_run(
         app_request=app_request,
-        manifest_path=published_agent.manifest_path,
+        published_agent=published_agent,
         question=request.question,
-        agent_id=published_agent.agent_id,
-        agent_version_id=published_agent.agent_version_id,
-        draft_id=published_agent.source_draft_id,
-        resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
         allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
-        published_agent_runtime_facts=published_agent.runtime_facts,
     )
 
     return _run_response(
@@ -117,9 +118,7 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
 
 
 @router.post("/chat/conversations")
-def create_conversation(
-    request: ConversationCreateRequest, app_request: Request
-) -> dict[str, Any]:
+def create_conversation(request: ConversationCreateRequest, app_request: Request) -> dict[str, Any]:
     """Create an assisted chat conversation for a Published Agent."""
 
     registry = _get_published_agents(app_request)
@@ -201,15 +200,10 @@ def create_conversation_run(
     context_admission = admit_conversation_context(conversation)
     result, detail, manifest = _execute_published_agent_run(
         app_request=app_request,
-        manifest_path=published_agent.manifest_path,
+        published_agent=published_agent,
         question=request.question,
         conversation_context=context_admission,
-        agent_id=published_agent.agent_id,
-        agent_version_id=published_agent.agent_version_id,
-        draft_id=published_agent.source_draft_id,
-        resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
         allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
-        published_agent_runtime_facts=published_agent.runtime_facts,
     )
     governance_details = _governance_projection(
         detail,
@@ -251,75 +245,34 @@ def create_conversation_run(
 def _execute_published_agent_run(
     *,
     app_request: Request,
-    manifest_path: Path,
+    published_agent: PublishedAgent,
     question: str,
     conversation_context: ContextAdmission | None = None,
-    agent_id: str | None = None,
-    agent_version_id: str | None = None,
-    draft_id: str | None = None,
-    resolved_knowledge_bindings: Any | None = None,
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     allow_untrusted_web_supplement: bool = False,
-    published_agent_runtime_facts: Any | None = None,
 ) -> tuple[Any, Any, AgentManifest]:
-    store = _get_store(app_request)
-    run_id = f"run_{uuid4().hex[:8]}"
-    resume_registry = _get_approval_resume_registry(app_request)
-    checkpointer = resume_registry.checkpointer_for(run_id)
     try:
-        manifest = load_agent_manifest(manifest_path)
-        result = run_with_langgraph(
-            manifest_path,
+        execution = execute_published_agent_run(
+            dependencies=RunExecutionDependencies(
+                store=_get_store(app_request),
+                runs_dir=_get_runs_dir(app_request),
+                configuration_store=_get_configuration_store(app_request),
+                approval_resume_registry=_get_approval_resume_registry(app_request),
+            ),
+            published_agent=published_agent,
             question=question,
-            runs_dir=_get_runs_dir(app_request),
             conversation_context=conversation_context,
-            run_id=run_id,
-            store=store,
-            checkpointer=checkpointer,
-            manifest=manifest,
-            resolved_knowledge_bindings=resolved_knowledge_bindings,
-            configuration_store=_get_configuration_store(app_request),
-            agent_id=agent_id,
-            agent_version_id=agent_version_id,
-            draft_id=draft_id,
+            run_purpose=run_purpose,
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
-            published_agent_runtime_facts=published_agent_runtime_facts,
         )
     except ProofAgentError as exc:
         raise HTTPException(
             status_code=400,
             detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
         ) from exc
-
-    detail = store.get_run_detail(run_id)
-    if detail is None:
-        raise HTTPException(status_code=500, detail="Run artifacts were not persisted.")
-    if detail.pending_approvals:
-        execution_input = result.workflow_template_execution_input
-        if execution_input is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Run is waiting for approval without Workflow Template Execution Input.",
-            )
-        resume_registry.put(
-            LangGraphApprovalResumeContext(
-                agent_yaml=manifest_path,
-                runs_dir=store.history_dir / run_id,
-                run_id=run_id,
-                question=question,
-                checkpointer=checkpointer,
-                manifest=manifest,
-                conversation_context=conversation_context,
-                resolved_knowledge_bindings=resolved_knowledge_bindings,
-                configuration_store=_get_configuration_store(app_request),
-                run_purpose=detail.run_purpose,
-                agent_id=agent_id,
-                agent_version_id=agent_version_id,
-                draft_id=draft_id,
-                allow_untrusted_web_supplement=allow_untrusted_web_supplement,
-                workflow_template_execution_input=execution_input,
-            )
-        )
-    return result, detail, manifest
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return execution.result, execution.detail, execution.manifest
 
 
 def _run_response(
@@ -385,7 +338,11 @@ def _governance_projection(
 
 def _final_output_from_trace(detail: Any) -> str:
     final = next(
-        (event for event in reversed(detail.trace_events) if event.get("event_type") == "final_output"),
+        (
+            event
+            for event in reversed(detail.trace_events)
+            if event.get("event_type") == "final_output"
+        ),
         None,
     )
     if final is None:
