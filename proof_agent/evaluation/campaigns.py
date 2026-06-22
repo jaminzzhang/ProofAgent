@@ -27,6 +27,12 @@ from proof_agent.evaluation.diagnostics import (
     write_coding_agent_diagnostic_artifacts,
 )
 from proof_agent.evaluation.errors import EvaluationInputError
+from proof_agent.evaluation.exploratory_probes import (
+    ExploratoryProbeRunRequest,
+    ExploratoryProbeRunner,
+    run_exploratory_probes,
+    write_exploratory_probe_artifacts,
+)
 from proof_agent.evaluation.sample_production import (
     EvaluationSampleRunner,
     produce_evaluation_subject_manifest_from_samples,
@@ -42,11 +48,17 @@ def run_evaluation_campaign(
     run_store: RunStore | None = None,
     sample_runner: EvaluationSampleRunner | None = None,
     diagnostic_reviewer: CodingAgentDiagnosticReviewer | None = None,
+    exploratory_probe_runner: ExploratoryProbeRunner | None = None,
 ) -> EvaluationCampaignSummary:
     """Run a manifest-driven Evaluation Campaign over existing formal subjects."""
 
     manifest_path = Path(campaign_path)
     raw = _load_campaign_yaml(manifest_path)
+    exploratory_enabled = _exploratory_probes_enabled(raw)
+    if exploratory_enabled and exploratory_probe_runner is None:
+        raise EvaluationInputError(
+            "Evaluation Campaign exploratory_probes enabled requires an exploratory probe runner."
+        )
     campaign_id = _required_string(raw, "campaign_id")
     version = _required_string(raw, "version")
     target = _required_mapping(raw, "target")
@@ -145,6 +157,22 @@ def run_evaluation_campaign(
             input_bundle=input_bundle,
             diagnostics=diagnostics,
         )
+    if exploratory_enabled and exploratory_probe_runner is not None:
+        exploratory_results = run_exploratory_probes(
+            runner=exploratory_probe_runner,
+            request=ExploratoryProbeRunRequest(
+                campaign_id=campaign_id,
+                version=version,
+                target_agent_id=target_agent_id,
+                target_agent_version_id=target_agent_version_id,
+                max_cases=_exploratory_probe_max_cases(raw),
+                surfaces=tuple(_mapping_items(raw.get("surfaces"))),
+            ),
+        )
+        write_exploratory_probe_artifacts(
+            artifact_dir=artifact_dir,
+            results=exploratory_results,
+        )
     _write_campaign_artifacts(summary, analyses=analyses)
     return summary
 
@@ -176,6 +204,35 @@ def _formal_suite_specs(raw: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]
             )
         specs.append(spec)
     return tuple(specs)
+
+
+def _exploratory_probes_enabled(raw: Mapping[str, Any]) -> bool:
+    diagnostics = raw.get("diagnostics")
+    if not isinstance(diagnostics, Mapping):
+        return False
+    exploratory = diagnostics.get("exploratory_probes")
+    return isinstance(exploratory, Mapping) and exploratory.get("enabled") is True
+
+
+def _exploratory_probe_max_cases(raw: Mapping[str, Any]) -> int:
+    diagnostics = _optional_mapping(raw.get("diagnostics"))
+    exploratory = _optional_mapping(diagnostics.get("exploratory_probes"))
+    raw_max_cases = exploratory.get("max_cases")
+    if isinstance(raw_max_cases, int) and raw_max_cases > 0:
+        return raw_max_cases
+    return 10
+
+
+def _optional_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
+def _mapping_items(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list | tuple):
+        return ()
+    return tuple(dict(item) for item in value if isinstance(item, Mapping))
 
 
 def _capability_coverage(

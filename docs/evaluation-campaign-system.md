@@ -365,7 +365,7 @@ These routes are read-only. Any run production happens through the Campaign CLI 
 
 ## Implementation Slices
 
-Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Slice 8 adds an artifact-level Curated Production Evaluation Sample import and reviewer-gated promotion workflow. Dashboard curation UI and automatic Campaign selection of promoted production samples remain future slices.
+Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Slice 8 adds an artifact-level Curated Production Evaluation Sample import and reviewer-gated promotion workflow. Slice 9 adds an injected Exploratory Probe runner and `exploratory_probe_results.jsonl` diagnostic artifact. Dashboard curation UI and automatic Campaign selection of promoted production samples remain future slices.
 
 Slice 1: Campaign manifest and artifact model
 
@@ -429,7 +429,14 @@ Slice 8: Curated production sample import and promotion
 - Require explicit Redaction Reviewer confirmation before writing production sample candidate artifacts.
 - Promote candidates into Evaluation Suite and Subject Manifest artifacts only after Domain Evaluation Reviewer and Harness Evaluation Reviewer confirmation.
 
-Slice 9: Curated production sample Campaign selection and UI
+Slice 9: Exploratory probe runner and result artifact
+
+- Run Exploratory Evaluation Probes through an injected coding-agent runner when `diagnostics.exploratory_probes.enabled` is true.
+- Write `diagnostics/exploratory_probe_results.jsonl`.
+- Keep probe findings marked `exploratory` and excluded from formal Governed Resolution Rate and Capability Coverage.
+- Reject enabled probe configuration when no probe runner is supplied.
+
+Slice 10: Curated production sample Campaign selection and UI
 
 - Add Dashboard curation review UI.
 - Add Campaign selection for promoted curated production samples.
