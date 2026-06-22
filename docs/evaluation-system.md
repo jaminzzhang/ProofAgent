@@ -450,5 +450,5 @@ When suite, gate profile, subject manifest, or rubric versions change, trend rep
 
 - Full scenario continuation linkage gates.
 - Audited Evaluation Judge and claim-level support diagnostics.
-- Production curation workflow with Domain Evaluation Reviewer and Harness Evaluation Reviewer confirmation.
+- Automatic Campaign selection of promoted curated production samples.
 - Dashboard UI for evaluation overview, case drilldown, export selection, campaign diagnostics, and curation workflows.
