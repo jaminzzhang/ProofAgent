@@ -21,6 +21,7 @@ import {
   fetchEvaluationCampaign,
   fetchEvaluationCampaignCases,
   fetchEvaluationCampaigns,
+  fetchEvaluationCampaignTrends,
   fetchKnowledgeIngestionJobs,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSources,
@@ -102,10 +103,25 @@ test('evaluation campaign client methods use dashboard campaign endpoints', asyn
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      campaign_id: 'active_agent_probe',
+      current_version: '2026-06-21',
+      baseline_campaign_id: 'previous_probe',
+      baseline_version: '2026-06-20',
+      status: 'comparable',
+      comparison_basis: {
+        suite_versions: [],
+      },
+      metric_deltas: {},
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
 
   await fetchEvaluationCampaigns()
   await fetchEvaluationCampaign('active_agent_probe')
   await fetchEvaluationCampaignCases('active_agent_probe')
+  await fetchEvaluationCampaignTrends('active_agent_probe')
 
   expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/evaluation/campaigns', undefined)
   expect(fetchMock).toHaveBeenNthCalledWith(
@@ -116,6 +132,11 @@ test('evaluation campaign client methods use dashboard campaign endpoints', asyn
   expect(fetchMock).toHaveBeenNthCalledWith(
     3,
     '/api/evaluation/campaigns/active_agent_probe/cases',
+    undefined,
+  )
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    4,
+    '/api/evaluation/campaigns/active_agent_probe/trends',
     undefined,
   )
 })

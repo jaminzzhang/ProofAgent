@@ -43,6 +43,14 @@ class EvaluationCampaignStore:
             )
         return tuple(_read_jsonl_mappings(cases_path))
 
+    def get_campaign_trends(self, campaign_id: str) -> dict[str, Any]:
+        trends_path = self._page_data_dir(campaign_id) / "evaluation_lab_trends.json"
+        if not trends_path.is_file():
+            raise EvaluationInputError(
+                f"Evaluation Campaign trend artifacts not found: {campaign_id}"
+            )
+        return _read_json_mapping(trends_path)
+
     def _load_campaign(self, campaign_dir: Path) -> dict[str, Any] | None:
         page_data_path = campaign_dir / "page_data" / "evaluation_lab_summary.json"
         if not page_data_path.is_file():

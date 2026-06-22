@@ -365,7 +365,7 @@ These routes are read-only. Any run production happens through the Campaign CLI 
 
 ## Implementation Slices
 
-Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Version-aware trends and curated production samples remain future slices.
+Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Curated production samples remain a future slice.
 
 Slice 1: Campaign manifest and artifact model
 
@@ -414,9 +414,15 @@ Slice 7A: Customer Run API sample adapter
 - Write `customer_response.txt` safe projections for Subject Manifest export.
 - Support per-case `metadata.customer_id` or `metadata.customer_ref` for customer-specific samples.
 
-Slice 7B: Trends and curated production samples
+Slice 7B: Version-aware trends
 
-- Add version-aware comparison.
+- Add version-aware comparison over prior Campaigns for the same target Agent.
+- Mark suite version changes as benchmark migration instead of metric regression or improvement.
+- Expose `GET /api/evaluation/campaigns/{campaign_id}/trends`.
+- Render the comparable Governed Resolution trend on the private Evaluation Lab first viewport.
+
+Slice 8: Curated production samples
+
 - Add production sample import and promotion workflow.
 - Keep unreviewed production samples diagnostic-only.
 

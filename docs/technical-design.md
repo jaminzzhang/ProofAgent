@@ -1192,7 +1192,7 @@ Dashboard routes:
 | `GET /api/evaluation/campaigns` | read-only Evaluation Campaign list for private Evaluation Lab |
 | `GET /api/evaluation/campaigns/{campaign_id}` | read-only Evaluation Campaign summary and readiness projection |
 | `GET /api/evaluation/campaigns/{campaign_id}/cases` | read-only Evaluation Campaign case and diagnostic projection |
-| `GET /api/evaluation/campaigns/{campaign_id}/trends` | future read-only version-aware campaign trend projection |
+| `GET /api/evaluation/campaigns/{campaign_id}/trends` | read-only version-aware campaign trend projection |
 | `GET /api/approvals` | global pending approval queue projection sorted by newest request first |
 | `POST /api/runs/{run_id}/approvals/{approval_id}/approve` | append approval-granted decision to the original run trace; requires Operator Identity Context with `approval.resolve` |
 | `POST /api/runs/{run_id}/approvals/{approval_id}/deny` | append approval-denied decision to the original run trace; requires Operator Identity Context with `approval.resolve` |

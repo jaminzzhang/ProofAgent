@@ -49,6 +49,23 @@ def test_dashboard_api_reads_evaluation_campaign_case_rows(tmp_path: Path) -> No
     assert response.json()["meta"] == {"total": 1}
 
 
+def test_dashboard_api_reads_evaluation_campaign_trends(tmp_path: Path) -> None:
+    campaigns_dir = tmp_path / "runs" / "evaluation_campaigns"
+    _write_campaign_page_data(campaigns_dir)
+    app = create_app(
+        history_dir=tmp_path / "runs" / "history",
+        evaluation_campaigns_dir=campaigns_dir,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/evaluation/campaigns/active_agent_probe/trends")
+
+    assert response.status_code == 200
+    assert response.json()["campaign_id"] == "active_agent_probe"
+    assert response.json()["status"] == "comparable"
+    assert response.json()["metric_deltas"]["governed_resolution_rate"] == 0.25
+
+
 def test_dashboard_api_returns_404_for_missing_evaluation_campaign(tmp_path: Path) -> None:
     app = create_app(
         history_dir=tmp_path / "runs" / "history",
@@ -130,6 +147,30 @@ def _write_campaign_page_data(campaigns_dir: Path) -> None:
                 "gate_failures": [],
                 "diagnostic_findings": [],
                 "diagnostic_blocker_candidate": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (page_data_dir / "evaluation_lab_trends.json").write_text(
+        json.dumps(
+            {
+                "campaign_id": "active_agent_probe",
+                "current_version": "2026-06-21",
+                "baseline_campaign_id": "previous_probe",
+                "baseline_version": "2026-06-20",
+                "status": "comparable",
+                "comparison_basis": {
+                    "target_agent_id": "insurance_customer_service",
+                    "current_target_agent_version_id": "published_v1",
+                    "baseline_target_agent_version_id": "published_v0",
+                    "suite_versions": [],
+                },
+                "metric_deltas": {
+                    "governed_resolution_rate": 0.25,
+                    "artifact_sufficiency_rate": 0.0,
+                    "deterministic_gate_pass_rate": 0.0,
+                },
             }
         )
         + "\n",

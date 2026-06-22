@@ -16,11 +16,13 @@ import {
   fetchEvaluationCampaign,
   fetchEvaluationCampaignCases,
   fetchEvaluationCampaigns,
+  fetchEvaluationCampaignTrends,
 } from '../api/client'
 import type {
   EvaluationCampaignCaseRow,
   EvaluationCampaignCapabilityCoverage,
   EvaluationCampaignSummary,
+  EvaluationCampaignTrend,
 } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
@@ -30,6 +32,7 @@ export function EvaluationLabPage() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null)
   const [summary, setSummary] = useState<EvaluationCampaignSummary | null>(null)
   const [caseRows, setCaseRows] = useState<EvaluationCampaignCaseRow[]>([])
+  const [trend, setTrend] = useState<EvaluationCampaignTrend | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -44,6 +47,7 @@ export function EvaluationLabPage() {
         if (response.data.length === 0) {
           setSummary(null)
           setCaseRows([])
+          setTrend(null)
           setLoading(false)
         }
       })
@@ -64,11 +68,13 @@ export function EvaluationLabPage() {
     Promise.all([
       fetchEvaluationCampaign(selectedCampaignId),
       fetchEvaluationCampaignCases(selectedCampaignId),
+      fetchEvaluationCampaignTrends(selectedCampaignId).catch(() => null),
     ])
-      .then(([campaign, cases]) => {
+      .then(([campaign, cases, campaignTrend]) => {
         if (cancelled) return
         setSummary(campaign)
         setCaseRows(cases.data)
+        setTrend(campaignTrend)
         setError(null)
         setLoading(false)
       })
@@ -166,6 +172,8 @@ export function EvaluationLabPage() {
             <StatCard
               label="Governed Resolution"
               value={formatRate(summary.governed_resolution_rate)}
+              subtitle={trendSubtitle(trend)}
+              delta={rateDeltaPercent(trend?.metric_deltas.governed_resolution_rate)}
               icon={ShieldCheck}
               tone={summary.governed_resolution_rate >= 0.95 ? 'success' : 'danger'}
             />
@@ -360,6 +368,19 @@ function formatRate(value: number): string {
 
 function formatOptionalRate(value: number | null): string {
   return value === null ? 'n/a' : formatRate(value)
+}
+
+function rateDeltaPercent(value: number | undefined): number | undefined {
+  return typeof value === 'number' ? Math.round(value * 100) : undefined
+}
+
+function trendSubtitle(trend: EvaluationCampaignTrend | null): string | undefined {
+  if (!trend) return undefined
+  if (trend.status === 'comparable' && trend.baseline_campaign_id) {
+    return `Trend vs ${trend.baseline_campaign_id}`
+  }
+  if (trend.status === 'benchmark_migration') return 'Benchmark migration'
+  return undefined
 }
 
 function humanizeCapability(value: string): string {

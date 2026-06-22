@@ -437,6 +437,40 @@ export interface EvaluationCampaignCasesResponse {
   }
 }
 
+export type EvaluationCampaignTrendStatus =
+  | 'comparable'
+  | 'benchmark_migration'
+  | 'no_baseline'
+
+export interface EvaluationCampaignTrendSuiteVersion {
+  source: string
+  suite_id: string
+  current_suite_version?: string | null
+  baseline_suite_version?: string | null
+  comparable: boolean
+}
+
+export interface EvaluationCampaignTrendBasis {
+  target_agent_id?: string | null
+  current_target_agent_version_id?: string | null
+  baseline_target_agent_version_id?: string | null
+  suite_versions: EvaluationCampaignTrendSuiteVersion[]
+}
+
+export interface EvaluationCampaignTrend {
+  campaign_id: string
+  current_version: string
+  baseline_campaign_id: string | null
+  baseline_version: string | null
+  status: EvaluationCampaignTrendStatus
+  comparison_basis: EvaluationCampaignTrendBasis
+  metric_deltas: {
+    governed_resolution_rate?: number
+    artifact_sufficiency_rate?: number
+    deterministic_gate_pass_rate?: number
+  }
+}
+
 export interface EvaluationCampaignSummary {
   campaign_id: string
   version: string

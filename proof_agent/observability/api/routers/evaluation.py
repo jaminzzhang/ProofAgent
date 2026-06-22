@@ -94,6 +94,20 @@ def list_evaluation_campaign_cases(
     }
 
 
+@router.get("/evaluation/campaigns/{campaign_id}/trends")
+def get_evaluation_campaign_trends(
+    campaign_id: str,
+    store: EvaluationCampaignStore = Depends(get_evaluation_campaign_store),
+) -> dict[str, Any]:
+    """Read one Evaluation Campaign version-aware trend projection."""
+
+    try:
+        trends = store.get_campaign_trends(campaign_id)
+    except EvaluationInputError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return cast(dict[str, Any], _jsonable(trends))
+
+
 @router.get("/evaluation/analyses/{analysis_id}/cases")
 def list_evaluation_case_results(
     analysis_id: str,

@@ -14,6 +14,7 @@ import type {
   EvaluationCampaignCasesResponse,
   EvaluationCampaignsResponse,
   EvaluationCampaignSummary,
+  EvaluationCampaignTrend,
   FoundationKnowledgeSourceValidation,
   HandoffsResponse,
   HealthResponse,
@@ -136,6 +137,14 @@ export function fetchEvaluationCampaignCases(
 ): Promise<EvaluationCampaignCasesResponse> {
   return fetchJson<EvaluationCampaignCasesResponse>(
     `${BASE}/evaluation/campaigns/${campaignId}/cases`,
+  )
+}
+
+export function fetchEvaluationCampaignTrends(
+  campaignId: string,
+): Promise<EvaluationCampaignTrend> {
+  return fetchJson<EvaluationCampaignTrend>(
+    `${BASE}/evaluation/campaigns/${campaignId}/trends`,
   )
 }
 

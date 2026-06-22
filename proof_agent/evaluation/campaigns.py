@@ -249,12 +249,17 @@ def _write_campaign_artifacts(
     page_data_dir = artifact_dir / "page_data"
     page_data_dir.mkdir(parents=True, exist_ok=True)
     summary_data = _summary_json(summary)
+    trend_data = _trend_json(summary_data, root_dir=artifact_dir.parent)
     (artifact_dir / "campaign_summary.json").write_text(
         json.dumps(summary_data, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     (page_data_dir / "evaluation_lab_summary.json").write_text(
         json.dumps(summary_data, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (page_data_dir / "evaluation_lab_trends.json").write_text(
+        json.dumps(trend_data, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     (page_data_dir / "evaluation_lab_cases.jsonl").write_text(
@@ -379,6 +384,140 @@ def _summary_json(summary: EvaluationCampaignSummary) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise TypeError("Evaluation Campaign summary must serialize to a mapping.")
     return data
+
+
+def _trend_json(summary_data: dict[str, Any], *, root_dir: Path) -> dict[str, Any]:
+    baseline = _latest_trend_baseline(summary_data, root_dir=root_dir)
+    trend: dict[str, Any] = {
+        "campaign_id": summary_data["campaign_id"],
+        "current_version": summary_data["version"],
+        "baseline_campaign_id": None,
+        "baseline_version": None,
+        "status": "no_baseline",
+        "comparison_basis": _comparison_basis(summary_data, baseline),
+        "metric_deltas": {},
+    }
+    if baseline is None:
+        return trend
+
+    trend["baseline_campaign_id"] = baseline.get("campaign_id")
+    trend["baseline_version"] = baseline.get("version")
+    if not _suite_versions_comparable(summary_data, baseline):
+        trend["status"] = "benchmark_migration"
+        return trend
+
+    trend["status"] = "comparable"
+    trend["metric_deltas"] = {
+        "governed_resolution_rate": _metric_delta(
+            summary_data,
+            baseline,
+            "governed_resolution_rate",
+        ),
+        "artifact_sufficiency_rate": _metric_delta(
+            summary_data,
+            baseline,
+            "artifact_sufficiency_rate",
+        ),
+        "deterministic_gate_pass_rate": _metric_delta(
+            summary_data,
+            baseline,
+            "deterministic_gate_pass_rate",
+        ),
+    }
+    return trend
+
+
+def _latest_trend_baseline(
+    summary_data: dict[str, Any],
+    *,
+    root_dir: Path,
+) -> dict[str, Any] | None:
+    if not root_dir.exists():
+        return None
+    candidates: list[dict[str, Any]] = []
+    for campaign_dir in root_dir.iterdir():
+        if not campaign_dir.is_dir() or campaign_dir.name == summary_data["campaign_id"]:
+            continue
+        summary_path = campaign_dir / "page_data" / "evaluation_lab_summary.json"
+        if not summary_path.is_file():
+            continue
+        try:
+            raw = json.loads(summary_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("target_agent_id") != summary_data.get("target_agent_id"):
+            continue
+        candidates.append(raw)
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: (str(item.get("version") or ""), str(item.get("campaign_id") or "")),
+    )[-1]
+
+
+def _comparison_basis(
+    summary_data: dict[str, Any],
+    baseline: dict[str, Any] | None,
+) -> dict[str, Any]:
+    current_suites = _suite_versions(summary_data)
+    baseline_suites = _suite_versions(baseline) if baseline is not None else {}
+    suite_versions: list[dict[str, Any]] = []
+    for key in sorted(set(current_suites) | set(baseline_suites)):
+        current = current_suites.get(key)
+        previous = baseline_suites.get(key)
+        source, suite_id = key
+        suite_versions.append(
+            {
+                "source": source,
+                "suite_id": suite_id,
+                "current_suite_version": current,
+                "baseline_suite_version": previous,
+                "comparable": current is not None and current == previous,
+            }
+        )
+    return {
+        "target_agent_id": summary_data.get("target_agent_id"),
+        "current_target_agent_version_id": summary_data.get("target_agent_version_id"),
+        "baseline_target_agent_version_id": (
+            baseline.get("target_agent_version_id") if baseline is not None else None
+        ),
+        "suite_versions": suite_versions,
+    }
+
+
+def _suite_versions_comparable(
+    summary_data: dict[str, Any],
+    baseline: dict[str, Any],
+) -> bool:
+    return _suite_versions(summary_data) == _suite_versions(baseline)
+
+
+def _suite_versions(summary_data: dict[str, Any] | None) -> dict[tuple[str, str], str]:
+    if summary_data is None:
+        return {}
+    suites: dict[tuple[str, str], str] = {}
+    for item in summary_data.get("suite_runs") or []:
+        if not isinstance(item, Mapping):
+            continue
+        source = item.get("source")
+        suite_id = item.get("suite_id")
+        suite_version = item.get("suite_version")
+        if isinstance(source, str) and isinstance(suite_id, str) and isinstance(suite_version, str):
+            suites[(source, suite_id)] = suite_version
+    return suites
+
+
+def _metric_delta(
+    summary_data: dict[str, Any],
+    baseline: dict[str, Any],
+    key: str,
+) -> float:
+    current = float(summary_data.get(key) or 0.0)
+    previous = float(baseline.get(key) or 0.0)
+    return round(current - previous, 6)
 
 
 def _campaign_report(summary: EvaluationCampaignSummary) -> str:

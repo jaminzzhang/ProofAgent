@@ -7,6 +7,7 @@ import {
   fetchEvaluationCampaign,
   fetchEvaluationCampaignCases,
   fetchEvaluationCampaigns,
+  fetchEvaluationCampaignTrends,
 } from '../../api/client'
 import type { EvaluationCampaignSummary } from '../../api/types'
 import { AppRoutes } from '../../router'
@@ -15,6 +16,7 @@ vi.mock('../../api/client', () => ({
   fetchEvaluationCampaigns: vi.fn(),
   fetchEvaluationCampaign: vi.fn(),
   fetchEvaluationCampaignCases: vi.fn(),
+  fetchEvaluationCampaignTrends: vi.fn(),
 }))
 
 describe('EvaluationLabPage', () => {
@@ -49,6 +51,24 @@ describe('EvaluationLabPage', () => {
       ],
       meta: { total: 1 },
     })
+    vi.mocked(fetchEvaluationCampaignTrends).mockResolvedValue({
+      campaign_id: 'active_agent_probe',
+      current_version: '2026-06-21',
+      baseline_campaign_id: 'previous_probe',
+      baseline_version: '2026-06-20',
+      status: 'comparable',
+      comparison_basis: {
+        target_agent_id: 'insurance_customer_service',
+        current_target_agent_version_id: 'published_v1',
+        baseline_target_agent_version_id: 'published_v0',
+        suite_versions: [],
+      },
+      metric_deltas: {
+        governed_resolution_rate: 0.5,
+        artifact_sufficiency_rate: 0,
+        deterministic_gate_pass_rate: 0,
+      },
+    })
 
     render(
       <MemoryRouter initialEntries={['/evaluation-lab']}>
@@ -59,6 +79,8 @@ describe('EvaluationLabPage', () => {
     expect(await screen.findByRole('heading', { name: 'Evaluation Lab' })).toBeInTheDocument()
     expect(await screen.findByText('active_agent_probe')).toBeInTheDocument()
     expect(screen.getByText('Ready')).toBeInTheDocument()
+    expect(screen.getByText('Trend vs previous_probe')).toBeInTheDocument()
+    expect(screen.getByText('+50%')).toBeInTheDocument()
     expect(screen.getByText('Intelligent Resolution')).toBeInTheDocument()
     expect(screen.getByText('82%')).toBeInTheDocument()
     expect(screen.getByText('0 blocker candidates')).toBeInTheDocument()
