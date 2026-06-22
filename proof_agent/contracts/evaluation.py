@@ -233,6 +233,7 @@ class EvaluationRunRef(FrozenModel):
     source: str | None = None
     conversation_id: str | None = None
     turn_id: str | None = None
+    continuation_group_id: str | None = None
 
 
 class EvaluationArtifactRef(FrozenModel):

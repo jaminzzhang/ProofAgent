@@ -309,7 +309,8 @@ Node Results explain failures and support repair ownership. They do not replace 
 
 ## Scenarios
 
-V1 is scenario-aware but does not fully implement all continuation linkage gates.
+V1 is scenario-aware and includes deterministic, artifact-backed linkage gates for
+conversation and continuation scenarios.
 
 V1 supports:
 
@@ -318,6 +319,10 @@ V1 supports:
 - per-step case analysis
 - ordered outcome checks
 - deterministic `same_conversation` linkage checks via `run_ref.conversation_id`
+- deterministic `same_continuation_group` linkage checks via `run_ref.continuation_group_id`
+  and distinct `run_ref.turn_id` values
+- no-bypass continuation proof through follow-up step `context_admission` trace events
+  whose `included_turn_ids` include the prior step turn
 - approval event reference checks through per-step `approval_event_ids`
 
 Example:
@@ -332,13 +337,6 @@ scenarios:
           - evt_approval_1
 ```
 - scenario report grouping
-
-Deferred:
-
-- same-conversation proof
-- continuation group proof
-- explicit approval decision references
-- full no-bypass scenario linkage gates
 
 ## Judge Diagnostics
 
@@ -448,7 +446,6 @@ When suite, gate profile, subject manifest, or rubric versions change, trend rep
 
 ## Future Work
 
-- Full scenario continuation linkage gates.
 - Audited Evaluation Judge and claim-level support diagnostics.
 - Automatic Campaign selection of promoted curated production samples.
 - Dashboard UI for evaluation overview, case drilldown, export selection, campaign diagnostics, and curation workflows.
