@@ -22,13 +22,20 @@ from proof_agent.contracts import (
 )
 from proof_agent.evaluation.analyzer import analyze_evaluation
 from proof_agent.evaluation.errors import EvaluationInputError
+from proof_agent.evaluation.sample_production import (
+    EvaluationSampleRunner,
+    produce_evaluation_subject_manifest_from_samples,
+)
 from proof_agent.evaluation.suites import load_evaluation_suite
+from proof_agent.observability.storage.run_store import RunStore
 
 
 def run_evaluation_campaign(
     *,
     campaign_path: Path | str,
     output_dir: Path | str | None = None,
+    run_store: RunStore | None = None,
+    sample_runner: EvaluationSampleRunner | None = None,
 ) -> EvaluationCampaignSummary:
     """Run a manifest-driven Evaluation Campaign over existing formal subjects."""
 
@@ -47,9 +54,31 @@ def run_evaluation_campaign(
     analyses: list[tuple[str, EvaluationSuite, EvaluationAnalysisSummary]] = []
     for spec in suite_specs:
         suite_path = _resolve_path(spec["suite_ref"], base_dir=manifest_path.parent)
-        subjects_path = _resolve_path(spec["subjects_ref"], base_dir=manifest_path.parent)
         source = str(spec.get("source", "formal"))
         suite = load_evaluation_suite(suite_path)
+        if spec.get("produce_samples") is True:
+            if run_store is None or sample_runner is None:
+                raise EvaluationInputError(
+                    "Evaluation Campaign sample production requires run_store and sample_runner."
+                )
+            subjects_path = artifact_dir / str(
+                spec.get("subjects_output_ref") or "subject_manifest.yaml"
+            )
+            produce_evaluation_subject_manifest_from_samples(
+                store=run_store,
+                suite=suite,
+                sample_runner=sample_runner,
+                output_path=subjects_path,
+                manifest_id=str(
+                    spec.get("subject_manifest_id")
+                    or f"{campaign_id}_{suite.suite_id}_subjects"
+                ),
+                version=version,
+                target_agent_id=target_agent_id,
+                target_agent_version_id=target_agent_version_id,
+            )
+        else:
+            subjects_path = _resolve_path(spec["subjects_ref"], base_dir=manifest_path.parent)
         analysis = analyze_evaluation(
             suite_path=suite_path,
             subjects_path=subjects_path,
@@ -119,9 +148,14 @@ def _formal_suite_specs(raw: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]
     for spec in formal:
         if not isinstance(spec, Mapping):
             raise EvaluationInputError("Evaluation Campaign formal suite entries must be mappings.")
-        if spec.get("suite_ref") is None or spec.get("subjects_ref") is None:
+        if spec.get("suite_ref") is None:
             raise EvaluationInputError(
-                "Evaluation Campaign formal suite entries require suite_ref and subjects_ref."
+                "Evaluation Campaign formal suite entries require suite_ref."
+            )
+        if spec.get("produce_samples") is not True and spec.get("subjects_ref") is None:
+            raise EvaluationInputError(
+                "Evaluation Campaign formal suite entries require subjects_ref unless "
+                "produce_samples is true."
             )
         specs.append(spec)
     return tuple(specs)

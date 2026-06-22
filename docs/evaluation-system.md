@@ -449,7 +449,7 @@ When suite, gate profile, subject manifest, or rubric versions change, trend rep
 ## Future Work
 
 - Evaluation Run Producer using existing execution surfaces.
-- Fresh sample production inside Coding-Agent-Led Evaluation Campaigns and private Evaluation Lab route.
+- Concrete Run Execution API / Customer Run API sample adapters, Coding Agent Evaluation Assist, case drilldowns, and trends inside Coding-Agent-Led Evaluation Campaigns.
 - Full scenario continuation linkage gates.
 - Audited Evaluation Judge and claim-level support diagnostics.
 - Production curation workflow with Domain Evaluation Reviewer and Harness Evaluation Reviewer confirmation.

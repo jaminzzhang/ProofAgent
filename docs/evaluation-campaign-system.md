@@ -365,7 +365,7 @@ These routes are read-only. Any run production happens through the Campaign CLI 
 
 ## Implementation Slices
 
-Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Fresh sample production through application-facing surfaces, Coding Agent Evaluation Assist, version-aware trends, and the React Evaluation Lab page remain future slices.
+Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Concrete Run Execution API and Customer Run API sample adapters, Coding Agent Evaluation Assist, case drilldowns, and version-aware trends remain future slices.
 
 Slice 1: Campaign manifest and artifact model
 
@@ -374,25 +374,32 @@ Slice 1: Campaign manifest and artifact model
 - Load Core and Published Agent Evaluation Contract suites.
 - Write `campaign_summary.json` and page data shape from existing Analyzer output.
 
-Slice 2: Sample production and subject export
+Slice 2: Campaign read APIs and Evaluation Lab first viewport
 
-- Produce `evaluation_sample` runs through Run Execution API and Customer Run API adapters.
-- Export subject manifests with hashes.
+- Expose `GET /api/evaluation/campaigns`.
+- Expose `GET /api/evaluation/campaigns/{campaign_id}`.
+- Add hidden `/evaluation-lab` route and first-viewport readiness cockpit.
+- Keep page rendering read-only.
+
+Slice 3: Sample production and subject export
+
+- Produce `evaluation_sample` runs through an injected application-facing sample runner.
+- Export subject manifests with hashes and reject non-`evaluation_sample` runs.
+- Add concrete Run Execution API and Customer Run API adapters.
 - Keep Analyzer unchanged.
 
-Slice 3: Coding Agent Evaluation Assist
+Slice 4: Coding Agent Evaluation Assist
 
 - Define safe diagnostic input bundle.
 - Write structured diagnostic output.
 - Mark diagnostic blocker candidates separately from readiness blockers.
 
-Slice 4: Evaluation Lab page
+Slice 5: Evaluation Lab drilldowns
 
-- Add hidden route.
-- Render first-viewport readiness cockpit and case drilldowns.
+- Add case drilldowns.
 - Verify with fixtures and browser checks.
 
-Slice 5: Trends and curated production samples
+Slice 6: Trends and curated production samples
 
 - Add version-aware comparison.
 - Add production sample import and promotion workflow.
