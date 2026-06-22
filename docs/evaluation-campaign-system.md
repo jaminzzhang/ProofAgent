@@ -365,7 +365,7 @@ These routes are read-only. Any run production happens through the Campaign CLI 
 
 ## Implementation Slices
 
-Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Concrete Run Execution API and Customer Run API sample adapters, Coding Agent Evaluation Assist, case drilldowns, and version-aware trends remain future slices.
+Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Customer Run API sampling, Coding Agent Evaluation Assist, case drilldowns, and version-aware trends remain future slices.
 
 Slice 1: Campaign manifest and artifact model
 
@@ -385,10 +385,16 @@ Slice 3: Sample production and subject export
 
 - Produce `evaluation_sample` runs through an injected application-facing sample runner.
 - Export subject manifests with hashes and reject non-`evaluation_sample` runs.
-- Add concrete Run Execution API and Customer Run API adapters.
 - Keep Analyzer unchanged.
 
-Slice 4: Coding Agent Evaluation Assist
+Slice 4: Run Execution API sample adapter
+
+- Execute operator-facing Published Agent samples through the same Run Execution service used by `/api/chat/runs`.
+- Persist generated runs with `run_purpose: evaluation_sample`.
+- Write `operator_response.txt` safe projections for Subject Manifest export.
+- Reject target Agent Version mismatches.
+
+Slice 5: Coding Agent Evaluation Assist
 
 - Define safe diagnostic input bundle.
 - Write structured diagnostic output.

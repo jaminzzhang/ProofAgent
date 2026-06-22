@@ -302,8 +302,8 @@ Boundary rules:
 - `observability/audit/` records facts and renders receipts; it does not control workflow.
 - `observability/api/` and `observability/storage/` expose read-only observability and must not create a second execution path.
 - Evaluation Analyzer is post-run analysis only. It reads Evaluation Subject Manifest, Trace, Governance Receipt, run metadata, and audience-safe response projection artifacts; it must not start runs, call models, retrieve knowledge, execute tools, invoke PolicyEngine, or import Runtime/Control Workflow/Capability/Bootstrap execution paths.
-- Evaluation Run Producer is a future helper, separate from Analyzer. It may create sample subjects only through existing execution surfaces and must not own gate logic or evaluation semantics.
-- Evaluation Campaign is an orchestration layer for the Active Published Agent Version. It can run declared suites and subject manifests through the post-run Analyzer, write Campaign/page-data artifacts, expose those artifacts through a hidden Evaluation Lab route, and produce hashed Subject Manifests from injected `evaluation_sample` RunStore samples. Future concrete sample adapters may create `evaluation_sample` runs only through application-facing execution surfaces, and future coding-agent diagnostics may read only safe artifacts; Campaign must not create a hidden Harness runtime or let subjective diagnostics override deterministic gates.
+- Evaluation Run Producer is separate from Analyzer. It may create sample subjects only through existing execution surfaces and must not own gate logic or evaluation semantics. The first concrete producer adapter uses the operator Run Execution API service for Active Published Agents; Customer Run API sampling remains a future adapter.
+- Evaluation Campaign is an orchestration layer for the Active Published Agent Version. It can run declared suites and subject manifests through the post-run Analyzer, write Campaign/page-data artifacts, expose those artifacts through a hidden Evaluation Lab route, and produce hashed Subject Manifests from injected or Run Execution API-backed `evaluation_sample` RunStore samples. Future coding-agent diagnostics may read only safe artifacts; Campaign must not create a hidden Harness runtime or let subjective diagnostics override deterministic gates.
 
 ## 7. Agent Contract
 
@@ -1220,7 +1220,7 @@ CLI commands:
 | `proof-agent inspect` | summarize trace or receipt |
 | `proof-agent compare` | Plain RAG vs Harness RAG |
 | `proof-agent evaluate analyze` | planned post-run Evaluation Analyzer over an Evaluation Suite and Evaluation Subject Manifest; does not create Agent runs |
-| `proof-agent evaluate campaign run` | manifest-driven Evaluation Campaign command that invokes the Analyzer over declared suite and subject refs, writes Campaign summary artifacts, and produces private Evaluation Lab page data; module-level Campaign execution also supports injected `evaluation_sample` production, while future CLI adapters add concrete Run Execution API / Customer Run API sampling and coding-agent diagnostics |
+| `proof-agent evaluate campaign run` | manifest-driven Evaluation Campaign command that invokes the Analyzer over declared suite and subject refs, writes Campaign summary artifacts, and produces private Evaluation Lab page data; module-level Campaign execution also supports injected `evaluation_sample` production and a Run Execution API-backed sample adapter, while future adapters add Customer Run API sampling and coding-agent diagnostics |
 | `proof-agent dev` | start the local backend API and Knowledge Worker with `.env` loaded |
 | `proof-agent server` | start only the Dashboard API |
 
