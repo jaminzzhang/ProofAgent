@@ -448,7 +448,6 @@ When suite, gate profile, subject manifest, or rubric versions change, trend rep
 
 ## Future Work
 
-- Customer Run API sample adapter for Coding-Agent-Led Evaluation Campaigns.
 - Version-aware trends inside Coding-Agent-Led Evaluation Campaigns.
 - Full scenario continuation linkage gates.
 - Audited Evaluation Judge and claim-level support diagnostics.

@@ -30,6 +30,7 @@ from proof_agent.contracts import (
     MemoryQuery,
     MemoryRecord,
     MemoryScope,
+    RunPurpose,
     ValidationStatus,
 )
 from proof_agent.contracts.dashboard import RunDetail
@@ -251,6 +252,22 @@ def create_customer_run(
 ) -> dict[str, Any]:
     """Start a governed run and return only the customer-safe response projection."""
 
+    return execute_customer_run_for_conversation(
+        conversation_id=conversation_id,
+        request=request,
+        app_request=app_request,
+    )
+
+
+def execute_customer_run_for_conversation(
+    *,
+    conversation_id: str,
+    request: CustomerRunRequest,
+    app_request: Request,
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION,
+) -> dict[str, Any]:
+    """Execute one Customer Run API turn for an existing customer conversation."""
+
     conversation = _require_customer_conversation(app_request, conversation_id)
     registry = _get_published_agents(app_request)
     published_agent = registry.resolve_customer_facing(conversation.agent_id)
@@ -272,14 +289,10 @@ def create_customer_run(
     if adapter_response is not None:
         _result, detail, _manifest = _execute_published_agent_run(
             app_request=app_request,
-            manifest_path=manifest_path,
+            published_agent=published_agent,
             question=request.question,
-            agent_id=published_agent.agent_id,
-            agent_version_id=published_agent.agent_version_id,
-            draft_id=published_agent.source_draft_id,
-            resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
             allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
-            published_agent_runtime_facts=published_agent.runtime_facts,
+            run_purpose=run_purpose,
         )
         if adapter_response.handoff_reason is not None:
             _append_customer_handoff_event(
@@ -315,7 +328,6 @@ def create_customer_run(
         )
         return payload
 
-
     manifest = _load_manifest(manifest_path)
     case_memory_enabled = _case_memory_enabled(manifest)
     user_memory_enabled = _user_memory_enabled(manifest)
@@ -332,17 +344,13 @@ def create_customer_run(
     )
     result, detail, _ = _execute_published_agent_run(
         app_request=app_request,
-        manifest_path=manifest_path,
+        published_agent=published_agent,
         question=request.question,
         conversation_context=_memory_context(
             ("Case Memory", case_memory_admission),
             ("Customer Persistent User Memory", user_memory_admission),
         ),
-        agent_id=published_agent.agent_id,
-        agent_version_id=published_agent.agent_version_id,
-        draft_id=published_agent.source_draft_id,
-        resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
-        published_agent_runtime_facts=published_agent.runtime_facts,
+        run_purpose=run_purpose,
     )
     if case_memory_enabled:
         _append_memory_admission_event(
@@ -556,13 +564,9 @@ def _memory_context(*admissions: tuple[str, MemoryAdmission]) -> ContextAdmissio
     if not admitted:
         return None
     included_ids = tuple(
-        memory_id
-        for _label, admission in admitted
-        for memory_id in admission.included_memory_ids
+        memory_id for _label, admission in admitted for memory_id in admission.included_memory_ids
     )
-    summary = " | ".join(
-        f"Admitted {label}: {admission.summary}" for label, admission in admitted
-    )
+    summary = " | ".join(f"Admitted {label}: {admission.summary}" for label, admission in admitted)
     return ContextAdmission(
         admitted=True,
         turn_count=len(included_ids),
@@ -577,7 +581,11 @@ def _customer_memory_consent(
     conversation: CustomerConversationRecord,
     request: CustomerRunRequest,
 ) -> bool:
-    return request.memory_consent if request.memory_consent is not None else conversation.memory_consent
+    return (
+        request.memory_consent
+        if request.memory_consent is not None
+        else conversation.memory_consent
+    )
 
 
 def _write_case_memory(
@@ -716,15 +724,17 @@ def _write_memory_candidate(
 
 
 def _case_memory_enabled(manifest: AgentManifest) -> bool:
-    return _memory_provider(manifest) in {"local", "mem0"} and _memory_scope_config(
-        manifest, "case"
-    )["enabled"]
+    return (
+        _memory_provider(manifest) in {"local", "mem0"}
+        and _memory_scope_config(manifest, "case")["enabled"]
+    )
 
 
 def _user_memory_enabled(manifest: AgentManifest) -> bool:
-    return _memory_provider(manifest) in {"local", "mem0"} and _memory_scope_config(
-        manifest, "user"
-    )["enabled"]
+    return (
+        _memory_provider(manifest) in {"local", "mem0"}
+        and _memory_scope_config(manifest, "user")["enabled"]
+    )
 
 
 def _memory_provider(manifest: AgentManifest) -> str:

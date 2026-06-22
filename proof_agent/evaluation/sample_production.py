@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -29,6 +29,7 @@ class EvaluationSampleRequest(FrozenModel):
     target_agent_id: str
     target_agent_version_id: str | None = None
     surface_ref: str = "operator_chat"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvaluationSampleRun(FrozenModel):
@@ -68,6 +69,7 @@ def produce_evaluation_subject_manifest_from_samples(
                 target_agent_id=target_agent_id,
                 target_agent_version_id=target_agent_version_id,
                 surface_ref=str(case.metadata.get("surface_ref", "operator_chat")),
+                metadata=dict(case.metadata),
             )
         )
         for case in suite.cases
