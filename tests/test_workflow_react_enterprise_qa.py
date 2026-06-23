@@ -245,6 +245,40 @@ def test_final_answer_model_request_lists_allowed_citation_refs() -> None:
     assert "Copy at least one allowed citation ref exactly" in user_message
 
 
+def test_final_answer_model_request_uses_fixed_function_schema() -> None:
+    request = build_model_request(
+        question="How did Ping An perform last year?",
+        evidence=(
+            EvidenceChunk(
+                source="knowledge://source/ks_myks/document/doc_1c78ce23",
+                content="2025 revenue was RMB 10,505 billion.",
+                admission_score=1.0,
+                status=EvidenceStatus.CANDIDATE,
+                citation=(
+                    "knowledge://source/ks_myks/document/doc_1c78ce23/"
+                    "revision/rev_1c78ce23#node=82ac0f38"
+                ),
+            ),
+        ),
+        provider="deepseek",
+        model="deepseek-v4-flash",
+    )
+
+    assert request.response_format == "json"
+    function_schema = request.function_schema
+    assert function_schema is not None
+    assert function_schema.name == "submit_final_answer"
+    assert function_schema.strict is True
+    assert function_schema.parameters_schema["required"] == ("message", "citations")
+    assert function_schema.parameters_schema["additionalProperties"] is False
+    assert function_schema.parameters_schema["properties"]["message"]["type"] == "string"
+    citations_schema = function_schema.parameters_schema["properties"]["citations"]
+    assert citations_schema == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+
+
 def test_supported_travel_meal_question_answers_with_react_review_trace(
     tmp_path: Path,
 ) -> None:

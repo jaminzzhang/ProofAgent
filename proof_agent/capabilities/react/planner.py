@@ -12,6 +12,7 @@ from proof_agent.capabilities.models.normalization import (
     parse_model_contract,
 )
 from proof_agent.contracts import (
+    ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
     ModelRole,
@@ -30,6 +31,7 @@ _PLANNER_ACTION_TYPES = (
     ReActActionType.REFUSE,
 )
 _PLANNER_ACTION_TYPE_SET = frozenset(_PLANNER_ACTION_TYPES)
+_PLANNER_FUNCTION_SCHEMA_NAME = "submit_react_action_proposal"
 _MAX_CANONICAL_STRING_LENGTH = 512
 _V1_TOOL_PARAMETER_ALLOWLIST = {
     "customer_lookup": frozenset({"customer_id", "policy_id"}),
@@ -202,6 +204,7 @@ class LLMReActPlanner:
                 ),
             ),
             response_format="json",
+            function_schema=_planner_function_schema(eligible_actions),
             stream=False,
             metadata={"role": "react_planner", "question": question},
         )
@@ -222,10 +225,80 @@ def _planner_allowed_actions(
     return [action.value for action in sorted(actions, key=lambda item: item.value)]
 
 
+def _planner_function_schema(
+    eligible_actions: AbstractSet[ReActActionType] | None,
+) -> ModelFunctionSchema:
+    return ModelFunctionSchema(
+        name=_PLANNER_FUNCTION_SCHEMA_NAME,
+        description=(
+            "Submit exactly one governed Proof Agent ReAct planner action proposal. "
+            "Do not include final answer text or refusal prose in function arguments."
+        ),
+        parameters_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["action_type", "parameters", "target_tool_name"],
+            "properties": {
+                "action_type": {
+                    "type": "string",
+                    "enum": _planner_allowed_actions(eligible_actions),
+                },
+                "parameters": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [],
+                            "properties": {},
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["query"],
+                            "properties": {"query": {"type": "string"}},
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["missing_fields"],
+                            "properties": {
+                                "missing_fields": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                }
+                            },
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["customer_id", "policy_id"],
+                            "properties": {
+                                "customer_id": {"type": "string"},
+                                "policy_id": {"type": "string"},
+                            },
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["query", "max_results"],
+                            "properties": {
+                                "query": {"type": "string"},
+                                "max_results": {"type": "number"},
+                            },
+                        },
+                    ]
+                },
+                "target_tool_name": {"type": ["string", "null"]},
+            },
+        },
+    )
+
+
 def _planner_control_prompt() -> str:
     return (
         "You are the Proof Agent LLM ReAct Planner. "
         "Return exactly one JSON object matching ReActActionProposal. "
+        "When function calling is available, submit the proposal through the supplied function schema. "
         "If you use a compact form, return action_type plus parameters; params is accepted as an alias for parameters. "
         "Use only allowed action_type values supplied in the user message. "
         "Do not return chain-of-thought, markdown commentary, tool results, or natural language. "

@@ -23,6 +23,7 @@ from proof_agent.control.workflow.harness_helpers import (
     emit_model_error,
     emit_policy_decision,
     model_response_payload,
+    structured_final_answer_output,
     system_prompt_length,
     validate_model_output,
 )
@@ -260,7 +261,6 @@ def build_enterprise_qa_graph(
         )
 
         outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
-        message = model_response.content
         validation_results = validate_model_output(
             response=model_response,
             outcome=outcome,
@@ -282,6 +282,11 @@ def build_enterprise_qa_graph(
                 "governance_message": "I cannot answer because the model output failed validation.",
             }
 
+        final_answer_output, _ = structured_final_answer_output(
+            model_response.content,
+            outcome=outcome,
+        )
+        message = str(final_answer_output.get("message", model_response.content))
         return {
             "final_output": message,
             "governance_refusal": outcome,

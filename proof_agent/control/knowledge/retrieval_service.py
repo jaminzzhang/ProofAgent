@@ -766,7 +766,7 @@ class KnowledgeRetrievalService:
         evidence = fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
         if request.force_empty:
             evidence = ()
-        payload = {
+        step_payload: dict[str, Any] = {
             "step_id": step_id,
             **_round_payload(round_id),
             "provider": self._knowledge_provider.provider_name,
@@ -788,7 +788,7 @@ class KnowledgeRetrievalService:
             evidence=evidence,
             summary={},
             no_evidence_reason_code="zero_accepted_evidence",
-            payload=payload,
+            payload=step_payload,
         )
 
     def _run_reviewed_or_step_gated_single_step(

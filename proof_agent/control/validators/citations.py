@@ -18,18 +18,41 @@ def validate_citations_supported_by_evidence(
     observation_records: Iterable[Mapping[str, object]] = (),
     require_supported_citation: bool = False,
 ) -> ValidationResult:
-    supported_sources = set[str]()
-    for chunk in evidence:
-        if chunk.status == "rejected":
-            continue
-        _add_supported_ref(supported_sources, chunk.source)
-        _add_supported_ref(supported_sources, chunk.citation)
-    for observation in observation_records:
-        for source in _string_refs(observation.get("source_refs")):
-            _add_supported_ref(supported_sources, source)
-        for citation in _string_refs(observation.get("citation_refs")):
-            _add_supported_ref(supported_sources, citation)
     cited_sources = _cited_refs(text)
+    return _validate_cited_refs(
+        cited_sources,
+        evidence,
+        observation_records=observation_records,
+        require_supported_citation=require_supported_citation,
+    )
+
+
+def validate_citation_refs_supported_by_evidence(
+    citation_refs: Iterable[str],
+    evidence: Iterable[EvidenceChunk],
+    *,
+    observation_records: Iterable[Mapping[str, object]] = (),
+    require_supported_citation: bool = False,
+) -> ValidationResult:
+    """Validate structured citation refs without extracting refs from prose."""
+
+    cited_sources = _structured_cited_refs(citation_refs)
+    return _validate_cited_refs(
+        cited_sources,
+        evidence,
+        observation_records=observation_records,
+        require_supported_citation=require_supported_citation,
+    )
+
+
+def _validate_cited_refs(
+    cited_sources: tuple[str, ...],
+    evidence: Iterable[EvidenceChunk],
+    *,
+    observation_records: Iterable[Mapping[str, object]],
+    require_supported_citation: bool,
+) -> ValidationResult:
+    supported_sources = _supported_refs(evidence, observation_records)
     unsupported = tuple(
         source for source in cited_sources if source not in supported_sources
     )
@@ -59,6 +82,24 @@ def validate_citations_supported_by_evidence(
     )
 
 
+def _supported_refs(
+    evidence: Iterable[EvidenceChunk],
+    observation_records: Iterable[Mapping[str, object]],
+) -> set[str]:
+    supported_sources = set[str]()
+    for chunk in evidence:
+        if chunk.status == "rejected":
+            continue
+        _add_supported_ref(supported_sources, chunk.source)
+        _add_supported_ref(supported_sources, chunk.citation)
+    for observation in observation_records:
+        for source in _string_refs(observation.get("source_refs")):
+            _add_supported_ref(supported_sources, source)
+        for citation in _string_refs(observation.get("citation_refs")):
+            _add_supported_ref(supported_sources, citation)
+    return supported_sources
+
+
 def _add_supported_ref(supported_sources: set[str], value: object) -> None:
     if not isinstance(value, str):
         return
@@ -75,6 +116,14 @@ def _cited_refs(text: str) -> tuple[str, ...]:
         _append_unique(refs, _clean_ref(match.group(1)))
     for match in MARKDOWN_SOURCE_RE.finditer(text):
         _append_unique(refs, _clean_ref(match.group(1)))
+    return tuple(refs)
+
+
+def _structured_cited_refs(citation_refs: Iterable[str]) -> tuple[str, ...]:
+    refs: list[str] = []
+    for ref in citation_refs:
+        if isinstance(ref, str):
+            _append_unique(refs, ref.strip())
     return tuple(refs)
 
 

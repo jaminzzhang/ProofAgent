@@ -154,6 +154,7 @@ from proof_agent.contracts.memory import (
 from proof_agent.contracts.model import (
     ModelCallRole,
     ModelConnectionResolutionRecord,
+    ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -367,6 +368,7 @@ __all__ = [
     "ModelConnectionSmokeTestRecord",
     "ModelConnectionResolutionRecord",
     "ModelConnectionValidationRecord",
+    "ModelFunctionSchema",
     "ModelMessage",
     "ModelRequest",
     "ModelResponse",

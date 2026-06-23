@@ -39,6 +39,7 @@ from proof_agent.control.workflow.harness_helpers import (
     emit_model_error,
     emit_policy_decision,
     model_response_payload,
+    structured_final_answer_output,
     system_prompt_length,
     validate_model_output,
 )
@@ -801,11 +802,16 @@ class ReActEnterpriseQAStageBehavior:
                 ),
                 "stage_llm_interactions": llm_interactions,
             }
+        final_answer_output, _ = structured_final_answer_output(
+            model_response.content,
+            outcome=outcome,
+        )
+        final_message = str(final_answer_output.get("message", model_response.content))
         result = {
             "review_results": [review_event],
-            "final_output": model_response.content,
+            "final_output": final_message,
             "governance_refusal": outcome,
-            "governance_message": model_response.content,
+            "governance_message": final_message,
         }
         response_stage_context = self.configured_stage_context("response", {**state, **result})
         return {
@@ -1128,6 +1134,11 @@ def _model_request_json(request: ModelRequest) -> dict[str, Any]:
         "provider": request.provider,
         "model": request.model,
         "response_format": request.response_format,
+        "function_schema": (
+            request.function_schema.model_dump(mode="json")
+            if request.function_schema is not None
+            else None
+        ),
         "stream": request.stream,
         "temperature": request.temperature,
         "max_output_tokens": request.max_output_tokens,

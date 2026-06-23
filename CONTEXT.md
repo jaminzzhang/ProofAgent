@@ -1122,6 +1122,14 @@ _Avoid_: Generic OpenAI-compatible example, provider-specific control plane
 The named OpenAI-compatible Model Provider for DeepSeek API calls. It is a formal Agent Contract provider for final answer generation, ReAct planning, and Harness review assistance, while all outputs still pass through Harness-normalized contracts, validators, PolicyEngine, and trace rules.
 _Avoid_: DeepSeek-specific Harness semantics, provider-native tool execution, openai_compatible-only example
 
+**DeepSeek Tool-Call Normalization**:
+The provider-specific request normalization that keeps DeepSeek tool-call requests inside the OpenAI-compatible adapter while adapting DeepSeek endpoint constraints before the remote call. It shapes provider request parameters only; it does not create DeepSeek-specific Harness actions, approval semantics, or output contracts.
+_Avoid_: DeepSeek-specific Tool Gateway, provider-native tool execution, separate DeepSeek Harness semantics
+
+**DeepSeek Thinking Tool-Call Loop**:
+A provider-native DeepSeek interaction pattern where thinking-mode tool-call turns include `reasoning_content` that must be passed back in later provider requests. It is not part of Proof Agent V1 Harness tool execution or planner structured output.
+_Avoid_: Planner function schema, Tool Gateway execution path, stored chain-of-thought
+
 **DeepSeek Model Name Policy**:
 Proof Agent recommends current DeepSeek model names in examples and documentation but does not hard-code a DeepSeek model allowlist in Agent Contract validation. Model inventory is provider-owned and may change without changing Harness semantics.
 _Avoid_: Offline-blocking provider inventory lookup, stale hard-coded model list, silently rewriting model names
