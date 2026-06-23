@@ -470,6 +470,18 @@ _Avoid_: Continuation state, scheduler state, raw stage result dump, runtime sta
 The validation-safe explanation of why a Workflow Template Stage stopped because of an exceptional or repairable diagnostic condition, carried as an independent execution fact rather than inside Workflow Stage Result Summary, and limited to stable error codes, role names, bounded lengths, stage status, trace event references, and bounded contract-field diagnostics without free-form diagnostic messages.
 _Avoid_: Governed refusal, approval pause, clarification need, provider response body, raw failed output, rejected field value, free-form exception message, stack trace, runtime state, chain-of-thought
 
+**Run Flow Diagram**:
+The Dashboard Run Detail visualization that renders a single Agent run as a left-to-right directed flow of Workflow Stage nodes, encoding each node's visited state, terminal outcome, and ReAct Self-Loop Iteration Count as visual channels (border color, fill, self-loop badge), so an operator can read which stages ran, where a Refusal occurred, and how many reasoning cycles elapsed without parsing trace events.
+_Avoid_: Generic node graph, editable workflow editor, Workflow Template editor, runtime topology view, mermaid diagram, auto-layout canvas
+
+**ReAct Self-Loop Iteration Count**:
+The number of ReAct reasoning cycles executed inside a single model-bearing Workflow Stage during one run, derived by counting `reasoning_summary` trace events linked to that stage, and rendered on the Run Flow Diagram as a self-loop badge on the stage node. Refusal paths that skip reasoning render with count zero and no self-loop, surfacing as a visually distinct Refusal terminal node rather than a missing loop.
+_Avoid_: Workflow Stage visit count, outer pipeline step count, action_proposal count, tool call count, loop budget, max_rounds
+
+**LLM Interaction Message View**:
+The Dashboard rendering of one Workflow Stage LLM Interaction Capture's `request_json.messages` array as a vertical sequence of role-headed cards (system / user / assistant), each showing the original content verbatim with syntax highlighting, character count, and copy affordance, plus the response as a highlighted JSON block with no field-level decomposition, so an operator can inspect the exact context sent to and returned from the model without a raw JSON dump.
+_Avoid_: Chat bubbles, field-decomposed request cards, summarized prompt, rendered contract fields, templated message preview
+
 **Governed Final Output Capture**:
 The Sensitive Validation Capture Artifact record of Proof Agent's governed final output after Harness normalization, including terminal outcome, final output text, output length, and safe citation or fact references when available.
 _Avoid_: Provider response body, raw model message list, raw evidence payload, raw tool payload, runtime state dict

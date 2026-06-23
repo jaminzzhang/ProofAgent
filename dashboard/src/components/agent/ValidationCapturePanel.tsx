@@ -10,6 +10,7 @@ import type {
   WorkflowStagePromptValueCapture,
   WorkflowStageResultVerificationProjection,
 } from '../../api/types'
+import { LlmInteractionReview } from './LlmInteractionReview'
 
 interface ValidationCapturePanelProps {
   runId: string
@@ -235,7 +236,14 @@ function StageReviewCard({
           application={stage.contextApplication}
         />
         <StageResultReview result={stage.result} />
-        <StageLlmInteractionReview interactions={stage.llmInteractions} />
+        <div className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3">
+          <h6 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            LLM Input/Output
+          </h6>
+          <div className="mt-2">
+            <LlmInteractionReview interactions={stage.llmInteractions} />
+          </div>
+        </div>
         <StageFailureDiagnostics
           diagnostics={stage.diagnostics}
           legacyDiagnostics={legacyDiagnostics}
@@ -390,51 +398,6 @@ function StageResultReview({ result }: { result?: WorkflowStageResultVerificatio
         </summary>
         <SafeJson value={result.summary} />
       </details>
-    </ReviewBlock>
-  )
-}
-
-function StageLlmInteractionReview({
-  interactions,
-}: {
-  interactions: WorkflowStageLlmInteractionCapture[]
-}) {
-  return (
-    <ReviewBlock title="LLM Input/Output JSON">
-      {interactions.length > 0 ? (
-        <div className="grid gap-3">
-          {interactions.map((interaction, index) => (
-            <div key={`${interaction.role}-${index}`} className="grid gap-2">
-              <dl className="grid gap-2 sm:grid-cols-2">
-                <CaptureFact label="Role" value={interaction.role} />
-                <CaptureFact label="Model" value={`${interaction.provider}/${interaction.model}`} />
-                <CaptureFact
-                  label="Output Length"
-                  value={String(interaction.response_content_length)}
-                />
-                <CaptureFact
-                  label="Parse Error"
-                  value={interaction.response_json_parse_error_code ?? 'None'}
-                />
-              </dl>
-              <details>
-                <summary className="cursor-pointer text-xs font-medium text-[var(--text-primary)]">
-                  Reveal LLM Request JSON
-                </summary>
-                <SafeJson value={interaction.request_json} />
-              </details>
-              <details>
-                <summary className="cursor-pointer text-xs font-medium text-[var(--text-primary)]">
-                  Reveal LLM Response JSON
-                </summary>
-                <SafeJson value={interaction.response_json ?? { unavailable: true }} />
-              </details>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-[var(--text-muted)]">Not recorded</p>
-      )}
     </ReviewBlock>
   )
 }
