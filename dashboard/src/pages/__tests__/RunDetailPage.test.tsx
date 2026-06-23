@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunDetail } from '../../api/types'
 import { ValidateWorkspace } from '../../components/agent/ValidateWorkspace'
 import { useRunDetail } from '../../hooks/useRunDetail'
@@ -11,6 +11,10 @@ import { RunDetailPage } from '../RunDetailPage'
 vi.mock('../../hooks/useRunDetail', () => ({
   useRunDetail: vi.fn(),
 }))
+
+afterEach(() => {
+  cleanup()
+})
 
 describe('RunDetailPage navigation', () => {
   it('returns to the originating Agent draft when opened from validation history', () => {
@@ -288,8 +292,13 @@ describe('RunDetailPage navigation', () => {
     ).not.toBeInTheDocument()
     expect(screen.getByText('react_enterprise_qa')).toBeInTheDocument()
     expect(screen.getByText('react_enterprise_qa.v1')).toBeInTheDocument()
-    expect(screen.getByText('Plan')).toBeInTheDocument()
-    expect(screen.getByText('Clarification')).toBeInTheDocument()
+    // The Run Flow Diagram renders stage labels as nodes at the top of the tab,
+    // and the stage cards render the same labels below; assert each surface by
+    // its testid rather than the now-ambiguous label text.
+    expect(screen.getByTestId('workflow-flow-diagram')).toBeInTheDocument()
+    expect(screen.getByTestId('flow-node-plan')).toHaveTextContent('Plan')
+    expect(screen.getByTestId('flow-node-clarification')).toHaveTextContent('Clarification')
+    expect(screen.getByTestId('stage-badges-plan')).toBeInTheDocument()
     expect(screen.getByText('completed')).toBeInTheDocument()
     expect(screen.getByText('ANSWERED_WITH_CITATIONS')).toBeInTheDocument()
     // badge counts summarize each visited stage's runtime events at a glance

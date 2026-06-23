@@ -774,8 +774,12 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText('Configured Context')).toBeInTheDocument()
     expect(screen.getByText('Applied Context')).toBeInTheDocument()
     expect(screen.getByText('Stage Result')).toBeInTheDocument()
-    expect(screen.getByText('LLM Input/Output JSON')).toBeInTheDocument()
+    expect(screen.getByText('LLM Input/Output')).toBeInTheDocument()
     expect(screen.getByText('react_planner')).toBeInTheDocument()
+    // The message view renders each request message verbatim and the response as
+    // a formatted JSON block (see ADR-0044).
+    expect(screen.getByText('{"question":"Q"}')).toBeInTheDocument()
+    expect(screen.getByText(/"action_type": "plan_retrieval"/)).toBeInTheDocument()
     expect(screen.getByText('Result Summary')).toBeInTheDocument()
     expect(screen.getByText('Exclusions')).toBeInTheDocument()
     expect(fetchValidationCapture).toHaveBeenCalledWith('run-validation-1')

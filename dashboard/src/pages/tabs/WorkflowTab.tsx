@@ -5,6 +5,7 @@ import type {
   WorkflowRunProjection,
   WorkflowRunStageProjection,
 } from '../../api/types'
+import { WorkflowFlowDiagram } from '../../components/timeline/WorkflowFlowDiagram'
 import { formatTraceTime, stringifyTraceValue, traceEventLabel } from './traceDisplay'
 
 interface WorkflowTabProps {
@@ -79,6 +80,10 @@ export function WorkflowTab({ projection, events = [] }: WorkflowTabProps) {
           />
         </div>
       </section>
+
+      {projection.stages.length > 0 && (
+        <WorkflowFlowDiagram projection={projection} events={events} />
+      )}
 
       {projection.stages.length === 0 ? (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 text-sm text-[var(--text-muted)]">
