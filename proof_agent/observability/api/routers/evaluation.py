@@ -18,6 +18,7 @@ from proof_agent.contracts import (
 )
 from proof_agent.evaluation.campaign_store import EvaluationCampaignStore
 from proof_agent.evaluation.errors import EvaluationInputError
+from proof_agent.evaluation.production_sample_store import ProductionSampleCurationStore
 from proof_agent.evaluation.subject_exports import (
     export_evaluation_subject_manifest_from_run_store,
 )
@@ -25,6 +26,7 @@ from proof_agent.evaluation.store import EvaluationStore
 from proof_agent.observability.api.dependencies import (
     get_evaluation_campaign_store,
     get_evaluation_store,
+    get_production_sample_curation_store,
     get_store,
 )
 from proof_agent.observability.storage.run_store import RunStore
@@ -106,6 +108,38 @@ def get_evaluation_campaign_trends(
     except EvaluationInputError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return cast(dict[str, Any], _jsonable(trends))
+
+
+@router.get("/evaluation/production-samples/candidates")
+def list_evaluation_production_sample_candidates(
+    store: ProductionSampleCurationStore = Depends(get_production_sample_curation_store),
+) -> dict[str, Any]:
+    """List diagnostic curated production sample candidates."""
+
+    try:
+        candidates = store.list_candidates()
+    except EvaluationInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "data": [_jsonable(candidate) for candidate in candidates],
+        "meta": {"total": len(candidates)},
+    }
+
+
+@router.get("/evaluation/production-samples/promotions")
+def list_evaluation_production_sample_promotions(
+    store: ProductionSampleCurationStore = Depends(get_production_sample_curation_store),
+) -> dict[str, Any]:
+    """List promoted curated production sample records."""
+
+    try:
+        promotions = store.list_promotions()
+    except EvaluationInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "data": [_jsonable(promotion) for promotion in promotions],
+        "meta": {"total": len(promotions)},
+    }
 
 
 @router.get("/evaluation/analyses/{analysis_id}/cases")

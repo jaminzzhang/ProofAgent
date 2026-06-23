@@ -16,6 +16,7 @@ from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.evaluation.campaign_store import EvaluationCampaignStore
+from proof_agent.evaluation.production_sample_store import ProductionSampleCurationStore
 from proof_agent.evaluation.store import EvaluationStore
 from proof_agent.observability.api.routers import (
     approvals,
@@ -37,6 +38,7 @@ def create_app(
     history_dir: Path = Path("runs/history"),
     evaluations_dir: Path | None = None,
     evaluation_campaigns_dir: Path | None = None,
+    evaluation_curation_dir: Path | None = None,
     runs_dir: Path = Path("runs/latest"),
     conversations_dir: Path = Path("runs/conversations"),
     published_agents: dict[str, Path] | None = None,
@@ -55,6 +57,8 @@ def create_app(
         Optional root directory for Evaluation Analyzer artifact storage.
     evaluation_campaigns_dir:
         Optional root directory for Evaluation Campaign artifact storage.
+    evaluation_curation_dir:
+        Optional root directory for curated production sample artifact storage.
     runs_dir:
         Compatibility directory used for the latest trace and receipt files.
     conversations_dir:
@@ -96,6 +100,9 @@ def create_app(
     )
     application.state.evaluation_campaign_store = EvaluationCampaignStore(
         evaluation_campaigns_dir or history_dir.parent / "evaluation_campaigns"
+    )
+    application.state.production_sample_curation_store = ProductionSampleCurationStore(
+        evaluation_curation_dir or history_dir.parent / "evaluation_curation"
     )
     application.state.runs_dir = runs_dir
     application.state.conversation_store = ConversationStore(conversations_dir)
