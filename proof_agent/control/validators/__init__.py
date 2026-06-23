@@ -1,4 +1,7 @@
-from proof_agent.control.validators.citations import validate_citations_supported_by_evidence
+from proof_agent.control.validators.citations import (
+    validate_citation_refs_supported_by_evidence,
+    validate_citations_supported_by_evidence,
+)
 from proof_agent.control.validators.customer_response import validate_customer_safe_response
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.validators.safety import validate_no_secret_strings
@@ -7,6 +10,7 @@ from proof_agent.control.validators.tool_result import validate_customer_lookup_
 
 __all__ = [
     "evaluate_evidence",
+    "validate_citation_refs_supported_by_evidence",
     "validate_citations_supported_by_evidence",
     "validate_customer_safe_response",
     "validate_customer_lookup_result",

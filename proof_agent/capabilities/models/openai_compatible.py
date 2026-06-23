@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 from typing import Any
 
-from proof_agent.contracts import ModelRequest, ModelResponse, TokenUsage
+from proof_agent.contracts import ModelFunctionSchema, ModelRequest, ModelResponse, TokenUsage
 from proof_agent.contracts.manifest import ModelConfig
 from proof_agent.errors import ProofAgentError
 
@@ -146,7 +147,15 @@ class OpenAICompatibleModelProvider:
                 for message in request.messages
             ],
         }
-        if request.response_format == "json":
+        if request.function_schema is not None:
+            payload.update(
+                _function_tool_payload(
+                    request.function_schema,
+                    provider_name=self.provider_name,
+                    base_url=self._base_url,
+                )
+            )
+        elif request.response_format == "json":
             payload["response_format"] = {"type": "json_object"}
         temperature = request.temperature
         if temperature is None:
@@ -189,13 +198,69 @@ class OpenAICompatibleModelProvider:
                 total_tokens=getattr(usage, "total_tokens", None),
             )
         return ModelResponse(
-            content=choice.message.content or "",
+            content=_extract_choice_content(choice),
             provider_name=self.provider_name,
             model_name=self.model_name,
             token_usage=token_usage,
             finish_reason=choice.finish_reason,
             raw_response_id=getattr(response, "id", None),
         )
+
+
+def _function_tool_payload(
+    function_schema: ModelFunctionSchema,
+    *,
+    provider_name: str,
+    base_url: str | None,
+) -> dict[str, Any]:
+    function_payload: dict[str, Any] = {
+        "name": function_schema.name,
+        "description": function_schema.description,
+        "parameters": function_schema.model_dump(mode="json")["parameters_schema"],
+    }
+    if function_schema.strict and _supports_strict_function_schema(
+        provider_name=provider_name,
+        base_url=base_url,
+    ):
+        function_payload["strict"] = True
+    payload: dict[str, Any] = {
+        "tools": [{"type": "function", "function": function_payload}],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": function_schema.name},
+        },
+    }
+    if _is_deepseek_provider(provider_name=provider_name, base_url=base_url):
+        payload["extra_body"] = {"thinking": {"type": "disabled"}}
+    return payload
+
+
+def _supports_strict_function_schema(*, provider_name: str, base_url: str | None) -> bool:
+    normalized_base_url = (base_url or "").rstrip("/")
+    if _is_deepseek_provider(provider_name=provider_name, base_url=base_url):
+        return normalized_base_url.endswith("/beta")
+    return True
+
+
+def _is_deepseek_provider(*, provider_name: str, base_url: str | None) -> bool:
+    normalized_base_url = (base_url or "").rstrip("/")
+    return provider_name == "deepseek" or "api.deepseek.com" in normalized_base_url
+
+
+def _extract_choice_content(choice: Any) -> str:
+    message = _get_value(choice, "message")
+    for tool_call in _get_value(message, "tool_calls") or ():
+        function = _get_value(tool_call, "function")
+        arguments = _get_value(function, "arguments")
+        if arguments:
+            return str(arguments)
+    return str(_get_value(message, "content") or "")
+
+
+def _get_value(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key, None)
 
 
 def _env_value(env_name: Any) -> str | None:

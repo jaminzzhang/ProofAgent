@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import Field, field_serializer, field_validator
 
@@ -45,6 +45,24 @@ class TokenUsage(FrozenModel):
     total_tokens: int | None = None
 
 
+class ModelFunctionSchema(FrozenModel):
+    """Provider-neutral function call contract for structured model output."""
+
+    name: str
+    description: str = ""
+    parameters_schema: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    strict: bool = True
+
+    @field_validator("parameters_schema", mode="after")
+    @classmethod
+    def freeze_parameters_schema(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("parameters_schema")
+    def serialize_parameters_schema(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast("dict[str, Any]", _json_plain(value))
+
+
 class ModelRequest(FrozenModel):
     messages: tuple[ModelMessage, ...]
     provider: str
@@ -54,6 +72,7 @@ class ModelRequest(FrozenModel):
     timeout_seconds: float | None = None
     stream: bool = False
     response_format: Literal["text", "json"] = "text"
+    function_schema: ModelFunctionSchema | None = None
     metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
     evidence_sources: tuple[str, ...] = Field(default_factory=tuple)
 
@@ -66,6 +85,14 @@ class ModelRequest(FrozenModel):
     @classmethod
     def freeze_metadata(cls, value: Any) -> Any:
         return freeze_value(value)
+
+
+def _json_plain(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_plain(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_plain(item) for item in value]
+    return value
 
 
 class ModelResponse(FrozenModel):

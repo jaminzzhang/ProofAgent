@@ -14,6 +14,7 @@ from typing import Any
 from proof_agent.contracts import (
     ContextAdmission,
     EvidenceChunk,
+    ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -22,14 +23,20 @@ from proof_agent.contracts import (
     RunPurpose,
     RunResult,
     ValidationResult,
+    ValidationStatus,
 )
-from proof_agent.control.validators.citations import validate_citations_supported_by_evidence
+from proof_agent.control.validators.citations import (
+    validate_citation_refs_supported_by_evidence,
+)
 from proof_agent.control.validators.safety import validate_no_secret_strings
 from proof_agent.control.validators.schema import validate_final_output_schema
 from proof_agent.observability.audit.receipt import generate_receipt
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.compat import update_latest_symlink
 from proof_agent.observability.storage.run_store import RunStore
+
+
+_FINAL_ANSWER_FUNCTION_SCHEMA_NAME = "submit_final_answer"
 
 
 def emit_policy_decision(trace: TraceWriter, decision: object) -> None:
@@ -89,7 +96,8 @@ def build_model_request(
             role=ModelRole.SYSTEM,
             content=(
                 "Answer using only accepted evidence. Refuse when evidence is insufficient. "
-                "Copy at least one allowed citation ref exactly into factual answers."
+                "Call submit_final_answer with the answer in message and exact allowed "
+                "citation refs in citations."
             ),
         ),
         ModelMessage(
@@ -105,6 +113,8 @@ def build_model_request(
         provider=provider,
         model=model,
         messages=messages,
+        response_format="json",
+        function_schema=_final_answer_function_schema(),
         metadata={
             "question": question,
             "conversation_context_admitted": bool(
@@ -123,7 +133,8 @@ def _citation_instruction_text(evidence: tuple[EvidenceChunk, ...]) -> str:
     return (
         "\n\nAllowed citation refs:\n"
         f"{bullet_list}\n"
-        "Copy at least one allowed citation ref exactly when making factual claims."
+        "Copy at least one allowed citation ref exactly when making factual claims. "
+        "Put citation refs in the structured citations field only."
     )
 
 
@@ -173,17 +184,91 @@ def validate_model_output(
     evidence: tuple[EvidenceChunk, ...],
     observation_records: tuple[Mapping[str, Any], ...] = (),
 ) -> tuple[ValidationResult, ...]:
+    output, parse_error = structured_final_answer_output(response.content, outcome=outcome)
+    if parse_error is not None:
+        return (
+            ValidationResult(
+                validator_name="schema",
+                status=ValidationStatus.FAILED,
+                reason="Final answer model output schema is invalid.",
+                metadata={"parse_error_code": parse_error},
+            ),
+            validate_no_secret_strings(response.content),
+            validate_citation_refs_supported_by_evidence(
+                (),
+                evidence,
+                observation_records=observation_records,
+                require_supported_citation=bool(evidence),
+            ),
+        )
+
     return (
-        validate_final_output_schema(
-            {"outcome": outcome.value, "message": response.content, "citations": []}
-        ),
-        validate_no_secret_strings(response.content),
-        validate_citations_supported_by_evidence(
-            response.content,
+        validate_final_output_schema(output),
+        validate_no_secret_strings(str(output["message"])),
+        validate_citation_refs_supported_by_evidence(
+            tuple(output["citations"]),
             evidence,
             observation_records=observation_records,
             require_supported_citation=bool(evidence),
         ),
+    )
+
+
+def structured_final_answer_output(
+    content: str,
+    *,
+    outcome: ReceiptOutcome,
+) -> tuple[dict[str, Any], str | None]:
+    raw, parse_error = _model_content_json(content)
+    if parse_error is not None:
+        return {}, parse_error
+    if not isinstance(raw, Mapping):
+        return {}, "model_output_json_not_object"
+    message = raw.get("message")
+    citations = raw.get("citations")
+    if not isinstance(message, str):
+        return {}, "model_output_missing_message"
+    if not isinstance(citations, list | tuple) or not all(
+        isinstance(item, str) for item in citations
+    ):
+        return {}, "model_output_invalid_citations"
+    return {
+        "outcome": outcome.value,
+        "message": message,
+        "citations": tuple(citations),
+    }, None
+
+
+def _model_content_json(content: str) -> tuple[Any | None, str | None]:
+    stripped = content.strip()
+    if not stripped:
+        return None, "empty_model_output"
+    try:
+        return json.loads(stripped), None
+    except json.JSONDecodeError:
+        return None, "model_output_json_parse_failed"
+
+
+def _final_answer_function_schema() -> ModelFunctionSchema:
+    return ModelFunctionSchema(
+        name=_FINAL_ANSWER_FUNCTION_SCHEMA_NAME,
+        description=(
+            "Submit the governed final answer. Put user-visible prose in message and "
+            "put exact accepted evidence citation refs in citations."
+        ),
+        parameters_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["message", "citations"],
+            "properties": {
+                "message": {"type": "string"},
+                "citations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+        },
+        strict=True,
     )
 
 

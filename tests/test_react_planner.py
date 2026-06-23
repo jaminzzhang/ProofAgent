@@ -507,6 +507,56 @@ def test_llm_react_planner_advertises_current_eligible_actions_only() -> None:
     assert user_payload["allowed_actions"] == ["generate_final_answer", "refuse"]
 
 
+def test_llm_react_planner_sends_fixed_function_schema_for_action_shape() -> None:
+    provider = FakePlannerProvider(
+        _planner_output(
+            action_type="generate_final_answer",
+            candidate_actions=["generate_final_answer"],
+            selected_action="generate_final_answer",
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="accepted_evidence_count=1; eligible_actions=generate_final_answer,refuse",
+        eligible_actions=frozenset(
+            {ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE}
+        ),
+    )
+
+    function_schema = provider.requests[0].function_schema
+    assert function_schema is not None
+    assert function_schema.name == "submit_react_action_proposal"
+    assert function_schema.strict is True
+    assert function_schema.parameters_schema["required"] == (
+        "action_type",
+        "parameters",
+        "target_tool_name",
+    )
+    assert function_schema.parameters_schema["additionalProperties"] is False
+    properties = function_schema.parameters_schema["properties"]
+    assert properties["action_type"]["enum"] == (
+        "generate_final_answer",
+        "refuse",
+    )
+    assert properties["parameters"]["anyOf"][0] == {
+        "type": "object",
+        "additionalProperties": False,
+        "required": (),
+        "properties": {},
+    }
+    assert {"query": {"type": "string"}} in tuple(
+        parameter_shape["properties"]
+        for parameter_shape in properties["parameters"]["anyOf"]
+    )
+    assert properties["target_tool_name"]["type"] == ("string", "null")
+
+
 def test_resolve_react_planner_uses_llm_adapter_for_registered_model_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

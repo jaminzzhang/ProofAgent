@@ -69,7 +69,7 @@ def test_final_answer_model_trace_includes_role_and_response_format(tmp_path: Pa
     model_request = next(event for event in events if event["event_type"] == "model_request")
 
     assert model_request["payload"]["role"] == "final_answer"
-    assert model_request["payload"]["response_format"] == "text"
+    assert model_request["payload"]["response_format"] == "json"
 
 
 def test_shared_model_connection_resolution_trace_is_secret_safe(
