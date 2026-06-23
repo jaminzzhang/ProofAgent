@@ -1178,6 +1178,14 @@ _Avoid_: Native provider command, raw model action
 The requirement that planner and reviewer model outputs be valid JSON objects representing Proof Agent contracts.
 _Avoid_: Natural-language control output, inferred JSON
 
+**Structured Model Output Schema**:
+A provider-neutral schema that names the expected JSON shape for one Harness-normalized model output before it can affect workflow, review, tool, or answer behavior.
+_Avoid_: Tool Contract, provider-native tool schema, prompt-only JSON instruction
+
+**Structured Output Transport Strategy**:
+The Model Provider adapter decision to send a Structured Model Output Schema through the safest available provider mechanism, such as forced tool/function call arguments or ordinary JSON response mode, without changing Harness semantics.
+_Avoid_: Agent Contract invocation mode, Tool Gateway execution, hidden retry fallback
+
 **Model Call Role**:
 The trace-safe label that distinguishes why a model provider was called during a governed run.
 _Avoid_: Role-specific trace event type
