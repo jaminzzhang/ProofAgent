@@ -43,7 +43,7 @@ class RemoteSearchProvider:
 
     @property
     def capabilities(self) -> RetrievalCapabilities:
-        return RetrievalCapabilities()
+        return RetrievalCapabilities(supports_parallel_retrieval=True)
 
     def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         """Return normalized fixture evidence until production HTTP is implemented."""

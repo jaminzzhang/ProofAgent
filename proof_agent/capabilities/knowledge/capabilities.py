@@ -14,3 +14,4 @@ class RetrievalCapabilities(FrozenModel):
 
     supports_structure_listing: bool = False
     supports_scoped_retrieval: bool = False
+    supports_parallel_retrieval: bool = False

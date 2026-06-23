@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.capabilities.knowledge.blended import (
     BlendedKnowledgeProvider,
     BoundKnowledgeProvider,
@@ -60,6 +62,34 @@ class FakeKnowledgeProvider:
         summary = self._retrieval_summary
         self._retrieval_summary = None
         return summary
+
+
+class DelayedParallelKnowledgeProvider:
+    provider_name = "parallel_fixture"
+
+    def __init__(
+        self,
+        *,
+        delays: Mapping[str, float],
+        evidence_by_query: Mapping[str, tuple[EvidenceChunk, ...]],
+    ) -> None:
+        self.delays = dict(delays)
+        self.evidence_by_query = dict(evidence_by_query)
+        self.calls: list[tuple[str, int | None]] = []
+        self.started_at: dict[str, float] = {}
+        self.finished_at: dict[str, float] = {}
+
+    @property
+    def capabilities(self) -> RetrievalCapabilities:
+        return RetrievalCapabilities(supports_parallel_retrieval=True)
+
+    def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
+        self.calls.append((query, top_k))
+        self.started_at[query] = time.monotonic()
+        time.sleep(self.delays.get(query, 0.0))
+        self.finished_at[query] = time.monotonic()
+        evidence = self.evidence_by_query.get(query, ())
+        return evidence[:top_k]
 
 
 class FakeModelProvider:
@@ -333,6 +363,292 @@ def test_agentic_retrieval_executes_query_set_before_planner_rewrites(
         event["payload"]["retrieval_query_item"]["intent_angle"]
         for event in retrieval_steps
     ] == ["required_documents", "exception_policy"]
+
+
+def test_react_reviewed_query_set_retrieves_parallel_when_provider_supports_it(
+    tmp_path: Path,
+) -> None:
+    required_query = "inpatient reimbursement required documents"
+    optional_query = "inpatient reimbursement exception documents"
+    provider = DelayedParallelKnowledgeProvider(
+        delays={required_query: 0.08, optional_query: 0.08},
+        evidence_by_query={
+            required_query: (
+                EvidenceChunk(
+                    source="required.md",
+                    content="Required document evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.9,
+                    citation="required.md:1",
+                ),
+            ),
+            optional_query: (
+                EvidenceChunk(
+                    source="optional.md",
+                    content="Optional exception evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.8,
+                    citation="optional.md:1",
+                ),
+            ),
+        },
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="What documents are required for inpatient reimbursement?",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query=required_query,
+                    intent_angle="required_documents",
+                    required=True,
+                    reason="Required documents are the direct intent.",
+                ),
+                RetrievalQueryItem(
+                    query=optional_query,
+                    intent_angle="exception_policy",
+                    required=False,
+                    reason="Exceptions may change the document list.",
+                ),
+            ),
+            max_queries=3,
+            query_concurrency=2,
+            query_timeout_seconds=1.0,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    assert result.evidence_result.status == "passed"
+    assert [chunk.source for chunk in result.evidence] == ["required.md", "optional.md"]
+    assert provider.started_at[optional_query] < provider.finished_at[required_query]
+
+
+def test_react_reviewed_query_set_retrieves_parallel_through_blended_provider(
+    tmp_path: Path,
+) -> None:
+    required_query = "inpatient reimbursement required documents"
+    optional_query = "inpatient reimbursement exception documents"
+    provider = DelayedParallelKnowledgeProvider(
+        delays={required_query: 0.08, optional_query: 0.08},
+        evidence_by_query={
+            required_query: (
+                EvidenceChunk(
+                    source="required.md",
+                    content="Required document evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.9,
+                    citation="required.md:1",
+                ),
+            ),
+            optional_query: (
+                EvidenceChunk(
+                    source="optional.md",
+                    content="Optional exception evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.8,
+                    citation="optional.md:1",
+                ),
+            ),
+        },
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=_mixed_provider(
+            _bound(
+                "ks_claims",
+                "kb_claims",
+                provider,  # type: ignore[arg-type]
+                keywords=("inpatient", "reimbursement"),
+            ),
+        ),
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="What documents are required for inpatient reimbursement?",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query=required_query,
+                    intent_angle="required_documents",
+                    required=True,
+                    reason="Required documents are the direct intent.",
+                ),
+                RetrievalQueryItem(
+                    query=optional_query,
+                    intent_angle="exception_policy",
+                    required=False,
+                    reason="Exceptions may change the document list.",
+                ),
+            ),
+            max_queries=3,
+            query_concurrency=2,
+            query_timeout_seconds=1.0,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    assert result.evidence_result.status == "passed"
+    assert [chunk.binding_id for chunk in result.evidence] == ["kb_claims", "kb_claims"]
+    assert provider.started_at[optional_query] < provider.finished_at[required_query]
+
+
+def test_parallel_query_set_timeout_keeps_required_evidence_and_drops_optional(
+    tmp_path: Path,
+) -> None:
+    required_query = "inpatient reimbursement required documents"
+    optional_query = "inpatient reimbursement exception documents"
+    provider = DelayedParallelKnowledgeProvider(
+        delays={required_query: 0.01, optional_query: 0.12},
+        evidence_by_query={
+            required_query: (
+                EvidenceChunk(
+                    source="required.md",
+                    content="Required document evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.9,
+                    citation="required.md:1",
+                ),
+            ),
+            optional_query: (
+                EvidenceChunk(
+                    source="optional.md",
+                    content="Slow optional exception evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.8,
+                    citation="optional.md:1",
+                ),
+            ),
+        },
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="What documents are required for inpatient reimbursement?",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query=required_query,
+                    intent_angle="required_documents",
+                    required=True,
+                    reason="Required documents are the direct intent.",
+                ),
+                RetrievalQueryItem(
+                    query=optional_query,
+                    intent_angle="exception_policy",
+                    required=False,
+                    reason="Exceptions may change the document list.",
+                ),
+            ),
+            max_queries=3,
+            query_concurrency=2,
+            query_timeout_seconds=0.03,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    assert result.evidence_result.status == "passed"
+    assert [chunk.source for chunk in result.evidence] == ["required.md"]
+    retrieval_results = [
+        event for event in _read_events(trace.trace_path)
+        if event["event_type"] == "retrieval_result"
+    ]
+    assert any(
+        event["payload"].get("round_id") == "query_set_02"
+        and event["payload"].get("no_evidence_reason_code") == "retrieval_query_timeout"
+        for event in retrieval_results
+    )
+
+
+def test_parallel_query_set_timeout_fails_when_required_does_not_return_normally(
+    tmp_path: Path,
+) -> None:
+    required_query = "inpatient reimbursement required documents"
+    optional_query = "inpatient reimbursement exception documents"
+    provider = DelayedParallelKnowledgeProvider(
+        delays={required_query: 0.12, optional_query: 0.01},
+        evidence_by_query={
+            required_query: (
+                EvidenceChunk(
+                    source="required.md",
+                    content="Slow required document evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.9,
+                    citation="required.md:1",
+                ),
+            ),
+            optional_query: (
+                EvidenceChunk(
+                    source="optional.md",
+                    content="Fast optional exception evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.8,
+                    citation="optional.md:1",
+                ),
+            ),
+        },
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="What documents are required for inpatient reimbursement?",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query=required_query,
+                    intent_angle="required_documents",
+                    required=True,
+                    reason="Required documents are the direct intent.",
+                ),
+                RetrievalQueryItem(
+                    query=optional_query,
+                    intent_angle="exception_policy",
+                    required=False,
+                    reason="Exceptions may change the document list.",
+                ),
+            ),
+            max_queries=3,
+            query_concurrency=2,
+            query_timeout_seconds=0.03,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    assert result.evidence == ()
+    assert result.evidence_result.status == "failed"
+    assert (
+        result.evidence_result.metadata["no_evidence_reason_code"]
+        == "required_provider_failure"
+    )
 
 
 def test_single_step_retrieval_traces_direct_provider_summary(tmp_path: Path) -> None:

@@ -235,6 +235,8 @@ class RetrievalConfig(FrozenModel):
     max_steps: int | None = None
     max_rounds: int = 3
     max_queries: int = Field(default=3, ge=1, le=5)
+    query_concurrency: int = Field(default=3, ge=1, le=5)
+    query_timeout_seconds: float = Field(default=10.0, ge=0.01, le=120.0)
     allow_query_rewrite: bool = False
     allow_rerank: bool = False
     allow_single_step_fallback: bool = False
