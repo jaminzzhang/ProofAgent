@@ -365,13 +365,19 @@ GET /api/evaluation/campaigns/{campaign_id}/cases
 GET /api/evaluation/campaigns/{campaign_id}/trends
 GET /api/evaluation/production-samples/candidates
 GET /api/evaluation/production-samples/promotions
+POST /api/evaluation/production-samples/promotions
 ```
 
-These routes are read-only. Any run production happens through the Campaign CLI or explicit backend orchestration, not through page rendering.
+The `GET` routes are read-only. `POST /api/evaluation/production-samples/promotions`
+is a reviewer-gated command route: it requires evaluation curation review
+permission, resolves candidates only under the configured curation artifact root,
+writes promotion artifacts under that root, and writes a command audit artifact.
+Any run production happens through the Campaign CLI or explicit backend
+orchestration, not through page rendering.
 
 ## Implementation Slices
 
-Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Slice 8 adds an artifact-level Curated Production Evaluation Sample import and reviewer-gated promotion workflow. Slice 9 adds an injected Exploratory Probe runner and `exploratory_probe_results.jsonl` diagnostic artifact. Slice 10A adds explicit Campaign selection for promoted curated production samples through promotion records and rejects diagnostic-only samples from formal Campaign scoring. Slice 10B1 adds automatic promoted production sample discovery from a configured promotions directory. Slice 10B2A adds read-only Dashboard APIs for curation candidates and promotion records. Slice 10B2B adds a read-only Evaluation Lab curation section for candidate backlog and promoted counts. Slice 10B2C.1 adds a read-only reviewer queue view for candidate review state and promotion evidence. Dashboard curation review write actions remain future slices.
+Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Slice 8 adds an artifact-level Curated Production Evaluation Sample import and reviewer-gated promotion workflow. Slice 9 adds an injected Exploratory Probe runner and `exploratory_probe_results.jsonl` diagnostic artifact. Slice 10A adds explicit Campaign selection for promoted curated production samples through promotion records and rejects diagnostic-only samples from formal Campaign scoring. Slice 10B1 adds automatic promoted production sample discovery from a configured promotions directory. Slice 10B2A adds read-only Dashboard APIs for curation candidates and promotion records. Slice 10B2B adds a read-only Evaluation Lab curation section for candidate backlog and promoted counts. Slice 10B2C.1 adds a read-only reviewer queue view for candidate review state and promotion evidence. Slice 10B2C.2A adds the reviewer-gated promotion command API with permission checks, root-confined artifact writes, and command audit output. Dashboard curation review action controls remain future slices.
 
 Slice 1: Campaign manifest and artifact model
 
@@ -477,11 +483,19 @@ Slice 10B2C.1: Curated production sample read-only reviewer queue UI
 - Keep the queue observational only: no browser-triggered import, review confirmation, promotion, or formal scoring mutation.
 - Keep unreviewed production samples diagnostic-only.
 
-Slice 10B2C.2: Curated production sample curation review actions
+Slice 10B2C.2A: Curated production sample promotion command API
 
-- Add Dashboard curation review UI.
+- Add `POST /api/evaluation/production-samples/promotions`.
+- Require `evaluation_curation.review` before writing promotion artifacts.
+- Resolve `batch_id` and `sample_id` only under the configured curation artifact root.
+- Write `production_sample_promotion.json`, generated suite and subject manifest artifacts, and `production_sample_promotion_audit.json`.
 - Keep unreviewed production samples diagnostic-only.
-- Add explicit write APIs only after reviewer roles, permission checks, audit records, and fail-closed promotion semantics are designed.
+
+Slice 10B2C.2B: Curated production sample Dashboard review actions
+
+- Add Dashboard curation review controls that call the reviewer-gated promotion command API.
+- Keep unreviewed production samples diagnostic-only.
+- Require explicit reviewer confirmation fields before enabling promotion.
 
 ## Verification
 

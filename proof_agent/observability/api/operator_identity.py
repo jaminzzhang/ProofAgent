@@ -28,6 +28,7 @@ class OperatorPermission(StrEnum):
     TOOL_SOURCE_VIEW = "tool_source.view"
     TOOL_SOURCE_EDIT = "tool_source.edit"
     TOOL_SOURCE_ARCHIVE = "tool_source.archive"
+    EVALUATION_CURATION_REVIEW = "evaluation_curation.review"
 
 
 @dataclass(frozen=True)

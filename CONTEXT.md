@@ -790,6 +790,10 @@ _Avoid_: raw production traffic, unreviewed monitoring data, automatic release g
 The process of turning production samples into formal Evaluation Cases through redaction, deduplication, taxonomy labeling, expected-resolution labeling, evidence or tool-basis annotation, risk classification, and human confirmation; LLM-assisted prelabeling may inform but not replace confirmation for release or safety suites.
 _Avoid_: Raw production replay, judge-only labeling, unreviewed monitoring sample
 
+**Evaluation Curation Review Permission**:
+The operator permission `evaluation_curation.review`, required before an internal command may promote a Curated Production Evaluation Sample into formal Evaluation Suite and Subject Manifest artifacts.
+_Avoid_: frontend-only review authority, implicit local-user promotion, unpermissioned production sample mutation
+
 **Domain Evaluation Reviewer**:
 The curator role that confirms expected business outcome, required business claims, evidence basis, and forbidden claim categories for promoted Evaluation Cases.
 _Avoid_: Judge, Harness reviewer, label preclassifier
