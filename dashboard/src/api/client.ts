@@ -16,6 +16,8 @@ import type {
   EvaluationCampaignSummary,
   EvaluationCampaignTrend,
   EvaluationProductionSampleCandidatesResponse,
+  EvaluationProductionSamplePromotion,
+  EvaluationProductionSamplePromotionRequest,
   EvaluationProductionSamplePromotionsResponse,
   FoundationKnowledgeSourceValidation,
   HandoffsResponse,
@@ -159,6 +161,19 @@ export function fetchEvaluationProductionSampleCandidates(): Promise<EvaluationP
 export function fetchEvaluationProductionSamplePromotions(): Promise<EvaluationProductionSamplePromotionsResponse> {
   return fetchJson<EvaluationProductionSamplePromotionsResponse>(
     `${BASE}/evaluation/production-samples/promotions`,
+  )
+}
+
+export function promoteEvaluationProductionSample(
+  request: EvaluationProductionSamplePromotionRequest,
+): Promise<EvaluationProductionSamplePromotion> {
+  return fetchJson<EvaluationProductionSamplePromotion>(
+    `${BASE}/evaluation/production-samples/promotions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    },
   )
 }
 

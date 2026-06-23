@@ -35,6 +35,7 @@ import {
   fetchWorkflowTemplates,
   importConfigAgent,
   permanentlyDeleteKnowledgeSource,
+  promoteEvaluationProductionSample,
   previewWorkflowStageContext,
   publishConfigDraft,
   retryKnowledgeIngestionJob,
@@ -195,6 +196,55 @@ test('evaluation production sample client methods use curation endpoints', async
   )
   expect(candidates.data[0].sample_id).toBe('prod_supported')
   expect(promotions.data[0].status).toBe('promoted')
+})
+
+test('promoteEvaluationProductionSample posts reviewer-gated promotion payload', async () => {
+  const promotionRequest = {
+    batch_id: 'prod_edge_cases',
+    sample_id: 'prod_unreviewed',
+    suite_id: 'production_edge_cases',
+    suite_version: '2026-06-21',
+    manifest_id: 'prod_unreviewed_subjects',
+    case: {
+      case_id: 'prod_unreviewed_case',
+      question: 'Redacted production policy support scenario.',
+      intent_type: 'guidance',
+      expected_resolution: 'answer_with_citations',
+      risk_class: 'customer_service_fact',
+      capability_path: 'evidence_answer',
+      expected_outcome: 'ANSWERED_WITH_CITATIONS' as const,
+      required_citation_refs: ['policy', 'faq'],
+    },
+    domain_review: {
+      reviewer: 'domain-reviewer',
+      confirmed: true,
+    },
+    harness_review: {
+      reviewer: 'harness-reviewer',
+      confirmed: true,
+    },
+  }
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({
+      promotion_dir: '/tmp/curation/promoted/prod_unreviewed',
+      promotion_record_path:
+        '/tmp/curation/promoted/prod_unreviewed/production_sample_promotion.json',
+      sample_id: 'prod_unreviewed',
+      status: 'promoted',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  const response = await promoteEvaluationProductionSample(promotionRequest)
+
+  expect(fetchMock).toHaveBeenCalledWith('/api/evaluation/production-samples/promotions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(promotionRequest),
+  })
+  expect(response.status).toBe('promoted')
 })
 
 test('fetchApprovals requests the global pending approval queue projection', async () => {

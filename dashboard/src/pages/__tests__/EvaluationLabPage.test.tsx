@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -10,6 +10,7 @@ import {
   fetchEvaluationCampaignTrends,
   fetchEvaluationProductionSampleCandidates,
   fetchEvaluationProductionSamplePromotions,
+  promoteEvaluationProductionSample,
 } from '../../api/client'
 import type { EvaluationCampaignSummary } from '../../api/types'
 import { AppRoutes } from '../../router'
@@ -21,6 +22,7 @@ vi.mock('../../api/client', () => ({
   fetchEvaluationCampaignTrends: vi.fn(),
   fetchEvaluationProductionSampleCandidates: vi.fn(),
   fetchEvaluationProductionSamplePromotions: vi.fn(),
+  promoteEvaluationProductionSample: vi.fn(),
 }))
 
 describe('EvaluationLabPage', () => {
@@ -165,6 +167,161 @@ describe('EvaluationLabPage', () => {
     expect(
       screen.getByText('Diagnostic only until domain and harness reviewers confirm.'),
     ).toBeInTheDocument()
+  })
+
+  it('promotes a production sample through explicit reviewer confirmation', async () => {
+    const campaign = evaluationCampaign()
+    vi.mocked(fetchEvaluationCampaigns).mockResolvedValue({
+      data: [campaign],
+      meta: { total: 1 },
+    })
+    vi.mocked(fetchEvaluationCampaign).mockResolvedValue(campaign)
+    vi.mocked(fetchEvaluationCampaignCases).mockResolvedValue({
+      campaign_id: 'active_agent_probe',
+      data: [],
+      meta: { total: 0 },
+    })
+    vi.mocked(fetchEvaluationCampaignTrends).mockResolvedValue({
+      campaign_id: 'active_agent_probe',
+      current_version: '2026-06-21',
+      baseline_campaign_id: null,
+      baseline_version: null,
+      status: 'no_baseline',
+      comparison_basis: {
+        suite_versions: [],
+      },
+      metric_deltas: {},
+    })
+    vi.mocked(fetchEvaluationProductionSampleCandidates).mockResolvedValue({
+      data: [
+        {
+          batch_id: 'prod_edge_cases',
+          batch_dir: '/tmp/curation/prod_edge_cases',
+          sample_id: 'prod_unreviewed',
+          source_run_id: 'run_prod_unreviewed',
+          curation_status: 'diagnostic_only',
+          formal_scoring_allowed: false,
+          run_purpose: 'production',
+          safe_summary: {
+            question_sha256: 'unreviewed-question-hash',
+            question_text_length: 54,
+            response_text_sha256: 'unreviewed-response-hash',
+            response_text_length: 35,
+          },
+        },
+      ],
+      meta: { total: 1 },
+    })
+    vi.mocked(fetchEvaluationProductionSamplePromotions)
+      .mockResolvedValueOnce({
+        data: [],
+        meta: { total: 0 },
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            promotion_dir: '/tmp/curation/promoted/prod_unreviewed',
+            promotion_record_path:
+              '/tmp/curation/promoted/prod_unreviewed/production_sample_promotion.json',
+            sample_id: 'prod_unreviewed',
+            status: 'promoted',
+            source_run_id: 'run_prod_unreviewed',
+            suite_path: 'evaluation_suite.yaml',
+            subject_manifest_path: 'evaluation_subjects.yaml',
+            domain_review: {
+              reviewer: 'domain-reviewer',
+              confirmed: true,
+            },
+            harness_review: {
+              reviewer: 'harness-reviewer',
+              confirmed: true,
+            },
+          },
+        ],
+        meta: { total: 1 },
+      })
+    vi.mocked(promoteEvaluationProductionSample).mockResolvedValue({
+      promotion_dir: '/tmp/curation/promoted/prod_unreviewed',
+      promotion_record_path:
+        '/tmp/curation/promoted/prod_unreviewed/production_sample_promotion.json',
+      sample_id: 'prod_unreviewed',
+      status: 'promoted',
+      suite_path: 'evaluation_suite.yaml',
+      subject_manifest_path: 'evaluation_subjects.yaml',
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evaluation-lab']}>
+        <AppRoutes />
+      </MemoryRouter>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Promote prod_unreviewed' }))
+
+    fireEvent.change(screen.getByLabelText('Case ID'), {
+      target: { value: 'prod_unreviewed_case' },
+    })
+    fireEvent.change(screen.getByLabelText('Question'), {
+      target: { value: 'Redacted production policy support scenario.' },
+    })
+    fireEvent.change(screen.getByLabelText('Intent Type'), {
+      target: { value: 'guidance' },
+    })
+    fireEvent.change(screen.getByLabelText('Expected Resolution'), {
+      target: { value: 'answer_with_citations' },
+    })
+    fireEvent.change(screen.getByLabelText('Risk Class'), {
+      target: { value: 'customer_service_fact' },
+    })
+    fireEvent.change(screen.getByLabelText('Capability Path'), {
+      target: { value: 'evidence_answer' },
+    })
+    fireEvent.change(screen.getByLabelText('Expected Outcome'), {
+      target: { value: 'ANSWERED_WITH_CITATIONS' },
+    })
+    fireEvent.change(screen.getByLabelText('Required Citation Refs'), {
+      target: { value: 'policy,faq' },
+    })
+    fireEvent.change(screen.getByLabelText('Domain Reviewer'), {
+      target: { value: 'domain-reviewer' },
+    })
+    fireEvent.click(screen.getByLabelText('Domain review confirmed'))
+    fireEvent.change(screen.getByLabelText('Harness Reviewer'), {
+      target: { value: 'harness-reviewer' },
+    })
+    fireEvent.click(screen.getByLabelText('Harness review confirmed'))
+    fireEvent.click(screen.getByRole('button', { name: 'Promote Sample' }))
+
+    await waitFor(() => {
+      expect(promoteEvaluationProductionSample).toHaveBeenCalledWith({
+        batch_id: 'prod_edge_cases',
+        sample_id: 'prod_unreviewed',
+        suite_id: 'production_edge_cases',
+        suite_version: '2026-06-21',
+        manifest_id: 'prod_unreviewed_subjects',
+        case: {
+          case_id: 'prod_unreviewed_case',
+          question: 'Redacted production policy support scenario.',
+          intent_type: 'guidance',
+          expected_resolution: 'answer_with_citations',
+          risk_class: 'customer_service_fact',
+          capability_path: 'evidence_answer',
+          expected_outcome: 'ANSWERED_WITH_CITATIONS',
+          required_citation_refs: ['policy', 'faq'],
+        },
+        domain_review: {
+          reviewer: 'domain-reviewer',
+          confirmed: true,
+        },
+        harness_review: {
+          reviewer: 'harness-reviewer',
+          confirmed: true,
+        },
+      })
+    })
+    expect(await screen.findByText('Promotion record is available.')).toBeInTheDocument()
+    expect(screen.getByText('Domain: domain-reviewer')).toBeInTheDocument()
+    expect(screen.getByText('Harness: harness-reviewer')).toBeInTheDocument()
   })
 })
 

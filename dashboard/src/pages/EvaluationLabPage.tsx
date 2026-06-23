@@ -1,9 +1,20 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AlertTriangle, Brain, Gauge, ShieldCheck, TestTubeDiagonal } from 'lucide-react'
 import {
   Badge,
+  Button,
   Card,
+  Checkbox,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
   EmptyState,
+  Input,
+  Label,
   Skeleton,
   Table,
   TableBody,
@@ -11,6 +22,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  Textarea,
 } from '@proofagent/ui'
 import {
   fetchEvaluationCampaign,
@@ -19,6 +31,7 @@ import {
   fetchEvaluationCampaignTrends,
   fetchEvaluationProductionSampleCandidates,
   fetchEvaluationProductionSamplePromotions,
+  promoteEvaluationProductionSample,
 } from '../api/client'
 import type {
   EvaluationCampaignCaseRow,
@@ -27,6 +40,8 @@ import type {
   EvaluationCampaignTrend,
   EvaluationProductionSampleCandidate,
   EvaluationProductionSamplePromotion,
+  EvaluationProductionSamplePromotionRequest,
+  ReceiptOutcome,
 } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
@@ -101,6 +116,15 @@ export function EvaluationLabPage() {
       cancelled = true
     }
   }, [selectedCampaignId])
+
+  async function refreshProductionSampleCuration() {
+    const [candidates, promotions] = await Promise.all([
+      fetchEvaluationProductionSampleCandidates().catch(() => ({ data: [], meta: { total: 0 } })),
+      fetchEvaluationProductionSamplePromotions().catch(() => ({ data: [], meta: { total: 0 } })),
+    ])
+    setCurationCandidates(candidates.data)
+    setCurationPromotions(promotions.data)
+  }
 
   return (
     <div className="max-w-7xl space-y-6">
@@ -246,6 +270,8 @@ export function EvaluationLabPage() {
           <CurationSummarySection
             candidates={curationCandidates}
             promotions={curationPromotions}
+            campaignVersion={summary.version}
+            onPromoted={refreshProductionSampleCuration}
           />
 
           <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -313,9 +339,13 @@ export function EvaluationLabPage() {
 function CurationSummarySection({
   candidates,
   promotions,
+  campaignVersion,
+  onPromoted,
 }: {
   candidates: EvaluationProductionSampleCandidate[]
   promotions: EvaluationProductionSamplePromotion[]
+  campaignVersion: string
+  onPromoted: () => Promise<void>
 }) {
   const promotionBySampleId = new Map(promotions.map((promotion) => [promotion.sample_id, promotion]))
   const promotedCandidateCount = candidates.filter(
@@ -364,6 +394,7 @@ function CurationSummarySection({
               <TableHead>Batch</TableHead>
               <TableHead>Reviewer Evidence</TableHead>
               <TableHead className="text-right">Safe Lengths</TableHead>
+              <TableHead className="text-right">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -402,6 +433,17 @@ function CurationSummarySection({
                   <TableCell className="text-right font-mono text-xs text-[var(--text-primary)]">
                     {safeLengthSummary(candidate)}
                   </TableCell>
+                  <TableCell className="text-right">
+                    {promotion?.status === 'promoted' ? (
+                      <Badge variant="success">Formal sample</Badge>
+                    ) : (
+                      <ProductionSamplePromotionDialog
+                        candidate={candidate}
+                        campaignVersion={campaignVersion}
+                        onPromoted={onPromoted}
+                      />
+                    )}
+                  </TableCell>
                 </TableRow>
               )
             })}
@@ -410,6 +452,315 @@ function CurationSummarySection({
       )}
     </Card>
   )
+}
+
+interface ProductionSamplePromotionFormState {
+  caseId: string
+  question: string
+  intentType: string
+  expectedResolution: string
+  riskClass: string
+  capabilityPath: string
+  expectedOutcome: ReceiptOutcome
+  requiredCitationRefs: string
+  domainReviewer: string
+  domainConfirmed: boolean
+  harnessReviewer: string
+  harnessConfirmed: boolean
+}
+
+function ProductionSamplePromotionDialog({
+  candidate,
+  campaignVersion,
+  onPromoted,
+}: {
+  candidate: EvaluationProductionSampleCandidate
+  campaignVersion: string
+  onPromoted: () => Promise<void>
+}) {
+  const [open, setOpen] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [form, setForm] = useState<ProductionSamplePromotionFormState>(() =>
+    initialPromotionForm(candidate),
+  )
+  const formPrefix = `production-sample-${candidate.sample_id}`
+
+  function updateField<K extends keyof ProductionSamplePromotionFormState>(
+    field: K,
+    value: ProductionSamplePromotionFormState[K],
+  ) {
+    setForm((current) => ({ ...current, [field]: value }))
+  }
+
+  function handleOpenChange(nextOpen: boolean) {
+    setOpen(nextOpen)
+    setSubmitError(null)
+    if (nextOpen) {
+      setForm(initialPromotionForm(candidate))
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!promotionFormIsComplete(form)) return
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      await promoteEvaluationProductionSample(
+        buildPromotionRequest(candidate, campaignVersion, form),
+      )
+      await onPromoted()
+      setOpen(false)
+    } catch {
+      setSubmitError('Production sample promotion failed.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const canSubmit = promotionFormIsComplete(form) && !submitting
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-label={`Promote ${candidate.sample_id}`}
+        >
+          Promote
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Promote production sample</DialogTitle>
+          <DialogDescription>
+            Create a reviewed evaluation case from safe curation artifacts for{' '}
+            <span className="font-mono">{candidate.sample_id}</span>.
+          </DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={handleSubmit}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor={`${formPrefix}-case-id`}>Case ID</Label>
+              <Input
+                id={`${formPrefix}-case-id`}
+                value={form.caseId}
+                onChange={(event) => updateField('caseId', event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`${formPrefix}-expected-outcome`}>Expected Outcome</Label>
+              <Input
+                id={`${formPrefix}-expected-outcome`}
+                value={form.expectedOutcome}
+                onChange={(event) =>
+                  updateField('expectedOutcome', event.target.value as ReceiptOutcome)
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`${formPrefix}-intent-type`}>Intent Type</Label>
+              <Input
+                id={`${formPrefix}-intent-type`}
+                value={form.intentType}
+                onChange={(event) => updateField('intentType', event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`${formPrefix}-expected-resolution`}>
+                Expected Resolution
+              </Label>
+              <Input
+                id={`${formPrefix}-expected-resolution`}
+                value={form.expectedResolution}
+                onChange={(event) => updateField('expectedResolution', event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`${formPrefix}-risk-class`}>Risk Class</Label>
+              <Input
+                id={`${formPrefix}-risk-class`}
+                value={form.riskClass}
+                onChange={(event) => updateField('riskClass', event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`${formPrefix}-capability-path`}>Capability Path</Label>
+              <Input
+                id={`${formPrefix}-capability-path`}
+                value={form.capabilityPath}
+                onChange={(event) => updateField('capabilityPath', event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor={`${formPrefix}-question`}>Question</Label>
+              <Textarea
+                id={`${formPrefix}-question`}
+                rows={3}
+                value={form.question}
+                onChange={(event) => updateField('question', event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor={`${formPrefix}-required-citation-refs`}>
+                Required Citation Refs
+              </Label>
+              <Input
+                id={`${formPrefix}-required-citation-refs`}
+                value={form.requiredCitationRefs}
+                onChange={(event) => updateField('requiredCitationRefs', event.target.value)}
+                placeholder="policy,faq"
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4 rounded-md border border-[var(--border)] bg-[var(--bg-subtle)] p-4 sm:grid-cols-2">
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor={`${formPrefix}-domain-reviewer`}>Domain Reviewer</Label>
+                <Input
+                  id={`${formPrefix}-domain-reviewer`}
+                  value={form.domainReviewer}
+                  onChange={(event) => updateField('domainReviewer', event.target.value)}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={`${formPrefix}-domain-confirmed`}
+                  checked={form.domainConfirmed}
+                  onCheckedChange={(checked) =>
+                    updateField('domainConfirmed', checked === true)
+                  }
+                />
+                <Label htmlFor={`${formPrefix}-domain-confirmed`}>
+                  Domain review confirmed
+                </Label>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor={`${formPrefix}-harness-reviewer`}>Harness Reviewer</Label>
+                <Input
+                  id={`${formPrefix}-harness-reviewer`}
+                  value={form.harnessReviewer}
+                  onChange={(event) => updateField('harnessReviewer', event.target.value)}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={`${formPrefix}-harness-confirmed`}
+                  checked={form.harnessConfirmed}
+                  onCheckedChange={(checked) =>
+                    updateField('harnessConfirmed', checked === true)
+                  }
+                />
+                <Label htmlFor={`${formPrefix}-harness-confirmed`}>
+                  Harness review confirmed
+                </Label>
+              </div>
+            </div>
+          </div>
+
+          {submitError && (
+            <p className="text-sm text-[var(--danger-fg)]" role="alert">
+              {submitError}
+            </p>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!canSubmit}>
+              {submitting ? 'Promoting...' : 'Promote Sample'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function initialPromotionForm(
+  candidate: EvaluationProductionSampleCandidate,
+): ProductionSamplePromotionFormState {
+  return {
+    caseId: `${candidate.sample_id}_case`,
+    question: '',
+    intentType: '',
+    expectedResolution: '',
+    riskClass: '',
+    capabilityPath: '',
+    expectedOutcome: 'ANSWERED_WITH_CITATIONS',
+    requiredCitationRefs: '',
+    domainReviewer: '',
+    domainConfirmed: false,
+    harnessReviewer: '',
+    harnessConfirmed: false,
+  }
+}
+
+function promotionFormIsComplete(form: ProductionSamplePromotionFormState): boolean {
+  return (
+    form.caseId.trim().length > 0 &&
+    form.question.trim().length > 0 &&
+    form.intentType.trim().length > 0 &&
+    form.expectedResolution.trim().length > 0 &&
+    form.riskClass.trim().length > 0 &&
+    form.capabilityPath.trim().length > 0 &&
+    form.expectedOutcome.trim().length > 0 &&
+    form.requiredCitationRefs.trim().length > 0 &&
+    form.domainReviewer.trim().length > 0 &&
+    form.domainConfirmed &&
+    form.harnessReviewer.trim().length > 0 &&
+    form.harnessConfirmed
+  )
+}
+
+function buildPromotionRequest(
+  candidate: EvaluationProductionSampleCandidate,
+  campaignVersion: string,
+  form: ProductionSamplePromotionFormState,
+): EvaluationProductionSamplePromotionRequest {
+  return {
+    batch_id: candidate.batch_id,
+    sample_id: candidate.sample_id,
+    suite_id: productionSampleSuiteId(candidate.batch_id),
+    suite_version: campaignVersion,
+    manifest_id: `${candidate.sample_id}_subjects`,
+    case: {
+      case_id: form.caseId.trim(),
+      question: form.question.trim(),
+      intent_type: form.intentType.trim(),
+      expected_resolution: form.expectedResolution.trim(),
+      risk_class: form.riskClass.trim(),
+      capability_path: form.capabilityPath.trim(),
+      expected_outcome: form.expectedOutcome.trim() as ReceiptOutcome,
+      required_citation_refs: commaSeparatedValues(form.requiredCitationRefs),
+    },
+    domain_review: {
+      reviewer: form.domainReviewer.trim(),
+      confirmed: form.domainConfirmed,
+    },
+    harness_review: {
+      reviewer: form.harnessReviewer.trim(),
+      confirmed: form.harnessConfirmed,
+    },
+  }
+}
+
+function productionSampleSuiteId(batchId: string): string {
+  return batchId.replace(/^prod(?=[_.-])/, 'production')
+}
+
+function commaSeparatedValues(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
 function reviewQueueLabel(candidate: EvaluationProductionSampleCandidate): string {

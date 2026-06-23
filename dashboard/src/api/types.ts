@@ -544,6 +544,28 @@ export interface EvaluationProductionSamplePromotionsResponse {
   }
 }
 
+export interface EvaluationProductionSamplePromotionCaseRequest {
+  case_id: string
+  question: string
+  intent_type: string
+  expected_resolution: string
+  risk_class: string
+  capability_path: string
+  expected_outcome: ReceiptOutcome
+  required_citation_refs: string[]
+}
+
+export interface EvaluationProductionSamplePromotionRequest {
+  batch_id: string
+  sample_id: string
+  suite_id: string
+  suite_version: string
+  manifest_id: string
+  case: EvaluationProductionSamplePromotionCaseRequest
+  domain_review: EvaluationProductionSampleReviewer
+  harness_review: EvaluationProductionSampleReviewer
+}
+
 export interface ContractBundle {
   agent_yaml: string
   policy_yaml: string
