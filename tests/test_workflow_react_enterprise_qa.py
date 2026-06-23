@@ -14,6 +14,8 @@ from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import (
     BusinessFlowSkillPackRecommendation,
     BusinessFlowSkillPackRecommendationType,
+    EvidenceChunk,
+    EvidenceStatus,
     IntentResolution,
     IntentResolutionResult,
     ModelConfig,
@@ -37,6 +39,10 @@ from proof_agent.control.workflow.stage_configuration import (
 from proof_agent.control.workflow.react_enterprise_qa_execution import (
     ReActEnterpriseQAWorkflowExecution,
 )
+from proof_agent.control.workflow.react_enterprise_qa_stage_behavior import (
+    _llm_interaction_capture,
+)
+from proof_agent.control.workflow.harness_helpers import build_model_request
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_with_langgraph
 
@@ -184,6 +190,59 @@ def test_react_execution_retrieval_returns_observation_record(
     assert observation["new_evidence_count"] == 1
     assert list(observation["unresolved_subgoals"]) == []
     assert list(observation["citation_refs"])
+
+
+def test_text_llm_interaction_capture_does_not_report_json_parse_failure() -> None:
+    request = ModelRequest(
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        messages=(),
+        response_format="text",
+    )
+    response = ModelResponse(
+        content="Travel meals are reimbursed. Citation: policy.md#travel:L1-L3",
+        provider_name="deepseek",
+        model_name="deepseek-v4-flash",
+    )
+
+    capture = _llm_interaction_capture(
+        stage_id="model_answer",
+        stage_label="Model Answer",
+        role="final_answer",
+        request=request,
+        response=response,
+    )
+
+    assert capture["request_json"]["response_format"] == "text"
+    assert "response_json_parse_error_code" not in capture
+    assert "response_json" not in capture
+    assert capture["response_content_length"] == len(response.content)
+
+
+def test_final_answer_model_request_lists_allowed_citation_refs() -> None:
+    citation = (
+        "knowledge://source/ks_myks/document/doc_1c78ce23/"
+        "revision/rev_1c78ce23#node=82ac0f38"
+    )
+    request = build_model_request(
+        question="平安去年业绩怎么样？",
+        evidence=(
+            EvidenceChunk(
+                source="knowledge://source/ks_myks/document/doc_1c78ce23",
+                content="2025 年营收 10,505 亿元。",
+                admission_score=1.0,
+                status=EvidenceStatus.CANDIDATE,
+                citation=citation,
+            ),
+        ),
+        provider="deepseek",
+        model="deepseek-v4-flash",
+    )
+
+    user_message = request.messages[1].content
+    assert "Allowed citation refs:" in user_message
+    assert citation in user_message
+    assert "Copy at least one allowed citation ref exactly" in user_message
 
 
 def test_supported_travel_meal_question_answers_with_react_review_trace(

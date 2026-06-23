@@ -1104,7 +1104,11 @@ def _llm_interaction_capture(
     request: ModelRequest,
     response: ModelResponse,
 ) -> dict[str, Any]:
-    response_json, parse_error = _model_content_json(response.content)
+    response_json, parse_error = (
+        _model_content_json(response.content)
+        if request.response_format == "json"
+        else (None, None)
+    )
     capture = {
         "stage_id": stage_id,
         "stage_label": stage_label,

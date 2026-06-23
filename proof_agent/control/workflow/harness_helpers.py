@@ -75,6 +75,7 @@ def build_model_request(
     workflow_stage_context: Mapping[str, Any] | None = None,
 ) -> ModelRequest:
     evidence_text = "\n\n".join(getattr(chunk, "content") for chunk in evidence)
+    citation_instruction_text = _citation_instruction_text(evidence)
     context_text = ""
     if conversation_context is not None and conversation_context.admitted:
         context_text = (
@@ -86,13 +87,17 @@ def build_model_request(
     messages = (
         ModelMessage(
             role=ModelRole.SYSTEM,
-            content="Answer using only accepted evidence. Refuse when evidence is insufficient.",
+            content=(
+                "Answer using only accepted evidence. Refuse when evidence is insufficient. "
+                "Copy at least one allowed citation ref exactly into factual answers."
+            ),
         ),
         ModelMessage(
             role=ModelRole.USER,
             content=(
                 f"{context_text}{workflow_stage_context_text}"
                 f"Question: {question}\n\nEvidence:\n{evidence_text}"
+                f"{citation_instruction_text}"
             ),
         ),
     )
@@ -108,6 +113,27 @@ def build_model_request(
         },
         evidence_sources=tuple(getattr(chunk, "source") for chunk in evidence),
     )
+
+
+def _citation_instruction_text(evidence: tuple[EvidenceChunk, ...]) -> str:
+    refs = _allowed_citation_refs(evidence)
+    if not refs:
+        return ""
+    bullet_list = "\n".join(f"- {ref}" for ref in refs)
+    return (
+        "\n\nAllowed citation refs:\n"
+        f"{bullet_list}\n"
+        "Copy at least one allowed citation ref exactly when making factual claims."
+    )
+
+
+def _allowed_citation_refs(evidence: tuple[EvidenceChunk, ...]) -> tuple[str, ...]:
+    refs: list[str] = []
+    for chunk in evidence:
+        for value in (chunk.citation, chunk.source):
+            if isinstance(value, str) and value.strip() and value not in refs:
+                refs.append(value)
+    return tuple(refs)
 
 
 def _workflow_stage_context_text(
