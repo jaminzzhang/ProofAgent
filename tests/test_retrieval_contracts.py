@@ -16,20 +16,23 @@ from proof_agent.contracts.manifest import ModelConfig, RetrievalConfig
 
 
 def test_retrieval_capabilities_defaults_are_false() -> None:
-    """Both capability flags default to False."""
+    """Capability flags default to False."""
     caps = RetrievalCapabilities()
     assert caps.supports_structure_listing is False
     assert caps.supports_scoped_retrieval is False
+    assert caps.supports_parallel_retrieval is False
 
 
 def test_retrieval_capabilities_can_enable_features() -> None:
-    """Can construct with True values for both flags."""
+    """Can construct with True values for all capability flags."""
     caps = RetrievalCapabilities(
         supports_structure_listing=True,
         supports_scoped_retrieval=True,
+        supports_parallel_retrieval=True,
     )
     assert caps.supports_structure_listing is True
     assert caps.supports_scoped_retrieval is True
+    assert caps.supports_parallel_retrieval is True
 
 
 def test_retrieval_capabilities_is_frozen() -> None:
@@ -277,11 +280,36 @@ def test_retrieval_config_max_queries_default() -> None:
     assert config.max_queries == 3
 
 
+def test_retrieval_config_query_parallelism_defaults() -> None:
+    """query_concurrency and query_timeout_seconds have bounded defaults."""
+    config = RetrievalConfig(strategy="agentic")
+    assert config.query_concurrency == 3
+    assert config.query_timeout_seconds == 10.0
+
+
 @pytest.mark.parametrize("max_queries", [0, 6])
 def test_retrieval_config_rejects_out_of_range_max_queries(max_queries: int) -> None:
     """max_queries is constrained to the approved 1..5 budget range."""
     with pytest.raises(ValidationError):
         RetrievalConfig(strategy="agentic", max_queries=max_queries)
+
+
+@pytest.mark.parametrize("query_concurrency", [0, 6])
+def test_retrieval_config_rejects_out_of_range_query_concurrency(
+    query_concurrency: int,
+) -> None:
+    """query_concurrency is constrained to the approved 1..5 budget range."""
+    with pytest.raises(ValidationError):
+        RetrievalConfig(strategy="agentic", query_concurrency=query_concurrency)
+
+
+@pytest.mark.parametrize("query_timeout_seconds", [0, 121])
+def test_retrieval_config_rejects_out_of_range_query_timeout(
+    query_timeout_seconds: float,
+) -> None:
+    """query_timeout_seconds is constrained to the approved 0.01..120 second range."""
+    with pytest.raises(ValidationError):
+        RetrievalConfig(strategy="agentic", query_timeout_seconds=query_timeout_seconds)
 
 
 def test_retrieval_config_evaluator_model_default_none() -> None:
@@ -317,6 +345,8 @@ def test_retrieval_config_serialization_roundtrip() -> None:
     original = RetrievalConfig(
         strategy="agentic",
         max_rounds=5,
+        query_concurrency=4,
+        query_timeout_seconds=7.5,
         evaluator_model=model,
     )
     data = original.model_dump()

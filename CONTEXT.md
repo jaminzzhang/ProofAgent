@@ -654,6 +654,10 @@ _Avoid_: Executable retrieval plan, provider call list, ReAct planner query rewr
 The public Intent Resolution behavior for knowledge-retrieval intents where the model expands one user question into a bounded Retrieval Query Set with complementary search angles. It is domain-neutral: query items express angles such as original wording, synonym or business terminology, time/entity/metric qualifiers, and bilingual alternatives when useful, without creating a new domain-specific query type.
 _Avoid_: Business-specific query subtype, one-query synonym rewrite, source filter, executable retrieval plan
 
+**Parallel Query Set Retrieval**:
+The bounded execution behavior where independent Retrieval Query Items from one reviewed Retrieval Query Set may retrieve concurrently when the provider explicitly declares parallel retrieval support. It preserves one governed retrieval action, required-item fail-closed semantics, optional-item timeout degradation, and deterministic evidence aggregation by query-set order.
+_Avoid_: Parallel ReAct planning, unbounded provider fan-out, implicit provider thread-safety, optional query blocking after timeout
+
 **Retrieval Query Item**:
 One candidate query in a Retrieval Query Set, carrying query text plus audit-safe intent angle, required flag, and reason without naming Knowledge Sources, providers, filters, or execution parameters.
 _Avoid_: Provider route, source filter, scoped retrieval command, top_k override
@@ -2974,10 +2978,14 @@ _Avoid_: Evidence content dump
 - **Intent Resolution Contract** may default **Retrieval Query Set** to empty for compatibility, but LLM Intent Resolution output fails validation when a retrieval-ready intent omits required query items.
 - **Retrieval Query Set** defaults to at most three **Retrieval Query Items** with a hard configurable cap of five; contract validation fails rather than silently truncating when the set exceeds its allowed budget.
 - `retrieval.max_queries` is the Agent-level Retrieval Query Set budget, valid from one through five, distinct from provider result `top_k` and agentic rewrite `max_rounds`.
+- `retrieval.query_concurrency` bounds **Parallel Query Set Retrieval** fan-out from one through five, and `retrieval.query_timeout_seconds` bounds the query-set batch wait from 0.01 through 120 seconds.
 - The governed Retrieval stage executes required **Retrieval Query Items** before optional items, and optional items may run only while the query budget remains.
 - **Retrieval Query Set** provides the initial query queue for agentic retrieval; **RetrievalPlanner** may append later rewrite queries only after the initial query queue fails to produce sufficient accepted evidence.
 - `single_step` retrieval may record a **Retrieval Query Set** but executes at most one selected query, while `agentic` retrieval is the strategy that may execute multiple **Retrieval Query Items**.
 - ReAct reviewed retrieval must execute a multi-item Retrieval Query Set as a query expansion batch even when the Agent's configured retrieval strategy is `single_step`, because Intent Resolution has already paid for Knowledge Query Expansion and the governed review approved the retrieval action.
+- **Parallel Query Set Retrieval** may run a reviewed multi-item Retrieval Query Set concurrently only when the Knowledge Provider declares `supports_parallel_retrieval`; unknown providers remain sequential rather than assuming thread safety.
+- **Parallel Query Set Retrieval** proceeds after the timeout when every required Retrieval Query Item has returned normally; optional timeout or optional provider failure is recorded as degraded retrieval and does not block evidence evaluation.
+- A required Retrieval Query Item timeout or provider failure fails closed as `required_provider_failure`; optional evidence cannot compensate for a missing required query because required items define the minimum intent coverage.
 - **Retrieval Query Set** is recorded both inside the `intent_resolution` trace payload and as a separate `retrieval_query_set` trace event with only audit-safe query item fields, counts, budget, validation status, and Intent Resolution linkage.
 - V2 **Intent Resolution** requires deterministic contract validation and trace recording, but does not add an independent Auto Review node because executable actions remain governed by existing review and policy nodes.
 - V2 **Intent Resolution** reuses **ReAct Planner Config** for model configuration while remaining a distinct model-call role and audit fact from ReAct planning.

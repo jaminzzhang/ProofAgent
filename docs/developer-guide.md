@@ -219,6 +219,8 @@ retrieval:
   top_k: 2
   min_score: 0.2
   max_queries: 3
+  query_concurrency: 3
+  query_timeout_seconds: 10.0
 
 model:
   provider: deterministic
@@ -845,7 +847,7 @@ When extending local indexed knowledge or remote retrieval:
 - Provider Adapter must return candidate `EvidenceChunk`.
 - Provider-specific config belongs to package-local Knowledge Sources or the Dashboard Knowledge Source store.
 - Agents bind package-local or shared Sources through `knowledge_bindings[].source_ref`; they do not own shared provider credentials or ingestion settings.
-- `top_k`, `min_score`, and the Intent Resolution Query Set budget `max_queries` belong under `retrieval`.
+- `top_k`, `min_score`, the Intent Resolution Query Set budget `max_queries`, query-set fan-out `query_concurrency`, and query-set batch wait `query_timeout_seconds` belong under `retrieval`.
 - Retrieval cannot determine the final answer.
 - Whether evidence is sufficient is determined by evaluators, PolicyEngine, and validators.
 - Provider SDK types must not enter contracts.

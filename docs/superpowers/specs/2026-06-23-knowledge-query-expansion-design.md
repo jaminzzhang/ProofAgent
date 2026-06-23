@@ -12,6 +12,8 @@ Use one public **Knowledge Query Expansion** behavior for all LLM Intent Resolut
 
 Direct `single_step` retrieval keeps its current behavior: select one required query item if present. ReAct reviewed retrieval changes behavior: when a multi-item Retrieval Query Set exists, it executes the whole ordered set as a query expansion batch within `retrieval.max_queries`, then evaluates the combined evidence.
 
+The query expansion batch may execute Retrieval Query Items concurrently when the provider explicitly declares parallel retrieval support. `retrieval.query_concurrency` bounds fan-out, and `retrieval.query_timeout_seconds` bounds the batch wait. Retrieval proceeds when required query items return normally; optional timeout or failure is degraded and traced without blocking evidence evaluation.
+
 ## Tests
 
 Add a prompt/payload test proving Intent Resolution exposes the public expansion policy to the LLM. Add a retrieval service test proving `retrieve_reviewed(..., execution_mode="react_reviewed_retrieval")` executes required and optional query items even when `strategy="single_step"`. Keep the existing direct `single_step` test unchanged.

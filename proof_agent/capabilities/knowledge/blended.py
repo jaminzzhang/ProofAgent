@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from proof_agent.capabilities.knowledge.provider import KnowledgeProvider
 from proof_agent.capabilities.knowledge.registry import resolve_knowledge_provider
+from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.contracts import EvidenceChunk, EvidenceContribution
 from proof_agent.contracts.knowledge_resolution import (
     ResolvedKnowledgeBinding,
@@ -39,6 +40,15 @@ class BlendedKnowledgeProvider:
     def bound_providers(self) -> tuple[BoundKnowledgeProvider, ...]:
         return self._bound_providers
 
+    @property
+    def capabilities(self) -> RetrievalCapabilities:
+        return RetrievalCapabilities(
+            supports_parallel_retrieval=all(
+                _provider_supports_parallel_retrieval(bound.provider)
+                for bound in self._bound_providers
+            )
+        )
+
     def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
         candidates: list[EvidenceChunk] = []
         for bound in self._bound_providers:
@@ -67,6 +77,11 @@ class BlendedKnowledgeProvider:
             chunk.model_copy(update={"fusion_rank": float(index)})
             for index, chunk in enumerate(ranked, start=1)
         )
+
+
+def _provider_supports_parallel_retrieval(provider: KnowledgeProvider) -> bool:
+    capabilities = getattr(provider, "capabilities", None)
+    return bool(getattr(capabilities, "supports_parallel_retrieval", False))
 
 
 def resolve_blended_knowledge_provider(

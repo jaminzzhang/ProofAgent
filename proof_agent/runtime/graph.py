@@ -68,6 +68,8 @@ def build_enterprise_qa_graph(
                 min_score=manifest.retrieval.min_score,
                 max_steps=manifest.retrieval.max_steps,
                 max_rounds=manifest.retrieval.max_rounds,
+                query_concurrency=manifest.retrieval.query_concurrency,
+                query_timeout_seconds=manifest.retrieval.query_timeout_seconds,
                 planner_model=invocation.retrieval_planner_model,
                 evaluator_model=invocation.retrieval_evaluator_model,
                 force_empty=question == UNSUPPORTED_QUESTION,

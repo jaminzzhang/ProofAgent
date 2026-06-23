@@ -587,6 +587,8 @@ class ReActEnterpriseQAStageBehavior:
                 evaluator_model=self.invocation.retrieval_evaluator_model,
                 retrieval_query_set=_retrieval_query_set_from_state(state),
                 max_queries=self.manifest.retrieval.max_queries,
+                query_concurrency=self.manifest.retrieval.query_concurrency,
+                query_timeout_seconds=self.manifest.retrieval.query_timeout_seconds,
                 force_empty=state["question"] == UNSUPPORTED_QUESTION,
             ),
             execution_mode="react_reviewed_retrieval",

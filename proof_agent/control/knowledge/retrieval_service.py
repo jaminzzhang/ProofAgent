@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -63,6 +64,8 @@ class KnowledgeRetrievalRequest:
     evaluator_model: ModelConfig | None = None
     retrieval_query_set: tuple[RetrievalQueryItem, ...] = ()
     max_queries: int = 3
+    query_concurrency: int = 3
+    query_timeout_seconds: float = 10.0
     force_empty: bool = False
 
 
@@ -85,6 +88,15 @@ class _ProviderStepResult:
     evidence: tuple[EvidenceChunk, ...]
     no_evidence_reason_code: str | None = None
     required_provider_failed: bool = False
+
+
+@dataclass(frozen=True)
+class _ParallelProviderStepResult:
+    evidence: tuple[EvidenceChunk, ...]
+    summary: Mapping[str, Any]
+    no_evidence_reason_code: str | None = None
+    status: Literal["ok", "blocked", "waiting", "error"] = "ok"
+    payload: Mapping[str, Any] | None = None
 
 
 class _GovernedRoutingModelProvider:
@@ -488,6 +500,26 @@ class KnowledgeRetrievalService:
         items = _ordered_query_items(request)
         if not items:
             return _ProviderStepResult(evidence=())
+        _validate_query_execution_budget(request)
+        if _can_parallelize_query_set(self._knowledge_provider, request, items):
+            return self._execute_parallel_agentic_query_set(
+                request,
+                items=items,
+                execution_mode=execution_mode,
+            )
+        return self._execute_sequential_agentic_query_set(
+            request,
+            items=items,
+            execution_mode=execution_mode,
+        )
+
+    def _execute_sequential_agentic_query_set(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        items: tuple[RetrievalQueryItem, ...],
+        execution_mode: str | None,
+    ) -> _ProviderStepResult:
         evidence: list[EvidenceChunk] = []
         no_evidence_reason_code: str | None = None
         for index, item in enumerate(items, start=1):
@@ -511,6 +543,252 @@ class KnowledgeRetrievalService:
         return _ProviderStepResult(
             evidence=tuple(evidence),
             no_evidence_reason_code=no_evidence_reason_code,
+        )
+
+    def _execute_parallel_agentic_query_set(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        items: tuple[RetrievalQueryItem, ...],
+        execution_mode: str | None,
+    ) -> _ProviderStepResult:
+        max_workers = min(request.query_concurrency, len(items))
+        executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="proof-retrieval-query",
+        )
+        future_entries: dict[Future[_ParallelProviderStepResult], tuple[int, RetrievalQueryItem]] = {}
+        try:
+            for index, item in enumerate(items, start=1):
+                round_id = f"query_set_{index:02d}"
+                step_context = self._step_context(
+                    request,
+                    execution_mode=execution_mode,
+                    question=item.query,
+                    step_id=round_id,
+                    query_item=item,
+                )
+                step_context["round_id"] = round_id
+                step_context["strategy"] = "agentic"
+                step_context["query_execution"] = "parallel"
+                self._trace.emit("retrieval_step", status="ok", payload=step_context)
+                future = executor.submit(
+                    self._execute_parallel_provider_step,
+                    request,
+                    item.query,
+                    round_id,
+                    round_id,
+                )
+                future_entries[future] = (index, item)
+
+            done, not_done = wait(
+                tuple(future_entries),
+                timeout=request.query_timeout_seconds,
+            )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        evidence_by_index: dict[int, tuple[EvidenceChunk, ...]] = {}
+        no_evidence_reason_code: str | None = None
+        required_provider_failed = False
+        for future in done:
+            index, item = future_entries[future]
+            round_id = f"query_set_{index:02d}"
+            try:
+                provider_step = future.result()
+            except Exception:
+                self._emit_basic_retrieval_result(
+                    (),
+                    step_id=round_id,
+                    round_id=round_id,
+                    status="error",
+                    no_evidence_reason_code=(
+                        "required_provider_failure"
+                        if item.required
+                        else "optional_provider_failure"
+                    ),
+                )
+                if item.required:
+                    required_provider_failed = True
+                    no_evidence_reason_code = "required_provider_failure"
+                elif no_evidence_reason_code is None:
+                    no_evidence_reason_code = "optional_provider_failure"
+                continue
+            evidence_by_index[index] = provider_step.evidence
+            if provider_step.no_evidence_reason_code is not None:
+                no_evidence_reason_code = provider_step.no_evidence_reason_code
+            if provider_step.payload is not None:
+                self._trace.emit(
+                    "retrieval_result",
+                    status=provider_step.status,
+                    payload=provider_step.payload,
+                )
+            else:
+                self._emit_basic_retrieval_result(
+                    provider_step.evidence,
+                    step_id=round_id,
+                    round_id=round_id,
+                    summary=provider_step.summary,
+                )
+
+        for future in not_done:
+            index, item = future_entries[future]
+            round_id = f"query_set_{index:02d}"
+            future.cancel()
+            self._emit_basic_retrieval_result(
+                (),
+                step_id=round_id,
+                round_id=round_id,
+                status="blocked",
+                summary={
+                    "timeout_seconds": request.query_timeout_seconds,
+                    "required": item.required,
+                },
+                no_evidence_reason_code="retrieval_query_timeout",
+            )
+            if item.required:
+                required_provider_failed = True
+                no_evidence_reason_code = "required_provider_failure"
+            elif no_evidence_reason_code is None:
+                no_evidence_reason_code = "retrieval_query_timeout"
+
+        evidence: list[EvidenceChunk] = []
+        for index in sorted(evidence_by_index):
+            evidence.extend(evidence_by_index[index])
+        return _ProviderStepResult(
+            evidence=tuple(evidence),
+            no_evidence_reason_code=no_evidence_reason_code,
+            required_provider_failed=required_provider_failed,
+        )
+
+    def _execute_parallel_provider_step(
+        self,
+        request: KnowledgeRetrievalRequest,
+        query: str,
+        step_id: str,
+        round_id: str | None,
+    ) -> _ParallelProviderStepResult:
+        bound_providers = _bound_providers(self._knowledge_provider)
+        if bound_providers is not None:
+            return self._execute_parallel_bound_provider_step(
+                request,
+                query=query,
+                bound_providers=bound_providers,
+                step_id=step_id,
+                round_id=round_id,
+            )
+        _bind_provider_routing_model_governance(
+            self._knowledge_provider,
+            policy=self._policy,
+            trace=self._trace,
+        )
+        evidence = self._knowledge_provider.retrieve(
+            query,
+            top_k=request.top_k,
+        )
+        summary = _consume_provider_retrieval_summary(self._knowledge_provider)
+        if request.force_empty:
+            evidence = ()
+        return _ParallelProviderStepResult(
+            evidence=evidence,
+            summary=summary,
+        )
+
+    def _execute_parallel_bound_provider_step(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        query: str,
+        bound_providers: tuple[BoundKnowledgeProvider, ...],
+        step_id: str,
+        round_id: str | None,
+    ) -> _ParallelProviderStepResult:
+        provider_calls: list[dict[str, Any]] = []
+        raw_candidates: list[EvidenceChunk] = []
+        degraded = False
+        routing = _route_bound_providers(query, bound_providers)
+        if not routing.selected:
+            payload = {
+                "step_id": step_id,
+                **_round_payload(round_id),
+                "provider": self._knowledge_provider.provider_name,
+                "candidate_count": 0,
+                "chunk_count": 0,
+                "raw_candidate_count": 0,
+                "deduplicated_count": 0,
+                "sources": [],
+                "binding_candidates": routing.binding_candidates,
+                "selected_bindings": [],
+                "provider_calls": [],
+                "degraded": False,
+                "routing": _routing_payload(routing),
+                "no_evidence_reason_code": routing.no_evidence_reason_code,
+            }
+            return _ParallelProviderStepResult(
+                evidence=(),
+                summary={},
+                no_evidence_reason_code=routing.no_evidence_reason_code,
+                payload=payload,
+            )
+
+        for bound in routing.selected:
+            binding_top_k = bound.resolved.top_k or request.top_k
+            _bind_provider_routing_model_governance(
+                bound.provider,
+                policy=self._policy,
+                trace=self._trace,
+            )
+            try:
+                chunks = bound.provider.retrieve(query, top_k=binding_top_k)
+            except Exception as exc:
+                provider_calls.append(
+                    _failed_provider_call(
+                        bound,
+                        exc,
+                        summary=_consume_provider_retrieval_summary(bound.provider),
+                    )
+                )
+                if bound.resolved.failure_mode == "advisory" and not _is_policy_error(exc):
+                    degraded = True
+                    continue
+                raise
+            provider_calls.append(
+                _successful_provider_call(
+                    bound,
+                    len(chunks),
+                    summary=_consume_provider_retrieval_summary(bound.provider),
+                )
+            )
+            for local_rank, chunk in enumerate(chunks, start=1):
+                raw_candidates.append(_tag_bound_chunk(chunk, bound=bound, local_rank=local_rank))
+
+        fused_candidates = _fuse_bound_candidates(raw_candidates)
+        evidence = fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        if request.force_empty:
+            evidence = ()
+        payload = {
+            "step_id": step_id,
+            **_round_payload(round_id),
+            "provider": self._knowledge_provider.provider_name,
+            "candidate_count": len(evidence),
+            "chunk_count": len(evidence),
+            "raw_candidate_count": len(raw_candidates),
+            "deduplicated_count": max(0, len(raw_candidates) - len(fused_candidates)),
+            "sources": [chunk.source for chunk in evidence],
+            "binding_candidates": routing.binding_candidates,
+            "selected_bindings": _selected_binding_summaries(
+                routing.selected,
+                selection_reason=routing.selection_reason,
+            ),
+            "provider_calls": provider_calls,
+            "degraded": degraded,
+            "routing": _routing_payload(routing),
+        }
+        return _ParallelProviderStepResult(
+            evidence=evidence,
+            summary={},
+            no_evidence_reason_code="zero_accepted_evidence",
+            payload=payload,
         )
 
     def _run_reviewed_or_step_gated_single_step(
@@ -876,6 +1154,47 @@ def _should_execute_reviewed_query_expansion(
         and request.strategy == "single_step"
         and len(request.retrieval_query_set) > 1
     )
+
+
+def _validate_query_execution_budget(request: KnowledgeRetrievalRequest) -> None:
+    if request.query_concurrency < 1 or request.query_concurrency > 5:
+        raise ProofAgentError(
+            "PA_RETRIEVAL_001",
+            "retrieval.query_concurrency must be between 1 and 5.",
+            "Set retrieval.query_concurrency to a value from 1 through 5.",
+        )
+    if request.query_timeout_seconds < 0.01 or request.query_timeout_seconds > 120.0:
+        raise ProofAgentError(
+            "PA_RETRIEVAL_001",
+            "retrieval.query_timeout_seconds must be between 0.01 and 120.0.",
+            "Set retrieval.query_timeout_seconds to a value from 0.01 through 120.0.",
+        )
+
+
+def _can_parallelize_query_set(
+    knowledge_provider: KnowledgeProvider,
+    request: KnowledgeRetrievalRequest,
+    items: tuple[RetrievalQueryItem, ...],
+) -> bool:
+    return (
+        len(items) > 1
+        and request.query_concurrency > 1
+        and _query_set_provider_supports_parallel_retrieval(knowledge_provider)
+    )
+
+
+def _query_set_provider_supports_parallel_retrieval(
+    knowledge_provider: KnowledgeProvider,
+) -> bool:
+    bound_providers = _bound_providers(knowledge_provider)
+    if bound_providers is not None:
+        return all(_provider_supports_parallel_retrieval(bound.provider) for bound in bound_providers)
+    return _provider_supports_parallel_retrieval(knowledge_provider)
+
+
+def _provider_supports_parallel_retrieval(knowledge_provider: KnowledgeProvider) -> bool:
+    capabilities = getattr(knowledge_provider, "capabilities", None)
+    return bool(getattr(capabilities, "supports_parallel_retrieval", False))
 
 
 def _ordered_query_items(
