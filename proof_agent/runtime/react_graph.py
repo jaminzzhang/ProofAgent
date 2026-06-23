@@ -55,6 +55,7 @@ class ReActGraphState(TypedDict, total=False):
     # Controlled ReAct Loop control state (ADR-0032). Control state, not logs.
     action_history: Annotated[list[dict[str, Any]], operator.add]
     evidence_trajectory: Annotated[list[int], operator.add]
+    observations: Annotated[list[dict[str, Any]], operator.add]
     last_convergence_signal: str | None
 
 

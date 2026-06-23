@@ -60,7 +60,10 @@ class DeterministicProvider:
                 "policyholder identity document."
             )
         if question == SUPPORTED_QUESTION:
-            return "Travel meals are reimbursed up to 50 USD per day with receipts."
+            return (
+                "Travel meals are reimbursed up to 50 USD per day with receipts. "
+                "Citation: customer-support-policy.md#travel-meals:L3-L7"
+            )
         if question == TOOL_REQUIRED_QUESTION:
             return "Customer policy status requires the approved customer_lookup tool."
         if question == UNSUPPORTED_QUESTION:

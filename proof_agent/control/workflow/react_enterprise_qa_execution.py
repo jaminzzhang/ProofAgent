@@ -259,7 +259,7 @@ class ReActEnterpriseQAWorkflowExecution:
                 "accepted_evidence_count": len(evidence),
                 "review_result_count": len(list(delta.get("review_results", ()))),
             },
-            produced_fact_refs=("evidence", "review_results"),
+            produced_fact_refs=("evidence", "review_results", "observations"),
             continuation=delta,
         )
 

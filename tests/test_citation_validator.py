@@ -50,3 +50,28 @@ def test_citation_validator_accepts_evidence_citation_field() -> None:
     )
 
     assert result.status == ValidationStatus.PASSED
+
+
+def test_citation_validator_fails_when_strict_answer_has_no_supported_refs() -> None:
+    result = validate_citations_supported_by_evidence(
+        "Travel meals require receipts.",
+        (
+            EvidenceChunk(
+                source="Travel Policy",
+                content="Travel meals require receipts.",
+                admission_score=0.8,
+                status=EvidenceStatus.CANDIDATE,
+                citation="travel-policy.md#meals:L10-L18",
+            ),
+        ),
+        observation_records=(
+            {
+                "source_refs": ["Travel Policy"],
+                "citation_refs": ["travel-policy.md#meals:L10-L18"],
+            },
+        ),
+        require_supported_citation=True,
+    )
+
+    assert result.status == ValidationStatus.FAILED
+    assert result.metadata["missing_supported_citation"] is True

@@ -145,13 +145,19 @@ def validate_model_output(
     response: ModelResponse,
     outcome: ReceiptOutcome,
     evidence: tuple[EvidenceChunk, ...],
+    observation_records: tuple[Mapping[str, Any], ...] = (),
 ) -> tuple[ValidationResult, ...]:
     return (
         validate_final_output_schema(
             {"outcome": outcome.value, "message": response.content, "citations": []}
         ),
         validate_no_secret_strings(response.content),
-        validate_citations_supported_by_evidence(response.content, evidence),
+        validate_citations_supported_by_evidence(
+            response.content,
+            evidence,
+            observation_records=observation_records,
+            require_supported_citation=bool(evidence),
+        ),
     )
 
 

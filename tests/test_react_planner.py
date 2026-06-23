@@ -481,6 +481,32 @@ def test_llm_react_planner_advertises_governed_planner_actions() -> None:
     ]
 
 
+def test_llm_react_planner_advertises_current_eligible_actions_only() -> None:
+    provider = FakePlannerProvider(
+        _planner_output(
+            action_type="generate_final_answer",
+            candidate_actions=["generate_final_answer"],
+            selected_action="generate_final_answer",
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    planner.plan(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="accepted_evidence_count=1; eligible_actions=generate_final_answer,refuse",
+        eligible_actions=frozenset(
+            {ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE}
+        ),
+    )
+
+    user_payload = json.loads(provider.requests[0].messages[1].content)
+    assert user_payload["allowed_actions"] == ["generate_final_answer", "refuse"]
+
+
 def test_resolve_react_planner_uses_llm_adapter_for_registered_model_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

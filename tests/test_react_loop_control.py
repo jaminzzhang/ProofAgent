@@ -21,8 +21,10 @@ from proof_agent.contracts import (
     ReasoningSummary,
 )
 from proof_agent.control.workflow.react_enterprise_qa import (
+    build_retrieval_observation_record,
     compute_eligible_action_set,
     constrain_action,
+    should_block_duplicate_observation_action,
     should_stop_for_plan_budget,
 )
 from proof_agent.runtime.react_graph import (
@@ -68,8 +70,9 @@ class MockLLMSequencePlanner:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        eligible_actions: frozenset[ReActActionType] | None = None,
     ) -> ReActActionProposal:
-        _ = (system_prompt, context_summary, workflow_stage_context)
+        _ = (system_prompt, context_summary, workflow_stage_context, eligible_actions)
         self.calls.append(question)
         index = min(len(self.calls) - 1, len(self._proposals) - 1)
         return self._proposals[index]
@@ -116,6 +119,36 @@ def test_should_stop_for_plan_budget(
     assert should_stop_for_plan_budget(plan_rounds, max_plan_rounds) is expected
 
 
+def test_build_retrieval_observation_record_includes_truth_and_summary_refs() -> None:
+    record = build_retrieval_observation_record(
+        action_id="act_round_1",
+        action_type=ReActActionType.PLAN_RETRIEVAL,
+        plan_round=1,
+        accepted_before=0,
+        accepted_after=1,
+        evidence=[
+            {
+                "evidence_id": "ev_1",
+                "source": "Travel Policy",
+                "citation": "travel-policy.md#meals:L10-L18",
+            }
+        ],
+    )
+
+    assert record["observation_id"] == "obs_1_act_round_1"
+    assert record["truth_ref"] == "evidence"
+    assert record["summary"] == {
+        "accepted_evidence_count": 1,
+        "new_evidence_count": 1,
+        "citation_count": 1,
+    }
+    assert record["accepted_evidence_count"] == 1
+    assert record["new_evidence_count"] == 1
+    assert record["unresolved_subgoals"] == []
+    assert record["source_refs"] == ["Travel Policy"]
+    assert record["citation_refs"] == ["travel-policy.md#meals:L10-L18"]
+
+
 def test_compute_eligible_action_set_unrestricted_when_no_signal() -> None:
     """RED (slice 2): no convergence signal returns the full plan-eligible set."""
 
@@ -136,6 +169,45 @@ def test_compute_eligible_action_set_unrestricted_when_no_signal() -> None:
             ReActActionType.REFUSE,
         }
     )
+
+
+def test_compute_eligible_action_set_answer_ready_narrows_to_terminal() -> None:
+    eligible, signal = compute_eligible_action_set(
+        plan_rounds=2,
+        max_plan_rounds=4,
+        action_history=[{"action_type": "plan_retrieval", "parameters": {"query": "q"}}],
+        evidence_trajectory=[1],
+        observations=[
+            {
+                "accepted_evidence_count": 1,
+                "new_evidence_count": 1,
+                "unresolved_subgoals": [],
+            }
+        ],
+    )
+
+    assert signal == "answer_ready"
+    assert eligible == frozenset({ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE})
+
+
+def test_compute_eligible_action_set_unresolved_subgoal_keeps_observation_actions() -> None:
+    eligible, signal = compute_eligible_action_set(
+        plan_rounds=2,
+        max_plan_rounds=4,
+        action_history=[{"action_type": "plan_retrieval", "parameters": {"query": "q"}}],
+        evidence_trajectory=[1],
+        observations=[
+            {
+                "accepted_evidence_count": 1,
+                "new_evidence_count": 1,
+                "unresolved_subgoals": ["compare product exclusions"],
+            }
+        ],
+    )
+
+    assert signal is None
+    assert ReActActionType.PLAN_RETRIEVAL in eligible
+    assert ReActActionType.PROPOSE_TOOL_CALL in eligible
 
 
 def test_compute_eligible_action_set_evidence_saturation_narrows_to_terminal() -> None:
@@ -185,6 +257,64 @@ def test_compute_eligible_action_set_hard_budget_forces_refuse() -> None:
 
     assert signal == "plan_budget_exhausted"
     assert eligible == frozenset({ReActActionType.REFUSE})
+
+
+def test_should_block_duplicate_observation_action_without_new_subgoal() -> None:
+    proposal = ReActActionProposal(
+        action_id="act_round_2",
+        action_type=ReActActionType.PLAN_RETRIEVAL,
+        reasoning_summary=ReasoningSummary(
+            goal="Test duplicate observation gate.",
+            observations=(),
+            candidate_actions=(ReActActionType.PLAN_RETRIEVAL,),
+            selected_action=ReActActionType.PLAN_RETRIEVAL,
+            rationale_summary="test",
+            risk_flags=(),
+            required_evidence=(),
+        ),
+        parameters={"query": "q"},
+        risk_level="low",
+    )
+
+    assert (
+        should_block_duplicate_observation_action(
+            proposal,
+            action_history=[
+                {"action_type": "plan_retrieval", "parameters": {"query": "q"}}
+            ],
+            observations=[{"unresolved_subgoals": []}],
+        )
+        is True
+    )
+
+
+def test_should_not_block_duplicate_observation_action_with_unresolved_subgoal() -> None:
+    proposal = ReActActionProposal(
+        action_id="act_round_2",
+        action_type=ReActActionType.PLAN_RETRIEVAL,
+        reasoning_summary=ReasoningSummary(
+            goal="Test duplicate observation gate.",
+            observations=(),
+            candidate_actions=(ReActActionType.PLAN_RETRIEVAL,),
+            selected_action=ReActActionType.PLAN_RETRIEVAL,
+            rationale_summary="test",
+            risk_flags=(),
+            required_evidence=(),
+        ),
+        parameters={"query": "q"},
+        risk_level="low",
+    )
+
+    assert (
+        should_block_duplicate_observation_action(
+            proposal,
+            action_history=[
+                {"action_type": "plan_retrieval", "parameters": {"query": "q"}}
+            ],
+            observations=[{"unresolved_subgoals": ["compare product exclusions"]}],
+        )
+        is False
+    )
 
 
 def test_constrain_action_keeps_in_set_proposal_unchanged() -> None:
