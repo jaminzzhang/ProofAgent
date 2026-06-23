@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { AlertTriangle, Brain, Gauge, ShieldCheck, TestTubeDiagonal } from 'lucide-react'
 import {
   Badge,
@@ -317,6 +317,12 @@ function CurationSummarySection({
   candidates: EvaluationProductionSampleCandidate[]
   promotions: EvaluationProductionSamplePromotion[]
 }) {
+  const promotionBySampleId = new Map(promotions.map((promotion) => [promotion.sample_id, promotion]))
+  const promotedCandidateCount = candidates.filter(
+    (candidate) => promotionBySampleId.get(candidate.sample_id)?.status === 'promoted',
+  ).length
+  const needsReviewCount = candidates.length - promotedCandidateCount
+
   return (
     <Card className="overflow-hidden p-0">
       <div className="border-b border-[var(--border)] bg-[var(--bg-subtle)] px-4 py-3">
@@ -333,6 +339,17 @@ function CurationSummarySection({
             </Badge>
           </div>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <h3 className="mr-1 text-xs font-semibold uppercase text-[var(--text-muted)]">
+            Reviewer Queue
+          </h3>
+          <Badge variant={needsReviewCount > 0 ? 'warning' : 'outline'}>
+            {needsReviewCount} needs review
+          </Badge>
+          <Badge variant={promotedCandidateCount > 0 ? 'success' : 'outline'}>
+            {promotedCandidateCount} promoted
+          </Badge>
+        </div>
       </div>
       {candidates.length === 0 ? (
         <div className="p-4">
@@ -345,41 +362,81 @@ function CurationSummarySection({
               <TableHead>Sample</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Batch</TableHead>
+              <TableHead>Reviewer Evidence</TableHead>
               <TableHead className="text-right">Safe Lengths</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {candidates.map((candidate) => (
-              <TableRow key={`${candidate.batch_id}-${candidate.sample_id}`}>
-                <TableCell>
-                  <div className="font-mono text-xs font-semibold text-[var(--text-primary)]">
-                    {candidate.sample_id}
-                  </div>
-                  {candidate.source_run_id && (
-                    <div className="mt-1 font-mono text-xs text-[var(--text-muted)]">
-                      {candidate.source_run_id}
+            {candidates.map((candidate) => {
+              const promotion = promotionBySampleId.get(candidate.sample_id)
+              return (
+                <TableRow key={`${candidate.batch_id}-${candidate.sample_id}`}>
+                  <TableCell>
+                    <div className="font-mono text-xs font-semibold text-[var(--text-primary)]">
+                      {candidate.sample_id}
                     </div>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Badge
-                    variant={candidate.curation_status === 'promoted' ? 'success' : 'warning'}
-                  >
-                    {humanizeCapability(candidate.curation_status)}
-                  </Badge>
-                </TableCell>
-                <TableCell className="font-mono text-xs text-[var(--text-secondary)]">
-                  {candidate.batch_id}
-                </TableCell>
-                <TableCell className="text-right font-mono text-xs text-[var(--text-primary)]">
-                  {safeLengthSummary(candidate)}
-                </TableCell>
-              </TableRow>
-            ))}
+                    {candidate.source_run_id && (
+                      <div className="mt-1 font-mono text-xs text-[var(--text-muted)]">
+                        {candidate.source_run_id}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <div className="space-y-1">
+                      <Badge variant={promotion?.status === 'promoted' ? 'success' : 'warning'}>
+                        {promotion?.status === 'promoted'
+                          ? 'Promoted'
+                          : reviewQueueLabel(candidate)}
+                      </Badge>
+                      <div className="text-xs text-[var(--text-muted)]">
+                        {reviewQueueDescription(candidate, promotion)}
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-[var(--text-secondary)]">
+                    {candidate.batch_id}
+                  </TableCell>
+                  <TableCell className="text-xs text-[var(--text-secondary)]">
+                    {reviewerEvidence(promotion)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs text-[var(--text-primary)]">
+                    {safeLengthSummary(candidate)}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
       )}
     </Card>
+  )
+}
+
+function reviewQueueLabel(candidate: EvaluationProductionSampleCandidate): string {
+  if (candidate.formal_scoring_allowed) return 'Review ready'
+  return 'Needs review'
+}
+
+function reviewQueueDescription(
+  candidate: EvaluationProductionSampleCandidate,
+  promotion: EvaluationProductionSamplePromotion | undefined,
+): string {
+  if (promotion?.status === 'promoted') return 'Promotion record is available.'
+  if (candidate.formal_scoring_allowed) return 'Promotion record is missing.'
+  return 'Diagnostic only until domain and harness reviewers confirm.'
+}
+
+function reviewerEvidence(
+  promotion: EvaluationProductionSamplePromotion | undefined,
+): ReactNode {
+  if (!promotion) return 'No promotion review recorded.'
+  const domainReviewer = promotion.domain_review?.reviewer ?? 'missing'
+  const harnessReviewer = promotion.harness_review?.reviewer ?? 'missing'
+  return (
+    <div className="space-y-1">
+      <div>Domain: {domainReviewer}</div>
+      <div>Harness: {harnessReviewer}</div>
+    </div>
   )
 }
 

@@ -90,8 +90,23 @@ describe('EvaluationLabPage', () => {
             response_text_length: 28,
           },
         },
+        {
+          batch_id: 'prod_edge_cases',
+          batch_dir: '/tmp/curation/prod_edge_cases',
+          sample_id: 'prod_unreviewed',
+          source_run_id: 'run_prod_unreviewed',
+          curation_status: 'diagnostic_only',
+          formal_scoring_allowed: false,
+          run_purpose: 'production',
+          safe_summary: {
+            question_sha256: 'unreviewed-question-hash',
+            question_text_length: 54,
+            response_text_sha256: 'unreviewed-response-hash',
+            response_text_length: 35,
+          },
+        },
       ],
-      meta: { total: 1 },
+      meta: { total: 2 },
     })
     vi.mocked(fetchEvaluationProductionSamplePromotions).mockResolvedValue({
       data: [
@@ -137,10 +152,19 @@ describe('EvaluationLabPage', () => {
     expect(screen.getByText('supported')).toBeInTheDocument()
     expect(screen.getByText('ANSWERED_WITH_CITATIONS')).toBeInTheDocument()
     expect(await screen.findByText('Production Sample Curation')).toBeInTheDocument()
-    expect(screen.getByText('1 diagnostic candidates')).toBeInTheDocument()
+    expect(screen.getByText('2 diagnostic candidates')).toBeInTheDocument()
     expect(screen.getByText('1 promoted samples')).toBeInTheDocument()
+    expect(screen.getByText('Reviewer Queue')).toBeInTheDocument()
+    expect(screen.getByText('1 needs review')).toBeInTheDocument()
+    expect(screen.getByText('1 promoted')).toBeInTheDocument()
     expect(screen.getByText('prod_supported')).toBeInTheDocument()
-    expect(screen.getByText('prod_edge_cases')).toBeInTheDocument()
+    expect(screen.getByText('prod_unreviewed')).toBeInTheDocument()
+    expect(screen.getAllByText('prod_edge_cases')).toHaveLength(2)
+    expect(screen.getByText('Domain: domain-reviewer')).toBeInTheDocument()
+    expect(screen.getByText('Harness: harness-reviewer')).toBeInTheDocument()
+    expect(
+      screen.getByText('Diagnostic only until domain and harness reviewers confirm.'),
+    ).toBeInTheDocument()
   })
 })
 
