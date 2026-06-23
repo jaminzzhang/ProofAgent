@@ -217,18 +217,27 @@ react:
   max_tool_calls: 1
   record_reasoning_summary: true
   planner:
-    provider: deterministic
-    name: agent-management-insurance-specialist-planner-demo
+    provider: openai_compatible
+    name: qwen-plus
+    params:
+      api_key_env: OPENAI_COMPATIBLE_API_KEY
+      base_url_env: OPENAI_COMPATIBLE_BASE_URL
+      temperature: 0
+      max_output_tokens: 800
+      timeout_seconds: 20
 
 review:
   mode: auto
   low_risk_fast_path: true
   subagent:
-    provider: deterministic
-    name: agent-management-insurance-specialist-review-demo
+    provider: openai_compatible
+    name: qwen-plus
     fail_closed: true
     params:
-      timeout_seconds: 8
+      api_key_env: OPENAI_COMPATIBLE_API_KEY
+      base_url_env: OPENAI_COMPATIBLE_BASE_URL
+      temperature: 0
+      timeout_seconds: 10
       max_output_tokens: 500
 
 response:
@@ -236,8 +245,14 @@ response:
   include_review_results: true
 
 model:
-  provider: deterministic
-  name: agent-management-insurance-specialist-demo
+  provider: openai_compatible
+  name: qwen-plus
+  params:
+    api_key_env: OPENAI_COMPATIBLE_API_KEY
+    base_url_env: OPENAI_COMPATIBLE_BASE_URL
+    temperature: 0
+    max_output_tokens: 800
+    timeout_seconds: 20
 
 policy:
   file: ./policy.yaml

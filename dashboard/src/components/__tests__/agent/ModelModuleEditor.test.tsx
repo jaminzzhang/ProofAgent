@@ -135,6 +135,47 @@ describe('ModelModuleEditor', () => {
     )
   })
 
+  it('applies unified remote provider environment settings to all model roles', () => {
+    const onFieldChange = vi.fn()
+
+    render(
+      <ModelModuleEditor
+        agentYaml={AGENT_YAML}
+        modelConnections={[modelConnection()]}
+        onFieldChange={onFieldChange}
+        onModelConfigChange={vi.fn()}
+        onSave={vi.fn()}
+        busy={false}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Provider'), {
+      target: { value: 'openai_compatible' },
+    })
+    fireEvent.change(screen.getByLabelText('Model Name'), {
+      target: { value: 'qwen-plus' },
+    })
+    fireEvent.change(screen.getByLabelText('API Key Env'), {
+      target: { value: 'OPENAI_COMPATIBLE_API_KEY' },
+    })
+    fireEvent.change(screen.getByLabelText('Base URL Env'), {
+      target: { value: 'OPENAI_COMPATIBLE_BASE_URL' },
+    })
+
+    expect(onFieldChange).toHaveBeenCalledWith(['model', 'provider'], 'openai_compatible')
+    expect(onFieldChange).toHaveBeenCalledWith(['react', 'planner', 'provider'], 'openai_compatible')
+    expect(onFieldChange).toHaveBeenCalledWith(['review', 'subagent', 'provider'], 'openai_compatible')
+    expect(onFieldChange).toHaveBeenCalledWith(['model', 'name'], 'qwen-plus')
+    expect(onFieldChange).toHaveBeenCalledWith(['react', 'planner', 'name'], 'qwen-plus')
+    expect(onFieldChange).toHaveBeenCalledWith(['review', 'subagent', 'name'], 'qwen-plus')
+    expect(onFieldChange).toHaveBeenCalledWith(['model', 'params', 'api_key_env'], 'OPENAI_COMPATIBLE_API_KEY')
+    expect(onFieldChange).toHaveBeenCalledWith(['react', 'planner', 'params', 'api_key_env'], 'OPENAI_COMPATIBLE_API_KEY')
+    expect(onFieldChange).toHaveBeenCalledWith(['review', 'subagent', 'params', 'api_key_env'], 'OPENAI_COMPATIBLE_API_KEY')
+    expect(onFieldChange).toHaveBeenCalledWith(['model', 'params', 'base_url_env'], 'OPENAI_COMPATIBLE_BASE_URL')
+    expect(onFieldChange).toHaveBeenCalledWith(['react', 'planner', 'params', 'base_url_env'], 'OPENAI_COMPATIBLE_BASE_URL')
+    expect(onFieldChange).toHaveBeenCalledWith(['review', 'subagent', 'params', 'base_url_env'], 'OPENAI_COMPATIBLE_BASE_URL')
+  })
+
   it('applies unified shared model selection to answer planner and reviewer', () => {
     const onModelConfigChange = vi.fn()
 

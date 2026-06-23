@@ -326,9 +326,12 @@ function ModelRoleCard({
   const modelName = readAgentYamlField(agentYaml, [...basePath, 'name'])
   const effectiveProvider = provider || MODEL_PROVIDER_OPTIONS[0]
   const effectiveModelName = modelName || 'deepseek-chat'
-  const credentialName = readAgentYamlField(agentYaml, [...basePath, 'credential_ref', 'name'])
-    || readAgentYamlField(agentYaml, [...basePath, 'params', 'api_key_env'])
-  const baseUrl = readAgentYamlField(agentYaml, [...basePath, 'base_url'])
+  const credentialName = readAgentYamlField(agentYaml, [...basePath, 'params', 'api_key_env'])
+    || readAgentYamlField(agentYaml, [...basePath, 'credential_ref', 'name'])
+  const baseUrlEnv = readAgentYamlField(agentYaml, [...basePath, 'params', 'base_url_env'])
+    || readAgentYamlField(agentYaml, [...basePath, 'base_url'])
+  const credentialPath = fieldPath(basePath, unified, ['params', 'api_key_env'])
+  const baseUrlEnvPath = fieldPath(basePath, unified, ['params', 'base_url_env'])
   const temperaturePath = fieldPath(basePath, unified, ['params', 'temperature'])
   const maxOutputPath = fieldPath(basePath, unified, ['params', 'max_output_tokens'])
   const timeoutPath = fieldPath(basePath, unified, ['params', 'timeout_seconds'])
@@ -374,16 +377,21 @@ function ModelRoleCard({
               placeholder="deepseek-chat"
             />
             <TextField
-              label={`${labelPrefix ? `${labelPrefix} ` : ''}Credential Env`}
+              label={`${labelPrefix ? `${labelPrefix} ` : ''}API Key Env`}
               value={credentialName}
-              onChange={(value) => onFieldChange(fieldPath(basePath, unified, ['credential_ref', 'name']), value)}
-              placeholder="DEEPSEEK_API_KEY"
+              onChange={(value) => {
+                onFieldChange(credentialPath, value)
+                if (currentModelSource(agentYaml, role.basePath) === 'custom') {
+                  onFieldChange(fieldPath(basePath, unified, ['credential_ref', 'name']), value)
+                }
+              }}
+              placeholder="OPENAI_COMPATIBLE_API_KEY"
             />
             <TextField
-              label={`${labelPrefix ? `${labelPrefix} ` : ''}Base URL`}
-              value={baseUrl}
-              onChange={(value) => onFieldChange(fieldPath(basePath, unified, ['base_url']), value)}
-              placeholder="https://api.deepseek.com"
+              label={`${labelPrefix ? `${labelPrefix} ` : ''}Base URL Env`}
+              value={baseUrlEnv}
+              onChange={(value) => onFieldChange(baseUrlEnvPath, value)}
+              placeholder="OPENAI_COMPATIBLE_BASE_URL"
             />
             {onSaveAsShared && (
               <div className="flex items-end">
@@ -484,7 +492,7 @@ function usageParams(agentYaml: string, basePath: string[]): AgentYamlMapping {
 }
 
 function currentModelSource(agentYaml: string, basePath: string[]): string {
-  return readAgentYamlField(agentYaml, [...basePath, 'model_source']) || 'custom'
+  return readAgentYamlField(agentYaml, [...basePath, 'model_source']) || 'inline'
 }
 
 function currentModelSourceValue(agentYaml: string, basePath: string[]): string {
