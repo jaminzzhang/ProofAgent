@@ -951,12 +951,28 @@ A Controlled ReAct Loop action that ends the loop: `GENERATE_FINAL_ANSWER`, `ASK
 _Avoid_: Observation action, mid-loop stop
 
 **Observation Record**:
-The structured control-state record written into state after each observation action, carrying the full retrieval evidence or tool result (truth layer), a deterministic no-LLM summary (decision layer), and a reference into the evidence list. Observation Records are control state, not logs; they are read by `plan` (summaries) and by `model_answer` (full content) and are receipt-replayable.
+The structured control-state record written into state after each observation action, carrying the full retrieval evidence or tool result (truth layer), a deterministic no-LLM summary (decision layer), and a reference into the evidence list. Observation Records are control state, not logs; they are read by `plan` (summaries) and by `model_answer` (full content) and are receipt-replayable. The runtime contract includes `observation_id`, `action_id`, `action_type`, `round`, `truth_ref`, `summary`, `accepted_evidence_count`, `new_evidence_count`, `unresolved_subgoals`, `source_refs`, and `citation_refs`.
 _Avoid_: Discarded tool output, trace-only observation, unstructured planner scratchpad
 
 **Eligible Action Set**:
 The runtime-computed subset of ReAct actions that `plan` is permitted to choose in a given round, narrowed by the Convergence Check. Enforced structurally by `_constrain_action`, not by prompt wording.
 _Avoid_: Prompt suggestion, advisory action list, LLM self-policed constraint
+
+**Planner Eligible Action Contract**:
+The planner-facing structured input contract that exposes the current Eligible Action Set as the only allowed actions for a Plan Round. Prompt context may explain why the set was narrowed, but it must not broaden the structured `allowed_actions` list.
+_Avoid_: Static planner allowlist, prompt-only constraint, all-actions planner schema
+
+**Answer-Ready Convergence Signal**:
+The Convergence Check signal that fires when Accepted Evidence exists and the latest Observation Record declares no unresolved subgoals. It narrows the next Plan Round to terminal actions only: `GENERATE_FINAL_ANSWER` or `REFUSE`.
+_Avoid_: Repeat retrieval by default, evidence-saturation-only convergence, planner-owned stop decision
+
+**Unresolved Subgoal**:
+A planner-visible item in an Observation Record summary that names a still-unanswered part of a compound request and justifies another Observation Action after Accepted Evidence exists.
+_Avoid_: Hidden TODO, model hunch, chain-of-thought proxy
+
+**Final Answer Citation Binding Gate**:
+The fail-closed validation gate that binds customer-visible factual claims to Observation Record `citation_refs` or `source_refs`. If Accepted Evidence exists and the final answer lacks supported citation references for factual claims, the answer is rejected rather than projected as governed output.
+_Avoid_: Citation-looking text, source list without Observation Record support, best-effort unsupported answer
 
 **Convergence Check**:
 The deterministic, plan-precondition Control Plane enforcement point that inspects control state (Plan Round count, Evidence Trajectory, Action History) and narrows the Eligible Action Set to force the loop to converge. It never emits a terminal outcome directly; it only constrains what `plan` may choose.
@@ -973,6 +989,10 @@ _Avoid_: Final evidence list, retrieval debug log
 **Action History**:
 The per-round sequence of selected action types and parameter hashes used by the Convergence Check to detect action repetition and oscillation. Control state, not a log.
 _Avoid_: Trace event stream, audit-only history
+
+**Observation Action Deduplication Gate**:
+The pre-execution Control Plane gate that rejects an Observation Action when the same `action_type` and `parameter_hash` already ran in the same governed run and no Observation Record declares a new unresolved subgoal requiring that repeat. It narrows the next decision to terminal actions instead of spending another retrieval or tool call.
+_Avoid_: Retrieval cache, post-hoc saturation signal, planner-owned duplicate suppression
 
 **Tiered Loop Models**:
 The Controlled ReAct Loop model assignment policy where `intent_resolution` and `plan` use a smaller, faster model and `model_answer` uses a larger model, so that loop cost and latency stay bounded as plan rounds grow.

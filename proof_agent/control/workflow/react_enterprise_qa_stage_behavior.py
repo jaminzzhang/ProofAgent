@@ -303,6 +303,7 @@ class ReActEnterpriseQAStageBehavior:
         from proof_agent.control.workflow.react_enterprise_qa import (
             compute_eligible_action_set,
             constrain_action,
+            should_block_duplicate_observation_action,
             should_stop_for_plan_budget,
         )
 
@@ -318,11 +319,13 @@ class ReActEnterpriseQAStageBehavior:
 
         action_history = list(state.get("action_history", []))
         evidence_trajectory = list(state.get("evidence_trajectory", []))
+        observations = list(state.get("observations", []))
         eligible_set, convergence_signal = compute_eligible_action_set(
             plan_rounds=plan_rounds,
             max_plan_rounds=max_plan_rounds,
             action_history=action_history,
             evidence_trajectory=evidence_trajectory,
+            observations=observations,
         )
 
         stage_context: Mapping[str, Any] | None = None
@@ -340,6 +343,7 @@ class ReActEnterpriseQAStageBehavior:
                     evidence_trajectory=evidence_trajectory,
                 ),
                 workflow_stage_context=stage_context,
+                eligible_actions=eligible_set,
             )
         except ModelOutputNormalizationError as exc:
             return self._plan_normalization_failure(state, stage_context, exc)
@@ -366,6 +370,29 @@ class ReActEnterpriseQAStageBehavior:
                     "convergence_signal": convergence_signal,
                 },
             )
+
+        if should_block_duplicate_observation_action(
+            proposal,
+            action_history=action_history,
+            observations=observations,
+        ):
+            self.trace.emit(
+                "observation_action_deduplicated",
+                status="ok",
+                payload={
+                    "action_id": proposal.action_id,
+                    "original_action_type": proposal.action_type.value,
+                    "constrained_to": ReActActionType.GENERATE_FINAL_ANSWER.value,
+                    "reason": "duplicate_observation_action",
+                },
+            )
+            proposal = proposal.model_copy(
+                update={
+                    "action_type": ReActActionType.GENERATE_FINAL_ANSWER,
+                    "parameters": {},
+                }
+            )
+            convergence_signal = "observation_action_deduplicated"
 
         emit_reasoning_summary(self.trace, proposal)
         emit_action_proposal(self.trace, proposal)
@@ -613,11 +640,27 @@ class ReActEnterpriseQAStageBehavior:
                     memory_stage_context,
                 ),
             }
+        accepted_before = len(list(state.get("evidence", [])))
         accepted_count = int(evidence_result.metadata.get("accepted_count", len(evidence)))
+        evidence_state = [_evidence_state_dict(chunk) for chunk in evidence]
+        from proof_agent.control.workflow.react_enterprise_qa import (
+            build_retrieval_observation_record,
+        )
+
         return {
             "review_results": [step_review_event],
-            "evidence": [_evidence_state_dict(chunk) for chunk in evidence],
+            "evidence": evidence_state,
             "evidence_trajectory": [accepted_count],
+            "observations": [
+                build_retrieval_observation_record(
+                    action_id=proposal.action_id,
+                    action_type=proposal.action_type,
+                    plan_round=int(state.get("plan_rounds", 0)),
+                    accepted_before=accepted_before,
+                    accepted_after=accepted_count,
+                    evidence=evidence_state,
+                )
+            ],
             **_stage_context_applications_delta(
                 state,
                 retrieval_stage_context,
@@ -713,6 +756,9 @@ class ReActEnterpriseQAStageBehavior:
             response=model_response,
             outcome=outcome,
             evidence=evidence,
+            observation_records=tuple(
+                item for item in state.get("observations", ()) if isinstance(item, Mapping)
+            ),
         )
         for validation in validation_results:
             self.trace.emit(

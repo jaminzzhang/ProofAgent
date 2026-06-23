@@ -156,6 +156,36 @@ def test_react_execution_clarification_returns_workflow_stage_result(
     )
 
 
+def test_react_execution_retrieval_returns_observation_record(
+    tmp_path: Path,
+) -> None:
+    execution = _react_execution(tmp_path)
+    plan_result = execution.plan(
+        {
+            "question": "What is the reimbursement rule for travel meals?",
+            "step_count": 0,
+            "evidence": [],
+        }
+    )
+    state = {
+        "question": "What is the reimbursement rule for travel meals?",
+        "evidence": [],
+        **dict(plan_result.continuation),
+    }
+
+    result = execution.retrieval(state)
+
+    assert "observations" in result.produced_fact_refs
+    observation = result.continuation["observations"][0]
+    assert observation["action_id"] == "act_retrieval_1"
+    assert observation["action_type"] == "plan_retrieval"
+    assert observation["truth_ref"] == "evidence"
+    assert observation["accepted_evidence_count"] == 1
+    assert observation["new_evidence_count"] == 1
+    assert list(observation["unresolved_subgoals"]) == []
+    assert list(observation["citation_refs"])
+
+
 def test_supported_travel_meal_question_answers_with_react_review_trace(
     tmp_path: Path,
 ) -> None:
@@ -1494,6 +1524,7 @@ class _SequencePlanner:
         self.calls = 0
         self.context_summaries: list[str] = []
         self.workflow_stage_contexts: list[Any] = []
+        self.eligible_action_sets: list[tuple[str, ...]] = []
 
     def plan(
         self,
@@ -1502,10 +1533,19 @@ class _SequencePlanner:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Any = None,
+        eligible_actions: Any = None,
     ) -> ReActActionProposal:
         _ = (question, system_prompt)
         self.context_summaries.append(context_summary)
         self.workflow_stage_contexts.append(workflow_stage_context)
+        self.eligible_action_sets.append(
+            tuple(
+                sorted(
+                    action.value if hasattr(action, "value") else str(action)
+                    for action in (eligible_actions or ())
+                )
+            )
+        )
         index = min(self.calls, len(self._proposals) - 1)
         self.calls += 1
         return self._proposals[index]
@@ -1603,15 +1643,16 @@ def test_v3_deterministic_planner_answers_after_evidence_without_constraint(
     assert "model_answer" in stage_ids
 
 
-def test_v3_loop_runs_multiple_retrieval_rounds_before_answering(
+def test_v3_loop_answer_ready_converges_before_repeated_retrieval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """RED (slice 5): the loop runs multiple retrieval rounds before answering.
+    """Answer-ready convergence prevents a second equivalent retrieval round.
 
-    Sequence [PLAN_RETRIEVAL, PLAN_RETRIEVAL, GENERATE_FINAL_ANSWER] must
-    produce three plan rounds with two retrieval rounds before the final
-    answer. Proves the loop accumulates across rounds (a behavior the
-    single-pass topology structurally could not perform).
+    Sequence [PLAN_RETRIEVAL, PLAN_RETRIEVAL, GENERATE_FINAL_ANSWER] used to
+    spend two retrieval rounds. Once the first retrieval writes accepted
+    evidence with no unresolved subgoals, the second planner call receives only
+    terminal eligible actions; a repeated retrieval proposal is constrained to
+    final answer generation.
     """
 
     planner = _SequencePlanner(
@@ -1637,10 +1678,11 @@ def test_v3_loop_runs_multiple_retrieval_rounds_before_answering(
     stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
     stage_ids = [event["payload"]["stage_id"] for event in stage_events]
 
-    assert stage_ids.count("plan") == 3
-    assert stage_ids.count("retrieval") == 2
+    assert stage_ids.count("plan") == 2
+    assert stage_ids.count("retrieval") == 1
     assert "model_answer" in stage_ids
-    assert planner.calls == 3
+    assert planner.calls == 2
+    assert planner.eligible_action_sets[1] == ("generate_final_answer", "refuse")
 
 
 def test_v3_loop_action_constraint_rewrites_repeated_retrieval_to_generate(

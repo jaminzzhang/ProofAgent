@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any, Protocol
+from typing import AbstractSet, Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -45,6 +45,7 @@ class ReActPlanner(Protocol):
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        eligible_actions: AbstractSet[ReActActionType] | None = None,
     ) -> ReActActionProposal:
         """Propose the next governed ReAct action."""
 
@@ -59,8 +60,9 @@ class DeterministicReActPlanner:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        eligible_actions: AbstractSet[ReActActionType] | None = None,
     ) -> ReActActionProposal:
-        _ = (system_prompt, context_summary, workflow_stage_context)
+        _ = (system_prompt, context_summary, workflow_stage_context, eligible_actions)
         normalized_question = question.lower()
 
         if "can this customer" in normalized_question or "claim it" in normalized_question:
@@ -175,15 +177,13 @@ class LLMReActPlanner:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        eligible_actions: AbstractSet[ReActActionType] | None = None,
     ) -> ReActActionProposal:
         user_payload: dict[str, Any] = {
             "question": question,
             "system_prompt_summary": system_prompt,
             "context_summary": context_summary,
-            "allowed_actions": [
-                action.value
-                for action in _PLANNER_ACTION_TYPES
-            ],
+            "allowed_actions": _planner_allowed_actions(eligible_actions),
         }
         if workflow_stage_context:
             user_payload["workflow_stage_context"] = dict(workflow_stage_context)
@@ -213,6 +213,13 @@ class LLMReActPlanner:
             proposal,
             raw_content_length=len(response.content),
         )
+
+
+def _planner_allowed_actions(
+    eligible_actions: AbstractSet[ReActActionType] | None,
+) -> list[str]:
+    actions = eligible_actions if eligible_actions is not None else _PLANNER_ACTION_TYPE_SET
+    return [action.value for action in sorted(actions, key=lambda item: item.value)]
 
 
 def _planner_control_prompt() -> str:

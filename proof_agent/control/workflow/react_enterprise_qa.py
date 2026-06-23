@@ -333,6 +333,7 @@ def compute_eligible_action_set(
     max_plan_rounds: int,
     action_history: list[Mapping[str, Any]],
     evidence_trajectory: list[int],
+    observations: list[Mapping[str, Any]] | None = None,
 ) -> tuple[frozenset[ReActActionType], str | None]:
     """Deterministically narrow the plan eligible action set (ADR-0032).
 
@@ -345,6 +346,9 @@ def compute_eligible_action_set(
     if should_stop_for_plan_budget(plan_rounds, max_plan_rounds):
         return _REFUSE_ONLY_ACTIONS, "plan_budget_exhausted"
 
+    if _detect_answer_ready(observations or []):
+        return _TERMINAL_NARROWED_ACTIONS, "answer_ready"
+
     if _detect_action_repetition(action_history):
         return _TERMINAL_NARROWED_ACTIONS, "action_repetition"
 
@@ -352,6 +356,82 @@ def compute_eligible_action_set(
         return _TERMINAL_NARROWED_ACTIONS, "evidence_saturation"
 
     return _PLAN_ELIGIBLE_ACTIONS, None
+
+
+def should_block_duplicate_observation_action(
+    proposal: ReActActionProposal,
+    *,
+    action_history: list[Mapping[str, Any]],
+    observations: list[Mapping[str, Any]],
+) -> bool:
+    if proposal.action_type not in {
+        ReActActionType.PLAN_RETRIEVAL,
+        ReActActionType.PROPOSE_TOOL_CALL,
+    }:
+        return False
+    current = _action_fingerprint(
+        {"action_type": proposal.action_type.value, "parameters": dict(proposal.parameters)}
+    )
+    if not any(_action_fingerprint(entry) == current for entry in action_history):
+        return False
+    return not _latest_observation_has_unresolved_subgoals(observations)
+
+
+def build_retrieval_observation_record(
+    *,
+    action_id: str,
+    action_type: ReActActionType,
+    plan_round: int,
+    accepted_before: int,
+    accepted_after: int,
+    evidence: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    new_count = max(accepted_after - accepted_before, 0)
+    citations = [
+        str(item["citation"])
+        for item in evidence
+        if isinstance(item.get("citation"), str) and item["citation"].strip()
+    ]
+    sources = [
+        str(item["source"])
+        for item in evidence
+        if isinstance(item.get("source"), str) and item["source"].strip()
+    ]
+    return {
+        "observation_id": f"obs_{plan_round}_{action_id}",
+        "action_id": action_id,
+        "action_type": action_type.value,
+        "round": plan_round,
+        "truth_ref": "evidence",
+        "summary": {
+            "accepted_evidence_count": accepted_after,
+            "new_evidence_count": new_count,
+            "citation_count": len(citations),
+        },
+        "accepted_evidence_count": accepted_after,
+        "new_evidence_count": new_count,
+        "unresolved_subgoals": [],
+        "source_refs": sources,
+        "citation_refs": citations,
+    }
+
+
+def _detect_answer_ready(observations: list[Mapping[str, Any]]) -> bool:
+    if not observations:
+        return False
+    latest = observations[-1]
+    if int(latest.get("accepted_evidence_count") or 0) <= 0:
+        return False
+    return not _latest_observation_has_unresolved_subgoals(observations)
+
+
+def _latest_observation_has_unresolved_subgoals(
+    observations: list[Mapping[str, Any]],
+) -> bool:
+    if not observations:
+        return False
+    unresolved = observations[-1].get("unresolved_subgoals") or []
+    return len(list(unresolved)) > 0
 
 
 def _detect_evidence_saturation(evidence_trajectory: list[int]) -> bool:
