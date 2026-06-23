@@ -37,6 +37,7 @@ from proof_agent.evaluation.sample_production import (
     EvaluationSampleRunner,
     produce_evaluation_subject_manifest_from_samples,
 )
+from proof_agent.evaluation.subjects import load_evaluation_subject_manifest
 from proof_agent.evaluation.suites import load_evaluation_suite
 from proof_agent.observability.storage.run_store import RunStore
 
@@ -64,7 +65,7 @@ def run_evaluation_campaign(
     target = _required_mapping(raw, "target")
     target_agent_id = _required_string(target, "agent_id")
     target_agent_version_id = _optional_string(target, "agent_version_id")
-    suite_specs = _formal_suite_specs(raw)
+    suite_specs = _campaign_suite_specs(raw, base_dir=manifest_path.parent)
     campaign_dir = Path(output_dir) if output_dir is not None else Path("runs/evaluation_campaigns")
     artifact_dir = campaign_dir / campaign_id
     analyzer_output_dir = artifact_dir / "analyzer"
@@ -96,6 +97,11 @@ def run_evaluation_campaign(
             )
         else:
             subjects_path = _resolve_path(spec["subjects_ref"], base_dir=manifest_path.parent)
+        if source == "curated_production_sample":
+            _require_promoted_curated_production_sample_suite(
+                suite=suite,
+                subjects_path=subjects_path,
+            )
         analysis = analyze_evaluation(
             suite_path=suite_path,
             subjects_path=subjects_path,
@@ -184,11 +190,30 @@ def _load_campaign_yaml(path: Path) -> Mapping[str, Any]:
     return raw
 
 
+def _campaign_suite_specs(
+    raw: Mapping[str, Any],
+    *,
+    base_dir: Path,
+) -> tuple[Mapping[str, Any], ...]:
+    specs = [
+        *_formal_suite_specs(raw),
+        *_production_sample_suite_specs(raw, base_dir=base_dir),
+    ]
+    if not specs:
+        raise EvaluationInputError(
+            "Evaluation Campaign suites must declare at least one formal or promoted "
+            "production sample suite."
+        )
+    return tuple(specs)
+
+
 def _formal_suite_specs(raw: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
     suites = _required_mapping(raw, "suites")
     formal = suites.get("formal")
-    if not isinstance(formal, list | tuple) or not formal:
-        raise EvaluationInputError("Evaluation Campaign suites.formal must be a non-empty list.")
+    if formal is None:
+        return ()
+    if not isinstance(formal, list | tuple):
+        raise EvaluationInputError("Evaluation Campaign suites.formal must be a list.")
     specs: list[Mapping[str, Any]] = []
     for spec in formal:
         if not isinstance(spec, Mapping):
@@ -204,6 +229,116 @@ def _formal_suite_specs(raw: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]
             )
         specs.append(spec)
     return tuple(specs)
+
+
+def _production_sample_suite_specs(
+    raw: Mapping[str, Any],
+    *,
+    base_dir: Path,
+) -> tuple[Mapping[str, Any], ...]:
+    suites = _required_mapping(raw, "suites")
+    production_samples = suites.get("production_samples")
+    if production_samples is None:
+        return ()
+    if not isinstance(production_samples, Mapping):
+        raise EvaluationInputError(
+            "Evaluation Campaign suites.production_samples must be a mapping."
+        )
+    if production_samples.get("enabled") is not True:
+        return ()
+    selections = production_samples.get("selections")
+    if not isinstance(selections, list | tuple) or not selections:
+        raise EvaluationInputError(
+            "Evaluation Campaign suites.production_samples.selections must be a non-empty list."
+        )
+
+    specs: list[Mapping[str, Any]] = []
+    for selection in selections:
+        if not isinstance(selection, Mapping):
+            raise EvaluationInputError(
+                "Evaluation Campaign production sample selections must be mappings."
+            )
+        promotion_ref = selection.get("promotion_ref")
+        if promotion_ref is None:
+            raise EvaluationInputError(
+                "Evaluation Campaign production sample selections require promotion_ref."
+            )
+        promotion_path = _resolve_path(promotion_ref, base_dir=base_dir)
+        promotion = _load_promoted_production_sample(promotion_path)
+        specs.append(
+            {
+                "source": str(selection.get("source") or "curated_production_sample"),
+                "suite_ref": _resolve_path(promotion["suite_path"], base_dir=promotion_path.parent),
+                "subjects_ref": _resolve_path(
+                    promotion["subject_manifest_path"],
+                    base_dir=promotion_path.parent,
+                ),
+                "curation_status": "promoted",
+                "source_sample_id": promotion.get("sample_id"),
+            }
+        )
+    return tuple(specs)
+
+
+def _load_promoted_production_sample(path: Path) -> Mapping[str, Any]:
+    if not path.is_file():
+        raise EvaluationInputError(f"Curated production sample promotion not found: {path}")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise EvaluationInputError(
+            f"Curated production sample promotion must be JSON: {path}"
+        ) from exc
+    if not isinstance(raw, Mapping):
+        raise EvaluationInputError(
+            f"Curated production sample promotion must be a mapping: {path}"
+        )
+    if raw.get("status") != "promoted":
+        raise EvaluationInputError(
+            f"Curated production sample requires promoted status: {path}"
+        )
+    if not isinstance(raw.get("suite_path"), str) or not raw["suite_path"]:
+        raise EvaluationInputError(
+            f"Curated production sample promotion requires suite_path: {path}"
+        )
+    if not isinstance(raw.get("subject_manifest_path"), str) or not raw["subject_manifest_path"]:
+        raise EvaluationInputError(
+            f"Curated production sample promotion requires subject_manifest_path: {path}"
+        )
+    return raw
+
+
+def _require_promoted_curated_production_sample_suite(
+    *,
+    suite: EvaluationSuite,
+    subjects_path: Path,
+) -> None:
+    subject_manifest = load_evaluation_subject_manifest(subjects_path)
+    for case in suite.cases:
+        _require_promoted_curated_production_metadata(
+            case.metadata,
+            ref=f"case {case.case_id}",
+        )
+    for subject in subject_manifest.subjects:
+        _require_promoted_curated_production_metadata(
+            subject.metadata,
+            ref=f"subject {subject.case_ref.case_id}",
+        )
+
+
+def _require_promoted_curated_production_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    ref: str,
+) -> None:
+    if metadata.get("source") != "curated_production_sample":
+        raise EvaluationInputError(
+            f"Evaluation Campaign {ref} must be a promoted curated production sample."
+        )
+    if metadata.get("curation_status") != "promoted":
+        raise EvaluationInputError(
+            f"Evaluation Campaign {ref} must be a promoted curated production sample."
+        )
 
 
 def _exploratory_probes_enabled(raw: Mapping[str, Any]) -> bool:
