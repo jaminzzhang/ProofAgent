@@ -396,7 +396,7 @@ class ReActEnterpriseQAStageBehavior:
 
         emit_reasoning_summary(self.trace, proposal)
         emit_action_proposal(self.trace, proposal)
-        return {
+        delta: dict[str, Any] = {
             "plan_rounds": plan_rounds + 1,
             "action": _proposal_state_dict(proposal),
             "reasoning_summary": _reasoning_summary_state_dict(proposal),
@@ -410,6 +410,19 @@ class ReActEnterpriseQAStageBehavior:
             **_stage_context_applications_delta(state, stage_context),
             "stage_llm_interactions": llm_interactions,
         }
+        if proposal.action_type is ReActActionType.REFUSE:
+            message = (
+                "I cannot answer because the planner selected a governed refusal "
+                "instead of producing an evidence-backed answer."
+            )
+            delta.update(
+                {
+                    "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                    "governance_message": message,
+                    "final_output": message,
+                }
+            )
+        return delta
 
     def _plan_normalization_failure(
         self,

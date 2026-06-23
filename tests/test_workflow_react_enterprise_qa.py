@@ -1643,6 +1643,37 @@ def test_v3_deterministic_planner_answers_after_evidence_without_constraint(
     assert "model_answer" in stage_ids
 
 
+def test_v3_loop_refuse_after_evidence_produces_explicit_final_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planner = _SequencePlanner(
+        [
+            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
+            _loop_proposal(ReActActionType.REFUSE, action_id="act_round_2"),
+        ]
+    )
+    monkeypatch.setattr(
+        "proof_agent.bootstrap.composition.resolve_react_planner",
+        lambda *args, **kwargs: planner,
+    )
+
+    result = run_with_langgraph(
+        REACT_V3_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "REFUSED_NO_EVIDENCE"
+    assert result.final_output
+    assert "Workflow ended unexpectedly without an outcome." not in result.final_output
+    assert "planner selected a governed refusal" in result.final_output
+    events = _trace_events(result.trace_path)
+    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
+    stage_ids = [event["payload"]["stage_id"] for event in stage_events]
+    assert stage_ids.count("plan") == 2
+    assert "model_answer" not in stage_ids
+
+
 def test_v3_loop_answer_ready_converges_before_repeated_retrieval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
