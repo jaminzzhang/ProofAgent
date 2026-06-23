@@ -66,6 +66,7 @@ class KnowledgeRetrievalRequest:
     max_queries: int = 3
     query_concurrency: int = 3
     query_timeout_seconds: float = 10.0
+    preferred_binding_ids: tuple[str, ...] = ()
     force_empty: bool = False
 
 
@@ -706,7 +707,11 @@ class KnowledgeRetrievalService:
         provider_calls: list[dict[str, Any]] = []
         raw_candidates: list[EvidenceChunk] = []
         degraded = False
-        routing = _route_bound_providers(query, bound_providers)
+        routing = _route_bound_providers(
+            query,
+            bound_providers,
+            preferred_binding_ids=request.preferred_binding_ids,
+        )
         if not routing.selected:
             payload = {
                 "step_id": step_id,
@@ -933,7 +938,11 @@ class KnowledgeRetrievalService:
         provider_calls: list[dict[str, Any]] = []
         raw_candidates: list[EvidenceChunk] = []
         degraded = False
-        routing = _route_bound_providers(query, bound_providers)
+        routing = _route_bound_providers(
+            query,
+            bound_providers,
+            preferred_binding_ids=request.preferred_binding_ids,
+        )
         if not routing.selected:
             self._trace.emit(
                 "retrieval_result",
@@ -1271,8 +1280,28 @@ def _route_bound_providers(
     bound_providers: tuple[BoundKnowledgeProvider, ...],
     *,
     selection_budget: int = 3,
+    preferred_binding_ids: tuple[str, ...] = (),
 ) -> _RoutingDecision:
     binding_candidates = _binding_candidate_summaries(query, bound_providers)
+    preferred_id_set = frozenset(preferred_binding_ids)
+    if preferred_id_set:
+        preferred = tuple(
+            bound
+            for bound in bound_providers
+            if bound.resolved.binding_id in preferred_id_set
+        )
+        if preferred:
+            return _RoutingDecision(
+                selected=preferred[:selection_budget],
+                binding_candidates=binding_candidates,
+                selection_reason="business_flow_skill_pack_refs",
+            )
+        return _RoutingDecision(
+            selected=(),
+            binding_candidates=binding_candidates,
+            selection_reason="business_flow_skill_pack_refs_unresolved",
+            no_evidence_reason_code="routing_empty",
+        )
     if len(bound_providers) == 1:
         return _RoutingDecision(
             selected=bound_providers,

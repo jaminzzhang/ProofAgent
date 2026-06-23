@@ -80,6 +80,51 @@ def test_deterministic_intent_resolver_recommends_retrieval_for_policy_question(
     assert resolution.retrieval_query_set[0].required is True
 
 
+def test_deterministic_intent_resolver_selects_matching_business_flow_pack() -> None:
+    resolver = DeterministicIntentResolver()
+    skill_packs = (
+        BusinessFlowSkillPackDefinition(
+            schema_version="business_flow_skill_pack.v1",
+            id="general_insurance_specialist",
+            label="General Insurance Specialist",
+            description="Handle general insurance questions.",
+            intent_patterns=("一般咨询", "保险业务问题"),
+            admission=BusinessFlowSkillPackAdmissionConfig(min_confidence=0.35),
+        ),
+        BusinessFlowSkillPackDefinition(
+            schema_version="business_flow_skill_pack.v1",
+            id="product_clause_consultation",
+            label="Product Clause Consultation",
+            description="Answer product clause questions with governed evidence.",
+            intent_patterns=("产品条款", "保障责任", "等待期", "产品解释"),
+            admission=BusinessFlowSkillPackAdmissionConfig(min_confidence=0.65),
+        ),
+        BusinessFlowSkillPackDefinition(
+            schema_version="business_flow_skill_pack.v1",
+            id="claims_consultation",
+            label="Claims Consultation",
+            description="Answer claims process and material questions.",
+            intent_patterns=("理赔", "理赔材料", "拒赔"),
+            admission=BusinessFlowSkillPackAdmissionConfig(min_confidence=0.68),
+        ),
+    )
+
+    result = resolver.resolve(
+        question="平安御享的主要保险产品条款有哪些？",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+        business_flow_skill_packs=skill_packs,
+    )
+
+    recommendation = result.business_flow_skill_pack_recommendation
+    assert recommendation is not None
+    assert (
+        recommendation.recommendation_type
+        == BusinessFlowSkillPackRecommendationType.SINGLE_PACK
+    )
+    assert recommendation.candidate_packs[0].pack_id == "product_clause_consultation"
+
+
 def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
     provider = FakeIntentProvider(
         """
@@ -284,6 +329,92 @@ def test_llm_intent_resolver_includes_business_flow_pack_summaries() -> None:
     assert "internal_policy" not in serialized_payload
 
 
+def test_llm_intent_resolver_sends_function_schema_for_business_flow_result() -> None:
+    provider = FakeIntentProvider(
+        """
+        {
+          "intent_resolution": {
+            "resolution_id": "intent_llm_1",
+            "user_goal": "Understand product clauses.",
+            "domain_intent": "insurance_product_clause_question",
+            "known_facts": ["The user asks about product clauses."],
+            "missing_fields": [],
+            "ambiguities": [],
+            "risk_flags": [],
+            "confidence": 0.91,
+            "recommended_next_action": "plan_retrieval",
+            "retrieval_query_set": [
+              {
+                "query": "Ping An Yu Xiang product clauses",
+                "intent_angle": "product_clause",
+                "required": true,
+                "reason": "The user asks about product clauses."
+              }
+            ]
+          },
+          "business_flow_skill_pack_recommendation": {
+            "recommendation_id": "bfsp_rec_intent_llm_1",
+            "intent_resolution_id": "intent_llm_1",
+            "recommendation_type": "single_pack",
+            "confidence": 0.88,
+            "reason": "The request is about product clauses.",
+            "candidate_packs": [
+              {
+                "pack_id": "product_clause_consultation",
+                "confidence": 0.86,
+                "reason": "Product clause flow applies."
+              }
+            ],
+            "requires_task_split": false
+          }
+        }
+        """
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+    skill_pack = BusinessFlowSkillPackDefinition(
+        schema_version="business_flow_skill_pack.v1",
+        id="product_clause_consultation",
+        label="Product Clause Consultation",
+        description="Answer product clause questions with governed evidence.",
+        intent_patterns=("产品条款",),
+        admission=BusinessFlowSkillPackAdmissionConfig(min_confidence=0.75),
+    )
+
+    resolver.resolve(
+        question="平安御享的主要保险产品条款有哪些？",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+        business_flow_skill_packs=(skill_pack,),
+    )
+
+    function_schema = provider.requests[0].function_schema
+    assert function_schema is not None
+    assert function_schema.name == "submit_intent_resolution_result"
+    assert function_schema.strict is True
+    root_schema = function_schema.parameters_schema
+    assert root_schema["required"] == (
+        "intent_resolution",
+        "business_flow_skill_pack_recommendation",
+    )
+    recommendation_schema = root_schema["properties"][
+        "business_flow_skill_pack_recommendation"
+    ]
+    assert recommendation_schema["additionalProperties"] is False
+    assert recommendation_schema["required"] == (
+        "recommendation_id",
+        "intent_resolution_id",
+        "recommendation_type",
+        "confidence",
+        "reason",
+        "candidate_packs",
+        "requires_task_split",
+    )
+    assert "route_confidence" not in recommendation_schema["properties"]
+
+
 def test_llm_intent_resolver_repairs_missing_contract_fields_once() -> None:
     provider = FakeIntentProvider(
         [
@@ -343,6 +474,119 @@ def test_llm_intent_resolver_repairs_missing_contract_fields_once() -> None:
     assert repair_payload["previous_response_json"]["recommended_next_action"] == (
         "plan_retrieval"
     )
+    repair_function_schema = provider.requests[1].function_schema
+    assert repair_function_schema is not None
+    assert repair_function_schema.name == "submit_intent_resolution"
+
+
+def test_llm_intent_resolver_repairs_business_flow_result_with_function_schema() -> None:
+    provider = FakeIntentProvider(
+        [
+            """
+            {
+              "intent_resolution": {
+                "resolution_id": "intent_1",
+                "user_goal": "Query product clauses.",
+                "domain_intent": "product_clause_consultation",
+                "known_facts": ["The user asks about product clauses."],
+                "missing_fields": [],
+                "ambiguities": [],
+                "risk_flags": [],
+                "confidence": 0.95,
+                "recommended_next_action": "plan_retrieval",
+                "retrieval_query_set": [
+                  {
+                    "query": "平安御享 主要保险产品条款",
+                    "intent_angle": "original_question",
+                    "required": true,
+                    "reason": "The user asks about product clauses."
+                  }
+                ]
+              },
+              "business_flow_skill_pack_recommendation": {
+                "recommendation_type": "single_pack",
+                "route_confidence": 0.95,
+                "candidate_packs": [
+                  {
+                    "pack_id": "product_clause_consultation",
+                    "confidence": 0.95,
+                    "reason": "Product clause flow applies."
+                  }
+                ]
+              }
+            }
+            """,
+            """
+            {
+              "intent_resolution": {
+                "resolution_id": "intent_1",
+                "user_goal": "Query product clauses.",
+                "domain_intent": "product_clause_consultation",
+                "known_facts": ["The user asks about product clauses."],
+                "missing_fields": [],
+                "ambiguities": [],
+                "risk_flags": [],
+                "confidence": 0.95,
+                "recommended_next_action": "plan_retrieval",
+                "retrieval_query_set": [
+                  {
+                    "query": "平安御享 主要保险产品条款",
+                    "intent_angle": "original_question",
+                    "required": true,
+                    "reason": "The user asks about product clauses."
+                  }
+                ]
+              },
+              "business_flow_skill_pack_recommendation": {
+                "recommendation_id": "bfsp_rec_intent_1",
+                "intent_resolution_id": "intent_1",
+                "recommendation_type": "single_pack",
+                "confidence": 0.95,
+                "reason": "The request is about product clauses.",
+                "candidate_packs": [
+                  {
+                    "pack_id": "product_clause_consultation",
+                    "confidence": 0.95,
+                    "reason": "Product clause flow applies."
+                  }
+                ],
+                "requires_task_split": false
+              }
+            }
+            """,
+        ]
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+    skill_pack = BusinessFlowSkillPackDefinition(
+        schema_version="business_flow_skill_pack.v1",
+        id="product_clause_consultation",
+        label="Product Clause Consultation",
+        description="Answer product clause questions with governed evidence.",
+        intent_patterns=("产品条款",),
+        admission=BusinessFlowSkillPackAdmissionConfig(min_confidence=0.75),
+    )
+
+    result = resolver.resolve(
+        question="平安御享的主要保险产品条款有哪些？",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+        business_flow_skill_packs=(skill_pack,),
+    )
+
+    assert result.business_flow_skill_pack_recommendation is not None
+    repair_payload = json.loads(provider.requests[1].messages[1].content)
+    assert repair_payload["validation_error"]["field_paths"] == [
+        "business_flow_skill_pack_recommendation.recommendation_id",
+        "business_flow_skill_pack_recommendation.intent_resolution_id",
+        "business_flow_skill_pack_recommendation.confidence",
+        "business_flow_skill_pack_recommendation.reason",
+    ]
+    repair_function_schema = provider.requests[1].function_schema
+    assert repair_function_schema is not None
+    assert repair_function_schema.name == "submit_intent_resolution_result"
 
 
 def test_llm_intent_resolver_rejects_executable_final_answer_action() -> None:

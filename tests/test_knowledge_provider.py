@@ -22,6 +22,23 @@ def test_retrieval_returns_source_chunks() -> None:
     assert chunks[0].citation
 
 
+def test_local_markdown_retrieval_matches_cjk_policy_terms(tmp_path: Path) -> None:
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "product-clauses.md").write_text(
+        "# 产品条款解释\n\n产品条款解释必须以正式条款和产品说明为依据。\n",
+        encoding="utf-8",
+    )
+    provider = LocalMarkdownProvider(knowledge)
+
+    chunks = provider.retrieve("平安御享的主要保险产品条款有哪些？", top_k=1)
+
+    assert chunks
+    assert chunks[0].source == "product-clauses.md"
+    assert chunks[0].provider_native_score is not None
+    assert chunks[0].provider_native_score > 0
+
+
 def test_resolves_local_markdown_provider() -> None:
     provider = resolve_knowledge_provider(
         KnowledgeConfig(

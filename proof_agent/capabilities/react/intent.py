@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     BusinessFlowSkillPackRecommendationType,
     IntentResolution,
     IntentResolutionResult,
+    ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
     ModelRole,
@@ -45,6 +46,8 @@ _INTENT_REQUIRED_FIELDS = (
     "recommended_next_action",
     "retrieval_query_set",
 )
+_INTENT_FUNCTION_SCHEMA_NAME = "submit_intent_resolution"
+_INTENT_RESULT_FUNCTION_SCHEMA_NAME = "submit_intent_resolution_result"
 
 
 class IntentResolver(Protocol):
@@ -92,6 +95,7 @@ class DeterministicIntentResolver:
                     _deterministic_business_flow_recommendation(
                         resolution,
                         business_flow_skill_packs,
+                        question=question,
                     )
                 ),
             )
@@ -113,6 +117,7 @@ class DeterministicIntentResolver:
                     _deterministic_business_flow_recommendation(
                         resolution,
                         business_flow_skill_packs,
+                        question=question,
                     )
                 ),
             )
@@ -141,6 +146,7 @@ class DeterministicIntentResolver:
                 _deterministic_business_flow_recommendation(
                     resolution,
                     business_flow_skill_packs,
+                    question=question,
                 )
             ),
         )
@@ -231,6 +237,9 @@ class LLMIntentResolver:
                 ),
             ),
             response_format="json",
+            function_schema=_intent_function_schema(
+                include_business_flow_recommendation=bool(business_flow_routing)
+            ),
             stream=False,
             metadata={"role": "intent_resolution", "question": question},
         )
@@ -311,14 +320,173 @@ def _intent_required_output_contract(
         "field_types": {
             "intent_resolution": "IntentResolution object",
             "business_flow_skill_pack_recommendation": (
-                "BusinessFlowSkillPackRecommendation object with recommendation_type "
-                "single_pack, no_pack, or ambiguous; top-level route confidence; "
-                "candidate_packs sorted by confidence descending; candidate pack_id, "
-                "confidence, and reason"
+                "BusinessFlowSkillPackRecommendation object with exact fields "
+                "recommendation_id, intent_resolution_id, recommendation_type, "
+                "confidence, reason, candidate_packs, and requires_task_split. "
+                "Use confidence, not route_confidence."
             ),
         },
         "intent_resolution_contract": intent_contract,
+        "business_flow_skill_pack_recommendation_contract": (
+            _business_flow_skill_pack_recommendation_contract()
+        ),
     }
+
+
+def _business_flow_skill_pack_recommendation_contract() -> dict[str, Any]:
+    return {
+        "name": "BusinessFlowSkillPackRecommendation",
+        "required_fields": [
+            "recommendation_id",
+            "intent_resolution_id",
+            "recommendation_type",
+            "confidence",
+            "reason",
+            "candidate_packs",
+            "requires_task_split",
+        ],
+        "field_types": {
+            "recommendation_id": "string",
+            "intent_resolution_id": "string matching intent_resolution.resolution_id",
+            "recommendation_type": "single_pack, no_pack, or ambiguous",
+            "confidence": "number between 0 and 1",
+            "reason": "string",
+            "candidate_packs": (
+                "array of objects with pack_id, confidence, and reason; exactly one "
+                "for single_pack, empty for no_pack, two or more for ambiguous"
+            ),
+            "requires_task_split": (
+                "boolean; true only when recommendation_type is ambiguous"
+            ),
+        },
+        "forbidden_fields": ["route_confidence", "recommended_pack_id"],
+    }
+
+
+def _intent_function_schema(
+    *,
+    include_business_flow_recommendation: bool,
+) -> ModelFunctionSchema:
+    if include_business_flow_recommendation:
+        return ModelFunctionSchema(
+            name=_INTENT_RESULT_FUNCTION_SCHEMA_NAME,
+            description=(
+                "Submit the governed intent resolution plus exactly one Business "
+                "Flow Skill Pack recommendation. Use the exact schema field names."
+            ),
+            parameters_schema=_intent_resolution_result_parameters_schema(),
+            strict=True,
+        )
+    return ModelFunctionSchema(
+        name=_INTENT_FUNCTION_SCHEMA_NAME,
+        description=(
+            "Submit the governed intent resolution. Do not include final answer text "
+            "or executable tool arguments."
+        ),
+        parameters_schema=_intent_resolution_parameters_schema(),
+        strict=True,
+    )
+
+
+def _intent_resolution_result_parameters_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "intent_resolution",
+            "business_flow_skill_pack_recommendation",
+        ],
+        "properties": {
+            "intent_resolution": _intent_resolution_parameters_schema(),
+            "business_flow_skill_pack_recommendation": (
+                _business_flow_skill_pack_recommendation_parameters_schema()
+            ),
+        },
+    }
+
+
+def _intent_resolution_parameters_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(_INTENT_REQUIRED_FIELDS),
+        "properties": {
+            "resolution_id": {"type": "string"},
+            "user_goal": {"type": "string"},
+            "domain_intent": {"type": "string"},
+            "known_facts": _string_array_schema(),
+            "missing_fields": _string_array_schema(),
+            "ambiguities": _string_array_schema(),
+            "risk_flags": _string_array_schema(),
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "recommended_next_action": {
+                "type": "string",
+                "enum": [action.value for action in sorted(_ALLOWED_RECOMMENDED_ACTIONS, key=str)],
+            },
+            "retrieval_query_set": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["query", "intent_angle", "required", "reason"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "intent_angle": {"type": "string"},
+                        "required": {"type": "boolean"},
+                        "reason": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
+
+
+def _business_flow_skill_pack_recommendation_parameters_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "recommendation_id",
+            "intent_resolution_id",
+            "recommendation_type",
+            "confidence",
+            "reason",
+            "candidate_packs",
+            "requires_task_split",
+        ],
+        "properties": {
+            "recommendation_id": {"type": "string"},
+            "intent_resolution_id": {"type": "string"},
+            "recommendation_type": {
+                "type": "string",
+                "enum": [
+                    BusinessFlowSkillPackRecommendationType.SINGLE_PACK.value,
+                    BusinessFlowSkillPackRecommendationType.NO_PACK.value,
+                    BusinessFlowSkillPackRecommendationType.AMBIGUOUS.value,
+                ],
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string"},
+            "candidate_packs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["pack_id", "confidence", "reason"],
+                    "properties": {
+                        "pack_id": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "reason": {"type": "string"},
+                    },
+                },
+            },
+            "requires_task_split": {"type": "boolean"},
+        },
+    }
+
+
+def _string_array_schema() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}}
 
 
 def _business_flow_skill_pack_routing_payload(
@@ -431,6 +599,11 @@ def _intent_repair_request(
             ),
         ),
         response_format="json",
+        function_schema=_intent_function_schema(
+            include_business_flow_recommendation=bool(
+                original_payload.get("business_flow_skill_pack_routing")
+            )
+        ),
         stream=False,
         metadata={
             "role": "intent_resolution",
@@ -451,6 +624,8 @@ def _intent_repair_prompt() -> str:
     return (
         "You are repairing a Proof Agent intent resolution JSON object. "
         "Return exactly one JSON object with every required field present. "
+        "When function calling is available, submit the repaired object through "
+        "the supplied function schema. "
         "Do not include markdown, explanations, final answers, tool calls, or chain-of-thought."
     )
 
@@ -469,10 +644,13 @@ def _intent_control_prompt() -> str:
     return (
         "You are the Proof Agent Intent Resolver. "
         "Return exactly one JSON object matching the required output contract. "
+        "When function calling is available, submit the object through the supplied "
+        "function schema. "
         "When the contract is IntentResolution, include all required fields: "
         f"{', '.join(_INTENT_REQUIRED_FIELDS)}. "
         "When the contract is IntentResolutionResult, return intent_resolution plus an "
-        "independent business_flow_skill_pack_recommendation. "
+        "independent business_flow_skill_pack_recommendation with exact schema field "
+        "names, including confidence rather than route_confidence. "
         "Summarize user intent, known facts, missing fields, ambiguities, risk flags, "
         "confidence, and a recommended_next_action. "
         "Use only allowed recommended_next_action values from the user message. "
@@ -488,6 +666,8 @@ def _intent_control_prompt() -> str:
 def _deterministic_business_flow_recommendation(
     resolution: IntentResolution,
     skill_packs: tuple[BusinessFlowSkillPackDefinition, ...],
+    *,
+    question: str,
 ) -> BusinessFlowSkillPackRecommendation | None:
     if not skill_packs:
         return None
@@ -506,22 +686,87 @@ def _deterministic_business_flow_recommendation(
                 ),
             ),
         )
+    ranked_matches = _rank_deterministic_business_flow_matches(question, skill_packs)
+    if not ranked_matches:
+        return BusinessFlowSkillPackRecommendation(
+            recommendation_id=f"bfsp_rec_{resolution.resolution_id}",
+            intent_resolution_id=resolution.resolution_id,
+            recommendation_type=BusinessFlowSkillPackRecommendationType.NO_PACK,
+            confidence=resolution.confidence,
+            reason=(
+                "Deterministic resolver found no matching Business Flow Skill "
+                "Pack routing pattern."
+            ),
+        )
+    top_score = ranked_matches[0][1]
+    top_matches = tuple(match for match in ranked_matches if match[1] == top_score)
+    if len(top_matches) == 1:
+        skill_pack, _, matched_patterns = top_matches[0]
+        return BusinessFlowSkillPackRecommendation(
+            recommendation_id=f"bfsp_rec_{resolution.resolution_id}",
+            intent_resolution_id=resolution.resolution_id,
+            recommendation_type=BusinessFlowSkillPackRecommendationType.SINGLE_PACK,
+            confidence=resolution.confidence,
+            reason=(
+                "Deterministic resolver selected the only Business Flow Skill Pack "
+                "with the strongest routing pattern match."
+            ),
+            candidate_packs=(
+                BusinessFlowCandidatePack(
+                    pack_id=skill_pack.id,
+                    confidence=resolution.confidence,
+                    reason=_deterministic_business_flow_match_reason(matched_patterns),
+                ),
+            ),
+        )
     return BusinessFlowSkillPackRecommendation(
         recommendation_id=f"bfsp_rec_{resolution.resolution_id}",
         intent_resolution_id=resolution.resolution_id,
         recommendation_type=BusinessFlowSkillPackRecommendationType.AMBIGUOUS,
         confidence=resolution.confidence,
-        reason="Deterministic resolver found multiple published Business Flow Skill Packs.",
+        reason=(
+            "Deterministic resolver found multiple Business Flow Skill Packs with "
+            "equally strong routing pattern matches."
+        ),
         candidate_packs=tuple(
             BusinessFlowCandidatePack(
                 pack_id=pack.id,
                 confidence=resolution.confidence,
-                reason="Published Business Flow Skill Pack candidate.",
+                reason=_deterministic_business_flow_match_reason(matched_patterns),
             )
-            for pack in skill_packs
+            for pack, _, matched_patterns in top_matches
         ),
         requires_task_split=True,
     )
+
+
+def _rank_deterministic_business_flow_matches(
+    question: str,
+    skill_packs: tuple[BusinessFlowSkillPackDefinition, ...],
+) -> list[tuple[BusinessFlowSkillPackDefinition, int, tuple[str, ...]]]:
+    normalized_question = _normalize_route_text(question)
+    matches: list[tuple[BusinessFlowSkillPackDefinition, int, tuple[str, ...]]] = []
+    for skill_pack in skill_packs:
+        matched_patterns = tuple(
+            pattern
+            for pattern in skill_pack.intent_patterns
+            if _normalize_route_text(pattern)
+            and _normalize_route_text(pattern) in normalized_question
+        )
+        if matched_patterns:
+            matches.append((skill_pack, len(matched_patterns), matched_patterns))
+    return sorted(matches, key=lambda match: match[1], reverse=True)
+
+
+def _normalize_route_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _deterministic_business_flow_match_reason(matched_patterns: tuple[str, ...]) -> str:
+    preview = ", ".join(matched_patterns[:3])
+    if len(matched_patterns) > 3:
+        preview = f"{preview}, ..."
+    return f"Matched routing pattern(s): {preview}."
 
 
 def _validate_intent_resolution_result(

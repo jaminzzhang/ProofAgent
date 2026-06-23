@@ -746,7 +746,7 @@ id: claims_escalation
 label: Claims Escalation
 description: Claims escalation routing addenda.
 intent_patterns:
-  - claims_escalation
+  - reimbursement rule
 stage_prompt_addenda: {}
 knowledge_binding_refs:
   - react_enterprise_qa_v2_knowledge_binding
@@ -766,7 +766,7 @@ id: billing_review
 label: Billing Review
 description: Billing review routing addenda.
 intent_patterns:
-  - billing_review
+  - reimbursement rule
 stage_prompt_addenda: {}
 knowledge_binding_refs:
   - react_enterprise_qa_v2_knowledge_binding
@@ -889,6 +889,86 @@ admission:
     assert plan_context["payload"]["task_instruction_count"] == 1
     trace_text = result.trace_path.read_text(encoding="utf-8")
     assert admitted_context not in trace_text
+
+
+def test_admitted_business_flow_routes_retrieval_to_pack_knowledge_binding(
+    tmp_path: Path,
+) -> None:
+    example_dir = tmp_path / "react_enterprise_qa_v2"
+    shutil.copytree(REACT_V2_AGENT.parent, example_dir)
+    skill_pack_dir = example_dir / "skill_packs"
+    skill_pack_dir.mkdir()
+    (skill_pack_dir / "enterprise.yaml").write_text(
+        """
+schema_version: business_flow_skill_pack.v1
+id: enterprise_policy_qa
+label: Enterprise Policy QA
+description: Enterprise policy question routing addenda.
+intent_patterns:
+  - enterprise_policy_question
+stage_prompt_addenda: {}
+knowledge_binding_refs:
+  - policy_binding
+tool_contract_refs: []
+policy_rule_refs:
+  - answering.require_retrieval
+validator_refs: []
+admission:
+  min_confidence: 0.5
+""",
+        encoding="utf-8",
+    )
+    manifest_path = example_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    source_ref = {
+        "scope": "package",
+        "source_id": "react_enterprise_qa_v2_knowledge",
+    }
+    manifest["knowledge_bindings"] = [
+        {
+            "binding_id": "policy_binding",
+            "source_ref": source_ref,
+            "alias": "policy_corpus",
+            "routing_metadata": {"document_family": "enterprise_policy"},
+        },
+        {
+            "binding_id": "claims_binding",
+            "source_ref": source_ref,
+            "alias": "claims_corpus",
+            "routing_metadata": {"document_family": "claims_metrics"},
+        },
+    ]
+    manifest["capabilities"]["skills"] = {
+        "enabled": True,
+        "business_flows": [
+            {
+                "id": "enterprise_policy_qa",
+                "definition": "./skill_packs/enterprise.yaml",
+            },
+        ],
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_with_langgraph(
+        manifest_path,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "run",
+    )
+
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    retrieval_result = next(
+        event
+        for event in _trace_events(result.trace_path)
+        if event["event_type"] == "retrieval_result"
+    )
+    assert [
+        binding["binding_id"]
+        for binding in retrieval_result["payload"]["selected_bindings"]
+    ] == ["policy_binding"]
+    assert (
+        retrieval_result["payload"]["routing"]["selection_reason"]
+        == "business_flow_skill_pack_refs"
+    )
 
 
 def test_workflow_stage_context_extends_model_prompt_without_replacing_system_prompt(

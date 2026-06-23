@@ -603,6 +603,10 @@ class ReActEnterpriseQAStageBehavior:
                 max_queries=self.manifest.retrieval.max_queries,
                 query_concurrency=self.manifest.retrieval.query_concurrency,
                 query_timeout_seconds=self.manifest.retrieval.query_timeout_seconds,
+                preferred_binding_ids=_admitted_business_flow_knowledge_binding_refs(
+                    state,
+                    self.invocation.business_flow_skill_packs,
+                ),
                 force_empty=state["question"] == UNSUPPORTED_QUESTION,
             ),
             execution_mode="react_reviewed_retrieval",
@@ -1701,6 +1705,19 @@ def _stage_prompt_with_business_flow_addendum(
             return prompt, None
         return _merge_stage_prompt(prompt, addendum), skill_pack.id
     return prompt, None
+
+
+def _admitted_business_flow_knowledge_binding_refs(
+    state: Mapping[str, Any],
+    skill_packs: tuple[BusinessFlowSkillPackDefinition, ...],
+) -> tuple[str, ...]:
+    selected_pack_id = state.get("primary_business_flow_skill_pack_id")
+    if not selected_pack_id:
+        return ()
+    for skill_pack in skill_packs:
+        if skill_pack.id == selected_pack_id:
+            return skill_pack.knowledge_binding_refs
+    return ()
 
 
 def _merge_stage_prompt(
