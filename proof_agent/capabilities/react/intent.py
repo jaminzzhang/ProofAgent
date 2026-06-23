@@ -198,6 +198,19 @@ class LLMIntentResolver:
                     "top_k",
                     "scope_id",
                 ],
+                "query_expansion_policy": {
+                    "name": "knowledge_query_expansion",
+                    "domain_specific_query_types_allowed": False,
+                    "required_angles": [
+                        "original wording",
+                        "business terminology or synonyms",
+                        "time/entity/metric qualifiers",
+                    ],
+                    "optional_angles": [
+                        "ranking or comparison wording",
+                        "bilingual alternative when useful",
+                    ],
+                },
             },
             "allowed_recommended_next_actions": [
                 action.value for action in sorted(_ALLOWED_RECOMMENDED_ACTIONS, key=str)
@@ -465,6 +478,8 @@ def _intent_control_prompt() -> str:
         "Use only allowed recommended_next_action values from the user message. "
         "When the recommended_next_action is plan_retrieval and no missing_fields "
         "block retrieval, include a bounded non-executing retrieval_query_set. "
+        "Use public Knowledge Query Expansion for knowledge retrieval: produce "
+        "complementary query angles without inventing business-specific query types. "
         "Do not return raw chain-of-thought, markdown, tool calls, executable retrieval "
         "plans, final answers, or policy decisions."
     )

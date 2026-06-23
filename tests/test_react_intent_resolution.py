@@ -139,6 +139,53 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
     )
 
 
+def test_llm_intent_resolver_exposes_public_query_expansion_policy() -> None:
+    provider = FakeIntentProvider(
+        """
+        {
+          "resolution_id": "intent_llm_1",
+          "user_goal": "Identify top-selling Ping An insurance products for 2025.",
+          "domain_intent": "public_insurance_knowledge_query",
+          "known_facts": ["The user asks which products sold well in 2025."],
+          "missing_fields": [],
+          "ambiguities": [],
+          "risk_flags": [],
+          "confidence": 0.86,
+          "recommended_next_action": "plan_retrieval",
+          "retrieval_query_set": [
+            {
+              "query": "平安保险2025年热销产品",
+              "intent_angle": "original_business_terms",
+              "required": true,
+              "reason": "Uses the user's original entity, year, and business wording."
+            }
+          ]
+        }
+        """
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+
+    resolver.resolve(
+        question="平安2025年卖得好的产品有哪些？",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+    )
+
+    assert provider.last_request is not None
+    user_payload = json.loads(provider.last_request.messages[1].content)
+    expansion_policy = user_payload["retrieval_query_set_budget"][
+        "query_expansion_policy"
+    ]
+    assert expansion_policy["name"] == "knowledge_query_expansion"
+    assert expansion_policy["domain_specific_query_types_allowed"] is False
+    assert "original wording" in expansion_policy["required_angles"]
+    assert "business terminology or synonyms" in expansion_policy["required_angles"]
+    assert "time/entity/metric qualifiers" in expansion_policy["required_angles"]
+
+
 def test_llm_intent_resolver_includes_business_flow_pack_summaries() -> None:
     provider = FakeIntentProvider(
         """

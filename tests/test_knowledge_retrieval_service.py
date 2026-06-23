@@ -213,6 +213,67 @@ def test_single_step_retrieval_uses_first_required_retrieval_query_item(
     )
 
 
+def test_react_reviewed_single_step_executes_expanded_query_set(
+    tmp_path: Path,
+) -> None:
+    provider = FakeKnowledgeProvider(
+        (
+            EvidenceChunk(
+                source="policy.md",
+                content="Ping An product ranking evidence.",
+                status=EvidenceStatus.CANDIDATE,
+                admission_score=0.9,
+                citation="policy.md:1",
+            ),
+        )
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="平安2025年卖得好的产品有哪些？",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query="平安保险2025年热销产品",
+                    intent_angle="original_business_terms",
+                    required=True,
+                    reason="Uses the user's original entity, year, and wording.",
+                ),
+                RetrievalQueryItem(
+                    query="2025年平安保险畅销产品排行榜 保费 新单",
+                    intent_angle="metric_ranking_terms",
+                    required=False,
+                    reason="Adds ranking and metric qualifiers.",
+                ),
+            ),
+            max_queries=3,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    assert provider.calls == [
+        ("平安保险2025年热销产品", 1),
+        ("2025年平安保险畅销产品排行榜 保费 新单", 1),
+    ]
+    assert result.evidence_result.status == "passed"
+    retrieval_steps = [
+        event for event in _read_events(trace.trace_path)
+        if event["event_type"] == "retrieval_step"
+    ]
+    assert [
+        event["payload"]["retrieval_query_item"]["intent_angle"]
+        for event in retrieval_steps
+    ] == ["original_business_terms", "metric_ranking_terms"]
+
+
 def test_agentic_retrieval_executes_query_set_before_planner_rewrites(
     tmp_path: Path,
 ) -> None:
