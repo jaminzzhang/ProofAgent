@@ -1649,7 +1649,8 @@ def bind_knowledge_source_to_draft(
     candidate = _draft_with_contract_bundle(draft, bundle)
     try:
         package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
-        load_agent_manifest(package_dir / "agent.yaml")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        _validate_business_flow_skill_packs(manifest, package_dir / "agent.yaml")
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
@@ -1695,7 +1696,8 @@ def unbind_knowledge_source_from_draft(
     candidate = _draft_with_contract_bundle(draft, bundle)
     try:
         package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
-        load_agent_manifest(package_dir / "agent.yaml")
+        manifest = load_agent_manifest(package_dir / "agent.yaml")
+        _validate_business_flow_skill_packs(manifest, package_dir / "agent.yaml")
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
@@ -1877,6 +1879,7 @@ def update_config_draft_contract(
     try:
         package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
         manifest = load_agent_manifest(package_dir / "agent.yaml")
+        _validate_business_flow_skill_packs(manifest, package_dir / "agent.yaml")
         _resolve_draft_knowledge_bindings(store, manifest)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2573,11 +2576,23 @@ def _business_flow_skill_pack_configuration_payload(
     manifest_path = package_dir / "agent.yaml"
     manifest = load_agent_manifest(manifest_path)
     template = resolve_workflow_template(manifest.workflow.template)
-    skill_packs = load_business_flow_skill_pack_set(
-        manifest,
-        template=template,
-        manifest_path=manifest_path,
-    )
+    configuration_issues: list[dict[str, str]] = []
+    try:
+        skill_packs = load_business_flow_skill_pack_set(
+            manifest,
+            template=template,
+            manifest_path=manifest_path,
+        )
+    except ProofAgentError as exc:
+        if not _is_recoverable_business_flow_skill_pack_ref_error(exc):
+            raise
+        configuration_issues.append(_configuration_issue_payload(exc))
+        skill_packs = load_business_flow_skill_pack_set(
+            manifest,
+            template=template,
+            manifest_path=manifest_path,
+            validate_capability_refs=False,
+        )
     stage_runtime = resolve_workflow_stage_runtime_configuration(
         manifest_path.read_text(encoding="utf-8"),
         source=WorkflowStageConfigurationRuntimeSource(
@@ -2611,6 +2626,7 @@ def _business_flow_skill_pack_configuration_payload(
         "template_name": template.name,
         "template_descriptor_version": template.descriptor_version,
         "addendum_slots": slots,
+        "configuration_issues": configuration_issues,
         "packs": [
             _business_flow_skill_pack_payload(
                 skill_pack,
@@ -2622,6 +2638,19 @@ def _business_flow_skill_pack_configuration_payload(
             for skill_pack in skill_packs
         ],
     }
+
+
+def _is_recoverable_business_flow_skill_pack_ref_error(exc: ProofAgentError) -> bool:
+    return exc.code == "PA_CONFIG_002" and exc.message.startswith(
+        "unknown Business Flow Skill Pack "
+    )
+
+
+def _configuration_issue_payload(exc: ProofAgentError) -> dict[str, str]:
+    payload = {"code": exc.code, "message": exc.message, "fix": exc.fix}
+    if exc.artifact_path is not None:
+        payload["artifact_path"] = str(exc.artifact_path)
+    return payload
 
 
 def _create_business_flow_skill_pack_bundle(
@@ -3169,6 +3198,14 @@ def _resolve_draft_knowledge_bindings(
     if has_shared_binding:
         return ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
     return PackageKnowledgeBindingResolver().resolve(manifest)
+
+
+def _validate_business_flow_skill_packs(manifest: Any, manifest_path: Path) -> None:
+    load_business_flow_skill_pack_set(
+        manifest,
+        template=resolve_workflow_template(manifest.workflow.template),
+        manifest_path=manifest_path,
+    )
 
 
 def _require_draft(

@@ -36,6 +36,7 @@ def load_business_flow_skill_pack_set(
     *,
     template: WorkflowTemplate,
     manifest_path: Path,
+    validate_capability_refs: bool = True,
 ) -> tuple[BusinessFlowSkillPackDefinition, ...]:
     """Load package-local Business Flow Skill Pack definitions for one manifest."""
 
@@ -61,11 +62,12 @@ def load_business_flow_skill_pack_set(
             template=template,
             definition_path=binding.definition,
         )
-        _validate_capability_refs(
-            definition,
-            manifest=manifest,
-            definition_path=binding.definition,
-        )
+        if validate_capability_refs:
+            _validate_capability_refs(
+                definition,
+                manifest=manifest,
+                definition_path=binding.definition,
+            )
         definitions.append(definition)
     return tuple(definitions)
 

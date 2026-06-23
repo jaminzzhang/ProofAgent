@@ -1009,6 +1009,7 @@ admission:
     assert response.status_code == 200
     payload = response.json()
     assert payload["enabled"] is True
+    assert payload["configuration_issues"] == []
     assert payload["addendum_slots"] == [
         {"stage_id": "plan", "stage_label": "Plan"},
         {"stage_id": "retrieval_review", "stage_label": "Retrieval Review"},
@@ -1045,6 +1046,61 @@ admission:
         "configured_stage_ids": ["plan", "model_answer"],
         "missing_stage_ids": ["retrieval_review", "tool_review"],
     }
+
+
+def test_fetch_config_draft_skills_reports_missing_refs_without_blocking_list(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    store = _configuration_store(client)
+    imported = client.post(
+        "/api/config/agents/import",
+        json={"manifest_path": "examples/agent_management_insurance_specialist/agent.yaml"},
+    ).json()
+    draft = store.get_draft(imported["agent_id"], imported["draft_id"])
+    assert draft is not None
+    raw_agent_yaml = yaml.safe_load(draft.contract_bundle.agent_yaml)
+    raw_agent_yaml["knowledge_bindings"] = [
+        binding
+        for binding in raw_agent_yaml["knowledge_bindings"]
+        if binding["binding_id"] != "general_insurance_knowledge"
+    ]
+    store.update_draft(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        actor="test-operator",
+        contract_bundle=ContractBundle(
+            agent_yaml=yaml.safe_dump(raw_agent_yaml, sort_keys=False),
+            policy_yaml=draft.contract_bundle.policy_yaml,
+            tools_yaml=draft.contract_bundle.tools_yaml,
+            extra_files=draft.contract_bundle.extra_files,
+            advanced_fields=draft.contract_bundle.advanced_fields,
+        ),
+    )
+
+    response = client.get(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["configuration_issues"][0]["code"] == "PA_CONFIG_002"
+    assert "unknown Business Flow Skill Pack knowledge_binding_refs" in (
+        payload["configuration_issues"][0]["message"]
+    )
+    assert "general_insurance_knowledge" in payload["configuration_issues"][0]["message"]
+    pack = next(
+        item for item in payload["packs"] if item["id"] == "general_insurance_specialist"
+    )
+    assert "general_insurance_knowledge" in pack["capability_refs"]["knowledge_binding_refs"]
+    repaired = client.patch(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}"
+        "/skills/business-flows/general_insurance_specialist",
+        json={"knowledge_binding_refs": []},
+    )
+
+    assert repaired.status_code == 200
+    assert repaired.json()["configuration_issues"] == []
 
 
 def test_fetch_config_draft_skills_handles_template_without_addendum_slots(
@@ -2642,6 +2698,37 @@ def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
     )
     assert "  top_k: 1" in loaded.json()["agent_yaml"]
+
+
+def test_update_contract_view_rejects_removed_skill_pack_knowledge_binding(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = client.post(
+        "/api/config/agents/import",
+        json={"manifest_path": "examples/agent_management_insurance_specialist/agent.yaml"},
+    ).json()
+    contract = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    ).json()
+    raw_agent_yaml = yaml.safe_load(contract["agent_yaml"])
+    raw_agent_yaml["knowledge_bindings"] = [
+        binding
+        for binding in raw_agent_yaml["knowledge_bindings"]
+        if binding["binding_id"] != "general_insurance_knowledge"
+    ]
+
+    updated = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
+        json={"agent_yaml": yaml.safe_dump(raw_agent_yaml, sort_keys=False)},
+    )
+
+    assert updated.status_code == 400
+    assert updated.json()["detail"]["code"] == "PA_CONFIG_002"
+    assert "unknown Business Flow Skill Pack knowledge_binding_refs" in (
+        updated.json()["detail"]["message"]
+    )
+    assert "general_insurance_knowledge" in updated.json()["detail"]["message"]
 
 
 def test_update_react_contract_view_preserves_reviewer_usage_params(
