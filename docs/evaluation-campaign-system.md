@@ -371,7 +371,7 @@ These routes are read-only. Any run production happens through the Campaign CLI 
 
 ## Implementation Slices
 
-Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Slice 8 adds an artifact-level Curated Production Evaluation Sample import and reviewer-gated promotion workflow. Slice 9 adds an injected Exploratory Probe runner and `exploratory_probe_results.jsonl` diagnostic artifact. Slice 10A adds explicit Campaign selection for promoted curated production samples through promotion records and rejects diagnostic-only samples from formal Campaign scoring. Slice 10B1 adds automatic promoted production sample discovery from a configured promotions directory. Slice 10B2A adds read-only Dashboard APIs for curation candidates and promotion records. Dashboard curation UI remains a future slice.
+Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Slice 8 adds an artifact-level Curated Production Evaluation Sample import and reviewer-gated promotion workflow. Slice 9 adds an injected Exploratory Probe runner and `exploratory_probe_results.jsonl` diagnostic artifact. Slice 10A adds explicit Campaign selection for promoted curated production samples through promotion records and rejects diagnostic-only samples from formal Campaign scoring. Slice 10B1 adds automatic promoted production sample discovery from a configured promotions directory. Slice 10B2A adds read-only Dashboard APIs for curation candidates and promotion records. Slice 10B2B adds a read-only Evaluation Lab curation section for candidate backlog and promoted counts. Dashboard curation review actions remain future slices.
 
 Slice 1: Campaign manifest and artifact model
 
@@ -463,7 +463,14 @@ Slice 10B2A: Curated production sample curation read APIs
 - Expose `GET /api/evaluation/production-samples/promotions`.
 - Return safe candidate summaries and promotion metadata without exposing raw production question or response text.
 
-Slice 10B2B: Curated production sample curation UI
+Slice 10B2B: Curated production sample read-only Evaluation Lab section
+
+- Fetch production sample candidates and promotion records from the curation read APIs.
+- Show diagnostic candidate backlog and promoted sample counts in the private Evaluation Lab.
+- List only safe candidate summaries, such as sample ids, batch ids, status, run refs, and text lengths.
+- Keep the section read-only and avoid exposing raw production question or response text.
+
+Slice 10B2C: Curated production sample curation review UI
 
 - Add Dashboard curation review UI.
 - Keep unreviewed production samples diagnostic-only.

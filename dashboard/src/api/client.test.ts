@@ -22,6 +22,8 @@ import {
   fetchEvaluationCampaignCases,
   fetchEvaluationCampaigns,
   fetchEvaluationCampaignTrends,
+  fetchEvaluationProductionSampleCandidates,
+  fetchEvaluationProductionSamplePromotions,
   fetchKnowledgeIngestionJobs,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSources,
@@ -139,6 +141,60 @@ test('evaluation campaign client methods use dashboard campaign endpoints', asyn
     '/api/evaluation/campaigns/active_agent_probe/trends',
     undefined,
   )
+})
+
+test('evaluation production sample client methods use curation endpoints', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      data: [
+        {
+          batch_id: 'prod_edge_cases',
+          batch_dir: '/tmp/curation/prod_edge_cases',
+          sample_id: 'prod_supported',
+          curation_status: 'diagnostic_only',
+          formal_scoring_allowed: false,
+          safe_summary: {
+            question_text_length: 42,
+            response_text_length: 28,
+          },
+        },
+      ],
+      meta: { total: 1 },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      data: [
+        {
+          promotion_dir: '/tmp/curation/promoted/prod_supported',
+          promotion_record_path:
+            '/tmp/curation/promoted/prod_supported/production_sample_promotion.json',
+          sample_id: 'prod_supported',
+          status: 'promoted',
+        },
+      ],
+      meta: { total: 1 },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+  const candidates = await fetchEvaluationProductionSampleCandidates()
+  const promotions = await fetchEvaluationProductionSamplePromotions()
+
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    1,
+    '/api/evaluation/production-samples/candidates',
+    undefined,
+  )
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    '/api/evaluation/production-samples/promotions',
+    undefined,
+  )
+  expect(candidates.data[0].sample_id).toBe('prod_supported')
+  expect(promotions.data[0].status).toBe('promoted')
 })
 
 test('fetchApprovals requests the global pending approval queue projection', async () => {

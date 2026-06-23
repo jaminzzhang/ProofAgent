@@ -15,6 +15,8 @@ import type {
   EvaluationCampaignsResponse,
   EvaluationCampaignSummary,
   EvaluationCampaignTrend,
+  EvaluationProductionSampleCandidatesResponse,
+  EvaluationProductionSamplePromotionsResponse,
   FoundationKnowledgeSourceValidation,
   HandoffsResponse,
   HealthResponse,
@@ -145,6 +147,18 @@ export function fetchEvaluationCampaignTrends(
 ): Promise<EvaluationCampaignTrend> {
   return fetchJson<EvaluationCampaignTrend>(
     `${BASE}/evaluation/campaigns/${campaignId}/trends`,
+  )
+}
+
+export function fetchEvaluationProductionSampleCandidates(): Promise<EvaluationProductionSampleCandidatesResponse> {
+  return fetchJson<EvaluationProductionSampleCandidatesResponse>(
+    `${BASE}/evaluation/production-samples/candidates`,
+  )
+}
+
+export function fetchEvaluationProductionSamplePromotions(): Promise<EvaluationProductionSamplePromotionsResponse> {
+  return fetchJson<EvaluationProductionSamplePromotionsResponse>(
+    `${BASE}/evaluation/production-samples/promotions`,
   )
 }
 

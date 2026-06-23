@@ -494,6 +494,56 @@ export interface EvaluationCampaignsResponse {
   }
 }
 
+export interface EvaluationProductionSampleSafeSummary {
+  question_sha256?: string
+  question_text_length?: number
+  response_text_sha256?: string
+  response_text_length?: number
+}
+
+export interface EvaluationProductionSampleCandidate {
+  batch_id: string
+  batch_dir: string
+  sample_id: string
+  source_run_id?: string
+  curation_status: string
+  formal_scoring_allowed: boolean
+  run_purpose?: string
+  safe_summary?: EvaluationProductionSampleSafeSummary
+}
+
+export interface EvaluationProductionSampleCandidatesResponse {
+  data: EvaluationProductionSampleCandidate[]
+  meta: {
+    total: number
+  }
+}
+
+export interface EvaluationProductionSampleReviewer {
+  reviewer: string
+  confirmed: boolean
+  notes?: string | null
+}
+
+export interface EvaluationProductionSamplePromotion {
+  promotion_dir: string
+  promotion_record_path: string
+  sample_id: string
+  status: string
+  source_run_id?: string
+  suite_path?: string
+  subject_manifest_path?: string
+  domain_review?: EvaluationProductionSampleReviewer
+  harness_review?: EvaluationProductionSampleReviewer
+}
+
+export interface EvaluationProductionSamplePromotionsResponse {
+  data: EvaluationProductionSamplePromotion[]
+  meta: {
+    total: number
+  }
+}
+
 export interface ContractBundle {
   agent_yaml: string
   policy_yaml: string

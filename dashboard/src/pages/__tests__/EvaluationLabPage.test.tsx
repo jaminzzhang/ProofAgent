@@ -8,6 +8,8 @@ import {
   fetchEvaluationCampaignCases,
   fetchEvaluationCampaigns,
   fetchEvaluationCampaignTrends,
+  fetchEvaluationProductionSampleCandidates,
+  fetchEvaluationProductionSamplePromotions,
 } from '../../api/client'
 import type { EvaluationCampaignSummary } from '../../api/types'
 import { AppRoutes } from '../../router'
@@ -17,6 +19,8 @@ vi.mock('../../api/client', () => ({
   fetchEvaluationCampaign: vi.fn(),
   fetchEvaluationCampaignCases: vi.fn(),
   fetchEvaluationCampaignTrends: vi.fn(),
+  fetchEvaluationProductionSampleCandidates: vi.fn(),
+  fetchEvaluationProductionSamplePromotions: vi.fn(),
 }))
 
 describe('EvaluationLabPage', () => {
@@ -69,6 +73,49 @@ describe('EvaluationLabPage', () => {
         deterministic_gate_pass_rate: 0,
       },
     })
+    vi.mocked(fetchEvaluationProductionSampleCandidates).mockResolvedValue({
+      data: [
+        {
+          batch_id: 'prod_edge_cases',
+          batch_dir: '/tmp/curation/prod_edge_cases',
+          sample_id: 'prod_supported',
+          source_run_id: 'run_prod_supported',
+          curation_status: 'diagnostic_only',
+          formal_scoring_allowed: false,
+          run_purpose: 'production',
+          safe_summary: {
+            question_sha256: 'question-hash',
+            question_text_length: 42,
+            response_text_sha256: 'response-hash',
+            response_text_length: 28,
+          },
+        },
+      ],
+      meta: { total: 1 },
+    })
+    vi.mocked(fetchEvaluationProductionSamplePromotions).mockResolvedValue({
+      data: [
+        {
+          promotion_dir: '/tmp/curation/promoted/prod_supported',
+          promotion_record_path:
+            '/tmp/curation/promoted/prod_supported/production_sample_promotion.json',
+          sample_id: 'prod_supported',
+          status: 'promoted',
+          source_run_id: 'run_prod_supported',
+          suite_path: 'evaluation_suite.yaml',
+          subject_manifest_path: 'evaluation_subjects.yaml',
+          domain_review: {
+            reviewer: 'domain-reviewer',
+            confirmed: true,
+          },
+          harness_review: {
+            reviewer: 'harness-reviewer',
+            confirmed: true,
+          },
+        },
+      ],
+      meta: { total: 1 },
+    })
 
     render(
       <MemoryRouter initialEntries={['/evaluation-lab']}>
@@ -89,6 +136,11 @@ describe('EvaluationLabPage', () => {
     expect(await screen.findByText('Case Drilldowns')).toBeInTheDocument()
     expect(screen.getByText('supported')).toBeInTheDocument()
     expect(screen.getByText('ANSWERED_WITH_CITATIONS')).toBeInTheDocument()
+    expect(await screen.findByText('Production Sample Curation')).toBeInTheDocument()
+    expect(screen.getByText('1 diagnostic candidates')).toBeInTheDocument()
+    expect(screen.getByText('1 promoted samples')).toBeInTheDocument()
+    expect(screen.getByText('prod_supported')).toBeInTheDocument()
+    expect(screen.getByText('prod_edge_cases')).toBeInTheDocument()
   })
 })
 

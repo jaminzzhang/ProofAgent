@@ -17,12 +17,16 @@ import {
   fetchEvaluationCampaignCases,
   fetchEvaluationCampaigns,
   fetchEvaluationCampaignTrends,
+  fetchEvaluationProductionSampleCandidates,
+  fetchEvaluationProductionSamplePromotions,
 } from '../api/client'
 import type {
   EvaluationCampaignCaseRow,
   EvaluationCampaignCapabilityCoverage,
   EvaluationCampaignSummary,
   EvaluationCampaignTrend,
+  EvaluationProductionSampleCandidate,
+  EvaluationProductionSamplePromotion,
 } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
@@ -33,6 +37,12 @@ export function EvaluationLabPage() {
   const [summary, setSummary] = useState<EvaluationCampaignSummary | null>(null)
   const [caseRows, setCaseRows] = useState<EvaluationCampaignCaseRow[]>([])
   const [trend, setTrend] = useState<EvaluationCampaignTrend | null>(null)
+  const [curationCandidates, setCurationCandidates] = useState<
+    EvaluationProductionSampleCandidate[]
+  >([])
+  const [curationPromotions, setCurationPromotions] = useState<
+    EvaluationProductionSamplePromotion[]
+  >([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -69,12 +79,16 @@ export function EvaluationLabPage() {
       fetchEvaluationCampaign(selectedCampaignId),
       fetchEvaluationCampaignCases(selectedCampaignId),
       fetchEvaluationCampaignTrends(selectedCampaignId).catch(() => null),
+      fetchEvaluationProductionSampleCandidates().catch(() => ({ data: [], meta: { total: 0 } })),
+      fetchEvaluationProductionSamplePromotions().catch(() => ({ data: [], meta: { total: 0 } })),
     ])
-      .then(([campaign, cases, campaignTrend]) => {
+      .then(([campaign, cases, campaignTrend, candidates, promotions]) => {
         if (cancelled) return
         setSummary(campaign)
         setCaseRows(cases.data)
         setTrend(campaignTrend)
+        setCurationCandidates(candidates.data)
+        setCurationPromotions(promotions.data)
         setError(null)
         setLoading(false)
       })
@@ -229,6 +243,11 @@ export function EvaluationLabPage() {
             </Table>
           </Card>
 
+          <CurationSummarySection
+            candidates={curationCandidates}
+            promotions={curationPromotions}
+          />
+
           <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <Card className="overflow-hidden p-0">
               <Table>
@@ -288,6 +307,79 @@ export function EvaluationLabPage() {
         </>
       )}
     </div>
+  )
+}
+
+function CurationSummarySection({
+  candidates,
+  promotions,
+}: {
+  candidates: EvaluationProductionSampleCandidate[]
+  promotions: EvaluationProductionSamplePromotion[]
+}) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="border-b border-[var(--border)] bg-[var(--bg-subtle)] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">
+            Production Sample Curation
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={candidates.length > 0 ? 'warning' : 'outline'}>
+              {candidates.length} diagnostic candidates
+            </Badge>
+            <Badge variant={promotions.length > 0 ? 'success' : 'outline'}>
+              {promotions.length} promoted samples
+            </Badge>
+          </div>
+        </div>
+      </div>
+      {candidates.length === 0 ? (
+        <div className="p-4">
+          <EmptyState message="No production sample curation candidates found." />
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-[var(--bg-subtle)] hover:bg-[var(--bg-subtle)]">
+              <TableHead>Sample</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Batch</TableHead>
+              <TableHead className="text-right">Safe Lengths</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {candidates.map((candidate) => (
+              <TableRow key={`${candidate.batch_id}-${candidate.sample_id}`}>
+                <TableCell>
+                  <div className="font-mono text-xs font-semibold text-[var(--text-primary)]">
+                    {candidate.sample_id}
+                  </div>
+                  {candidate.source_run_id && (
+                    <div className="mt-1 font-mono text-xs text-[var(--text-muted)]">
+                      {candidate.source_run_id}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant={candidate.curation_status === 'promoted' ? 'success' : 'warning'}
+                  >
+                    {humanizeCapability(candidate.curation_status)}
+                  </Badge>
+                </TableCell>
+                <TableCell className="font-mono text-xs text-[var(--text-secondary)]">
+                  {candidate.batch_id}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs text-[var(--text-primary)]">
+                  {safeLengthSummary(candidate)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </Card>
   )
 }
 
@@ -381,6 +473,15 @@ function trendSubtitle(trend: EvaluationCampaignTrend | null): string | undefine
   }
   if (trend.status === 'benchmark_migration') return 'Benchmark migration'
   return undefined
+}
+
+function safeLengthSummary(candidate: EvaluationProductionSampleCandidate): string {
+  const questionLength = candidate.safe_summary?.question_text_length
+  const responseLength = candidate.safe_summary?.response_text_length
+  if (typeof questionLength !== 'number' && typeof responseLength !== 'number') {
+    return 'n/a'
+  }
+  return `q:${questionLength ?? 'n/a'} r:${responseLength ?? 'n/a'}`
 }
 
 function humanizeCapability(value: string): string {
