@@ -113,6 +113,8 @@ suites:
     enabled: true
     selections:
       - promotion_ref: runs/curation/promoted/prod_supported/production_sample_promotion.json
+    auto_select:
+      promotions_dir: runs/curation/promoted
 thresholds:
   governed_resolution_rate_min: 0.95
   artifact_sufficiency_required: 1.0
@@ -367,7 +369,7 @@ These routes are read-only. Any run production happens through the Campaign CLI 
 
 ## Implementation Slices
 
-Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Slice 8 adds an artifact-level Curated Production Evaluation Sample import and reviewer-gated promotion workflow. Slice 9 adds an injected Exploratory Probe runner and `exploratory_probe_results.jsonl` diagnostic artifact. Slice 10A adds explicit Campaign selection for promoted curated production samples through promotion records and rejects diagnostic-only samples from formal Campaign scoring. Dashboard curation UI and automatic Campaign selection of promoted production samples remain future slices.
+Current implementation status: Slice 1 provides a manifest-driven Campaign runner over already-declared Evaluation Suites and Subject Manifests, writes Campaign summary artifacts, and exposes `proof-agent evaluate campaign run`. Slice 2 exposes Campaign summaries through read-only Dashboard APIs and a hidden `/evaluation-lab` first viewport. Slice 3 adds injected sample production over `evaluation_sample` RunStore artifacts and hashed Subject Manifest export. Slice 4 adds a concrete Run Execution API-backed sample adapter for Active Published Agents. Slice 5 adds Coding Agent Evaluation Assist artifacts, safe diagnostic input bundles, and an Evaluation Lab first-viewport diagnostic summary. Slice 6 adds `evaluation_lab_cases.jsonl`, a read-only case rows API, and an Evaluation Lab case drilldown table. Slice 7A adds a Customer Run API-backed sample adapter for customer-facing Published Agents. Slice 7B writes version-aware trends, exposes the read-only trends API, and renders the comparable Governed Resolution delta in Evaluation Lab. Slice 8 adds an artifact-level Curated Production Evaluation Sample import and reviewer-gated promotion workflow. Slice 9 adds an injected Exploratory Probe runner and `exploratory_probe_results.jsonl` diagnostic artifact. Slice 10A adds explicit Campaign selection for promoted curated production samples through promotion records and rejects diagnostic-only samples from formal Campaign scoring. Slice 10B1 adds automatic promoted production sample discovery from a configured promotions directory. Dashboard curation UI remains a future slice.
 
 Slice 1: Campaign manifest and artifact model
 
@@ -445,10 +447,16 @@ Slice 10A: Curated production sample Campaign selection backend
 - Reject curated production sample suites or subjects unless their metadata is `source: curated_production_sample` and `curation_status: promoted`.
 - Keep diagnostic-only production sample candidates out of formal Campaign scoring.
 
-Slice 10B: Curated production sample curation UI and automatic selection
+Slice 10B1: Automatic promoted production sample Campaign selection
+
+- Add `suites.production_samples.auto_select.promotions_dir`.
+- Recursively discover `production_sample_promotion.json` records under the configured directory.
+- Reuse promoted status and curated metadata checks before formal Campaign scoring.
+- Fail closed when discovered promotion records are not `status: promoted`.
+
+Slice 10B2: Curated production sample curation UI
 
 - Add Dashboard curation review UI.
-- Add Campaign selection for promoted curated production samples.
 - Keep unreviewed production samples diagnostic-only.
 
 ## Verification

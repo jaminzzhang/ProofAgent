@@ -54,6 +54,43 @@ thresholds:
     assert summary.suite_runs[0].suite_id == "production_edge_cases"
 
 
+def test_campaign_auto_selects_promoted_curated_production_samples(
+    tmp_path: Path,
+) -> None:
+    _promote_production_sample(tmp_path)
+    campaign_path = tmp_path / "campaign.yaml"
+    campaign_path.write_text(
+        """
+campaign_id: production_sample_auto_select_campaign
+version: "2026-06-23"
+target:
+  agent_id: insurance_customer_service
+  agent_version_id: published_v1
+suites:
+  production_samples:
+    enabled: true
+    auto_select:
+      promotions_dir: promoted
+thresholds:
+  governed_resolution_rate_min: 0.95
+  artifact_sufficiency_required: 1.0
+  deterministic_gate_pass_required: 1.0
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    summary = run_evaluation_campaign(
+        campaign_path=campaign_path,
+        output_dir=tmp_path / "campaigns",
+    )
+
+    assert summary.readiness_status == "ready"
+    assert summary.governed_resolution_rate == 1.0
+    assert len(summary.suite_runs) == 1
+    assert summary.suite_runs[0].source == "curated_production_sample"
+    assert summary.suite_runs[0].suite_id == "production_edge_cases"
+
+
 def test_campaign_rejects_diagnostic_only_curated_production_formal_suite(
     tmp_path: Path,
 ) -> None:
@@ -144,6 +181,51 @@ thresholds:
     )
 
     with pytest.raises(EvaluationInputError, match="promoted curated production sample"):
+        run_evaluation_campaign(
+            campaign_path=campaign_path,
+            output_dir=tmp_path / "campaigns",
+        )
+
+
+def test_campaign_auto_select_rejects_unpromoted_production_sample_record(
+    tmp_path: Path,
+) -> None:
+    promotion_dir = tmp_path / "promoted" / "diagnostic_only"
+    promotion_dir.mkdir(parents=True)
+    (promotion_dir / "production_sample_promotion.json").write_text(
+        json.dumps(
+            {
+                "sample_id": "diagnostic_only",
+                "status": "diagnostic_only",
+                "suite_path": "evaluation_suite.yaml",
+                "subject_manifest_path": "evaluation_subjects.yaml",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    campaign_path = tmp_path / "campaign.yaml"
+    campaign_path.write_text(
+        """
+campaign_id: production_sample_auto_select_campaign
+version: "2026-06-23"
+target:
+  agent_id: insurance_customer_service
+  agent_version_id: published_v1
+suites:
+  production_samples:
+    enabled: true
+    auto_select:
+      promotions_dir: promoted
+thresholds:
+  governed_resolution_rate_min: 0.95
+  artifact_sufficiency_required: 1.0
+  deterministic_gate_pass_required: 1.0
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvaluationInputError, match="requires promoted status"):
         run_evaluation_campaign(
             campaign_path=campaign_path,
             output_dir=tmp_path / "campaigns",

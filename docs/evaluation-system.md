@@ -501,5 +501,4 @@ When suite, gate profile, subject manifest, or rubric versions change, trend rep
 ## Future Work
 
 - Audited Evaluation Judge and claim-level support diagnostics.
-- Automatic Campaign selection of promoted curated production samples.
 - Dashboard UI for evaluation overview, case drilldown, export selection, campaign diagnostics, and curation workflows.

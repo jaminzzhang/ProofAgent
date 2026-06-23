@@ -246,28 +246,22 @@ def _production_sample_suite_specs(
         )
     if production_samples.get("enabled") is not True:
         return ()
-    selections = production_samples.get("selections")
-    if not isinstance(selections, list | tuple) or not selections:
+    promotion_paths = _production_sample_promotion_paths(
+        production_samples,
+        base_dir=base_dir,
+    )
+    if not promotion_paths:
         raise EvaluationInputError(
-            "Evaluation Campaign suites.production_samples.selections must be a non-empty list."
+            "Evaluation Campaign suites.production_samples requires selections or "
+            "auto_select.promotions_dir."
         )
 
     specs: list[Mapping[str, Any]] = []
-    for selection in selections:
-        if not isinstance(selection, Mapping):
-            raise EvaluationInputError(
-                "Evaluation Campaign production sample selections must be mappings."
-            )
-        promotion_ref = selection.get("promotion_ref")
-        if promotion_ref is None:
-            raise EvaluationInputError(
-                "Evaluation Campaign production sample selections require promotion_ref."
-            )
-        promotion_path = _resolve_path(promotion_ref, base_dir=base_dir)
+    for promotion_path in promotion_paths:
         promotion = _load_promoted_production_sample(promotion_path)
         specs.append(
             {
-                "source": str(selection.get("source") or "curated_production_sample"),
+                "source": "curated_production_sample",
                 "suite_ref": _resolve_path(promotion["suite_path"], base_dir=promotion_path.parent),
                 "subjects_ref": _resolve_path(
                     promotion["subject_manifest_path"],
@@ -278,6 +272,67 @@ def _production_sample_suite_specs(
             }
         )
     return tuple(specs)
+
+
+def _production_sample_promotion_paths(
+    production_samples: Mapping[str, Any],
+    *,
+    base_dir: Path,
+) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    selections = production_samples.get("selections")
+    if selections is not None:
+        if not isinstance(selections, list | tuple):
+            raise EvaluationInputError(
+                "Evaluation Campaign suites.production_samples.selections must be a list."
+            )
+        for selection in selections:
+            if not isinstance(selection, Mapping):
+                raise EvaluationInputError(
+                    "Evaluation Campaign production sample selections must be mappings."
+                )
+            promotion_ref = selection.get("promotion_ref")
+            if promotion_ref is None:
+                raise EvaluationInputError(
+                    "Evaluation Campaign production sample selections require promotion_ref."
+                )
+            paths.append(_resolve_path(promotion_ref, base_dir=base_dir))
+
+    auto_select = production_samples.get("auto_select")
+    if auto_select is not None:
+        if not isinstance(auto_select, Mapping):
+            raise EvaluationInputError(
+                "Evaluation Campaign suites.production_samples.auto_select must be a mapping."
+            )
+        promotions_dir = auto_select.get("promotions_dir")
+        if promotions_dir is None:
+            raise EvaluationInputError(
+                "Evaluation Campaign suites.production_samples.auto_select requires "
+                "promotions_dir."
+            )
+        paths.extend(_auto_selected_promotion_paths(promotions_dir, base_dir=base_dir))
+    return _dedupe_paths(paths)
+
+
+def _auto_selected_promotion_paths(value: Any, *, base_dir: Path) -> tuple[Path, ...]:
+    promotions_dir = _resolve_path(value, base_dir=base_dir)
+    if not promotions_dir.is_dir():
+        raise EvaluationInputError(
+            f"Evaluation Campaign production sample promotions_dir not found: {promotions_dir}"
+        )
+    return tuple(sorted(promotions_dir.rglob("production_sample_promotion.json")))
+
+
+def _dedupe_paths(paths: list[Path]) -> tuple[Path, ...]:
+    seen: set[Path] = set()
+    deduped: list[Path] = []
+    for path in paths:
+        resolved = path.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(path)
+    return tuple(deduped)
 
 
 def _load_promoted_production_sample(path: Path) -> Mapping[str, Any]:
