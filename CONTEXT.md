@@ -650,6 +650,10 @@ _Avoid_: Reused Reasoning Summary, planner scratchpad, free-form intent notes
 A bounded, non-executing set of candidate Knowledge retrieval queries emitted with Intent Resolution to express the search angles needed for the user's intent before the governed Retrieval stages choose and execute queries.
 _Avoid_: Executable retrieval plan, provider call list, ReAct planner query rewrite, untrusted web search rewrite
 
+**Knowledge Query Expansion**:
+The public Intent Resolution behavior for knowledge-retrieval intents where the model expands one user question into a bounded Retrieval Query Set with complementary search angles. It is domain-neutral: query items express angles such as original wording, synonym or business terminology, time/entity/metric qualifiers, and bilingual alternatives when useful, without creating a new domain-specific query type.
+_Avoid_: Business-specific query subtype, one-query synonym rewrite, source filter, executable retrieval plan
+
 **Retrieval Query Item**:
 One candidate query in a Retrieval Query Set, carrying query text plus audit-safe intent angle, required flag, and reason without naming Knowledge Sources, providers, filters, or execution parameters.
 _Avoid_: Provider route, source filter, scoped retrieval command, top_k override
@@ -2966,12 +2970,14 @@ _Avoid_: Evidence content dump
 - **Intent Resolution Contract** and **Reasoning Summary** are separate audit-safe summaries: the former captures understood user intent, while the latter captures selected ReAct action rationale.
 - **Intent Resolution** may recommend the next action category, but it cannot create executable retrieval plans, tool calls, or final answers; the **ReAct Planner** still emits the governed **ReAct Action Proposal**.
 - **Retrieval Query Set** must be non-empty when **Intent Resolution** recommends Knowledge retrieval and no blocking missing fields remain; it may be empty for clarification, tool, or non-retrieval intents.
+- **Knowledge Query Expansion** is the default public behavior for LLM Intent Resolution knowledge-retrieval intents; it expands the user's request into complementary Retrieval Query Items without adding business-specific query types.
 - **Intent Resolution Contract** may default **Retrieval Query Set** to empty for compatibility, but LLM Intent Resolution output fails validation when a retrieval-ready intent omits required query items.
 - **Retrieval Query Set** defaults to at most three **Retrieval Query Items** with a hard configurable cap of five; contract validation fails rather than silently truncating when the set exceeds its allowed budget.
 - `retrieval.max_queries` is the Agent-level Retrieval Query Set budget, valid from one through five, distinct from provider result `top_k` and agentic rewrite `max_rounds`.
 - The governed Retrieval stage executes required **Retrieval Query Items** before optional items, and optional items may run only while the query budget remains.
 - **Retrieval Query Set** provides the initial query queue for agentic retrieval; **RetrievalPlanner** may append later rewrite queries only after the initial query queue fails to produce sufficient accepted evidence.
 - `single_step` retrieval may record a **Retrieval Query Set** but executes at most one selected query, while `agentic` retrieval is the strategy that may execute multiple **Retrieval Query Items**.
+- ReAct reviewed retrieval must execute a multi-item Retrieval Query Set as a query expansion batch even when the Agent's configured retrieval strategy is `single_step`, because Intent Resolution has already paid for Knowledge Query Expansion and the governed review approved the retrieval action.
 - **Retrieval Query Set** is recorded both inside the `intent_resolution` trace payload and as a separate `retrieval_query_set` trace event with only audit-safe query item fields, counts, budget, validation status, and Intent Resolution linkage.
 - V2 **Intent Resolution** requires deterministic contract validation and trace recording, but does not add an independent Auto Review node because executable actions remain governed by existing review and policy nodes.
 - V2 **Intent Resolution** reuses **ReAct Planner Config** for model configuration while remaining a distinct model-call role and audit fact from ReAct planning.

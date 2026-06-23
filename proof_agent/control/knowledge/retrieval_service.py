@@ -267,6 +267,15 @@ class KnowledgeRetrievalService:
         reviewed: bool,
         execution_mode: str | None,
     ) -> KnowledgeRetrievalResult:
+        if _should_execute_reviewed_query_expansion(
+            request,
+            reviewed=reviewed,
+            execution_mode=execution_mode,
+        ):
+            return self._run_reviewed_query_expansion(
+                request,
+                execution_mode=execution_mode,
+            )
         query_item = _single_step_query_item(request)
         step_context = self._step_context(
             request,
@@ -297,6 +306,39 @@ class KnowledgeRetrievalService:
             step_id="step_1",
             query_item=query_item,
         )
+
+    def _run_reviewed_query_expansion(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        execution_mode: str | None,
+    ) -> KnowledgeRetrievalResult:
+        self._trace.emit(
+            "retrieval_plan",
+            status="ok",
+            payload={
+                "strategy": "query_set_expansion",
+                "base_strategy": request.strategy,
+                "provider": self._knowledge_provider.provider_name,
+                "decision": "reviewed",
+                "question": request.question,
+                "retrieval_query_count": len(request.retrieval_query_set),
+                "max_queries": request.max_queries,
+            },
+        )
+        query_set_step = self._execute_agentic_query_set(
+            request,
+            execution_mode=execution_mode,
+        )
+        evidence = query_set_step.evidence
+        if request.force_empty or query_set_step.required_provider_failed:
+            evidence = ()
+        evidence_result = self._evaluate_evidence(
+            evidence,
+            min_score=request.min_score,
+            no_evidence_reason_code=query_set_step.no_evidence_reason_code,
+        )
+        return KnowledgeRetrievalResult(evidence=evidence, evidence_result=evidence_result)
 
     def _run_agentic(
         self,
@@ -820,6 +862,20 @@ def _single_step_query_item(
         return None
     required = tuple(item for item in items if item.required)
     return (required or items)[0]
+
+
+def _should_execute_reviewed_query_expansion(
+    request: KnowledgeRetrievalRequest,
+    *,
+    reviewed: bool,
+    execution_mode: str | None,
+) -> bool:
+    return (
+        reviewed
+        and execution_mode == "react_reviewed_retrieval"
+        and request.strategy == "single_step"
+        and len(request.retrieval_query_set) > 1
+    )
 
 
 def _ordered_query_items(
