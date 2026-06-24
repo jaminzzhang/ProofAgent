@@ -47,6 +47,9 @@ DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa
 REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 PUBLIC_EXAMPLE_PATH = Path("examples/insurance_customer_service/agent.yaml")
 DEV_PROCESS_POLL_SECONDS = 0.5
+SERVER_HISTORY_DIR_ENV = "PROOF_AGENT_SERVER_HISTORY_DIR"
+SERVER_CONFIG_DIR_ENV = "PROOF_AGENT_SERVER_CONFIG_DIR"
+SERVER_SEED_EXAMPLE_AGENT_ENV = "PROOF_AGENT_SERVER_SEED_EXAMPLE_AGENT"
 
 
 def run_with_langgraph(*args: Any, **kwargs: Any) -> Any:
@@ -86,6 +89,11 @@ def dev(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the API to"),
     history_dir: str = typer.Option("runs/history", "--history-dir", help="Run history directory"),
     config_dir: str = typer.Option("runs/config", "--config-dir", help="Local configuration store"),
+    reload: bool = typer.Option(
+        False,
+        "--reload",
+        help="Reload the backend API server when Python source files change.",
+    ),
     worker_poll_interval_seconds: float = typer.Option(
         2.0,
         "--worker-poll-interval",
@@ -105,6 +113,7 @@ def dev(
         port=port,
         history_dir=history_dir,
         config_dir=config_dir,
+        reload=reload,
         worker_poll_interval_seconds=worker_poll_interval_seconds,
         no_worker=no_worker,
     )
@@ -458,6 +467,11 @@ def server(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     history_dir: str = typer.Option("runs/history", "--history-dir", help="Run history directory"),
     config_dir: str = typer.Option("runs/config", "--config-dir", help="Local configuration store"),
+    reload: bool = typer.Option(
+        False,
+        "--reload",
+        help="Reload the API server when Python source files change.",
+    ),
     seed_example_agent: bool = typer.Option(
         True,
         "--seed-example-agent/--no-seed-example-agent",
@@ -481,16 +495,51 @@ def server(
     if seed_example_agent and _seed_default_dev_agent(configuration_store):
         typer.echo("Seeded local configuration with insurance_customer_service.")
 
+    typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
+    typer.echo("To start the frontends in development mode, run:")
+    typer.echo("  Dashboard: cd dashboard && npm run dev (port 5173)")
+    typer.echo("  Unified Chat: cd chat && npm run dev (port 5174, /operator and /customer)")
+    if reload:
+        os.environ[SERVER_HISTORY_DIR_ENV] = history_dir
+        os.environ[SERVER_CONFIG_DIR_ENV] = config_dir
+        os.environ[SERVER_SEED_EXAMPLE_AGENT_ENV] = "1" if seed_example_agent else "0"
+        reload_dir = Path.cwd() / "proof_agent"
+        uvicorn.run(
+            "proof_agent.delivery.cli:_create_server_app_from_env",
+            factory=True,
+            host=host,
+            port=port,
+            reload=True,
+            reload_dirs=[str(reload_dir)] if reload_dir.exists() else None,
+        )
+        return
+
     app = create_app(
         history_dir=Path(history_dir),
         agent_configuration_store=configuration_store,
         agent_configuration_dir=Path(config_dir),
     )
-    typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
-    typer.echo("To start the frontends in development mode, run:")
-    typer.echo("  Dashboard: cd dashboard && npm run dev (port 5173)")
-    typer.echo("  Unified Chat: cd chat && npm run dev (port 5174, /operator and /customer)")
     uvicorn.run(app, host=host, port=port)
+
+
+def _create_server_app_from_env() -> Any:
+    """Create the API app for Uvicorn reload subprocesses."""
+
+    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+    from proof_agent.observability.api.app import create_app
+
+    history_dir = Path(os.environ.get(SERVER_HISTORY_DIR_ENV, "runs/history"))
+    config_dir = Path(os.environ.get(SERVER_CONFIG_DIR_ENV, "runs/config"))
+    seed_example_agent = os.environ.get(SERVER_SEED_EXAMPLE_AGENT_ENV, "1") != "0"
+    configuration_store = LocalAgentConfigurationStore(config_dir)
+    if seed_example_agent:
+        _seed_default_dev_agent(configuration_store)
+
+    return create_app(
+        history_dir=history_dir,
+        agent_configuration_store=configuration_store,
+        agent_configuration_dir=config_dir,
+    )
 
 
 @app.command("knowledge-worker")
@@ -567,25 +616,29 @@ def _dev_process_specs(
     port: int,
     history_dir: str,
     config_dir: str,
+    reload: bool,
     worker_poll_interval_seconds: float,
     no_worker: bool,
 ) -> list[tuple[str, list[str]]]:
     command_prefix = [sys.executable, "-m", "proof_agent.delivery.cli"]
+    api_command = [
+        *command_prefix,
+        "server",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--history-dir",
+        history_dir,
+        "--config-dir",
+        config_dir,
+    ]
+    if reload:
+        api_command.append("--reload")
     specs = [
         (
             "api",
-            [
-                *command_prefix,
-                "server",
-                "--host",
-                host,
-                "--port",
-                str(port),
-                "--history-dir",
-                history_dir,
-                "--config-dir",
-                config_dir,
-            ],
+            api_command,
         )
     ]
     if not no_worker:

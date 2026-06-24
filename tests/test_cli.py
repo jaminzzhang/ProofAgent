@@ -120,6 +120,23 @@ def test_dev_command_can_disable_knowledge_worker(
     assert [name for name, _command in captured_specs] == ["api"]
 
 
+def test_dev_command_can_enable_api_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_specs = []
+
+    def fake_run_dev_processes(specs):
+        captured_specs.extend(specs)
+
+    monkeypatch.setattr("proof_agent.delivery.cli._run_dev_processes", fake_run_dev_processes)
+
+    result = runner.invoke(app, ["dev", "--reload", "--no-worker"])
+
+    assert result.exit_code == 0
+    assert [name for name, _command in captured_specs] == ["api"]
+    assert captured_specs[0][1][-1] == "--reload"
+
+
 def test_seed_default_dev_agent_publishes_insurance_customer_service(tmp_path: Path) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
 
