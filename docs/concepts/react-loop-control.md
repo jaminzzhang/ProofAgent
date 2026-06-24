@@ -61,6 +61,7 @@ Three signals:
 
 | Signal | Definition | Effect on Eligible Action Set |
 | --- | --- | --- |
+| Answer ready | Accepted Evidence exists and the latest Observation Record has no unresolved subgoals | Use `GENERATE_FINAL_ANSWER` only unless a traced blocker makes an answer impossible |
 | Evidence saturation | Consecutive rounds with no growth in `evidence_trajectory`, or high overlap with existing evidence | Restrict, e.g. to `{GENERATE_FINAL_ANSWER, REFUSE}` |
 | Action repetition | Consecutive rounds selecting the same `action_type` with near-identical parameters (strongest oscillation signal) | Restrict, e.g. to `{GENERATE_FINAL_ANSWER, REFUSE}` or force a new query |
 | Hard budget | `max_plan_rounds` / `max_tool_calls` threshold reached | Force convergence or `REFUSE` |
@@ -73,8 +74,20 @@ Eligible Action Set restriction is enforced structurally, never by prompt wordin
 
 | Layer | Mechanism | Status |
 | --- | --- | --- |
-| Layer 2 | **Action Constraint** — deterministic post-output rewrite. Out-of-set proposal is replaced by a default (`GENERATE_FINAL_ANSWER` in convergence contexts, `REFUSE` in divergence contexts); an `action_constrained` trace event records original, constrained value, reason, eligible set. | MVP, provider-neutral, permanent backstop |
+| Layer 2 | **Action Constraint** — deterministic post-output rewrite. Out-of-set proposal is replaced by a default that must itself be inside the Eligible Action Set (`GENERATE_FINAL_ANSWER` in answerable convergence contexts, `REFUSE` in hard-blocked contexts); an `action_constrained` trace event records original, constrained value, reason, eligible set. | MVP, provider-neutral, permanent backstop |
 | Layer 3 | Provider function-calling — pass the Eligible Action Set as the tool schema so the provider cannot emit an out-of-set action. | Later; requires `ModelProvider` protocol extension; never replaces Layer 2 |
+
+Under the Answer-Ready Finalization Gate, a no-blocker Plan Round exposes only `GENERATE_FINAL_ANSWER` as eligible. If the planner or provider still emits `REFUSE`, Action Constraint rewrites it to `GENERATE_FINAL_ANSWER`. A `REFUSE` proposal is accepted only when the state carries a traced blocker. Model caution, prior failed turns, or missing evidence text in the planner prompt are not blockers by themselves.
+
+When the blocker list is empty, `plan` emits a synthetic `GENERATE_FINAL_ANSWER` action without calling the planner model. The loop still exits through `plan`; the decision is deterministic Control Plane finalization rather than model confirmation.
+
+Answer-ready blockers are first-class Control Plane state (`answer_ready_blockers`), not planner rationale. An empty blocker list means final-answer obligation. Non-empty blockers must carry stable codes, bounded reasons, and optional source references so trace, Dashboard, and tests can explain why finalization was not allowed.
+
+Planner context after answer-ready must be isolated from historical refusal summaries. Current Observation Records and traced blockers govern the terminal decision. Prior failed attempts may remain audit facts, but they are not model-bearing refusal evidence for the current run.
+
+Once answer-ready finalization is admitted, `model_answer` receives the full Accepted Evidence truth layer plus citation/source references. Planner summaries are decision inputs only; they are never the basis for customer-visible factual synthesis.
+
+For product-clause runs, product variant ambiguity is not a blocker when Accepted Evidence clearly identifies one variant. The final answer should declare that variant scope. Variant ambiguity blocks finalization only when Accepted Evidence contains conflicting variants or cannot establish the answer scope.
 
 Layer 2 ships first and is never removed: even after Layer 3 lands, Azure and Anthropic remain placeholders and provider capabilities vary, so the Control Plane keeps final authority.
 
@@ -111,6 +124,7 @@ These fields live on the runtime state object, are persisted across checkpoint a
 | `observations` | list of Observation Records | `plan` (summaries), `model_answer` (full) |
 | `action_history` | per-round action type + parameter hash | Convergence Check (repetition) |
 | `evidence_trajectory` | per-round accepted-evidence counts | Convergence Check (saturation) |
+| `answer_ready_blockers` | list of stable blocker objects (`code`, `reason`, optional `source_ref`) | Answer-Ready Finalization Gate |
 | `last_convergence_signal` | most recent signal | trace, prompt injection |
 
 ## Verification boundary

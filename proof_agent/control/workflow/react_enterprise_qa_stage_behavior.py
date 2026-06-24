@@ -321,13 +321,48 @@ class ReActEnterpriseQAStageBehavior:
         action_history = list(state.get("action_history", []))
         evidence_trajectory = list(state.get("evidence_trajectory", []))
         observations = list(state.get("observations", []))
+        answer_ready_blockers = [
+            dict(blocker)
+            for blocker in list(state.get("answer_ready_blockers", []))
+            if isinstance(blocker, Mapping)
+        ]
         eligible_set, convergence_signal = compute_eligible_action_set(
             plan_rounds=plan_rounds,
             max_plan_rounds=max_plan_rounds,
             action_history=action_history,
             evidence_trajectory=evidence_trajectory,
             observations=observations,
+            answer_ready_blockers=answer_ready_blockers,
         )
+
+        if convergence_signal == "answer_ready":
+            proposal = _model_action_proposal(str(state["question"]))
+            self.trace.emit(
+                "answer_ready_finalization_forced",
+                status="ok",
+                payload={
+                    "action_id": proposal.action_id,
+                    "action_type": proposal.action_type.value,
+                    "answer_ready_blockers": answer_ready_blockers,
+                    "convergence_signal": convergence_signal,
+                },
+            )
+            emit_reasoning_summary(self.trace, proposal)
+            emit_action_proposal(self.trace, proposal)
+            return {
+                "plan_rounds": plan_rounds + 1,
+                "action": _proposal_state_dict(proposal),
+                "reasoning_summary": _reasoning_summary_state_dict(proposal),
+                "answer_ready_blockers": answer_ready_blockers,
+                "action_history": [
+                    {
+                        "action_type": proposal.action_type.value,
+                        "parameters": dict(proposal.parameters),
+                    }
+                ],
+                "last_convergence_signal": convergence_signal,
+                "stage_llm_interactions": [],
+            }
 
         stage_context: Mapping[str, Any] | None = None
         try:

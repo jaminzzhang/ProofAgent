@@ -26,6 +26,7 @@ class TraceEventType(str, Enum):
     REASONING_SUMMARY = "reasoning_summary"
     ACTION_PROPOSAL = "action_proposal"
     ACTION_CONSTRAINED = "action_constrained"
+    ANSWER_READY_FINALIZATION_FORCED = "answer_ready_finalization_forced"
     REVIEW_REQUESTED = "review_requested"
     REVIEW_DECISION = "review_decision"
     REVIEW_ERROR = "review_error"

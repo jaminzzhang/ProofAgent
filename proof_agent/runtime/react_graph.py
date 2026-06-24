@@ -56,6 +56,7 @@ class ReActGraphState(TypedDict, total=False):
     action_history: Annotated[list[dict[str, Any]], operator.add]
     evidence_trajectory: Annotated[list[int], operator.add]
     observations: Annotated[list[dict[str, Any]], operator.add]
+    answer_ready_blockers: list[dict[str, Any]]
     last_convergence_signal: str | None
 
 

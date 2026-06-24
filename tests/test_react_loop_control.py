@@ -171,7 +171,7 @@ def test_compute_eligible_action_set_unrestricted_when_no_signal() -> None:
     )
 
 
-def test_compute_eligible_action_set_answer_ready_narrows_to_terminal() -> None:
+def test_compute_eligible_action_set_answer_ready_narrows_to_final_answer_only() -> None:
     eligible, signal = compute_eligible_action_set(
         plan_rounds=2,
         max_plan_rounds=4,
@@ -187,7 +187,33 @@ def test_compute_eligible_action_set_answer_ready_narrows_to_terminal() -> None:
     )
 
     assert signal == "answer_ready"
-    assert eligible == frozenset({ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE})
+    assert eligible == frozenset({ReActActionType.GENERATE_FINAL_ANSWER})
+
+
+def test_compute_eligible_action_set_answer_ready_hard_blocker_forces_refuse() -> None:
+    eligible, signal = compute_eligible_action_set(
+        plan_rounds=2,
+        max_plan_rounds=4,
+        action_history=[{"action_type": "plan_retrieval", "parameters": {"query": "q"}}],
+        evidence_trajectory=[1],
+        observations=[
+            {
+                "accepted_evidence_count": 1,
+                "new_evidence_count": 1,
+                "unresolved_subgoals": [],
+            }
+        ],
+        answer_ready_blockers=[
+            {
+                "code": "citation_binding_impossible",
+                "reason": "accepted evidence cannot be bound to citations",
+                "source_ref": "citation_gate",
+            }
+        ],
+    )
+
+    assert signal == "answer_ready_blocked"
+    assert eligible == frozenset({ReActActionType.REFUSE})
 
 
 def test_compute_eligible_action_set_unresolved_subgoal_keeps_observation_actions() -> None:
@@ -354,6 +380,19 @@ def test_constrain_action_rewrites_to_refuse_in_divergence_context() -> None:
 
     constrained, rewritten = constrain_action(
         proposal, eligible, convergence_signal="plan_budget_exhausted"
+    )
+
+    assert constrained.action_type is ReActActionType.REFUSE
+    assert rewritten is not None
+    assert rewritten.constrained_to is ReActActionType.REFUSE
+
+
+def test_constrain_action_rewrites_answer_ready_blocked_to_refuse() -> None:
+    proposal = _proposal(ReActActionType.GENERATE_FINAL_ANSWER)
+    eligible = frozenset({ReActActionType.REFUSE})
+
+    constrained, rewritten = constrain_action(
+        proposal, eligible, convergence_signal="answer_ready_blocked"
     )
 
     assert constrained.action_type is ReActActionType.REFUSE

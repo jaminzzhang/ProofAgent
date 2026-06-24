@@ -983,8 +983,36 @@ The planner-facing structured input contract that exposes the current Eligible A
 _Avoid_: Static planner allowlist, prompt-only constraint, all-actions planner schema
 
 **Answer-Ready Convergence Signal**:
-The Convergence Check signal that fires when Accepted Evidence exists and the latest Observation Record declares no unresolved subgoals. It narrows the next Plan Round to terminal actions only: `GENERATE_FINAL_ANSWER` or `REFUSE`.
-_Avoid_: Repeat retrieval by default, evidence-saturation-only convergence, planner-owned stop decision
+The Convergence Check signal that fires when Accepted Evidence exists and the latest Observation Record declares no unresolved subgoals. It activates the Answer-Ready Finalization Gate: the loop should proceed to `GENERATE_FINAL_ANSWER` unless an explicit blocker is present.
+_Avoid_: Repeat retrieval by default, evidence-saturation-only convergence, planner-owned stop decision, terminal two-choice ambiguity
+
+**Answer-Ready Finalization Gate**:
+The Control Plane rule that treats answer-ready state as a final-answer obligation, not a peer choice between answer and refusal. When no explicit blocker exists, the next Plan Round's Eligible Action Set is `GENERATE_FINAL_ANSWER` only. A `REFUSE` terminal action remains valid only when the state carries a specific blocker such as unresolved subgoals, a policy denial, no Accepted Evidence, evidence relevance failure, or citation-binding impossibility.
+_Avoid_: Refusal from model caution alone, refusal because past turns failed, refusal without a blocker, answer-ready as terminal coin flip, answer-ready terminal two-choice set
+
+**Answer-Ready Planner Context Isolation**:
+The model-bearing context projection rule for Plan Rounds after the Answer-Ready Convergence Signal fires. Current Observation Records and explicit blockers govern the terminal decision; prior refusal or failed-attempt summaries must be omitted from free-text planner context or projected only as bounded non-blocking metadata that cannot justify refusal.
+_Avoid_: Historical refusal as current evidence, prior failed attempts as a blocker, free-text failure summaries in answer-ready planner context
+
+**Answer-Ready Action Constraint**:
+The deterministic eligibility enforcement rule that rewrites any non-`GENERATE_FINAL_ANSWER` proposal to `GENERATE_FINAL_ANSWER` when answer-ready state has no explicit blocker. If a blocker exists, the blocker determines whether `REFUSE`, `ASK_CLARIFICATION`, or another governed terminal path is eligible.
+_Avoid_: Accepting planner-selected refusal without blocker, relying on provider function-calling alone, hidden answer-ready rewrite
+
+**Answer-Ready Synthetic Finalization**:
+The plan-stage Control Plane behavior that emits a synthetic `GENERATE_FINAL_ANSWER` action without invoking the planner model when the Answer-Ready Finalization Gate has no blockers. It preserves the Controlled ReAct Loop topology because the exit action is still produced by the `plan` stage, but removes unnecessary model latency and historical-context influence from a deterministic finalization decision.
+_Avoid_: Calling planner just to confirm finalization, model-owned finalization when blockers are empty, skipping the plan stage entirely
+
+**Answer-Ready Blocker**:
+A first-class Control Plane state item that explains why answer-ready state cannot proceed directly to `GENERATE_FINAL_ANSWER`. Each blocker has a stable `code`, bounded `reason`, and optional source reference. Common codes include `no_accepted_evidence`, `unresolved_subgoal`, `policy_denied`, `evidence_relevance_failed`, `citation_binding_impossible`, and `variant_conflict`.
+_Avoid_: Inferring blockers from scattered state at decision time, raw model rationale as blocker, unstructured refusal reason
+
+**Answer-Ready Evidence Projection**:
+The evidence projection rule after the Answer-Ready Finalization Gate admits `GENERATE_FINAL_ANSWER`. The planner reads only Observation Record summaries and blockers, while `model_answer` must receive the full Accepted Evidence truth layer plus Observation Record `citation_refs` and `source_refs` so it can synthesize and bind cited claims.
+_Avoid_: Final answer from planner summary only, citation refs without evidence content, moving refusal from planner to model_answer by starving evidence
+
+**Product Variant Ambiguity**:
+A product-clause ambiguity where the user names a product family or short product name that could map to multiple variants. It does not block Answer-Ready Finalization when Accepted Evidence clearly identifies one product variant; the final answer must state the cited variant scope. It becomes a blocker only when Accepted Evidence contains conflicting variants or cannot establish which variant the answer would cover.
+_Avoid_: Refusal from ambiguity alone, unstated product-scope answer, merging multiple variants without saying so
 
 **Unresolved Subgoal**:
 A planner-visible item in an Observation Record summary that names a still-unanswered part of a compound request and justifies another Observation Action after Accepted Evidence exists.
@@ -3774,6 +3802,13 @@ _Avoid_: Evidence content dump
 - "Convergence" could mean the planner LLM deciding to stop, a hard budget firing, or a deterministic Control Plane check. Resolved per ADR-0032: convergence is a deterministic **Convergence Check** enforcement point that narrows the **Eligible Action Set**; the LLM never owns the stop decision.
 - "Eligibility enforcement" could mean prompt wording, output validation, or provider function-calling. Resolved per ADR-0032: a deterministic **Action Constraint** rewrite (Layer 2) is the permanent provider-neutral backstop; provider function-calling (Layer 3) is a later optimization that never replaces Layer 2.
 - "Tool result" could be terminal output, trace-only data, or loop control state. Resolved per ADR-0032: a tool result becomes an **Observation Record** and returns to plan; `WAITING_FOR_APPROVAL` is a suspension outcome, not a terminal, and approval resume returns to plan whether granted or denied.
+- "Answer-ready" could mean either a narrowed terminal choice or an obligation to answer from Accepted Evidence. Resolved per ADR-0047: answer-ready activates the **Answer-Ready Finalization Gate**; `REFUSE` requires an explicit blocker and cannot be selected merely because planner context is conservative or prior turns refused.
+- "Answer-ready eligible actions" could mean `{GENERATE_FINAL_ANSWER, REFUSE}` or a single finalization action. Resolved per ADR-0047: with no explicit blocker, the eligible set is `GENERATE_FINAL_ANSWER` only, backed by deterministic Action Constraint rewrite.
+- "Answer-ready planner call" could mean asking the planner to emit the obvious terminal action or letting Control Plane synthesize it. Resolved: with no blocker, the `plan` stage emits synthetic `GENERATE_FINAL_ANSWER` without a planner model call.
+- "Answer-ready blockers" could mean inferred ad hoc conditions or model rationale. Resolved: blockers are first-class Control Plane state with stable codes; an empty blocker list means final-answer obligation.
+- "Answer-ready evidence" could mean planner summaries are enough or full evidence must reach final answer generation. Resolved: planner sees summaries/blockers; `model_answer` sees full Accepted Evidence truth layer plus citation/source refs.
+- "Prior failed attempts" could mean useful conversation context or a current-run refusal basis. Resolved: after answer-ready, prior refusal summaries are audit/background only and must not be free-text model-bearing context for the terminal planner decision.
+- "Product variant ambiguity" could mean automatic refusal, clarification, or scoped answer. Resolved: if Accepted Evidence clearly identifies a variant, answer with that variant scope; only conflicting or unscoped evidence becomes a blocker.
 - "Loop verification" could mean reusing the deterministic-provider test suite or adding real-LLM tests. Resolved per ADR-0033: the deterministic path (V1/V2) is necessary but not sufficient; **V3 real-LLM regression** with behavioral thresholds is the product release gate.
 - "Workflow Template list" could mean the Dashboard static option array, the backend registry, or a per-Agent enumeration. Resolved: the **Dynamic Workflow Template Catalog** (`GET /api/config/workflow-templates`) is the source of truth; the Dashboard static option list is a **Template Selector Fallback** used only when the catalog fails to load.
 

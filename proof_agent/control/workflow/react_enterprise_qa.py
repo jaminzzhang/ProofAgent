@@ -319,6 +319,27 @@ _TERMINAL_NARROWED_ACTIONS: frozenset[ReActActionType] = frozenset(
     {ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE}
 )
 
+_ANSWER_READY_ACTIONS: frozenset[ReActActionType] = frozenset(
+    {ReActActionType.GENERATE_FINAL_ANSWER}
+)
+
+_ANSWER_READY_CLARIFICATION_BLOCKER_ACTIONS: frozenset[ReActActionType] = frozenset(
+    {ReActActionType.ASK_CLARIFICATION, ReActActionType.REFUSE}
+)
+
+_ANSWER_READY_CLARIFICATION_BLOCKER_CODES: frozenset[str] = frozenset(
+    {"unresolved_subgoal", "variant_conflict"}
+)
+
+_ANSWER_READY_HARD_BLOCKER_CODES: frozenset[str] = frozenset(
+    {
+        "no_accepted_evidence",
+        "policy_denied",
+        "evidence_relevance_failed",
+        "citation_binding_impossible",
+    }
+)
+
 # Eligible set when the plan budget is exhausted: the loop must end, and the
 # only honest terminal action is refuse (no evidence synthesis is possible).
 _REFUSE_ONLY_ACTIONS: frozenset[ReActActionType] = frozenset({ReActActionType.REFUSE})
@@ -334,6 +355,7 @@ def compute_eligible_action_set(
     action_history: list[Mapping[str, Any]],
     evidence_trajectory: list[int],
     observations: list[Mapping[str, Any]] | None = None,
+    answer_ready_blockers: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[frozenset[ReActActionType], str | None]:
     """Deterministically narrow the plan eligible action set (ADR-0032).
 
@@ -347,7 +369,9 @@ def compute_eligible_action_set(
         return _REFUSE_ONLY_ACTIONS, "plan_budget_exhausted"
 
     if _detect_answer_ready(observations or []):
-        return _TERMINAL_NARROWED_ACTIONS, "answer_ready"
+        if answer_ready_blockers:
+            return _answer_ready_blocked_actions(answer_ready_blockers), "answer_ready_blocked"
+        return _ANSWER_READY_ACTIONS, "answer_ready"
 
     if _detect_action_repetition(action_history):
         return _TERMINAL_NARROWED_ACTIONS, "action_repetition"
@@ -356,6 +380,21 @@ def compute_eligible_action_set(
         return _TERMINAL_NARROWED_ACTIONS, "evidence_saturation"
 
     return _PLAN_ELIGIBLE_ACTIONS, None
+
+
+def _answer_ready_blocked_actions(
+    blockers: Sequence[Mapping[str, Any]],
+) -> frozenset[ReActActionType]:
+    codes = {
+        str(blocker.get("code") or "").strip()
+        for blocker in blockers
+        if isinstance(blocker, Mapping)
+    }
+    if codes and codes <= _ANSWER_READY_CLARIFICATION_BLOCKER_CODES:
+        return _ANSWER_READY_CLARIFICATION_BLOCKER_ACTIONS
+    if codes & _ANSWER_READY_HARD_BLOCKER_CODES:
+        return _REFUSE_ONLY_ACTIONS
+    return _REFUSE_ONLY_ACTIONS
 
 
 def should_block_duplicate_observation_action(
@@ -483,18 +522,24 @@ def constrain_action(
     """Return the proposal unchanged when in-set, otherwise rewrite it (ADR-0032).
 
     Layer 2 eligibility enforcement: a provider-neutral, deterministic rewrite.
-    The default for an out-of-set action follows the convergence context:
-    divergence signals (budget exhaustion) default to REFUSE; everything else
-    (saturation, repetition, or no signal) defaults to GENERATE_FINAL_ANSWER.
+    The default for an out-of-set action follows the convergence context and
+    must itself be in the eligible set. Divergence signals prefer REFUSE;
+    ordinary convergence prefers GENERATE_FINAL_ANSWER when available.
     """
 
     if proposal.action_type in eligible_set:
         return proposal, None
 
-    if convergence_signal in _DIVERGENCE_SIGNALS:
+    if convergence_signal in _DIVERGENCE_SIGNALS and ReActActionType.REFUSE in eligible_set:
         default = ReActActionType.REFUSE
-    else:
+    elif ReActActionType.GENERATE_FINAL_ANSWER in eligible_set:
         default = ReActActionType.GENERATE_FINAL_ANSWER
+    elif ReActActionType.REFUSE in eligible_set:
+        default = ReActActionType.REFUSE
+    elif ReActActionType.ASK_CLARIFICATION in eligible_set:
+        default = ReActActionType.ASK_CLARIFICATION
+    else:
+        default = sorted(eligible_set, key=lambda action: action.value)[0]
     constrained = proposal.model_copy(update={"action_type": default})
     rewrite = ActionRewrite(
         original_action_type=proposal.action_type,

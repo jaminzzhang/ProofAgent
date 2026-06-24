@@ -1756,17 +1756,17 @@ def test_v3_loop_returns_to_plan_after_retrieval_then_converges(
     stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
     stage_ids = [event["payload"]["stage_id"] for event in stage_events]
 
-    # Loop must visit plan twice: round 1 (retrieval) -> plan -> round 2 (generate).
+    # Loop must visit plan twice: round 1 (retrieval) -> plan -> synthetic generate.
     assert stage_ids.count("plan") == 2
     assert "retrieval" in stage_ids
     assert "model_answer" in stage_ids
     # Retrieval is followed by a return to plan, not directly by model_answer.
     assert stage_ids.index("retrieval") < stage_ids.index("model_answer")
-    # The planner was invoked exactly twice (two plan rounds).
-    assert planner.calls == 2
+    # The second plan round is deterministic answer-ready finalization.
+    assert planner.calls == 1
 
 
-def test_v3_loop_planner_context_includes_observation_control_state(
+def test_v3_loop_answer_ready_does_not_send_observation_state_to_planner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     planner = _SequencePlanner(
@@ -1787,14 +1787,10 @@ def test_v3_loop_planner_context_includes_observation_control_state(
     )
 
     assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    assert planner.calls == 2
-    second_round_context = planner.context_summaries[1]
-    assert "Loop Control:" in second_round_context
-    assert "plan_round=1" in second_round_context
-    assert "eligible_actions=" in second_round_context
-    assert "generate_final_answer" in second_round_context
-    assert "accepted_evidence_count=1" in second_round_context
-    assert "last_action_type=plan_retrieval" in second_round_context
+    assert planner.calls == 1
+    assert len(planner.context_summaries) == 1
+    events = _trace_events(result.trace_path)
+    assert "answer_ready_finalization_forced" in _event_types(events)
 
 
 def test_v3_deterministic_planner_answers_after_evidence_without_constraint(
@@ -1816,7 +1812,7 @@ def test_v3_deterministic_planner_answers_after_evidence_without_constraint(
     assert "model_answer" in stage_ids
 
 
-def test_v3_loop_refuse_after_evidence_produces_explicit_final_output(
+def test_v3_loop_answer_ready_synthetic_finalization_bypasses_planner_refusal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     planner = _SequencePlanner(
@@ -1836,15 +1832,75 @@ def test_v3_loop_refuse_after_evidence_produces_explicit_final_output(
         runs_dir=tmp_path / "runs",
     )
 
-    assert result.outcome == "REFUSED_NO_EVIDENCE"
-    assert result.final_output
-    assert "Workflow ended unexpectedly without an outcome." not in result.final_output
-    assert "planner selected a governed refusal" in result.final_output
+    assert result.outcome == "ANSWERED_WITH_CITATIONS"
+    assert planner.calls == 1
     events = _trace_events(result.trace_path)
     stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
     stage_ids = [event["payload"]["stage_id"] for event in stage_events]
     assert stage_ids.count("plan") == 2
-    assert "model_answer" not in stage_ids
+    assert "model_answer" in stage_ids
+    forced_events = [
+        event
+        for event in events
+        if event["event_type"] == "answer_ready_finalization_forced"
+    ]
+    assert len(forced_events) == 1
+    assert forced_events[0]["payload"]["action_type"] == "generate_final_answer"
+    assert forced_events[0]["payload"]["answer_ready_blockers"] == []
+
+
+def test_v3_loop_answer_ready_blocker_prevents_synthetic_finalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planner = _SequencePlanner(
+        [
+            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
+            _loop_proposal(ReActActionType.GENERATE_FINAL_ANSWER, action_id="act_round_2"),
+        ]
+    )
+    monkeypatch.setattr(
+        "proof_agent.bootstrap.composition.resolve_react_planner",
+        lambda *args, **kwargs: planner,
+    )
+    original_retrieval = ReActEnterpriseQAWorkflowExecution.retrieval
+
+    def retrieval_with_answer_ready_blocker(
+        self: ReActEnterpriseQAWorkflowExecution,
+        state: dict[str, Any],
+    ) -> WorkflowStageResult:
+        result = original_retrieval(self, state)
+        continuation = {
+            **dict(result.continuation),
+            "answer_ready_blockers": [
+                {
+                    "code": "citation_binding_impossible",
+                    "reason": "accepted evidence cannot be bound to citations",
+                    "source_ref": "citation_gate",
+                }
+            ],
+        }
+        return result.model_copy(update={"continuation": continuation})
+
+    monkeypatch.setattr(
+        ReActEnterpriseQAWorkflowExecution,
+        "retrieval",
+        retrieval_with_answer_ready_blocker,
+    )
+
+    result = run_with_langgraph(
+        REACT_V3_AGENT,
+        question="What is the reimbursement rule for travel meals?",
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert result.outcome == "REFUSED_NO_EVIDENCE"
+    assert planner.calls == 2
+    assert planner.eligible_action_sets[-1] == ("refuse",)
+    events = _trace_events(result.trace_path)
+    assert "answer_ready_finalization_forced" not in _event_types(events)
+    constraint = next(event for event in events if event["event_type"] == "action_constrained")
+    assert constraint["payload"]["original_action_type"] == "generate_final_answer"
+    assert constraint["payload"]["constrained_to"] == "refuse"
 
 
 def test_v3_loop_answer_ready_converges_before_repeated_retrieval(
@@ -1854,9 +1910,8 @@ def test_v3_loop_answer_ready_converges_before_repeated_retrieval(
 
     Sequence [PLAN_RETRIEVAL, PLAN_RETRIEVAL, GENERATE_FINAL_ANSWER] used to
     spend two retrieval rounds. Once the first retrieval writes accepted
-    evidence with no unresolved subgoals, the second planner call receives only
-    terminal eligible actions; a repeated retrieval proposal is constrained to
-    final answer generation.
+    evidence with no unresolved subgoals, the second plan round synthesizes
+    final answer generation without calling the planner again.
     """
 
     planner = _SequencePlanner(
@@ -1885,20 +1940,19 @@ def test_v3_loop_answer_ready_converges_before_repeated_retrieval(
     assert stage_ids.count("plan") == 2
     assert stage_ids.count("retrieval") == 1
     assert "model_answer" in stage_ids
-    assert planner.calls == 2
-    assert planner.eligible_action_sets[1] == ("generate_final_answer", "refuse")
+    assert planner.calls == 1
+    assert len(planner.eligible_action_sets) == 1
+    assert "answer_ready_finalization_forced" in _event_types(events)
 
 
-def test_v3_loop_action_constraint_rewrites_repeated_retrieval_to_generate(
+def test_v3_loop_answer_ready_synthetic_finalization_preempts_repeated_retrieval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """RED (slice 5): Action Constraint rewrites an out-of-set repeated retrieval to GENERATE.
+    """Answer-ready synthetic finalization preempts a repeated retrieval proposal.
 
-    Sequence [PLAN_RETRIEVAL(q), PLAN_RETRIEVAL(q)] triggers action repetition
-    at round 2, narrowing the eligible set to {GENERATE, REFUSE}. The planner
-    still proposes PLAN_RETRIEVAL (out of set), so the Action Constraint
-    rewrites it to GENERATE_FINAL_ANSWER and emits an ``action_constrained``
-    trace event. The loop then answers rather than diverging.
+    Once the first retrieval writes accepted evidence with no unresolved
+    subgoals, the second scripted PLAN_RETRIEVAL is never requested from the
+    planner. The Control Plane emits a synthetic final-answer action instead.
     """
 
     planner = _SequencePlanner(
@@ -1920,11 +1974,6 @@ def test_v3_loop_action_constraint_rewrites_repeated_retrieval_to_generate(
 
     assert result.outcome == "ANSWERED_WITH_CITATIONS"
     events = _trace_events(result.trace_path)
-    constraint_events = [
-        event for event in events if event["event_type"] == "action_constrained"
-    ]
-    assert len(constraint_events) == 1
-    payload = constraint_events[0]["payload"]
-    assert payload["original_action_type"] == "plan_retrieval"
-    assert payload["constrained_to"] == "generate_final_answer"
-    assert payload["reason"] == "outside_eligible_set"
+    assert planner.calls == 1
+    assert "answer_ready_finalization_forced" in _event_types(events)
+    assert "action_constrained" not in _event_types(events)
