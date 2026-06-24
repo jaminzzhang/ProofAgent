@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, Card } from '@proofagent/ui'
+import { Badge, Card, Checkbox } from '@proofagent/ui'
 import {
   createKnowledgeSource,
   fetchKnowledgeSources,
@@ -34,6 +34,7 @@ export function KnowledgePage() {
   const [routingCredentialEnv, setRoutingCredentialEnv] = useState('')
   const [documentSelectionBudget, setDocumentSelectionBudget] = useState('8')
   const [workerConcurrency, setWorkerConcurrency] = useState('2')
+  const [supportsParallelRetrieval, setSupportsParallelRetrieval] = useState(true)
   const [remoteEndpoint, setRemoteEndpoint] = useState('')
   const [remoteHeaderEnv, setRemoteHeaderEnv] = useState('')
   const [remoteTopK, setRemoteTopK] = useState('5')
@@ -107,6 +108,7 @@ export function KnowledgePage() {
           routingCredentialEnv,
           documentSelectionBudget,
           workerConcurrency,
+          supportsParallelRetrieval,
         }),
       })
       setStatus(t('knowledge.created').replace('{name}', source.name))
@@ -192,6 +194,11 @@ export function KnowledgePage() {
               )}
               <NumberField label={t('knowledge.documentSelectionBudget')} value={documentSelectionBudget} onChange={setDocumentSelectionBudget} min={1} />
               <NumberField label={t('knowledge.workerConcurrency')} value={workerConcurrency} onChange={setWorkerConcurrency} min={1} />
+              <CheckboxField
+                label={t('knowledge.parallelRetrieval')}
+                checked={supportsParallelRetrieval}
+                onChange={setSupportsParallelRetrieval}
+              />
             </>
           ) : (
             <>
@@ -400,6 +407,7 @@ function localIndexParams({
   routingCredentialEnv,
   documentSelectionBudget,
   workerConcurrency,
+  supportsParallelRetrieval,
 }: {
   ingestionProvider: string
   ingestionModelName: string
@@ -413,6 +421,7 @@ function localIndexParams({
   routingCredentialEnv: string
   documentSelectionBudget: string
   workerConcurrency: string
+  supportsParallelRetrieval: boolean
 }): Record<string, unknown> {
   return {
     ingestion_model: sourceOwnedModelConfig({
@@ -431,7 +440,35 @@ function localIndexParams({
     }),
     document_selection_budget: positiveNumber(documentSelectionBudget, 8),
     worker_concurrency: positiveNumber(workerConcurrency, 2),
+    capabilities: {
+      supports_parallel_retrieval: supportsParallelRetrieval,
+    },
   }
+}
+
+function CheckboxField({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+}) {
+  const id = `knowledge-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2">
+      <Checkbox
+        id={id}
+        aria-label={label}
+        checked={checked}
+        onCheckedChange={(value) => onChange(value === true)}
+      />
+      <label htmlFor={id} className="text-sm font-medium text-[var(--text-primary)]">
+        {label}
+      </label>
+    </div>
+  )
 }
 
 function sourceOwnedModelConfig({

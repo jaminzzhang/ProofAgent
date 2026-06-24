@@ -576,6 +576,37 @@ class TestLocalIndexProvider:
         assert resolved_configs[0].provider == "deterministic"
         assert resolved_configs[0].name == "routing-model"
 
+    def test_from_config_allows_parallel_retrieval_capability_to_be_disabled(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """from_config() reads Dashboard-managed retrieval capability params."""
+        snapshot_path, artifact_root = _write_v2_snapshot(tmp_path)
+        routing_provider = MockModelProvider("routing", "routing-model")
+        monkeypatch.setattr(
+            local_index_module,
+            "resolve_provider",
+            lambda config: routing_provider,
+            raising=False,
+        )
+        config = KnowledgeConfig(
+            provider="local_index",
+            params={
+                "snapshot_path": snapshot_path,
+                "artifact_root": artifact_root,
+                "routing_model": {
+                    "provider": "deterministic",
+                    "name": "routing-model",
+                },
+                "capabilities": {"supports_parallel_retrieval": False},
+            },
+        )
+
+        provider = LocalIndexProvider.from_config(config)
+
+        assert provider.capabilities.supports_parallel_retrieval is False
+
     def test_from_config_inherits_ingestion_model_for_routing(
         self,
         tmp_path: Path,
@@ -1053,7 +1084,9 @@ class TestLocalIndexProvider:
         assert exc.value.code == "PA_KNOWLEDGE_002"
         assert "private storage failure" not in str(exc.value)
 
-    def test_runtime_revision_retrieval_uses_llm_guided_leaf_selection(self) -> None:
+    def test_runtime_revision_retrieval_uses_all_leaf_selection_after_document_routing(
+        self,
+    ) -> None:
         calls = []
 
         class FakeRetriever:
@@ -1074,7 +1107,7 @@ class TestLocalIndexProvider:
 
         assert nodes[0].node.id_ == "node_policy"
         assert calls == [
-            ("as_retriever", {"retriever_mode": "select_leaf", "similarity_top_k": 2}),
+            ("as_retriever", {"retriever_mode": "all_leaf", "similarity_top_k": 2}),
             ("retrieve", "claim handling"),
         ]
 

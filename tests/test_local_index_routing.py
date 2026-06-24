@@ -186,6 +186,7 @@ def test_document_router_falls_back_to_sorted_full_set_when_metadata_does_not_ma
     )
 
     payload = _request_payload(model)
+    assert model.requests[0].timeout_seconds == 30.0
     assert [item["document_id"] for item in payload["document_candidates"]] == [
         "doc_alpha",
         "doc_zeta",

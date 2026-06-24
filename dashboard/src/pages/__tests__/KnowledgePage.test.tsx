@@ -139,7 +139,54 @@ describe('KnowledgePage', () => {
           },
           document_selection_budget: 8,
           worker_concurrency: 2,
+          capabilities: {
+            supports_parallel_retrieval: true,
+          },
         },
+      })
+    })
+  })
+
+  it('allows disabling parallel retrieval for local index sources', async () => {
+    vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(createKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_policies',
+      name: 'Policy Source',
+      provider: 'local_index',
+      lifecycle_state: 'ACTIVE',
+      params: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_1',
+      latest_snapshot_id: null,
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 0,
+      ready_document_count: 0,
+    })
+
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Knowledge Sources')
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Policy Source' } })
+    fireEvent.change(screen.getByLabelText('Source ID'), { target: { value: 'ks_policies' } })
+    fireEvent.click(screen.getByLabelText('Parallel Retrieval'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create Source' }))
+
+    await waitFor(() => {
+      expect(createKnowledgeSource).toHaveBeenCalledWith({
+        source_id: 'ks_policies',
+        name: 'Policy Source',
+        provider: 'local_index',
+        params: expect.objectContaining({
+          capabilities: {
+            supports_parallel_retrieval: false,
+          },
+        }),
       })
     })
   })
@@ -226,6 +273,9 @@ describe('KnowledgePage', () => {
           },
           document_selection_budget: 8,
           worker_concurrency: 2,
+          capabilities: {
+            supports_parallel_retrieval: true,
+          },
         },
       })
     })

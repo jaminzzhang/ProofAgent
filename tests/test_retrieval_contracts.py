@@ -15,12 +15,12 @@ from proof_agent.contracts.manifest import ModelConfig, RetrievalConfig
 # ============================================================================
 
 
-def test_retrieval_capabilities_defaults_are_false() -> None:
-    """Capability flags default to False."""
+def test_retrieval_capabilities_defaults_to_parallel_retrieval() -> None:
+    """Parallel retrieval defaults to enabled for providers that expose capabilities."""
     caps = RetrievalCapabilities()
     assert caps.supports_structure_listing is False
     assert caps.supports_scoped_retrieval is False
-    assert caps.supports_parallel_retrieval is False
+    assert caps.supports_parallel_retrieval is True
 
 
 def test_retrieval_capabilities_can_enable_features() -> None:

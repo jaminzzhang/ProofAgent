@@ -93,6 +93,7 @@ class LocalIndexProvider(KnowledgeProvider):
         routing_provider: ModelProvider | None = None,
         runtime_snapshot: LocalIndexRuntimeSnapshot | None = None,
         document_selection_budget: int = 8,
+        supports_parallel_retrieval: bool = True,
     ) -> None:
         """Initialize LocalIndexProvider.
 
@@ -103,6 +104,7 @@ class LocalIndexProvider(KnowledgeProvider):
             routing_provider: Raw model provider for runtime document selection
             runtime_snapshot: Optional immutable v2 runtime snapshot descriptor
             document_selection_budget: Maximum routed documents selected per provider call
+            supports_parallel_retrieval: Whether query-set retrieval can run in parallel
         """
         self.ingestion_model = ingestion_model
         self.routing_model = routing_model
@@ -110,6 +112,7 @@ class LocalIndexProvider(KnowledgeProvider):
         self.routing_provider = routing_provider
         self.runtime_snapshot = runtime_snapshot
         self.document_selection_budget = document_selection_budget
+        self.supports_parallel_retrieval = supports_parallel_retrieval
         self._index: TreeIndex | None = None
         self._retrieval_summary: Mapping[str, Any] | None = None
 
@@ -133,6 +136,7 @@ class LocalIndexProvider(KnowledgeProvider):
         """
         snapshot_path, artifact_root = _runtime_snapshot_paths_from_params(config.params)
         document_selection_budget = _document_selection_budget_from_params(config.params)
+        supports_parallel_retrieval = _supports_parallel_retrieval_from_params(config.params)
         runtime_snapshot = load_ready_snapshot_manifest(snapshot_path, artifact_root=artifact_root)
         routing_config = _routing_model_config_from_params(config.params)
         resolved_routing = resolve_model_role_config(
@@ -152,6 +156,7 @@ class LocalIndexProvider(KnowledgeProvider):
             routing_provider=routing_provider,
             runtime_snapshot=runtime_snapshot,
             document_selection_budget=document_selection_budget,
+            supports_parallel_retrieval=supports_parallel_retrieval,
         )
 
     @property
@@ -162,10 +167,13 @@ class LocalIndexProvider(KnowledgeProvider):
             RetrievalCapabilities with both structure listing and scoped retrieval
         """
         if self.runtime_snapshot is not None:
-            return RetrievalCapabilities()
+            return RetrievalCapabilities(
+                supports_parallel_retrieval=self.supports_parallel_retrieval
+            )
         return RetrievalCapabilities(
             supports_structure_listing=True,
             supports_scoped_retrieval=True,
+            supports_parallel_retrieval=self.supports_parallel_retrieval,
         )
 
     @property
@@ -658,7 +666,7 @@ def _retrieve_from_runtime_revision(
 ) -> tuple[NodeWithScore, ...]:
     try:
         retriever = index.as_retriever(
-            retriever_mode="select_leaf",
+            retriever_mode="all_leaf",
             similarity_top_k=top_k,
         )
         return tuple(retriever.retrieve(query))
@@ -699,6 +707,26 @@ def _document_selection_budget_from_params(params: Mapping[str, Any]) -> int:
             "PA_KNOWLEDGE_001",
             "Local Index document_selection_budget must be an integer from 1 through 20.",
             "Set params.document_selection_budget to an integer from 1 through 20.",
+        )
+    return value
+
+
+def _supports_parallel_retrieval_from_params(params: Mapping[str, Any]) -> bool:
+    raw_capabilities = params.get("capabilities")
+    if raw_capabilities is None:
+        return True
+    if not isinstance(raw_capabilities, Mapping):
+        raise ProofAgentError(
+            "PA_KNOWLEDGE_001",
+            "Local Index params.capabilities must be an object.",
+            "Set params.capabilities.supports_parallel_retrieval to true or false.",
+        )
+    value = raw_capabilities.get("supports_parallel_retrieval", True)
+    if not isinstance(value, bool):
+        raise ProofAgentError(
+            "PA_KNOWLEDGE_001",
+            "Local Index params.capabilities.supports_parallel_retrieval must be boolean.",
+            "Set params.capabilities.supports_parallel_retrieval to true or false.",
         )
     return value
 

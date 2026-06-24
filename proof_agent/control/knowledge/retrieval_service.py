@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import PurePosixPath
 import re
+from threading import Event
+import time
 from typing import Any, Literal
 
 from proof_agent.capabilities.knowledge import KnowledgeProvider
@@ -100,6 +102,53 @@ class _ParallelProviderStepResult:
     payload: Mapping[str, Any] | None = None
 
 
+class _ProviderStepExecutionError(Exception):
+    def __init__(
+        self,
+        *,
+        status: Literal["ok", "blocked", "waiting", "error"],
+        payload: Mapping[str, Any],
+        no_evidence_reason_code: str | None = None,
+    ) -> None:
+        super().__init__(no_evidence_reason_code or "provider step failed")
+        self.status = status
+        self.payload = payload
+        self.no_evidence_reason_code = no_evidence_reason_code
+
+
+class _RetrievalExecutionCancelled(Exception):
+    """Internal cooperative cancellation signal for timed retrieval work."""
+
+
+@dataclass
+class _RetrievalExecutionContext:
+    deadline_monotonic: float | None
+    cancel_event: Event = field(default_factory=Event)
+
+    @classmethod
+    def with_timeout(cls, timeout_seconds: float) -> _RetrievalExecutionContext:
+        return cls(deadline_monotonic=time.monotonic() + timeout_seconds)
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def is_cancelled(self) -> bool:
+        if self.cancel_event.is_set():
+            return True
+        deadline = self.deadline_monotonic
+        return deadline is not None and time.monotonic() >= deadline
+
+    def raise_if_cancelled(self) -> None:
+        if self.is_cancelled():
+            raise _RetrievalExecutionCancelled
+
+    def timeout_remaining_seconds(self) -> float | None:
+        deadline = self.deadline_monotonic
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.monotonic())
+
+
 class _GovernedRoutingModelProvider:
     """Apply Control Plane policy and trace to Source-owned routing model calls."""
 
@@ -109,10 +158,12 @@ class _GovernedRoutingModelProvider:
         provider: ModelProvider,
         policy: PolicyEngine,
         trace: TraceWriter,
+        execution_context: _RetrievalExecutionContext | None = None,
     ) -> None:
         self.inner_provider = provider
         self._policy = policy
         self._trace = trace
+        self._execution_context = execution_context
 
     @property
     def provider_name(self) -> str:
@@ -125,11 +176,20 @@ class _GovernedRoutingModelProvider:
     def estimate_tokens(self, request: ModelRequest) -> int | None:
         return self.inner_provider.estimate_tokens(request)
 
-    def bind(self, *, policy: PolicyEngine, trace: TraceWriter) -> None:
+    def bind(
+        self,
+        *,
+        policy: PolicyEngine,
+        trace: TraceWriter,
+        execution_context: _RetrievalExecutionContext | None = None,
+    ) -> None:
         self._policy = policy
         self._trace = trace
+        self._execution_context = execution_context
 
     def generate(self, request: ModelRequest) -> ModelResponse:
+        context = self._execution_context
+        _raise_if_retrieval_cancelled(context)
         estimated_tokens = self.estimate_tokens(request)
         decision = self._policy.evaluate(
             EnforcementPoint.BEFORE_MODEL_CALL,
@@ -142,6 +202,7 @@ class _GovernedRoutingModelProvider:
                 "role": ModelCallRole.ROUTING.value,
             },
         )
+        _raise_if_retrieval_cancelled(context)
         _emit_policy(self._trace, decision)
         if not _allowed(decision):
             raise ProofAgentError(
@@ -149,6 +210,7 @@ class _GovernedRoutingModelProvider:
                 "Knowledge routing model call was blocked by policy.",
                 "Update policy or configure an allowed Source routing model.",
             )
+        _raise_if_retrieval_cancelled(context)
         self._trace.emit(
             "model_request",
             status="ok",
@@ -160,6 +222,7 @@ class _GovernedRoutingModelProvider:
         try:
             response = self.inner_provider.generate(request)
         except Exception as exc:
+            _raise_if_retrieval_cancelled(context)
             self._trace.emit(
                 "model_error",
                 status="error",
@@ -173,6 +236,7 @@ class _GovernedRoutingModelProvider:
                 },
             )
             raise
+        _raise_if_retrieval_cancelled(context)
         self._trace.emit(
             "model_response",
             status="ok",
@@ -526,7 +590,7 @@ class KnowledgeRetrievalService:
         for index, item in enumerate(items, start=1):
             round_id = f"query_set_{index:02d}"
             try:
-                provider_step = self._execute_agentic_round(
+                provider_step = self._execute_sequential_agentic_round_with_timeout(
                     request,
                     query=item.query,
                     round_id=round_id,
@@ -539,11 +603,150 @@ class KnowledgeRetrievalService:
                     no_evidence_reason_code="required_provider_failure",
                     required_provider_failed=True,
                 )
+            if provider_step.required_provider_failed:
+                return _ProviderStepResult(
+                    evidence=tuple(evidence),
+                    no_evidence_reason_code=provider_step.no_evidence_reason_code,
+                    required_provider_failed=True,
+                )
             evidence.extend(provider_step.evidence)
             no_evidence_reason_code = provider_step.no_evidence_reason_code
         return _ProviderStepResult(
             evidence=tuple(evidence),
             no_evidence_reason_code=no_evidence_reason_code,
+        )
+
+    def _execute_sequential_agentic_round_with_timeout(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        query: str,
+        round_id: str,
+        execution_mode: str | None,
+        query_item: RetrievalQueryItem,
+    ) -> _ProviderStepResult:
+        step_context = self._step_context(
+            request,
+            execution_mode=execution_mode,
+            question=query,
+            step_id=round_id,
+            query_item=query_item,
+        )
+        step_context["round_id"] = round_id
+        step_context["strategy"] = "agentic"
+        step_context["query_execution"] = "sequential"
+        self._trace.emit("retrieval_step", status="ok", payload=step_context)
+
+        execution_context = _RetrievalExecutionContext.with_timeout(
+            request.query_timeout_seconds
+        )
+        executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="proof-retrieval-query",
+        )
+        future = executor.submit(
+            self._execute_parallel_provider_step,
+            request,
+            query,
+            round_id,
+            round_id,
+            execution_context,
+        )
+        try:
+            done, not_done = wait(
+                (future,),
+                timeout=execution_context.timeout_remaining_seconds(),
+            )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        if not_done:
+            execution_context.cancel()
+            future.cancel()
+            self._emit_basic_retrieval_result(
+                (),
+                step_id=round_id,
+                round_id=round_id,
+                status="blocked",
+                summary={
+                    "timeout_seconds": request.query_timeout_seconds,
+                    "required": query_item.required,
+                },
+                no_evidence_reason_code="retrieval_query_timeout",
+            )
+            return _ProviderStepResult(
+                evidence=(),
+                no_evidence_reason_code=(
+                    "required_provider_failure"
+                    if query_item.required
+                    else "retrieval_query_timeout"
+                ),
+                required_provider_failed=query_item.required,
+            )
+
+        try:
+            provider_step = next(iter(done)).result()
+        except _RetrievalExecutionCancelled:
+            self._emit_basic_retrieval_result(
+                (),
+                step_id=round_id,
+                round_id=round_id,
+                status="blocked",
+                summary={
+                    "timeout_seconds": request.query_timeout_seconds,
+                    "required": query_item.required,
+                },
+                no_evidence_reason_code="retrieval_query_timeout",
+            )
+            return _ProviderStepResult(
+                evidence=(),
+                no_evidence_reason_code=(
+                    "required_provider_failure"
+                    if query_item.required
+                    else "retrieval_query_timeout"
+                ),
+                required_provider_failed=query_item.required,
+            )
+        except _ProviderStepExecutionError as exc:
+            self._trace.emit(
+                "retrieval_result",
+                status=exc.status,
+                payload=exc.payload,
+            )
+            raise
+        except Exception:
+            self._emit_basic_retrieval_result(
+                (),
+                step_id=round_id,
+                round_id=round_id,
+                status="error",
+                summary=_consume_provider_retrieval_summary(self._knowledge_provider),
+                no_evidence_reason_code=(
+                    "required_provider_failure"
+                    if query_item.required
+                    else "optional_provider_failure"
+                ),
+            )
+            raise
+
+        if provider_step.payload is not None:
+            self._trace.emit(
+                "retrieval_result",
+                status=provider_step.status,
+                payload=provider_step.payload,
+            )
+        else:
+            self._emit_basic_retrieval_result(
+                provider_step.evidence,
+                step_id=round_id,
+                round_id=round_id,
+                status=provider_step.status,
+                summary=provider_step.summary,
+                no_evidence_reason_code=provider_step.no_evidence_reason_code,
+            )
+        return _ProviderStepResult(
+            evidence=provider_step.evidence,
+            no_evidence_reason_code=provider_step.no_evidence_reason_code,
         )
 
     def _execute_parallel_agentic_query_set(
@@ -554,6 +757,9 @@ class KnowledgeRetrievalService:
         execution_mode: str | None,
     ) -> _ProviderStepResult:
         max_workers = min(request.query_concurrency, len(items))
+        execution_context = _RetrievalExecutionContext.with_timeout(
+            request.query_timeout_seconds
+        )
         executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="proof-retrieval-query",
@@ -579,15 +785,19 @@ class KnowledgeRetrievalService:
                     item.query,
                     round_id,
                     round_id,
+                    execution_context,
                 )
                 future_entries[future] = (index, item)
 
             done, not_done = wait(
                 tuple(future_entries),
-                timeout=request.query_timeout_seconds,
+                timeout=execution_context.timeout_remaining_seconds(),
             )
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+
+        if not_done:
+            execution_context.cancel()
 
         evidence_by_index: dict[int, tuple[EvidenceChunk, ...]] = {}
         no_evidence_reason_code: str | None = None
@@ -597,6 +807,42 @@ class KnowledgeRetrievalService:
             round_id = f"query_set_{index:02d}"
             try:
                 provider_step = future.result()
+            except _RetrievalExecutionCancelled:
+                self._emit_basic_retrieval_result(
+                    (),
+                    step_id=round_id,
+                    round_id=round_id,
+                    status="blocked",
+                    summary={
+                        "timeout_seconds": request.query_timeout_seconds,
+                        "required": item.required,
+                    },
+                    no_evidence_reason_code="retrieval_query_timeout",
+                )
+                if item.required:
+                    required_provider_failed = True
+                    no_evidence_reason_code = "required_provider_failure"
+                elif no_evidence_reason_code is None:
+                    no_evidence_reason_code = "retrieval_query_timeout"
+                continue
+            except _ProviderStepExecutionError as exc:
+                payload = dict(exc.payload)
+                payload["no_evidence_reason_code"] = (
+                    "required_provider_failure"
+                    if item.required
+                    else "optional_provider_failure"
+                )
+                self._trace.emit(
+                    "retrieval_result",
+                    status=exc.status,
+                    payload=payload,
+                )
+                if item.required:
+                    required_provider_failed = True
+                    no_evidence_reason_code = "required_provider_failure"
+                elif no_evidence_reason_code is None:
+                    no_evidence_reason_code = "optional_provider_failure"
+                continue
             except Exception:
                 self._emit_basic_retrieval_result(
                     (),
@@ -668,7 +914,9 @@ class KnowledgeRetrievalService:
         query: str,
         step_id: str,
         round_id: str | None,
+        execution_context: _RetrievalExecutionContext | None = None,
     ) -> _ParallelProviderStepResult:
+        _raise_if_retrieval_cancelled(execution_context)
         bound_providers = _bound_providers(self._knowledge_provider)
         if bound_providers is not None:
             return self._execute_parallel_bound_provider_step(
@@ -677,16 +925,19 @@ class KnowledgeRetrievalService:
                 bound_providers=bound_providers,
                 step_id=step_id,
                 round_id=round_id,
+                execution_context=execution_context,
             )
         _bind_provider_routing_model_governance(
             self._knowledge_provider,
             policy=self._policy,
             trace=self._trace,
+            execution_context=execution_context,
         )
         evidence = self._knowledge_provider.retrieve(
             query,
             top_k=request.top_k,
         )
+        _raise_if_retrieval_cancelled(execution_context)
         summary = _consume_provider_retrieval_summary(self._knowledge_provider)
         if request.force_empty:
             evidence = ()
@@ -703,6 +954,7 @@ class KnowledgeRetrievalService:
         bound_providers: tuple[BoundKnowledgeProvider, ...],
         step_id: str,
         round_id: str | None,
+        execution_context: _RetrievalExecutionContext | None = None,
     ) -> _ParallelProviderStepResult:
         provider_calls: list[dict[str, Any]] = []
         raw_candidates: list[EvidenceChunk] = []
@@ -737,14 +989,19 @@ class KnowledgeRetrievalService:
             )
 
         for bound in routing.selected:
+            _raise_if_retrieval_cancelled(execution_context)
             binding_top_k = bound.resolved.top_k or request.top_k
             _bind_provider_routing_model_governance(
                 bound.provider,
                 policy=self._policy,
                 trace=self._trace,
+                execution_context=execution_context,
             )
             try:
                 chunks = bound.provider.retrieve(query, top_k=binding_top_k)
+                _raise_if_retrieval_cancelled(execution_context)
+            except _RetrievalExecutionCancelled:
+                raise
             except Exception as exc:
                 provider_calls.append(
                     _failed_provider_call(
@@ -756,7 +1013,29 @@ class KnowledgeRetrievalService:
                 if bound.resolved.failure_mode == "advisory" and not _is_policy_error(exc):
                     degraded = True
                     continue
-                raise
+                raise _ProviderStepExecutionError(
+                    status="error",
+                    payload={
+                        "step_id": step_id,
+                        **_round_payload(round_id),
+                        "provider": self._knowledge_provider.provider_name,
+                        "candidate_count": 0,
+                        "chunk_count": 0,
+                        "raw_candidate_count": len(raw_candidates),
+                        "deduplicated_count": 0,
+                        "sources": [],
+                        "binding_candidates": routing.binding_candidates,
+                        "selected_bindings": _selected_binding_summaries(
+                            routing.selected,
+                            selection_reason=routing.selection_reason,
+                        ),
+                        "provider_calls": provider_calls,
+                        "degraded": degraded,
+                        "routing": _routing_payload(routing),
+                        "no_evidence_reason_code": "required_provider_failure",
+                    },
+                    no_evidence_reason_code="required_provider_failure",
+                ) from exc
             provider_calls.append(
                 _successful_provider_call(
                     bound,
@@ -1580,21 +1859,34 @@ def _bind_provider_routing_model_governance(
     *,
     policy: PolicyEngine,
     trace: TraceWriter,
+    execution_context: _RetrievalExecutionContext | None = None,
 ) -> None:
     bind = getattr(provider, "bind_runtime_routing_provider", None)
     routing_provider = getattr(provider, "routing_provider", None)
     if not callable(bind) or routing_provider is None:
         return
     if isinstance(routing_provider, _GovernedRoutingModelProvider):
-        routing_provider.bind(policy=policy, trace=trace)
+        routing_provider.bind(
+            policy=policy,
+            trace=trace,
+            execution_context=execution_context,
+        )
         return
     bind(
         _GovernedRoutingModelProvider(
             provider=routing_provider,
             policy=policy,
             trace=trace,
+            execution_context=execution_context,
         )
     )
+
+
+def _raise_if_retrieval_cancelled(
+    execution_context: _RetrievalExecutionContext | None,
+) -> None:
+    if execution_context is not None:
+        execution_context.raise_if_cancelled()
 
 
 def _trace_safe_retrieval_summary(summary: Mapping[str, Any]) -> dict[str, Any]:

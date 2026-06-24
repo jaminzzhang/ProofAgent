@@ -92,6 +92,26 @@ class DelayedParallelKnowledgeProvider:
         return evidence[:top_k]
 
 
+class DelayedSequentialKnowledgeProvider:
+    provider_name = "local_index"
+
+    def __init__(
+        self,
+        *,
+        delays: Mapping[str, float],
+        evidence_by_query: Mapping[str, tuple[EvidenceChunk, ...]],
+    ) -> None:
+        self.delays = dict(delays)
+        self.evidence_by_query = dict(evidence_by_query)
+        self.calls: list[tuple[str, int | None]] = []
+
+    def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
+        self.calls.append((query, top_k))
+        time.sleep(self.delays.get(query, 0.0))
+        evidence = self.evidence_by_query.get(query, ())
+        return evidence[:top_k]
+
+
 class FakeModelProvider:
     def __init__(self, responses: tuple[str, ...], *, model_name: str) -> None:
         self.provider_name = "deterministic"
@@ -145,6 +165,44 @@ class FakeRoutingAwareKnowledgeProvider:
             )
         )
         return ()
+
+
+class ChainedRoutingAwareKnowledgeProvider:
+    provider_name = "local_index"
+
+    def __init__(self, routing_provider: FakeOutboundRoutingModel) -> None:
+        self.routing_provider = routing_provider
+
+    def bind_runtime_routing_provider(self, routing_provider: Any) -> None:
+        self.routing_provider = routing_provider
+
+    def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[EvidenceChunk, ...]:
+        request = ModelRequest(
+            messages=(ModelMessage(role=ModelRole.USER, content=query),),
+            provider=self.routing_provider.provider_name,
+            model=self.routing_provider.model_name,
+            response_format="json",
+        )
+        self.routing_provider.generate(request)
+        self.routing_provider.generate(request)
+        return ()
+
+
+class SlowOutboundRoutingModel(FakeOutboundRoutingModel):
+    def __init__(self, *, delay_seconds: float) -> None:
+        super().__init__()
+        self.delay_seconds = delay_seconds
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.calls.append(request)
+        time.sleep(self.delay_seconds)
+        if self.error is not None:
+            raise self.error
+        return ModelResponse(
+            content='{"selected_document_ids":[],"reason":"none"}',
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+        )
 
 
 def test_single_step_retrieval_service_gates_provider_and_evaluates_evidence(
@@ -649,6 +707,204 @@ def test_parallel_query_set_timeout_fails_when_required_does_not_return_normally
         result.evidence_result.metadata["no_evidence_reason_code"]
         == "required_provider_failure"
     )
+
+
+def test_sequential_query_set_timeout_fails_when_required_does_not_return_normally(
+    tmp_path: Path,
+) -> None:
+    required_query = "ping an yu xiang policy terms"
+    optional_query = "ping an yu xiang coverage"
+    provider = DelayedSequentialKnowledgeProvider(
+        delays={required_query: 0.12, optional_query: 0.0},
+        evidence_by_query={
+            required_query: (
+                EvidenceChunk(
+                    source="required.md",
+                    content="Slow required policy evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.9,
+                    citation="required.md:1",
+                ),
+            ),
+            optional_query: (
+                EvidenceChunk(
+                    source="optional.md",
+                    content="Fast optional coverage evidence.",
+                    status=EvidenceStatus.CANDIDATE,
+                    admission_score=0.8,
+                    citation="optional.md:1",
+                ),
+            ),
+        },
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="What are the main Ping An Yu Xiang insurance clauses?",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query=required_query,
+                    intent_angle="policy_terms",
+                    required=True,
+                    reason="Policy terms are the direct intent.",
+                ),
+                RetrievalQueryItem(
+                    query=optional_query,
+                    intent_angle="coverage",
+                    required=False,
+                    reason="Coverage details may add context.",
+                ),
+            ),
+            max_queries=3,
+            query_timeout_seconds=0.03,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    assert result.evidence == ()
+    assert result.evidence_result.status == "failed"
+    assert (
+        result.evidence_result.metadata["no_evidence_reason_code"]
+        == "required_provider_failure"
+    )
+    retrieval_results = [
+        event
+        for event in _read_events(trace.trace_path)
+        if event["event_type"] == "retrieval_result"
+    ]
+    assert len(retrieval_results) == 1
+    assert retrieval_results[0]["status"] == "blocked"
+    assert retrieval_results[0]["payload"]["round_id"] == "query_set_01"
+    assert (
+        retrieval_results[0]["payload"]["no_evidence_reason_code"]
+        == "retrieval_query_timeout"
+    )
+    assert provider.calls == [(required_query, 1)]
+
+
+def test_sequential_query_set_timeout_cancels_late_routing_model_trace(
+    tmp_path: Path,
+) -> None:
+    query = "ping an yu xiang policy terms"
+    routing_model = SlowOutboundRoutingModel(delay_seconds=0.06)
+    provider = ChainedRoutingAwareKnowledgeProvider(routing_model)
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=provider,
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="What are the main Ping An Yu Xiang insurance clauses?",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query=query,
+                    intent_angle="policy_terms",
+                    required=True,
+                    reason="Policy terms are the direct intent.",
+                ),
+                RetrievalQueryItem(
+                    query="ping an yu xiang coverage",
+                    intent_angle="coverage",
+                    required=False,
+                    reason="Coverage terms may add context.",
+                ),
+            ),
+            max_queries=3,
+            query_timeout_seconds=0.02,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    time.sleep(0.14)
+
+    assert result.evidence_result.status == "failed"
+    assert len(routing_model.calls) == 1
+    events = _read_events(trace.trace_path)
+    retrieval_result_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["event_type"] == "retrieval_result"
+        and event["payload"].get("no_evidence_reason_code") == "retrieval_query_timeout"
+    )
+    assert not any(
+        event["event_type"] in {"model_request", "model_response"}
+        for event in events[retrieval_result_index + 1 :]
+    )
+
+
+def test_sequential_query_set_required_binding_failure_preserves_provider_call_trace(
+    tmp_path: Path,
+) -> None:
+    failing = FakeKnowledgeProvider(
+        provider_name="local_index",
+        error=ProofAgentError(
+            "PA_KNOWLEDGE_002",
+            "selected document failed",
+            "Retry after republishing.",
+        ),
+        retrieval_summaries=(
+            {"document_routing": {"selection_reason": "selected_document_failed"}},
+        ),
+    )
+    trace = TraceWriter(tmp_path / "trace.jsonl", run_id="run_test")
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=PolicyEngine(()),
+        knowledge_provider=_mixed_provider(
+            _bound("ks_required", "kb_required", failing, keywords=("policy",))
+        ),
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="policy terms",
+            strategy="single_step",
+            top_k=1,
+            min_score=0.2,
+            retrieval_query_set=(
+                RetrievalQueryItem(
+                    query="policy terms",
+                    intent_angle="policy_terms",
+                    required=True,
+                    reason="Policy terms are required.",
+                ),
+                RetrievalQueryItem(
+                    query="coverage terms",
+                    intent_angle="coverage",
+                    required=False,
+                    reason="Coverage details are supplemental.",
+                ),
+            ),
+            max_queries=3,
+            query_timeout_seconds=1.0,
+        ),
+        execution_mode="react_reviewed_retrieval",
+    )
+
+    assert result.evidence == ()
+    assert result.evidence_result.status == "failed"
+    retrieval_result = _last_event(trace.trace_path, "retrieval_result")
+    assert retrieval_result["status"] == "error"
+    provider_calls = retrieval_result["payload"]["provider_calls"]
+    assert provider_calls[0]["failure_mode"] == "required"
+    assert provider_calls[0]["document_routing"] == {
+        "selection_reason": "selected_document_failed"
+    }
 
 
 def test_single_step_retrieval_traces_direct_provider_summary(tmp_path: Path) -> None:

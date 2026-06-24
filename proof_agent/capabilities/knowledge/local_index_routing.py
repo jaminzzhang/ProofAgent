@@ -22,6 +22,7 @@ from proof_agent.errors import ProofAgentError
 MAX_ROUTING_MODEL_DOCUMENT_CANDIDATES = 100
 MAX_ROUTING_METADATA_SCALARS = 20
 MAX_ROUTING_METADATA_SCALAR_CHARS = 300
+DOCUMENT_ROUTING_MODEL_TIMEOUT_SECONDS = 30.0
 ROUTING_METADATA_KEYS = (
     "title",
     "description",
@@ -148,6 +149,7 @@ def route_snapshot_documents(
         ),
         provider=routing_model.provider_name,
         model=routing_model.model_name,
+        timeout_seconds=DOCUMENT_ROUTING_MODEL_TIMEOUT_SECONDS,
         response_format="json",
         metadata={"role": ModelCallRole.ROUTING.value},
     )
