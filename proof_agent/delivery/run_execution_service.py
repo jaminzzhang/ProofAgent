@@ -44,12 +44,13 @@ def execute_published_agent_run(
     """Execute one governed run for an already-resolved Published Agent."""
 
     run_id = f"run_{uuid4().hex[:8]}"
+    run_artifact_dir = dependencies.store.create_run_dir(run_id)
     checkpointer = dependencies.approval_resume_registry.checkpointer_for(run_id)
     manifest = load_agent_manifest(published_agent.manifest_path)
     result = run_with_langgraph(
         published_agent.manifest_path,
         question=question,
-        runs_dir=dependencies.runs_dir,
+        runs_dir=run_artifact_dir,
         conversation_context=conversation_context,
         run_id=run_id,
         store=dependencies.store,

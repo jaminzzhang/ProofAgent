@@ -2026,11 +2026,12 @@ def validate_config_draft(
         ) from exc
     run_store = _get_run_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
+    run_artifact_dir = run_store.create_run_dir(run_id)
     try:
         result = run_with_langgraph(
             package_dir / "agent.yaml",
             question=request.question,
-            runs_dir=_get_runs_dir(app_request),
+            runs_dir=run_artifact_dir,
             run_id=run_id,
             store=run_store,
             manifest=manifest,

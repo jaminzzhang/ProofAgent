@@ -3,6 +3,7 @@
 import base64
 import json
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 import pytest
@@ -27,6 +28,8 @@ from proof_agent.contracts import (
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
+    ReceiptOutcome,
+    RunResult,
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.app import create_app
@@ -2890,6 +2893,62 @@ def test_validate_draft_runs_harness_as_validation_run(tmp_path: Path) -> None:
 
     loaded = client.get(f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}")
     assert loaded.json()["validation_records"][0]["run_id"] == body["run_id"]
+
+
+def test_validate_draft_uses_per_run_history_artifact_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    captured: dict[str, Path] = {}
+
+    def fake_run_with_langgraph(agent_yaml: Path, **kwargs: Any) -> RunResult:
+        run_id = str(kwargs["run_id"])
+        runs_dir = Path(kwargs["runs_dir"])
+        captured["runs_dir"] = runs_dir
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        trace_path = runs_dir / "trace.jsonl"
+        receipt_path = runs_dir / "governance_receipt.md"
+        trace_path.write_text(
+            json.dumps({"event_type": "run_started", "run_id": run_id}) + "\n",
+            encoding="utf-8",
+        )
+        receipt_path.write_text("# Receipt\n", encoding="utf-8")
+        kwargs["store"].save_run_artifacts(
+            run_id,
+            trace_source=trace_path,
+            receipt_source=receipt_path,
+            question=str(kwargs["question"]),
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            run_purpose=kwargs["run_purpose"],
+            agent_id=kwargs["agent_id"],
+            draft_id=kwargs["draft_id"],
+        )
+        return RunResult(
+            final_output="ok",
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            trace_path=trace_path,
+            receipt_path=receipt_path,
+        )
+
+    monkeypatch.setattr(
+        configuration_api_module,
+        "run_with_langgraph",
+        fake_run_with_langgraph,
+    )
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={"question": "What is the reimbursement rule for travel meals?"},
+    )
+
+    assert validation.status_code == 200
+    run_id = validation.json()["run_id"]
+    expected_dir = tmp_path / "history" / run_id
+    assert captured["runs_dir"] == expected_dir
+    assert (expected_dir / "trace.jsonl").exists()
+    assert not (tmp_path / "latest" / "trace.jsonl").exists()
 
 
 def test_validation_run_defaults_to_summary_only_trace_capture(tmp_path: Path) -> None:
