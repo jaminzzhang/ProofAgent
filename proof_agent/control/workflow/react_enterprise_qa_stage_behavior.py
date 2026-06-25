@@ -286,179 +286,7 @@ class ReActEnterpriseQAStageBehavior:
         }
 
     def plan(self, state: Mapping[str, Any]) -> dict[str, Any]:
-        if self._uses_loop():
-            return self._plan_loop(state)
         return self._plan_single_pass(state)
-
-    def _uses_loop(self) -> bool:
-        return self.invocation.template.descriptor_version == "react_enterprise_qa.v3"
-
-    def _plan_loop(self, state: Mapping[str, Any]) -> dict[str, Any]:
-        """Controlled ReAct Loop plan pipeline (ADR-0032).
-
-        Budget short-circuit -> Convergence Check (eligible set) -> planner ->
-        Action Constraint -> emit. Accumulates control state
-        (plan_rounds, action_history, evidence_trajectory).
-        """
-
-        from proof_agent.control.workflow.react_enterprise_qa import (
-            compute_eligible_action_set,
-            constrain_action,
-            should_block_duplicate_observation_action,
-            should_stop_for_plan_budget,
-        )
-
-        if self.react is None or self.invocation.react_planner is None:
-            return _refusal("ReAct planner is not configured.")
-
-        plan_rounds = int(state.get("plan_rounds", 0))
-        max_plan_rounds = self.react.max_plan_rounds if self.react is not None else 0
-        if should_stop_for_plan_budget(plan_rounds, max_plan_rounds):
-            return _refusal(
-                "The plan round budget was exhausted before an answer could be produced."
-            )
-
-        action_history = list(state.get("action_history", []))
-        evidence_trajectory = list(state.get("evidence_trajectory", []))
-        observations = list(state.get("observations", []))
-        answer_ready_blockers = [
-            dict(blocker)
-            for blocker in list(state.get("answer_ready_blockers", []))
-            if isinstance(blocker, Mapping)
-        ]
-        eligible_set, convergence_signal = compute_eligible_action_set(
-            plan_rounds=plan_rounds,
-            max_plan_rounds=max_plan_rounds,
-            action_history=action_history,
-            evidence_trajectory=evidence_trajectory,
-            observations=observations,
-            answer_ready_blockers=answer_ready_blockers,
-        )
-
-        if convergence_signal == "answer_ready":
-            proposal = _model_action_proposal(str(state["question"]))
-            self.trace.emit(
-                "answer_ready_finalization_forced",
-                status="ok",
-                payload={
-                    "action_id": proposal.action_id,
-                    "action_type": proposal.action_type.value,
-                    "answer_ready_blockers": answer_ready_blockers,
-                    "convergence_signal": convergence_signal,
-                },
-            )
-            emit_reasoning_summary(self.trace, proposal)
-            emit_action_proposal(self.trace, proposal)
-            return {
-                "plan_rounds": plan_rounds + 1,
-                "action": _proposal_state_dict(proposal),
-                "reasoning_summary": _reasoning_summary_state_dict(proposal),
-                "answer_ready_blockers": answer_ready_blockers,
-                "action_history": [
-                    {
-                        "action_type": proposal.action_type.value,
-                        "parameters": dict(proposal.parameters),
-                    }
-                ],
-                "last_convergence_signal": convergence_signal,
-                "stage_llm_interactions": [],
-            }
-
-        stage_context: Mapping[str, Any] | None = None
-        try:
-            stage_context = self.configured_stage_context("plan", state)
-            proposal = self.invocation.react_planner.plan(
-                question=state["question"],
-                system_prompt="Use governed ReAct planning without raw chain-of-thought.",
-                context_summary=_planner_context_summary(
-                    state,
-                    plan_rounds=plan_rounds,
-                    eligible_set=eligible_set,
-                    convergence_signal=convergence_signal,
-                    action_history=action_history,
-                    evidence_trajectory=evidence_trajectory,
-                ),
-                workflow_stage_context=stage_context,
-                eligible_actions=eligible_set,
-            )
-        except ModelOutputNormalizationError as exc:
-            return self._plan_normalization_failure(state, stage_context, exc)
-
-        llm_interactions = _drain_stage_llm_interactions(
-            self.invocation.react_planner,
-            stage_id="plan",
-            stage_label=self._stage_label("plan"),
-        )
-
-        proposal, rewrite = constrain_action(
-            proposal, eligible_set, convergence_signal=convergence_signal
-        )
-        if rewrite is not None:
-            self.trace.emit(
-                "action_constrained",
-                status="ok",
-                payload={
-                    "action_id": proposal.action_id,
-                    "original_action_type": rewrite.original_action_type.value,
-                    "constrained_to": rewrite.constrained_to.value,
-                    "reason": rewrite.reason,
-                    "eligible_set": [action.value for action in rewrite.eligible_set],
-                    "convergence_signal": convergence_signal,
-                },
-            )
-
-        if should_block_duplicate_observation_action(
-            proposal,
-            action_history=action_history,
-            observations=observations,
-        ):
-            self.trace.emit(
-                "observation_action_deduplicated",
-                status="ok",
-                payload={
-                    "action_id": proposal.action_id,
-                    "original_action_type": proposal.action_type.value,
-                    "constrained_to": ReActActionType.GENERATE_FINAL_ANSWER.value,
-                    "reason": "duplicate_observation_action",
-                },
-            )
-            proposal = proposal.model_copy(
-                update={
-                    "action_type": ReActActionType.GENERATE_FINAL_ANSWER,
-                    "parameters": {},
-                }
-            )
-            convergence_signal = "observation_action_deduplicated"
-
-        emit_reasoning_summary(self.trace, proposal)
-        emit_action_proposal(self.trace, proposal)
-        delta: dict[str, Any] = {
-            "plan_rounds": plan_rounds + 1,
-            "action": _proposal_state_dict(proposal),
-            "reasoning_summary": _reasoning_summary_state_dict(proposal),
-            "action_history": [
-                {
-                    "action_type": proposal.action_type.value,
-                    "parameters": dict(proposal.parameters),
-                }
-            ],
-            "last_convergence_signal": convergence_signal,
-            **_stage_context_applications_delta(state, stage_context),
-            "stage_llm_interactions": llm_interactions,
-        }
-        if proposal.action_type is ReActActionType.REFUSE:
-            message = (
-                "I cannot answer because the planner selected a governed refusal "
-                "instead of producing an evidence-backed answer."
-            )
-            delta.update(
-                {
-                    "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
-                    "governance_message": message,
-                    "final_output": message,
-                }
-            )
-        return delta
 
     def _plan_normalization_failure(
         self,
@@ -695,27 +523,11 @@ class ReActEnterpriseQAStageBehavior:
                     memory_stage_context,
                 ),
             }
-        accepted_before = len(list(state.get("evidence", [])))
-        accepted_count = int(evidence_result.metadata.get("accepted_count", len(evidence)))
         evidence_state = [_evidence_state_dict(chunk) for chunk in evidence]
-        from proof_agent.control.workflow.react_enterprise_qa import (
-            build_retrieval_observation_record,
-        )
 
         return {
             "review_results": [step_review_event],
             "evidence": evidence_state,
-            "evidence_trajectory": [accepted_count],
-            "observations": [
-                build_retrieval_observation_record(
-                    action_id=proposal.action_id,
-                    action_type=proposal.action_type,
-                    plan_round=int(state.get("plan_rounds", 0)),
-                    accepted_before=accepted_before,
-                    accepted_after=accepted_count,
-                    evidence=evidence_state,
-                )
-            ],
             **_stage_context_applications_delta(
                 state,
                 retrieval_stage_context,
@@ -811,9 +623,6 @@ class ReActEnterpriseQAStageBehavior:
             response=model_response,
             outcome=outcome,
             evidence=evidence,
-            observation_records=tuple(
-                item for item in state.get("observations", ()) if isinstance(item, Mapping)
-            ),
         )
         for validation in validation_results:
             self.trace.emit(
@@ -1555,45 +1364,6 @@ def _intent_context_summary(state: Mapping[str, Any]) -> str:
         f"ambiguities={resolution.get('ambiguities', [])}; "
         f"recommended_next_action={resolution.get('recommended_next_action', '')}."
     )
-
-
-def _planner_context_summary(
-    state: Mapping[str, Any],
-    *,
-    plan_rounds: int,
-    eligible_set: frozenset[ReActActionType],
-    convergence_signal: str | None,
-    action_history: list[Mapping[str, Any]],
-    evidence_trajectory: list[int],
-) -> str:
-    intent_summary = _intent_context_summary(state)
-    eligible_actions = ",".join(
-        action.value for action in sorted(eligible_set, key=lambda item: item.value)
-    )
-    accepted_evidence_count = (
-        evidence_trajectory[-1]
-        if evidence_trajectory
-        else len(state.get("evidence", ()) or ())
-    )
-    previous_evidence_count = (
-        evidence_trajectory[-2]
-        if len(evidence_trajectory) > 1
-        else 0
-    )
-    evidence_growth = accepted_evidence_count - previous_evidence_count
-    last_action = action_history[-1] if action_history else {}
-    loop_summary = (
-        "Loop Control: "
-        f"plan_round={plan_rounds}; "
-        f"eligible_actions={eligible_actions}; "
-        f"last_convergence_signal={convergence_signal or 'none'}; "
-        f"accepted_evidence_count={accepted_evidence_count}; "
-        f"evidence_growth_since_last_round={evidence_growth}; "
-        f"last_action_type={last_action.get('action_type', 'none')}."
-    )
-    if intent_summary:
-        return f"{intent_summary}\n{loop_summary}"
-    return loop_summary
 
 
 def _workflow_stage_runtime_sample_context(

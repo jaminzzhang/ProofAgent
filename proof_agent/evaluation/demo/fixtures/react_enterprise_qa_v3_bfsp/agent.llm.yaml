@@ -2,7 +2,7 @@ name: react_enterprise_qa_v3_bfsp_llm
 purpose: "Run V3 intent execution with LLM-backed intent resolution, planning, review, and Business Flow Skill Pack routing."
 
 workflow:
-  runtime: langgraph
+  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
   checkpointer:

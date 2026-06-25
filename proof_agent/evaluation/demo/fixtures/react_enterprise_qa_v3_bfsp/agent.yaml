@@ -2,7 +2,7 @@ name: react_enterprise_qa_v3_bfsp
 purpose: "Answer enterprise knowledge questions through the governed Controlled ReAct Loop with Business Flow Skill Pack recommendation and admission."
 
 workflow:
-  runtime: langgraph
+  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
   checkpointer:

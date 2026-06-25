@@ -161,9 +161,6 @@ def run_with_langgraph(
         "review_results": [],
         "stage_results": [],
         "stage_context_applications": [],
-        # Controlled ReAct Loop control state (ADR-0032).
-        "action_history": [],
-        "evidence_trajectory": [],
     }
     config = {"configurable": {"thread_id": actual_run_id}}
 
@@ -382,16 +379,22 @@ def resume_langgraph_approval(
 
 
 def _ensure_executable_template(manifest: AgentManifest, agent_yaml: Path) -> None:
+    if manifest.workflow.template == "react_enterprise_qa_v3":
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "react_enterprise_qa_v3 is executed by the Controlled ReAct Orchestrator, not run_with_langgraph.",
+            "Start v3 through the Run Execution API or Controlled ReAct Orchestrator.",
+            artifact_path=agent_yaml,
+        )
     if manifest.workflow.template not in {
         "enterprise_qa",
         "react_enterprise_qa",
         "react_enterprise_qa_v2",
-        "react_enterprise_qa_v3",
     }:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"workflow template is not executable yet: {manifest.workflow.template}",
-            "Use workflow.template: enterprise_qa, react_enterprise_qa, react_enterprise_qa_v2, or react_enterprise_qa_v3.",
+            "Use workflow.template: enterprise_qa, react_enterprise_qa, or react_enterprise_qa_v2.",
             artifact_path=agent_yaml,
         )
 

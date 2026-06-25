@@ -41,6 +41,12 @@ from proof_agent.contracts.conversation import (
     ConversationRecord,
     ConversationTurn,
 )
+from proof_agent.contracts.controlled_react import (
+    ControlledReActRunPhase,
+    ControlledReActRunState,
+    ControlledReActRunStateSnapshot,
+    ObservationRecord,
+)
 from proof_agent.contracts.customer import (
     CustomerAuthorizationContext,
     CustomerConversationRecord,
@@ -259,6 +265,9 @@ __all__ = [
     "ContractBundle",
     "ClarificationNeed",
     "ContextAdmission",
+    "ControlledReActRunPhase",
+    "ControlledReActRunState",
+    "ControlledReActRunStateSnapshot",
     "ConversationRecord",
     "ConversationTurn",
     "CustomerAuthorizationContext",
@@ -373,6 +382,7 @@ __all__ = [
     "ModelRequest",
     "ModelResponse",
     "ModelRole",
+    "ObservationRecord",
     "PackageKnowledgeSourceConfig",
     "PendingApproval",
     "PolicyConfig",

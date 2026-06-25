@@ -20,6 +20,7 @@ from proof_agent.contracts import (
 from proof_agent.control.workflow.react_enterprise_qa_execution import (
     ReActEnterpriseQAWorkflowExecution,
 )
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.runtime.workflow_stage_adapter import (
     WorkflowStageResultRuntimeAdapter,
@@ -52,13 +53,6 @@ class ReActGraphState(TypedDict, total=False):
     governance_refusal: ReceiptOutcome | None
     governance_message: str | None
     final_output: str | None
-    # Controlled ReAct Loop control state (ADR-0032). Control state, not logs.
-    action_history: Annotated[list[dict[str, Any]], operator.add]
-    evidence_trajectory: Annotated[list[int], operator.add]
-    observations: Annotated[list[dict[str, Any]], operator.add]
-    answer_ready_blockers: list[dict[str, Any]]
-    last_convergence_signal: str | None
-
 
 def build_react_enterprise_qa_graph(
     invocation: HarnessInvocation,
@@ -68,11 +62,13 @@ def build_react_enterprise_qa_graph(
     allow_untrusted_web_supplement: bool = False,
 ) -> StateGraph:  # type: ignore[type-arg]
     descriptor_version = invocation.template.descriptor_version
-    uses_intent_resolution = descriptor_version in (
-        "react_enterprise_qa.v2",
-        "react_enterprise_qa.v3",
-    )
-    uses_loop = descriptor_version == "react_enterprise_qa.v3"
+    if descriptor_version == "react_enterprise_qa.v3":
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "react_enterprise_qa.v3 is executed by the Controlled ReAct Orchestrator, not the LangGraph React graph.",
+            "Start v3 through the Run Execution API or Controlled ReAct Orchestrator.",
+        )
+    uses_intent_resolution = descriptor_version == "react_enterprise_qa.v2"
     execution = ReActEnterpriseQAWorkflowExecution(
         invocation=invocation,
         trace=trace,
@@ -114,37 +110,25 @@ def build_react_enterprise_qa_graph(
         )
     else:
         builder.add_edge(START, "plan")
-    plan_router = loop_route_after_plan if uses_loop else _route_after_plan
     builder.add_conditional_edges(
         "plan",
-        plan_router,
-        (
-            {
-                "clarify": "clarify",
-                "review_tool": "review_tool",
-                "review_retrieval_plan": "review_retrieval_plan",
-                "model": "model",
-                "end": END,
-            }
-            if uses_loop
-            else {
-                "clarify": "clarify",
-                "review_tool": "review_tool",
-                "review_retrieval_plan": "review_retrieval_plan",
-                "end": END,
-            }
-        ),
+        _route_after_plan,
+        {
+            "clarify": "clarify",
+            "review_tool": "review_tool",
+            "review_retrieval_plan": "review_retrieval_plan",
+            "end": END,
+        },
     )
     builder.add_conditional_edges(
         "review_retrieval_plan",
         _route_after_review,
         {"retrieval": "retrieval", "end": END},
     )
-    retrieval_router = loop_route_after_retrieval if uses_loop else _route_after_retrieval
     builder.add_conditional_edges(
         "retrieval",
-        retrieval_router,
-        ({"plan": "plan", "end": END} if uses_loop else {"model": "model", "end": END}),
+        _route_after_retrieval,
+        {"model": "model", "end": END},
     )
     builder.add_edge("model", END)
     builder.add_conditional_edges(
@@ -152,11 +136,7 @@ def build_react_enterprise_qa_graph(
         _route_after_tool_review,
         {"tool": "tool", "end": END},
     )
-    tool_router = loop_route_after_tool if uses_loop else _terminal_route
-    if uses_loop:
-        builder.add_conditional_edges("tool", tool_router, {"plan": "plan", "end": END})
-    else:
-        builder.add_edge("tool", END)
+    builder.add_edge("tool", END)
     builder.add_edge("clarify", END)
     return builder
 
@@ -193,42 +173,6 @@ def _route_after_retrieval(state: ReActGraphState) -> str:
 
 def _route_after_tool_review(state: ReActGraphState) -> str:
     return "end" if state.get("governance_refusal") else "tool"
-
-
-# --- Controlled ReAct Loop routing (ADR-0032, v3 template) ---
-# Loop semantics: observation actions (retrieval, tool) return to plan; only
-# terminal actions (GENERATE_FINAL_ANSWER, REFUSE) and governance refusal end
-# the loop. These coexist with the single-pass _route_after_* functions used by
-# the v1/v2 compatibility paths.
-
-
-def loop_route_after_plan(state: ReActGraphState) -> str:
-    if state.get("governance_refusal"):
-        return "end"
-    action = _proposal_from_state(state).action_type
-    if action == ReActActionType.GENERATE_FINAL_ANSWER:
-        return "model"
-    if action == ReActActionType.REFUSE:
-        return "end"
-    if action == ReActActionType.ASK_CLARIFICATION:
-        return "clarify"
-    if action == ReActActionType.PROPOSE_TOOL_CALL:
-        return "review_tool"
-    if action == ReActActionType.PLAN_RETRIEVAL:
-        return "review_retrieval_plan"
-    return "end"
-
-
-def loop_route_after_retrieval(state: ReActGraphState) -> str:
-    # Observation action: success returns to plan to re-plan with the new
-    # observation; governance refusal ends the loop.
-    return "end" if state.get("governance_refusal") else "plan"
-
-
-def loop_route_after_tool(state: ReActGraphState) -> str:
-    # Observation action: success returns to plan with the tool observation;
-    # governance refusal ends the loop.
-    return "end" if state.get("governance_refusal") else "plan"
 
 
 def _add_node(builder: StateGraph, name: str, node: Any) -> None:  # type: ignore[type-arg]

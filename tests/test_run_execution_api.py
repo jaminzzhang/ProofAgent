@@ -133,6 +133,31 @@ def _copy_react_v2_agent_with_response_details(tmp_path: Path) -> Path:
     return manifest_path
 
 
+def _copy_react_v3_agent_with_unique_knowledge(tmp_path: Path) -> Path:
+    agent_dir = tmp_path / "react_enterprise_qa_v3_unique"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    knowledge_dir = agent_dir / "knowledge"
+    for path in knowledge_dir.glob("*.md"):
+        path.unlink()
+    (knowledge_dir / "sapphire-meals.md").write_text(
+        "# Sapphire Meal Policy\n\n"
+        "## Reimbursement\n\n"
+        "Sapphire meals are reimbursed up to 77 USD per day when the traveler "
+        "keeps the sapphire meal receipt.\n",
+        encoding="utf-8",
+    )
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    manifest_path.write_text(
+        manifest_text.replace("name: react_enterprise_qa_v3", "name: react_enterprise_qa_v3_unique"),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
 def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Path) -> None:
     app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
     client = TestClient(app)
@@ -189,19 +214,19 @@ def test_chat_run_response_includes_citation_refs_when_available(
     assert detail.json()["citation_refs"] == body["citation_refs"]
 
 
-def test_chat_run_executes_v3_business_flow_agent_through_published_path(
+def test_chat_run_executes_v3_agent_through_controlled_react_orchestrator(
     tmp_path: Path,
 ) -> None:
     app = _app_with_published_agent(
         tmp_path,
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3_bfsp/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
     )
     client = TestClient(app)
 
     response = client.post(
         "/api/chat/runs",
         json={
-            "agent_id": "react_enterprise_qa_v3_bfsp",
+            "agent_id": "react_enterprise_qa_v3",
             "question": "What is the reimbursement rule for travel meals?",
         },
     )
@@ -209,21 +234,141 @@ def test_chat_run_executes_v3_business_flow_agent_through_published_path(
     assert response.status_code == 200
     body = response.json()
     assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
+    assert body["final_output"]
 
     detail = client.get(f"/api/runs/{body['run_id']}")
     assert detail.status_code == 200
     detail_body = detail.json()
+    trace = client.get(f"/api/runs/{body['run_id']}/trace").json()
+    run_started = next(
+        event for event in trace["events"] if event["event_type"] == "run_started"
+    )
+    assert run_started["payload"]["runtime"] == "controlled_react_orchestrator"
     assert detail_body["workflow_projection"]["template_descriptor_version"] == (
         "react_enterprise_qa.v3"
     )
-    governance = detail_body["governance_details"]
-    assert governance["business_flow_skill_pack_recommendation"][
-        "recommendation_type"
-    ] == "single_pack"
-    assert governance["business_flow_skill_pack_admission"]["decision"] == "admitted"
-    assert governance["business_flow_skill_pack_admission"]["selected_pack_id"] == (
-        "enterprise_policy_qa"
+
+
+def test_chat_run_v3_uses_configured_knowledge_provider(tmp_path: Path) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        _copy_react_v3_agent_with_unique_knowledge(tmp_path),
     )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa_v3_unique",
+            "question": "What is the sapphire meal reimbursement rule?",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
+    assert "77 USD" in body["final_output"]
+    assert body["citation_refs"]
+    assert body["citation_refs"][0]["citation"] == (
+        "sapphire-meals.md#reimbursement:L3-L5"
+    )
+
+
+def test_chat_run_v3_uses_configured_tool_policy_for_denial(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "react_enterprise_qa_v3_tool_deny"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "name: react_enterprise_qa_v3",
+            "name: react_enterprise_qa_v3_tool_deny",
+        ),
+        encoding="utf-8",
+    )
+    policy_path = agent_dir / "policy.yaml"
+    policy_path.write_text(
+        policy_path.read_text(encoding="utf-8").replace(
+            "on_match: require_approval",
+            "on_match: deny",
+        ),
+        encoding="utf-8",
+    )
+    app = _app_with_published_agent(
+        tmp_path,
+        manifest_path,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa_v3_tool_deny",
+            "question": "Please look up customer policy status for CUST-001.",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "TOOL_APPROVAL_DENIED"
+    assert body["approval_state"] is None
+    assert body["pending_approvals"] == []
+
+
+def test_chat_run_v3_approval_endpoint_resumes_after_restart_with_tool_gateway(
+    tmp_path: Path,
+) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+    )
+    client = TestClient(app)
+
+    waiting = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa_v3",
+            "question": "Please look up customer policy status for CUST-001.",
+        },
+    )
+
+    assert waiting.status_code == 200
+    waiting_body = waiting.json()
+    approval = waiting_body["pending_approvals"][0]
+    assert approval["tool_name"] == "customer_lookup"
+    assert approval["checkpoint_ref"].startswith("controlled-react://")
+
+    restarted_store = LocalAgentConfigurationStore(tmp_path / "config")
+    restarted_app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        published_agents={},
+        agent_configuration_store=restarted_store,
+    )
+    restarted_client = TestClient(restarted_app)
+
+    approved = restarted_client.post(
+        f"/api/runs/{waiting_body['run_id']}/approvals/{approval['approval_id']}/approve",
+    )
+
+    assert approved.status_code == 200
+    approved_body = approved.json()
+    assert approved_body["outcome"] == "ANSWERED_WITH_CITATIONS"
+    assert approved_body["approval_state"]["state"] == "granted"
+    assert approved_body["pending_approvals"] == []
+    event_types = [event["event_type"] for event in approved_body["trace_events"]]
+    assert event_types.count("pending_approval_created") == 1
+    assert event_types.count("tool_result") == 1
+    tool_result = next(
+        event for event in approved_body["trace_events"] if event["event_type"] == "tool_result"
+    )
+    assert tool_result["payload"]["tool_name"] == "customer_lookup"
+    assert tool_result["payload"]["result"]["status"] == "active"
+    final_output = approved_body["trace_events"][-1]
+    assert final_output["event_type"] == "final_output"
+    assert "active" in final_output["payload"]["message"]
 
 
 def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:

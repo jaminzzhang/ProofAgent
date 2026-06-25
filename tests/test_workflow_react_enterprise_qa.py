@@ -43,6 +43,7 @@ from proof_agent.control.workflow.react_enterprise_qa_stage_behavior import (
     _llm_interaction_capture,
 )
 from proof_agent.control.workflow.harness_helpers import build_model_request
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_with_langgraph
 
@@ -50,9 +51,6 @@ from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_
 REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_V2_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml")
 REACT_V3_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
-REACT_V3_BFSP_AGENT = Path(
-    "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3_bfsp/agent.yaml"
-)
 
 
 def _trace_events(path: Path) -> list[dict[str, Any]]:
@@ -162,7 +160,7 @@ def test_react_execution_clarification_returns_workflow_stage_result(
     )
 
 
-def test_react_execution_retrieval_returns_observation_record(
+def test_react_execution_retrieval_returns_evidence(
     tmp_path: Path,
 ) -> None:
     execution = _react_execution(tmp_path)
@@ -181,15 +179,10 @@ def test_react_execution_retrieval_returns_observation_record(
 
     result = execution.retrieval(state)
 
-    assert "observations" in result.produced_fact_refs
-    observation = result.continuation["observations"][0]
-    assert observation["action_id"] == "act_retrieval_1"
-    assert observation["action_type"] == "plan_retrieval"
-    assert observation["truth_ref"] == "evidence"
-    assert observation["accepted_evidence_count"] == 1
-    assert observation["new_evidence_count"] == 1
-    assert list(observation["unresolved_subgoals"]) == []
-    assert list(observation["citation_refs"])
+    assert "evidence" in result.produced_fact_refs
+    evidence = result.continuation["evidence"][0]
+    assert evidence["source"] == "customer-support-policy.md"
+    assert evidence["citation"]
 
 
 def test_text_llm_interaction_capture_does_not_report_json_parse_failure() -> None:
@@ -689,47 +682,18 @@ admission:
     assert admission_event["payload"]["selected_pack_id"] is None
 
 
-def test_v3_business_flow_fixture_admits_pack_and_applies_stage_context(
+def test_langgraph_runner_rejects_v3_template(
     tmp_path: Path,
 ) -> None:
-    result = run_with_langgraph(
-        REACT_V3_BFSP_AGENT,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "run",
-    )
+    with pytest.raises(ProofAgentError) as exc:
+        run_with_langgraph(
+            REACT_V3_AGENT,
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
 
-    assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    events = _trace_events(result.trace_path)
-    event_types = _event_types(events)
-    config_event = next(
-        event
-        for event in events
-        if event["event_type"] == "workflow_stage_configuration_trace_summary"
-    )
-    assert config_event["payload"]["template_descriptor_version"] == (
-        "react_enterprise_qa.v3"
-    )
-    assert event_types.index("intent_resolution") < event_types.index(
-        "business_flow_skill_pack_recommendation"
-    )
-    assert event_types.index("business_flow_skill_pack_recommendation") < (
-        event_types.index("business_flow_skill_pack_admission")
-    )
-    admission_event = next(
-        event
-        for event in events
-        if event["event_type"] == "business_flow_skill_pack_admission"
-    )
-    assert admission_event["payload"]["decision"] == "admitted"
-    assert admission_event["payload"]["selected_pack_id"] == "enterprise_policy_qa"
-    assert any(
-        event["event_type"] == "workflow_stage_context_applied"
-        and event["payload"].get("stage_id") == "plan"
-        and event["payload"].get("context_source") == "business_flow_skill_pack"
-        and event["payload"].get("business_flow_skill_pack_id")
-        == "enterprise_policy_qa"
-        for event in events
-    )
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "Controlled ReAct Orchestrator" in exc.value.message
 
 
 def test_v2_business_flow_clarification_waits_for_user_input(
@@ -1669,311 +1633,3 @@ class FakeControlPlaneProvider:
             model_name=self.model_name,
             finish_reason="stop",
         )
-
-
-def _loop_proposal(action_type: ReActActionType, *, action_id: str) -> ReActActionProposal:
-    return ReActActionProposal(
-        action_id=action_id,
-        action_type=action_type,
-        reasoning_summary=ReasoningSummary(
-            goal="Controlled ReAct Loop test proposal.",
-            observations=(),
-            candidate_actions=(action_type,),
-            selected_action=action_type,
-            rationale_summary="loop test",
-            risk_flags=(),
-            required_evidence=(),
-        ),
-        parameters={"query": "travel meal reimbursement"} if action_type is ReActActionType.PLAN_RETRIEVAL else {},
-        risk_level="low",
-    )
-
-
-class _SequencePlanner:
-    """ReAct planner returning a scripted proposal sequence for loop tests."""
-
-    def __init__(self, proposals: list[ReActActionProposal]) -> None:
-        self._proposals = list(proposals)
-        self.calls = 0
-        self.context_summaries: list[str] = []
-        self.workflow_stage_contexts: list[Any] = []
-        self.eligible_action_sets: list[tuple[str, ...]] = []
-
-    def plan(
-        self,
-        *,
-        question: str,
-        system_prompt: str,
-        context_summary: str,
-        workflow_stage_context: Any = None,
-        eligible_actions: Any = None,
-    ) -> ReActActionProposal:
-        _ = (question, system_prompt)
-        self.context_summaries.append(context_summary)
-        self.workflow_stage_contexts.append(workflow_stage_context)
-        self.eligible_action_sets.append(
-            tuple(
-                sorted(
-                    action.value if hasattr(action, "value") else str(action)
-                    for action in (eligible_actions or ())
-                )
-            )
-        )
-        index = min(self.calls, len(self._proposals) - 1)
-        self.calls += 1
-        return self._proposals[index]
-
-
-def test_v3_loop_returns_to_plan_after_retrieval_then_converges(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """RED (slice 4): the v3 loop returns to plan after retrieval and converges.
-
-    Sequence [PLAN_RETRIEVAL, GENERATE_FINAL_ANSWER] must produce two plan
-    rounds: round 1 retrieves, round 2 generates. The retrieval back-edge is
-    the load-bearing loop mechanic under test.
-    """
-
-    planner = _SequencePlanner(
-        [
-            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
-            _loop_proposal(ReActActionType.GENERATE_FINAL_ANSWER, action_id="act_round_2"),
-        ]
-    )
-    monkeypatch.setattr(
-        "proof_agent.bootstrap.composition.resolve_react_planner",
-        lambda *args, **kwargs: planner,
-    )
-
-    result = run_with_langgraph(
-        REACT_V3_AGENT,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "runs",
-    )
-
-    assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    events = _trace_events(result.trace_path)
-    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
-    stage_ids = [event["payload"]["stage_id"] for event in stage_events]
-
-    # Loop must visit plan twice: round 1 (retrieval) -> plan -> synthetic generate.
-    assert stage_ids.count("plan") == 2
-    assert "retrieval" in stage_ids
-    assert "model_answer" in stage_ids
-    # Retrieval is followed by a return to plan, not directly by model_answer.
-    assert stage_ids.index("retrieval") < stage_ids.index("model_answer")
-    # The second plan round is deterministic answer-ready finalization.
-    assert planner.calls == 1
-
-
-def test_v3_loop_answer_ready_does_not_send_observation_state_to_planner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    planner = _SequencePlanner(
-        [
-            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
-            _loop_proposal(ReActActionType.GENERATE_FINAL_ANSWER, action_id="act_round_2"),
-        ]
-    )
-    monkeypatch.setattr(
-        "proof_agent.bootstrap.composition.resolve_react_planner",
-        lambda *args, **kwargs: planner,
-    )
-
-    result = run_with_langgraph(
-        REACT_V3_AGENT,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "runs",
-    )
-
-    assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    assert planner.calls == 1
-    assert len(planner.context_summaries) == 1
-    events = _trace_events(result.trace_path)
-    assert "answer_ready_finalization_forced" in _event_types(events)
-
-
-def test_v3_deterministic_planner_answers_after_evidence_without_constraint(
-    tmp_path: Path,
-) -> None:
-    result = run_with_langgraph(
-        REACT_V3_AGENT,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "runs",
-    )
-
-    assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    events = _trace_events(result.trace_path)
-    assert "action_constrained" not in _event_types(events)
-    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
-    stage_ids = [event["payload"]["stage_id"] for event in stage_events]
-    assert stage_ids.count("plan") == 2
-    assert "retrieval" in stage_ids
-    assert "model_answer" in stage_ids
-
-
-def test_v3_loop_answer_ready_synthetic_finalization_bypasses_planner_refusal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    planner = _SequencePlanner(
-        [
-            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
-            _loop_proposal(ReActActionType.REFUSE, action_id="act_round_2"),
-        ]
-    )
-    monkeypatch.setattr(
-        "proof_agent.bootstrap.composition.resolve_react_planner",
-        lambda *args, **kwargs: planner,
-    )
-
-    result = run_with_langgraph(
-        REACT_V3_AGENT,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "runs",
-    )
-
-    assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    assert planner.calls == 1
-    events = _trace_events(result.trace_path)
-    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
-    stage_ids = [event["payload"]["stage_id"] for event in stage_events]
-    assert stage_ids.count("plan") == 2
-    assert "model_answer" in stage_ids
-    forced_events = [
-        event
-        for event in events
-        if event["event_type"] == "answer_ready_finalization_forced"
-    ]
-    assert len(forced_events) == 1
-    assert forced_events[0]["payload"]["action_type"] == "generate_final_answer"
-    assert forced_events[0]["payload"]["answer_ready_blockers"] == []
-
-
-def test_v3_loop_answer_ready_blocker_prevents_synthetic_finalization(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    planner = _SequencePlanner(
-        [
-            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
-            _loop_proposal(ReActActionType.GENERATE_FINAL_ANSWER, action_id="act_round_2"),
-        ]
-    )
-    monkeypatch.setattr(
-        "proof_agent.bootstrap.composition.resolve_react_planner",
-        lambda *args, **kwargs: planner,
-    )
-    original_retrieval = ReActEnterpriseQAWorkflowExecution.retrieval
-
-    def retrieval_with_answer_ready_blocker(
-        self: ReActEnterpriseQAWorkflowExecution,
-        state: dict[str, Any],
-    ) -> WorkflowStageResult:
-        result = original_retrieval(self, state)
-        continuation = {
-            **dict(result.continuation),
-            "answer_ready_blockers": [
-                {
-                    "code": "citation_binding_impossible",
-                    "reason": "accepted evidence cannot be bound to citations",
-                    "source_ref": "citation_gate",
-                }
-            ],
-        }
-        return result.model_copy(update={"continuation": continuation})
-
-    monkeypatch.setattr(
-        ReActEnterpriseQAWorkflowExecution,
-        "retrieval",
-        retrieval_with_answer_ready_blocker,
-    )
-
-    result = run_with_langgraph(
-        REACT_V3_AGENT,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "runs",
-    )
-
-    assert result.outcome == "REFUSED_NO_EVIDENCE"
-    assert planner.calls == 2
-    assert planner.eligible_action_sets[-1] == ("refuse",)
-    events = _trace_events(result.trace_path)
-    assert "answer_ready_finalization_forced" not in _event_types(events)
-    constraint = next(event for event in events if event["event_type"] == "action_constrained")
-    assert constraint["payload"]["original_action_type"] == "generate_final_answer"
-    assert constraint["payload"]["constrained_to"] == "refuse"
-
-
-def test_v3_loop_answer_ready_converges_before_repeated_retrieval(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Answer-ready convergence prevents a second equivalent retrieval round.
-
-    Sequence [PLAN_RETRIEVAL, PLAN_RETRIEVAL, GENERATE_FINAL_ANSWER] used to
-    spend two retrieval rounds. Once the first retrieval writes accepted
-    evidence with no unresolved subgoals, the second plan round synthesizes
-    final answer generation without calling the planner again.
-    """
-
-    planner = _SequencePlanner(
-        [
-            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
-            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_2"),
-            _loop_proposal(ReActActionType.GENERATE_FINAL_ANSWER, action_id="act_round_3"),
-        ]
-    )
-    monkeypatch.setattr(
-        "proof_agent.bootstrap.composition.resolve_react_planner",
-        lambda *args, **kwargs: planner,
-    )
-
-    result = run_with_langgraph(
-        REACT_V3_AGENT,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "runs",
-    )
-
-    assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    events = _trace_events(result.trace_path)
-    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
-    stage_ids = [event["payload"]["stage_id"] for event in stage_events]
-
-    assert stage_ids.count("plan") == 2
-    assert stage_ids.count("retrieval") == 1
-    assert "model_answer" in stage_ids
-    assert planner.calls == 1
-    assert len(planner.eligible_action_sets) == 1
-    assert "answer_ready_finalization_forced" in _event_types(events)
-
-
-def test_v3_loop_answer_ready_synthetic_finalization_preempts_repeated_retrieval(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Answer-ready synthetic finalization preempts a repeated retrieval proposal.
-
-    Once the first retrieval writes accepted evidence with no unresolved
-    subgoals, the second scripted PLAN_RETRIEVAL is never requested from the
-    planner. The Control Plane emits a synthetic final-answer action instead.
-    """
-
-    planner = _SequencePlanner(
-        [
-            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_1"),
-            _loop_proposal(ReActActionType.PLAN_RETRIEVAL, action_id="act_round_2"),
-        ]
-    )
-    monkeypatch.setattr(
-        "proof_agent.bootstrap.composition.resolve_react_planner",
-        lambda *args, **kwargs: planner,
-    )
-
-    result = run_with_langgraph(
-        REACT_V3_AGENT,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "runs",
-    )
-
-    assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    events = _trace_events(result.trace_path)
-    assert planner.calls == 1
-    assert "answer_ready_finalization_forced" in _event_types(events)
-    assert "action_constrained" not in _event_types(events)

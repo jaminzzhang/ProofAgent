@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
+    ControlledReActRunStateSnapshot,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
     WorkflowTemplateExecutionInput,
@@ -73,6 +75,61 @@ class LangGraphApprovalResumeContext:
     draft_id: str | None = None
     allow_untrusted_web_supplement: bool = False
     workflow_template_execution_input: WorkflowTemplateExecutionInput | None = None
+
+
+@dataclass(frozen=True)
+class ControlledReActApprovalResumeContext:
+    """Runtime context required to resume one approval-interrupted Controlled ReAct run."""
+
+    agent_yaml: Path
+    run_id: str
+    question: str
+    manifest: AgentManifest
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
+    configuration_store: LocalAgentConfigurationStore | None = None
+    run_purpose: RunPurpose = RunPurpose.PRODUCTION
+    agent_id: str | None = None
+    agent_version_id: str | None = None
+    draft_id: str | None = None
+
+
+CONTROLLED_REACT_SNAPSHOT_REF_PREFIX = "controlled-react://"
+
+
+class FileControlledReActSnapshotStore:
+    """Disk-backed snapshot store for Controlled ReAct approval resume."""
+
+    def __init__(self, root_dir: Path) -> None:
+        self._root_dir = root_dir
+
+    def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
+        path = self._snapshot_path(snapshot.run_id, snapshot.snapshot_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(_model_payload(snapshot), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return (
+            f"{CONTROLLED_REACT_SNAPSHOT_REF_PREFIX}"
+            f"{snapshot.run_id}/{snapshot.snapshot_id}"
+        )
+
+    def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
+        run_id, snapshot_id = _parse_controlled_react_snapshot_ref(snapshot_ref)
+        path = self._snapshot_path(run_id, snapshot_id)
+        if not path.exists():
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                f"controlled ReAct snapshot not found: {snapshot_ref}",
+                "Restart the run so approval resume can persist a fresh snapshot.",
+                artifact_path=path,
+            )
+        return ControlledReActRunStateSnapshot.model_validate(
+            json.loads(path.read_text(encoding="utf-8"))
+        )
+
+    def _snapshot_path(self, run_id: str, snapshot_id: str) -> Path:
+        return self._root_dir / run_id / "controlled_react" / f"{snapshot_id}.json"
 
 
 class ApprovalResumeClaim:
@@ -147,6 +204,10 @@ class LangGraphApprovalResumeRegistry:
         self._contexts: dict[str, LangGraphApprovalResumeContext] = {}
         self._root_dir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def root_dir(self) -> Path:
+        return self._root_dir
+
     def put(self, context: LangGraphApprovalResumeContext) -> None:
         if context.workflow_template_execution_input is None:
             raise ProofAgentError(
@@ -158,14 +219,28 @@ class LangGraphApprovalResumeRegistry:
         self._write_metadata(context)
         self._contexts[context.run_id] = context
 
+    def put_controlled_react(self, context: ControlledReActApprovalResumeContext) -> None:
+        self._write_controlled_react_metadata(context)
+
     def get(self, run_id: str) -> LangGraphApprovalResumeContext | None:
         if context := self._contexts.get(run_id):
             return context
         return self._load_context(run_id)
 
+    def get_controlled_react(
+        self,
+        run_id: str,
+    ) -> ControlledReActApprovalResumeContext | None:
+        return self._load_controlled_react_context(run_id)
+
     def discard(self, run_id: str) -> None:
         self._contexts.pop(run_id, None)
         metadata_path = self._metadata_path(run_id)
+        if metadata_path.exists():
+            metadata_path.unlink()
+
+    def discard_controlled_react(self, run_id: str) -> None:
+        metadata_path = self._controlled_react_metadata_path(run_id)
         if metadata_path.exists():
             metadata_path.unlink()
 
@@ -174,6 +249,9 @@ class LangGraphApprovalResumeRegistry:
 
     def checkpointer_for(self, run_id: str) -> Any:
         return create_persistent_checkpointer(self._checkpoint_dir(run_id))
+
+    def controlled_react_snapshot_store(self) -> FileControlledReActSnapshotStore:
+        return FileControlledReActSnapshotStore(self._root_dir)
 
     def _write_metadata(self, context: LangGraphApprovalResumeContext) -> None:
         execution_input_payload = _model_payload(context.workflow_template_execution_input)
@@ -195,6 +273,24 @@ class LangGraphApprovalResumeRegistry:
             ),
         }
         path = self._metadata_path(context.run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _write_controlled_react_metadata(
+        self,
+        context: ControlledReActApprovalResumeContext,
+    ) -> None:
+        metadata = {
+            "agent_yaml": str(context.agent_yaml),
+            "run_id": context.run_id,
+            "question": context.question,
+            "resolved_knowledge_bindings": _model_payload(context.resolved_knowledge_bindings),
+            "run_purpose": context.run_purpose.value,
+            "agent_id": context.agent_id,
+            "agent_version_id": context.agent_version_id,
+            "draft_id": context.draft_id,
+        }
+        path = self._controlled_react_metadata_path(context.run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -238,11 +334,42 @@ class LangGraphApprovalResumeRegistry:
         self._contexts[run_id] = context
         return context
 
+    def _load_controlled_react_context(
+        self,
+        run_id: str,
+    ) -> ControlledReActApprovalResumeContext | None:
+        path = self._controlled_react_metadata_path(run_id)
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        agent_yaml = Path(str(data["agent_yaml"]))
+        manifest = load_agent_manifest(agent_yaml)
+        resolved_knowledge_bindings = (
+            ResolvedKnowledgeBindingSet.model_validate(data["resolved_knowledge_bindings"])
+            if data.get("resolved_knowledge_bindings") is not None
+            else None
+        )
+        return ControlledReActApprovalResumeContext(
+            agent_yaml=agent_yaml,
+            run_id=str(data["run_id"]),
+            question=str(data["question"]),
+            manifest=manifest,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
+            configuration_store=self._configuration_store,
+            run_purpose=RunPurpose(str(data.get("run_purpose") or RunPurpose.PRODUCTION.value)),
+            agent_id=data.get("agent_id"),
+            agent_version_id=data.get("agent_version_id"),
+            draft_id=data.get("draft_id"),
+        )
+
     def _metadata_path(self, run_id: str) -> Path:
         return self._root_dir / run_id / "resume_context.json"
 
     def _checkpoint_dir(self, run_id: str) -> Path:
         return self._root_dir / run_id / "checkpoint"
+
+    def _controlled_react_metadata_path(self, run_id: str) -> Path:
+        return self._root_dir / run_id / "controlled_react_resume_context.json"
 
     def _lock_path(self, run_id: str) -> Path:
         return self._root_dir / run_id / "resume.lock"
@@ -292,8 +419,26 @@ def _payload_sha256(value: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _parse_controlled_react_snapshot_ref(snapshot_ref: str) -> tuple[str, str]:
+    if not snapshot_ref.startswith(CONTROLLED_REACT_SNAPSHOT_REF_PREFIX):
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            f"invalid controlled ReAct snapshot reference: {snapshot_ref}",
+            "Use the checkpoint_ref emitted by the pending approval event.",
+        )
+    payload = snapshot_ref.removeprefix(CONTROLLED_REACT_SNAPSHOT_REF_PREFIX)
+    parts = payload.split("/")
+    if len(parts) != 2 or not all(parts):
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            f"invalid controlled ReAct snapshot reference: {snapshot_ref}",
+            "Use the checkpoint_ref emitted by the pending approval event.",
+        )
+    return parts[0], parts[1]
+
+
 def _jsonable(value: Any) -> Any:
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]

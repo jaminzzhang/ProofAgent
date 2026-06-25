@@ -2,7 +2,7 @@ name: react_enterprise_qa_v3
 purpose: "Answer enterprise knowledge questions through the governed Controlled ReAct Loop (ADR-0032): observation actions return to plan under a dual-axis budget and deterministic Convergence Check."
 
 workflow:
-  runtime: langgraph
+  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
   checkpointer:

@@ -650,6 +650,90 @@ _Avoid_: Hidden model call, prompt-driven tool execution, prompt-driven retrieva
 A Workflow Template where a model proposes reasoning steps and action proposals, while the Control Envelope governs whether each step may execute. Per ADR-0032, the product baseline is the real **Controlled ReAct Loop** (observe-then-replan), not the earlier single-pass wiring.
 _Avoid_: Autonomous ReAct agent, direct model executor, single-pass DAG mislabeled as a loop
 
+**Controlled ReAct Orchestrator**:
+The run-scoped Control Plane execution authority for the React Enterprise QA V3 product path. Its public execution interface starts or resumes a governed run; Intent Resolution, planning, review, observation actions, approval suspension and resume, convergence, and terminal outcome selection are internal orchestration steps.
+_Avoid_: LangGraph topology, legacy workflow compatibility layer, autonomous agent runtime, public per-stage executor
+
+**Controlled ReAct Stage Projection**:
+The trace-safe projection that names an internal Controlled ReAct Orchestrator step as a Workflow Template Stage for trace, Governance Receipt, Dashboard, and validation capture. It is an observability and explanation fact, not an execution interface or internal module seam.
+_Avoid_: Public stage method, runtime graph node, Orchestrator module boundary, stage-owned execution
+
+**Controlled ReAct Shadow Verification**:
+The temporary migration safety check that runs new Controlled ReAct Orchestrator behavior against representative historical V3 inputs and compares governed outcomes, stage projections, trace facts, and known semantic corrections before deleting legacy execution paths. It is not a compatibility mode and does not preserve old executors after cutover.
+_Avoid_: Dual runtime support, long-lived compatibility adapter, feature flag rollout, legacy behavior contract
+
+**Controlled ReAct Orchestrator Acceptance Gate**:
+The cutover gate for the V3 Controlled ReAct Orchestrator, based on governed outcomes, Observation Record invariants, approval pause and resume behavior, stage projections, receipt basis, and removal of retired execution paths. It validates Control Envelope semantics rather than byte-for-byte trace compatibility with the old executor.
+_Avoid_: old trace replay parity, event-for-event compatibility, legacy executor equivalence
+
+**Controlled ReAct Run State**:
+The typed internal state of one Controlled ReAct Orchestrator execution, carrying run references, intent facts, admitted Business Flow Skill Pack facts, action history, Observation Records, approval pause, evidence basis references, blockers, and terminal outcome. It is an internal Control Plane value, not a Runtime Plane state dictionary or trace payload.
+_Avoid_: LangGraph state, continuation dict, raw stage delta, trace-as-state
+
+**Controlled ReAct Run State Snapshot**:
+The protected resumable capture of Controlled ReAct Run State written when the Controlled ReAct Orchestrator suspends for approval. Approval resume loads this snapshot, validates the original Workflow Template Execution Input integrity, applies the approval decision as loop state, and continues orchestration.
+_Avoid_: LangGraph checkpoint as authority, trace replay, mutable latest Agent Contract reload, ad hoc resume payload
+
+**Controlled ReAct Run State Snapshot Store**:
+The execution-state port that persists and loads Controlled ReAct Run State Snapshots for approval resume. The Controlled ReAct Orchestrator owns writes and reads; Trace, Governance Receipt, RunStore, and Dashboard may carry only trace-safe snapshot references or approval projections and must not deserialize snapshots or drive resume semantics from them.
+_Avoid_: RunStore detail field, trace event payload as state, Dashboard resume source, LangGraph checkpoint store
+
+**Controlled ReAct Transition Commit**:
+The single-run atomic commit boundary for one Controlled ReAct Orchestrator transition. It updates run state or snapshot, emits trace-safe stage and approval projections, and records idempotency keys for action and observation outputs under one transition lock.
+_Avoid_: Parallel resume, split state/trace writes, duplicate Observation Record append, tool retry as new action
+
+**Controlled ReAct Outcome Taxonomy**:
+The mutually exclusive result classes for a Controlled ReAct Orchestrator transition: governed waiting, governed terminal outcome, or exceptional diagnostic stop. Approval pauses and clarification needs are waiting states, normal refusals and evidence-insufficient answers are governed terminal outcomes, and provider, adapter, normalization, or readiness failures are diagnostic stops with Workflow Stage Failure Diagnostic Projection.
+_Avoid_: Approval as failure, diagnostic stop as ordinary stage summary, provider exception as customer answer, HTTP status as workflow semantics
+
+**Controlled ReAct State Machine Core**:
+The typed transition kernel inside the Controlled ReAct Orchestrator. It advances Controlled ReAct Run State through explicit commands and effect results while depending on LLM, retrieval, tool, policy, trace projection, and snapshot persistence through ports.
+_Avoid_: capability-owned state mutation, runtime graph state, dict transition payload, direct adapter call inside state update
+
+**Controlled ReAct Action Authority**:
+The Orchestrator-owned decision boundary that turns planner proposals, eligible action sets, review facts, policy facts, and observation history into the next governed action or terminal/waiting outcome. Planner, Review, Policy, Tool Gateway, retrieval, and tool adapters provide proposals or effect facts; they do not jump orchestration state or produce final answers.
+_Avoid_: planner as router, review as executor, policy as flow controller, tool gateway final response
+
+**Controlled ReAct Effect Port Set**:
+The minimum side-effect interface set consumed by the Controlled ReAct Orchestrator: intent resolver, planner, review, policy, knowledge observation, tool observation, answer synthesis, stage projection, snapshot store, and transition lock. Concrete runtime, delivery, provider, store, and adapter classes plug in behind these ports.
+_Avoid_: direct RunStore dependency, direct LangGraph dependency, direct provider client dependency, broad service locator
+
+**Controlled ReAct Port Protocol Module**:
+The internal `proof_agent/control/workflow/controlled_react/ports.py` module that declares Orchestrator effect port protocols. These protocols are Control Plane dependency-inversion seams, while only persisted or serialized DTOs belong in `proof_agent/contracts/`.
+_Avoid_: global contracts for private ports, delivery-owned port protocols, runtime-owned port protocols, service locator module
+
+**Controlled ReAct Contract Module**:
+The `proof_agent/contracts/controlled_react.py` module for persisted, resumable, or audit-replayable Controlled ReAct DTOs such as Controlled ReAct Run State, Controlled ReAct Run State Snapshot, and Observation Record. Internal transition commands, effect results, and state-machine step types remain in `proof_agent/control/workflow/controlled_react/`.
+_Avoid_: internal command contract, port protocol contract, runtime state contract, trace-only DTO
+
+**Controlled ReAct Public Execution Result**:
+The Orchestrator external return boundary: `WorkflowTemplateExecutionResult` only. Controlled ReAct Run State, run-state snapshots, transition commands, and effect results remain internal implementation or resume artifacts and must not be returned to Delivery as public execution facts.
+_Avoid_: RunState API response, snapshot handoff result, transition debug payload, internal state leak
+
+**Controlled ReAct Delivery Entry Point**:
+The Delivery-to-Control handoff for the V3 product path: Delivery resolves the Published Agent, run id, request facts, and artifact finalization context, then calls `ControlledReActOrchestrator.start` or `ControlledReActOrchestrator.resume`. Delivery must not call LangGraph runners or React runtime graphs for V3 orchestration semantics.
+_Avoid_: delivery-owned workflow branch, direct runtime runner call, approval registry as execution authority, Delivery state machine
+
+**Controlled ReAct Legacy Runtime Deletion Gate**:
+The cutover condition that removes legacy V3 execution entrypoints and their authority from production code, tests, and current architecture documentation. `run_with_langgraph`, `resume_langgraph_approval`, `LangGraphApprovalResumeRegistry`, React runtime graphs, and LangGraph checkpoint resume must not remain as V3 execution paths after Orchestrator cutover.
+_Avoid_: hidden legacy test authority, CLI fallback runner, documentation-defined old path, optional compatibility branch
+
+**Controlled ReAct Template-Bound Execution**:
+The V3 execution binding where `workflow.template: react_enterprise_qa_v3` selects the Controlled ReAct Orchestrator product path. `workflow.runtime` no longer chooses the execution engine for V3 Published Agents, and LangGraph checkpointer fields do not define approval resume semantics.
+_Avoid_: YAML-selected runtime engine, runtime feature flag, checkpointer-owned resume, template/runtime split authority
+
+**Controlled ReAct Stage Descriptor Projection**:
+The V3 interpretation of Workflow Template Descriptor stages and `workflow.stages[]`: they configure and explain stage projections for Dashboard, Governance Receipt, RunStore, and validation capture. They do not define execution nodes, edges, branches, ordering, loops, or Orchestrator state transitions.
+_Avoid_: YAML workflow graph, descriptor-owned execution order, configurable branch edge, stage list as runtime plan
+
+**Controlled ReAct Orchestrator Test Authority**:
+The V3 correctness test boundary centered on the Controlled ReAct Orchestrator: pure state-machine tests, fake-port integration tests, and Delivery smoke tests through `WorkflowTemplateExecutionResult`. Legacy runtime-runner tests may survive only when rewritten to assert current V3 Orchestrator semantics.
+_Avoid_: LangGraph runner test authority, checkpoint resume golden path, old trace parity test, hidden legacy fixture
+
+**Controlled ReAct Migration Slice Order**:
+The implementation order for the V3 Orchestrator cutover: contracts, ports, and pure state-machine tests first; fake-port start/resume second; existing adapter integration third; Delivery entrypoint fourth; shadow verification fifth; legacy runtime, manifest runtime selector, old tests, and old current-doc paths last.
+_Avoid_: one-shot rewrite, horizontal test bulk, compatibility branch, delete-before-shadow
+
 **Intent Resolution**:
 The governed understanding step that turns a user turn and admitted conversation context into an audit-safe summary of user goal, domain intent, known facts, missing fields, ambiguities, risk flags, and the recommended next action before ReAct planning.
 _Avoid_: Raw chain-of-thought, hidden thinking, unstructured intent guess
@@ -681,6 +765,10 @@ _Avoid_: Replacing Enterprise QA Template, generic autonomous agent template
 **React Enterprise QA Template V2**:
 The versioned Controlled ReAct Workflow Template that adds Intent Resolution before ReAct planning while preserving historical interpretation of earlier Published Agent Versions.
 _Avoid_: Runtime feature flag for v1, mutable latest template behavior
+
+**React Enterprise QA Template V3**:
+The product-baseline Controlled ReAct Workflow Template that combines Intent Resolution, Business Flow Skill Pack admission, and the real Controlled ReAct Loop. Earlier Enterprise QA and React Enterprise QA V1/V2 execution paths are retired rather than kept as compatibility paths.
+_Avoid_: Compatibility template, feature flag, parallel legacy workflow
 
 **Insurance QA Evaluation Target**:
 A concrete Agent evaluation target that applies the React Enterprise QA Template to the Insurance Service QA Domain and measures both business answer quality and Control Envelope behavior.
@@ -955,7 +1043,7 @@ The deterministic regression baseline for Proof Agent's primary React Enterprise
 _Avoid_: Legacy linear Enterprise QA baseline, remote-model release gate, separate workflow world
 
 **Controlled ReAct Loop**:
-The real Think→Act→Observe→Replan loop shape for React Enterprise QA Template V2, in which each `plan` round emits one governed ReAct Action Proposal, executes one observation action, writes an Observation Record, and returns to plan until plan emits a terminal action. Distinct from the earlier single-pass ReAct wiring where retrieval and tool were terminal branches.
+The real Think→Act→Observe→Replan loop shape for React Enterprise QA Template V3, in which each `plan` round emits one governed ReAct Action Proposal, executes one observation action, writes an Observation Record, and returns to plan until plan emits a terminal action. Distinct from the retired single-pass ReAct wiring where retrieval and tool were terminal branches.
 _Avoid_: Single-pass ReAct DAG, classification pipeline mislabeled as ReAct, plan-and-execute batch
 
 **Plan Round**:
@@ -963,16 +1051,16 @@ One invocation of the `plan` stage in the Controlled ReAct Loop. The unit counte
 _Avoid_: Graph node, retrieval step, tool call
 
 **Observation Action**:
-A Controlled ReAct Loop action that gathers information and then returns control to `plan`: `PLAN_RETRIEVAL` and `PROPOSE_TOOL_CALL`. Observation actions are never terminal.
-_Avoid_: Terminal action, one-shot branch
+A Controlled ReAct Loop action that gathers information and then returns control to `plan`: `PLAN_RETRIEVAL` and `PROPOSE_TOOL_CALL`. Its only execution result is an Observation Record; it must not create final output or select a terminal outcome.
+_Avoid_: Terminal action, one-shot branch, tool-generated final answer, retrieval-generated final answer
 
 **Terminal Action**:
 A Controlled ReAct Loop action that ends the loop: `GENERATE_FINAL_ANSWER`, `ASK_CLARIFICATION`, `REFUSE`. Terminal actions are the only loop exit.
 _Avoid_: Observation action, mid-loop stop
 
 **Observation Record**:
-The structured control-state record written into state after each observation action, carrying the full retrieval evidence or tool result (truth layer), a deterministic no-LLM summary (decision layer), and a reference into the evidence list. Observation Records are control state, not logs; they are read by `plan` (summaries) and by `model_answer` (full content) and are receipt-replayable. The runtime contract includes `observation_id`, `action_id`, `action_type`, `round`, `truth_ref`, `summary`, `accepted_evidence_count`, `new_evidence_count`, `unresolved_subgoals`, `source_refs`, and `citation_refs`.
-_Avoid_: Discarded tool output, trace-only observation, unstructured planner scratchpad
+The structured control-state record written into state after each observation action, carrying the full retrieval evidence or tool result (truth layer), a deterministic no-LLM summary (decision layer), and references needed by final answer synthesis. Observation Records are the sole result carrier for Observation Actions; they are control state, not logs, and are read by `plan` (summaries) and by `model_answer` (full content). The runtime contract includes `observation_id`, `action_id`, `action_type`, `round`, `truth_ref`, `summary`, `accepted_evidence_count`, `new_evidence_count`, `unresolved_subgoals`, `source_refs`, and `citation_refs`.
+_Avoid_: Discarded tool output, trace-only observation, unstructured planner scratchpad, direct final response
 
 **Eligible Action Set**:
 The runtime-computed subset of ReAct actions that `plan` is permitted to choose in a given round, narrowed by the Convergence Check. Enforced structurally by `_constrain_action`, not by prompt wording.

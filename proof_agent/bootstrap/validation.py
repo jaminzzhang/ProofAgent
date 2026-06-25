@@ -361,11 +361,16 @@ def _require_model_source_shape(
 def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     """Validate the supported v1 runtime envelope and local file dependencies."""
 
-    if manifest.workflow.runtime != "langgraph":
+    expected_runtime = (
+        "controlled_react"
+        if manifest.workflow.template == "react_enterprise_qa_v3"
+        else "langgraph"
+    )
+    if manifest.workflow.runtime != expected_runtime:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"unsupported workflow runtime: {manifest.workflow.runtime}",
-            "Use workflow.runtime: langgraph for v1.",
+            f"Use workflow.runtime: {expected_runtime} for {manifest.workflow.template}.",
             artifact_path=manifest_path,
         )
     if manifest.workflow.template not in SUPPORTED_WORKFLOW_TEMPLATES:

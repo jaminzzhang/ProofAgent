@@ -37,6 +37,17 @@ def test_load_valid_react_enterprise_qa_v2_manifest() -> None:
     assert manifest.react.planner.provider == "deterministic"
 
 
+def test_load_valid_controlled_react_v3_manifest() -> None:
+    manifest = load_agent_manifest(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
+    )
+
+    assert manifest.name == "react_enterprise_qa_v3"
+    assert manifest.workflow.runtime == "controlled_react"
+    assert manifest.workflow.template == "react_enterprise_qa_v3"
+    assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v3"
+
+
 def test_loads_business_flow_skill_pack_bindings(tmp_path: Path) -> None:
     agent_yaml = tmp_path / "agent.yaml"
     (tmp_path / "knowledge").mkdir()

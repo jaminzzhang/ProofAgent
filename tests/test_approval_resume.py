@@ -8,6 +8,8 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import (
+    ControlledReActRunState,
+    ControlledReActRunStateSnapshot,
     EffectiveWorkflowStageConfiguration,
     EffectiveWorkflowStageConfigurationStage,
     WorkflowStageAvailability,
@@ -19,12 +21,15 @@ from proof_agent.contracts import (
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.approval_resume import (
+    CONTROLLED_REACT_SNAPSHOT_REF_PREFIX,
+    ControlledReActApprovalResumeContext,
     LangGraphApprovalResumeContext,
     LangGraphApprovalResumeRegistry,
 )
 
 
 REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+REACT_V3_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
 
 
 def _execution_input() -> WorkflowTemplateExecutionInput:
@@ -125,3 +130,40 @@ def test_approval_resume_registry_rejects_tampered_execution_input(
 
     assert exc.value.code == "PA_RUNTIME_001"
     assert "failed integrity validation" in exc.value.message
+
+
+def test_controlled_react_resume_registry_persists_context_and_snapshot(
+    tmp_path: Path,
+) -> None:
+    registry = LangGraphApprovalResumeRegistry(tmp_path)
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_run_controlled",
+        run_id="run_controlled",
+        state=ControlledReActRunState(
+            run_id="run_controlled",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Please look up customer policy status for CUST-001.",
+        ),
+    )
+
+    snapshot_ref = registry.controlled_react_snapshot_store().save(snapshot)
+    registry.put_controlled_react(
+        ControlledReActApprovalResumeContext(
+            agent_yaml=REACT_V3_AGENT,
+            run_id="run_controlled",
+            question=snapshot.state.question,
+            manifest=load_agent_manifest(REACT_V3_AGENT),
+        )
+    )
+
+    assert snapshot_ref.startswith(CONTROLLED_REACT_SNAPSHOT_REF_PREFIX)
+    loaded_snapshot = LangGraphApprovalResumeRegistry(
+        tmp_path
+    ).controlled_react_snapshot_store().load(snapshot_ref)
+    loaded_context = LangGraphApprovalResumeRegistry(tmp_path).get_controlled_react(
+        "run_controlled"
+    )
+    assert loaded_snapshot == snapshot
+    assert loaded_context is not None
+    assert loaded_context.manifest.workflow.template == "react_enterprise_qa_v3"

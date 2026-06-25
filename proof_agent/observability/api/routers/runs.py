@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from proof_agent.contracts import TraceEventType
+from proof_agent.bootstrap.composition import compose_harness_invocation
+from proof_agent.contracts import TraceEventType, WorkflowStageStatus
 from proof_agent.contracts.dashboard import RunPurpose
 from proof_agent.contracts.receipt import ReceiptOutcome
+from proof_agent.control.workflow.controlled_react import (
+    ControlledReActResumeRequest,
+    build_controlled_react_orchestrator_for_invocation,
+)
+from proof_agent.control.workflow.harness_helpers import finalize_run
+from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.api.dependencies import get_operator_identity, get_store
 from proof_agent.observability.api.operator_identity import (
     OperatorIdentityContext,
@@ -19,7 +28,11 @@ from proof_agent.observability.api.operator_identity import (
 )
 from proof_agent.observability.api.serializers import serialize_run_detail, serialize_run_summary
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.approval_resume import LangGraphApprovalResumeRegistry
+from proof_agent.runtime.approval_resume import (
+    CONTROLLED_REACT_SNAPSHOT_REF_PREFIX,
+    ControlledReActApprovalResumeContext,
+    LangGraphApprovalResumeRegistry,
+)
 from proof_agent.runtime.langgraph_runner import resume_langgraph_approval
 
 router = APIRouter(tags=["runs"])
@@ -234,6 +247,32 @@ def _resume_pending_approval_if_possible(
             store=store,
         )
 
+        controlled_context = registry.get_controlled_react(run_id)
+        if controlled_context is not None:
+            _resume_controlled_react_approval(
+                context=controlled_context,
+                pending=pending,
+                approval_id=approval_id,
+                approved=approved,
+                actor=identity.operator_id,
+                registry=registry,
+                store=store,
+            )
+            registry.discard_controlled_react(run_id)
+            updated = store.get_run_detail(run_id)
+            if updated is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Run disappeared after resume: {run_id}",
+                )
+            return serialize_run_detail(updated)
+
+        if _is_controlled_react_pending(pending):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Controlled ReAct resume context missing: {run_id}",
+            )
+
         context = registry.get(run_id)
         if context is None:
             return None
@@ -263,6 +302,128 @@ def _resume_pending_approval_if_possible(
     if updated is None:
         raise HTTPException(status_code=500, detail=f"Run disappeared after resume: {run_id}")
     return serialize_run_detail(updated)
+
+
+def _resume_controlled_react_approval(
+    *,
+    context: ControlledReActApprovalResumeContext,
+    pending: dict[str, Any],
+    approval_id: str,
+    approved: bool,
+    actor: str,
+    registry: LangGraphApprovalResumeRegistry,
+    store: RunStore,
+) -> None:
+    checkpoint_ref = str(pending.get("checkpoint_ref") or "")
+    invocation = compose_harness_invocation(
+        context.agent_yaml,
+        manifest=context.manifest,
+        resolved_knowledge_bindings=context.resolved_knowledge_bindings,
+        configuration_store=context.configuration_store,
+    )
+    orchestrator = build_controlled_react_orchestrator_for_invocation(
+        invocation,
+        snapshot_store=registry.controlled_react_snapshot_store(),
+    )
+    result = orchestrator.resume(
+        ControlledReActResumeRequest(
+            snapshot_ref=checkpoint_ref,
+            approval_id=approval_id,
+            approved=approved,
+            actor=actor,
+        )
+    )
+
+    trace_path = store.history_dir / context.run_id / "trace.jsonl"
+    receipt_path = store.history_dir / context.run_id / "governance_receipt.md"
+    if not trace_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Trace not appendable for run: {context.run_id}",
+        )
+    trace = TraceWriter(
+        trace_path,
+        run_id=context.run_id,
+        initial_sequence=_latest_trace_sequence(trace_path),
+    )
+    trace.emit(
+        TraceEventType.APPROVAL_GRANTED if approved else TraceEventType.APPROVAL_DENIED,
+        status="ok" if approved else "blocked",
+        payload={
+            "approval_id": approval_id,
+            "tool_name": pending.get("tool_name"),
+            "action_id": pending.get("action_id"),
+            "state": "granted" if approved else "denied",
+            "actor": actor,
+            "permission": OperatorPermission.APPROVAL_RESOLVE.value,
+        },
+    )
+    if approved:
+        _emit_controlled_react_tool_results(trace, result.stage_results)
+    for stage_result in result.stage_results:
+        _emit_controlled_react_stage_result(trace, stage_result)
+    finalize_run(
+        trace=trace,
+        receipt_path=receipt_path,
+        trace_path=trace_path,
+        agent_name=context.manifest.name,
+        question=context.question,
+        outcome=result.outcome,
+        message=result.final_output,
+        store=store,
+        run_purpose=context.run_purpose,
+        agent_id=context.agent_id,
+        agent_version_id=context.agent_version_id,
+        draft_id=context.draft_id,
+    )
+
+
+def _emit_controlled_react_tool_results(
+    trace: TraceWriter,
+    stage_results: tuple[Any, ...],
+) -> None:
+    for stage_result in stage_results:
+        if getattr(stage_result, "stage_id", None) != "tool":
+            continue
+        summary = dict(getattr(stage_result, "summary", {}) or {})
+        raw_result = summary.get("result")
+        trace.emit(
+            "tool_result",
+            status="ok",
+            payload={
+                "tool_name": summary.get("tool_name"),
+                "executed": summary.get("executed"),
+                "result": dict(raw_result) if isinstance(raw_result, Mapping) else {},
+            },
+        )
+
+
+def _emit_controlled_react_stage_result(trace: TraceWriter, stage_result: Any) -> None:
+    status = getattr(stage_result, "status", None)
+    outcome = getattr(stage_result, "outcome", None)
+    status_value = getattr(status, "value", None)
+    outcome_value = getattr(outcome, "value", None)
+    trace.emit(
+        "workflow_stage_result",
+        status=_trace_status_for_stage_result_status(status),
+        payload={
+            "stage_id": getattr(stage_result, "stage_id", None),
+            "status": str(status_value) if status_value is not None else str(status),
+            "outcome": str(outcome_value) if outcome_value is not None else None,
+            "summary": dict(getattr(stage_result, "summary", {}) or {}),
+            "produced_fact_refs": list(getattr(stage_result, "produced_fact_refs", ()) or ()),
+        },
+    )
+
+
+def _trace_status_for_stage_result_status(
+    status: Any,
+) -> Literal["ok", "blocked", "waiting", "error"]:
+    if status is WorkflowStageStatus.BLOCKED:
+        return "blocked"
+    if status is WorkflowStageStatus.WAITING:
+        return "waiting"
+    return "ok"
 
 
 def _resolve_pending_approval(
@@ -361,6 +522,14 @@ def _pending_approval_expired(pending: dict[str, Any]) -> bool:
     return parsed <= datetime.now(UTC)
 
 
+def _is_controlled_react_pending(pending: dict[str, Any]) -> bool:
+    checkpoint_ref = pending.get("checkpoint_ref")
+    return (
+        isinstance(checkpoint_ref, str)
+        and checkpoint_ref.startswith(CONTROLLED_REACT_SNAPSHOT_REF_PREFIX)
+    )
+
+
 def _iso_timestamp_expired(value: str) -> bool:
     if not value:
         return True
@@ -371,6 +540,24 @@ def _iso_timestamp_expired(value: str) -> bool:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed <= datetime.now(UTC)
+
+
+def _latest_trace_sequence(trace_path: Path) -> int:
+    sequence = 0
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        try:
+            sequence = max(sequence, int(event.get("sequence") or 0))
+        except (TypeError, ValueError):
+            continue
+    return sequence
 
 
 def _find_pending_approval(
