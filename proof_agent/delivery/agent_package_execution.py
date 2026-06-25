@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -370,14 +371,21 @@ def _emit_controlled_react_approval_pause(
     trace: TraceWriter,
     approval_pause: ApprovalPause,
 ) -> None:
+    summary = dict(approval_pause.summary)
+    parameters = summary.get("parameters")
     payload = {
+        "run_id": trace.run_id,
+        "thread_id": trace.run_id,
         "approval_id": approval_pause.approval_id,
         "action_id": approval_pause.action_id,
         "tool_name": approval_pause.tool_name,
+        "parameters": dict(parameters) if isinstance(parameters, Mapping) else {},
         "policy_decision": approval_pause.policy_decision.value,
         "checkpoint_ref": approval_pause.checkpoint_ref,
+        "checkpoint_id": approval_pause.checkpoint_ref,
+        "status": "requested",
         "expires_at": approval_pause.expires_at,
-        "summary": dict(approval_pause.summary),
+        "summary": summary,
     }
     trace.emit("approval_requested", status="waiting", payload=payload)
     trace.emit("pending_approval_created", status="waiting", payload=payload)

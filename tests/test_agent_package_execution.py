@@ -86,3 +86,36 @@ def test_execute_agent_package_run_returns_v3_clarification_need(
         ]
         for event in events
     )
+
+
+def test_execute_agent_package_run_projects_v3_tool_approval_payload(
+    tmp_path: Path,
+) -> None:
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            question="Look up customer policy status before answering.",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.WAITING_FOR_APPROVAL
+    events = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    pending = next(
+        event for event in events if event["event_type"] == "pending_approval_created"
+    )
+    payload = pending["payload"]
+    assert payload["run_id"] == pending["run_id"]
+    assert payload["thread_id"] == pending["run_id"]
+    assert payload["action_id"] == "act_tool_1"
+    assert payload["tool_name"] == "customer_lookup"
+    assert payload["parameters"] == {
+        "customer_id": "CUST-001",
+        "policy_id": "POL-001",
+    }
+    assert payload["policy_decision"] == "require_approval"
+    assert payload["checkpoint_ref"]
+    assert payload["checkpoint_id"] == payload["checkpoint_ref"]

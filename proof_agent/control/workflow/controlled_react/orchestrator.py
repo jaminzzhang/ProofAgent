@@ -319,7 +319,10 @@ class ControlledReActOrchestrator:
             policy_decision=PolicyDecisionType.REQUIRE_APPROVAL,
             checkpoint_ref=snapshot_ref,
             expires_at=expires_at,
-            summary={"tool_name": tool_name},
+            summary={
+                "tool_name": tool_name,
+                "parameters": _approval_parameters(action.parameters),
+            },
         )
         message = f"Waiting for approval before {tool_name} can execute."
         return WorkflowTemplateExecutionResult(
@@ -455,6 +458,10 @@ def _human_join(values: tuple[str, ...]) -> str:
     if len(values) == 1:
         return values[0]
     return f"{', '.join(values[:-1])}, and {values[-1]}"
+
+
+def _approval_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    return {str(key): value for key, value in parameters.items()}
 
 
 def _stage_results_from_state(
