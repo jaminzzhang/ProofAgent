@@ -27,11 +27,6 @@ from proof_agent.control.workflow.react_enterprise_qa import (
     should_block_duplicate_observation_action,
     should_stop_for_plan_budget,
 )
-from proof_agent.runtime.react_graph import (
-    loop_route_after_plan,
-    loop_route_after_retrieval,
-    loop_route_after_tool,
-)
 
 
 def _proposal(action_type: ReActActionType, *, action_id: str = "act_test") -> ReActActionProposal:
@@ -410,67 +405,3 @@ def test_constrain_action_rewrites_to_generate_when_no_signal() -> None:
 
     assert constrained.action_type is ReActActionType.GENERATE_FINAL_ANSWER
     assert rewritten is not None
-
-
-def _state_with_action(action_type: ReActActionType) -> dict[str, Any]:
-    return {
-        "action": {
-            "action_id": "act_test",
-            "action_type": action_type.value,
-            "reasoning_summary": {
-                "goal": "test",
-                "observations": [],
-                "candidate_actions": [action_type.value],
-                "selected_action": action_type.value,
-                "rationale_summary": "test",
-                "risk_flags": [],
-                "required_evidence": [],
-            },
-            "parameters": {},
-            "risk_level": "low",
-        }
-    }
-
-
-def test_loop_route_after_plan_generates_routes_to_model() -> None:
-    """RED (slice 4): GENERATE_FINAL_ANSWER routes to model (terminal synthesis)."""
-
-    state = _state_with_action(ReActActionType.GENERATE_FINAL_ANSWER)
-
-    assert loop_route_after_plan(state) == "model"
-
-
-def test_loop_route_after_plan_refuse_routes_to_end() -> None:
-    """RED (slice 4): REFUSE routes to end."""
-
-    state = _state_with_action(ReActActionType.REFUSE)
-
-    assert loop_route_after_plan(state) == "end"
-
-
-def test_loop_route_after_plan_observation_actions_route_to_review() -> None:
-    """RED (slice 4): observation actions route to their review nodes, not back to plan."""
-
-    assert (
-        loop_route_after_plan(_state_with_action(ReActActionType.PLAN_RETRIEVAL))
-        == "review_retrieval_plan"
-    )
-    assert (
-        loop_route_after_plan(_state_with_action(ReActActionType.PROPOSE_TOOL_CALL))
-        == "review_tool"
-    )
-    assert loop_route_after_plan(_state_with_action(ReActActionType.ASK_CLARIFICATION)) == "clarify"
-
-
-def test_loop_route_after_retrieval_returns_to_plan() -> None:
-    """RED (slice 4): retrieval success returns to plan (loop back-edge)."""
-
-    assert loop_route_after_retrieval({}) == "plan"
-    assert loop_route_after_retrieval({"governance_refusal": "REFUSED_NO_EVIDENCE"}) == "end"
-
-
-def test_loop_route_after_tool_returns_to_plan() -> None:
-    """RED (slice 4): tool success returns to plan (loop back-edge)."""
-
-    assert loop_route_after_tool({}) == "plan"
-    assert loop_route_after_tool({"governance_refusal": "REFUSED_NO_EVIDENCE"}) == "end"

@@ -12,6 +12,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ApprovalPause,
+    ClarificationNeed,
     ContextAdmission,
     EnforcementPoint,
     EvidenceChunk,
@@ -255,6 +256,11 @@ def emit_controlled_react_trace_projection(
             trace,
             execution_result.approval_pause,
         )
+    if execution_result.clarification_need is not None:
+        _emit_controlled_react_clarification_requested(
+            trace,
+            execution_result.clarification_need,
+        )
 
 
 def _emit_controlled_react_evidence_projection(
@@ -375,6 +381,22 @@ def _emit_controlled_react_approval_pause(
     }
     trace.emit("approval_requested", status="waiting", payload=payload)
     trace.emit("pending_approval_created", status="waiting", payload=payload)
+
+
+def _emit_controlled_react_clarification_requested(
+    trace: TraceWriter,
+    clarification_need: ClarificationNeed,
+) -> None:
+    trace.emit(
+        "clarification_requested",
+        status="waiting",
+        payload={
+            "action_id": clarification_need.action_id,
+            "missing_fields": list(clarification_need.missing_fields),
+            "message": clarification_need.message,
+            "summary": dict(clarification_need.summary),
+        },
+    )
 
 
 def _trace_status_for_stage_result(

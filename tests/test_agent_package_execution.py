@@ -55,3 +55,34 @@ def test_execute_agent_package_run_projects_v3_answer_governance_trace(
     assert evidence_events
     assert "customer-support-policy" in evidence_events[-1]["payload"]["source_refs"]
     assert "customer-support-policy" in evidence_events[-1]["payload"]["accepted_sources"]
+
+
+def test_execute_agent_package_run_returns_v3_clarification_need(
+    tmp_path: Path,
+) -> None:
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            question="Can this customer claim it?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION
+    assert result.workflow_template_execution_result is not None
+    need = result.workflow_template_execution_result.clarification_need
+    assert need is not None
+    assert need.missing_fields == ("customer_id", "policy_id", "claim_type")
+    events = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        event["event_type"] == "clarification_requested"
+        and event["payload"]["missing_fields"] == [
+            "customer_id",
+            "policy_id",
+            "claim_type",
+        ]
+        for event in events
+    )

@@ -7,6 +7,7 @@ from typing import Any
 
 from proof_agent.contracts import (
     ApprovalPause,
+    ClarificationNeed,
     ControlledReActRunPhase,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
@@ -80,6 +81,8 @@ class ControlledReActOrchestrator:
             )
         if action.action_type is ReActActionType.REFUSE:
             return self._refuse_plan_budget_exhausted(request, action)
+        if action.action_type is ReActActionType.ASK_CLARIFICATION:
+            return self._ask_clarification(request, action)
         if action.action_type is ReActActionType.PROPOSE_TOOL_CALL:
             policy_decision = self._policy_decision(state, action)
             if policy_decision is PolicyDecisionType.DENY:
@@ -132,6 +135,45 @@ class ControlledReActOrchestrator:
             outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
             final_output=message,
             message=message,
+            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+
+    def _ask_clarification(
+        self,
+        request: ControlledReActStartRequest,
+        action: ReActActionProposal,
+    ) -> WorkflowTemplateExecutionResult:
+        missing_fields = _clarification_missing_fields(action)
+        message = (
+            "Please provide "
+            f"{_human_join(missing_fields)} before I can continue."
+        )
+        clarification_need = ClarificationNeed(
+            action_id=action.action_id,
+            missing_fields=missing_fields,
+            message=message,
+            summary={
+                "reason": "missing_required_context",
+                "missing_fields": list(missing_fields),
+            },
+        )
+        return WorkflowTemplateExecutionResult(
+            run_id=request.run_id,
+            template_name=request.template_name,
+            template_descriptor_version=request.template_descriptor_version,
+            outcome=ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION,
+            final_output=message,
+            message=message,
+            clarification_need=clarification_need,
+            stage_results=(
+                WorkflowStageResult(
+                    stage_id="clarification",
+                    status=WorkflowStageStatus.WAITING,
+                    outcome=ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION,
+                    summary={"missing_fields": list(missing_fields)},
+                    produced_fact_refs=("clarification_need",),
+                ),
+            ),
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
         )
 
@@ -387,6 +429,32 @@ def _observation_payloads(state: ControlledReActRunState) -> list[Mapping[str, A
         }
         for record in state.observation_records
     ]
+
+
+def _clarification_missing_fields(
+    action: ReActActionProposal,
+) -> tuple[str, ...]:
+    raw_missing_fields = action.parameters.get("missing_fields", ())
+    candidates: tuple[Any, ...]
+    if isinstance(raw_missing_fields, str):
+        candidates = (raw_missing_fields,)
+    else:
+        try:
+            candidates = tuple(raw_missing_fields)
+        except TypeError:
+            candidates = ()
+    missing_fields = tuple(
+        field.strip()
+        for field in candidates
+        if isinstance(field, str) and field.strip()
+    )
+    return missing_fields or ("required_details",)
+
+
+def _human_join(values: tuple[str, ...]) -> str:
+    if len(values) == 1:
+        return values[0]
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
 
 
 def _stage_results_from_state(
