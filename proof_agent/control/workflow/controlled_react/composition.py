@@ -26,6 +26,7 @@ from proof_agent.control.workflow.controlled_react.ports import (
     ControlledReActPorts,
     SnapshotStorePort,
 )
+from proof_agent.control.validators.evidence import evaluate_evidence
 
 
 def build_default_controlled_react_orchestrator() -> ControlledReActOrchestrator:
@@ -125,12 +126,12 @@ class _InvocationKnowledgeObservationAdapter:
         action: ReActActionProposal,
     ) -> ObservationRecord:
         query = _string_value(action.parameters.get("query")) or state.question
-        evidence = tuple(
-            chunk.model_copy(update={"status": EvidenceStatus.ACCEPTED})
-            for chunk in self._invocation.knowledge_provider.retrieve(
+        evidence, accepted_evidence, evaluation_metadata = _admit_evidence(
+            self._invocation.knowledge_provider.retrieve(
                 query,
                 top_k=self._invocation.manifest.retrieval.top_k,
-            )
+            ),
+            min_score=self._invocation.manifest.retrieval.min_score,
         )
         return ObservationRecord(
             observation_id=f"obs_{action.action_id}",
@@ -140,19 +141,19 @@ class _InvocationKnowledgeObservationAdapter:
             truth_ref="knowledge://configured_provider",
             summary={
                 "query": query,
-                "accepted_evidence_count": len(evidence),
-                "new_evidence_count": len(evidence),
-                "evidence": [
-                    _evidence_payload(chunk)
-                    for chunk in evidence
-                ],
+                "accepted_evidence_count": len(accepted_evidence),
+                "new_evidence_count": len(accepted_evidence),
+                "rejected_evidence_count": len(evidence) - len(accepted_evidence),
+                "min_score": self._invocation.manifest.retrieval.min_score,
+                "evidence_validation": evaluation_metadata,
+                "evidence": [_evidence_payload(chunk) for chunk in evidence],
             },
-            accepted_evidence_count=len(evidence),
-            new_evidence_count=len(evidence),
+            accepted_evidence_count=len(accepted_evidence),
+            new_evidence_count=len(accepted_evidence),
             unresolved_subgoals=(),
-            source_refs=tuple(chunk.source for chunk in evidence),
+            source_refs=tuple(chunk.source for chunk in accepted_evidence),
             citation_refs=tuple(
-                chunk.citation for chunk in evidence if chunk.citation is not None
+                chunk.citation for chunk in accepted_evidence if chunk.citation is not None
             ),
         )
 
@@ -349,8 +350,35 @@ def _evidence_from_observations(
             continue
         for item in raw_evidence:
             if isinstance(item, Mapping):
-                evidence.append(EvidenceChunk.model_validate(item))
+                chunk = EvidenceChunk.model_validate(item)
+                if chunk.status is EvidenceStatus.ACCEPTED:
+                    evidence.append(chunk)
     return tuple(evidence)
+
+
+def _admit_evidence(
+    chunks: tuple[EvidenceChunk, ...],
+    *,
+    min_score: float,
+) -> tuple[tuple[EvidenceChunk, ...], tuple[EvidenceChunk, ...], Mapping[str, Any]]:
+    validation = evaluate_evidence(chunks, min_count=1, min_score=min_score)
+    evidence: list[EvidenceChunk] = []
+    accepted_evidence: list[EvidenceChunk] = []
+    for chunk in chunks:
+        accepted = (
+            chunk.status is not EvidenceStatus.REJECTED
+            and chunk.admission_score is not None
+            and chunk.admission_score >= min_score
+        )
+        admitted = chunk.model_copy(
+            update={
+                "status": EvidenceStatus.ACCEPTED if accepted else EvidenceStatus.REJECTED,
+            }
+        )
+        evidence.append(admitted)
+        if accepted:
+            accepted_evidence.append(admitted)
+    return tuple(evidence), tuple(accepted_evidence), validation.metadata
 
 
 def _has_tool_observation(state: ControlledReActRunState) -> bool:

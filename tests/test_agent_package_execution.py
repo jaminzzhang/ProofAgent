@@ -1,5 +1,8 @@
 import json
+import shutil
 from pathlib import Path
+
+import yaml
 
 from proof_agent.contracts import ReceiptOutcome
 from proof_agent.delivery.agent_package_execution import (
@@ -55,6 +58,62 @@ def test_execute_agent_package_run_projects_v3_answer_governance_trace(
     assert evidence_events
     assert "customer-support-policy" in evidence_events[-1]["payload"]["source_refs"]
     assert "customer-support-policy" in evidence_events[-1]["payload"]["accepted_sources"]
+
+
+def test_execute_agent_package_run_refuses_v3_when_no_evidence_is_admitted(
+    tmp_path: Path,
+) -> None:
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            question="Puccini Tosca opera composer",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert "no governed evidence" in result.final_output
+    assert result.workflow_template_execution_result is not None
+    assert result.workflow_template_execution_result.evidence == ()
+    retrieval_stage = next(
+        stage
+        for stage in result.workflow_template_execution_result.stage_results
+        if stage.stage_id == "retrieval"
+    )
+    assert retrieval_stage.summary["accepted_evidence_count"] == 0
+
+
+def test_execute_agent_package_run_applies_v3_retrieval_min_score(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    manifest_path = agent_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["retrieval"]["min_score"] = 0.5
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=manifest_path,
+            question="Who composed the opera Tosca?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert result.workflow_template_execution_result is not None
+    retrieval_stage = next(
+        stage
+        for stage in result.workflow_template_execution_result.stage_results
+        if stage.stage_id == "retrieval"
+    )
+    assert retrieval_stage.summary["accepted_evidence_count"] == 0
+    assert retrieval_stage.summary["rejected_evidence_count"] > 0
+    assert retrieval_stage.summary["min_score"] == 0.5
 
 
 def test_execute_agent_package_run_returns_v3_clarification_need(

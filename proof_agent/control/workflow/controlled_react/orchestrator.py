@@ -30,6 +30,7 @@ from proof_agent.control.workflow.controlled_react.state_machine import (
 from proof_agent.control.workflow.react_enterprise_qa import (
     compute_eligible_action_set,
     constrain_action,
+    should_block_duplicate_observation_action,
 )
 
 
@@ -80,7 +81,7 @@ class ControlledReActOrchestrator:
                 max_plan_rounds=request.max_plan_rounds,
             )
         if action.action_type is ReActActionType.REFUSE:
-            return self._refuse_plan_budget_exhausted(request, action)
+            return self._refuse_plan_budget_exhausted(request, action, state=state)
         if action.action_type is ReActActionType.ASK_CLARIFICATION:
             return self._ask_clarification(request, action)
         if action.action_type is ReActActionType.PROPOSE_TOOL_CALL:
@@ -126,8 +127,13 @@ class ControlledReActOrchestrator:
         self,
         request: ControlledReActStartRequest,
         action: ReActActionProposal,
+        *,
+        state: ControlledReActRunState,
     ) -> WorkflowTemplateExecutionResult:
-        message = "Unable to continue gathering evidence within the plan budget."
+        if action.parameters.get("refusal_reason") == "observation_no_progress":
+            message = "Unable to answer because no governed evidence met admission requirements."
+        else:
+            message = "Unable to continue gathering evidence within the plan budget."
         return WorkflowTemplateExecutionResult(
             run_id=request.run_id,
             template_name=request.template_name,
@@ -135,6 +141,7 @@ class ControlledReActOrchestrator:
             outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
             final_output=message,
             message=message,
+            stage_results=_stage_results_from_state(state),
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
         )
 
@@ -411,6 +418,17 @@ class ControlledReActOrchestrator:
             eligible_actions,
             convergence_signal=convergence_signal,
         )
+        if should_block_duplicate_observation_action(
+            constrained,
+            action_history=_action_history_payload(state),
+            observations=_observation_payloads(state),
+        ):
+            return constrained.model_copy(
+                update={
+                    "action_type": ReActActionType.REFUSE,
+                    "parameters": {"refusal_reason": "observation_no_progress"},
+                }
+            )
         return constrained
 
 
