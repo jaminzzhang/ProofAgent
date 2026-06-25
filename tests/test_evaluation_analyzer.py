@@ -124,7 +124,6 @@ def test_analyzer_reports_v3_intent_execution_behavior_metrics(tmp_path: Path) -
     )
 
     assert summary.behavior_metrics == {
-        "bfsp_recommendation_accuracy": 1.0,
         "inappropriate_clarification_rate": 0.0,
         "action_constraint_rewrite_rate": 0.0,
         "repeated_identical_retrieval_rate": 0.0,
@@ -137,7 +136,7 @@ def test_analyzer_reports_v3_intent_execution_behavior_metrics(tmp_path: Path) -
         / summary.analysis_id
         / "evaluation_report.md"
     ).read_text(encoding="utf-8")
-    assert "- bfsp_recommendation_accuracy: 1.000" in report
+    assert "- bfsp_recommendation_accuracy:" not in report
     assert "- inappropriate_clarification_rate: 0.000" in report
 
 
@@ -617,7 +616,7 @@ suite_id: v3_intent_execution
 version: "2026-06-21"
 name: V3 Intent Execution
 cases:
-  - case_id: v3_bfsp_policy_answer
+  - case_id: v3_policy_answer
     question: What is the reimbursement rule for travel meals?
     intent_type: enterprise_policy_question
     expected_resolution: answer_with_citations
@@ -627,9 +626,6 @@ cases:
       outcome: ANSWERED_WITH_CITATIONS
       required_citation_refs:
         - customer-support-policy
-      expected_business_flow_skill_pack_recommendation_type: single_pack
-      expected_business_flow_skill_pack_decision: admitted
-      expected_business_flow_skill_pack_id: enterprise_policy_qa
       forbid_clarification: true
       max_action_constraint_rewrites: 0
       forbid_repeated_retrieval_queries: true
@@ -644,7 +640,7 @@ version: "2026-06-21"
 suite_id: v3_intent_execution
 subjects:
   - case_ref:
-      case_id: v3_bfsp_policy_answer
+      case_id: v3_policy_answer
     artifacts:
       trace_ref: runs/history/run_v3_policy/trace.jsonl
       receipt_ref: runs/history/run_v3_policy/governance_receipt.md

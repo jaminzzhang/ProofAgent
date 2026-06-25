@@ -13,6 +13,8 @@ from proof_agent.contracts import (
     AgentManifest,
     ApprovalPause,
     ContextAdmission,
+    EnforcementPoint,
+    EvidenceChunk,
     PublishedAgentRuntimeFacts,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
@@ -26,7 +28,10 @@ from proof_agent.control.workflow.controlled_react import (
     build_controlled_react_orchestrator_for_invocation,
 )
 from proof_agent.control.workflow.controlled_react.ports import SnapshotStorePort
-from proof_agent.control.workflow.harness_helpers import finalize_run
+from proof_agent.control.workflow.harness_helpers import (
+    emit_policy_decision,
+    finalize_run,
+)
 from proof_agent.control.workflow.templates import resolve_workflow_template
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
@@ -165,6 +170,11 @@ def _execute_controlled_react_v3_agent_package_run(
         }
     )
     trace = TraceWriter(trace_path, run_id=run_id)
+    _emit_controlled_react_answer_policy_decision(
+        trace,
+        invocation=invocation,
+        execution_result=execution_result,
+    )
     emit_controlled_react_trace_projection(
         trace,
         manifest=manifest,
@@ -264,6 +274,12 @@ def _emit_controlled_react_evidence_projection(
         }
         for chunk in execution_result.evidence
     ]
+    source_refs = _evidence_source_refs(execution_result.evidence)
+    citations = [
+        chunk.citation
+        for chunk in execution_result.evidence
+        if chunk.citation is not None
+    ]
     trace.emit(
         "retrieval_result",
         status="ok",
@@ -278,9 +294,49 @@ def _emit_controlled_react_evidence_projection(
         status="ok",
         payload={
             "accepted_count": len(execution_result.evidence),
-            "metadata": {"evidence": evidence_payload},
+            "accepted_sources": source_refs,
+            "source_refs": source_refs,
+            "citations": citations,
+            "metadata": {
+                "accepted_sources": source_refs,
+                "source_refs": source_refs,
+                "citations": citations,
+                "evidence": evidence_payload,
+            },
         },
     )
+
+
+def _emit_controlled_react_answer_policy_decision(
+    trace: TraceWriter,
+    *,
+    invocation: Any,
+    execution_result: WorkflowTemplateExecutionResult,
+) -> None:
+    if not execution_result.evidence:
+        return
+    decision = invocation.policy.evaluate(
+        EnforcementPoint.BEFORE_ANSWER,
+        {
+            "accepted_evidence_count": len(execution_result.evidence),
+            "citations_present": any(
+                chunk.citation is not None for chunk in execution_result.evidence
+            ),
+        },
+        trace_event_id=f"{execution_result.run_id}:controlled_react:before_answer",
+    )
+    emit_policy_decision(trace, decision)
+
+
+def _evidence_source_refs(evidence: tuple[EvidenceChunk, ...]) -> list[str]:
+    refs: set[str] = set()
+    for chunk in evidence:
+        refs.add(chunk.source)
+        refs.add(Path(chunk.source).stem)
+        if chunk.citation is not None:
+            refs.add(chunk.citation)
+            refs.add(Path(chunk.citation.split("#", maxsplit=1)[0]).stem)
+    return sorted(refs)
 
 
 def _emit_controlled_react_stage_result(

@@ -30,3 +30,28 @@ def test_execute_agent_package_run_executes_v3_with_controlled_react(
         and event["payload"]["runtime"] == "controlled_react_orchestrator"
         for event in events
     )
+
+
+def test_execute_agent_package_run_projects_v3_answer_governance_trace(
+    tmp_path: Path,
+) -> None:
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    events = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event["event_type"] == "policy_decision" for event in events)
+    evidence_events = [
+        event for event in events if event["event_type"] == "evidence_evaluation"
+    ]
+    assert evidence_events
+    assert "customer-support-policy" in evidence_events[-1]["payload"]["source_refs"]
+    assert "customer-support-policy" in evidence_events[-1]["payload"]["accepted_sources"]

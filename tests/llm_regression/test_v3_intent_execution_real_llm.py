@@ -36,7 +36,7 @@ def test_v3_intent_execution_suite_passes_real_llm_gate(tmp_path: Path) -> None:
             "--suite",
             "v3_intent_execution",
             "--agent",
-            "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3_bfsp/agent.llm.yaml",
+            "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
             "--output-dir",
             str(tmp_path / "evaluations"),
         ],
@@ -50,5 +50,5 @@ def test_v3_intent_execution_suite_passes_real_llm_gate(tmp_path: Path) -> None:
         / "v3_intent_execution-v3_intent_execution_run_subjects"
         / "evaluation_report.md"
     ).read_text(encoding="utf-8")
-    assert "- bfsp_recommendation_accuracy:" in report
+    assert "- bfsp_recommendation_accuracy:" not in report
     assert "- action_constraint_rewrite_rate:" in report

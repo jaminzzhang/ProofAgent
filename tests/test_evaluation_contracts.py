@@ -109,7 +109,7 @@ def test_evaluation_expected_tool_governance_fields_are_contract_data() -> None:
 
 def test_evaluation_expected_intent_execution_fields_are_contract_data() -> None:
     case = EvaluationCase(
-        case_id="v3_bfsp_policy_answer",
+        case_id="business_flow_policy_answer",
         question="What is the reimbursement rule for travel meals?",
         intent_type="enterprise_policy_question",
         expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,

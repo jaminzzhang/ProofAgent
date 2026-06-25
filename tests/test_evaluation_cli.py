@@ -85,7 +85,7 @@ suite_id: v3_intent_execution
 version: "2026-06-21"
 name: V3 Intent Execution
 cases:
-  - case_id: v3_bfsp_policy_answer
+  - case_id: v3_policy_answer
     question: What is the reimbursement rule for travel meals?
     intent_type: enterprise_policy_question
     expected_resolution: answer_with_citations
@@ -95,9 +95,6 @@ cases:
       outcome: ANSWERED_WITH_CITATIONS
       required_citation_refs:
         - customer-support-policy
-      expected_business_flow_skill_pack_recommendation_type: single_pack
-      expected_business_flow_skill_pack_decision: admitted
-      expected_business_flow_skill_pack_id: enterprise_policy_qa
       forbid_clarification: true
       max_action_constraint_rewrites: 0
       forbid_repeated_retrieval_queries: true
@@ -113,10 +110,6 @@ cases:
         trace_path = Path(request.runs_dir) / "trace.jsonl"
         receipt_path = Path(request.runs_dir) / "governance_receipt.md"
         trace_path.write_text(
-            '{"event_type":"business_flow_skill_pack_recommendation","status":"ok",'
-            '"payload":{"recommendation_type":"single_pack"}}\n'
-            '{"event_type":"business_flow_skill_pack_admission","status":"ok",'
-            '"payload":{"decision":"admitted","selected_pack_id":"enterprise_policy_qa"}}\n'
             '{"event_type":"retrieval_step","status":"ok",'
             '"payload":{"query":"travel meal reimbursement"}}\n'
             '{"event_type":"retrieval_result","status":"ok",'
@@ -170,7 +163,7 @@ cases:
         / "evaluation_subjects.yaml"
     )
     assert subject_manifest.exists()
-    assert "v3_bfsp_policy_answer" in subject_manifest.read_text(encoding="utf-8")
+    assert "v3_policy_answer" in subject_manifest.read_text(encoding="utf-8")
     assert (
         output_dir
         / "v3_intent_execution-v3_intent_execution_run_subjects"
