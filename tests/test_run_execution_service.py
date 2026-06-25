@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+import proof_agent.delivery.agent_package_execution as agent_package_execution
 import proof_agent.delivery.run_execution_service as run_execution_service
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import ReceiptOutcome, RunResult, WorkflowTemplateExecutionResult
@@ -52,7 +53,7 @@ def test_published_agent_run_uses_per_run_history_artifact_dir(
         )
 
     monkeypatch.setattr(
-        run_execution_service,
+        agent_package_execution,
         "run_with_langgraph",
         fake_run_with_langgraph,
     )
@@ -109,7 +110,7 @@ def test_v3_published_agent_run_uses_controlled_react_orchestrator(
         raise AssertionError("react_enterprise_qa_v3 must not call legacy runtime")
 
     monkeypatch.setattr(
-        run_execution_service,
+        agent_package_execution,
         "run_with_langgraph",
         forbidden_run_with_langgraph,
     )

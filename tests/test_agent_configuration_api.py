@@ -99,6 +99,17 @@ def _import_react_enterprise_qa(client: TestClient) -> dict:
     return response.json()
 
 
+def _import_react_enterprise_qa_v3(client: TestClient) -> dict:
+    response = client.post(
+        "/api/config/agents/import",
+        json={
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def test_list_config_agents_empty(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -2895,6 +2906,38 @@ def test_validate_draft_runs_harness_as_validation_run(tmp_path: Path) -> None:
     assert loaded.json()["validation_records"][0]["run_id"] == body["run_id"]
 
 
+def test_validate_v3_draft_runs_controlled_react_as_validation_run(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa_v3(client)
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert validation.status_code == 200
+    body = validation.json()
+    assert body["run_purpose"] == "validation"
+
+    detail = client.get(f"/api/runs/{body['run_id']}")
+    assert detail.status_code == 200
+    detail_body = detail.json()
+    assert detail_body["workflow_projection"]["template_name"] == "react_enterprise_qa_v3"
+    assert detail_body["workflow_projection"]["template_descriptor_version"] == (
+        "react_enterprise_qa.v3"
+    )
+    trace = client.get(f"/api/runs/{body['run_id']}/trace").json()["events"]
+    assert any(
+        event["event_type"] == "run_started"
+        and event["payload"]["runtime"] == "controlled_react_orchestrator"
+        for event in trace
+    )
+
+
 def test_validate_draft_uses_per_run_history_artifact_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2903,9 +2946,9 @@ def test_validate_draft_uses_per_run_history_artifact_dir(
     draft = _import_enterprise_qa(client)
     captured: dict[str, Path] = {}
 
-    def fake_run_with_langgraph(agent_yaml: Path, **kwargs: Any) -> RunResult:
-        run_id = str(kwargs["run_id"])
-        runs_dir = Path(kwargs["runs_dir"])
+    def fake_execute_agent_package_run(request: Any) -> RunResult:
+        run_id = str(request.run_id)
+        runs_dir = Path(request.runs_dir)
         captured["runs_dir"] = runs_dir
         runs_dir.mkdir(parents=True, exist_ok=True)
         trace_path = runs_dir / "trace.jsonl"
@@ -2915,15 +2958,15 @@ def test_validate_draft_uses_per_run_history_artifact_dir(
             encoding="utf-8",
         )
         receipt_path.write_text("# Receipt\n", encoding="utf-8")
-        kwargs["store"].save_run_artifacts(
+        request.store.save_run_artifacts(
             run_id,
             trace_source=trace_path,
             receipt_source=receipt_path,
-            question=str(kwargs["question"]),
+            question=str(request.question),
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
-            run_purpose=kwargs["run_purpose"],
-            agent_id=kwargs["agent_id"],
-            draft_id=kwargs["draft_id"],
+            run_purpose=request.run_purpose,
+            agent_id=request.agent_id,
+            draft_id=request.draft_id,
         )
         return RunResult(
             final_output="ok",
@@ -2934,8 +2977,8 @@ def test_validate_draft_uses_per_run_history_artifact_dir(
 
     monkeypatch.setattr(
         configuration_api_module,
-        "run_with_langgraph",
-        fake_run_with_langgraph,
+        "execute_agent_package_run",
+        fake_execute_agent_package_run,
     )
 
     validation = client.post(

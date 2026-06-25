@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from proof_agent.evaluation.compare.result import RagResult
 
 
 runner = CliRunner()
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_demo_command_exists() -> None:
@@ -53,6 +55,41 @@ def test_cli_commands_load_local_dotenv(
 
     assert result.exit_code == 0
     assert "deepseek env: DEEPSEEK_API_KEY" in result.output
+
+
+def test_run_command_executes_v3_manifest_through_controlled_react(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    agent_yaml = (
+        REPO_ROOT
+        / "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(agent_yaml),
+            "--question",
+            "What is the reimbursement rule for travel meals?",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Outcome: ANSWERED_WITH_CITATIONS" in result.output
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "runs/latest/trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert any(
+        event["event_type"] == "run_started"
+        and event["payload"]["runtime"] == "controlled_react_orchestrator"
+        for event in events
+    )
 
 
 def test_dev_command_supervises_api_and_knowledge_worker(

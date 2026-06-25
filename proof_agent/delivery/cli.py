@@ -52,12 +52,22 @@ SERVER_CONFIG_DIR_ENV = "PROOF_AGENT_SERVER_CONFIG_DIR"
 SERVER_SEED_EXAMPLE_AGENT_ENV = "PROOF_AGENT_SERVER_SEED_EXAMPLE_AGENT"
 
 
-def run_with_langgraph(*args: Any, **kwargs: Any) -> Any:
-    """Lazy wrapper so evaluation CLI commands do not import runtime execution paths."""
+def agent_package_run_request(*args: Any, **kwargs: Any) -> Any:
+    """Lazy wrapper so non-run CLI commands do not import runtime execution paths."""
 
-    from proof_agent.runtime.langgraph_runner import run_with_langgraph as _run_with_langgraph
+    from proof_agent.delivery.agent_package_execution import AgentPackageRunRequest
 
-    return _run_with_langgraph(*args, **kwargs)
+    return AgentPackageRunRequest(*args, **kwargs)
+
+
+def execute_agent_package_run(*args: Any, **kwargs: Any) -> Any:
+    """Lazy wrapper so non-run CLI commands do not import runtime execution paths."""
+
+    from proof_agent.delivery.agent_package_execution import (
+        execute_agent_package_run as _execute_agent_package_run,
+    )
+
+    return _execute_agent_package_run(*args, **kwargs)
 
 
 def run_harness_rag(*args: Any, **kwargs: Any) -> Any:
@@ -129,11 +139,13 @@ def demo() -> None:
     typer.echo("Proof Agent demo")
     store = RunStore(Path("runs/history"))
     for scenario in REACT_DEMO_SCENARIOS:
-        result = run_with_langgraph(
-            DEMO_AGENT_PATH,
-            question=scenario.question,
-            runs_dir=Path("runs/latest"),
-            store=store,
+        result = execute_agent_package_run(
+            agent_package_run_request(
+                agent_yaml=DEMO_AGENT_PATH,
+                question=scenario.question,
+                runs_dir=Path("runs/latest"),
+                store=store,
+            )
         )
         typer.echo(f"{scenario.name}: {result.outcome.value}")
 
@@ -145,11 +157,13 @@ def react_demo() -> None:
     typer.echo("Proof Agent ReAct demo")
     store = RunStore(Path("runs/history"))
     for scenario in REACT_DEMO_SCENARIOS:
-        result = run_with_langgraph(
-            REACT_DEMO_AGENT_PATH,
-            question=scenario.question,
-            runs_dir=Path("runs/latest"),
-            store=store,
+        result = execute_agent_package_run(
+            agent_package_run_request(
+                agent_yaml=REACT_DEMO_AGENT_PATH,
+                question=scenario.question,
+                runs_dir=Path("runs/latest"),
+                store=store,
+            )
         )
         typer.echo(f"{scenario.name}: {result.outcome.value}")
 
@@ -159,8 +173,13 @@ def run(agent_yaml: str, question: str = typer.Option(SUPPORTED_QUESTION, "--que
     """Run one Enterprise QA question through the governed harness."""
 
     store = RunStore(Path("runs/history"))
-    result = run_with_langgraph(
-        Path(agent_yaml), question=question, runs_dir=Path("runs/latest"), store=store
+    result = execute_agent_package_run(
+        agent_package_run_request(
+            agent_yaml=Path(agent_yaml),
+            question=question,
+            runs_dir=Path("runs/latest"),
+            store=store,
+        )
     )
     typer.echo(result.final_output)
     typer.echo(f"Outcome: {result.outcome.value}")
@@ -289,11 +308,13 @@ def evaluate_run_suite(
         case_dir_name = _safe_path_segment(case.case_id)
         case_dir = artifacts_dir / case_dir_name
         case_dir.mkdir(parents=True, exist_ok=True)
-        result = run_with_langgraph(
-            agent_path,
-            question=case.question,
-            runs_dir=case_dir,
-            store=store,
+        result = execute_agent_package_run(
+            agent_package_run_request(
+                agent_yaml=agent_path,
+                question=case.question,
+                runs_dir=case_dir,
+                store=store,
+            )
         )
         response_path = case_dir / "evaluated_response.txt"
         response_path.write_text(str(result.final_output), encoding="utf-8")

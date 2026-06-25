@@ -78,6 +78,10 @@ from proof_agent.control.workflow.templates import (
     list_workflow_templates,
     resolve_workflow_template,
 )
+from proof_agent.delivery.agent_package_execution import (
+    AgentPackageRunRequest,
+    execute_agent_package_run,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import (
@@ -86,7 +90,6 @@ from proof_agent.observability.api.operator_identity import (
     require_operator_permission,
 )
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 router = APIRouter(tags=["configuration"])
@@ -2028,18 +2031,20 @@ def validate_config_draft(
     run_id = f"run_{uuid4().hex[:8]}"
     run_artifact_dir = run_store.create_run_dir(run_id)
     try:
-        result = run_with_langgraph(
-            package_dir / "agent.yaml",
-            question=request.question,
-            runs_dir=run_artifact_dir,
-            run_id=run_id,
-            store=run_store,
-            manifest=manifest,
-            resolved_knowledge_bindings=resolved_knowledge_bindings,
-            configuration_store=config_store,
-            run_purpose=RunPurpose.VALIDATION,
-            agent_id=agent_id,
-            draft_id=draft_id,
+        result = execute_agent_package_run(
+            AgentPackageRunRequest(
+                agent_yaml=package_dir / "agent.yaml",
+                question=request.question,
+                runs_dir=run_artifact_dir,
+                run_id=run_id,
+                store=run_store,
+                manifest=manifest,
+                resolved_knowledge_bindings=resolved_knowledge_bindings,
+                configuration_store=config_store,
+                run_purpose=RunPurpose.VALIDATION,
+                agent_id=agent_id,
+                draft_id=draft_id,
+            )
         )
     except ProofAgentError as exc:
         raise HTTPException(

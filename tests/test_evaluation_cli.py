@@ -17,7 +17,7 @@ def test_evaluate_analyze_cli_writes_artifacts_and_returns_one_when_required_cas
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "proof_agent.delivery.cli.run_with_langgraph",
+        "proof_agent.delivery.cli.execute_agent_package_run",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not create runs")),
     )
     suite_path, subjects_path = _write_cli_fixture(tmp_path)
@@ -48,7 +48,7 @@ def test_evaluate_analyze_cli_returns_one_when_release_decision_is_blocked(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "proof_agent.delivery.cli.run_with_langgraph",
+        "proof_agent.delivery.cli.execute_agent_package_run",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not create runs")),
     )
     suite_path, subjects_path = _write_cli_fixture(tmp_path, include_missing_case=False)
@@ -106,12 +106,12 @@ cases:
         encoding="utf-8",
     )
 
-    def fake_run_with_langgraph(agent_yaml, *, question, runs_dir, store=None):
-        assert Path(agent_yaml) == agent_path
-        assert question == "What is the reimbursement rule for travel meals?"
-        Path(runs_dir).mkdir(parents=True, exist_ok=True)
-        trace_path = Path(runs_dir) / "trace.jsonl"
-        receipt_path = Path(runs_dir) / "governance_receipt.md"
+    def fake_execute_agent_package_run(request):
+        assert Path(request.agent_yaml) == agent_path
+        assert request.question == "What is the reimbursement rule for travel meals?"
+        Path(request.runs_dir).mkdir(parents=True, exist_ok=True)
+        trace_path = Path(request.runs_dir) / "trace.jsonl"
+        receipt_path = Path(request.runs_dir) / "governance_receipt.md"
         trace_path.write_text(
             '{"event_type":"business_flow_skill_pack_recommendation","status":"ok",'
             '"payload":{"recommendation_type":"single_pack"}}\n'
@@ -142,7 +142,10 @@ cases:
             receipt_path=receipt_path,
         )
 
-    monkeypatch.setattr("proof_agent.delivery.cli.run_with_langgraph", fake_run_with_langgraph)
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli.execute_agent_package_run",
+        fake_execute_agent_package_run,
+    )
 
     result = runner.invoke(
         app,
