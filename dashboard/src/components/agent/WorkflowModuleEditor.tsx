@@ -12,7 +12,12 @@ import {
   readWorkflowStageConfigs,
   replaceWorkflowStages,
 } from '../../utils/agentYaml'
-import { WORKFLOW_FIELDS, WORKFLOW_TEMPLATE_FALLBACK, WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS } from './module-configs/workflow'
+import {
+  WORKFLOW_FIELDS,
+  WORKFLOW_TEMPLATE_FALLBACK,
+  WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS,
+  WORKFLOW_TEMPLATE_RUNTIMES,
+} from './module-configs/workflow'
 import { useWorkflowTemplates } from '../../hooks/useWorkflowTemplates'
 import { useLocale } from '../../i18n/locale'
 
@@ -138,6 +143,10 @@ export function WorkflowModuleEditor({
       ?? WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS[value]
     if (descriptorVersion) {
       onFieldChange(['workflow', 'template_descriptor_version'], descriptorVersion)
+    }
+    const runtime = WORKFLOW_TEMPLATE_RUNTIMES[value]
+    if (runtime) {
+      onFieldChange(['workflow', 'runtime'], runtime)
     }
   }
 

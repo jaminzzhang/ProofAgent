@@ -239,9 +239,13 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
     assert result.final_output == "Submit the claim form and itemized invoice."
     assert result.reasoning_summary is not None
     assert result.reasoning_summary["selected_action"] == "generate_final_answer"
+    assert [
+        stage.stage_id
+        for stage in result.stage_results
+    ] == ["plan", "tool_review", "tool", "plan", "model_answer", "response"]
 
 
-def test_resume_denied_tool_snapshot_returns_denial_without_tool_observation() -> None:
+def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
     action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
         update={"target_tool_name": "customer_lookup"}
     )
@@ -275,9 +279,15 @@ def test_resume_denied_tool_snapshot_returns_denial_without_tool_observation() -
     )
 
     assert result.run_id == "run_005"
-    assert result.outcome is ReceiptOutcome.TOOL_APPROVAL_DENIED
-    assert result.final_output == "The customer_lookup tool was not run because approval was denied."
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert result.final_output == "Submit the claim form and itemized invoice."
     assert result.approval_pause is None
+    assert [
+        stage.stage_id
+        for stage in result.stage_results
+    ] == ["plan", "tool_review", "tool", "plan", "model_answer", "response"]
+    tool_stage = next(stage for stage in result.stage_results if stage.stage_id == "tool")
+    assert tool_stage.summary["approval_state"] == "denied"
 
 
 class _TerminalAnswerPlanner:

@@ -115,6 +115,7 @@ async def _call_http_tool(request: MCPToolCallRequest) -> Mapping[str, Any]:
     async with httpx.AsyncClient(
         headers=dict(request.connection.http_headers),
         timeout=request.connection.timeout_seconds,
+        trust_env=False,
     ) as http_client:
         async with streamable_http_client(
             request.connection.endpoint,

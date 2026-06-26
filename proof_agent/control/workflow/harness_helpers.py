@@ -7,6 +7,7 @@ helpers. All functions are public; callers import what they need.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -182,6 +183,7 @@ def validate_model_output(
     response: ModelResponse,
     outcome: ReceiptOutcome,
     evidence: tuple[EvidenceChunk, ...],
+    question: str | None = None,
     observation_records: tuple[Mapping[str, Any], ...] = (),
 ) -> tuple[ValidationResult, ...]:
     output, parse_error = structured_final_answer_output(response.content, outcome=outcome)
@@ -211,7 +213,195 @@ def validate_model_output(
             observation_records=observation_records,
             require_supported_citation=bool(evidence),
         ),
+        validate_final_answer_adequacy(
+            question=question,
+            message=str(output["message"]),
+            citations=tuple(output["citations"]),
+            evidence=evidence,
+            outcome=outcome,
+        ),
     )
+
+
+def validate_final_answer_adequacy(
+    *,
+    question: str | None,
+    message: str,
+    citations: tuple[str, ...],
+    evidence: tuple[EvidenceChunk, ...],
+    outcome: ReceiptOutcome,
+) -> ValidationResult:
+    """Reject obvious non-answers that still satisfy schema and citation syntax."""
+
+    if outcome is not ReceiptOutcome.ANSWERED_WITH_CITATIONS:
+        return ValidationResult(
+            validator_name="final_answer_adequacy",
+            status=ValidationStatus.PASSED,
+            reason="Adequacy gate is only enforced for answered outcomes.",
+            metadata={},
+        )
+
+    violation_codes: list[str] = []
+    stripped_message = message.strip()
+    if not stripped_message:
+        violation_codes.append("empty_answer")
+    if not citations:
+        violation_codes.append("missing_claim_citation_binding")
+    if _looks_like_raw_evidence_dump(stripped_message, evidence):
+        violation_codes.append("raw_evidence_dump")
+    if _looks_like_table_fragment_without_conclusion(stripped_message):
+        violation_codes.append("missing_business_conclusion")
+    question_terms = _question_terms(question or "")
+    matched_question_terms = _matched_terms(stripped_message, question_terms)
+    if question_terms and len(matched_question_terms) < _minimum_question_term_matches(question_terms):
+        violation_codes.append("missing_question_terms")
+
+    if violation_codes:
+        return ValidationResult(
+            validator_name="final_answer_adequacy",
+            status=ValidationStatus.FAILED,
+            reason="Final answer is not adequate for governed response.",
+            metadata={
+                "violation_codes": tuple(dict.fromkeys(violation_codes)),
+                "question_term_count": len(question_terms),
+                "matched_question_terms": tuple(sorted(matched_question_terms)),
+            },
+        )
+    return ValidationResult(
+        validator_name="final_answer_adequacy",
+        status=ValidationStatus.PASSED,
+        reason="Final answer passed adequacy checks.",
+        metadata={
+            "question_term_count": len(question_terms),
+            "matched_question_terms": tuple(sorted(matched_question_terms)),
+        },
+    )
+
+
+def _looks_like_raw_evidence_dump(
+    message: str,
+    evidence: tuple[EvidenceChunk, ...],
+) -> bool:
+    normalized_message = _normalize_for_comparison(message)
+    if not normalized_message:
+        return False
+    for chunk in evidence:
+        evidence_candidates = (
+            _normalize_for_comparison(chunk.content),
+            _normalize_evidence_body_for_comparison(chunk.content),
+        )
+        for normalized_evidence in evidence_candidates:
+            if _looks_like_raw_evidence_candidate(
+                normalized_message,
+                normalized_evidence,
+            ):
+                return True
+    return False
+
+
+def _looks_like_raw_evidence_candidate(
+    normalized_message: str,
+    normalized_evidence: str,
+) -> bool:
+    if len(normalized_evidence) < 80:
+        return False
+    if normalized_message == normalized_evidence:
+        return True
+    if normalized_message.startswith(normalized_evidence[:80]):
+        return len(normalized_message) >= len(normalized_evidence) * 0.85
+    return False
+
+
+def _normalize_evidence_body_for_comparison(content: str) -> str:
+    body = "\n".join(
+        line
+        for line in content.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    return _normalize_for_comparison(body)
+
+
+def _looks_like_table_fragment_without_conclusion(message: str) -> bool:
+    lines = [line.strip() for line in message.splitlines() if line.strip()]
+    if len(lines) < 6:
+        return False
+    short_line_count = sum(1 for line in lines if len(line) <= 48)
+    return short_line_count / len(lines) >= 0.7
+
+
+_LATIN_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "before",
+        "does",
+        "from",
+        "have",
+        "into",
+        "rule",
+        "should",
+        "that",
+        "the",
+        "their",
+        "this",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+        "would",
+    }
+)
+
+_CJK_STOP_BIGRAMS = frozenset({"什么", "哪些", "多少", "如何", "怎么", "怎样", "了吗"})
+
+
+def _question_terms(question: str) -> tuple[str, ...]:
+    terms: list[str] = []
+    lowered = question.lower()
+    for token in re.findall(r"[a-z0-9]+", lowered):
+        if len(token) < 4 or token in _LATIN_STOPWORDS:
+            continue
+        terms.append(token)
+    for sequence in re.findall(r"[\u4e00-\u9fff]+", question):
+        if len(sequence) < 2:
+            continue
+        for index in range(len(sequence) - 1):
+            term = sequence[index : index + 2]
+            if term not in _CJK_STOP_BIGRAMS:
+                terms.append(term)
+    return tuple(dict.fromkeys(terms))
+
+
+def _matched_terms(message: str, question_terms: tuple[str, ...]) -> set[str]:
+    lowered_message = message.lower()
+    message_tokens = tuple(re.findall(r"[a-z0-9]+", lowered_message))
+    matched: set[str] = set()
+    for term in question_terms:
+        lowered_term = term.lower()
+        if lowered_term in lowered_message:
+            matched.add(term)
+            continue
+        if _latin_prefix_match(lowered_term, message_tokens):
+            matched.add(term)
+    return matched
+
+
+def _latin_prefix_match(term: str, message_tokens: tuple[str, ...]) -> bool:
+    if len(term) < 5 or re.fullmatch(r"[a-z0-9]+", term) is None:
+        return False
+    stem = term[:5]
+    return any(len(token) >= 5 and token[:5] == stem for token in message_tokens)
+
+
+def _minimum_question_term_matches(question_terms: tuple[str, ...]) -> int:
+    if len(question_terms) >= 3:
+        return 2
+    return 1
+
+
+def _normalize_for_comparison(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def structured_final_answer_output(

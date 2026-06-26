@@ -2938,6 +2938,45 @@ def test_validate_v3_draft_runs_controlled_react_as_validation_run(
     )
 
 
+def test_validate_v3_draft_full_capture_records_model_answer_interaction(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa_v3(client)
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={
+            "question": "What is the reimbursement rule for travel meals?",
+            "full_capture": True,
+        },
+    )
+
+    assert validation.status_code == 200
+    body = validation.json()
+    capture = client.get(body["links"]["validation_capture"])
+
+    assert capture.status_code == 200
+    payload = capture.json()["payload"]
+    assert [
+        stage["stage_id"]
+        for stage in payload["stage_results"]
+    ] == [
+        "intent_resolution",
+        "memory_read",
+        "plan",
+        "retrieval_review",
+        "retrieval",
+        "plan",
+        "model_answer",
+        "memory",
+        "response",
+    ]
+    assert payload["llm_interactions"]
+    assert payload["llm_interactions"][0]["stage_id"] == "model_answer"
+    assert payload["llm_interactions"][0]["request_json"]["messages"]
+
+
 def test_validate_draft_uses_per_run_history_artifact_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

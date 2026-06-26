@@ -623,6 +623,7 @@ class ReActEnterpriseQAStageBehavior:
             response=model_response,
             outcome=outcome,
             evidence=evidence,
+            question=str(state.get("question", "")),
         )
         for validation in validation_results:
             self.trace.emit(

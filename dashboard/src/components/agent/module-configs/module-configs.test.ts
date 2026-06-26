@@ -41,6 +41,7 @@ describe('module configuration field options', () => {
       'react_enterprise_qa',
       'enterprise_qa',
     ])
+    expect(optionsFor(WORKFLOW_FIELDS, 'Runtime')).toEqual(['controlled_react', 'langgraph'])
     expect(optionsFor(WORKFLOW_FIELDS, 'Checkpointer Provider')).toEqual(['sqlite'])
     expect(optionsFor(MODEL_FIELDS, 'Answer Model Provider')).toEqual(modelProviders)
     expect(optionsFor(MODEL_FIELDS, 'Planner Provider')).toEqual(modelProviders)

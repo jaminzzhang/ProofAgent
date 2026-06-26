@@ -16,11 +16,16 @@ from proof_agent.contracts import (
     ReActActionProposal,
     ReActActionType,
     ReceiptOutcome,
+    ValidationResult,
+    ValidationStatus,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionResult,
 )
-from proof_agent.control.workflow.controlled_react.ports import ControlledReActPorts
+from proof_agent.control.workflow.controlled_react.ports import (
+    AnswerSynthesisResult,
+    ControlledReActPorts,
+)
 from proof_agent.control.workflow.controlled_react.state_machine import (
     ControlledReActStateMachine,
     EffectResult,
@@ -69,6 +74,7 @@ class ControlledReActOrchestrator:
             question=request.question,
             phase=ControlledReActRunPhase.PLANNING,
         )
+        state = self._prepare_pre_loop_state(state)
         action = self._ports.planner.plan(state)
         if action.action_type is ReActActionType.PLAN_RETRIEVAL:
             if self._review_denies(state, action):
@@ -94,6 +100,7 @@ class ControlledReActOrchestrator:
                 if action.action_type is not ReActActionType.GENERATE_FINAL_ANSWER:
                     raise ValueError(f"unsupported tool follow-up action: {action.action_type}")
                 answer = self._ports.answer_synthesis.synthesize(state, action)
+                memory_write = self._write_memory(state, answer)
                 return WorkflowTemplateExecutionResult(
                     run_id=request.run_id,
                     template_name=request.template_name,
@@ -102,14 +109,22 @@ class ControlledReActOrchestrator:
                     final_output=answer.final_output,
                     message=answer.message,
                     evidence=answer.evidence,
-                    stage_results=_stage_results_from_state(state),
+                    stage_results=_stage_results_for_answer(
+                        state,
+                        answer,
+                        action,
+                        memory_write_result=memory_write,
+                    ),
+                    intent_resolution=state.intent_resolution,
                     reasoning_summary=answer.reasoning_summary,
                     model_usage_summary=answer.model_usage_summary,
+                    stage_llm_interactions=answer.stage_llm_interactions,
                 )
             return self._pause_for_tool_approval(request, state, action)
         if action.action_type is not ReActActionType.GENERATE_FINAL_ANSWER:
             raise ValueError(f"unsupported start action: {action.action_type}")
         answer = self._ports.answer_synthesis.synthesize(state, action)
+        memory_write = self._write_memory(state, answer)
         return WorkflowTemplateExecutionResult(
             run_id=request.run_id,
             template_name=request.template_name,
@@ -118,9 +133,16 @@ class ControlledReActOrchestrator:
             final_output=answer.final_output,
             message=answer.message,
             evidence=answer.evidence,
-            stage_results=_stage_results_from_state(state),
+            stage_results=_stage_results_for_answer(
+                state,
+                answer,
+                action,
+                memory_write_result=memory_write,
+            ),
+            intent_resolution=state.intent_resolution,
             reasoning_summary=answer.reasoning_summary,
             model_usage_summary=answer.model_usage_summary,
+            stage_llm_interactions=answer.stage_llm_interactions,
         )
 
     def _refuse_plan_budget_exhausted(
@@ -134,15 +156,28 @@ class ControlledReActOrchestrator:
             message = "Unable to answer because no governed evidence met admission requirements."
         else:
             message = "Unable to continue gathering evidence within the plan budget."
+        answer = AnswerSynthesisResult(
+            outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+            final_output=message,
+            message=message,
+            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+        memory_write = self._write_memory(state, answer)
         return WorkflowTemplateExecutionResult(
             run_id=request.run_id,
             template_name=request.template_name,
             template_descriptor_version=request.template_descriptor_version,
-            outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+            outcome=answer.outcome,
             final_output=message,
             message=message,
-            stage_results=_stage_results_from_state(state),
-            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+            stage_results=_stage_results_for_refusal(
+                state,
+                answer,
+                action,
+                memory_write_result=memory_write,
+            ),
+            intent_resolution=state.intent_resolution,
+            reasoning_summary=answer.reasoning_summary,
         )
 
     def _ask_clarification(
@@ -249,7 +284,46 @@ class ControlledReActOrchestrator:
             raise ValueError("approval resume snapshot is missing pending action")
         action = state.action_history[-1]
         if not request.approved:
-            return self._deny_tool_approval(state, action)
+            planning_state = self._observe_tool_approval_denial(state, action, request)
+            next_action = self._ports.planner.plan(planning_state)
+            if next_action.action_type is ReActActionType.REFUSE:
+                return self._refuse_plan_budget_exhausted(
+                    ControlledReActStartRequest(
+                        run_id=planning_state.run_id,
+                        template_name=planning_state.template_name,
+                        template_descriptor_version=(
+                            planning_state.template_descriptor_version
+                        ),
+                        question=planning_state.question,
+                    ),
+                    next_action,
+                    state=planning_state,
+                )
+            if next_action.action_type is not ReActActionType.GENERATE_FINAL_ANSWER:
+                raise ValueError(
+                    f"unsupported denied approval follow-up action: {next_action.action_type}"
+                )
+            answer = self._ports.answer_synthesis.synthesize(planning_state, next_action)
+            memory_write = self._write_memory(planning_state, answer)
+            return WorkflowTemplateExecutionResult(
+                run_id=planning_state.run_id,
+                template_name=planning_state.template_name,
+                template_descriptor_version=planning_state.template_descriptor_version,
+                outcome=answer.outcome,
+                final_output=answer.final_output,
+                message=answer.message,
+                evidence=answer.evidence,
+                stage_results=_stage_results_for_answer(
+                    planning_state,
+                    answer,
+                    next_action,
+                    memory_write_result=memory_write,
+                ),
+                intent_resolution=planning_state.intent_resolution,
+                reasoning_summary=answer.reasoning_summary,
+                model_usage_summary=answer.model_usage_summary,
+                stage_llm_interactions=answer.stage_llm_interactions,
+            )
         if self._ports.tool_observation is None:
             raise ValueError("tool observation port is required for approval resume")
         observing_state = state.model_copy(
@@ -264,6 +338,7 @@ class ControlledReActOrchestrator:
         if next_action.action_type is not ReActActionType.GENERATE_FINAL_ANSWER:
             raise ValueError(f"unsupported resume action: {next_action.action_type}")
         answer = self._ports.answer_synthesis.synthesize(planning_state, next_action)
+        memory_write = self._write_memory(planning_state, answer)
         return WorkflowTemplateExecutionResult(
             run_id=planning_state.run_id,
             template_name=planning_state.template_name,
@@ -272,9 +347,16 @@ class ControlledReActOrchestrator:
             final_output=answer.final_output,
             message=answer.message,
             evidence=answer.evidence,
-            stage_results=_stage_results_from_state(planning_state),
+            stage_results=_stage_results_for_answer(
+                planning_state,
+                answer,
+                next_action,
+                memory_write_result=memory_write,
+            ),
+            intent_resolution=planning_state.intent_resolution,
             reasoning_summary=answer.reasoning_summary,
             model_usage_summary=answer.model_usage_summary,
+            stage_llm_interactions=answer.stage_llm_interactions,
         )
 
     def _deny_tool_approval(
@@ -340,8 +422,41 @@ class ControlledReActOrchestrator:
             final_output=message,
             message=message,
             approval_pause=approval_pause,
+            stage_results=_stage_results_for_waiting_approval(waiting_state, action),
+            intent_resolution=waiting_state.intent_resolution,
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
         )
+
+    def _prepare_pre_loop_state(
+        self,
+        state: ControlledReActRunState,
+    ) -> ControlledReActRunState:
+        if self._ports.intent_resolution is not None:
+            intent_result = self._ports.intent_resolution.resolve(state)
+            state = state.model_copy(
+                update={
+                    "intent_resolution": intent_result.intent_resolution.model_dump(
+                        mode="json",
+                    ),
+                }
+            )
+        if self._ports.memory is not None:
+            state = state.model_copy(
+                update={
+                    "memory_context": dict(self._ports.memory.read(state)),
+                    "memory_read_performed": True,
+                }
+            )
+        return state
+
+    def _write_memory(
+        self,
+        state: ControlledReActRunState,
+        answer: AnswerSynthesisResult,
+    ) -> ValidationResult | None:
+        if self._ports.memory is None:
+            return None
+        return self._ports.memory.write(state, answer)
 
     def _observe_knowledge(
         self,
@@ -375,6 +490,38 @@ class ControlledReActOrchestrator:
             }
         )
         observation = self._ports.tool_observation.observe(observing_state, action)
+        return self._commit_observation(observing_state, action, observation)
+
+    def _observe_tool_approval_denial(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        request: ControlledReActResumeRequest,
+    ) -> ControlledReActRunState:
+        tool_name = action.target_tool_name or "unknown_tool"
+        observing_state = state.model_copy(
+            update={
+                "phase": ControlledReActRunPhase.OBSERVING,
+                "plan_round": state.plan_round + 1,
+            }
+        )
+        observation = ObservationRecord(
+            observation_id=f"obs_denied_{action.action_id}",
+            action_id=action.action_id,
+            action_type=action.action_type,
+            round=observing_state.plan_round,
+            truth_ref=f"approval://{request.approval_id}",
+            summary={
+                "tool_name": tool_name,
+                "approval_state": "denied",
+                "actor": request.actor,
+            },
+            accepted_evidence_count=0,
+            new_evidence_count=0,
+            unresolved_subgoals=("tool_approval_denied",),
+            source_refs=(f"tool://{tool_name}",),
+            citation_refs=(),
+        )
         return self._commit_observation(observing_state, action, observation)
 
     def _commit_observation(
@@ -502,3 +649,236 @@ def _stage_id_for_observation(record: ObservationRecord) -> str:
     if record.action_type is ReActActionType.PLAN_RETRIEVAL:
         return "retrieval"
     return str(record.action_type.value)
+
+
+def _stage_results_for_answer(
+    state: ControlledReActRunState,
+    answer: AnswerSynthesisResult,
+    final_action: ReActActionProposal,
+    *,
+    memory_write_result: ValidationResult | None = None,
+) -> tuple[WorkflowStageResult, ...]:
+    results: list[WorkflowStageResult] = []
+    if state.intent_resolution is not None:
+        results.append(_intent_resolution_stage_result(state))
+    if state.memory_read_performed:
+        results.append(_memory_read_stage_result(state))
+    first_retrieval_action = _first_action_of_type(
+        state,
+        ReActActionType.PLAN_RETRIEVAL,
+    )
+    if first_retrieval_action is not None:
+        results.append(_plan_stage_result(state, first_retrieval_action))
+        results.append(_retrieval_review_stage_result(first_retrieval_action))
+    first_tool_action = _first_action_of_type(
+        state,
+        ReActActionType.PROPOSE_TOOL_CALL,
+    )
+    if first_tool_action is not None:
+        results.append(_plan_stage_result(state, first_tool_action))
+        results.append(_tool_review_stage_result(first_tool_action))
+    results.extend(_stage_results_from_state(state))
+    results.append(_plan_stage_result(state, final_action))
+    results.append(_model_answer_stage_result(answer))
+    if memory_write_result is not None:
+        results.append(_memory_write_stage_result(memory_write_result))
+    results.append(_response_stage_result(answer))
+    return tuple(results)
+
+
+def _stage_results_for_refusal(
+    state: ControlledReActRunState,
+    answer: AnswerSynthesisResult,
+    final_action: ReActActionProposal,
+    *,
+    memory_write_result: ValidationResult | None = None,
+) -> tuple[WorkflowStageResult, ...]:
+    results = _stage_results_before_terminal(state, final_action)
+    if memory_write_result is not None:
+        results.append(_memory_write_stage_result(memory_write_result))
+    results.append(_response_stage_result(answer))
+    return tuple(results)
+
+
+def _stage_results_for_waiting_approval(
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+) -> tuple[WorkflowStageResult, ...]:
+    results: list[WorkflowStageResult] = []
+    if state.intent_resolution is not None:
+        results.append(_intent_resolution_stage_result(state))
+    if state.memory_read_performed:
+        results.append(_memory_read_stage_result(state))
+    results.append(_plan_stage_result(state, action))
+    results.append(_tool_review_stage_result(action))
+    return tuple(results)
+
+
+def _stage_results_before_terminal(
+    state: ControlledReActRunState,
+    final_action: ReActActionProposal,
+) -> list[WorkflowStageResult]:
+    results: list[WorkflowStageResult] = []
+    if state.intent_resolution is not None:
+        results.append(_intent_resolution_stage_result(state))
+    if state.memory_read_performed:
+        results.append(_memory_read_stage_result(state))
+    first_retrieval_action = _first_action_of_type(
+        state,
+        ReActActionType.PLAN_RETRIEVAL,
+    )
+    if first_retrieval_action is not None:
+        results.append(_plan_stage_result(state, first_retrieval_action))
+        results.append(_retrieval_review_stage_result(first_retrieval_action))
+    first_tool_action = _first_action_of_type(
+        state,
+        ReActActionType.PROPOSE_TOOL_CALL,
+    )
+    if first_tool_action is not None:
+        results.append(_plan_stage_result(state, first_tool_action))
+        results.append(_tool_review_stage_result(first_tool_action))
+    results.extend(_stage_results_from_state(state))
+    results.append(_plan_stage_result(state, final_action))
+    return results
+
+
+def _intent_resolution_stage_result(
+    state: ControlledReActRunState,
+) -> WorkflowStageResult:
+    intent_resolution = dict(state.intent_resolution or {})
+    return WorkflowStageResult(
+        stage_id="intent_resolution",
+        status=WorkflowStageStatus.COMPLETED,
+        summary={
+            "resolution_id": str(intent_resolution.get("resolution_id", "")),
+            "domain_intent": str(intent_resolution.get("domain_intent", "")),
+            "recommended_next_action": str(
+                intent_resolution.get("recommended_next_action", "")
+            ),
+            "confidence": intent_resolution.get("confidence", 0),
+        },
+        produced_fact_refs=("intent_resolution",),
+    )
+
+
+def _memory_read_stage_result(
+    state: ControlledReActRunState,
+) -> WorkflowStageResult:
+    memory_context = dict(state.memory_context)
+    return WorkflowStageResult(
+        stage_id="memory_read",
+        status=WorkflowStageStatus.COMPLETED,
+        summary={
+            "read_key_count": len(memory_context),
+            "keys": sorted(memory_context),
+        },
+        produced_fact_refs=("memory_context",),
+    )
+
+
+def _plan_stage_result(
+    state: ControlledReActRunState,
+    final_action: ReActActionProposal,
+) -> WorkflowStageResult:
+    return WorkflowStageResult(
+        stage_id="plan",
+        status=WorkflowStageStatus.COMPLETED,
+        summary={
+            "action_count": len(state.action_history) + 1,
+            "plan_round": state.plan_round,
+            "final_action_id": final_action.action_id,
+            "final_action_type": final_action.action_type.value,
+        },
+        produced_fact_refs=("reasoning_summary", "action_proposal"),
+    )
+
+
+def _retrieval_review_stage_result(
+    action: ReActActionProposal,
+) -> WorkflowStageResult:
+    return WorkflowStageResult(
+        stage_id="retrieval_review",
+        status=WorkflowStageStatus.COMPLETED,
+        summary={
+            "action_id": action.action_id,
+            "action_type": action.action_type.value,
+            "review_status": "allowed",
+        },
+        produced_fact_refs=("review_results",),
+    )
+
+
+def _tool_review_stage_result(
+    action: ReActActionProposal,
+) -> WorkflowStageResult:
+    return WorkflowStageResult(
+        stage_id="tool_review",
+        status=WorkflowStageStatus.COMPLETED,
+        summary={
+            "action_id": action.action_id,
+            "action_type": action.action_type.value,
+            "tool_name": action.target_tool_name or "",
+            "review_status": "allowed",
+        },
+        produced_fact_refs=("review_results",),
+    )
+
+
+def _model_answer_stage_result(answer: AnswerSynthesisResult) -> WorkflowStageResult:
+    return WorkflowStageResult(
+        stage_id="model_answer",
+        status=(
+            WorkflowStageStatus.COMPLETED
+            if answer.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+            else WorkflowStageStatus.BLOCKED
+        ),
+        outcome=answer.outcome,
+        summary={
+            "outcome": answer.outcome.value,
+            "final_output_length": len(answer.final_output),
+            "model_call_count": len(answer.stage_llm_interactions),
+        },
+        produced_fact_refs=("final_output", "review_results"),
+    )
+
+
+def _memory_write_stage_result(
+    result: ValidationResult,
+) -> WorkflowStageResult:
+    return WorkflowStageResult(
+        stage_id="memory",
+        status=(
+            WorkflowStageStatus.COMPLETED
+            if result.status is ValidationStatus.PASSED
+            else WorkflowStageStatus.BLOCKED
+        ),
+        summary={
+            "status": result.status.value,
+            "validator_name": result.validator_name,
+            "written_fields": list(result.metadata.get("written_fields", ())),
+        },
+        produced_fact_refs=("memory_write",),
+    )
+
+
+def _response_stage_result(answer: AnswerSynthesisResult) -> WorkflowStageResult:
+    return WorkflowStageResult(
+        stage_id="response",
+        status=WorkflowStageStatus.COMPLETED,
+        outcome=answer.outcome,
+        summary={
+            "outcome": answer.outcome.value,
+            "message_length": len(answer.message),
+        },
+        produced_fact_refs=("final_output",),
+    )
+
+
+def _first_action_of_type(
+    state: ControlledReActRunState,
+    action_type: ReActActionType,
+) -> ReActActionProposal | None:
+    for action in state.action_history:
+        if action.action_type is action_type:
+            return action
+    return None

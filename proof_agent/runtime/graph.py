@@ -265,6 +265,7 @@ def build_enterprise_qa_graph(
             response=model_response,
             outcome=outcome,
             evidence=evidence,
+            question=question,
         )
         for validation in validation_results:
             trace.emit(

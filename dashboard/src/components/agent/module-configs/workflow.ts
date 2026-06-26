@@ -21,8 +21,15 @@ export const WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS: Record<string, string> = {
   enterprise_qa: 'enterprise_qa.v1',
 }
 
+export const WORKFLOW_TEMPLATE_RUNTIMES: Record<string, string> = {
+  react_enterprise_qa_v3: 'controlled_react',
+  react_enterprise_qa_v2: 'langgraph',
+  react_enterprise_qa: 'langgraph',
+  enterprise_qa: 'langgraph',
+}
+
 export const WORKFLOW_FIELDS = [
-  { label: 'Runtime', path: ['workflow', 'runtime'], input: 'select' as const, options: ['langgraph'] },
+  { label: 'Runtime', path: ['workflow', 'runtime'], input: 'select' as const, options: ['controlled_react', 'langgraph'] },
   {
     label: 'Template',
     path: ['workflow', 'template'],

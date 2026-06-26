@@ -21,6 +21,7 @@ from proof_agent.contracts import (
     ResolvedKnowledgeBindingSet,
     RunPurpose,
     RunResult,
+    WorkflowStageLlmInteraction,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionResult,
@@ -250,6 +251,7 @@ def emit_controlled_react_trace_projection(
     )
     if execution_result.evidence:
         _emit_controlled_react_evidence_projection(trace, execution_result)
+    _emit_controlled_react_model_usage_projection(trace, execution_result)
     for stage_result in execution_result.stage_results:
         _emit_controlled_react_stage_result(trace, stage_result)
     if execution_result.approval_pause is not None:
@@ -333,6 +335,77 @@ def _emit_controlled_react_answer_policy_decision(
         trace_event_id=f"{execution_result.run_id}:controlled_react:before_answer",
     )
     emit_policy_decision(trace, decision)
+
+
+def _emit_controlled_react_model_usage_projection(
+    trace: TraceWriter,
+    execution_result: WorkflowTemplateExecutionResult,
+) -> None:
+    for interaction in execution_result.stage_llm_interactions:
+        _emit_controlled_react_model_interaction(
+            trace,
+            interaction,
+            model_usage_summary=dict(execution_result.model_usage_summary),
+        )
+
+
+def _emit_controlled_react_model_interaction(
+    trace: TraceWriter,
+    interaction: WorkflowStageLlmInteraction,
+    *,
+    model_usage_summary: Mapping[str, Any],
+) -> None:
+    request_json = dict(interaction.request_json)
+    messages = request_json.get("messages")
+    message_items = list(messages) if isinstance(messages, list | tuple) else []
+    trace.emit(
+        "model_request",
+        status="ok",
+        payload={
+            "provider": interaction.provider,
+            "model": interaction.model,
+            "role": interaction.role,
+            "response_format": request_json.get("response_format"),
+            "message_count": len(message_items),
+            "prompt_length": _message_content_length(message_items),
+            "system_prompt_length": _system_message_content_length(message_items),
+            "estimated_tokens": model_usage_summary.get("estimated_tokens"),
+            "stream": request_json.get("stream"),
+            "cost_class": model_usage_summary.get("cost_class"),
+            "stage_id": interaction.stage_id,
+        },
+    )
+    trace.emit(
+        "model_response",
+        status="ok",
+        payload={
+            "provider": interaction.provider,
+            "model": interaction.model,
+            "finish_reason": model_usage_summary.get("finish_reason"),
+            "content_length": interaction.response_content_length,
+            "refusal_reason": None,
+            "token_usage": model_usage_summary.get("token_usage"),
+            "stage_id": interaction.stage_id,
+        },
+    )
+
+
+def _message_content_length(messages: list[Any]) -> int:
+    total = 0
+    for message in messages:
+        if isinstance(message, Mapping):
+            total += len(str(message.get("content", "")))
+    return total
+
+
+def _system_message_content_length(messages: list[Any]) -> int:
+    total = 0
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        if message.get("role") == "system":
+            total += len(str(message.get("content", "")))
+    return total
 
 
 def _evidence_source_refs(evidence: tuple[EvidenceChunk, ...]) -> list[str]:

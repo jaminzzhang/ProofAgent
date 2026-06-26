@@ -8,16 +8,33 @@ from proof_agent.contracts import (
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     EvidenceChunk,
+    IntentResolutionResult,
     ObservationRecord,
     PolicyDecision,
     ReActActionProposal,
     ReceiptOutcome,
     ReviewDecision,
+    ValidationResult,
+    WorkflowStageLlmInteraction,
 )
 
 
 class PlannerPort(Protocol):
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal: ...
+
+
+class IntentResolutionPort(Protocol):
+    def resolve(self, state: ControlledReActRunState) -> IntentResolutionResult: ...
+
+
+class MemoryPort(Protocol):
+    def read(self, state: ControlledReActRunState) -> Mapping[str, Any]: ...
+
+    def write(
+        self,
+        state: ControlledReActRunState,
+        answer: AnswerSynthesisResult,
+    ) -> ValidationResult: ...
 
 
 @dataclass(frozen=True)
@@ -28,6 +45,9 @@ class AnswerSynthesisResult:
     reasoning_summary: Mapping[str, Any] | None = None
     model_usage_summary: Mapping[str, Any] = field(default_factory=dict)
     evidence: tuple[EvidenceChunk, ...] = field(default_factory=tuple)
+    stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = field(
+        default_factory=tuple
+    )
 
 
 class AnswerSynthesisPort(Protocol):
@@ -80,6 +100,8 @@ class SnapshotStorePort(Protocol):
 class ControlledReActPorts:
     planner: PlannerPort
     answer_synthesis: AnswerSynthesisPort
+    intent_resolution: IntentResolutionPort | None = None
+    memory: MemoryPort | None = None
     knowledge_observation: KnowledgeObservationPort | None = None
     tool_observation: ToolObservationPort | None = None
     policy: PolicyPort | None = None

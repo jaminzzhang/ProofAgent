@@ -654,9 +654,21 @@ _Avoid_: Autonomous ReAct agent, direct model executor, single-pass DAG mislabel
 The run-scoped Control Plane execution authority for the React Enterprise QA V3 product path. Its public execution interface starts or resumes a governed run; Intent Resolution, planning, review, observation actions, approval suspension and resume, convergence, and terminal outcome selection are internal orchestration steps.
 _Avoid_: LangGraph topology, legacy workflow compatibility layer, autonomous agent runtime, public per-stage executor
 
+**Controlled ReAct Intent Resolution Placement**:
+The V3 rule that Intent Resolution is an Orchestrator-owned pre-loop control stage that records intent and Business Flow admission facts before the first plan round. It is not a Delivery preprocessor and does not count against the Controlled ReAct Loop `max_plan_rounds` budget.
+_Avoid_: delivery-owned intent routing, plan round zero, descriptor-owned pre-node, prompt-only context injection
+
 **Controlled ReAct Stage Projection**:
 The trace-safe projection that names an internal Controlled ReAct Orchestrator step as a Workflow Template Stage for trace, Governance Receipt, Dashboard, and validation capture. It is an observability and explanation fact, not an execution interface or internal module seam.
 _Avoid_: Public stage method, runtime graph node, Orchestrator module boundary, stage-owned execution
+
+**Controlled ReAct Stage Projection Authority**:
+The V3 target-state rule that Workflow Stage projection facts are produced by the Controlled ReAct Orchestrator from real internal transition facts before Delivery writes trace, receipt, RunStore, or validation capture artifacts. Delivery-side stage projection may exist only as a temporary migration shim and must not become the semantic source of stage sequencing.
+_Avoid_: delivery-owned stage sequencing, synthetic full-chain trace, projection-as-execution, artifact writer as workflow authority
+
+**Controlled ReAct Review Stage Execution**:
+The V3 rule that `retrieval_review` and `tool_review` projections must come from real Orchestrator review, policy, and action-constraining facts before an observation action executes. They are not UI filler stages and must not be emitted merely to make a run appear to have traversed the full Workflow Template.
+_Avoid_: synthetic review stage, trace-only review, post-hoc review projection, review-as-display
 
 **Controlled ReAct Shadow Verification**:
 The temporary migration safety check that runs new Controlled ReAct Orchestrator behavior against representative historical V3 inputs and compares governed outcomes, stage projections, trace facts, and known semantic corrections before deleting legacy execution paths. It is not a compatibility mode and does not preserve old executors after cutover.
@@ -678,9 +690,13 @@ _Avoid_: LangGraph checkpoint as authority, trace replay, mutable latest Agent C
 The execution-state port that persists and loads Controlled ReAct Run State Snapshots for approval resume. The Controlled ReAct Orchestrator owns writes and reads; Trace, Governance Receipt, RunStore, and Dashboard may carry only trace-safe snapshot references or approval projections and must not deserialize snapshots or drive resume semantics from them.
 _Avoid_: RunStore detail field, trace event payload as state, Dashboard resume source, LangGraph checkpoint store
 
+**Controlled ReAct Approval Resume Loopback**:
+The V3 rule that approval resume writes an Observation Record and returns to plan whether the operator approved or denied the pending tool action. `WAITING_FOR_APPROVAL` is a governed waiting state, not a terminal outcome, and approval denial must not bypass replan.
+_Avoid_: approval denial as terminal branch, approval result as final answer, resume-to-response shortcut, pending approval as workflow failure
+
 **Controlled ReAct Transition Commit**:
 The single-run atomic commit boundary for one Controlled ReAct Orchestrator transition. It updates run state or snapshot, emits trace-safe stage and approval projections, and records idempotency keys for action and observation outputs under one transition lock.
-_Avoid_: Parallel resume, split state/trace writes, duplicate Observation Record append, tool retry as new action
+_Avoid_: Parallel resume, split state/trace writes, duplicate Observation Record append, tool retry as new action, final-only stage assembly
 
 **Controlled ReAct Outcome Taxonomy**:
 The mutually exclusive result classes for a Controlled ReAct Orchestrator transition: governed waiting, governed terminal outcome, or exceptional diagnostic stop. Approval pauses and clarification needs are waiting states, normal refusals and evidence-insufficient answers are governed terminal outcomes, and provider, adapter, normalization, or readiness failures are diagnostic stops with Workflow Stage Failure Diagnostic Projection.
@@ -693,6 +709,22 @@ _Avoid_: capability-owned state mutation, runtime graph state, dict transition p
 **Controlled ReAct Action Authority**:
 The Orchestrator-owned decision boundary that turns planner proposals, eligible action sets, review facts, policy facts, and observation history into the next governed action or terminal/waiting outcome. Planner, Review, Policy, Tool Gateway, retrieval, and tool adapters provide proposals or effect facts; they do not jump orchestration state or produce final answers.
 _Avoid_: planner as router, review as executor, policy as flow controller, tool gateway final response
+
+**Controlled ReAct Final Answer Gate**:
+The Orchestrator-owned terminal gate inside `model_answer` that validates final answer schema, safety, citation binding, and answer adequacy before an answered outcome may be returned. Delivery may project this result but must not repair or override an Orchestrator-produced terminal outcome after the fact.
+_Avoid_: delivery-side answer correction, citation-only success, raw evidence answer, post-hoc terminal rewrite
+
+**Controlled ReAct Memory Write Placement**:
+The V3 rule that memory write is an Orchestrator-owned post-terminal governed side effect projected as the `memory` Workflow Template Stage before `response`. By default, memory write failure records a blocked or skipped memory projection but does not change the already-governed terminal answer outcome unless policy explicitly requires fail-closed behavior.
+_Avoid_: memory-owned answer change, delivery-side memory write, memory write inside plan round, hidden terminal rewrite
+
+**Controlled ReAct Memory Read Placement**:
+The V3 rule that memory read is an Orchestrator-owned pre-loop context step after Intent Resolution and before the first plan round. Memory read may influence planning, retrieval query formation, and clarification selection, but it is not accepted evidence and must not become a citation basis for the final answer.
+_Avoid_: memory as evidence, memory citation, retrieval-afterthought memory read, delivery-side context injection
+
+**Controlled ReAct Response Projection Ownership**:
+The V3 rule that `response` is an Orchestrator-owned governed response projection stage that shapes the caller-visible message, refusal wording, citation presentation, and disclosure semantics from the terminal outcome. Delivery finalizes artifacts such as trace, receipt, and RunStore records, but must not own workflow response semantics.
+_Avoid_: delivery-owned response wording, artifact finalization as workflow stage, ungoverned final output wrapper, receipt-driven response
 
 **Controlled ReAct Effect Port Set**:
 The minimum side-effect interface set consumed by the Controlled ReAct Orchestrator: intent resolver, planner, review, policy, knowledge observation, tool observation, answer synthesis, stage projection, snapshot store, and transition lock. Concrete runtime, delivery, provider, store, and adapter classes plug in behind these ports.
@@ -726,9 +758,17 @@ _Avoid_: YAML-selected runtime engine, runtime feature flag, checkpointer-owned 
 The V3 interpretation of Workflow Template Descriptor stages and `workflow.stages[]`: they configure and explain stage projections for Dashboard, Governance Receipt, RunStore, and validation capture. They do not define execution nodes, edges, branches, ordering, loops, or Orchestrator state transitions.
 _Avoid_: YAML workflow graph, descriptor-owned execution order, configurable branch edge, stage list as runtime plan
 
+**Controlled ReAct Workflow Completeness**:
+The V3 completeness standard that requires the Orchestrator to execute the real Controlled ReAct Loop, enforce the relevant governance gates, and emit complete Workflow Stage projections for trace, receipt, Dashboard, and validation capture. Completeness is not descriptor-order execution and must not move execution authority out of the Orchestrator.
+_Avoid_: running every descriptor stage in order, projection-only success, trace event checklist, descriptor-driven orchestration
+
 **Controlled ReAct Orchestrator Test Authority**:
 The V3 correctness test boundary centered on the Controlled ReAct Orchestrator: pure state-machine tests, fake-port integration tests, and Delivery smoke tests through `WorkflowTemplateExecutionResult`. Legacy runtime-runner tests may survive only when rewritten to assert current V3 Orchestrator semantics.
 _Avoid_: LangGraph runner test authority, checkpoint resume golden path, old trace parity test, hidden legacy fixture
+
+**Controlled ReAct Workflow Completeness Acceptance Suite**:
+The first V3 full-chain acceptance matrix: single retrieval with memory read/write and response projection; no-evidence governed refusal; tool approval waiting with snapshot and approval projection; approved approval resume returning to plan; denied approval resume returning to plan; and bad final answer rejection through schema, citation, safety, and adequacy gates.
+_Avoid_: single happy-path validation, trace-only coverage, model-answer-only test, approval terminal shortcut
 
 **Controlled ReAct Migration Slice Order**:
 The implementation order for the V3 Orchestrator cutover: contracts, ports, and pure state-machine tests first; fake-port start/resume second; existing adapter integration third; Delivery entrypoint fourth; shadow verification fifth; legacy runtime, manifest runtime selector, old tests, and old current-doc paths last.

@@ -444,6 +444,7 @@ async def _discover_http_tools(
     async with httpx.AsyncClient(
         headers=dict(connection.http_headers),
         timeout=connection.timeout_seconds,
+        trust_env=False,
     ) as http_client:
         async with streamable_http_client(
             connection.endpoint,

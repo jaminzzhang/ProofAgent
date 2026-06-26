@@ -51,6 +51,16 @@ class ControlledReActRunState(FrozenModel):
     plan_round: int = 0
     action_history: tuple[ReActActionProposal, ...] = Field(default_factory=tuple)
     observation_records: tuple[ObservationRecord, ...] = Field(default_factory=tuple)
+    intent_resolution: Mapping[str, Any] | None = None
+    memory_context: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    memory_read_performed: bool = False
+
+    @field_validator("intent_resolution", "memory_context", mode="after")
+    @classmethod
+    def freeze_mappings(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        return freeze_value(value)
 
 
 class ControlledReActRunStateSnapshot(FrozenModel):

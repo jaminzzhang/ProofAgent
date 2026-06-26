@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
 from proof_agent.capabilities.react.planner import DeterministicReActPlanner
+from proof_agent.capabilities.react.intent import DeterministicIntentResolver
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.contracts import (
     ControlledReActRunState,
@@ -11,12 +13,20 @@ from proof_agent.contracts import (
     EvidenceChunk,
     EvidenceStatus,
     EnforcementPoint,
+    IntentResolutionResult,
+    ModelCallRole,
+    ModelRequest,
+    ModelResponse,
     ObservationRecord,
     PolicyDecision,
     ReActActionProposal,
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
+    ReviewDecision,
+    ValidationResult,
+    ValidationStatus,
+    WorkflowStageLlmInteraction,
 )
 from proof_agent.control.workflow.controlled_react.orchestrator import (
     ControlledReActOrchestrator,
@@ -25,6 +35,13 @@ from proof_agent.control.workflow.controlled_react.ports import (
     AnswerSynthesisResult,
     ControlledReActPorts,
     SnapshotStorePort,
+)
+from proof_agent.control.workflow.harness_helpers import (
+    build_model_request,
+    cost_class,
+    model_response_payload,
+    structured_final_answer_output,
+    validate_model_output,
 )
 from proof_agent.control.validators.evidence import evaluate_evidence
 
@@ -53,11 +70,14 @@ def build_controlled_react_orchestrator_for_invocation(
     return ControlledReActOrchestrator(
         ports=ControlledReActPorts(
             planner=_InvocationPlannerAdapter(invocation),
+            intent_resolution=_InvocationIntentResolutionAdapter(invocation),
+            memory=_InvocationMemoryAdapter(invocation),
             knowledge_observation=_InvocationKnowledgeObservationAdapter(invocation),
             tool_observation=_InvocationToolObservationAdapter(invocation),
             policy=_InvocationPolicyAdapter(invocation),
+            review=_InvocationReviewAdapter(invocation),
             snapshot_store=snapshot_store or _InMemorySnapshotStoreAdapter(),
-            answer_synthesis=_EvidenceAnswerSynthesisAdapter(),
+            answer_synthesis=_ModelAnswerSynthesisAdapter(invocation),
         )
     )
 
@@ -71,6 +91,44 @@ class _DeterministicPlannerAdapter:
             question=state.question,
             system_prompt="Controlled ReAct Orchestrator V3",
             context_summary=_context_summary(state),
+        )
+
+
+class _InvocationIntentResolutionAdapter:
+    def __init__(self, invocation: HarnessInvocation) -> None:
+        self._invocation = invocation
+        self._fallback = DeterministicIntentResolver()
+
+    def resolve(self, state: ControlledReActRunState) -> IntentResolutionResult:
+        resolver = self._invocation.intent_resolver or self._fallback
+        return resolver.resolve(
+            question=state.question,
+            system_prompt="Resolve user intent before Controlled ReAct planning.",
+            context_summary="pre_loop=true",
+            workflow_stage_context=None,
+            business_flow_skill_packs=self._invocation.business_flow_skill_packs,
+        )
+
+
+class _InvocationMemoryAdapter:
+    def __init__(self, invocation: HarnessInvocation) -> None:
+        self._memory = invocation.create_memory()
+
+    def read(self, state: ControlledReActRunState) -> Mapping[str, Any]:
+        _ = state
+        return self._memory.read()
+
+    def write(
+        self,
+        state: ControlledReActRunState,
+        answer: AnswerSynthesisResult,
+    ) -> ValidationResult:
+        return self._memory.write(
+            {
+                "question": state.question,
+                "outcome": answer.outcome.value,
+                "final_output_length": len(answer.final_output),
+            }
         )
 
 
@@ -240,7 +298,54 @@ class _InvocationPolicyAdapter:
         )
 
 
-class _EvidenceAnswerSynthesisAdapter:
+class _InvocationReviewAdapter:
+    def __init__(self, invocation: HarnessInvocation) -> None:
+        self._invocation = invocation
+
+    def review(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+    ) -> ReviewDecision:
+        point = EnforcementPoint.BEFORE_RETRIEVAL_PLAN
+        context = {
+            "run_id": state.run_id,
+            "question": state.question,
+            "action_type": action.action_type.value,
+            "risk_level": action.risk_level,
+            "parameters": dict(action.parameters),
+        }
+        if (
+            self._invocation.manifest.review is not None
+            and self._invocation.manifest.review.mode == "auto"
+            and self._invocation.review_subagent is not None
+        ):
+            return self._invocation.review_subagent.review(
+                enforcement_point=point,
+                action=action,
+                context=context,
+            )
+        decision = self._invocation.policy.evaluate(
+            point,
+            context,
+            trace_event_id=f"{state.run_id}:{action.action_id}:retrieval_review",
+        )
+        return ReviewDecision(
+            review_id=f"review.{action.action_id}.{point.value}",
+            enforcement_point=point,
+            suggested_decision=decision.decision,
+            reason=decision.reason,
+            confidence=1.0,
+            risk_flags=tuple(action.reasoning_summary.risk_flags),
+            subject_action_id=action.action_id,
+            metadata={"policy_rule_id": decision.policy_rule_id},
+        )
+
+
+class _ModelAnswerSynthesisAdapter:
+    def __init__(self, invocation: HarnessInvocation) -> None:
+        self._invocation = invocation
+
     def synthesize(
         self,
         state: ControlledReActRunState,
@@ -263,15 +368,60 @@ class _EvidenceAnswerSynthesisAdapter:
                 message=message,
                 reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
             )
-        first = evidence[0]
-        citation_suffix = f" Citation: {first.citation}." if first.citation else ""
-        message = f"{first.content.strip()}{citation_suffix}"
+        model_request = build_model_request(
+            question=state.question,
+            evidence=evidence,
+            provider=self._invocation.model_provider.provider_name,
+            model=self._invocation.model_provider.model_name,
+        )
+        estimated_tokens = self._invocation.model_provider.estimate_tokens(model_request)
+        model_response = self._invocation.model_provider.generate(model_request)
+        interaction = _llm_interaction_capture(
+            stage_id="model_answer",
+            stage_label="Model Answer",
+            role=ModelCallRole.FINAL_ANSWER.value,
+            request=model_request,
+            response=model_response,
+        )
+        outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
+        validation_results = validate_model_output(
+            response=model_response,
+            outcome=outcome,
+            evidence=evidence,
+            question=state.question,
+        )
+        if any(result.status is ValidationStatus.FAILED for result in validation_results):
+            message = "I cannot answer because the model output failed validation."
+            return AnswerSynthesisResult(
+                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                final_output=message,
+                message=message,
+                reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+                evidence=evidence,
+                model_usage_summary=_model_usage_summary(
+                    request=model_request,
+                    response=model_response,
+                    estimated_tokens=estimated_tokens,
+                ),
+                stage_llm_interactions=(interaction,),
+            )
+        final_answer_output, _parse_error = structured_final_answer_output(
+            model_response.content,
+            outcome=outcome,
+        )
+        message = str(final_answer_output.get("message", model_response.content))
         return AnswerSynthesisResult(
-            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            outcome=outcome,
             final_output=message,
             message=message,
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
             evidence=evidence,
+            model_usage_summary=_model_usage_summary(
+                request=model_request,
+                response=model_response,
+                estimated_tokens=estimated_tokens,
+            ),
+            stage_llm_interactions=(interaction,),
         )
 
 
@@ -435,6 +585,92 @@ def _tool_answer_from_observations(state: ControlledReActRunState) -> str | None
             return f"{tool_name} returned status {status}{subject_suffix}.{source_suffix}"
         return f"{tool_name} returned: {dict(raw_result)}"
     return None
+
+
+def _model_usage_summary(
+    *,
+    request: ModelRequest,
+    response: ModelResponse,
+    estimated_tokens: int | None,
+) -> dict[str, Any]:
+    payload = model_response_payload(response)
+    token_usage = payload.get("token_usage")
+    return {
+        "provider": response.provider_name,
+        "model": response.model_name,
+        "role": ModelCallRole.FINAL_ANSWER.value,
+        "message_count": len(request.messages),
+        "estimated_tokens": estimated_tokens,
+        "stream": request.stream,
+        "cost_class": cost_class(request.provider),
+        "finish_reason": response.finish_reason,
+        "content_length": len(response.content),
+        "token_usage": token_usage,
+    }
+
+
+def _llm_interaction_capture(
+    *,
+    stage_id: str,
+    stage_label: str,
+    role: str,
+    request: ModelRequest,
+    response: ModelResponse,
+) -> WorkflowStageLlmInteraction:
+    response_json, parse_error = (
+        _model_content_json(response.content)
+        if request.response_format == "json"
+        else (None, None)
+    )
+    return WorkflowStageLlmInteraction(
+        stage_id=stage_id,
+        stage_label=stage_label,
+        role=role,
+        provider=response.provider_name,
+        model=response.model_name,
+        request_json=_model_request_json(request),
+        response_json=response_json,
+        response_content_length=len(response.content),
+        response_json_parse_error_code=parse_error,
+    )
+
+
+def _model_request_json(request: ModelRequest) -> dict[str, Any]:
+    return {
+        "provider": request.provider,
+        "model": request.model,
+        "response_format": request.response_format,
+        "function_schema": (
+            request.function_schema.model_dump(mode="json")
+            if request.function_schema is not None
+            else None
+        ),
+        "stream": request.stream,
+        "temperature": request.temperature,
+        "max_output_tokens": request.max_output_tokens,
+        "timeout_seconds": request.timeout_seconds,
+        "metadata": dict(request.metadata),
+        "evidence_sources": list(request.evidence_sources),
+        "messages": [
+            {
+                "role": message.role.value,
+                "content": message.content,
+                "name": message.name,
+                "metadata": dict(message.metadata),
+            }
+            for message in request.messages
+        ],
+    }
+
+
+def _model_content_json(content: str) -> tuple[Any | None, str | None]:
+    stripped = content.strip()
+    if not stripped:
+        return None, "empty_model_output"
+    try:
+        return json.loads(stripped), None
+    except json.JSONDecodeError:
+        return None, "model_output_json_parse_failed"
 
 
 def _evidence_payload(chunk: EvidenceChunk) -> dict[str, Any]:

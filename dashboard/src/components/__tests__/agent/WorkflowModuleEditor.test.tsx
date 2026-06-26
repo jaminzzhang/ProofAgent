@@ -357,6 +357,67 @@ workflow:
     expect(optionValues).toEqual(['react_enterprise_qa_v3', 'react_enterprise_qa_v2'])
   })
 
+  it('keeps workflow runtime aligned when the Template selector changes', () => {
+    const onFieldChange = vi.fn()
+
+    render(
+      <WorkflowModuleEditor
+        agentYaml={AGENT_YAML}
+        descriptor={DESCRIPTOR}
+        onFieldChange={onFieldChange}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Template'), {
+      target: { value: 'react_enterprise_qa_v3' },
+    })
+
+    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template'], 'react_enterprise_qa_v3')
+    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template_descriptor_version'], 'react_enterprise_qa.v3')
+    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'runtime'], 'controlled_react')
+  })
+
+  it('keeps legacy workflow templates on langgraph runtime', () => {
+    const onFieldChange = vi.fn()
+
+    render(
+      <WorkflowModuleEditor
+        agentYaml={`name: insurance
+workflow:
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+  checkpointer:
+    type: memory
+`}
+        descriptor={{
+          ...DESCRIPTOR,
+          name: 'react_enterprise_qa_v3',
+          descriptor_version: 'react_enterprise_qa.v3',
+        }}
+        onFieldChange={onFieldChange}
+        onSaveCore={vi.fn()}
+        onSaveStages={vi.fn()}
+        onPreviewStage={vi.fn()}
+        busy={false}
+        stageBusy={false}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Template'), {
+      target: { value: 'react_enterprise_qa_v2' },
+    })
+
+    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template'], 'react_enterprise_qa_v2')
+    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template_descriptor_version'], 'react_enterprise_qa.v2')
+    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'runtime'], 'langgraph')
+  })
+
   it('falls back to the static template list when the catalog fails to load', () => {
     vi.mocked(useWorkflowTemplates).mockReturnValue({
       templates: [],
