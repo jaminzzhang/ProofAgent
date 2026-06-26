@@ -1,0 +1,93 @@
+# Tools Models And Memory Decisions
+
+## Ambiguity Resolutions
+
+- "`validation_capture.v2` schema enforcement" could mean continuing a naked dictionary builder, relying on store sanitization, or adding an explicit contract. Resolved: use **Validation Capture V2 Contract Model** in the contracts layer and let Delivery persist the model's JSON dump through the existing Sensitive Validation Capture Artifact store.
+- "Intent summary" could mean reusing **Reasoning Summary** or creating a separate contract. Resolved: use **Intent Resolution Contract** because user-intent understanding and ReAct action rationale are different audit facts.
+- "Multi-round Intent Resolution" could mean repeated hidden thinking inside one run or governed accumulation across user turns. Resolved: run Intent Resolution once per governed run and accumulate multi-turn understanding through **Controlled Conversation Context** and **Clarification Continuation Run**.
+- "V1 LLM support" could mean deterministic-only demo or unbounded model support. Resolved: V1 is real-LLM capable through the supported **Model Provider Registry** paths while deterministic planner, reviewer, and model behavior remain the release gate.
+- "LLM automatic decision" could mean model self-approval, rule-based Harness review, or a Control Plane review subagent. Resolved: use **Harness Review Subagent** for the LLM-backed control component that runs only in **Auto Review Mode**.
+- "LLM reviewer" could mean replacing deterministic review behavior or adding a provider-backed reviewer implementation. Resolved: use **LLM Harness Review Subagent** as an additional implementation.
+- "Review model" could mean the final answer model or a separate control-plane reviewer. Resolved: **Review Subagent Config** is independent from final answer `model`.
+- "Agent model configuration" could mean one shared model for every role or role-specific model settings. Resolved: use **Model Role Configuration**; UI may offer reuse shortcuts, but the Agent Contract stores distinct final, planner, and reviewer role settings.
+- "Shared model versioning" could mean pinning model connections into Published Agent Versions or resolving them live. Resolved per ADR-0020: **Shared Model Connections** are live references, and **Model Connection Impact Review**, configuration audit, **Model Connection Resolution Record**, and fail-closed resolution provide accountability instead of publication pinning.
+- "Reviewer model parameters" could mean reviewer-specific top-level fields or the same role usage shape used by Answer and Planner. Resolved: use **Model Usage Parameters** under `review.subagent.params` for timeout, maximum output tokens, temperature, and similar model-call settings; migrate directly without dual-reading old top-level reviewer usage fields.
+- "`ai_core` configuration" could mean a new top-level Agent Contract field or the existing role-specific model fields. Resolved: keep role-specific `model`, `react.planner`, and `review.subagent` fields.
+- "Planner provider" or "review provider" could mean role-specific provider names. Resolved: provider names identify external model channels; role semantics come from the Agent Contract section.
+- "LLM output" could mean raw provider text, provider-native tool calls, or a typed Harness contract. Resolved: V1 uses **Harness-Normalized Model Output** before any output affects control behavior.
+- "JSON output" could mean strict JSON mode, JSON inside text, or natural-language field inference. Resolved: use **Model Output JSON Contract** with bounded extraction only.
+- "Planner trace event" or "review trace event" could mean new role-specific model event names. Resolved: use shared model request and response events with **Model Call Role**.
+- "Planner prompt" or "review prompt" could mean Agent-authored business instructions or Harness-maintained control instructions. Resolved: use **Harness Control Prompt** for V1 control-plane prompts.
+- "Control context" could mean raw runtime state or a curated Harness input. Resolved: use **Structured Control Context** for planner and reviewer model calls.
+- "Invalid model output" could mean guessing a safer action, asking clarification, or failing closed. Resolved: use **Model Output Normalization Failure** and trace the precise parse or validation reason.
+- "Native tool calling" could mean provider-controlled tool execution or a payload normalization mechanism. Resolved: native tool calling is future **Native Tool Call Adapter** work and cannot bypass Harness governance.
+- "Subagent decision" could mean a final policy decision or a typed suggestion. Resolved: a **Review Decision** is only advisory until `PolicyEngine` validates it.
+- "Reviewer failure" could mean proceed optimistically or stop safely. Resolved: **Review Failure Policy** fails closed and records the reason.
+- "Review every node" could include answer admission and final output validation. Resolved: V1 **Auto Review Scope** excludes deterministic answer admission as an authority boundary.
+- "ReAct reasoning" could mean raw chain-of-thought or trace-safe planning facts. Resolved: record **Reasoning Summary** only.
+- "Review trace" could mean final policy or reviewer suggestion. Resolved: **Review Decision Event** records the suggestion; `policy_decision` records the final governance decision.
+- "Policy configuration" could mean natural-language instructions, prompt rules, or executable governance rules. Resolved: use **Policy Rule Configuration** for structured rules; natural-language descriptions are non-executable unless compiled and validated.
+- "Customer context" could mean conversation history, identity, authorization, or raw credentials. Resolved: use **Controlled Conversation Context** for prior turns and **Customer Authorization Context** for verified customer scope; raw credentials never enter the Harness run context.
+- "Tool configuration" could mean a reusable connection, a governance contract, or an Agent-specific enablement rule. Resolved: use **Tool Source** for the connection/package, **Tool Contract** for governance, and **Agent Tool Binding** for per-Agent scope and approval settings.
+- "Tool authorization" could mean planner self-certification, reviewer advice, or deterministic contract enforcement. Resolved: **Tool Contract** and **Agent Contract** policy metadata define the conditions, while PolicyEngine and Tool Gateway enforce them against normalized arguments and **Customer Authorization Context**.
+- "Multi-turn context" could mean raw transcript injection or governed context admission. Resolved: automatic context uses **Controlled Conversation Context** and must not replace per-turn evidence retrieval.
+- "Authorize knowledge configuration" could mean one broad administrator toggle, reusing Agent edit rights for every asset operation, or preserving distinct capabilities. Resolved: **Knowledge Source Permission Model** separates view, edit, publish, and archive; Knowledge Source API command requests resolve Operator Identity Context server-side instead of accepting request-body actor fields; Agent binding changes and Agent publication remain separate `agent.edit` and `agent.publish` capabilities. V1 single-user mode grants all while keeping API, Dashboard, and audit boundaries explicit.
+- "Document routing model" could mean reusing an Agent planner, requiring a second source model, or inheriting the ingestion model. Resolved: **Knowledge Routing Model Configuration** belongs to the **Knowledge Source**, inherits **Knowledge Ingestion Model Configuration** by default, and may be overridden independently.
+- "Reusable assets" could mean agent-scoped only, shared library, or hybrid. Resolved: **Knowledge Source**, **Tool Source**, and **Policy Rule Configuration** live in the **Shared Asset Library** and are bound to agents through Agent Knowledge Bindings and Agent Tool Bindings.
+- "Answer-ready planner call" could mean asking the planner to emit the obvious terminal action or letting Control Plane synthesize it. Resolved: with no blocker, the `plan` stage emits synthetic `GENERATE_FINAL_ANSWER` without a planner model call.
+- "Answer-ready blockers" could mean inferred ad hoc conditions or model rationale. Resolved: blockers are first-class Control Plane state with stable codes; an empty blocker list means final-answer obligation.
+- "Prior failed attempts" could mean useful conversation context or a current-run refusal basis. Resolved: after answer-ready, prior refusal summaries are audit/background only and must not be free-text model-bearing context for the terminal planner decision.
+- "Loop verification" could mean reusing the deterministic-provider test suite or adding real-LLM tests. Resolved per ADR-0033: the deterministic path (V1/V2) is necessary but not sufficient; **V3 real-LLM regression** with behavioral thresholds is the product release gate.
+
+## Relationship And Reference Notes
+
+- Tools, models, and memory are capabilities behind governed ports; they do not own workflow decisions.
+
+- Model-call roles provide trace and policy identity without leaking provider-specific SDK types into public contracts.
+
+- Validation Delivery constructs a **Validation Capture V2 Contract Model** and persists its JSON dump; Configuration Store remains a defense-in-depth sanitizer and retention owner, not the component that infers or normalizes the v2 payload schema from arbitrary dictionaries.
+- ReAct routing helpers that only parse Runtime Plane state for LangGraph branch selection stay local to the Runtime Adapter, while Control Plane model-provider trace wrapping moves into ReAct Enterprise QA Workflow Execution or ReAct Enterprise QA Stage Behavior initialization.
+- Workflow Template Execution must not route to or execute unavailable Workflow Template Stages; if a model or scheduler output selects an unavailable stage or action, the Control Envelope fails closed rather than treating the stage as silently skipped.
+- Memory stage availability is capability-gated; disabled-by-capability means the Agent Contract did not enable memory for that stage, while blocked-by-policy means memory was enabled but a specific memory write was denied by the Control Envelope.
+- A **LLM Harness Review Subagent** is a separate Harness Review Subagent implementation and must not replace deterministic review behavior used by tests and demos.
+- A **LLM Harness Review Subagent** follows the **LLM ReAct Planner** implementation pattern for model calls, output normalization, validation, and fail-closed tracing.
+- **Model Provider Registry** provider names describe external model channels, not Proof Agent role names.
+- V1 LLM integration uses **Harness-Normalized Model Output** for final answers, **ReAct Action Proposal** values, and **Review Decision** values.
+- Planner and reviewer paths use a **Model Output JSON Contract** and should request JSON output from the selected **Model Provider Registry** entry when supported.
+- A **Model Output JSON Contract** may be parsed from a full JSON response or a single fenced JSON object, but must not be inferred from natural language.
+- V1 planner, reviewer, and final answer model calls are non-streaming so validation and audit can complete before output is treated as valid.
+- A **Model Output Normalization Failure** must stop or constrain the current control path rather than guessing the intended model behavior.
+- A **Model Output Normalization Failure** from a **LLM ReAct Planner** fails the planning path closed and is traced with the parse or validation reason.
+- A **Model Output Normalization Failure** from a **LLM Harness Review Subagent** follows **Review Failure Policy**.
+- A **Model Output Normalization Failure** from final answer generation is handled as output validation failure and must not be shown as a valid answer.
+- Provider-native tool call payloads must not execute tools directly; a future **Native Tool Call Adapter** must convert them into Harness-governed proposals first.
+- Final answer generation, **LLM ReAct Planner**, and **LLM Harness Review Subagent** all emit model call trace events with a **Model Call Role**.
+- A **Model Call Role** distinguishes model calls such as `final_answer`, `react_planner`, and `harness_review` while preserving shared model usage accounting.
+- A **LLM ReAct Planner** and **LLM Harness Review Subagent** use **Harness Control Prompt** templates maintained by Proof Agent.
+- **Harness Control Prompt** inputs come from **Structured Control Context**, not raw user transcripts, raw evidence content, secrets, or arbitrary Agent-authored prompt overrides.
+- **Structured Control Context** may include user question, Agent purpose, ReAct Action Budget, allowed actions, tool risk summary, evidence state, conversation summary, enforcement point, and policy-relevant metadata.
+- **Auto Review Mode** may use a **Harness Review Subagent** as a Control Plane component.
+- A **Harness Review Subagent** reviews Harness control nodes; it does not generate the final user answer.
+- A **Harness Review Subagent** is configured by **Review Subagent Config**, not by the final answer model config.
+- A **Harness Review Subagent** produces a **Review Decision**.
+- A **Review Decision** becomes effective only after `PolicyEngine` validates it against deterministic rules and emits the final `PolicyDecision`.
+- A **Review Failure Policy** must fail closed: tool review falls back to `require_approval`, model call review falls back to `deny` or `escalate`, and retrieval review may use explicit single-step fallback only when configured.
+- Invalid or conflicting **Review Decision** output is traced as review error or override and cannot silently allow execution.
+- V1 **Auto Review Scope** covers `before_retrieval_plan`, `before_retrieval_step`, `before_tool_call`, and `before_model_call`.
+- `before_answer` remains governed primarily by deterministic evidence and citation rules; a **Harness Review Subagent** may advise but cannot replace evidence validation.
+- A **Controlled ReAct Workflow** records **Action Proposal Event**, **Review Decision Event**, **Review Override Event**, and **Clarification Requested Event** where applicable.
+- **Tool Contract** and **Agent Contract** policy metadata are the authority for customer read-tool authorization conditions such as read-only classification, authenticated-customer requirements, ownership checks, risk level, and parameter bounds.
+- **Controlled Agent Memory** extends memory beyond per-run session state while remaining inside the **Control Envelope**.
+- A **Hybrid Memory Framework** may use one or more **Memory Provider Adapter** implementations, but **Memory Admission** remains a Control Plane decision.
+- Memory layers describe Proof Agent product semantics; **Memory Provider Adapter** implementations describe replaceable storage and retrieval engines.
+- External memory engines may provide storage, retrieval, summarization, or ranking, but they must not decide **Memory Admission** or bypass the **Control Envelope**.
+- **Case Memory Lifecycle Controls** must be proven before **Persistent User Memory** is enabled.
+- The first **Persistent User Memory** implementation targets **Customer Persistent User Memory**, not operator or staff user profiles.
+- A **Memory Subject Reference** identifies who **Persistent User Memory** is about without reusing **Case Memory** identifiers.
+- **Case Memory** is generated from governed run facts, not from raw transcripts or unvalidated model text.
+- **Case Focus** belongs to **Case Memory** and must not become a cross-session **Persistent User Memory** profile in the first implementation stage.
+- **Case Memory** may support follow-up understanding after **Memory Admission**, but it is not **Accepted Evidence**.
+- **Knowledge Source Permission Model** separates `knowledge_source.view`, `knowledge_source.edit`, `knowledge_source.publish`, and `knowledge_source.archive`. Knowledge Source command requests do not carry actor fields; the API resolves Operator Identity Context server-side. Agent binding edits require `agent.edit`, and publishing a new Agent version requires `agent.publish`. V1 local single-user mode grants all by default while API checks, Dashboard actions, and Configuration Operation Audit preserve these boundaries for future RBAC.
+- Optional **Knowledge Source Routing Model Configuration** may choose a bounded set of eligible bindings only after deterministic routing cannot make a clear selection; model routing failure does not fan out to every source.
+- **Knowledge Ingestion Model Configuration** stores model provider settings and credential environment-variable references, never raw credentials; promotion freezes its artifact-affecting declaration into a secret-safe **Knowledge Artifact Build Spec**, and missing credentials fail the job while preserving the last READY snapshot.
+- An **Index-Backed Knowledge Source** owns **Knowledge Routing Model Configuration** independently from any Agent planner model configuration; it inherits the source's **Knowledge Ingestion Model Configuration** by default and may override provider, model, or environment-variable references.
