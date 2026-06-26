@@ -31,6 +31,7 @@ from proof_agent.control.workflow.controlled_react import (
     build_controlled_react_orchestrator_for_invocation,
 )
 from proof_agent.control.workflow.controlled_react.ports import SnapshotStorePort
+from proof_agent.control.workflow.controlled_react.ports import ObservationTruthStorePort
 from proof_agent.control.workflow.harness_helpers import (
     emit_policy_decision,
     finalize_run,
@@ -73,6 +74,7 @@ class AgentPackageRunRequest:
     published_agent_runtime_facts: PublishedAgentRuntimeFacts | None = None
     controlled_react_orchestrator: ControlledReActOrchestratorDependency | None = None
     controlled_react_snapshot_store: SnapshotStorePort | None = None
+    controlled_react_observation_truth_store: ObservationTruthStorePort | None = None
 
 
 def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
@@ -144,6 +146,7 @@ def _execute_controlled_react_v3_agent_package_run(
         orchestrator = build_controlled_react_orchestrator_for_invocation(
             invocation,
             snapshot_store=request.controlled_react_snapshot_store,
+            observation_truth_store=request.controlled_react_observation_truth_store,
         )
     template = resolve_workflow_template(manifest.workflow.template)
     execution_result = orchestrator.start(
@@ -151,8 +154,7 @@ def _execute_controlled_react_v3_agent_package_run(
             run_id=run_id,
             template_name=manifest.workflow.template,
             template_descriptor_version=(
-                manifest.workflow.template_descriptor_version
-                or template.descriptor_version
+                manifest.workflow.template_descriptor_version or template.descriptor_version
             ),
             question=request.question,
             max_plan_rounds=manifest.react.max_plan_rounds,
@@ -231,9 +233,7 @@ def emit_controlled_react_trace_projection(
         payload={
             "source": {
                 "source_type": (
-                    "published_agent_version"
-                    if agent_version_id is not None
-                    else "agent_manifest"
+                    "published_agent_version" if agent_version_id is not None else "agent_manifest"
                 ),
                 "reference": (
                     f"published_version:{agent_version_id}"
@@ -273,7 +273,6 @@ def _emit_controlled_react_evidence_projection(
     evidence_payload = [
         {
             "source": chunk.source,
-            "content": chunk.content,
             "status": chunk.status.value,
             "evidence_id": chunk.evidence_id,
             "provider_native_score": chunk.provider_native_score,
@@ -285,9 +284,7 @@ def _emit_controlled_react_evidence_projection(
     ]
     source_refs = _evidence_source_refs(execution_result.evidence)
     citations = [
-        chunk.citation
-        for chunk in execution_result.evidence
-        if chunk.citation is not None
+        chunk.citation for chunk in execution_result.evidence if chunk.citation is not None
     ]
     trace.emit(
         "retrieval_result",
@@ -429,11 +426,7 @@ def _emit_controlled_react_stage_result(
         payload={
             "stage_id": stage_result.stage_id,
             "status": stage_result.status.value,
-            "outcome": (
-                stage_result.outcome.value
-                if stage_result.outcome is not None
-                else None
-            ),
+            "outcome": (stage_result.outcome.value if stage_result.outcome is not None else None),
             "summary": dict(stage_result.summary),
             "produced_fact_refs": list(stage_result.produced_fact_refs),
         },

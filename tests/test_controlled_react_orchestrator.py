@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
 from proof_agent.contracts import (
+    AnswerEvidenceContext,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
+    EvidenceChunk,
+    EvidenceStatus,
     EnforcementPoint,
     ObservationRecord,
     PolicyDecision,
@@ -11,7 +16,9 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
+    RetrievalObservationTruth,
     ReviewDecision,
+    ToolObservationTruth,
     WorkflowTemplateExecutionResult,
 )
 from proof_agent.control.workflow.controlled_react import (
@@ -20,7 +27,15 @@ from proof_agent.control.workflow.controlled_react import (
     ControlledReActPorts,
     ControlledReActResumeRequest,
     ControlledReActStartRequest,
+    ObservationEffect,
+    ObservationIdentity,
+    build_default_controlled_react_orchestrator,
 )
+from proof_agent.control.workflow.controlled_react.composition import (
+    _EvidenceAnswerSynthesisAdapter,
+    _tool_summary_projection,
+)
+from proof_agent.errors import ProofAgentError
 
 
 def test_start_returns_workflow_template_execution_result_for_terminal_answer() -> None:
@@ -47,6 +62,21 @@ def test_start_returns_workflow_template_execution_result_for_terminal_answer() 
     assert result.final_output == "Submit the claim form and itemized invoice."
 
 
+def test_default_controlled_react_orchestrator_uses_observation_effects() -> None:
+    result = build_default_controlled_react_orchestrator().start(
+        ControlledReActStartRequest(
+            run_id="run_default",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Are travel meals reimbursed?",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert result.stage_results
+    assert "evidence" not in result.stage_results[0].summary
+
+
 def test_start_replans_after_retrieval_observation_before_answering() -> None:
     orchestrator = ControlledReActOrchestrator(
         ports=ControlledReActPorts(
@@ -69,6 +99,129 @@ def test_start_replans_after_retrieval_observation_before_answering() -> None:
     assert result.final_output == "Submit the claim form and itemized invoice."
     assert result.reasoning_summary is not None
     assert result.reasoning_summary["selected_action"] == "generate_final_answer"
+
+
+def test_start_commits_knowledge_observation_effect_before_answering() -> None:
+    knowledge_observation = _EffectKnowledgeObservation()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_RetrievalThenAnswerPlanner(),
+            knowledge_observation=knowledge_observation,
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_effect",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="What documents are required?",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert knowledge_observation.identity is not None
+    assert knowledge_observation.identity.observation_id == "obs_1_act_retrieve"
+
+
+def test_stage_results_use_commit_trace_projection() -> None:
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_RetrievalThenAnswerPlanner(),
+            knowledge_observation=_EffectKnowledgeObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_projection",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="What documents are required?",
+        )
+    )
+
+    retrieval_stage = next(
+        stage for stage in result.stage_results if stage.stage_id == "retrieval"
+    )
+    assert retrieval_stage.summary["observation_id"] == "obs_1_act_retrieve"
+    assert retrieval_stage.summary["truth_kind"] == "retrieval"
+
+
+def test_answer_synthesis_receives_answer_evidence_context() -> None:
+    answer_synthesis = _ContextCapturingAnswerSynthesis()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_RetrievalThenAnswerPlanner(),
+            knowledge_observation=_EffectKnowledgeObservation(),
+            answer_synthesis=answer_synthesis,
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_answer_context",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="What documents are required?",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert answer_synthesis.context is not None
+    assert answer_synthesis.context.run_id == "run_answer_context"
+    assert answer_synthesis.context.observation_truth
+    assert answer_synthesis.context.citation_refs == ("claims-guide.md#documents",)
+
+
+def test_observation_effect_must_match_allocated_identity() -> None:
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_RetrievalThenAnswerPlanner(),
+            knowledge_observation=_WrongIdentityKnowledgeObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    try:
+        orchestrator.start(
+            ControlledReActStartRequest(
+                run_id="run_001",
+                template_name="react_enterprise_qa_v3",
+                template_descriptor_version="react_enterprise_qa.v3",
+                question="What documents are required?",
+            )
+        )
+    except ValueError as exc:
+        assert "allocated observation identity" in str(exc)
+    else:
+        raise AssertionError("orchestrator must reject unallocated observation identity")
+
+
+def test_answer_context_rejects_record_citations_missing_from_truth() -> None:
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_RetrievalThenAnswerPlanner(),
+            knowledge_observation=_CitationMismatchKnowledgeObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    try:
+        orchestrator.start(
+            ControlledReActStartRequest(
+                run_id="run_001",
+                template_name="react_enterprise_qa_v3",
+                template_descriptor_version="react_enterprise_qa.v3",
+                question="What documents are required?",
+            )
+        )
+    except ValueError as exc:
+        assert "citation_refs are missing from truth artifact" in str(exc)
+    else:
+        raise AssertionError("orchestrator must reject unverifiable citation refs")
 
 
 def test_start_constrains_repeated_retrieval_to_refusal_when_plan_budget_is_exhausted() -> None:
@@ -201,6 +354,37 @@ def test_start_policy_allows_tool_action_then_replans_to_answer_without_snapshot
     assert result.reasoning_summary["selected_action"] == "generate_final_answer"
 
 
+def test_start_can_observe_tool_then_retrieval_before_answering() -> None:
+    answer_synthesis = _ContextCapturingAnswerSynthesis()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolThenRetrievalThenAnswerPlanner(),
+            policy=_AllowToolPolicy(),
+            tool_observation=_ToolObservation(),
+            knowledge_observation=_EffectKnowledgeObservation(),
+            answer_synthesis=answer_synthesis,
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_tool_then_retrieval",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up the customer status and cite the policy.",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert [
+        stage.stage_id
+        for stage in result.stage_results
+        if stage.stage_id in {"tool", "retrieval"}
+    ] == ["tool", "retrieval"]
+    assert answer_synthesis.context is not None
+    assert len(answer_synthesis.context.observation_truth) == 2
+
+
 def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
     action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
         update={"target_tool_name": "customer_lookup"}
@@ -243,6 +427,93 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
         stage.stage_id
         for stage in result.stage_results
     ] == ["plan", "tool_review", "tool", "plan", "model_answer", "response"]
+
+
+def test_resume_can_observe_tool_then_retrieval_before_answering() -> None:
+    action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_run_004",
+        run_id="run_004",
+        state=ControlledReActRunState(
+            run_id="run_004",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up this customer's claim status and cite policy.",
+            action_history=(action,),
+        ),
+    )
+    answer_synthesis = _ContextCapturingAnswerSynthesis()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolThenRetrievalThenAnswerPlanner(),
+            snapshot_store=_ResumeSnapshotStore(snapshot),
+            tool_observation=_ToolObservation(),
+            knowledge_observation=_EffectKnowledgeObservation(),
+            answer_synthesis=answer_synthesis,
+        )
+    )
+
+    result = orchestrator.resume(
+        ControlledReActResumeRequest(
+            snapshot_ref="snapshot://run_004/snap_001",
+            approval_id="appr_act_tool",
+            approved=True,
+            actor="ops",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert [
+        stage.stage_id
+        for stage in result.stage_results
+        if stage.stage_id in {"tool", "retrieval"}
+    ] == ["tool", "retrieval"]
+    assert answer_synthesis.context is not None
+    assert len(answer_synthesis.context.observation_truth) == 2
+
+
+def test_tool_answer_fallback_does_not_echo_raw_authorized_result() -> None:
+    truth = ToolObservationTruth(
+        truth_ref="observation://run_001/obs_tool/truth",
+        observation_id="obs_tool",
+        action_id="act_tool",
+        tool_name="customer_lookup",
+        authorized_result={
+            "raw_payload": {"customer_phone": "555-0100"},
+            "internal_note": "must-not-echo",
+        },
+        result_schema_id="customer_lookup.v1",
+    )
+
+    result = _EvidenceAnswerSynthesisAdapter().synthesize(
+        ControlledReActRunState(
+            run_id="run_001",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up this customer.",
+        ),
+        _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER),
+        AnswerEvidenceContext(
+            run_id="run_001",
+            observation_truth=(truth,),
+            source_refs=("tool://customer_lookup",),
+        ),
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert "must-not-echo" not in result.final_output
+    assert "555-0100" not in result.final_output
+    assert result.final_output == "customer_lookup returned an authorized result."
+
+
+def test_tool_summary_projection_requires_configured_fields() -> None:
+    with pytest.raises(ProofAgentError, match="missing summary_fields"):
+        _tool_summary_projection(
+            {"raw_payload": {"customer_phone": "555-0100"}},
+            summary_fields=("status",),
+        )
 
 
 def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
@@ -300,8 +571,9 @@ class _AnswerSynthesis:
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
     ) -> AnswerSynthesisResult:
-        _ = state
+        _ = (state, answer_context)
         return AnswerSynthesisResult(
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             final_output="Submit the claim form and itemized invoice.",
@@ -322,19 +594,166 @@ class _KnowledgeObservation:
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
-        return ObservationRecord(
-            observation_id="obs_retrieval",
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
+        evidence = EvidenceChunk(
+            source="claims-guide.md",
+            content="Submit the claim form and itemized invoice.",
+            status=EvidenceStatus.ACCEPTED,
+            citation="claims-guide.md#documents",
+        )
+        truth = RetrievalObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            accepted_evidence=(evidence,),
+            citation_refs=("claims-guide.md#documents",),
+        )
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
             action_id=action.action_id,
             action_type=action.action_type,
             round=state.plan_round,
-            truth_ref="evidence",
+            truth_ref=identity.truth_ref,
             summary={"accepted_evidence_count": 1, "new_evidence_count": 1},
             accepted_evidence_count=1,
             new_evidence_count=1,
             unresolved_subgoals=(),
             source_refs=("claims-guide.md",),
             citation_refs=("claims-guide.md#documents",),
+        )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection={"observation_id": identity.observation_id},
+        )
+
+
+class _EffectKnowledgeObservation:
+    identity: ObservationIdentity | None = None
+
+    def observe(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
+        self.identity = identity
+        evidence = EvidenceChunk(
+            source="claims-guide.md",
+            content="Submit the claim form and itemized invoice.",
+            status=EvidenceStatus.ACCEPTED,
+            citation="claims-guide.md#documents",
+        )
+        truth = RetrievalObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            accepted_evidence=(evidence,),
+            citation_refs=("claims-guide.md#documents",),
+        )
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            action_type=action.action_type,
+            round=state.plan_round,
+            truth_ref=identity.truth_ref,
+            summary={"accepted_evidence_count": 1, "citation_count": 1},
+            accepted_evidence_count=1,
+            new_evidence_count=1,
+            unresolved_subgoals=(),
+            source_refs=("claims-guide.md",),
+            citation_refs=("claims-guide.md#documents",),
+        )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection={"observation_id": identity.observation_id},
+        )
+
+
+class _WrongIdentityKnowledgeObservation:
+    def observe(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
+        _ = identity
+        wrong_identity = ObservationIdentity.allocate(
+            run_id=state.run_id,
+            plan_round=state.plan_round + 100,
+            action_id=action.action_id,
+        )
+        evidence = EvidenceChunk(
+            source="claims-guide.md",
+            content="Submit the claim form and itemized invoice.",
+            status=EvidenceStatus.ACCEPTED,
+            citation="claims-guide.md#documents",
+        )
+        truth = RetrievalObservationTruth(
+            truth_ref=wrong_identity.truth_ref,
+            observation_id=wrong_identity.observation_id,
+            action_id=action.action_id,
+            accepted_evidence=(evidence,),
+            citation_refs=("claims-guide.md#documents",),
+        )
+        record = ObservationRecord(
+            observation_id=wrong_identity.observation_id,
+            action_id=action.action_id,
+            action_type=action.action_type,
+            round=state.plan_round,
+            truth_ref=wrong_identity.truth_ref,
+            summary={"accepted_evidence_count": 1, "citation_count": 1},
+            accepted_evidence_count=1,
+            new_evidence_count=1,
+            source_refs=("claims-guide.md",),
+            citation_refs=("claims-guide.md#documents",),
+        )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection={"observation_id": wrong_identity.observation_id},
+        )
+
+
+class _CitationMismatchKnowledgeObservation:
+    def observe(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
+        _ = state
+        evidence = EvidenceChunk(
+            source="claims-guide.md",
+            content="Submit the claim form and itemized invoice.",
+            status=EvidenceStatus.ACCEPTED,
+            citation="claims-guide.md#documents",
+        )
+        truth = RetrievalObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            accepted_evidence=(evidence,),
+            citation_refs=(),
+        )
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            action_type=action.action_type,
+            round=state.plan_round,
+            truth_ref=identity.truth_ref,
+            summary={"accepted_evidence_count": 1, "citation_count": 1},
+            accepted_evidence_count=1,
+            new_evidence_count=1,
+            source_refs=("claims-guide.md",),
+            citation_refs=("claims-guide.md#documents",),
+        )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection={"observation_id": identity.observation_id},
         )
 
 
@@ -346,9 +765,10 @@ class _CountingKnowledgeObservation(_KnowledgeObservation):
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
         self.call_count += 1
-        return super().observe(state, action)
+        return super().observe(state, action, identity)
 
 
 class _FailingKnowledgeObservation:
@@ -356,8 +776,9 @@ class _FailingKnowledgeObservation:
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
-        _ = (state, action)
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
+        _ = (state, action, identity)
         raise AssertionError("review denied retrieval must not execute observation")
 
 
@@ -366,9 +787,31 @@ class _ObservationBackedAnswerSynthesis:
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
     ) -> AnswerSynthesisResult:
+        _ = answer_context
         if not state.observation_records:
             raise AssertionError("answer synthesis requires an ObservationRecord")
+        return AnswerSynthesisResult(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            final_output="Submit the claim form and itemized invoice.",
+            message="Answered with governed citations.",
+            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+
+
+class _ContextCapturingAnswerSynthesis:
+    def __init__(self) -> None:
+        self.context = None
+
+    def synthesize(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
+    ) -> AnswerSynthesisResult:
+        _ = state
+        self.context = answer_context
         return AnswerSynthesisResult(
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             final_output="Submit the claim form and itemized invoice.",
@@ -414,6 +857,17 @@ class _ToolObservationThenAnswerPlanner:
             return _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
                 update={"target_tool_name": "customer_lookup"}
             )
+        return _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER)
+
+
+class _ToolThenRetrievalThenAnswerPlanner:
+    def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
+        if not state.observation_records:
+            return _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+                update={"target_tool_name": "customer_lookup"}
+            )
+        if len(state.observation_records) == 1:
+            return _proposal("act_retrieve", ReActActionType.PLAN_RETRIEVAL)
         return _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER)
 
 
@@ -501,19 +955,34 @@ class _ToolObservation:
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
-        return ObservationRecord(
-            observation_id="obs_tool",
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
+        tool_name = action.target_tool_name or "unknown_tool"
+        truth = ToolObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            tool_name=tool_name,
+            authorized_result={"status": "pending"},
+            result_schema_id=f"{tool_name}.v1",
+        )
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
             action_id=action.action_id,
             action_type=action.action_type,
             round=state.plan_round,
-            truth_ref="tool_result",
+            truth_ref=identity.truth_ref,
             summary={"tool_name": action.target_tool_name, "status": "completed"},
             accepted_evidence_count=0,
             new_evidence_count=0,
             unresolved_subgoals=(),
-            source_refs=("tool://customer_lookup",),
+            source_refs=(f"tool://{tool_name}",),
             citation_refs=(),
+        )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection={"observation_id": identity.observation_id},
         )
 
 
@@ -522,8 +991,9 @@ class _FailingToolObservation:
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
-        _ = (state, action)
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
+        _ = (state, action, identity)
         raise AssertionError("denied approval must not execute tool observation")
 
 

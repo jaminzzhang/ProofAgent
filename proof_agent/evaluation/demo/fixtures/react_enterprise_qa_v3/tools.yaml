@@ -12,6 +12,8 @@ tools:
     allowed_parameters:
       - customer_id
       - policy_id
+    summary_fields:
+      - status
     denied_parameters:
       - access_token
       - customer_phone

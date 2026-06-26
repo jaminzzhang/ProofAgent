@@ -17,7 +17,9 @@ def test_execute_agent_package_run_executes_v3_with_controlled_react(
 ) -> None:
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             question="What is the reimbursement rule for travel meals?",
             runs_dir=tmp_path / "run",
         )
@@ -26,8 +28,7 @@ def test_execute_agent_package_run_executes_v3_with_controlled_react(
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert result.workflow_template_execution_result is not None
     events = [
-        json.loads(line)
-        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
     assert any(
         event["event_type"] == "run_started"
@@ -41,7 +42,9 @@ def test_execute_agent_package_run_projects_v3_answer_governance_trace(
 ) -> None:
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             question="What is the reimbursement rule for travel meals?",
             runs_dir=tmp_path / "run",
         )
@@ -49,16 +52,16 @@ def test_execute_agent_package_run_projects_v3_answer_governance_trace(
 
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     events = [
-        json.loads(line)
-        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
     assert any(event["event_type"] == "policy_decision" for event in events)
-    evidence_events = [
-        event for event in events if event["event_type"] == "evidence_evaluation"
-    ]
+    evidence_events = [event for event in events if event["event_type"] == "evidence_evaluation"]
     assert evidence_events
     assert "customer-support-policy" in evidence_events[-1]["payload"]["source_refs"]
     assert "customer-support-policy" in evidence_events[-1]["payload"]["accepted_sources"]
+    projected_evidence = evidence_events[-1]["payload"]["metadata"]["evidence"]
+    assert projected_evidence
+    assert "content" not in projected_evidence[-1]
 
 
 def test_execute_agent_package_run_projects_v3_complete_model_answer_chain(
@@ -115,11 +118,9 @@ def test_execute_agent_package_run_projects_v3_complete_model_answer_chain(
         for stage in result.workflow_template_execution_result.stage_results
         if stage.stage_id == "retrieval"
     )
-    evidence = retrieval_stage.summary["evidence"][0]
-    forbidden_fallback = (
-        f"{evidence['content'].strip()} Citation: {evidence['citation']}."
-    )
-    assert result.final_output != forbidden_fallback
+    assert retrieval_stage.summary["truth_kind"] == "retrieval"
+    assert retrieval_stage.summary["accepted_evidence_count"] > 0
+    assert "evidence" not in retrieval_stage.summary
 
 
 def test_execute_agent_package_run_refuses_v3_when_no_evidence_is_admitted(
@@ -127,7 +128,9 @@ def test_execute_agent_package_run_refuses_v3_when_no_evidence_is_admitted(
 ) -> None:
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             question="Puccini Tosca opera composer",
             runs_dir=tmp_path / "run",
         )
@@ -229,7 +232,9 @@ def test_execute_agent_package_run_returns_v3_clarification_need(
 ) -> None:
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             question="Can this customer claim it?",
             runs_dir=tmp_path / "run",
         )
@@ -241,12 +246,12 @@ def test_execute_agent_package_run_returns_v3_clarification_need(
     assert need is not None
     assert need.missing_fields == ("customer_id", "policy_id", "claim_type")
     events = [
-        json.loads(line)
-        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
     assert any(
         event["event_type"] == "clarification_requested"
-        and event["payload"]["missing_fields"] == [
+        and event["payload"]["missing_fields"]
+        == [
             "customer_id",
             "policy_id",
             "claim_type",
@@ -260,7 +265,9 @@ def test_execute_agent_package_run_projects_v3_tool_approval_payload(
 ) -> None:
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             question="Look up customer policy status before answering.",
             runs_dir=tmp_path / "run",
         )
@@ -273,12 +280,9 @@ def test_execute_agent_package_run_projects_v3_tool_approval_payload(
         for stage in result.workflow_template_execution_result.stage_results
     ] == ["intent_resolution", "memory_read", "plan", "tool_review"]
     events = [
-        json.loads(line)
-        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
-    pending = next(
-        event for event in events if event["event_type"] == "pending_approval_created"
-    )
+    pending = next(event for event in events if event["event_type"] == "pending_approval_created")
     payload = pending["payload"]
     assert payload["run_id"] == pending["run_id"]
     assert payload["thread_id"] == pending["run_id"]

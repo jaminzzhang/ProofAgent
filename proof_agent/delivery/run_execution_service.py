@@ -86,6 +86,11 @@ def execute_published_agent_run(
                 if is_controlled_react_v3
                 else None
             ),
+            controlled_react_observation_truth_store=(
+                dependencies.approval_resume_registry.controlled_react_observation_truth_store()
+                if is_controlled_react_v3
+                else None
+            ),
         )
     )
 

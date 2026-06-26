@@ -5,17 +5,22 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from proof_agent.contracts import (
+    AnswerEvidenceContext,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     EvidenceChunk,
     IntentResolutionResult,
-    ObservationRecord,
+    ObservationTruthArtifact,
     PolicyDecision,
     ReActActionProposal,
     ReceiptOutcome,
     ReviewDecision,
     ValidationResult,
     WorkflowStageLlmInteraction,
+)
+from proof_agent.control.workflow.controlled_react.observation_commit import (
+    ObservationEffect,
+    ObservationIdentity,
 )
 
 
@@ -55,6 +60,7 @@ class AnswerSynthesisPort(Protocol):
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
     ) -> AnswerSynthesisResult: ...
 
 
@@ -63,7 +69,8 @@ class KnowledgeObservationPort(Protocol):
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord: ...
+        identity: ObservationIdentity,
+    ) -> ObservationEffect: ...
 
 
 class ToolObservationPort(Protocol):
@@ -71,7 +78,14 @@ class ToolObservationPort(Protocol):
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord: ...
+        identity: ObservationIdentity,
+    ) -> ObservationEffect: ...
+
+
+class ObservationTruthStorePort(Protocol):
+    def save(self, truth: ObservationTruthArtifact) -> str: ...
+
+    def load(self, truth_ref: str) -> ObservationTruthArtifact: ...
 
 
 class PolicyPort(Protocol):
@@ -107,3 +121,4 @@ class ControlledReActPorts:
     policy: PolicyPort | None = None
     review: ReviewPort | None = None
     snapshot_store: SnapshotStorePort | None = None
+    observation_truth_store: ObservationTruthStorePort | None = None

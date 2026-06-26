@@ -152,14 +152,18 @@ def _copy_react_v3_agent_with_unique_knowledge(tmp_path: Path) -> Path:
     manifest_path = agent_dir / "agent.yaml"
     manifest_text = manifest_path.read_text(encoding="utf-8")
     manifest_path.write_text(
-        manifest_text.replace("name: react_enterprise_qa_v3", "name: react_enterprise_qa_v3_unique"),
+        manifest_text.replace(
+            "name: react_enterprise_qa_v3", "name: react_enterprise_qa_v3_unique"
+        ),
         encoding="utf-8",
     )
     return manifest_path
 
 
 def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     response = client.post(
@@ -206,9 +210,7 @@ def test_chat_run_response_includes_citation_refs_when_available(
     assert response.status_code == 200
     body = response.json()
     assert body["citation_refs"]
-    assert body["citation_refs"][0]["citation"] == (
-        "customer-support-policy.md#travel-meals:L3-L7"
-    )
+    assert body["citation_refs"][0]["citation"] == ("customer-support-policy.md#travel-meals:L3-L7")
     detail = client.get(f"/api/runs/{body['run_id']}")
     assert detail.status_code == 200
     assert detail.json()["citation_refs"] == body["citation_refs"]
@@ -240,9 +242,7 @@ def test_chat_run_executes_v3_agent_through_controlled_react_orchestrator(
     assert detail.status_code == 200
     detail_body = detail.json()
     trace = client.get(f"/api/runs/{body['run_id']}/trace").json()
-    run_started = next(
-        event for event in trace["events"] if event["event_type"] == "run_started"
-    )
+    run_started = next(event for event in trace["events"] if event["event_type"] == "run_started")
     assert run_started["payload"]["runtime"] == "controlled_react_orchestrator"
     assert detail_body["workflow_projection"]["template_descriptor_version"] == (
         "react_enterprise_qa.v3"
@@ -269,9 +269,52 @@ def test_chat_run_v3_uses_configured_knowledge_provider(tmp_path: Path) -> None:
     assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
     assert "77 USD" in body["final_output"]
     assert body["citation_refs"]
-    assert body["citation_refs"][0]["citation"] == (
-        "sapphire-meals.md#reimbursement:L3-L5"
+    assert body["citation_refs"][0]["citation"] == ("sapphire-meals.md#reimbursement:L3-L5")
+
+
+def test_chat_run_v3_persists_observation_truth_for_resume(tmp_path: Path) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
     )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa_v3",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    truth_dir = (
+        tmp_path / "approval_resume" / body["run_id"] / "controlled_react" / "observation_truth"
+    )
+
+    assert list(truth_dir.glob("*.json"))
+
+
+def test_chat_run_v3_response_evidence_uses_safe_projection(tmp_path: Path) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa_v3",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["evidence"]
+    assert "content" not in body["evidence"][0]
 
 
 def test_chat_run_v3_uses_configured_tool_policy_for_denial(tmp_path: Path) -> None:
@@ -365,7 +408,7 @@ def test_chat_run_v3_approval_endpoint_resumes_after_restart_with_tool_gateway(
         event for event in approved_body["trace_events"] if event["event_type"] == "tool_result"
     )
     assert tool_result["payload"]["tool_name"] == "customer_lookup"
-    assert tool_result["payload"]["result"]["status"] == "active"
+    assert tool_result["payload"]["result"] == {"status": "active"}
     final_output = approved_body["trace_events"][-1]
     assert final_output["event_type"] == "final_output"
     assert "active" in final_output["payload"]["message"]
@@ -397,8 +440,7 @@ def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:
     assert summary["payload"]["source"] == {
         "source_type": "published_agent_version",
         "reference": (
-            f"published_version:{body['agent_version_id']}:"
-            "effective_workflow_stage_configuration"
+            f"published_version:{body['agent_version_id']}:effective_workflow_stage_configuration"
         ),
     }
     detail = client.get(f"/api/runs/{body['run_id']}").json()
@@ -410,6 +452,7 @@ def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:
         "plan",
         "model_answer",
     }
+
 
 def test_validation_capture_requires_agent_validate_permission(tmp_path: Path) -> None:
     app, _artifact = _app_with_validation_capture(tmp_path)
@@ -437,9 +480,13 @@ def test_production_run_never_exposes_validation_capture(tmp_path: Path) -> None
 
 
 def test_expired_validation_capture_returns_404(tmp_path: Path) -> None:
-    expired_at = (datetime.now(UTC) - timedelta(minutes=1)).isoformat().replace(
-        "+00:00",
-        "Z",
+    expired_at = (
+        (datetime.now(UTC) - timedelta(minutes=1))
+        .isoformat()
+        .replace(
+            "+00:00",
+            "Z",
+        )
     )
     app, _artifact = _app_with_validation_capture(tmp_path, expires_at=expired_at)
     client = TestClient(app)
@@ -451,7 +498,9 @@ def test_expired_validation_capture_returns_404(tmp_path: Path) -> None:
 
 
 def test_chat_run_execution_rejects_unknown_agent_id(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     response = client.post(
@@ -467,7 +516,9 @@ def test_chat_run_execution_rejects_unknown_agent_id(tmp_path: Path) -> None:
 
 
 def test_chat_run_execution_rejects_arbitrary_manifest_path(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     response = client.post(
@@ -483,7 +534,9 @@ def test_chat_run_execution_rejects_arbitrary_manifest_path(tmp_path: Path) -> N
 
 
 def test_chat_run_execution_rejects_inline_approval_resume_parameter(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     response = client.post(
@@ -501,7 +554,9 @@ def test_chat_run_execution_rejects_inline_approval_resume_parameter(tmp_path: P
 def test_chat_run_execution_registers_react_enterprise_qa(
     tmp_path: Path,
 ) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     response = client.post(
@@ -519,7 +574,9 @@ def test_chat_run_execution_registers_react_enterprise_qa(
 
 
 def test_chat_run_omits_governance_details_by_default(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     response = client.post(
@@ -537,7 +594,9 @@ def test_chat_run_omits_governance_details_by_default(tmp_path: Path) -> None:
 def test_chat_run_omits_governance_details_when_agent_policy_denies(
     tmp_path: Path,
 ) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     response = client.post(
@@ -625,7 +684,9 @@ def test_chat_run_executes_with_same_manifest_used_for_projection(
 
 
 def test_chat_run_execution_returns_approval_state_for_tool_question(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     response = client.post(
@@ -646,7 +707,9 @@ def test_chat_run_execution_returns_approval_state_for_tool_question(tmp_path: P
 
 
 def test_chat_run_approval_endpoint_resumes_waiting_tool_run(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     waiting = client.post(
@@ -674,7 +737,9 @@ def test_chat_run_approval_endpoint_resumes_waiting_tool_run(tmp_path: Path) -> 
     event_types = [event["event_type"] for event in trace["events"]]
     assert event_types.count("run_started") == 1
     assert event_types.count("pending_approval_created") == 1
-    approval_granted = next(event for event in trace["events"] if event["event_type"] == "approval_granted")
+    approval_granted = next(
+        event for event in trace["events"] if event["event_type"] == "approval_granted"
+    )
     assert approval_granted["payload"]["actor"] == "local-user"
     assert "tool_result" in event_types
     final_output = trace["events"][-1]
@@ -683,7 +748,9 @@ def test_chat_run_approval_endpoint_resumes_waiting_tool_run(tmp_path: Path) -> 
 
 
 def test_chat_run_approval_endpoint_rejects_duplicate_resume(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     waiting = client.post(
@@ -712,7 +779,9 @@ def test_chat_run_approval_endpoint_rejects_duplicate_resume(tmp_path: Path) -> 
 
 
 def test_chat_run_approval_endpoint_rejects_concurrent_resume_claim(tmp_path: Path) -> None:
-    app = _app_with_published_agent(tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
     client = TestClient(app)
 
     waiting = client.post(

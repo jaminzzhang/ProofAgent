@@ -8,6 +8,7 @@ from proof_agent.capabilities.react.planner import DeterministicReActPlanner
 from proof_agent.capabilities.react.intent import DeterministicIntentResolver
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.contracts import (
+    AnswerEvidenceContext,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     EvidenceChunk,
@@ -23,7 +24,9 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
+    RetrievalObservationTruth,
     ReviewDecision,
+    ToolObservationTruth,
     ValidationResult,
     ValidationStatus,
     WorkflowStageLlmInteraction,
@@ -31,9 +34,15 @@ from proof_agent.contracts import (
 from proof_agent.control.workflow.controlled_react.orchestrator import (
     ControlledReActOrchestrator,
 )
+from proof_agent.control.workflow.controlled_react.observation_commit import (
+    ObservationEffect,
+    ObservationIdentity,
+    ObservationSummaryBuilder,
+)
 from proof_agent.control.workflow.controlled_react.ports import (
     AnswerSynthesisResult,
     ControlledReActPorts,
+    ObservationTruthStorePort,
     SnapshotStorePort,
 )
 from proof_agent.control.workflow.harness_helpers import (
@@ -44,6 +53,7 @@ from proof_agent.control.workflow.harness_helpers import (
     validate_model_output,
 )
 from proof_agent.control.validators.evidence import evaluate_evidence
+from proof_agent.errors import ProofAgentError
 
 
 def build_default_controlled_react_orchestrator() -> ControlledReActOrchestrator:
@@ -64,6 +74,7 @@ def build_controlled_react_orchestrator_for_invocation(
     invocation: HarnessInvocation,
     *,
     snapshot_store: SnapshotStorePort | None = None,
+    observation_truth_store: ObservationTruthStorePort | None = None,
 ) -> ControlledReActOrchestrator:
     """Assemble a run-scoped V3 orchestrator from resolved Harness capabilities."""
 
@@ -77,6 +88,7 @@ def build_controlled_react_orchestrator_for_invocation(
             policy=_InvocationPolicyAdapter(invocation),
             review=_InvocationReviewAdapter(invocation),
             snapshot_store=snapshot_store or _InMemorySnapshotStoreAdapter(),
+            observation_truth_store=observation_truth_store,
             answer_synthesis=_ModelAnswerSynthesisAdapter(invocation),
         )
     )
@@ -149,40 +161,61 @@ class _InvocationPlannerAdapter:
 
 
 class _DeterministicKnowledgeObservationAdapter:
+    def __init__(self) -> None:
+        self._summary_builder = ObservationSummaryBuilder()
+
     def observe(
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
-        query = _string_value(action.parameters.get("query")) or state.question
-        return ObservationRecord(
-            observation_id=f"obs_{action.action_id}",
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
+        evidence = EvidenceChunk(
+            source="customer-support-policy.md",
+            content="Travel meals are reimbursed when supported by governed policy evidence.",
+            status=EvidenceStatus.ACCEPTED,
+            citation="customer-support-policy.md#travel-meals:L3-L7",
+        )
+        truth = RetrievalObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            accepted_evidence=(evidence,),
+            citation_refs=("customer-support-policy.md#travel-meals:L3-L7",),
+        )
+        summary = self._summary_builder.build(truth)
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
             action_id=action.action_id,
             action_type=action.action_type,
             round=state.plan_round,
-            truth_ref="knowledge://deterministic/local",
-            summary={
-                "query": query,
-                "accepted_evidence_count": 1,
-                "new_evidence_count": 1,
-            },
+            truth_ref=identity.truth_ref,
+            summary=summary,
             accepted_evidence_count=1,
             new_evidence_count=1,
             unresolved_subgoals=(),
             source_refs=("customer-support-policy.md",),
             citation_refs=("customer-support-policy.md#travel-meals:L3-L7",),
         )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection=dict(summary),
+            tool_summary_fields=("status",),
+        )
 
 
 class _InvocationKnowledgeObservationAdapter:
     def __init__(self, invocation: HarnessInvocation) -> None:
         self._invocation = invocation
+        self._summary_builder = ObservationSummaryBuilder()
 
     def observe(
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
         query = _string_value(action.parameters.get("query")) or state.question
         evidence, accepted_evidence, evaluation_metadata = _admit_evidence(
             self._invocation.knowledge_provider.retrieve(
@@ -191,21 +224,29 @@ class _InvocationKnowledgeObservationAdapter:
             ),
             min_score=self._invocation.manifest.retrieval.min_score,
         )
-        return ObservationRecord(
-            observation_id=f"obs_{action.action_id}",
+        truth = RetrievalObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            accepted_evidence=accepted_evidence,
+            rejected_evidence_summary={"count": len(evidence) - len(accepted_evidence)},
+            admission_metadata={
+                "min_score": self._invocation.manifest.retrieval.min_score,
+                "evidence_validation": evaluation_metadata,
+                "query": query,
+            },
+            citation_refs=tuple(
+                chunk.citation for chunk in accepted_evidence if chunk.citation is not None
+            ),
+        )
+        summary = self._summary_builder.build(truth)
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
             action_id=action.action_id,
             action_type=action.action_type,
             round=state.plan_round,
-            truth_ref="knowledge://configured_provider",
-            summary={
-                "query": query,
-                "accepted_evidence_count": len(accepted_evidence),
-                "new_evidence_count": len(accepted_evidence),
-                "rejected_evidence_count": len(evidence) - len(accepted_evidence),
-                "min_score": self._invocation.manifest.retrieval.min_score,
-                "evidence_validation": evaluation_metadata,
-                "evidence": [_evidence_payload(chunk) for chunk in evidence],
-            },
+            truth_ref=identity.truth_ref,
+            summary=summary,
             accepted_evidence_count=len(accepted_evidence),
             new_evidence_count=len(accepted_evidence),
             unresolved_subgoals=(),
@@ -214,40 +255,68 @@ class _InvocationKnowledgeObservationAdapter:
                 chunk.citation for chunk in accepted_evidence if chunk.citation is not None
             ),
         )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection=dict(summary),
+        )
 
 
 class _DeterministicToolObservationAdapter:
+    def __init__(self) -> None:
+        self._summary_builder = ObservationSummaryBuilder()
+
     def observe(
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
         _ = state
         tool_name = action.target_tool_name or "unknown_tool"
-        return ObservationRecord(
-            observation_id=f"obs_{action.action_id}",
+        truth = ToolObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            tool_name=tool_name,
+            authorized_result={"status": "completed"},
+            result_schema_id=f"{tool_name}.v1",
+        )
+        summary = self._summary_builder.build(
+            truth,
+            tool_summary_fields=("status",),
+        )
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
             action_id=action.action_id,
             action_type=action.action_type,
             round=state.plan_round,
-            truth_ref=f"tool://{tool_name}",
-            summary={"tool_name": tool_name, "status": "completed"},
+            truth_ref=identity.truth_ref,
+            summary=summary,
             accepted_evidence_count=0,
             new_evidence_count=0,
             unresolved_subgoals=(),
             source_refs=(f"tool://{tool_name}",),
             citation_refs=(),
         )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection=dict(summary),
+        )
 
 
 class _InvocationToolObservationAdapter:
     def __init__(self, invocation: HarnessInvocation) -> None:
         self._invocation = invocation
+        self._summary_builder = ObservationSummaryBuilder()
 
     def observe(
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-    ) -> ObservationRecord:
+        identity: ObservationIdentity,
+    ) -> ObservationEffect:
         tool_name = action.target_tool_name or "unknown_tool"
         result = self._invocation.tool_gateway.request_tool(
             tool_name=tool_name,
@@ -256,23 +325,72 @@ class _InvocationToolObservationAdapter:
             run_id=state.run_id,
         )
         tool_result = dict(result.result or {})
-        return ObservationRecord(
-            observation_id=f"obs_{action.action_id}",
+        truth = ToolObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            tool_name=tool_name,
+            authorized_result=tool_result,
+            result_schema_id=f"{tool_name}.v1",
+            redaction_metadata={"redacted_field_count": 0},
+        )
+        config = self._invocation.tool_gateway.tools.get(tool_name)
+        summary_projection = _tool_summary_projection(
+            tool_result,
+            summary_fields=config.summary_fields if config is not None else (),
+        )
+        summary = self._summary_builder.build(
+            truth,
+            tool_summary_projection=summary_projection,
+        )
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
             action_id=action.action_id,
             action_type=action.action_type,
             round=state.plan_round,
-            truth_ref=f"tool://{tool_name}",
-            summary={
-                "tool_name": tool_name,
-                "executed": result.executed,
-                "approval_state": result.approval_state.model_dump(mode="json"),
-                "result": tool_result,
-            },
+            truth_ref=identity.truth_ref,
+            summary=summary,
             accepted_evidence_count=0,
             new_evidence_count=0,
             unresolved_subgoals=(),
             source_refs=(f"tool://{tool_name}",),
             citation_refs=(),
+        )
+        return ObservationEffect(
+            observation_record=record,
+            truth_artifact=truth,
+            trace_projection={
+                **dict(summary),
+                "executed": result.executed,
+                "approval_state": result.approval_state.model_dump(mode="json"),
+            },
+            tool_summary_projection=summary_projection,
+        )
+
+
+def _tool_summary_projection(
+    tool_result: Mapping[str, Any],
+    *,
+    summary_fields: tuple[str, ...],
+) -> Mapping[str, Any]:
+    nested_summary = tool_result.get("summary")
+    if isinstance(nested_summary, Mapping):
+        _require_summary_fields(nested_summary, summary_fields)
+        return {field: nested_summary[field] for field in summary_fields if field in nested_summary}
+    _require_summary_fields(tool_result, summary_fields)
+    return {field: tool_result[field] for field in summary_fields if field in tool_result}
+
+
+def _require_summary_fields(
+    projection_source: Mapping[str, Any],
+    summary_fields: tuple[str, ...],
+) -> None:
+    missing = [field for field in summary_fields if field not in projection_source]
+    if missing:
+        raise ProofAgentError(
+            "PA_TOOL_SOURCE_002",
+            "tool result is missing summary_fields.",
+            "Return all Tool Contract summary_fields from the tool result.",
         )
 
 
@@ -350,10 +468,12 @@ class _ModelAnswerSynthesisAdapter:
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
     ) -> AnswerSynthesisResult:
-        evidence = _evidence_from_observations(state)
+        _ = state
+        evidence = _evidence_from_answer_context(answer_context)
         if not evidence:
-            tool_answer = _tool_answer_from_observations(state)
+            tool_answer = _tool_answer_from_answer_context(answer_context)
             if tool_answer is not None:
                 return AnswerSynthesisResult(
                     outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
@@ -425,13 +545,52 @@ class _ModelAnswerSynthesisAdapter:
         )
 
 
+class _EvidenceAnswerSynthesisAdapter:
+    def synthesize(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
+    ) -> AnswerSynthesisResult:
+        _ = state
+        evidence = _evidence_from_answer_context(answer_context)
+        if not evidence:
+            tool_answer = _tool_answer_from_answer_context(answer_context)
+            if tool_answer is not None:
+                return AnswerSynthesisResult(
+                    outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+                    final_output=tool_answer,
+                    message=tool_answer,
+                    reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+                )
+            message = "Unable to answer without accepted governed evidence."
+            return AnswerSynthesisResult(
+                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                final_output=message,
+                message=message,
+                reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+            )
+        first = evidence[0]
+        citation_suffix = f" Citation: {first.citation}." if first.citation else ""
+        message = f"{first.content.strip()}{citation_suffix}"
+        return AnswerSynthesisResult(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            final_output=message,
+            message=message,
+            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+            evidence=evidence,
+        )
+
+
 class _DeterministicAnswerSynthesisAdapter:
     def synthesize(
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
     ) -> AnswerSynthesisResult:
-        citation_refs = _citation_refs(state)
+        _ = state
+        citation_refs = answer_context.citation_refs
         citation_suffix = f" Citation: {citation_refs[0]}." if citation_refs else ""
         message = (
             "Travel meals are reimbursed when supported by governed policy evidence."
@@ -460,8 +619,7 @@ class _InMemorySnapshotStoreAdapter:
 
 def _context_summary(state: ControlledReActRunState) -> str:
     accepted_count = sum(
-        observation.accepted_evidence_count
-        for observation in state.observation_records
+        observation.accepted_evidence_count for observation in state.observation_records
     )
     if accepted_count <= 0:
         tool_observation_count = sum(
@@ -490,19 +648,16 @@ def _citation_refs(state: ControlledReActRunState) -> tuple[str, ...]:
     return tuple(refs)
 
 
-def _evidence_from_observations(
-    state: ControlledReActRunState,
+def _evidence_from_answer_context(
+    answer_context: AnswerEvidenceContext,
 ) -> tuple[EvidenceChunk, ...]:
     evidence: list[EvidenceChunk] = []
-    for observation in state.observation_records:
-        raw_evidence = observation.summary.get("evidence")
-        if not isinstance(raw_evidence, list | tuple):
+    for truth in answer_context.observation_truth:
+        if not isinstance(truth, RetrievalObservationTruth):
             continue
-        for item in raw_evidence:
-            if isinstance(item, Mapping):
-                chunk = EvidenceChunk.model_validate(item)
-                if chunk.status is EvidenceStatus.ACCEPTED:
-                    evidence.append(chunk)
+        for chunk in truth.accepted_evidence:
+            if chunk.status is EvidenceStatus.ACCEPTED:
+                evidence.append(chunk)
     return tuple(evidence)
 
 
@@ -559,31 +714,18 @@ def _final_answer_action(action_id: str) -> ReActActionProposal:
     )
 
 
-def _tool_answer_from_observations(state: ControlledReActRunState) -> str | None:
-    for observation in reversed(state.observation_records):
-        if observation.action_type is not ReActActionType.PROPOSE_TOOL_CALL:
+def _tool_answer_from_answer_context(
+    answer_context: AnswerEvidenceContext,
+) -> str | None:
+    for truth in reversed(answer_context.observation_truth):
+        if not isinstance(truth, ToolObservationTruth):
             continue
-        tool_name = _string_value(observation.summary.get("tool_name")) or "tool"
-        raw_result = observation.summary.get("result")
-        if not isinstance(raw_result, Mapping):
-            continue
+        tool_name = truth.tool_name
+        raw_result = truth.authorized_result
         status = _string_value(raw_result.get("status"))
-        customer_id = _string_value(raw_result.get("customer_id"))
-        policy_id = _string_value(raw_result.get("policy_id"))
-        source = _string_value(raw_result.get("source"))
-        subject = " ".join(
-            value
-            for value in (
-                f"customer {customer_id}" if customer_id else None,
-                f"policy {policy_id}" if policy_id else None,
-            )
-            if value is not None
-        )
-        subject_suffix = f" for {subject}" if subject else ""
-        source_suffix = f" Source: {source}." if source else ""
         if status:
-            return f"{tool_name} returned status {status}{subject_suffix}.{source_suffix}"
-        return f"{tool_name} returned: {dict(raw_result)}"
+            return f"{tool_name} returned status {status}."
+        return f"{tool_name} returned an authorized result."
     return None
 
 

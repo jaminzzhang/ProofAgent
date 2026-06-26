@@ -6,16 +6,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from proof_agent.contracts import (
+    AnswerEvidenceContext,
     ApprovalPause,
     ClarificationNeed,
     ControlledReActRunPhase,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     ObservationRecord,
+    ObservationTruthArtifact,
     PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
     ReceiptOutcome,
+    RetrievalObservationTruth,
+    ToolObservationTruth,
     ValidationResult,
     ValidationStatus,
     WorkflowStageResult,
@@ -26,11 +30,11 @@ from proof_agent.control.workflow.controlled_react.ports import (
     AnswerSynthesisResult,
     ControlledReActPorts,
 )
-from proof_agent.control.workflow.controlled_react.state_machine import (
-    ControlledReActStateMachine,
-    EffectResult,
-    TransitionCommand,
-    TransitionCommandType,
+from proof_agent.control.workflow.controlled_react.observation_commit import (
+    InMemoryObservationTruthStore,
+    ObservationCommitter,
+    ObservationEffect,
+    ObservationIdentity,
 )
 from proof_agent.control.workflow.react_enterprise_qa import (
     compute_eligible_action_set,
@@ -54,6 +58,7 @@ class ControlledReActResumeRequest:
     approval_id: str
     approved: bool
     actor: str
+    max_plan_rounds: int = 4
 
 
 class ControlledReActOrchestrator:
@@ -61,7 +66,12 @@ class ControlledReActOrchestrator:
 
     def __init__(self, *, ports: ControlledReActPorts) -> None:
         self._ports = ports
-        self._state_machine = ControlledReActStateMachine()
+        self._observation_truth_store = (
+            ports.observation_truth_store or InMemoryObservationTruthStore()
+        )
+        self._observation_committer = ObservationCommitter(
+            truth_store=self._observation_truth_store
+        )
 
     def start(
         self,
@@ -76,74 +86,61 @@ class ControlledReActOrchestrator:
         )
         state = self._prepare_pre_loop_state(state)
         action = self._ports.planner.plan(state)
-        if action.action_type is ReActActionType.PLAN_RETRIEVAL:
-            if self._review_denies(state, action):
-                return self._deny_retrieval_review(request, action)
-            state = self._observe_knowledge(state, action)
-            action = self._ports.planner.plan(state)
-            action = self._constrain_next_action(
-                state,
-                action,
-                max_plan_rounds=request.max_plan_rounds,
-            )
-        if action.action_type is ReActActionType.REFUSE:
-            return self._refuse_plan_budget_exhausted(request, action, state=state)
-        if action.action_type is ReActActionType.ASK_CLARIFICATION:
-            return self._ask_clarification(request, action)
-        if action.action_type is ReActActionType.PROPOSE_TOOL_CALL:
-            policy_decision = self._policy_decision(state, action)
-            if policy_decision is PolicyDecisionType.DENY:
-                return self._deny_tool_policy(request, action)
-            if policy_decision is PolicyDecisionType.ALLOW:
-                state = self._observe_tool(state, action)
-                action = self._ports.planner.plan(state)
-                if action.action_type is not ReActActionType.GENERATE_FINAL_ANSWER:
-                    raise ValueError(f"unsupported tool follow-up action: {action.action_type}")
-                answer = self._ports.answer_synthesis.synthesize(state, action)
-                memory_write = self._write_memory(state, answer)
-                return WorkflowTemplateExecutionResult(
-                    run_id=request.run_id,
-                    template_name=request.template_name,
-                    template_descriptor_version=request.template_descriptor_version,
-                    outcome=answer.outcome,
-                    final_output=answer.final_output,
-                    message=answer.message,
-                    evidence=answer.evidence,
-                    stage_results=_stage_results_for_answer(
-                        state,
-                        answer,
-                        action,
-                        memory_write_result=memory_write,
-                    ),
-                    intent_resolution=state.intent_resolution,
-                    reasoning_summary=answer.reasoning_summary,
-                    model_usage_summary=answer.model_usage_summary,
-                    stage_llm_interactions=answer.stage_llm_interactions,
-                )
-            return self._pause_for_tool_approval(request, state, action)
-        if action.action_type is not ReActActionType.GENERATE_FINAL_ANSWER:
-            raise ValueError(f"unsupported start action: {action.action_type}")
-        answer = self._ports.answer_synthesis.synthesize(state, action)
-        memory_write = self._write_memory(state, answer)
-        return WorkflowTemplateExecutionResult(
-            run_id=request.run_id,
-            template_name=request.template_name,
-            template_descriptor_version=request.template_descriptor_version,
-            outcome=answer.outcome,
-            final_output=answer.final_output,
-            message=answer.message,
-            evidence=answer.evidence,
-            stage_results=_stage_results_for_answer(
-                state,
-                answer,
-                action,
-                memory_write_result=memory_write,
-            ),
-            intent_resolution=state.intent_resolution,
-            reasoning_summary=answer.reasoning_summary,
-            model_usage_summary=answer.model_usage_summary,
-            stage_llm_interactions=answer.stage_llm_interactions,
+        return self._run_loop(
+            request,
+            state=state,
+            action=action,
+            max_plan_rounds=request.max_plan_rounds,
         )
+
+    def _run_loop(
+        self,
+        request: ControlledReActStartRequest,
+        *,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        max_plan_rounds: int,
+    ) -> WorkflowTemplateExecutionResult:
+        while True:
+            if action.action_type is ReActActionType.REFUSE:
+                return self._refuse_plan_budget_exhausted(request, action, state=state)
+            if action.action_type is ReActActionType.ASK_CLARIFICATION:
+                return self._ask_clarification(request, action)
+            if action.action_type is ReActActionType.GENERATE_FINAL_ANSWER:
+                answer = self._synthesize_answer(state, action)
+                memory_write = self._write_memory(state, answer)
+                return _workflow_result_from_answer(
+                    state,
+                    answer,
+                    action,
+                    memory_write_result=memory_write,
+                )
+            if action.action_type is ReActActionType.PLAN_RETRIEVAL:
+                if self._review_denies(state, action):
+                    return self._deny_retrieval_review(request, action)
+                state = self._observe_knowledge(state, action)
+                action = self._ports.planner.plan(state)
+                action = self._constrain_next_action(
+                    state,
+                    action,
+                    max_plan_rounds=max_plan_rounds,
+                )
+                continue
+            if action.action_type is ReActActionType.PROPOSE_TOOL_CALL:
+                policy_decision = self._policy_decision(state, action)
+                if policy_decision is PolicyDecisionType.DENY:
+                    return self._deny_tool_policy(request, action)
+                if policy_decision is PolicyDecisionType.ALLOW:
+                    state = self._observe_tool(state, action)
+                    action = self._ports.planner.plan(state)
+                    action = self._constrain_next_action(
+                        state,
+                        action,
+                        max_plan_rounds=max_plan_rounds,
+                    )
+                    continue
+                return self._pause_for_tool_approval(request, state, action)
+            raise ValueError(f"unsupported start action: {action.action_type}")
 
     def _refuse_plan_budget_exhausted(
         self,
@@ -186,10 +183,7 @@ class ControlledReActOrchestrator:
         action: ReActActionProposal,
     ) -> WorkflowTemplateExecutionResult:
         missing_fields = _clarification_missing_fields(action)
-        message = (
-            "Please provide "
-            f"{_human_join(missing_fields)} before I can continue."
-        )
+        message = f"Please provide {_human_join(missing_fields)} before I can continue."
         clarification_need = ClarificationNeed(
             action_id=action.action_id,
             missing_fields=missing_fields,
@@ -286,43 +280,22 @@ class ControlledReActOrchestrator:
         if not request.approved:
             planning_state = self._observe_tool_approval_denial(state, action, request)
             next_action = self._ports.planner.plan(planning_state)
-            if next_action.action_type is ReActActionType.REFUSE:
-                return self._refuse_plan_budget_exhausted(
-                    ControlledReActStartRequest(
-                        run_id=planning_state.run_id,
-                        template_name=planning_state.template_name,
-                        template_descriptor_version=(
-                            planning_state.template_descriptor_version
-                        ),
-                        question=planning_state.question,
-                    ),
-                    next_action,
-                    state=planning_state,
-                )
-            if next_action.action_type is not ReActActionType.GENERATE_FINAL_ANSWER:
-                raise ValueError(
-                    f"unsupported denied approval follow-up action: {next_action.action_type}"
-                )
-            answer = self._ports.answer_synthesis.synthesize(planning_state, next_action)
-            memory_write = self._write_memory(planning_state, answer)
-            return WorkflowTemplateExecutionResult(
-                run_id=planning_state.run_id,
-                template_name=planning_state.template_name,
-                template_descriptor_version=planning_state.template_descriptor_version,
-                outcome=answer.outcome,
-                final_output=answer.final_output,
-                message=answer.message,
-                evidence=answer.evidence,
-                stage_results=_stage_results_for_answer(
-                    planning_state,
-                    answer,
-                    next_action,
-                    memory_write_result=memory_write,
+            next_action = self._constrain_next_action(
+                planning_state,
+                next_action,
+                max_plan_rounds=request.max_plan_rounds,
+            )
+            return self._run_loop(
+                ControlledReActStartRequest(
+                    run_id=planning_state.run_id,
+                    template_name=planning_state.template_name,
+                    template_descriptor_version=planning_state.template_descriptor_version,
+                    question=planning_state.question,
+                    max_plan_rounds=request.max_plan_rounds,
                 ),
-                intent_resolution=planning_state.intent_resolution,
-                reasoning_summary=answer.reasoning_summary,
-                model_usage_summary=answer.model_usage_summary,
-                stage_llm_interactions=answer.stage_llm_interactions,
+                state=planning_state,
+                action=next_action,
+                max_plan_rounds=request.max_plan_rounds,
             )
         if self._ports.tool_observation is None:
             raise ValueError("tool observation port is required for approval resume")
@@ -332,31 +305,31 @@ class ControlledReActOrchestrator:
                 "plan_round": state.plan_round + 1,
             }
         )
-        observation = self._ports.tool_observation.observe(observing_state, action)
-        planning_state = self._commit_observation(observing_state, action, observation)
+        identity = _allocate_observation_identity(observing_state, action)
+        effect = self._ports.tool_observation.observe(observing_state, action, identity)
+        planning_state = self._commit_observation_effect(
+            observing_state,
+            action,
+            effect,
+            identity,
+        )
         next_action = self._ports.planner.plan(planning_state)
-        if next_action.action_type is not ReActActionType.GENERATE_FINAL_ANSWER:
-            raise ValueError(f"unsupported resume action: {next_action.action_type}")
-        answer = self._ports.answer_synthesis.synthesize(planning_state, next_action)
-        memory_write = self._write_memory(planning_state, answer)
-        return WorkflowTemplateExecutionResult(
-            run_id=planning_state.run_id,
-            template_name=planning_state.template_name,
-            template_descriptor_version=planning_state.template_descriptor_version,
-            outcome=answer.outcome,
-            final_output=answer.final_output,
-            message=answer.message,
-            evidence=answer.evidence,
-            stage_results=_stage_results_for_answer(
-                planning_state,
-                answer,
-                next_action,
-                memory_write_result=memory_write,
+        next_action = self._constrain_next_action(
+            planning_state,
+            next_action,
+            max_plan_rounds=request.max_plan_rounds,
+        )
+        return self._run_loop(
+            ControlledReActStartRequest(
+                run_id=planning_state.run_id,
+                template_name=planning_state.template_name,
+                template_descriptor_version=planning_state.template_descriptor_version,
+                question=planning_state.question,
+                max_plan_rounds=request.max_plan_rounds,
             ),
-            intent_resolution=planning_state.intent_resolution,
-            reasoning_summary=answer.reasoning_summary,
-            model_usage_summary=answer.model_usage_summary,
-            stage_llm_interactions=answer.stage_llm_interactions,
+            state=planning_state,
+            action=next_action,
+            max_plan_rounds=request.max_plan_rounds,
         )
 
     def _deny_tool_approval(
@@ -397,9 +370,13 @@ class ControlledReActOrchestrator:
         )
         snapshot_ref = self._ports.snapshot_store.save(snapshot)
         tool_name = action.target_tool_name or "unknown_tool"
-        expires_at = (datetime.now(UTC) + timedelta(seconds=60)).isoformat().replace(
-            "+00:00",
-            "Z",
+        expires_at = (
+            (datetime.now(UTC) + timedelta(seconds=60))
+            .isoformat()
+            .replace(
+                "+00:00",
+                "Z",
+            )
         )
         approval_pause = ApprovalPause(
             approval_id=f"appr_{action.action_id}",
@@ -472,8 +449,13 @@ class ControlledReActOrchestrator:
                 "action_history": state.action_history + (action,),
             }
         )
-        observation = self._ports.knowledge_observation.observe(observing_state, action)
-        return self._commit_observation(observing_state, action, observation)
+        identity = _allocate_observation_identity(observing_state, action)
+        effect = self._ports.knowledge_observation.observe(
+            observing_state,
+            action,
+            identity,
+        )
+        return self._commit_observation_effect(observing_state, action, effect, identity)
 
     def _observe_tool(
         self,
@@ -489,8 +471,9 @@ class ControlledReActOrchestrator:
                 "action_history": state.action_history + (action,),
             }
         )
-        observation = self._ports.tool_observation.observe(observing_state, action)
-        return self._commit_observation(observing_state, action, observation)
+        identity = _allocate_observation_identity(observing_state, action)
+        effect = self._ports.tool_observation.observe(observing_state, action, identity)
+        return self._commit_observation_effect(observing_state, action, effect, identity)
 
     def _observe_tool_approval_denial(
         self,
@@ -505,44 +488,105 @@ class ControlledReActOrchestrator:
                 "plan_round": state.plan_round + 1,
             }
         )
-        observation = ObservationRecord(
-            observation_id=f"obs_denied_{action.action_id}",
+        identity = _allocate_observation_identity(observing_state, action)
+        authorized_result = {
+            "approval_state": "denied",
+            "actor": request.actor,
+        }
+        truth = ToolObservationTruth(
+            truth_ref=identity.truth_ref,
+            observation_id=identity.observation_id,
+            action_id=action.action_id,
+            tool_name=tool_name,
+            authorized_result=authorized_result,
+            result_schema_id=f"{tool_name}.approval.v1",
+            approval_ref=request.approval_id,
+        )
+        record = ObservationRecord(
+            observation_id=identity.observation_id,
             action_id=action.action_id,
             action_type=action.action_type,
             round=observing_state.plan_round,
-            truth_ref=f"approval://{request.approval_id}",
-            summary={
-                "tool_name": tool_name,
-                "approval_state": "denied",
-                "actor": request.actor,
-            },
+            truth_ref=identity.truth_ref,
             accepted_evidence_count=0,
             new_evidence_count=0,
             unresolved_subgoals=("tool_approval_denied",),
             source_refs=(f"tool://{tool_name}",),
             citation_refs=(),
         )
-        return self._commit_observation(observing_state, action, observation)
+        return self._commit_observation_effect(
+            observing_state,
+            action,
+            ObservationEffect(
+                observation_record=record,
+                truth_artifact=truth,
+                trace_projection=authorized_result,
+                tool_summary_projection=authorized_result,
+            ),
+            identity,
+        )
 
-    def _commit_observation(
+    def _commit_observation_effect(
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
-        observation: ObservationRecord,
+        effect: ObservationEffect,
+        identity: ObservationIdentity,
     ) -> ControlledReActRunState:
-        result = self._state_machine.advance(
+        result = self._observation_committer.commit(
             state,
-            TransitionCommand(
-                command_id=f"commit_{observation.observation_id}",
-                command_type=TransitionCommandType.RECORD_OBSERVATION,
-                action=action,
-            ),
-            EffectResult(
-                command_id=f"commit_{observation.observation_id}",
-                observation_record=observation,
-            ),
+            action,
+            effect,
+            expected_identity=identity,
         )
-        return result.state
+        if len(result.state.observation_records) <= len(state.observation_records):
+            return result.state
+        existing_projections = tuple(result.state.observation_trace_projections)
+        projection_gap_records = result.state.observation_records[len(existing_projections) : -1]
+        return result.state.model_copy(
+            update={
+                "observation_trace_projections": (
+                    existing_projections
+                    + tuple(dict(record.summary) for record in projection_gap_records)
+                    + (result.trace_projection,)
+                )
+            }
+        )
+
+    def _synthesize_answer(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+    ) -> AnswerSynthesisResult:
+        context = self._answer_evidence_context(state)
+        return self._ports.answer_synthesis.synthesize(state, action, context)
+
+    def _answer_evidence_context(
+        self,
+        state: ControlledReActRunState,
+    ) -> AnswerEvidenceContext:
+        truths = tuple(
+            self._observation_truth_store.load(record.truth_ref)
+            for record in state.observation_records
+        )
+        _validate_answer_truth_context(state.observation_records, truths)
+        citation_refs = tuple(
+            ref for record in state.observation_records for ref in record.citation_refs
+        )
+        source_refs = tuple(
+            ref for record in state.observation_records for ref in record.source_refs
+        )
+        return AnswerEvidenceContext(
+            run_id=state.run_id,
+            observation_truth=truths,
+            citation_refs=citation_refs,
+            source_refs=source_refs,
+            validation_precheck={
+                "observation_count": len(state.observation_records),
+                "citation_ref_count": len(citation_refs),
+                "source_ref_count": len(source_refs),
+            },
+        )
 
     def _constrain_next_action(
         self,
@@ -589,6 +633,34 @@ def _action_history_payload(state: ControlledReActRunState) -> list[Mapping[str,
     ]
 
 
+def _allocate_observation_identity(
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+) -> ObservationIdentity:
+    return ObservationIdentity.allocate(
+        run_id=state.run_id,
+        plan_round=state.plan_round,
+        action_id=action.action_id,
+    )
+
+
+def _validate_answer_truth_context(
+    records: tuple[ObservationRecord, ...],
+    truths: tuple[ObservationTruthArtifact, ...],
+) -> None:
+    for record, truth in zip(records, truths, strict=True):
+        if record.truth_ref != truth.truth_ref:
+            raise ValueError("observation record truth_ref does not match truth artifact")
+        if record.observation_id != truth.observation_id:
+            raise ValueError("observation record id does not match truth artifact")
+        if isinstance(truth, RetrievalObservationTruth):
+            missing = tuple(ref for ref in record.citation_refs if ref not in truth.citation_refs)
+            if missing:
+                raise ValueError("observation record citation_refs are missing from truth artifact")
+        elif record.citation_refs:
+            raise ValueError("tool observation record must not carry citation_refs")
+
+
 def _observation_payloads(state: ControlledReActRunState) -> list[Mapping[str, Any]]:
     return [
         {
@@ -612,9 +684,7 @@ def _clarification_missing_fields(
         except TypeError:
             candidates = ()
     missing_fields = tuple(
-        field.strip()
-        for field in candidates
-        if isinstance(field, str) and field.strip()
+        field.strip() for field in candidates if isinstance(field, str) and field.strip()
     )
     return missing_fields or ("required_details",)
 
@@ -636,11 +706,21 @@ def _stage_results_from_state(
         WorkflowStageResult(
             stage_id=_stage_id_for_observation(record),
             status=WorkflowStageStatus.COMPLETED,
-            summary=dict(record.summary),
+            summary=_stage_summary_for_observation(state, index, record),
             produced_fact_refs=record.source_refs or (record.truth_ref,),
         )
-        for record in state.observation_records
+        for index, record in enumerate(state.observation_records)
     )
+
+
+def _stage_summary_for_observation(
+    state: ControlledReActRunState,
+    index: int,
+    record: ObservationRecord,
+) -> dict[str, Any]:
+    if index < len(state.observation_trace_projections):
+        return dict(state.observation_trace_projections[index])
+    return dict(record.summary)
 
 
 def _stage_id_for_observation(record: ObservationRecord) -> str:
@@ -882,3 +962,31 @@ def _first_action_of_type(
         if action.action_type is action_type:
             return action
     return None
+
+
+def _workflow_result_from_answer(
+    state: ControlledReActRunState,
+    answer: AnswerSynthesisResult,
+    final_action: ReActActionProposal,
+    *,
+    memory_write_result: ValidationResult | None = None,
+) -> WorkflowTemplateExecutionResult:
+    return WorkflowTemplateExecutionResult(
+        run_id=state.run_id,
+        template_name=state.template_name,
+        template_descriptor_version=state.template_descriptor_version,
+        outcome=answer.outcome,
+        final_output=answer.final_output,
+        message=answer.message,
+        evidence=answer.evidence,
+        stage_results=_stage_results_for_answer(
+            state,
+            answer,
+            final_action,
+            memory_write_result=memory_write_result,
+        ),
+        intent_resolution=state.intent_resolution,
+        reasoning_summary=answer.reasoning_summary,
+        model_usage_summary=answer.model_usage_summary,
+        stage_llm_interactions=answer.stage_llm_interactions,
+    )

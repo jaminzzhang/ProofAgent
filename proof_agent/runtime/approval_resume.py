@@ -17,8 +17,12 @@ from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
     ControlledReActRunStateSnapshot,
+    ObservationTruthArtifact,
+    ObservationTruthKind,
+    RetrievalObservationTruth,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
+    ToolObservationTruth,
     WorkflowTemplateExecutionInput,
 )
 from proof_agent.errors import ProofAgentError
@@ -109,10 +113,7 @@ class FileControlledReActSnapshotStore:
             json.dumps(_model_payload(snapshot), indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        return (
-            f"{CONTROLLED_REACT_SNAPSHOT_REF_PREFIX}"
-            f"{snapshot.run_id}/{snapshot.snapshot_id}"
-        )
+        return f"{CONTROLLED_REACT_SNAPSHOT_REF_PREFIX}{snapshot.run_id}/{snapshot.snapshot_id}"
 
     def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
         run_id, snapshot_id = _parse_controlled_react_snapshot_ref(snapshot_ref)
@@ -130,6 +131,55 @@ class FileControlledReActSnapshotStore:
 
     def _snapshot_path(self, run_id: str, snapshot_id: str) -> Path:
         return self._root_dir / run_id / "controlled_react" / f"{snapshot_id}.json"
+
+
+class FileObservationTruthStore:
+    """Disk-backed Observation Truth Store for Controlled ReAct resume."""
+
+    def __init__(self, root_dir: Path) -> None:
+        self._root_dir = root_dir
+
+    def save(self, truth: ObservationTruthArtifact) -> str:
+        run_id, observation_id = _parse_observation_truth_ref(truth.truth_ref)
+        path = self._truth_path(run_id, observation_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(_model_payload(truth), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return truth.truth_ref
+
+    def load(self, truth_ref: str) -> ObservationTruthArtifact:
+        run_id, observation_id = _parse_observation_truth_ref(truth_ref)
+        path = self._truth_path(run_id, observation_id)
+        if not path.exists():
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                f"controlled ReAct observation truth not found: {truth_ref}",
+                "Restart the run so approval resume can persist observation truth.",
+                artifact_path=path,
+            )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        kind = payload.get("kind")
+        if kind == ObservationTruthKind.RETRIEVAL.value:
+            return RetrievalObservationTruth.model_validate(payload)
+        if kind == ObservationTruthKind.TOOL.value:
+            return ToolObservationTruth.model_validate(payload)
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            f"unsupported controlled ReAct observation truth kind: {kind}",
+            "Discard the stale approval checkpoint and restart the run.",
+            artifact_path=path,
+        )
+
+    def _truth_path(self, run_id: str, observation_id: str) -> Path:
+        return (
+            self._root_dir
+            / run_id
+            / "controlled_react"
+            / "observation_truth"
+            / f"{observation_id}.json"
+        )
 
 
 class ApprovalResumeClaim:
@@ -253,6 +303,9 @@ class LangGraphApprovalResumeRegistry:
     def controlled_react_snapshot_store(self) -> FileControlledReActSnapshotStore:
         return FileControlledReActSnapshotStore(self._root_dir)
 
+    def controlled_react_observation_truth_store(self) -> FileObservationTruthStore:
+        return FileObservationTruthStore(self._root_dir)
+
     def _write_metadata(self, context: LangGraphApprovalResumeContext) -> None:
         execution_input_payload = _model_payload(context.workflow_template_execution_input)
         metadata = {
@@ -268,9 +321,7 @@ class LangGraphApprovalResumeRegistry:
             "draft_id": context.draft_id,
             "allow_untrusted_web_supplement": context.allow_untrusted_web_supplement,
             "workflow_template_execution_input": execution_input_payload,
-            "workflow_template_execution_input_sha256": _payload_sha256(
-                execution_input_payload
-            ),
+            "workflow_template_execution_input_sha256": _payload_sha256(execution_input_payload),
         }
         path = self._metadata_path(context.run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -326,9 +377,7 @@ class LangGraphApprovalResumeRegistry:
             agent_id=data.get("agent_id"),
             agent_version_id=data.get("agent_version_id"),
             draft_id=data.get("draft_id"),
-            allow_untrusted_web_supplement=bool(
-                data.get("allow_untrusted_web_supplement", False)
-            ),
+            allow_untrusted_web_supplement=bool(data.get("allow_untrusted_web_supplement", False)),
             workflow_template_execution_input=execution_input,
         )
         self._contexts[run_id] = context
@@ -433,6 +482,25 @@ def _parse_controlled_react_snapshot_ref(snapshot_ref: str) -> tuple[str, str]:
             "PA_RUNTIME_001",
             f"invalid controlled ReAct snapshot reference: {snapshot_ref}",
             "Use the checkpoint_ref emitted by the pending approval event.",
+        )
+    return parts[0], parts[1]
+
+
+def _parse_observation_truth_ref(truth_ref: str) -> tuple[str, str]:
+    prefix = "observation://"
+    if not truth_ref.startswith(prefix):
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            f"invalid observation truth reference: {truth_ref}",
+            "Use the truth_ref allocated by the Controlled ReAct Orchestrator.",
+        )
+    payload = truth_ref.removeprefix(prefix)
+    parts = payload.split("/")
+    if len(parts) != 3 or parts[2] != "truth" or not parts[0] or not parts[1]:
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            f"invalid observation truth reference: {truth_ref}",
+            "Use the truth_ref allocated by the Controlled ReAct Orchestrator.",
         )
     return parts[0], parts[1]
 

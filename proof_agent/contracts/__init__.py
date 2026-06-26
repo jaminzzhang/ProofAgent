@@ -42,10 +42,15 @@ from proof_agent.contracts.conversation import (
     ConversationTurn,
 )
 from proof_agent.contracts.controlled_react import (
+    AnswerEvidenceContext,
     ControlledReActRunPhase,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     ObservationRecord,
+    ObservationTruthArtifact,
+    ObservationTruthKind,
+    RetrievalObservationTruth,
+    ToolObservationTruth,
 )
 from proof_agent.contracts.customer import (
     CustomerAuthorizationContext,
@@ -245,6 +250,7 @@ __all__ = [
     "ActiveAgentVersion",
     "ALLOWED_REVIEW_DECISIONS",
     "AgentValidationRecord",
+    "AnswerEvidenceContext",
     "ApprovalPause",
     "ApprovalState",
     "ApprovalStatus",
@@ -383,6 +389,8 @@ __all__ = [
     "ModelResponse",
     "ModelRole",
     "ObservationRecord",
+    "ObservationTruthArtifact",
+    "ObservationTruthKind",
     "PackageKnowledgeSourceConfig",
     "PendingApproval",
     "PolicyConfig",
@@ -403,6 +411,7 @@ __all__ = [
     "ResolvedKnowledgeBinding",
     "ResolvedKnowledgeBindingSet",
     "ResolvedWorkflowStageRuntimeConfiguration",
+    "RetrievalObservationTruth",
     "RetrievalConfig",
     "RetrievalQueryItem",
     "ReviewConfig",
@@ -426,6 +435,7 @@ __all__ = [
     "ToolRequest",
     "ToolsConfig",
     "ToolCapabilityConfig",
+    "ToolObservationTruth",
     "TraceEvent",
     "TraceEventType",
     "UntrustedWebContext",

@@ -727,7 +727,7 @@ The V3 rule that `response` is an Orchestrator-owned governed response projectio
 _Avoid_: delivery-owned response wording, artifact finalization as workflow stage, ungoverned final output wrapper, receipt-driven response
 
 **Controlled ReAct Effect Port Set**:
-The minimum side-effect interface set consumed by the Controlled ReAct Orchestrator: intent resolver, planner, review, policy, knowledge observation, tool observation, answer synthesis, stage projection, snapshot store, and transition lock. Concrete runtime, delivery, provider, store, and adapter classes plug in behind these ports.
+The minimum side-effect interface set consumed by the Controlled ReAct Orchestrator: intent resolver, planner, review, policy, knowledge observation, tool observation, observation truth store, answer synthesis, stage projection, snapshot store, and transition lock. Concrete runtime, delivery, provider, store, and adapter classes plug in behind these ports.
 _Avoid_: direct RunStore dependency, direct LangGraph dependency, direct provider client dependency, broad service locator
 
 **Controlled ReAct Port Protocol Module**:
@@ -735,7 +735,7 @@ The internal `proof_agent/control/workflow/controlled_react/ports.py` module tha
 _Avoid_: global contracts for private ports, delivery-owned port protocols, runtime-owned port protocols, service locator module
 
 **Controlled ReAct Contract Module**:
-The `proof_agent/contracts/controlled_react.py` module for persisted, resumable, or audit-replayable Controlled ReAct DTOs such as Controlled ReAct Run State, Controlled ReAct Run State Snapshot, and Observation Record. Internal transition commands, effect results, and state-machine step types remain in `proof_agent/control/workflow/controlled_react/`.
+The `proof_agent/contracts/controlled_react.py` module for persisted, resumable, or audit-replayable Controlled ReAct DTOs such as Controlled ReAct Run State, Controlled ReAct Run State Snapshot, Observation Record, Observation Truth Artifact variants, and Answer Evidence Context. Observation Effect, Observation Identity, Observation Commit Result, Observation Summary Builder, transition commands, and state-machine step types remain in `proof_agent/control/workflow/controlled_react/`.
 _Avoid_: internal command contract, port protocol contract, runtime state contract, trace-only DTO
 
 **Controlled ReAct Public Execution Result**:
@@ -773,6 +773,14 @@ _Avoid_: single happy-path validation, trace-only coverage, model-answer-only te
 **Controlled ReAct Migration Slice Order**:
 The implementation order for the V3 Orchestrator cutover: contracts, ports, and pure state-machine tests first; fake-port start/resume second; existing adapter integration third; Delivery entrypoint fourth; shadow verification fifth; legacy runtime, manifest runtime selector, old tests, and old current-doc paths last.
 _Avoid_: one-shot rewrite, horizontal test bulk, compatibility branch, delete-before-shadow
+
+**Observation Truth Migration Sequence**:
+The implementation order for deepening Observation Record: first add public contracts for truth artifacts and answer context, then add truth store and commit internals, then migrate knowledge/tool observation adapters to Observation Effects, and finally switch answer synthesis and observability to resolved context and projections. It is a sub-sequence within Controlled ReAct Migration Slice Order.
+_Avoid_: Orchestrator main-flow rewrite first, adapter-first migration, projection before contract, summary-payload compatibility
+
+**Observation Record Refactor Acceptance Gate**:
+The V3 acceptance gate for Observation Record deepening, requiring no raw evidence or tool payload in summary, resolvable `truth_ref` for every committed record, Answer Evidence Context-based synthesis, projection-only observability, stable retry/resume identity, all-or-nothing commit failure, and citation binding against truth artifacts plus record refs.
+_Avoid_: Test-green-only acceptance, summary payload leakage, observability truth bypass, adapter-owned commit
 
 **Intent Resolution**:
 The governed understanding step that turns a user turn and admitted conversation context into an audit-safe summary of user goal, domain intent, known facts, missing fields, ambiguities, risk flags, and the recommended next action before ReAct planning.
@@ -1094,13 +1102,57 @@ _Avoid_: Graph node, retrieval step, tool call
 A Controlled ReAct Loop action that gathers information and then returns control to `plan`: `PLAN_RETRIEVAL` and `PROPOSE_TOOL_CALL`. Its only execution result is an Observation Record; it must not create final output or select a terminal outcome.
 _Avoid_: Terminal action, one-shot branch, tool-generated final answer, retrieval-generated final answer
 
+**Observation Effect**:
+The internal effect result returned by a Knowledge Observation Port or Tool Observation Port after executing an Observation Action, carrying a proposed Observation Record envelope, a typed Observation Truth Artifact, and a trace-safe projection. It is not committed state until the Orchestrator validates and atomically writes the truth artifact and record.
+_Avoid_: Committed Observation Record, adapter-owned state append, trace event as effect
+
+**Observation Identity Allocation**:
+The Orchestrator-owned deterministic assignment of `observation_id`, `truth_ref`, and commit key before an Observation Action executes. Observation adapters must use the allocated identity in their Observation Effect and must not mint observation ids or truth refs.
+_Avoid_: Adapter-generated observation id, random truth ref, retry-dependent identity, provider-owned commit key
+
+**Observation Summary Builder**:
+The deterministic Control Plane builder that derives the planner-visible Observation Record `summary` from Observation Truth Artifact metadata, evidence admission facts, Tool Contract `summary_fields`, and redaction policy. Observation adapters do not author free-form planner-visible summaries.
+_Avoid_: Adapter-authored summary, raw evidence summary, raw tool payload summary, model-written observation summary
+
 **Terminal Action**:
 A Controlled ReAct Loop action that ends the loop: `GENERATE_FINAL_ANSWER`, `ASK_CLARIFICATION`, `REFUSE`. Terminal actions are the only loop exit.
 _Avoid_: Observation action, mid-loop stop
 
 **Observation Record**:
-The structured control-state record written into state after each observation action, carrying the full retrieval evidence or tool result (truth layer), a deterministic no-LLM summary (decision layer), and references needed by final answer synthesis. Observation Records are the sole result carrier for Observation Actions; they are control state, not logs, and are read by `plan` (summaries) and by `model_answer` (full content). The runtime contract includes `observation_id`, `action_id`, `action_type`, `round`, `truth_ref`, `summary`, `accepted_evidence_count`, `new_evidence_count`, `unresolved_subgoals`, `source_refs`, and `citation_refs`.
-_Avoid_: Discarded tool output, trace-only observation, unstructured planner scratchpad, direct final response
+The structured control-state envelope written into state after each observation action, carrying a deterministic no-LLM summary, convergence fields, safe source/citation references, and a `truth_ref` to the Observation Truth Artifact. Observation Records are the sole loop-visible result carrier for Observation Actions; they are control state, not logs, and `plan` reads summaries while `model_answer` resolves `truth_ref` for full content.
+_Avoid_: Discarded tool output, trace-only observation, unstructured planner scratchpad, direct final response, raw evidence summary
+
+**Observation Truth Artifact**:
+The typed payload artifact referenced by an Observation Record `truth_ref`, modeled as a discriminated union for retrieval truth and tool truth. It contains full admitted retrieval evidence or authorized tool result plus redaction and admission metadata for final-answer synthesis, audit replay, and receipt basis, and it must not be embedded in Observation Record `summary`.
+_Avoid_: Summary payload, planner scratchpad, trace payload, evidence stuffed into summary
+
+**Retrieval Observation Truth**:
+The Observation Truth Artifact variant for governed retrieval, carrying accepted evidence chunks, rejected-evidence summary, admission metadata, and citation references. It is the only full retrieval payload that final-answer synthesis may use after a retrieval Observation Record.
+_Avoid_: Evidence in summary, citation-only record, raw provider response
+
+**Tool Observation Truth**:
+The Observation Truth Artifact variant for governed tool execution, carrying the authorized redacted tool result, tool identity, result schema reference, approval reference when available, and redaction metadata. It is distinct from Tool Observation Record summary, which contains only planner-visible fields.
+_Avoid_: Tool summary as truth, raw tool payload, approval trace as result
+
+**Observation Truth Store**:
+The Control Plane storage boundary for Observation Truth Artifacts, written atomically with Observation Record commit and resolved by `truth_ref` for final-answer synthesis, audit replay, and receipt basis. Controlled ReAct Run State and snapshots store only `truth_ref`, never the full truth payload.
+_Avoid_: Snapshot payload store, trace store, RunStore projection, summary-backed truth
+
+**Observation Truth Projection**:
+The trace-safe observability projection emitted from Observation Commit for Trace, Governance Receipt, RunStore, and Dashboard. It carries ids, counts, status, source/citation references, redaction facts, and bounded summaries only; it does not expose full Observation Truth Artifact payloads.
+_Avoid_: Truth artifact read, raw evidence projection, raw tool result projection, Dashboard truth payload
+
+**Observation Audit Replay**:
+The permissioned audit path that resolves Observation Truth Artifacts by `truth_ref` for replay, investigation, or validation use cases. It is separate from ordinary Trace, Governance Receipt, RunStore, and Dashboard projections.
+_Avoid_: Ordinary run detail, receipt rendering, trace replay shortcut, customer-visible source view
+
+**Observation Commit**:
+The Orchestrator-owned atomic transition that validates an Observation Effect, writes the Observation Truth Artifact, appends the Observation Record envelope, and emits trace-safe projections under one transition boundary. Observation adapters may propose effects but cannot mutate Control Plane state directly.
+_Avoid_: Adapter append, split truth/record write, trace-first commit, best-effort observation persistence
+
+**Observation Commit Failure**:
+The fail-closed result when Observation Commit cannot validate or persist the complete observation unit, including truth artifact validation, truth store write, summary build, record append, or trace-safe projection construction. A failed commit must not append an Observation Record or create a state where `truth_ref` cannot resolve.
+_Avoid_: Partial observation, record without truth, truth without record, fake trace success, silent degraded commit
 
 **Eligible Action Set**:
 The runtime-computed subset of ReAct actions that `plan` is permitted to choose in a given round, narrowed by the Convergence Check. Enforced structurally by `_constrain_action`, not by prompt wording.
@@ -1137,6 +1189,10 @@ _Avoid_: Inferring blockers from scattered state at decision time, raw model rat
 **Answer-Ready Evidence Projection**:
 The evidence projection rule after the Answer-Ready Finalization Gate admits `GENERATE_FINAL_ANSWER`. The planner reads only Observation Record summaries and blockers, while `model_answer` must receive the full Accepted Evidence truth layer plus Observation Record `citation_refs` and `source_refs` so it can synthesize and bind cited claims.
 _Avoid_: Final answer from planner summary only, citation refs without evidence content, moving refusal from planner to model_answer by starving evidence
+
+**Answer Evidence Context**:
+The Orchestrator-built final-answer input that resolves required Observation Record `truth_ref` values through the Observation Truth Store and packages typed retrieval/tool truth, citation refs, source refs, and validation precheck facts for AnswerSynthesisPort. AnswerSynthesisPort consumes this resolved context and does not receive a Truth Store handle.
+_Avoid_: Answer adapter store read, summary-derived evidence, planner summary as answer evidence, store handle in model_answer
 
 **Product Variant Ambiguity**:
 A product-clause ambiguity where the user names a product family or short product name that could map to multiple variants. It does not block Answer-Ready Finalization when Accepted Evidence clearly identifies one product variant; the final answer must state the cited variant scope. It becomes a blocker only when Accepted Evidence contains conflicting variants or cannot establish which variant the answer would cover.

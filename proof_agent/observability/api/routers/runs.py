@@ -138,9 +138,7 @@ def get_validation_capture(
         raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
     if _iso_timestamp_expired(artifact.expires_at):
         raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
-    payload = configuration_store.read_sensitive_validation_capture_payload(
-        artifact.capture_id
-    )
+    payload = configuration_store.read_sensitive_validation_capture_payload(artifact.capture_id)
     if payload is None:
         raise HTTPException(status_code=404, detail=f"Validation capture not found: {run_id}")
     return {
@@ -324,6 +322,7 @@ def _resume_controlled_react_approval(
     orchestrator = build_controlled_react_orchestrator_for_invocation(
         invocation,
         snapshot_store=registry.controlled_react_snapshot_store(),
+        observation_truth_store=registry.controlled_react_observation_truth_store(),
     )
     result = orchestrator.resume(
         ControlledReActResumeRequest(
@@ -524,9 +523,8 @@ def _pending_approval_expired(pending: dict[str, Any]) -> bool:
 
 def _is_controlled_react_pending(pending: dict[str, Any]) -> bool:
     checkpoint_ref = pending.get("checkpoint_ref")
-    return (
-        isinstance(checkpoint_ref, str)
-        and checkpoint_ref.startswith(CONTROLLED_REACT_SNAPSHOT_REF_PREFIX)
+    return isinstance(checkpoint_ref, str) and checkpoint_ref.startswith(
+        CONTROLLED_REACT_SNAPSHOT_REF_PREFIX
     )
 
 
@@ -565,11 +563,7 @@ def _find_pending_approval(
     approval_id: str,
 ) -> dict[str, Any] | None:
     return next(
-        (
-            approval
-            for approval in pending_approvals
-            if approval.get("approval_id") == approval_id
-        ),
+        (approval for approval in pending_approvals if approval.get("approval_id") == approval_id),
         None,
     )
 
