@@ -1,12 +1,12 @@
 # Controlled ReAct Loop Control
 
-This concept page defines the normative control contract for the **Controlled ReAct Loop**: how the loop is shaped, what counts as a step, how it is forced to converge, and how the Control Envelope keeps the only decision authority inside the loop. It is the contract companion to [ADR-0032](../adr/0032-controlled-react-loop-and-convergence-governance.md) and [ADR-0033](../adr/0033-react-loop-verification-regime.md).
+This concept page defines the normative control contract for the **Controlled ReAct Loop**: how the loop is shaped, what counts as a step, how it is forced to converge, and how the Control Envelope keeps the only decision authority inside the loop. It is the contract companion to [ADR-0032](../adr/0032-controlled-react-loop-and-convergence-governance.md), [ADR-0048](../adr/0048-controlled-react-orchestrator-v3-only.md), [ADR-0050](../adr/0050-controlled-react-orchestrator-without-langgraph-core.md), and [ADR-0033](../adr/0033-react-loop-verification-regime.md).
 
 This page does not redefine the Control Envelope, PolicyEngine, or Approval State; it constrains how the loop participates in them.
 
 ## Loop shape
 
-The React Enterprise QA Template V2 is a real Think→Act→Observe→Replan loop. One **Plan Round** = one `plan` invocation that emits exactly one governed **ReAct Action Proposal**. After an observation action executes and its **Observation Record** is written, control returns to `plan`. Only a terminal action, or hard-budget exhaustion, ends the loop.
+The React Enterprise QA Template V3 product path is a real Think→Act→Observe→Replan loop owned by the V3 **Controlled ReAct Orchestrator**. One **Plan Round** = one `plan` invocation that emits exactly one governed **ReAct Action Proposal**. After an observation action executes and its **Observation Record** is written, control returns to `plan`. Only a terminal action, or hard-budget exhaustion, ends the loop.
 
 ```text
 START
@@ -21,10 +21,10 @@ START
         ├── GENERATE_FINAL_ANSWER ─► model_answer ─►│ (terminal) END
         ├── PLAN_RETRIEVAL ─► retrieval ───────────┘ (observation)
         └── PROPOSE_TOOL_CALL ─► tool ─────────────┘ (observation)
-                                   (approval resume → plan, granted or denied)
+                                   (approval granted resume → plan)
 ```
 
-The earlier single-pass wiring (where `retrieve → model → END` and `tool → END` are hard edges) is a compatibility/regression path only. It is not the product baseline.
+The earlier single-pass wiring (where `retrieve → model → END` and `tool → END` are hard edges) is historical. It is not the V3 product baseline and must not define V3 orchestration semantics.
 
 ## Action set
 
@@ -110,20 +110,20 @@ This is why "keep everything vs. keep nothing" is rejected: auditability require
 Three sub-decisions, all confirmed in ADR-0032:
 
 - **Tool returns to plan.** After a tool executes, control returns to `plan`. The Convergence Check typically narrows to `{GENERATE_FINAL_ANSWER, REFUSE}` because tool data is frequently terminal (e.g. a customer status lookup), pushing the loop to exit in one more round. Topology stays uniform: every observation action returns to `plan`.
-- **Approval resume returns to plan, granted or denied.** A denied approval becomes an Observation Record ("this path is blocked"), not a terminal. `WAITING_FOR_APPROVAL` remains a suspension outcome; the true terminal outcome is decided by `plan` after resume, which may answer with available evidence, refuse, or switch to a retrieval path. This gives the Agent self-healing when an approval is denied.
+- **Approval resume is snapshot-owned by the Orchestrator.** Approval-granted resume loads `ControlledReActRunStateSnapshot`, observes the tool, returns to `plan`, and then exits through normal terminal action selection. The current V3 cutover records approval denial as a governed denied outcome. If denied-as-observation self-healing is added later, it must still be implemented as Orchestrator state transition, not as Runtime Plane checkpoint behavior.
 - **Tool summary fields are declared by the tool contract.** A tool contract declares `summary_fields`; the Observation Record summary is deterministically extracted from those fields. The tool implementation does not decide what `plan` may see.
 
 This fixes "tool data cannot enter an answer" (tool → Observation Record truth layer → plan → `GENERATE_FINAL_ANSWER` → `model_answer` synthesizes from full observations) and fixes compound requests (a tool round plus a retrieval round in one loop).
 
 ## Required control state
 
-These fields live on the runtime state object, are persisted across checkpoint and interrupt/resume, and are read by the Control Plane. They are not logs.
+These fields live on Orchestrator-owned Control Plane state, are persisted across approval pause through `ControlledReActRunStateSnapshot`, and are read by the Control Plane. They are not logs.
 
 | Field | Type | Reader |
 | --- | --- | --- |
-| `observations` | list of Observation Records | `plan` (summaries), `model_answer` (full) |
-| `action_history` | per-round action type + parameter hash | Convergence Check (repetition) |
-| `evidence_trajectory` | per-round accepted-evidence counts | Convergence Check (saturation) |
+| `observation_records` | list of Observation Records | `plan` (summaries), `model_answer` (full) |
+| `action_history` | per-round action proposal and parameter hash | Convergence Check (repetition) |
+| `evidence_trajectory` | derived from per-round accepted-evidence counts in Observation Records | Convergence Check (saturation) |
 | `answer_ready_blockers` | list of stable blocker objects (`code`, `reason`, optional `source_ref`) | Answer-Ready Finalization Gate |
 | `last_convergence_signal` | most recent signal | trace, prompt injection |
 
@@ -145,7 +145,7 @@ Deterministic-provider success (V1/V2) is necessary but not sufficient for any l
 1. Observation actions must return to `plan`; only terminal actions and hard-budget exhaustion may end the loop.
 2. Convergence and eligibility decisions are Control Plane semantics. The Runtime Plane only consumes the Eligible Action Set and Convergence Check output; it must not recompute them.
 3. The Eligible Action Set is enforced structurally (Layer 2 minimum); prompt wording is advisory only.
-4. Observation Records are control state and must be persisted across checkpoint and interrupt/resume.
+4. Observation Records are control state and must be persisted across approval pause/resume through the Orchestrator-owned run-state snapshot.
 5. Tool Observation Record summaries are extracted from contract-declared `summary_fields`; the tool implementation does not choose plan-visible content.
-6. `WAITING_FOR_APPROVAL` is a suspension state; approval resume re-enters `plan` whether granted or denied.
+6. `WAITING_FOR_APPROVAL` is a suspension state; approval-granted resume re-enters `plan` from the Orchestrator snapshot. Approval denial must remain a governed Orchestrator outcome or Orchestrator observation transition, never a Runtime Plane shortcut.
 7. Loop-affecting releases must pass the ADR-0033 V3 real-LLM regression gate; deterministic-provider success alone is not sufficient.

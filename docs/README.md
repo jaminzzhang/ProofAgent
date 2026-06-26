@@ -30,6 +30,13 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | `concepts/trust-boundaries.md` | Security scope, assumptions, and non-claims |
 | `concepts/react-loop-control.md` | Controlled ReAct Loop control contract: action set, budget, convergence, eligibility, Observation Records |
 
+## Architecture Decision Records
+
+| Decision set | Purpose |
+| --- | --- |
+| `adr/0048-controlled-react-orchestrator-v3-only.md` through `adr/0073-controlled-react-migration-slice-order.md` | V3 Controlled ReAct Orchestrator cutover: v3-only product path, run-scoped start/resume interface, no LangGraph core, typed run state, observation-only actions, approval snapshot resume, module placement, port boundaries, delivery entrypoint, template-bound execution, stage projection, test authority, and migration order |
+| `adr/0032-controlled-react-loop-and-convergence-governance.md` and `adr/0033-react-loop-verification-regime.md` | Loop governance and verification baseline that V3 Orchestrator implements or narrows |
+
 ## Developer Guide
 
 | Document | Purpose |

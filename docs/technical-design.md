@@ -27,7 +27,7 @@ Core goals:
 4. Provide CLI and Docker execution entry points.
 5. Maintain contract-first design; third-party SDK types must not leak into public contracts.
 
-Current deterministic demo acceptance results, backed by the React Enterprise QA baseline:
+Current deterministic demo acceptance results, backed by the React Enterprise QA V3 baseline:
 ```text
 supported: ANSWERED_WITH_CITATIONS
 unsupported: REFUSED_NO_EVIDENCE
@@ -80,7 +80,7 @@ The overall architecture of Proof Agent is not a simple top-down pipeline, but a
 
 ```text
                          Delivery / Entry
-             CLI | Docker | Template | future Execution API
+        CLI | Docker | Run Execution API | Conversation API | Configuration API
                                   |
                                   v
                        Bootstrap / Composition
@@ -96,7 +96,7 @@ The overall architecture of Proof Agent is not a simple top-down pipeline, but a
                                   |
                                   v
                            Runtime Plane
-      LangGraph Runner | future LangChain Adapter
+      LangGraph Runner for non-V3 compatibility | future LangChain Adapter
       state execution | checkpoint | interrupt/resume | streaming
                                   |
                                   v
@@ -119,59 +119,82 @@ Audit & Observability side channel:
     -> Dashboard API / inspect / stats read projections
 ```
 
-Enterprise QA current main chain:
+Current Agent package execution chain:
 
 ```text
-CLI / Docker
-  -> run_with_langgraph
+CLI / Docker / Configuration validation / Run Execution API / Conversation API
+  -> execute_agent_package_run
       -> load_agent_manifest
-      -> resolve current dependencies from manifest
-      -> emit run_started / manifest_loaded
-      -> PolicyEngine(before_retrieval)
-      -> PolicyEngine(before_retrieval_step)
-      -> retrieval_step through KnowledgeProvider
-      -> evaluate_evidence
-      -> PolicyEngine(before_answer)
-      -> build ModelRequest
-      -> PolicyEngine(before_model_call)
-      -> ModelProvider.generate
-      -> validators
-      -> optional ToolGateway approval path
-      -> SessionMemory policy/write
-      -> final_output
+      -> if workflow.template == react_enterprise_qa_v3:
+           -> compose_harness_invocation
+           -> build_controlled_react_orchestrator_for_invocation
+           -> ControlledReActOrchestrator.start
+           -> emit Controlled ReAct trace projection
+         else:
+           -> run_with_langgraph historical compatibility/runtime path
+      -> finalize_run
   -> persist trace and run metadata
   -> render Governance Receipt
   -> expose Dashboard API read projections
 ```
 
-Controlled ReAct Enterprise QA runs as a real Control Envelope-governed loop (ADR-0032), not a single-pass DAG:
+React Enterprise QA V3 is the current product path. It is selected by
+`workflow.template: react_enterprise_qa_v3` plus `workflow.runtime:
+controlled_react`; the template binds execution to the V3 Controlled ReAct
+Orchestrator rather than to a LangGraph runtime selector (ADR-0048, ADR-0050,
+ADR-0068, ADR-0070). Non-V3 templates, where still registered for historical
+demos or regression fixtures, are outside the V3 product path and must not
+define or adapt V3 orchestration semantics.
+
+Controlled ReAct V3 runs as a Control Envelope-governed state machine, not a
+single-pass DAG:
 
 ```text
-CLI / API / Conversation turn
-  -> load react_enterprise_qa_v2 Agent Contract
-  -> resolve intent into an audit-safe summary and bounded Retrieval Query Set
-  -> LOOP:
-       -> deterministic Convergence Check narrows the Eligible Action Set
-          from Plan Round count, Evidence Trajectory, and Action History
-       -> optional Deterministic Plan Short-Circuit selects first action
-       -> otherwise ReAct planner proposes one governed action from the Eligible Action Set
-       -> emit reasoning_summary and action_proposal
-       -> Action Constraint rewrites any out-of-set proposal + emits action_constrained
-       -> Harness Review Subagent suggests a decision for reviewed points
-       -> PolicyEngine/Harness makes the final decision
-       -> OBSERVATION ACTION (PLAN_RETRIEVAL / PROPOSE_TOOL_CALL):
-            execute allowed retrieval or tool, write an Observation Record
-            (full truth layer + deterministic summary layer), return to plan
-       -> APPROVAL: WAITING_FOR_APPROVAL suspends; resume returns to plan
-            whether granted or denied (denial becomes an Observation Record)
-       -> TERMINAL ACTION (GENERATE_FINAL_ANSWER / ASK_CLARIFICATION / REFUSE): exit loop
-  -> on GENERATE_FINAL_ANSWER: model_answer synthesizes from full Observation Records
-  -> deterministic before_answer evidence and citation gate
-  -> final_output with answer, refusal, approval wait, clarification wait, or escalation
+Request
+  -> ControlledReActStartRequest
+  -> ControlledReActOrchestrator.start
+      -> planner proposes one governed action
+      -> PLAN_RETRIEVAL:
+           -> optional review/policy
+           -> KnowledgeObservationPort retrieves through resolved Knowledge Provider
+           -> Evidence Admission applies manifest.retrieval.min_score
+           -> ObservationRecord is committed by ControlledReActStateMachine
+           -> planner replans with observation summary
+           -> Convergence Check and duplicate/no-progress guard constrain next action
+      -> PROPOSE_TOOL_CALL:
+           -> PolicyPort evaluates before_tool_call
+           -> ALLOW executes through ToolObservationPort and replans
+           -> REQUIRE_APPROVAL returns ApprovalPause and protected snapshot_ref
+           -> DENY returns governed tool-denied outcome
+      -> GENERATE_FINAL_ANSWER:
+           -> AnswerSynthesisPort synthesizes only from accepted evidence or authorized tool observation
+           -> before_answer evidence and citation policy is emitted
+      -> ASK_CLARIFICATION:
+           -> ClarificationNeed and WAITING_FOR_USER_CLARIFICATION
+      -> REFUSE:
+           -> REFUSED_NO_EVIDENCE
+  -> emit trace projection and Governance Receipt
+```
+
+Approval resume uses Orchestrator-owned state, not trace replay or a LangGraph
+checkpoint:
+
+```text
+Approval API
+  -> load ControlledReActRunStateSnapshot by ApprovalPause.checkpoint_ref
+  -> ControlledReActOrchestrator.resume
+      -> approved: observe tool, replan, synthesize final output
+      -> denied: record governed approval-denied outcome
   -> persist trace and Governance Receipt
 ```
 
-The loop is bounded by a dual-axis budget: `max_plan_rounds` (thinking divergence) and `max_tool_calls` (action divergence); retrieval has no independent call budget. The planner, Retrieval Query Set, review subagent, and Convergence Check are inputs to governance, not governance authorities. The earlier single-pass `react_enterprise_qa.v1` wiring and the linear `enterprise_qa` template remain as compatibility/regression paths only (ADR-0029).
+The loop is bounded by `max_plan_rounds`; the Agent Contract keeps
+`max_tool_calls` as the action-divergence budget for Tool Gateway governance.
+Retrieval has no independent call budget. The planner, review subagent,
+Observation ports, and Convergence Check are inputs to governance, not
+governance authorities. Stage descriptors are projections for Dashboard,
+RunStore, trace, receipt, and validation capture. They are not public
+Orchestrator methods and must not become execution seams.
 
 The Intent Resolution Retrieval Query Set is a non-executing candidate query summary.
 
@@ -220,12 +243,12 @@ Layer boundary rules:
 
 | Area | Current implementation |
 | --- | --- |
-| Delivery | `delivery/cli.py` exposes `demo`, `run`, `doctor`, `inspect`, `compare`, `dev`, `server`, continuous `knowledge-worker`, and bounded `knowledge-worker --once` |
+| Delivery | `delivery/cli.py` exposes `demo`, `react-demo`, `run`, `doctor`, `inspect`, `compare`, `dev`, `server`, continuous `knowledge-worker`, and bounded `knowledge-worker --once`; `delivery/agent_package_execution.py` is the shared Agent package execution seam for CLI, validation, Run Execution API, and Conversation API |
 | Docker | `Dockerfile`, `docker-compose.yml` runs demo by default |
 | Contracts | Pydantic v2 frozen models |
 | Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, Shared Model Connection resolution, and `HarnessInvocation` composition |
-| Workflow | `control/workflow/` owns Enterprise QA and Controlled ReAct Enterprise QA Harness behavior plus the workflow template registry |
-| Runtime | `runtime/langgraph_runner.py` executes supported `StateGraph` templates through resolved Harness dependencies |
+| Workflow | `control/workflow/controlled_react/` owns the V3 Controlled ReAct Orchestrator, state machine, ports, snapshot-aware start/resume interface, and invocation adapters; `control/workflow/templates.py` owns descriptor projections |
+| Runtime | `runtime/langgraph_runner.py` executes non-V3 historical/runtime templates through resolved Harness dependencies; V3 product execution bypasses LangGraph and runs through the Control Plane Orchestrator |
 | Policy | `control/policy/` owns retrieval, ReAct review, answer, tool, memory, and model call enforcement points |
 | Knowledge | `control/knowledge/` owns Control Plane retrieval orchestration; `capabilities/knowledge/` owns Markdown deterministic retrieval, Local Index runtime load, source-owned ingestion/routing model resolution, asynchronous Local Index ingestion, and remote adapter boundaries |
 | Model | `capabilities/models/` owns `deterministic`, `openai_compatible`, `openai`, `deepseek`; Azure/Anthropic placeholders; Dashboard Configuration > Models owns reusable Shared Model Connections |
@@ -233,7 +256,7 @@ Layer boundary rules:
 | Memory | `capabilities/memory/` owns session memory with denylist |
 | Validators | `control/validators/` owns schema, evidence, safety, citations, tool result |
 | Audit | `observability/audit/` owns JSONL trace, redaction, Governance Receipt, Model Usage, and model connection resolution events |
-| Storage/API | `observability/storage/` and `observability/api/` own RunStore, FastAPI health/runs/stats routes; `configuration/local_store.py` and `delivery/configuration_api.py` own Shared Model Connection configuration routes |
+| Storage/API | `observability/storage/` and `observability/api/` own RunStore, FastAPI health/runs/stats routes, approval commands, V3 Controlled ReAct snapshot resume, and non-V3 LangGraph checkpoint resume; `configuration/local_store.py` and `delivery/configuration_api.py` own Shared Model Connection configuration routes |
 | Customer Service | `delivery/customer_api.py`, `delivery/customer_adapters.py`, `observability/storage/customer_store.py`, `contracts/customer.py`, and `contracts/handoff.py` own customer-safe projections, the Customer Run Adapter seam, and internal handoff monitoring |
 | Tests/CI | pytest, Ruff, mypy, GitHub Actions |
 
@@ -275,11 +298,11 @@ proof_agent/
     models/
     tools/
   contracts/        public frozen contracts
-  control/          workflow, policy, validators, and governed decisions
+  control/          workflow, Controlled ReAct V3 Orchestrator, policy, validators, and governed decisions
     policy/
     validators/
     workflow/
-  delivery/         CLI and future execution entry points
+  delivery/         CLI, shared Agent package execution seam, Run/Conversation/Configuration APIs
   evaluation/       deterministic demo, Plain RAG comparison, and post-run Evaluation Analyzer
     compare/
     demo/
@@ -287,7 +310,7 @@ proof_agent/
     api/
     audit/
     storage/
-  runtime/          LangGraph/LangChain runtime adapters
+  runtime/          non-V3 LangGraph runtime adapters and future runtime mechanics
   cli.py            backward-compatible CLI shim
   errors.py         shared error type
 ```
@@ -296,10 +319,10 @@ Architecture layer mapping:
 
 | Architecture layer | Current modules |
 | --- | --- |
-| Delivery / Entry | `delivery/cli.py`, compatibility shim `cli.py`, Docker assets, and public packages under `examples/` |
-| Bootstrap / Composition | `bootstrap/`, provider registries, Shared Model Connection resolution, current dependency resolution inside `control/workflow/orchestrator.py` |
-| Control Plane | `control/workflow/`, `control/policy/`, `control/validators/`, approval state used by ToolGateway, memory policy checks |
-| Runtime Plane | `runtime/` |
+| Delivery / Entry | `delivery/cli.py`, `delivery/agent_package_execution.py`, `delivery/run_execution_service.py`, Run/Conversation/Configuration APIs, compatibility shim `cli.py`, Docker assets, and public packages under `examples/` |
+| Bootstrap / Composition | `bootstrap/`, provider registries, Shared Model Connection resolution, `HarnessInvocation`, and V3 Orchestrator composition adapters |
+| Control Plane | `control/workflow/controlled_react/`, `control/workflow/`, `control/policy/`, `control/validators/`, approval state used by ToolGateway, memory policy checks |
+| Runtime Plane | `runtime/` for non-V3 LangGraph mechanics and future adapters |
 | Capability Layer | `capabilities/models/`, `capabilities/knowledge/`, `capabilities/memory/`, `capabilities/tools/`, future Skill packs |
 | Contracts & Ports | `contracts/`, provider protocols |
 | Audit & Observability | `observability/audit/`, `observability/storage/`, `observability/api/`, configuration audit records |
@@ -307,7 +330,10 @@ Architecture layer mapping:
 
 Boundary rules:
 - `contracts/` cannot import adapter SDKs.
+- `delivery/agent_package_execution.py` is the Agent package execution seam; Delivery and APIs should route through it instead of calling runtime runners directly.
+- `control/workflow/controlled_react/` exposes run-scoped start/resume behavior; internal stages remain state-machine steps and projection facts, not public methods.
 - `control/workflow/` owns Harness order and calls protocols, not SDK clients.
+- `runtime/` cannot define V3 Controlled ReAct semantics. It may support non-V3 templates or future adapters around the Orchestrator.
 - `capabilities/models/` owns model SDK integration.
 - `capabilities/knowledge/` returns `EvidenceChunk`; it does not decide final answer.
 - `capabilities/tools/` is the only tool execution entry.
@@ -360,16 +386,16 @@ audit:
   receipt_path: ../../runs/latest/governance_receipt.md
 ```
 
-Controlled ReAct V2 example:
+Controlled ReAct V3 product-path example:
 
 ```yaml
-name: react_enterprise_qa_v2
-purpose: "Answer enterprise knowledge questions through a governed ReAct workflow with Intent Resolution."
+name: react_enterprise_qa_v3
+purpose: "Answer enterprise knowledge questions through the governed Controlled ReAct Loop."
 
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v2
-  template_descriptor_version: react_enterprise_qa.v2
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
   checkpointer:
     provider: sqlite
     uri: memory
@@ -402,21 +428,31 @@ response:
   include_review_results: false
 ```
 
-`react` defines planner limits and adapter selection. For `react_enterprise_qa_v2`, the same planner configuration also powers Intent Resolution before ReAct planning. `review` defines the advisory Harness Review Subagent. `response` caps optional governance details returned by execution APIs; callers may request `include_governance_details`, but the response only includes details allowed by `response.include_reasoning_summary` and `response.include_review_results`.
+For V3, `workflow.runtime: controlled_react` is a validation guard, not a
+runtime-engine selector. `workflow.template: react_enterprise_qa_v3` binds the
+Agent Contract to the V3 Controlled ReAct Orchestrator. `react` defines planner
+limits and adapter selection. `review` defines the advisory Harness Review
+Subagent. `response` caps optional governance details returned by execution
+APIs; callers may request `include_governance_details`, but the response only
+includes details allowed by `response.include_reasoning_summary` and
+`response.include_review_results`. If `workflow.checkpointer` is present on a
+V3 manifest, it must not define approval-resume semantics; V3 resume state is
+the Orchestrator-owned `ControlledReActRunStateSnapshot`.
 
 The fixed ReAct Action Set is:
 
 ```text
 ASK_CLARIFICATION
 PLAN_RETRIEVAL
-RUN_RETRIEVAL_STEP
 PROPOSE_TOOL_CALL
 GENERATE_FINAL_ANSWER
-ESCALATE
-STOP
+REFUSE
 ```
 
-Planner output is a proposed action from this closed set. The planner cannot execute retrieval, tools, models, memory writes, or final answers directly.
+Planner output is a proposed action from this closed set. The planner cannot
+execute retrieval, tools, models, memory writes, or final answers directly.
+Observation actions must commit an `ObservationRecord` through the Orchestrator
+state machine before any later plan or terminal answer can use their facts.
 
 ### LLM Role Boundaries
 
@@ -479,8 +515,9 @@ Config rules:
 - Missing shared model connection fails with `PA_MODEL_CONNECTION_001`.
 - Archived shared model connection is allowed for existing runtime resolution with a publish-blocking warning, but production publication fails with `PA_MODEL_CONNECTION_002`.
 - Provider runtime errors should emit `model_error` once trace exists.
-- `react_enterprise_qa` and `react_enterprise_qa_v2` require the `react` section.
-- `react_enterprise_qa_v2` adds Intent Resolution before ReAct planning; it reuses `react.planner` model configuration while emitting a distinct `intent_resolution` model-call role and audit event.
+- ReAct templates require the `react` section.
+- `react_enterprise_qa_v3` requires `workflow.runtime: controlled_react` and descriptor version `react_enterprise_qa.v3`; non-V3 ReAct templates use `workflow.runtime: langgraph` only for historical/runtime compatibility surfaces.
+- V3 Intent Resolution, stage configuration, and stage result facts are descriptor-backed projections. They do not expose public execution methods or make LangGraph nodes part of V3 semantics.
 - `review.mode: auto` requires `review.subagent`.
 - `review.low_risk_fast_path` defaults to `true`; low-risk retrieval and evidence-backed answer enforcement points may skip the reviewer model only after deterministic policy returns `allow`, and the runtime must still emit review/policy trace events with the fast-path reason.
 - Reviewer model usage settings belong under `review.subagent.params`; old top-level reviewer usage fields are rejected instead of dual-read.
@@ -501,7 +538,8 @@ Responsibilities:
 
 Current MVP note:
 - `bootstrap/composition.py` exposes `HarnessInvocation`, the thin composition entry point that resolves the Agent Contract into template metadata and governed capabilities.
-- The Enterprise QA orchestrator and LangGraph runner consume the resolved invocation rather than independently constructing provider dependencies.
+- `delivery/agent_package_execution.py` consumes the resolved manifest, dispatches V3 packages to the Controlled ReAct Orchestrator, and dispatches non-V3 compatibility templates to the LangGraph runner.
+- `control/workflow/controlled_react/composition.py` builds Orchestrator ports from `HarnessInvocation`; the Orchestrator does not construct provider dependencies directly.
 - Future templates should extend the workflow template registry and composition boundary instead of adding template-specific dependency assembly to the Enterprise QA orchestrator.
 
 Rules:
@@ -518,6 +556,7 @@ Contracts & Ports are the vertical foundation used by Control, Runtime, Capabili
 | `AgentManifest` | Agent config entry point |
 | `PolicyRule` / `PolicyDecision` | rule declaration and decision |
 | `ReActActionProposal` / `ReasoningSummary` | governed ReAct action proposal and audit-safe reasoning summary |
+| `ControlledReActRunState` / `ObservationRecord` / `ControlledReActRunStateSnapshot` | V3 Orchestrator-owned loop state, observation facts, and approval-resume snapshot |
 | `ReviewDecision` | advisory review result; final authority remains with PolicyEngine/Harness |
 | `EvidenceChunk` | retrieved evidence and citation source |
 | `ModelRequest` / `ModelResponse` | provider-neutral model call |
@@ -554,7 +593,7 @@ It owns:
 - output admission through validators
 - memory write policy
 - outcome mapping and refusal behavior
-- Controlled ReAct Loop control state and convergence governance (ADR-0032)
+- Controlled ReAct V3 run state, transition authority, snapshot resume, action constraints, and convergence governance (ADR-0032, ADR-0048 through ADR-0073)
 
 It does not own:
 - SDK clients
@@ -564,23 +603,27 @@ It does not own:
 - Dashboard read APIs
 - provider-specific error payloads
 
-### Controlled ReAct Loop governance (ADR-0032)
+### Controlled ReAct V3 Orchestrator Governance (ADR-0032, ADR-0048 through ADR-0073)
 
-The React Enterprise QA Template V2 runs as a real loop. The Control Plane owns the loop's control state and all of its convergence decisions; the Runtime Plane only executes the graph mechanics.
+The React Enterprise QA Template V3 product path runs as a Control Plane
+state machine in `control/workflow/controlled_react/`. It is not a LangGraph
+`StateGraph`, and its public execution interface is run-scoped:
+`ControlledReActOrchestrator.start` and `ControlledReActOrchestrator.resume`.
 
 Action set — five actions, partitioned by post-execution behavior:
 - Observation actions (`PLAN_RETRIEVAL`, `PROPOSE_TOOL_CALL`): execute, write an Observation Record, and return to `plan`.
 - Terminal actions (`GENERATE_FINAL_ANSWER`, `ASK_CLARIFICATION`, `REFUSE`): the only loop exits.
 
-Control state — required on the runtime state object, read by the Control Plane, not logs:
-- `observations` — Observation Records (full truth layer + deterministic summary layer + evidence reference).
-- `action_history` — per-round selected action type and parameter hash, for repetition detection.
-- `evidence_trajectory` — per-round accepted-evidence counts, for saturation detection.
-- `last_convergence_signal` — most recent Convergence Check signal, for trace and prompt injection.
+Current run state — typed Control Plane state, not trace logs:
+- `phase` — planning, observing, waiting, or terminal.
+- `plan_round` — bounded plan progression.
+- `action_history` — selected action proposals, used for repetition detection.
+- `observation_records` — committed observation facts with summary, source refs, citation refs, and accepted-evidence counts.
+- `ControlledReActRunStateSnapshot` — protected approval-resume capture referenced by `ApprovalPause.checkpoint_ref`.
 
 Dual-axis budget:
-- `max_plan_rounds` (default 4) — counts plan invocations, guards thinking divergence. `react.max_steps` is a backward-compatible alias.
-- `max_tool_calls` — counts executed tool calls, guards action divergence. Retrieval has no independent call budget.
+- `max_plan_rounds` (default 4) — counts plan invocations and guards thinking divergence. `react.max_steps` is a backward-compatible alias.
+- `max_tool_calls` — Agent Contract action-divergence budget for Tool Gateway governance. Retrieval has no independent call budget.
 
 Convergence Check — a deterministic, plan-precondition enforcement point that inspects control state and narrows the Eligible Action Set. It uses three signals: evidence saturation, action repetition, and hard-budget thresholds. It never emits a terminal outcome directly; it only constrains what `plan` may choose, preserving "plan is the only decision exit."
 
@@ -588,7 +631,7 @@ Action Constraint — deterministic rewrite of any plan proposal that falls outs
 
 Tool branch in the loop:
 - After a tool executes, control returns to `plan` (the Convergence Check then typically narrows to `{GENERATE_FINAL_ANSWER, REFUSE}` because tool data is frequently terminal).
-- Approval resume returns to `plan` whether granted or denied; a denied approval becomes an Observation Record, not a terminal. `WAITING_FOR_APPROVAL` remains a suspension outcome; the true terminal outcome is decided by plan after resume.
+- Approval pause stores a `ControlledReActRunStateSnapshot` through the snapshot store port. Approval-granted resume observes the tool, returns to planning, and then synthesizes the terminal answer. The current denial path records a governed approval-denied outcome; a denied-as-observation expansion remains a loop-level extension, not a Runtime Plane responsibility.
 - Tool Observation Record summaries are extracted from the `summary_fields` declared on the tool contract, so the capability layer does not decide what `plan` may see.
 
 Tiered models and short-circuit:
@@ -597,13 +640,20 @@ Tiered models and short-circuit:
 
 Current MVP:
 - `control/workflow/orchestrator.py` preserves the plain Python Enterprise QA Harness behavior.
+- `control/workflow/controlled_react/orchestrator.py` owns the V3 run-scoped start/resume interface.
+- `control/workflow/controlled_react/state_machine.py` owns the pure transition kernel for committing observation records.
+- `control/workflow/controlled_react/ports.py` owns the internal Orchestrator effect ports.
+- `control/workflow/controlled_react/composition.py` adapts `HarnessInvocation` capabilities into those ports.
 - `control/workflow/templates.py` registers the supported workflow templates.
 - `control/policy/` evaluates policy rules.
 - `control/validators/` admit or block candidate outputs and tool results.
 - `capabilities/tools/approval.py` defines approval state, while `capabilities/tools/gateway.py` is the governed tool entry.
 
 
-Future templates should use a workflow registry or separate workflow modules. Do not keep adding template-specific branches to Enterprise QA orchestrator.
+Future templates should use the workflow registry, a dedicated Control Plane
+module, or an adapter around the V3 Orchestrator where appropriate. Do not add
+new product semantics to the historical Enterprise QA orchestrator or to
+Runtime Plane graph branches.
 
 ## 11. Runtime Plane
 
@@ -624,15 +674,15 @@ Runtime adapter strategy:
 - Runtime details must not leak into config, policy, trace, receipt, dashboard contracts, or public DTOs.
 - Runtime cannot bypass PolicyEngine, ApprovalState, Validators, ToolGateway, or trace emission.
 
-Controlled ReAct Loop mechanics (ADR-0032):
-- The Runtime Plane implements the loop as graph edges: observation actions return to `plan`; only terminal actions and hard-budget exhaustion reach `END`.
-- The Runtime Plane persists loop control state (`observations`, `action_history`, `evidence_trajectory`, `last_convergence_signal`) across checkpoint and interrupt/resume so that an approval suspension does not lose loop progress.
-- Convergence and eligibility decisions are Control Plane semantics. The Runtime Plane only consumes the Eligible Action Set and the Convergence Check output; it must not recompute them.
-- `WAITING_FOR_APPROVAL` is a suspension state; approval resume re-enters `plan`, so the Runtime must not treat a denied approval as a terminal graph exit.
+Controlled ReAct V3 mechanics:
+- The Orchestrator implements the loop as Control Plane state transitions.
+- Observation actions commit `ObservationRecord` values through the state machine; terminal actions produce `WorkflowTemplateExecutionResult`.
+- Approval pause persists `ControlledReActRunStateSnapshot`; resume loads the snapshot through the Orchestrator snapshot store port.
+- Convergence, eligibility, action constraint, evidence admission, and terminal outcome mapping are Control Plane semantics. Runtime Plane adapters must not recompute them.
 
 Current MVP:
-- `runtime/langgraph_runner.py` executes the Enterprise QA LangGraph `StateGraph` with a composed `HarnessInvocation`.
-- This keeps runtime mechanics in the Runtime Plane while deterministic Harness behavior remains the regression baseline.
+- `runtime/langgraph_runner.py` executes non-V3 historical/runtime templates with a composed `HarnessInvocation`.
+- The V3 product path bypasses LangGraph core execution and records `runtime: controlled_react_orchestrator` in trace projection.
 
 ## 12. PolicyEngine
 
@@ -1161,8 +1211,8 @@ Rules:
 - Published Agent resolution can use the local Agent Configuration Store. When
   an Active Agent Version exists, execution uses that immutable version package
   and records `agent_id` and `agent_version_id` in RunStore metadata.
-- Execution still goes through Bootstrap / Composition, Runtime Plane, PolicyEngine, ToolGateway, Validators, Trace, Receipt, and RunStore.
-- Chat run requests cannot carry inline approval decisions. Approval decisions are recorded against the original run through Run History approval endpoints. The local runtime persists approval resume metadata and LangGraph checkpoint files under the run storage root, so a restarted app process can resume the original thread. A per-run atomic local lock prevents concurrent local approval resumes from executing the same checkpoint twice. Multi-instance production deployments still require a shared transactional checkpointer and lock backend.
+- Execution still goes through Bootstrap / Composition, Control Plane workflow, PolicyEngine, ToolGateway, Validators, Trace, Receipt, and RunStore. V3 Published Agents enter the Controlled ReAct Orchestrator through `execute_agent_package_run`; non-V3 historical templates enter the LangGraph runner.
+- Chat run requests cannot carry inline approval decisions. Approval decisions are recorded against the original run through Run History approval endpoints. V3 approval pause persists Orchestrator resume context plus `ControlledReActRunStateSnapshot`; non-V3 approval pause persists LangGraph checkpoint resume metadata. A per-run atomic local lock prevents concurrent local approval resumes from executing the same pending approval twice. Multi-instance production deployments still require a shared transactional resume/lock backend.
 - Approval endpoints must enforce the durable `PendingApproval.expires_at` boundary. Late approve or deny attempts record `approval_timeout` and must not resume tool execution.
 - Conversation runs admit a trace-safe summary of recent turns as Controlled Conversation Context; prior turns can resolve follow-ups but cannot replace current-turn evidence retrieval.
 
@@ -1281,7 +1331,7 @@ Rules:
   stage semantics. The JSONL Trace remains the source fact log and debug
   drilldown; frontend code must not reconstruct governed Workflow semantics by
   parsing trace events.
-- Approval Console actions resolve `PendingApproval` state. Approved tool execution resume must use the runtime checkpoint rather than a new chat request; if the checkpoint is missing, the system may record the decision but must not claim tool execution resumed. Approval command requests resolve Operator Identity Context server-side, require `approval.resolve`, and terminal approval trace events record the resolved operator id. The global Approval Queue is a read projection over pending approvals, not a Run list filter or stats payload; it marks expired approvals without mutating trace. The Dashboard `/approvals` page consumes that projection for triage and links operators to Run Detail Approval Action for the actual approve or deny command.
+- Approval Console actions resolve `PendingApproval` state. V3 approved tool execution resume must use the Orchestrator snapshot reference rather than a new chat request; non-V3 approved resume may use the runtime checkpoint. If resumable state is missing, the system may record the decision but must not claim tool execution resumed. Approval command requests resolve Operator Identity Context server-side, require `approval.resolve`, and terminal approval trace events record the resolved operator id. The global Approval Queue is a read projection over pending approvals, not a Run list filter or stats payload; it marks expired approvals without mutating trace. The Dashboard `/approvals` page consumes that projection for triage and links operators to Run Detail Approval Action for the actual approve or deny command.
 
 ## 21. CLI And Docker
 
@@ -1290,7 +1340,7 @@ CLI commands:
 | --- | --- |
 | `proof-agent demo` | deterministic React Enterprise QA baseline scenarios |
 | `proof-agent react-demo` | compatibility command for deterministic React Enterprise QA scenarios |
-| `proof-agent run` | run one Enterprise QA question |
+| `proof-agent run` | run one Agent package question through `execute_agent_package_run` |
 | `proof-agent doctor` | local, Docker, sample, provider readiness |
 | `proof-agent inspect` | summarize trace or receipt |
 | `proof-agent compare` | Plain RAG vs Harness RAG |
@@ -1389,9 +1439,9 @@ Remote provider tests must mock SDK clients and never require real API keys.
 | 1 | deterministic Harness MVP with CLI/Docker |
 | 2 | remote model governance and model trace |
 | 3 | RunStore and Dashboard API |
-| 4 | production adapters: LangChain/LangGraph, real MCP, local index, governed remote retrieval, Azure/Anthropic, streaming |
+| 4 | production adapters: LangChain/LangGraph outside V3 core semantics, real MCP, local index, governed remote retrieval, Azure/Anthropic, streaming |
 | 5 | Agent Control Platform: Dashboard UI, Approval Console, RBAC, multi-template, external observability |
-| 6 | Controlled ReAct Loop (ADR-0032): real observe-then-replan loop, dual-axis budget, Convergence Check, three-layer Observation Records, tool-in-the-loop, Action Constraint, tiered models, and the ADR-0033 verification regime (V2 scripted-LLM scaffold as release-enabling, V3 real-LLM regression as release gate) |
+| 6 | Controlled ReAct V3 Orchestrator: run-scoped start/resume interface, Control Plane state machine, Observation Records, approval snapshot resume, Action Constraint, evidence admission, stage projection, and real-LLM regression gate |
 
 ## 26. Stability Rules
 
@@ -1403,4 +1453,4 @@ Remote provider tests must mock SDK clients and never require real API keys.
 6. New API routes must not create alternate execution semantics.
 7. New memory providers must define retention, deletion, redaction, and tenant boundary.
 8. New evaluators must define the control path for failure.
-9. Controlled ReAct Loop changes must keep convergence and eligibility decisions in the Control Plane; the Runtime Plane may only consume the Eligible Action Set and Convergence Check output (ADR-0032). Loop-affecting releases must pass the ADR-0033 V3 real-LLM regression gate; deterministic-provider success alone is not sufficient (ADR-0033).
+9. Controlled ReAct V3 changes must keep run state, observation commit, approval resume, convergence, eligibility, and outcome mapping in the Control Plane Orchestrator. Runtime Plane adapters may schedule or persist mechanics around the Orchestrator, but must not define V3 semantics. Loop-affecting releases must pass the ADR-0033 V3 real-LLM regression gate; deterministic-provider success alone is not sufficient.
