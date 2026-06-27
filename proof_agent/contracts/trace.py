@@ -19,14 +19,13 @@ class TraceEventType(str, Enum):
     WORKFLOW_STAGE_RESULT = "workflow_stage_result"
     INTENT_RESOLUTION = "intent_resolution"
     RETRIEVAL_QUERY_SET = "retrieval_query_set"
-    BUSINESS_FLOW_SKILL_PACK_RECOMMENDATION = (
-        "business_flow_skill_pack_recommendation"
-    )
+    BUSINESS_FLOW_SKILL_PACK_RECOMMENDATION = "business_flow_skill_pack_recommendation"
     BUSINESS_FLOW_SKILL_PACK_ADMISSION = "business_flow_skill_pack_admission"
     REASONING_SUMMARY = "reasoning_summary"
     ACTION_PROPOSAL = "action_proposal"
     ACTION_CONSTRAINED = "action_constrained"
     ANSWER_READY_FINALIZATION_FORCED = "answer_ready_finalization_forced"
+    TOOL_PROPOSAL_SCOPE = "tool_proposal_scope"
     REVIEW_REQUESTED = "review_requested"
     REVIEW_DECISION = "review_decision"
     REVIEW_ERROR = "review_error"

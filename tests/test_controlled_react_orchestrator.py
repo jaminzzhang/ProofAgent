@@ -4,8 +4,11 @@ import pytest
 
 from proof_agent.contracts import (
     AnswerEvidenceContext,
+    ApprovedToolProposalSnapshot,
+    ControlledReActRunPhase,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
+    EffectiveToolProposalScope,
     EvidenceChunk,
     EvidenceStatus,
     EnforcementPoint,
@@ -17,6 +20,9 @@ from proof_agent.contracts import (
     ReasoningSummary,
     ReceiptOutcome,
     RetrievalObservationTruth,
+    ToolProposalInterface,
+    ToolProposalParameter,
+    ToolProposalParameterSource,
     ReviewDecision,
     ToolObservationTruth,
     WorkflowTemplateExecutionResult,
@@ -143,9 +149,7 @@ def test_stage_results_use_commit_trace_projection() -> None:
         )
     )
 
-    retrieval_stage = next(
-        stage for stage in result.stage_results if stage.stage_id == "retrieval"
-    )
+    retrieval_stage = next(stage for stage in result.stage_results if stage.stage_id == "retrieval")
     assert retrieval_stage.summary["observation_id"] == "obs_1_act_retrieve"
     assert retrieval_stage.summary["truth_kind"] == "retrieval"
 
@@ -272,6 +276,99 @@ def test_start_review_denies_retrieval_without_observation() -> None:
     assert result.final_output == "The retrieval action was not run because review denied it."
 
 
+def test_empty_effective_tool_scope_removes_tool_action_from_planner_state() -> None:
+    planner = _CapturingRefusalPlanner()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=planner,
+            tool_proposal_scope=_EmptyToolProposalScope(),
+            answer_synthesis=_AnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_empty_tool_scope",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up claim status.",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert planner.captured_state is not None
+    assert planner.captured_state.effective_tool_proposal_scope is not None
+    assert planner.captured_state.effective_tool_proposal_scope.tool_contract_ids == ()
+    assert (
+        ReActActionType.PROPOSE_TOOL_CALL not in planner.captured_state.effective_react_action_set
+    )
+    scope_stages = [
+        stage for stage in result.stage_results if stage.stage_id == "tool_proposal_scope"
+    ]
+    assert len(scope_stages) == 1
+    scope_summary = dict(scope_stages[0].summary)
+    assert scope_summary["schema_digest"] == "sha256:empty"
+    assert scope_summary["tool_contract_ids"] == ()
+    assert scope_summary["proposal_action_enabled"] is False
+    assert "input_schema" not in repr(scope_summary)
+    assert "tool_source_id" not in repr(scope_summary)
+
+
+def test_scope_outside_tool_proposal_fails_before_policy_and_execution() -> None:
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolApprovalPlanner(),
+            tool_proposal_scope=_ClaimOnlyToolProposalScope(),
+            policy=_FailingPolicy(),
+            tool_observation=_FailingToolObservation(),
+            answer_synthesis=_AnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_scope_violation",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up customer policy status.",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert result.final_output == (
+        "The customer_lookup tool was not run because it is outside "
+        "the effective tool proposal scope."
+    )
+
+
+def test_tool_proposal_binding_runs_before_policy_review() -> None:
+    policy = _CapturingAllowPolicy()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_CreateTicketThenAnswerPlanner(),
+            tool_proposal_scope=_CreateTicketToolProposalScope(),
+            policy=policy,
+            tool_observation=_ToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_bind_policy",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Create a service ticket.",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert policy.parameters is not None
+    assert policy.parameters["idempotency_key"] == (
+        "run_bind_policy:act_create_ticket:create_service_ticket"
+    )
+
+
 def test_start_suspends_tool_action_with_approval_pause_and_snapshot_ref() -> None:
     snapshot_store = _SnapshotStore()
     orchestrator = ControlledReActOrchestrator(
@@ -299,6 +396,46 @@ def test_start_suspends_tool_action_with_approval_pause_and_snapshot_ref() -> No
     assert snapshot_store.saved_snapshot is not None
     assert snapshot_store.saved_snapshot.state.action_history[0].action_type is (
         ReActActionType.PROPOSE_TOOL_CALL
+    )
+
+
+def test_approval_pause_freezes_bound_tool_proposal_snapshot() -> None:
+    snapshot_store = _SnapshotStore()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_CreateTicketThenAnswerPlanner(),
+            tool_proposal_scope=_CreateTicketToolProposalScope(),
+            policy=_RequireApprovalToolPolicy(),
+            snapshot_store=snapshot_store,
+            answer_synthesis=_AnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_bound_approval",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Create a service ticket.",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.WAITING_FOR_APPROVAL
+    assert result.approval_pause is not None
+    assert "approved_tool_proposal" in result.approval_pause.summary
+    approval_summary = result.approval_pause.summary["approved_tool_proposal"]
+    assert approval_summary["tool_contract_id"] == "create_service_ticket"
+    assert approval_summary["parameter_keys"] == (
+        "idempotency_key",
+        "ticket_subject",
+    )
+    assert approval_summary["parameter_digest"].startswith("sha256:")
+    assert snapshot_store.saved_snapshot is not None
+    approved_snapshot = snapshot_store.saved_snapshot.state.approved_tool_proposal_snapshot
+    assert approved_snapshot is not None
+    assert approved_snapshot.tool_contract_id == "create_service_ticket"
+    assert approved_snapshot.parameters["idempotency_key"] == (
+        "run_bound_approval:act_create_ticket:create_service_ticket"
     )
 
 
@@ -377,9 +514,7 @@ def test_start_can_observe_tool_then_retrieval_before_answering() -> None:
 
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert [
-        stage.stage_id
-        for stage in result.stage_results
-        if stage.stage_id in {"tool", "retrieval"}
+        stage.stage_id for stage in result.stage_results if stage.stage_id in {"tool", "retrieval"}
     ] == ["tool", "retrieval"]
     assert answer_synthesis.context is not None
     assert len(answer_synthesis.context.observation_truth) == 2
@@ -423,10 +558,74 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
     assert result.final_output == "Submit the claim form and itemized invoice."
     assert result.reasoning_summary is not None
     assert result.reasoning_summary["selected_action"] == "generate_final_answer"
-    assert [
-        stage.stage_id
-        for stage in result.stage_results
-    ] == ["plan", "tool_review", "tool", "plan", "model_answer", "response"]
+    assert [stage.stage_id for stage in result.stage_results] == [
+        "plan",
+        "tool_review",
+        "tool",
+        "plan",
+        "model_answer",
+        "response",
+    ]
+
+
+def test_resume_fails_closed_when_approved_tool_snapshot_integrity_mismatches() -> None:
+    action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={
+            "target_tool_name": "create_service_ticket",
+            "parameters": {
+                "ticket_subject": "Claim follow-up",
+                "idempotency_key": "tampered",
+            },
+        }
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_run_integrity",
+        run_id="run_integrity",
+        state=ControlledReActRunState(
+            run_id="run_integrity",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Create a service ticket.",
+            phase=ControlledReActRunPhase.WAITING,
+            action_history=(action,),
+            approved_tool_proposal_snapshot=ApprovedToolProposalSnapshot(
+                snapshot_id="approved_act_tool",
+                action_id=action.action_id,
+                tool_contract_id="create_service_ticket",
+                parameters={
+                    "ticket_subject": "Claim follow-up",
+                    "idempotency_key": "original",
+                },
+                parameter_digest="sha256:original",
+                scope_digest="sha256:scope",
+                policy_decision=PolicyDecisionType.REQUIRE_APPROVAL.value,
+                risk_level="high",
+                approval_reason="Human approval required before tool execution.",
+            ),
+        ),
+    )
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolObservationThenAnswerPlanner(),
+            snapshot_store=_ResumeSnapshotStore(snapshot),
+            tool_observation=_FailingToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.resume(
+        ControlledReActResumeRequest(
+            snapshot_ref="snapshot://run_004/snap_001",
+            approval_id="appr_act_tool",
+            approved=True,
+            actor="ops",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert result.final_output == (
+        "The approved tool proposal no longer matches the pending execution request."
+    )
 
 
 def test_resume_can_observe_tool_then_retrieval_before_answering() -> None:
@@ -466,9 +665,7 @@ def test_resume_can_observe_tool_then_retrieval_before_answering() -> None:
 
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert [
-        stage.stage_id
-        for stage in result.stage_results
-        if stage.stage_id in {"tool", "retrieval"}
+        stage.stage_id for stage in result.stage_results if stage.stage_id in {"tool", "retrieval"}
     ] == ["tool", "retrieval"]
     assert answer_synthesis.context is not None
     assert len(answer_synthesis.context.observation_truth) == 2
@@ -553,10 +750,14 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert result.final_output == "Submit the claim form and itemized invoice."
     assert result.approval_pause is None
-    assert [
-        stage.stage_id
-        for stage in result.stage_results
-    ] == ["plan", "tool_review", "tool", "plan", "model_answer", "response"]
+    assert [stage.stage_id for stage in result.stage_results] == [
+        "plan",
+        "tool_review",
+        "tool",
+        "plan",
+        "model_answer",
+        "response",
+    ]
     tool_stage = next(stage for stage in result.stage_results if stage.stage_id == "tool")
     assert tool_stage.summary["approval_state"] == "denied"
 
@@ -827,6 +1028,74 @@ class _ToolApprovalPlanner:
         return proposal.model_copy(update={"target_tool_name": "customer_lookup"})
 
 
+class _CapturingRefusalPlanner:
+    def __init__(self) -> None:
+        self.captured_state: ControlledReActRunState | None = None
+
+    def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
+        self.captured_state = state
+        return _proposal("act_refuse", ReActActionType.REFUSE)
+
+
+class _EmptyToolProposalScope:
+    def resolve(self, state: ControlledReActRunState) -> EffectiveToolProposalScope:
+        return EffectiveToolProposalScope(
+            run_id=state.run_id,
+            plan_round=state.plan_round,
+            schema_digest="sha256:empty",
+        )
+
+
+class _ClaimOnlyToolProposalScope:
+    def resolve(self, state: ControlledReActRunState) -> EffectiveToolProposalScope:
+        return EffectiveToolProposalScope(
+            run_id=state.run_id,
+            plan_round=state.plan_round,
+            schema_digest="sha256:claim",
+            tool_interfaces=(
+                ToolProposalInterface(
+                    tool_contract_id="claim_status_lookup",
+                    purpose="claim status lookup",
+                    risk_level="medium",
+                    read_only=True,
+                    requires_approval=False,
+                ),
+            ),
+        )
+
+
+class _CreateTicketToolProposalScope:
+    def resolve(self, state: ControlledReActRunState) -> EffectiveToolProposalScope:
+        return EffectiveToolProposalScope(
+            run_id=state.run_id,
+            plan_round=state.plan_round,
+            schema_digest="sha256:create-ticket",
+            tool_interfaces=(
+                ToolProposalInterface(
+                    tool_contract_id="create_service_ticket",
+                    purpose="create service ticket",
+                    risk_level="high",
+                    read_only=False,
+                    requires_approval=True,
+                    parameters=(
+                        ToolProposalParameter(
+                            name="ticket_subject",
+                            required=True,
+                            value_type="string",
+                            value_source=ToolProposalParameterSource.USER_SUPPLIED,
+                        ),
+                        ToolProposalParameter(
+                            name="idempotency_key",
+                            required=True,
+                            value_type="string",
+                            value_source=ToolProposalParameterSource.SYSTEM_GENERATED,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+
 class _AlwaysRetrievalPlanner:
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
         _ = state
@@ -860,6 +1129,21 @@ class _ToolObservationThenAnswerPlanner:
         return _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER)
 
 
+class _CreateTicketThenAnswerPlanner:
+    def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
+        if not state.observation_records:
+            return _proposal(
+                "act_create_ticket",
+                ReActActionType.PROPOSE_TOOL_CALL,
+            ).model_copy(
+                update={
+                    "target_tool_name": "create_service_ticket",
+                    "parameters": {"ticket_subject": "Claim follow-up"},
+                }
+            )
+        return _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER)
+
+
 class _ToolThenRetrievalThenAnswerPlanner:
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
         if not state.observation_records:
@@ -887,6 +1171,16 @@ class _FailingSnapshotStore:
     def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
         _ = snapshot_ref
         raise AssertionError("start should not load snapshots")
+
+
+class _FailingPolicy:
+    def evaluate(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+    ) -> PolicyDecision:
+        _ = (state, action)
+        raise AssertionError("scope violations must not reach PolicyEngine")
 
 
 class _DenyToolPolicy:
@@ -933,6 +1227,26 @@ class _AllowToolPolicy:
             enforcement_point=EnforcementPoint.BEFORE_TOOL_CALL,
             reason="customer_lookup is allowed",
             policy_rule_id="tools.customer_lookup.allow",
+            trace_event_id="trace_policy_allow",
+        )
+
+
+class _CapturingAllowPolicy:
+    def __init__(self) -> None:
+        self.parameters: dict[str, object] | None = None
+
+    def evaluate(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+    ) -> PolicyDecision:
+        _ = state
+        self.parameters = dict(action.parameters)
+        return PolicyDecision(
+            decision=PolicyDecisionType.ALLOW,
+            enforcement_point=EnforcementPoint.BEFORE_TOOL_CALL,
+            reason="bound tool proposal is allowed",
+            policy_rule_id="tools.create_service_ticket.allow",
             trace_event_id="trace_policy_allow",
         )
 

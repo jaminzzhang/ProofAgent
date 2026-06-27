@@ -87,6 +87,56 @@ def test_tool_governance_gate_passes_expected_mcp_tool_projection(
     )
 
 
+def test_tool_proposal_scope_gate_passes_declared_scope_projection(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="mcp_claim_status",
+        question="What is the claim status?",
+        intent_type="tool_required",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="tool_governed",
+        capability_path="retrieval_plus_tool",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            required_tool_proposal_scope_contract_ids=("claim_status_lookup",),
+        ),
+    )
+    subject = _tool_scope_subject(tmp_path)
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.TOOL_PROPOSAL_SCOPE].status == EvaluationGateStatus.PASSED
+
+
+def test_tool_proposal_scope_gate_fails_on_schema_projection_leakage(
+    tmp_path: Path,
+) -> None:
+    case = EvaluationCase(
+        case_id="mcp_claim_status",
+        question="What is the claim status?",
+        intent_type="tool_required",
+        expected_resolution=EvaluationExpectedResolution.ANSWER_WITH_CITATIONS,
+        risk_class="tool_governed",
+        capability_path="retrieval_plus_tool",
+        expected=EvaluationCaseExpected(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            required_tool_proposal_scope_contract_ids=("claim_status_lookup",),
+        ),
+    )
+    subject = _tool_scope_subject(tmp_path, leak_schema=True)
+    artifacts = read_evaluation_artifacts(subject)
+
+    gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
+
+    assert gates[EvaluationGateName.TOOL_PROPOSAL_SCOPE].status == EvaluationGateStatus.FAILED
+    assert (
+        "scope projection exposed hidden field(s): input_schema"
+        in gates[EvaluationGateName.TOOL_PROPOSAL_SCOPE].reason
+    )
+
+
 def test_tool_governance_gate_fails_when_expected_mcp_tool_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -112,9 +162,10 @@ def test_tool_governance_gate_fails_when_expected_mcp_tool_is_missing(
     assert gates[EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "missing expected MCP tool(s): policy.lookup" in gates[
-        EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL
-    ].reason
+    assert (
+        "missing expected MCP tool(s): policy.lookup"
+        in gates[EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL].reason
+    )
 
 
 def test_tool_governance_gate_fails_when_expected_mcp_failure_is_missing(
@@ -140,9 +191,10 @@ def test_tool_governance_gate_fails_when_expected_mcp_failure_is_missing(
     assert gates[EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "missing expected tool failure code(s): PA_TOOL_SOURCE_002" in gates[
-        EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL
-    ].reason
+    assert (
+        "missing expected tool failure code(s): PA_TOOL_SOURCE_002"
+        in gates[EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL].reason
+    )
 
 
 def test_tool_governance_gate_passes_expected_mcp_failure_code(
@@ -162,13 +214,14 @@ def test_tool_governance_gate_passes_expected_mcp_failure_code(
     )
     subject = _mcp_subject(tmp_path)
     subject.trace.ref.write_text(
-        subject.trace.ref.read_text(encoding="utf-8").replace(
+        subject.trace.ref.read_text(encoding="utf-8")
+        .replace(
             '"event_type":"tool_result","sequence":3,"status":"ok"',
             '"event_type":"tool_result","sequence":3,"status":"error"',
-        ).replace(
+        )
+        .replace(
             '"result_schema_validation":"passed",',
-            '"result_schema_validation":"failed",'
-            '"error_code":"PA_TOOL_SOURCE_002",',
+            '"result_schema_validation":"failed","error_code":"PA_TOOL_SOURCE_002",',
         ),
         encoding="utf-8",
     )
@@ -208,9 +261,9 @@ def test_redaction_safety_gate_fails_on_raw_mcp_payload_leakage(
     gates = {result.gate: result for result in evaluate_case_gates(case, subject, artifacts)}
 
     assert gates[EvaluationGateName.REDACTION_SAFETY].status == EvaluationGateStatus.FAILED
-    assert "raw MCP payload marker found in trace" in gates[
-        EvaluationGateName.REDACTION_SAFETY
-    ].reason
+    assert (
+        "raw MCP payload marker found in trace" in gates[EvaluationGateName.REDACTION_SAFETY].reason
+    )
 
 
 def test_business_flow_skill_pack_gate_passes_when_admission_matches_expected_pack(
@@ -291,9 +344,10 @@ def test_business_flow_skill_pack_gate_fails_when_selected_pack_differs(
     assert gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "expected Business Flow Skill Pack enterprise_policy_qa" in gates[
-        EvaluationGateName.BUSINESS_FLOW_SKILL_PACK
-    ].reason
+    assert (
+        "expected Business Flow Skill Pack enterprise_policy_qa"
+        in gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].reason
+    )
 
 
 def test_business_flow_skill_pack_gate_fails_when_expected_decision_differs(
@@ -333,9 +387,10 @@ def test_business_flow_skill_pack_gate_fails_when_expected_decision_differs(
     assert gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "expected Business Flow Skill Pack decision no_pack" in gates[
-        EvaluationGateName.BUSINESS_FLOW_SKILL_PACK
-    ].reason
+    assert (
+        "expected Business Flow Skill Pack decision no_pack"
+        in gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].reason
+    )
 
 
 def test_business_flow_skill_pack_gate_passes_expected_no_pack_decision(
@@ -411,9 +466,10 @@ def test_business_flow_skill_pack_gate_fails_when_expected_recommendation_differ
     assert gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "expected Business Flow Skill Pack recommendation no_pack" in gates[
-        EvaluationGateName.BUSINESS_FLOW_SKILL_PACK
-    ].reason
+    assert (
+        "expected Business Flow Skill Pack recommendation no_pack"
+        in gates[EvaluationGateName.BUSINESS_FLOW_SKILL_PACK].reason
+    )
 
 
 def test_intent_execution_behavior_gate_fails_for_forbidden_clarification(
@@ -449,9 +505,7 @@ def test_intent_execution_behavior_gate_fails_for_forbidden_clarification(
     assert gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "clarification_requested" in gates[
-        EvaluationGateName.INTENT_EXECUTION_BEHAVIOR
-    ].reason
+    assert "clarification_requested" in gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].reason
 
 
 def test_intent_execution_behavior_gate_fails_when_action_rewrites_exceed_limit(
@@ -488,9 +542,10 @@ def test_intent_execution_behavior_gate_fails_when_action_rewrites_exceed_limit(
     assert gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "action_constrained count 1 exceeded limit 0" in gates[
-        EvaluationGateName.INTENT_EXECUTION_BEHAVIOR
-    ].reason
+    assert (
+        "action_constrained count 1 exceeded limit 0"
+        in gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].reason
+    )
 
 
 def test_intent_execution_behavior_gate_fails_for_repeated_retrieval_query(
@@ -528,9 +583,10 @@ def test_intent_execution_behavior_gate_fails_for_repeated_retrieval_query(
     assert gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "repeated retrieval query: travel meal reimbursement" in gates[
-        EvaluationGateName.INTENT_EXECUTION_BEHAVIOR
-    ].reason
+    assert (
+        "repeated retrieval query: travel meal reimbursement"
+        in gates[EvaluationGateName.INTENT_EXECUTION_BEHAVIOR].reason
+    )
 
 
 def test_response_projection_safety_gate_fails_when_required_citation_ref_missing(
@@ -557,9 +613,10 @@ def test_response_projection_safety_gate_fails_when_required_citation_ref_missin
     assert gates[EvaluationGateName.RESPONSE_PROJECTION_SAFETY].status == (
         EvaluationGateStatus.FAILED
     )
-    assert "missing response citation refs: customer-support-policy" in gates[
-        EvaluationGateName.RESPONSE_PROJECTION_SAFETY
-    ].reason
+    assert (
+        "missing response citation refs: customer-support-policy"
+        in gates[EvaluationGateName.RESPONSE_PROJECTION_SAFETY].reason
+    )
 
 
 def test_gates_fail_when_trace_and_receipt_outcomes_disagree(tmp_path: Path) -> None:
@@ -583,9 +640,10 @@ def test_gates_fail_when_trace_and_receipt_outcomes_disagree(tmp_path: Path) -> 
 
     assert gates[EvaluationGateName.OUTCOME].status == EvaluationGateStatus.PASSED
     assert gates[EvaluationGateName.AUDIT_ARTIFACT].status == EvaluationGateStatus.FAILED
-    assert "trace outcome did not match receipt outcome" in gates[
-        EvaluationGateName.AUDIT_ARTIFACT
-    ].reason
+    assert (
+        "trace outcome did not match receipt outcome"
+        in gates[EvaluationGateName.AUDIT_ARTIFACT].reason
+    )
 
 
 def test_artifact_sufficiency_gate_fails_on_hash_mismatch(tmp_path: Path) -> None:
@@ -674,6 +732,62 @@ def _mcp_subject(tmp_path: Path) -> EvaluationSubject:
     receipt_path.write_text(
         "# Governance Receipt\n\n## Final Outcome\n\nANSWERED_WITH_CITATIONS\n\n"
         "claim_status_lookup claim.status.lookup authorized_tool_result\n",
+        encoding="utf-8",
+    )
+    response_path.write_text("Claim CLM-001 is open.", encoding="utf-8")
+    return EvaluationSubject(
+        case_ref=EvaluationCaseRef(case_id="mcp_claim_status"),
+        trace=EvaluationArtifactRef(ref=trace_path),
+        receipt=EvaluationArtifactRef(ref=receipt_path),
+        response_projection=EvaluationResponseProjection(
+            audience=EvaluationResponseProjectionAudience.OPERATOR,
+            ref=response_path,
+        ),
+    )
+
+
+def _tool_scope_subject(
+    tmp_path: Path,
+    *,
+    leak_schema: bool = False,
+) -> EvaluationSubject:
+    trace_path = tmp_path / "tool_scope_trace.jsonl"
+    receipt_path = tmp_path / "tool_scope_governance_receipt.md"
+    response_path = tmp_path / "tool_scope_operator_response.txt"
+    interface_payload = (
+        '{"tool_contract_id":"claim_status_lookup","purpose":"claim status lookup",'
+        '"parameters":[{"name":"claim_id","required":true,'
+        '"value_source":"user_supplied"}]}'
+    )
+    if leak_schema:
+        interface_payload = (
+            '{"tool_contract_id":"claim_status_lookup","purpose":"claim status lookup",'
+            '"input_schema":{"type":"object"},'
+            '"parameters":[{"name":"claim_id","required":true,'
+            '"value_source":"user_supplied"}]}'
+        )
+    trace_path.write_text(
+        '{"run_id":"run_scope","event_type":"tool_proposal_scope","sequence":1,'
+        '"status":"ok","payload":{"schema_digest":"sha256:scope",'
+        '"tool_interfaces":[' + interface_payload + "]}}\n"
+        '{"run_id":"run_scope","event_type":"policy_decision","sequence":2,"status":"ok"}\n'
+        '{"run_id":"run_scope","event_type":"tool_request","sequence":3,"status":"ok",'
+        '"payload":{"tool_contract_id":"claim_status_lookup",'
+        '"mcp_tool_name":"claim.status.lookup","provider":"mcp",'
+        '"scope_digest":"sha256:scope","parameter_digest":"sha256:params"}}\n'
+        '{"run_id":"run_scope","event_type":"tool_result","sequence":4,"status":"ok",'
+        '"payload":{"provider":"mcp","tool_source_id":"tool_mcp_claims_http",'
+        '"tool_contract_id":"claim_status_lookup",'
+        '"mcp_tool_name":"claim.status.lookup",'
+        '"result_schema_validation":"passed",'
+        '"result_classification":"authorized_tool_result",'
+        '"summary":{"claim_id":"CLM-001","status":"open"}}}\n'
+        '{"run_id":"run_scope","event_type":"final_output","sequence":5,"status":"ok",'
+        '"payload":{"outcome":"ANSWERED_WITH_CITATIONS"}}\n',
+        encoding="utf-8",
+    )
+    receipt_path.write_text(
+        "# Governance Receipt\n\n## Final Outcome\n\nANSWERED_WITH_CITATIONS\n",
         encoding="utf-8",
     )
     response_path.write_text("Claim CLM-001 is open.", encoding="utf-8")

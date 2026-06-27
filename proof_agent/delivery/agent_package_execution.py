@@ -420,6 +420,12 @@ def _emit_controlled_react_stage_result(
     trace: TraceWriter,
     stage_result: WorkflowStageResult,
 ) -> None:
+    if stage_result.stage_id == "tool_proposal_scope":
+        trace.emit(
+            "tool_proposal_scope",
+            status="ok",
+            payload=dict(stage_result.summary),
+        )
     trace.emit(
         "workflow_stage_result",
         status=_trace_status_for_stage_result(stage_result),

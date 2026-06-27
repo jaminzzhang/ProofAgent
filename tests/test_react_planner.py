@@ -9,11 +9,15 @@ from proof_agent.capabilities.react import (
     resolve_react_planner,
 )
 from proof_agent.contracts import (
+    EffectiveToolProposalScope,
     ModelRequest,
     ModelResponse,
     ReActActionProposal,
     ReActActionType,
     ReActPlannerConfig,
+    ToolProposalInterface,
+    ToolProposalParameter,
+    ToolProposalParameterSource,
 )
 from proof_agent.contracts.manifest import ModelConfig
 from proof_agent.errors import ProofAgentError
@@ -135,10 +139,7 @@ def test_deterministic_planner_generates_final_answer_after_accepted_evidence() 
     )
 
     assert proposal.action_type == ReActActionType.GENERATE_FINAL_ANSWER
-    assert (
-        proposal.reasoning_summary.selected_action
-        == ReActActionType.GENERATE_FINAL_ANSWER
-    )
+    assert proposal.reasoning_summary.selected_action == ReActActionType.GENERATE_FINAL_ANSWER
 
 
 def test_deterministic_planner_asks_clarification_for_underspecified_claim() -> None:
@@ -224,9 +225,7 @@ def test_llm_react_planner_accepts_compact_deepseek_style_parameters() -> None:
     )
 
     assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
-    assert dict(proposal.parameters) == {
-        "query": "reimbursement rule for travel meals"
-    }
+    assert dict(proposal.parameters) == {"query": "reimbursement rule for travel meals"}
     assert proposal.reasoning_summary.selected_action == ReActActionType.PLAN_RETRIEVAL
     assert proposal.risk_level == "low"
 
@@ -283,9 +282,7 @@ def test_llm_react_planner_maps_nested_search_tool_arguments_to_retrieval() -> N
     )
 
     assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
-    assert dict(proposal.parameters) == {
-        "query": "reimbursement rule for travel meals"
-    }
+    assert dict(proposal.parameters) == {"query": "reimbursement rule for travel meals"}
 
 
 def test_llm_react_planner_maps_compact_plan_field_to_retrieval_query() -> None:
@@ -354,9 +351,7 @@ def test_llm_react_planner_canonicalizes_retrieval_output_before_returning() -> 
 
     assert proposal.action_type == ReActActionType.PLAN_RETRIEVAL
     assert dict(proposal.parameters) == {"query": "travel meal reimbursement rule"}
-    assert proposal.reasoning_summary.candidate_actions == (
-        ReActActionType.PLAN_RETRIEVAL,
-    )
+    assert proposal.reasoning_summary.candidate_actions == (ReActActionType.PLAN_RETRIEVAL,)
     assert proposal.reasoning_summary.selected_action == ReActActionType.PLAN_RETRIEVAL
     assert proposal.risk_level == "low"
     assert sentinel not in _proposal_json(proposal)
@@ -399,12 +394,8 @@ def test_llm_react_planner_canonicalizes_clarification_output_before_returning()
     )
 
     assert proposal.action_type == ReActActionType.ASK_CLARIFICATION
-    assert dict(proposal.parameters) == {
-        "missing_fields": ("customer_id", "policy_id")
-    }
-    assert proposal.reasoning_summary.candidate_actions == (
-        ReActActionType.ASK_CLARIFICATION,
-    )
+    assert dict(proposal.parameters) == {"missing_fields": ("customer_id", "policy_id")}
+    assert proposal.reasoning_summary.candidate_actions == (ReActActionType.ASK_CLARIFICATION,)
     assert proposal.reasoning_summary.risk_flags == ()
     assert sentinel not in _proposal_json(proposal)
 
@@ -498,9 +489,7 @@ def test_llm_react_planner_advertises_current_eligible_actions_only() -> None:
         question="What is the reimbursement rule for travel meals?",
         system_prompt="Use governed ReAct planning.",
         context_summary="accepted_evidence_count=1; eligible_actions=generate_final_answer,refuse",
-        eligible_actions=frozenset(
-            {ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE}
-        ),
+        eligible_actions=frozenset({ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE}),
     )
 
     user_payload = json.loads(provider.requests[0].messages[1].content)
@@ -524,9 +513,7 @@ def test_llm_react_planner_sends_fixed_function_schema_for_action_shape() -> Non
         question="What is the reimbursement rule for travel meals?",
         system_prompt="Use governed ReAct planning.",
         context_summary="accepted_evidence_count=1; eligible_actions=generate_final_answer,refuse",
-        eligible_actions=frozenset(
-            {ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE}
-        ),
+        eligible_actions=frozenset({ReActActionType.GENERATE_FINAL_ANSWER, ReActActionType.REFUSE}),
     )
 
     function_schema = provider.requests[0].function_schema
@@ -551,10 +538,72 @@ def test_llm_react_planner_sends_fixed_function_schema_for_action_shape() -> Non
         "properties": {},
     }
     assert {"query": {"type": "string"}} in tuple(
-        parameter_shape["properties"]
-        for parameter_shape in properties["parameters"]["anyOf"]
+        parameter_shape["properties"] for parameter_shape in properties["parameters"]["anyOf"]
     )
     assert properties["target_tool_name"]["type"] == ("string", "null")
+
+
+def test_llm_react_planner_generates_tool_schema_from_effective_scope() -> None:
+    provider = FakePlannerProvider(
+        _planner_output(
+            action_type="propose_tool_call",
+            candidate_actions=["propose_tool_call"],
+            selected_action="propose_tool_call",
+            parameters={"claim_id": "CLM-001", "customer_id": "CUST-001"},
+            target_tool_name="claim_status_lookup",
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+    effective_scope = EffectiveToolProposalScope(
+        run_id="run_scope",
+        plan_round=0,
+        schema_digest="sha256:scope",
+        tool_interfaces=(
+            ToolProposalInterface(
+                tool_contract_id="claim_status_lookup",
+                purpose="claim status lookup",
+                risk_level="medium",
+                read_only=True,
+                requires_approval=False,
+                semantic_result_summary="Returns claim status.",
+                parameters=(
+                    ToolProposalParameter(
+                        name="claim_id",
+                        required=True,
+                        value_type="string",
+                        value_source=ToolProposalParameterSource.USER_SUPPLIED,
+                    ),
+                    ToolProposalParameter(
+                        name="customer_id",
+                        required=True,
+                        value_type="string",
+                        value_source=ToolProposalParameterSource.AUTHORIZED_RESOURCE_HANDLE,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    proposal = planner.plan(
+        question="Look up claim status.",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+        eligible_actions=frozenset({ReActActionType.PROPOSE_TOOL_CALL}),
+        effective_tool_proposal_scope=effective_scope,
+    )
+
+    function_schema = provider.requests[0].function_schema
+    assert function_schema is not None
+    schema = function_schema.parameters_schema
+    assert schema["properties"]["target_tool_name"]["enum"] == ("claim_status_lookup",)
+    tool_parameters_schema = schema["properties"]["parameters"]["oneOf"][0]
+    assert tool_parameters_schema["required"] == ("claim_id", "customer_id")
+    assert set(tool_parameters_schema["properties"]) == {"claim_id", "customer_id"}
+    assert "tool_source_id" not in function_schema.model_dump_json()
+    assert proposal.target_tool_name == "claim_status_lookup"
 
 
 def test_resolve_react_planner_uses_llm_adapter_for_registered_model_provider(
@@ -591,9 +640,7 @@ def test_llm_react_planner_rejects_invalid_model_output() -> None:
 
 
 def test_llm_react_planner_accepts_generate_final_answer_terminal_action() -> None:
-    provider = FakePlannerProvider(
-        _planner_output(action_type="generate_final_answer")
-    )
+    provider = FakePlannerProvider(_planner_output(action_type="generate_final_answer"))
     planner = LLMReActPlanner(
         config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
         model_provider=provider,
@@ -626,7 +673,7 @@ def test_llm_react_planner_rejects_unrouteable_initial_actions(
             question="What is the reimbursement rule for travel meals?",
             system_prompt="Use governed ReAct planning.",
             context_summary="No prior context.",
-    )
+        )
 
     assert exc.value.error_code == "model_output_contract_validation_failed"
     assert "unsupported planner action" in str(exc.value)

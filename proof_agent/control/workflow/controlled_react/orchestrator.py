@@ -3,15 +3,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import hashlib
+import json
 from typing import Any
 
 from proof_agent.contracts import (
     AnswerEvidenceContext,
     ApprovalPause,
+    ApprovedToolProposalSnapshot,
     ClarificationNeed,
     ControlledReActRunPhase,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
+    EffectiveToolProposalScope,
     ObservationRecord,
     ObservationTruthArtifact,
     PolicyDecisionType,
@@ -29,6 +33,9 @@ from proof_agent.contracts import (
 from proof_agent.control.workflow.controlled_react.ports import (
     AnswerSynthesisResult,
     ControlledReActPorts,
+)
+from proof_agent.control.workflow.controlled_react.tool_proposal_binding import (
+    ToolProposalParameterBinder,
 )
 from proof_agent.control.workflow.controlled_react.observation_commit import (
     InMemoryObservationTruthStore,
@@ -72,6 +79,7 @@ class ControlledReActOrchestrator:
         self._observation_committer = ObservationCommitter(
             truth_store=self._observation_truth_store
         )
+        self._tool_proposal_binder = ToolProposalParameterBinder()
 
     def start(
         self,
@@ -85,7 +93,10 @@ class ControlledReActOrchestrator:
             phase=ControlledReActRunPhase.PLANNING,
         )
         state = self._prepare_pre_loop_state(state)
-        action = self._ports.planner.plan(state)
+        state, action = self._plan_next_action(
+            state,
+            max_plan_rounds=request.max_plan_rounds,
+        )
         return self._run_loop(
             request,
             state=state,
@@ -119,23 +130,22 @@ class ControlledReActOrchestrator:
                 if self._review_denies(state, action):
                     return self._deny_retrieval_review(request, action)
                 state = self._observe_knowledge(state, action)
-                action = self._ports.planner.plan(state)
-                action = self._constrain_next_action(
+                state, action = self._plan_next_action(
                     state,
-                    action,
                     max_plan_rounds=max_plan_rounds,
                 )
                 continue
             if action.action_type is ReActActionType.PROPOSE_TOOL_CALL:
+                if _tool_scope_violation(state, action):
+                    return self._deny_tool_scope_violation(request, action)
+                state, action = self._bind_tool_proposal(state, action)
                 policy_decision = self._policy_decision(state, action)
                 if policy_decision is PolicyDecisionType.DENY:
                     return self._deny_tool_policy(request, action)
                 if policy_decision is PolicyDecisionType.ALLOW:
                     state = self._observe_tool(state, action)
-                    action = self._ports.planner.plan(state)
-                    action = self._constrain_next_action(
+                    state, action = self._plan_next_action(
                         state,
-                        action,
                         max_plan_rounds=max_plan_rounds,
                     )
                     continue
@@ -266,6 +276,26 @@ class ControlledReActOrchestrator:
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
         )
 
+    def _deny_tool_scope_violation(
+        self,
+        request: ControlledReActStartRequest,
+        action: ReActActionProposal,
+    ) -> WorkflowTemplateExecutionResult:
+        tool_name = action.target_tool_name or "unknown_tool"
+        message = (
+            f"The {tool_name} tool was not run because it is outside "
+            "the effective tool proposal scope."
+        )
+        return WorkflowTemplateExecutionResult(
+            run_id=request.run_id,
+            template_name=request.template_name,
+            template_descriptor_version=request.template_descriptor_version,
+            outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+            final_output=message,
+            message=message,
+            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+
     def resume(
         self,
         request: ControlledReActResumeRequest,
@@ -279,10 +309,8 @@ class ControlledReActOrchestrator:
         action = state.action_history[-1]
         if not request.approved:
             planning_state = self._observe_tool_approval_denial(state, action, request)
-            next_action = self._ports.planner.plan(planning_state)
-            next_action = self._constrain_next_action(
+            planning_state, next_action = self._plan_next_action(
                 planning_state,
-                next_action,
                 max_plan_rounds=request.max_plan_rounds,
             )
             return self._run_loop(
@@ -299,6 +327,8 @@ class ControlledReActOrchestrator:
             )
         if self._ports.tool_observation is None:
             raise ValueError("tool observation port is required for approval resume")
+        if _approved_tool_integrity_mismatch(state, action):
+            return self._deny_approved_tool_integrity_mismatch(state, action)
         observing_state = state.model_copy(
             update={
                 "phase": ControlledReActRunPhase.OBSERVING,
@@ -313,10 +343,8 @@ class ControlledReActOrchestrator:
             effect,
             identity,
         )
-        next_action = self._ports.planner.plan(planning_state)
-        next_action = self._constrain_next_action(
+        planning_state, next_action = self._plan_next_action(
             planning_state,
-            next_action,
             max_plan_rounds=request.max_plan_rounds,
         )
         return self._run_loop(
@@ -349,6 +377,22 @@ class ControlledReActOrchestrator:
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
         )
 
+    def _deny_approved_tool_integrity_mismatch(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+    ) -> WorkflowTemplateExecutionResult:
+        message = "The approved tool proposal no longer matches the pending execution request."
+        return WorkflowTemplateExecutionResult(
+            run_id=state.run_id,
+            template_name=state.template_name,
+            template_descriptor_version=state.template_descriptor_version,
+            outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+            final_output=message,
+            message=message,
+            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+
     def _pause_for_tool_approval(
         self,
         request: ControlledReActStartRequest,
@@ -357,10 +401,16 @@ class ControlledReActOrchestrator:
     ) -> WorkflowTemplateExecutionResult:
         if self._ports.snapshot_store is None:
             raise ValueError("snapshot store port is required for approval pause")
+        approved_tool_snapshot = _approved_tool_snapshot(
+            state,
+            action,
+            policy_decision=PolicyDecisionType.REQUIRE_APPROVAL,
+        )
         waiting_state = state.model_copy(
             update={
                 "phase": ControlledReActRunPhase.WAITING,
                 "action_history": state.action_history + (action,),
+                "approved_tool_proposal_snapshot": approved_tool_snapshot,
             }
         )
         snapshot = ControlledReActRunStateSnapshot(
@@ -388,6 +438,7 @@ class ControlledReActOrchestrator:
             summary={
                 "tool_name": tool_name,
                 "parameters": _approval_parameters(action.parameters),
+                "approved_tool_proposal": _approved_tool_summary(approved_tool_snapshot),
             },
         )
         message = f"Waiting for approval before {tool_name} can execute."
@@ -434,6 +485,73 @@ class ControlledReActOrchestrator:
         if self._ports.memory is None:
             return None
         return self._ports.memory.write(state, answer)
+
+    def _plan_next_action(
+        self,
+        state: ControlledReActRunState,
+        *,
+        max_plan_rounds: int,
+    ) -> tuple[ControlledReActRunState, ReActActionProposal]:
+        planning_state = self._prepare_plan_state(
+            state,
+            max_plan_rounds=max_plan_rounds,
+        )
+        action = self._ports.planner.plan(planning_state)
+        action = self._constrain_next_action(
+            planning_state,
+            action,
+            max_plan_rounds=max_plan_rounds,
+        )
+        return planning_state, action
+
+    def _prepare_plan_state(
+        self,
+        state: ControlledReActRunState,
+        *,
+        max_plan_rounds: int,
+    ) -> ControlledReActRunState:
+        eligible_actions, _convergence_signal = _eligible_actions_for_state(
+            state,
+            max_plan_rounds=max_plan_rounds,
+        )
+        scope = None
+        tool_scope_projections = tuple(state.tool_proposal_scope_trace_projections)
+        if self._ports.tool_proposal_scope is not None:
+            scope = self._ports.tool_proposal_scope.resolve(state)
+            if not scope.tool_interfaces:
+                eligible_actions = frozenset(
+                    action
+                    for action in eligible_actions
+                    if action is not ReActActionType.PROPOSE_TOOL_CALL
+                )
+            tool_scope_projections = tool_scope_projections + (
+                _tool_scope_trace_projection(scope, eligible_actions),
+            )
+        return state.model_copy(
+            update={
+                "effective_tool_proposal_scope": scope,
+                "effective_react_action_set": tuple(
+                    sorted(eligible_actions, key=lambda item: item.value)
+                ),
+                "bound_tool_proposal": None,
+                "approved_tool_proposal_snapshot": None,
+                "tool_proposal_scope_trace_projections": tool_scope_projections,
+            }
+        )
+
+    def _bind_tool_proposal(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+    ) -> tuple[ControlledReActRunState, ReActActionProposal]:
+        scope = state.effective_tool_proposal_scope
+        if scope is None:
+            return state, action
+        bound = self._tool_proposal_binder.bind(state, action, scope)
+        return (
+            state.model_copy(update={"bound_tool_proposal": bound}),
+            action.model_copy(update={"parameters": dict(bound.parameters)}),
+        )
 
     def _observe_knowledge(
         self,
@@ -595,15 +713,12 @@ class ControlledReActOrchestrator:
         *,
         max_plan_rounds: int,
     ) -> ReActActionProposal:
-        eligible_actions, convergence_signal = compute_eligible_action_set(
-            plan_rounds=state.plan_round,
+        eligible_actions, convergence_signal = _eligible_actions_for_state(
+            state,
             max_plan_rounds=max_plan_rounds,
-            action_history=_action_history_payload(state),
-            evidence_trajectory=[
-                record.accepted_evidence_count for record in state.observation_records
-            ],
-            observations=_observation_payloads(state),
         )
+        if state.effective_react_action_set:
+            eligible_actions = frozenset(state.effective_react_action_set)
         constrained, _rewrite = constrain_action(
             action,
             eligible_actions,
@@ -621,6 +736,103 @@ class ControlledReActOrchestrator:
                 }
             )
         return constrained
+
+
+def _eligible_actions_for_state(
+    state: ControlledReActRunState,
+    *,
+    max_plan_rounds: int,
+) -> tuple[frozenset[ReActActionType], str | None]:
+    return compute_eligible_action_set(
+        plan_rounds=state.plan_round,
+        max_plan_rounds=max_plan_rounds,
+        action_history=_action_history_payload(state),
+        evidence_trajectory=[
+            record.accepted_evidence_count for record in state.observation_records
+        ],
+        observations=_observation_payloads(state),
+    )
+
+
+def _tool_scope_violation(
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+) -> bool:
+    scope = state.effective_tool_proposal_scope
+    if scope is None:
+        return False
+    tool_name = action.target_tool_name
+    return tool_name not in scope.tool_contract_ids
+
+
+def _approved_tool_integrity_mismatch(
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+) -> bool:
+    snapshot = state.approved_tool_proposal_snapshot
+    if snapshot is None:
+        return False
+    if snapshot.action_id != action.action_id:
+        return True
+    if snapshot.tool_contract_id != (action.target_tool_name or ""):
+        return True
+    return snapshot.parameter_digest != _parameter_digest(action.parameters)
+
+
+def _parameter_digest(parameters: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        _jsonable(parameters),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _jsonable(value: Any) -> Any:
+    if hasattr(value, "value"):
+        return value.value
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple | set | frozenset):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _tool_scope_trace_projection(
+    scope: EffectiveToolProposalScope,
+    eligible_actions: frozenset[ReActActionType],
+) -> Mapping[str, Any]:
+    return {
+        "run_id": scope.run_id,
+        "plan_round": scope.plan_round,
+        "schema_digest": scope.schema_digest,
+        "tool_contract_ids": scope.tool_contract_ids,
+        "tool_interfaces": tuple(
+            {
+                "tool_contract_id": interface.tool_contract_id,
+                "purpose": interface.purpose,
+                "risk_level": interface.risk_level,
+                "read_only": interface.read_only,
+                "requires_approval": interface.requires_approval,
+                "semantic_result_summary": interface.semantic_result_summary,
+                "remaining_call_budget": interface.remaining_call_budget,
+                "parameters": tuple(
+                    {
+                        "name": parameter.name,
+                        "required": parameter.required,
+                        "value_type": parameter.value_type,
+                        "value_source": parameter.value_source.value,
+                        "description": parameter.description,
+                        "enum_values": parameter.enum_values,
+                    }
+                    for parameter in interface.parameters
+                ),
+            }
+            for interface in scope.tool_interfaces
+        ),
+        "excluded_count": len(scope.excluded),
+        "proposal_action_enabled": ReActActionType.PROPOSE_TOOL_CALL in eligible_actions,
+    }
 
 
 def _action_history_payload(state: ControlledReActRunState) -> list[Mapping[str, Any]]:
@@ -699,6 +911,41 @@ def _approval_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
     return {str(key): value for key, value in parameters.items()}
 
 
+def _approved_tool_snapshot(
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+    *,
+    policy_decision: PolicyDecisionType,
+) -> ApprovedToolProposalSnapshot | None:
+    bound = state.bound_tool_proposal
+    if bound is None:
+        return None
+    return ApprovedToolProposalSnapshot(
+        snapshot_id=f"approved_{action.action_id}",
+        action_id=action.action_id,
+        tool_contract_id=bound.tool_contract_id,
+        parameters=bound.parameters,
+        parameter_digest=bound.parameter_digest,
+        scope_digest=bound.scope_digest,
+        policy_decision=policy_decision.value,
+        risk_level=action.risk_level,
+        approval_reason="Human approval required before tool execution.",
+    )
+
+
+def _approved_tool_summary(
+    snapshot: ApprovedToolProposalSnapshot | None,
+) -> Mapping[str, Any] | None:
+    if snapshot is None:
+        return None
+    return {
+        "tool_contract_id": snapshot.tool_contract_id,
+        "parameter_keys": tuple(sorted(snapshot.parameters)),
+        "parameter_digest": snapshot.parameter_digest,
+        "scope_digest": snapshot.scope_digest,
+    }
+
+
 def _stage_results_from_state(
     state: ControlledReActRunState,
 ) -> tuple[WorkflowStageResult, ...]:
@@ -710,6 +957,20 @@ def _stage_results_from_state(
             produced_fact_refs=record.source_refs or (record.truth_ref,),
         )
         for index, record in enumerate(state.observation_records)
+    )
+
+
+def _tool_proposal_scope_stage_results(
+    state: ControlledReActRunState,
+) -> tuple[WorkflowStageResult, ...]:
+    return tuple(
+        WorkflowStageResult(
+            stage_id="tool_proposal_scope",
+            status=WorkflowStageStatus.COMPLETED,
+            summary=projection,
+            produced_fact_refs=("effective_tool_proposal_scope",),
+        )
+        for projection in state.tool_proposal_scope_trace_projections
     )
 
 
@@ -743,6 +1004,9 @@ def _stage_results_for_answer(
         results.append(_intent_resolution_stage_result(state))
     if state.memory_read_performed:
         results.append(_memory_read_stage_result(state))
+    scope_stage_results = list(_tool_proposal_scope_stage_results(state))
+    if scope_stage_results:
+        results.append(scope_stage_results.pop(0))
     first_retrieval_action = _first_action_of_type(
         state,
         ReActActionType.PLAN_RETRIEVAL,
@@ -758,6 +1022,7 @@ def _stage_results_for_answer(
         results.append(_plan_stage_result(state, first_tool_action))
         results.append(_tool_review_stage_result(first_tool_action))
     results.extend(_stage_results_from_state(state))
+    results.extend(scope_stage_results)
     results.append(_plan_stage_result(state, final_action))
     results.append(_model_answer_stage_result(answer))
     if memory_write_result is not None:
@@ -789,6 +1054,7 @@ def _stage_results_for_waiting_approval(
         results.append(_intent_resolution_stage_result(state))
     if state.memory_read_performed:
         results.append(_memory_read_stage_result(state))
+    results.extend(_tool_proposal_scope_stage_results(state))
     results.append(_plan_stage_result(state, action))
     results.append(_tool_review_stage_result(action))
     return tuple(results)
@@ -803,6 +1069,9 @@ def _stage_results_before_terminal(
         results.append(_intent_resolution_stage_result(state))
     if state.memory_read_performed:
         results.append(_memory_read_stage_result(state))
+    scope_stage_results = list(_tool_proposal_scope_stage_results(state))
+    if scope_stage_results:
+        results.append(scope_stage_results.pop(0))
     first_retrieval_action = _first_action_of_type(
         state,
         ReActActionType.PLAN_RETRIEVAL,
@@ -818,6 +1087,7 @@ def _stage_results_before_terminal(
         results.append(_plan_stage_result(state, first_tool_action))
         results.append(_tool_review_stage_result(first_tool_action))
     results.extend(_stage_results_from_state(state))
+    results.extend(scope_stage_results)
     results.append(_plan_stage_result(state, final_action))
     return results
 
@@ -832,9 +1102,7 @@ def _intent_resolution_stage_result(
         summary={
             "resolution_id": str(intent_resolution.get("resolution_id", "")),
             "domain_intent": str(intent_resolution.get("domain_intent", "")),
-            "recommended_next_action": str(
-                intent_resolution.get("recommended_next_action", "")
-            ),
+            "recommended_next_action": str(intent_resolution.get("recommended_next_action", "")),
             "confidence": intent_resolution.get("confidence", 0),
         },
         produced_fact_refs=("intent_resolution",),

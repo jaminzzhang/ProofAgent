@@ -52,6 +52,7 @@ class EvaluationGateName(str, Enum):
     CONTROL_ENVELOPE_COVERAGE = "control_envelope_coverage"
     EVIDENCE_STRUCTURAL = "evidence_structural"
     TOOL_GOVERNANCE_STRUCTURAL = "tool_governance_structural"
+    TOOL_PROPOSAL_SCOPE = "tool_proposal_scope"
     RESPONSE_PROJECTION_SAFETY = "response_projection_safety"
     REDACTION_SAFETY = "redaction_safety"
     RESPONSE_ASSERTION = "response_assertion"
@@ -167,18 +168,27 @@ class EvaluationCaseExpected(FrozenModel):
     required_mcp_tool_names: tuple[str, ...] = Field(default_factory=tuple)
     required_tool_result_classifications: tuple[str, ...] = Field(default_factory=tuple)
     required_tool_failure_codes: tuple[str, ...] = Field(default_factory=tuple)
-    expected_business_flow_skill_pack_decision: Literal[
-        "admitted",
-        "no_pack",
-        "needs_clarification",
-        "refused",
-        "failed_closed",
-    ] | None = None
-    expected_business_flow_skill_pack_recommendation_type: Literal[
-        "single_pack",
-        "no_pack",
-        "ambiguous",
-    ] | None = None
+    required_tool_proposal_scope_contract_ids: tuple[str, ...] = Field(default_factory=tuple)
+    forbidden_tool_proposal_scope_contract_ids: tuple[str, ...] = Field(default_factory=tuple)
+    expect_empty_tool_proposal_scope: bool = False
+    expected_business_flow_skill_pack_decision: (
+        Literal[
+            "admitted",
+            "no_pack",
+            "needs_clarification",
+            "refused",
+            "failed_closed",
+        ]
+        | None
+    ) = None
+    expected_business_flow_skill_pack_recommendation_type: (
+        Literal[
+            "single_pack",
+            "no_pack",
+            "ambiguous",
+        ]
+        | None
+    ) = None
     expected_business_flow_skill_pack_id: str | None = None
     forbid_clarification: bool = False
     max_action_constraint_rewrites: int | None = Field(default=None, ge=0)

@@ -11,6 +11,7 @@ from proof_agent.contracts import (
     AnswerEvidenceContext,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
+    EffectiveToolProposalScope,
     EvidenceChunk,
     EvidenceStatus,
     EnforcementPoint,
@@ -44,6 +45,9 @@ from proof_agent.control.workflow.controlled_react.ports import (
     ControlledReActPorts,
     ObservationTruthStorePort,
     SnapshotStorePort,
+)
+from proof_agent.control.workflow.controlled_react.tool_proposal_scope import (
+    ToolProposalScopeResolver,
 )
 from proof_agent.control.workflow.harness_helpers import (
     build_model_request,
@@ -87,6 +91,7 @@ def build_controlled_react_orchestrator_for_invocation(
             tool_observation=_InvocationToolObservationAdapter(invocation),
             policy=_InvocationPolicyAdapter(invocation),
             review=_InvocationReviewAdapter(invocation),
+            tool_proposal_scope=_InvocationToolProposalScopeAdapter(invocation),
             snapshot_store=snapshot_store or _InMemorySnapshotStoreAdapter(),
             observation_truth_store=observation_truth_store,
             answer_synthesis=_ModelAnswerSynthesisAdapter(invocation),
@@ -157,6 +162,24 @@ class _InvocationPlannerAdapter:
             question=state.question,
             system_prompt="Controlled ReAct Orchestrator V3",
             context_summary=_context_summary(state),
+            eligible_actions=(
+                frozenset(state.effective_react_action_set)
+                if state.effective_react_action_set
+                else None
+            ),
+            effective_tool_proposal_scope=state.effective_tool_proposal_scope,
+        )
+
+
+class _InvocationToolProposalScopeAdapter:
+    def __init__(self, invocation: HarnessInvocation) -> None:
+        self._invocation = invocation
+        self._resolver = ToolProposalScopeResolver()
+
+    def resolve(self, state: ControlledReActRunState) -> EffectiveToolProposalScope:
+        return self._resolver.resolve(
+            state,
+            tools=self._invocation.tool_gateway.tools,
         )
 
 
@@ -760,9 +783,7 @@ def _llm_interaction_capture(
     response: ModelResponse,
 ) -> WorkflowStageLlmInteraction:
     response_json, parse_error = (
-        _model_content_json(response.content)
-        if request.response_format == "json"
-        else (None, None)
+        _model_content_json(response.content) if request.response_format == "json" else (None, None)
     )
     return WorkflowStageLlmInteraction(
         stage_id=stage_id,

@@ -27,6 +27,104 @@ class ObservationTruthKind(str, Enum):
     TOOL = "tool"
 
 
+class ToolProposalParameterSource(str, Enum):
+    """Allowed source classes for planner-visible tool proposal parameters."""
+
+    USER_SUPPLIED = "user_supplied"
+    CONTROLLED_CONTEXT = "controlled_context"
+    AUTHORIZED_RESOURCE_HANDLE = "authorized_resource_handle"
+    SYSTEM_GENERATED = "system_generated"
+    PLANNER_LITERAL = "planner_literal"
+
+
+class ToolProposalParameter(FrozenModel):
+    """Planner-visible parameter projection for one tool proposal parameter."""
+
+    name: str
+    required: bool = False
+    value_type: str = "string"
+    value_source: ToolProposalParameterSource = ToolProposalParameterSource.USER_SUPPLIED
+    description: str | None = None
+    enum_values: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class ToolProposalInterface(FrozenModel):
+    """Planner-visible tool proposal projection, without execution schemas."""
+
+    tool_contract_id: str
+    purpose: str
+    risk_level: str
+    read_only: bool
+    requires_approval: bool
+    semantic_result_summary: str | None = None
+    parameters: tuple[ToolProposalParameter, ...] = Field(default_factory=tuple)
+    source: str | None = None
+    remaining_call_budget: int | None = None
+    mcp_tool_name: str | None = None
+    tool_source_id: str | None = None
+    input_schema: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    result_schema: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("input_schema", "result_schema", mode="after")
+    @classmethod
+    def freeze_hidden_schema_placeholders(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class EffectiveToolProposalScope(FrozenModel):
+    """Round-scoped planner-visible tool proposal scope."""
+
+    run_id: str
+    plan_round: int
+    tool_interfaces: tuple[ToolProposalInterface, ...] = Field(default_factory=tuple)
+    excluded: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    schema_digest: str
+
+    @property
+    def tool_contract_ids(self) -> tuple[str, ...]:
+        return tuple(interface.tool_contract_id for interface in self.tool_interfaces)
+
+    @field_validator("excluded", mode="after")
+    @classmethod
+    def freeze_excluded(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class BoundToolProposal(FrozenModel):
+    """Execution-ready tool proposal after Control Plane parameter binding."""
+
+    action_id: str
+    tool_contract_id: str
+    parameters: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    parameter_sources: Mapping[str, str] = Field(default_factory=FrozenDict)
+    parameter_digest: str
+    scope_digest: str | None = None
+
+    @field_validator("parameters", "parameter_sources", mode="after")
+    @classmethod
+    def freeze_bound_mappings(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
+class ApprovedToolProposalSnapshot(FrozenModel):
+    """Frozen approval object for one concrete bound tool proposal."""
+
+    snapshot_id: str
+    action_id: str
+    tool_contract_id: str
+    parameters: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    parameter_digest: str
+    scope_digest: str | None = None
+    policy_decision: str
+    risk_level: str
+    approval_reason: str
+
+    @field_validator("parameters", mode="after")
+    @classmethod
+    def freeze_parameters(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+
 class RetrievalObservationTruth(FrozenModel):
     """Full governed retrieval payload referenced by an Observation Record."""
 
@@ -115,14 +213,20 @@ class ControlledReActRunState(FrozenModel):
     action_history: tuple[ReActActionProposal, ...] = Field(default_factory=tuple)
     observation_records: tuple[ObservationRecord, ...] = Field(default_factory=tuple)
     intent_resolution: Mapping[str, Any] | None = None
-    memory_context: Mapping[str, Any] = Field(default_factory=FrozenDict)
-    memory_read_performed: bool = False
-    observation_trace_projections: tuple[Mapping[str, Any], ...] = Field(
+    effective_tool_proposal_scope: EffectiveToolProposalScope | None = None
+    effective_react_action_set: tuple[ReActActionType, ...] = Field(default_factory=tuple)
+    bound_tool_proposal: BoundToolProposal | None = None
+    approved_tool_proposal_snapshot: ApprovedToolProposalSnapshot | None = None
+    tool_proposal_scope_trace_projections: tuple[Mapping[str, Any], ...] = Field(
         default_factory=tuple
     )
+    memory_context: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    memory_read_performed: bool = False
+    observation_trace_projections: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
 
     @field_validator(
         "intent_resolution",
+        "tool_proposal_scope_trace_projections",
         "memory_context",
         "observation_trace_projections",
         mode="after",

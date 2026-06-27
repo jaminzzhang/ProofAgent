@@ -1016,9 +1016,7 @@ admission:
         actor="operator",
     )
 
-    response = client.get(
-        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills"
-    )
+    response = client.get(f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills")
 
     assert response.status_code == 200
     payload = response.json()
@@ -1037,9 +1035,7 @@ admission:
     assert pack["routing_admission"]["intent_patterns"] == ["claim status"]
     assert pack["routing_admission"]["admission"]["min_confidence"] == 0.6
     assert pack["capability_refs"]["knowledge_binding_refs"] == ["kb_local"]
-    assert pack["capability_refs"]["policy_rule_refs"] == [
-        "answering.require_retrieval"
-    ]
+    assert pack["capability_refs"]["policy_rule_refs"] == ["answering.require_retrieval"]
     stages = {stage["stage_id"]: stage for stage in pack["stage_addenda"]}
     assert set(stages) == {"plan", "retrieval_review", "tool_review", "model_answer"}
     assert stages["plan"]["configured"] is True
@@ -1092,20 +1088,17 @@ def test_fetch_config_draft_skills_reports_missing_refs_without_blocking_list(
         ),
     )
 
-    response = client.get(
-        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills"
-    )
+    response = client.get(f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["configuration_issues"][0]["code"] == "PA_CONFIG_002"
-    assert "unknown Business Flow Skill Pack knowledge_binding_refs" in (
-        payload["configuration_issues"][0]["message"]
+    assert (
+        "unknown Business Flow Skill Pack knowledge_binding_refs"
+        in (payload["configuration_issues"][0]["message"])
     )
     assert "general_insurance_knowledge" in payload["configuration_issues"][0]["message"]
-    pack = next(
-        item for item in payload["packs"] if item["id"] == "general_insurance_specialist"
-    )
+    pack = next(item for item in payload["packs"] if item["id"] == "general_insurance_specialist")
     assert "general_insurance_knowledge" in pack["capability_refs"]["knowledge_binding_refs"]
     repaired = client.patch(
         f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}"
@@ -1292,9 +1285,7 @@ admission: {}
             "intent_patterns": ["claim status", "claim documents"],
             "stage_prompt_addenda": {
                 "plan": {
-                    "task_instructions": [
-                        "Prefer retrieval before answering claim questions."
-                    ],
+                    "task_instructions": ["Prefer retrieval before answering claim questions."],
                 }
             },
             "admission": {"min_confidence": 0.7},
@@ -1323,9 +1314,7 @@ admission: {}
     assert definition["intent_patterns"] == ["claim status", "claim documents"]
     assert definition["stage_prompt_addenda"] == {
         "plan": {
-            "task_instructions": [
-                "Prefer retrieval before answering claim questions."
-            ],
+            "task_instructions": ["Prefer retrieval before answering claim questions."],
             "output_preferences": [],
         }
     }
@@ -2476,9 +2465,7 @@ def test_bind_shared_knowledge_source_keeps_business_flow_skill_refs_valid(
             "fusion_weight": 0.5,
         },
     )
-    skills = client.get(
-        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/skills"
-    )
+    skills = client.get(f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/skills")
 
     assert bound.status_code == 200
     parsed = yaml.safe_load(bound.json()["agent_yaml"])
@@ -2486,9 +2473,10 @@ def test_bind_shared_knowledge_source_keeps_business_flow_skill_refs_valid(
     assert "general_insurance_knowledge" in binding_ids
     assert "ks_local_index_binding" in binding_ids
     assert skills.status_code == 200
-    assert {
-        pack["id"] for pack in skills.json()["packs"]
-    } >= {"general_insurance_specialist", "agent_basic_law_consultation"}
+    assert {pack["id"] for pack in skills.json()["packs"]} >= {
+        "general_insurance_specialist",
+        "agent_basic_law_consultation",
+    }
 
 
 def test_bind_unpublished_knowledge_source_to_agent_draft_is_rejected(
@@ -2739,8 +2727,9 @@ def test_update_contract_view_rejects_removed_skill_pack_knowledge_binding(
 
     assert updated.status_code == 400
     assert updated.json()["detail"]["code"] == "PA_CONFIG_002"
-    assert "unknown Business Flow Skill Pack knowledge_binding_refs" in (
-        updated.json()["detail"]["message"]
+    assert (
+        "unknown Business Flow Skill Pack knowledge_binding_refs"
+        in (updated.json()["detail"]["message"])
     )
     assert "general_insurance_knowledge" in updated.json()["detail"]["message"]
 
@@ -2875,7 +2864,10 @@ def test_workflow_stage_preview_rejects_governance_bypass_prompt(tmp_path: Path)
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "PA_CONFIG_002"
-    assert "workflow stage prompt contains forbidden governance override language" in response.json()["detail"]["message"]
+    assert (
+        "workflow stage prompt contains forbidden governance override language"
+        in response.json()["detail"]["message"]
+    )
 
 
 def test_validate_draft_runs_harness_as_validation_run(tmp_path: Path) -> None:
@@ -2958,15 +2950,14 @@ def test_validate_v3_draft_full_capture_records_model_answer_interaction(
 
     assert capture.status_code == 200
     payload = capture.json()["payload"]
-    assert [
-        stage["stage_id"]
-        for stage in payload["stage_results"]
-    ] == [
+    assert [stage["stage_id"] for stage in payload["stage_results"]] == [
         "intent_resolution",
         "memory_read",
+        "tool_proposal_scope",
         "plan",
         "retrieval_review",
         "retrieval",
+        "tool_proposal_scope",
         "plan",
         "model_answer",
         "memory",
@@ -3093,9 +3084,7 @@ def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -
     assert artifact["draft_id"] == draft["draft_id"]
     assert artifact["retention_class"] == "sensitive_validation_capture"
     assert artifact["retain_for_audit"] is True
-    assert body["links"]["validation_capture"] == (
-        f"/api/runs/{body['run_id']}/validation-capture"
-    )
+    assert body["links"]["validation_capture"] == (f"/api/runs/{body['run_id']}/validation-capture")
 
     detail = client.get(f"/api/runs/{body['run_id']}")
     assert detail.status_code == 200

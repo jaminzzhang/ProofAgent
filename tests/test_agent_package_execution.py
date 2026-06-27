@@ -69,7 +69,9 @@ def test_execute_agent_package_run_projects_v3_complete_model_answer_chain(
 ) -> None:
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             question="What is the reimbursement rule for travel meals?",
             runs_dir=tmp_path / "run",
         )
@@ -78,15 +80,16 @@ def test_execute_agent_package_run_projects_v3_complete_model_answer_chain(
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert result.workflow_template_execution_result is not None
     stage_ids = [
-        stage.stage_id
-        for stage in result.workflow_template_execution_result.stage_results
+        stage.stage_id for stage in result.workflow_template_execution_result.stage_results
     ]
     assert stage_ids == [
         "intent_resolution",
         "memory_read",
+        "tool_proposal_scope",
         "plan",
         "retrieval_review",
         "retrieval",
+        "tool_proposal_scope",
         "plan",
         "model_answer",
         "memory",
@@ -100,8 +103,7 @@ def test_execute_agent_package_run_projects_v3_complete_model_answer_chain(
     )
 
     events = [
-        json.loads(line)
-        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
     event_types = [event["event_type"] for event in events]
     assert "model_request" in event_types
@@ -141,14 +143,15 @@ def test_execute_agent_package_run_refuses_v3_when_no_evidence_is_admitted(
     assert result.workflow_template_execution_result is not None
     assert result.workflow_template_execution_result.evidence == ()
     assert [
-        stage.stage_id
-        for stage in result.workflow_template_execution_result.stage_results
+        stage.stage_id for stage in result.workflow_template_execution_result.stage_results
     ] == [
         "intent_resolution",
         "memory_read",
+        "tool_proposal_scope",
         "plan",
         "retrieval_review",
         "retrieval",
+        "tool_proposal_scope",
         "plan",
         "memory",
         "response",
@@ -206,7 +209,9 @@ def test_execute_agent_package_run_rejects_v3_raw_evidence_final_answer(
 
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             question="What is the reimbursement rule for travel meals?",
             runs_dir=tmp_path / "run",
         )
@@ -221,10 +226,9 @@ def test_execute_agent_package_run_rejects_v3_raw_evidence_final_answer(
         if stage.stage_id == "model_answer"
     )
     assert model_answer.status.value == "blocked"
-    assert [
-        stage.stage_id
-        for stage in result.workflow_template_execution_result.stage_results
-    ][-3:] == ["model_answer", "memory", "response"]
+    assert [stage.stage_id for stage in result.workflow_template_execution_result.stage_results][
+        -3:
+    ] == ["model_answer", "memory", "response"]
 
 
 def test_execute_agent_package_run_returns_v3_clarification_need(
@@ -276,12 +280,16 @@ def test_execute_agent_package_run_projects_v3_tool_approval_payload(
     assert result.outcome is ReceiptOutcome.WAITING_FOR_APPROVAL
     assert result.workflow_template_execution_result is not None
     assert [
-        stage.stage_id
-        for stage in result.workflow_template_execution_result.stage_results
-    ] == ["intent_resolution", "memory_read", "plan", "tool_review"]
+        stage.stage_id for stage in result.workflow_template_execution_result.stage_results
+    ] == ["intent_resolution", "memory_read", "tool_proposal_scope", "plan", "tool_review"]
     events = [
         json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
+    scope_event = next(event for event in events if event["event_type"] == "tool_proposal_scope")
+    scope_payload = scope_event["payload"]
+    assert "customer_lookup" in scope_payload["tool_contract_ids"]
+    assert "input_schema" not in json.dumps(scope_payload)
+    assert "tool_source_id" not in json.dumps(scope_payload)
     pending = next(event for event in events if event["event_type"] == "pending_approval_created")
     payload = pending["payload"]
     assert payload["run_id"] == pending["run_id"]

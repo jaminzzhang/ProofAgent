@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,7 @@ def evaluate_case_gates(
         _control_envelope_coverage_gate(case, artifacts),
         _evidence_structural_gate(case, artifacts),
         _tool_governance_structural_gate(case, artifacts),
+        _tool_proposal_scope_gate(case, artifacts),
         _response_projection_safety_gate(case, artifacts),
         _redaction_safety_gate(artifacts),
         _response_assertion_gate(case, artifacts),
@@ -47,7 +48,9 @@ def evaluate_case_gates(
 
 def _subject_mapping_gate(case: EvaluationCase, subject: EvaluationSubject) -> EvaluationGateResult:
     if subject.case_ref.case_id == case.case_id:
-        return _gate(EvaluationGateName.SUBJECT_MAPPING, EvaluationGateStatus.PASSED, "case_ref matched")
+        return _gate(
+            EvaluationGateName.SUBJECT_MAPPING, EvaluationGateStatus.PASSED, "case_ref matched"
+        )
     return _gate(
         EvaluationGateName.SUBJECT_MAPPING,
         EvaluationGateStatus.FAILED,
@@ -61,7 +64,11 @@ def _artifact_sufficiency_gate(subject: EvaluationSubject) -> EvaluationGateResu
     if subject.run_meta is not None:
         refs.append(subject.run_meta)
     if subject.response_projection.ref is not None:
-        refs.append(EvaluationArtifactRef(ref=subject.response_projection.ref, sha256=subject.response_projection.sha256))
+        refs.append(
+            EvaluationArtifactRef(
+                ref=subject.response_projection.ref, sha256=subject.response_projection.sha256
+            )
+        )
     missing = [str(ref.ref) for ref in refs if not ref.ref.exists()]
     if missing:
         return _gate(
@@ -71,7 +78,9 @@ def _artifact_sufficiency_gate(subject: EvaluationSubject) -> EvaluationGateResu
             sufficiency=EvaluationArtifactSufficiencyStatus.INSUFFICIENT,
             failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
         )
-    mismatched = [str(ref.ref) for ref in refs if ref.sha256 is not None and _sha256(ref.ref) != ref.sha256]
+    mismatched = [
+        str(ref.ref) for ref in refs if ref.sha256 is not None and _sha256(ref.ref) != ref.sha256
+    ]
     if mismatched:
         return _gate(
             EvaluationGateName.ARTIFACT_SUFFICIENCY,
@@ -95,7 +104,9 @@ def _artifact_sufficiency_gate(subject: EvaluationSubject) -> EvaluationGateResu
 
 def _outcome_gate(case: EvaluationCase, artifacts: EvaluationArtifacts) -> EvaluationGateResult:
     if artifacts.actual_outcome == case.expected.outcome:
-        return _gate(EvaluationGateName.OUTCOME, EvaluationGateStatus.PASSED, "actual outcome matched")
+        return _gate(
+            EvaluationGateName.OUTCOME, EvaluationGateStatus.PASSED, "actual outcome matched"
+        )
     return _gate(
         EvaluationGateName.OUTCOME,
         EvaluationGateStatus.FAILED,
@@ -134,7 +145,9 @@ def _audit_artifact_gate(artifacts: EvaluationArtifacts) -> EvaluationGateResult
             "trace outcome did not match receipt outcome",
             failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
         )
-    return _gate(EvaluationGateName.AUDIT_ARTIFACT, EvaluationGateStatus.PASSED, "trace and receipt agreed")
+    return _gate(
+        EvaluationGateName.AUDIT_ARTIFACT, EvaluationGateStatus.PASSED, "trace and receipt agreed"
+    )
 
 
 def _control_envelope_coverage_gate(
@@ -170,7 +183,9 @@ def _evidence_structural_gate(
             EvaluationGateStatus.PASSED,
             "answered-with-citations evidence was not required",
         )
-    evidence_events = [event for event in artifacts.trace_events if event.event_type == "evidence_evaluation"]
+    evidence_events = [
+        event for event in artifacts.trace_events if event.event_type == "evidence_evaluation"
+    ]
     if not evidence_events:
         return _gate(
             EvaluationGateName.EVIDENCE_STRUCTURAL,
@@ -188,7 +203,9 @@ def _evidence_structural_gate(
             failure_owner=EvaluationFailureOwner.RETRIEVAL_FAILURE,
         )
     observed_sources = _observed_source_refs(artifacts.trace_events)
-    missing_refs = [ref for ref in case.expected.required_citation_refs if ref not in observed_sources]
+    missing_refs = [
+        ref for ref in case.expected.required_citation_refs if ref not in observed_sources
+    ]
     if missing_refs:
         return _gate(
             EvaluationGateName.EVIDENCE_STRUCTURAL,
@@ -260,8 +277,7 @@ def _tool_governance_structural_gate(
         return _gate(
             EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL,
             EvaluationGateStatus.FAILED,
-            "missing expected tool result classification(s): "
-            + ", ".join(missing_classifications),
+            "missing expected tool result classification(s): " + ", ".join(missing_classifications),
             failure_owner=EvaluationFailureOwner.TOOL_GOVERNANCE_FAILURE,
         )
     missing_failure_codes = sorted(
@@ -275,14 +291,114 @@ def _tool_governance_structural_gate(
         return _gate(
             EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL,
             EvaluationGateStatus.FAILED,
-            "missing expected tool failure code(s): "
-            + ", ".join(missing_failure_codes),
+            "missing expected tool failure code(s): " + ", ".join(missing_failure_codes),
             failure_owner=EvaluationFailureOwner.TOOL_GOVERNANCE_FAILURE,
         )
     return _gate(
         EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL,
         EvaluationGateStatus.PASSED,
         "tool governance events were recorded",
+    )
+
+
+def _tool_proposal_scope_gate(
+    case: EvaluationCase,
+    artifacts: EvaluationArtifacts,
+) -> EvaluationGateResult:
+    expected_required = set(case.expected.required_tool_proposal_scope_contract_ids)
+    expected_forbidden = set(case.expected.forbidden_tool_proposal_scope_contract_ids)
+    expect_empty = case.expected.expect_empty_tool_proposal_scope
+    if not expected_required and not expected_forbidden and not expect_empty:
+        return _gate(
+            EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+            EvaluationGateStatus.PASSED,
+            "no expected Tool Proposal Scope declared",
+        )
+    scope_events = _tool_proposal_scope_events(artifacts.trace_events)
+    if not scope_events:
+        return _gate(
+            EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+            EvaluationGateStatus.FAILED,
+            "missing tool_proposal_scope event",
+            failure_owner=EvaluationFailureOwner.TOOL_GOVERNANCE_FAILURE,
+        )
+    leaked_fields = sorted(
+        {
+            field
+            for event in scope_events
+            for field in _hidden_tool_scope_projection_fields(event.payload)
+        }
+    )
+    if leaked_fields:
+        return _gate(
+            EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+            EvaluationGateStatus.FAILED,
+            "scope projection exposed hidden field(s): " + ", ".join(leaked_fields),
+            failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
+        )
+    observed_contracts = {
+        contract_id
+        for event in scope_events
+        for contract_id in _tool_scope_contract_ids(event.payload)
+    }
+    if expect_empty:
+        if observed_contracts:
+            return _gate(
+                EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+                EvaluationGateStatus.FAILED,
+                "expected empty Tool Proposal Scope, got: " + ", ".join(sorted(observed_contracts)),
+                failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+            )
+        requested_contracts = _tool_request_contract_ids(artifacts.trace_events)
+        if requested_contracts:
+            return _gate(
+                EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+                EvaluationGateStatus.FAILED,
+                "tool_request observed while expected Tool Proposal Scope was empty",
+                failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+            )
+    missing_required = sorted(expected_required - observed_contracts)
+    if missing_required:
+        return _gate(
+            EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+            EvaluationGateStatus.FAILED,
+            "missing expected Tool Proposal Scope contract(s): " + ", ".join(missing_required),
+            failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+        )
+    forbidden_present = sorted(expected_forbidden & observed_contracts)
+    if forbidden_present:
+        return _gate(
+            EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+            EvaluationGateStatus.FAILED,
+            "forbidden Tool Proposal Scope contract(s) present: " + ", ".join(forbidden_present),
+            failure_owner=EvaluationFailureOwner.PLANNING_FAILURE,
+        )
+    requested_outside_scope = sorted(
+        _tool_request_contract_ids(artifacts.trace_events) - observed_contracts
+    )
+    if requested_outside_scope:
+        return _gate(
+            EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+            EvaluationGateStatus.FAILED,
+            "tool_request outside Tool Proposal Scope: " + ", ".join(requested_outside_scope),
+            failure_owner=EvaluationFailureOwner.TOOL_GOVERNANCE_FAILURE,
+        )
+    missing_scope_digests = _tool_request_scope_digest_mismatches(
+        artifacts.trace_events,
+        scope_events,
+    )
+    if missing_scope_digests:
+        return _gate(
+            EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+            EvaluationGateStatus.FAILED,
+            "tool_request scope digest did not match scope event(s): "
+            + ", ".join(missing_scope_digests),
+            failure_owner=EvaluationFailureOwner.TOOL_GOVERNANCE_FAILURE,
+        )
+    return _gate(
+        EvaluationGateName.TOOL_PROPOSAL_SCOPE,
+        EvaluationGateStatus.PASSED,
+        "Tool Proposal Scope matched declared expectations",
     )
 
 
@@ -310,9 +426,7 @@ def _response_projection_safety_gate(
     if case.expected.require_response_citation_refs:
         response_text = artifacts.response_text.lower()
         missing_refs = [
-            ref
-            for ref in case.expected.required_citation_refs
-            if ref.lower() not in response_text
+            ref for ref in case.expected.required_citation_refs if ref.lower() not in response_text
         ]
         if missing_refs:
             return _gate(
@@ -330,8 +444,7 @@ def _response_projection_safety_gate(
 
 def _redaction_safety_gate(artifacts: EvaluationArtifacts) -> EvaluationGateResult:
     trace_payload_text = "\n".join(
-        json.dumps(dict(event.payload), sort_keys=True).lower()
-        for event in artifacts.trace_events
+        json.dumps(dict(event.payload), sort_keys=True).lower() for event in artifacts.trace_events
     )
     raw_payload_markers = ("raw_payload", "internal_note")
     leaked_raw_payload_markers = [
@@ -341,8 +454,7 @@ def _redaction_safety_gate(artifacts: EvaluationArtifacts) -> EvaluationGateResu
         return _gate(
             EvaluationGateName.REDACTION_SAFETY,
             EvaluationGateStatus.FAILED,
-            "raw MCP payload marker found in trace: "
-            + ", ".join(leaked_raw_payload_markers),
+            "raw MCP payload marker found in trace: " + ", ".join(leaked_raw_payload_markers),
             failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
         )
     unsafe_markers = ("sk-", "api_key", "password=", "begin rsa private key")
@@ -355,7 +467,11 @@ def _redaction_safety_gate(artifacts: EvaluationArtifacts) -> EvaluationGateResu
             "unsafe secret-like markers found: " + ", ".join(leaked),
             failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
         )
-    return _gate(EvaluationGateName.REDACTION_SAFETY, EvaluationGateStatus.PASSED, "no secret-like markers found")
+    return _gate(
+        EvaluationGateName.REDACTION_SAFETY,
+        EvaluationGateStatus.PASSED,
+        "no secret-like markers found",
+    )
 
 
 def _response_assertion_gate(
@@ -364,7 +480,9 @@ def _response_assertion_gate(
 ) -> EvaluationGateResult:
     assertions = case.expected.response_assertions
     response_text = artifacts.response_text.lower()
-    forbidden = [phrase for phrase in assertions.must_not_include if phrase.lower() in response_text]
+    forbidden = [
+        phrase for phrase in assertions.must_not_include if phrase.lower() in response_text
+    ]
     if forbidden:
         return _gate(
             EvaluationGateName.RESPONSE_ASSERTION,
@@ -402,9 +520,7 @@ def _intent_execution_behavior_gate(
         )
     if case.expected.max_action_constraint_rewrites is not None:
         rewrite_count = sum(
-            1
-            for event in artifacts.trace_events
-            if event.event_type == "action_constrained"
+            1 for event in artifacts.trace_events if event.event_type == "action_constrained"
         )
         if rewrite_count > case.expected.max_action_constraint_rewrites:
             return _gate(
@@ -457,9 +573,7 @@ def _business_flow_skill_pack_gate(
             "no expected Business Flow Skill Pack declared",
         )
     if expected_recommendation_type is not None:
-        recommendation = _business_flow_skill_pack_recommendation(
-            artifacts.trace_events
-        )
+        recommendation = _business_flow_skill_pack_recommendation(artifacts.trace_events)
         if recommendation is None:
             return _gate(
                 EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
@@ -631,6 +745,85 @@ def _business_flow_skill_pack_recommendation(
             continue
         return dict(event.payload)
     return None
+
+
+def _tool_proposal_scope_events(
+    events: Iterable[EvaluationTraceEvent],
+) -> tuple[EvaluationTraceEvent, ...]:
+    return tuple(
+        event
+        for event in events
+        if event.event_type in {"tool_proposal_scope", "effective_tool_proposal_scope"}
+    )
+
+
+def _hidden_tool_scope_projection_fields(value: Any) -> set[str]:
+    hidden_fields = {
+        "mcp_tool_name",
+        "tool_source_id",
+        "input_schema",
+        "result_schema",
+        "raw_payload",
+        "connection",
+        "endpoint",
+        "api_key",
+    }
+    found: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text in hidden_fields:
+                found.add(key_text)
+            found.update(_hidden_tool_scope_projection_fields(item))
+    elif isinstance(value, list | tuple):
+        for item in value:
+            found.update(_hidden_tool_scope_projection_fields(item))
+    return found
+
+
+def _tool_scope_contract_ids(payload: Mapping[str, Any]) -> set[str]:
+    contract_ids = _string_items(payload.get("tool_contract_ids"))
+    interfaces = payload.get("tool_interfaces")
+    if isinstance(interfaces, list | tuple):
+        for interface in interfaces:
+            if not isinstance(interface, Mapping):
+                continue
+            value = interface.get("tool_contract_id")
+            if isinstance(value, str):
+                contract_ids.add(value)
+    return contract_ids
+
+
+def _tool_request_contract_ids(events: Iterable[EvaluationTraceEvent]) -> set[str]:
+    contract_ids: set[str] = set()
+    for event in events:
+        if event.event_type != "tool_request":
+            continue
+        value = event.payload.get("tool_contract_id")
+        if isinstance(value, str):
+            contract_ids.add(value)
+    return contract_ids
+
+
+def _tool_request_scope_digest_mismatches(
+    events: Iterable[EvaluationTraceEvent],
+    scope_events: tuple[EvaluationTraceEvent, ...],
+) -> tuple[str, ...]:
+    scope_digests = {
+        digest
+        for event in scope_events
+        if isinstance((digest := event.payload.get("schema_digest")), str)
+    }
+    if not scope_digests:
+        return ()
+    mismatches: set[str] = set()
+    for event in events:
+        if event.event_type != "tool_request":
+            continue
+        scope_digest = event.payload.get("scope_digest")
+        if isinstance(scope_digest, str) and scope_digest not in scope_digests:
+            mismatches.add(scope_digest)
+    return tuple(sorted(mismatches))
 
 
 def _string_items(value: Any) -> set[str]:

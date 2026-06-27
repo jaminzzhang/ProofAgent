@@ -14,15 +14,14 @@ CORE_ANALYZER_GATES_V1 = EvaluationGateProfile(
         EvaluationGateName.CONTROL_ENVELOPE_COVERAGE,
         EvaluationGateName.EVIDENCE_STRUCTURAL,
         EvaluationGateName.TOOL_GOVERNANCE_STRUCTURAL,
+        EvaluationGateName.TOOL_PROPOSAL_SCOPE,
         EvaluationGateName.RESPONSE_PROJECTION_SAFETY,
         EvaluationGateName.REDACTION_SAFETY,
         EvaluationGateName.RESPONSE_ASSERTION,
         EvaluationGateName.INTENT_EXECUTION_BEHAVIOR,
         EvaluationGateName.BUSINESS_FLOW_SKILL_PACK,
     ),
-    diagnostic_gates=(
-        EvaluationGateName.FORBIDDEN_CLAIM,
-    ),
+    diagnostic_gates=(EvaluationGateName.FORBIDDEN_CLAIM,),
 )
 
 

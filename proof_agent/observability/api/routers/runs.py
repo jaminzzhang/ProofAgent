@@ -402,6 +402,13 @@ def _emit_controlled_react_stage_result(trace: TraceWriter, stage_result: Any) -
     outcome = getattr(stage_result, "outcome", None)
     status_value = getattr(status, "value", None)
     outcome_value = getattr(outcome, "value", None)
+    summary = dict(getattr(stage_result, "summary", {}) or {})
+    if getattr(stage_result, "stage_id", None) == "tool_proposal_scope":
+        trace.emit(
+            "tool_proposal_scope",
+            status="ok",
+            payload=summary,
+        )
     trace.emit(
         "workflow_stage_result",
         status=_trace_status_for_stage_result_status(status),
@@ -409,7 +416,7 @@ def _emit_controlled_react_stage_result(trace: TraceWriter, stage_result: Any) -
             "stage_id": getattr(stage_result, "stage_id", None),
             "status": str(status_value) if status_value is not None else str(status),
             "outcome": str(outcome_value) if outcome_value is not None else None,
-            "summary": dict(getattr(stage_result, "summary", {}) or {}),
+            "summary": summary,
             "produced_fact_refs": list(getattr(stage_result, "produced_fact_refs", ()) or ()),
         },
     )

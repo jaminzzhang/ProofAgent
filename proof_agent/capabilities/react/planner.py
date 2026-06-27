@@ -12,6 +12,7 @@ from proof_agent.capabilities.models.normalization import (
     parse_model_contract,
 )
 from proof_agent.contracts import (
+    EffectiveToolProposalScope,
     ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
@@ -48,6 +49,7 @@ class ReActPlanner(Protocol):
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         eligible_actions: AbstractSet[ReActActionType] | None = None,
+        effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
         """Propose the next governed ReAct action."""
 
@@ -63,8 +65,15 @@ class DeterministicReActPlanner:
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         eligible_actions: AbstractSet[ReActActionType] | None = None,
+        effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
-        _ = (system_prompt, context_summary, workflow_stage_context, eligible_actions)
+        _ = (
+            system_prompt,
+            context_summary,
+            workflow_stage_context,
+            eligible_actions,
+            effective_tool_proposal_scope,
+        )
         normalized_question = question.lower()
 
         if "can this customer" in normalized_question or "claim it" in normalized_question:
@@ -73,7 +82,9 @@ class DeterministicReActPlanner:
                 action_type=ReActActionType.ASK_CLARIFICATION,
                 reasoning_summary=ReasoningSummary(
                     goal="Clarify the customer and claim details before governed action.",
-                    observations=("The request refers to a customer or claim without identifiers.",),
+                    observations=(
+                        "The request refers to a customer or claim without identifiers.",
+                    ),
                     candidate_actions=(ReActActionType.ASK_CLARIFICATION,),
                     selected_action=ReActActionType.ASK_CLARIFICATION,
                     rationale_summary="Required customer and claim context is missing.",
@@ -180,6 +191,7 @@ class LLMReActPlanner:
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         eligible_actions: AbstractSet[ReActActionType] | None = None,
+        effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
         user_payload: dict[str, Any] = {
             "question": question,
@@ -189,6 +201,10 @@ class LLMReActPlanner:
         }
         if workflow_stage_context:
             user_payload["workflow_stage_context"] = dict(workflow_stage_context)
+        if effective_tool_proposal_scope is not None:
+            user_payload["effective_tool_proposal_scope"] = _tool_scope_prompt_payload(
+                effective_tool_proposal_scope
+            )
         request = ModelRequest(
             provider=self.model_provider.provider_name,
             model=self.model_provider.model_name,
@@ -204,7 +220,10 @@ class LLMReActPlanner:
                 ),
             ),
             response_format="json",
-            function_schema=_planner_function_schema(eligible_actions),
+            function_schema=_planner_function_schema(
+                eligible_actions,
+                effective_tool_proposal_scope=effective_tool_proposal_scope,
+            ),
             stream=False,
             metadata={"role": "react_planner", "question": question},
         )
@@ -215,6 +234,7 @@ class LLMReActPlanner:
         return _validate_planner_proposal(
             proposal,
             raw_content_length=len(response.content),
+            effective_tool_proposal_scope=effective_tool_proposal_scope,
         )
 
 
@@ -227,6 +247,8 @@ def _planner_allowed_actions(
 
 def _planner_function_schema(
     eligible_actions: AbstractSet[ReActActionType] | None,
+    *,
+    effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
 ) -> ModelFunctionSchema:
     return ModelFunctionSchema(
         name=_PLANNER_FUNCTION_SCHEMA_NAME,
@@ -243,52 +265,8 @@ def _planner_function_schema(
                     "type": "string",
                     "enum": _planner_allowed_actions(eligible_actions),
                 },
-                "parameters": {
-                    "anyOf": [
-                        {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": [],
-                            "properties": {},
-                        },
-                        {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["query"],
-                            "properties": {"query": {"type": "string"}},
-                        },
-                        {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["missing_fields"],
-                            "properties": {
-                                "missing_fields": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                }
-                            },
-                        },
-                        {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["customer_id", "policy_id"],
-                            "properties": {
-                                "customer_id": {"type": "string"},
-                                "policy_id": {"type": "string"},
-                            },
-                        },
-                        {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["query", "max_results"],
-                            "properties": {
-                                "query": {"type": "string"},
-                                "max_results": {"type": "number"},
-                            },
-                        },
-                    ]
-                },
-                "target_tool_name": {"type": ["string", "null"]},
+                "parameters": _planner_parameters_schema(effective_tool_proposal_scope),
+                "target_tool_name": _target_tool_name_schema(effective_tool_proposal_scope),
             },
         },
     )
@@ -361,9 +339,7 @@ def _parse_planner_proposal(*, content: str) -> ReActActionProposal:
         reasoning_summary=_safe_reasoning_summary(action_type),
         parameters=parameters,
         target_tool_name=target_tool_name,
-        risk_level="medium"
-        if action_type == ReActActionType.PROPOSE_TOOL_CALL
-        else "low",
+        risk_level="medium" if action_type == ReActActionType.PROPOSE_TOOL_CALL else "low",
     )
 
 
@@ -371,6 +347,7 @@ def _validate_planner_proposal(
     proposal: ReActActionProposal,
     *,
     raw_content_length: int,
+    effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
 ) -> ReActActionProposal:
     if proposal.action_type not in _PLANNER_ACTION_TYPE_SET:
         raise _planner_semantic_error(
@@ -390,18 +367,16 @@ def _validate_planner_proposal(
             raw_content_length=raw_content_length,
         )
 
-    if (
-        proposal.action_type == ReActActionType.PLAN_RETRIEVAL
-        and not _is_non_empty_string(proposal.parameters.get("query"))
+    if proposal.action_type == ReActActionType.PLAN_RETRIEVAL and not _is_non_empty_string(
+        proposal.parameters.get("query")
     ):
         raise _planner_semantic_error(
             "plan_retrieval requires parameters.query.",
             raw_content_length=raw_content_length,
         )
 
-    if (
-        proposal.action_type == ReActActionType.PROPOSE_TOOL_CALL
-        and not _is_non_empty_string(proposal.target_tool_name)
+    if proposal.action_type == ReActActionType.PROPOSE_TOOL_CALL and not _is_non_empty_string(
+        proposal.target_tool_name
     ):
         raise _planner_semantic_error(
             "propose_tool_call requires target_tool_name.",
@@ -410,9 +385,7 @@ def _validate_planner_proposal(
 
     if (
         proposal.action_type == ReActActionType.ASK_CLARIFICATION
-        and not _is_non_empty_string_sequence(
-            proposal.parameters.get("missing_fields")
-        )
+        and not _is_non_empty_string_sequence(proposal.parameters.get("missing_fields"))
     ):
         raise _planner_semantic_error(
             "ask_clarification requires parameters.missing_fields.",
@@ -422,6 +395,7 @@ def _validate_planner_proposal(
     return _canonicalize_planner_proposal(
         proposal,
         raw_content_length=raw_content_length,
+        effective_tool_proposal_scope=effective_tool_proposal_scope,
     )
 
 
@@ -429,6 +403,7 @@ def _canonicalize_planner_proposal(
     proposal: ReActActionProposal,
     *,
     raw_content_length: int,
+    effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
 ) -> ReActActionProposal:
     action_type = proposal.action_type
     if action_type == ReActActionType.PLAN_RETRIEVAL:
@@ -483,6 +458,10 @@ def _canonicalize_planner_proposal(
         raw_content_length=raw_content_length,
     )
     allowed_parameters = _V1_TOOL_PARAMETER_ALLOWLIST.get(target_tool_name)
+    if effective_tool_proposal_scope is not None:
+        allowed_parameters = _scope_tool_parameter_allowlist(effective_tool_proposal_scope).get(
+            target_tool_name
+        )
     if allowed_parameters is None:
         raise _planner_semantic_error(
             "propose_tool_call target_tool_name is not supported.",
@@ -510,6 +489,128 @@ def _canonicalize_planner_proposal(
         target_tool_name=target_tool_name,
         risk_level="medium",
     )
+
+
+def _planner_parameters_schema(
+    effective_tool_proposal_scope: EffectiveToolProposalScope | None,
+) -> Mapping[str, Any]:
+    if effective_tool_proposal_scope is None:
+        return {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [],
+                    "properties": {},
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["query"],
+                    "properties": {"query": {"type": "string"}},
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["missing_fields"],
+                    "properties": {
+                        "missing_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        }
+                    },
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["customer_id", "policy_id"],
+                    "properties": {
+                        "customer_id": {"type": "string"},
+                        "policy_id": {"type": "string"},
+                    },
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["query", "max_results"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "max_results": {"type": "number"},
+                    },
+                },
+            ]
+        }
+    return {
+        "oneOf": [
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    parameter.name for parameter in interface.parameters if parameter.required
+                ],
+                "properties": {
+                    parameter.name: _parameter_schema(parameter.value_type)
+                    for parameter in interface.parameters
+                },
+            }
+            for interface in effective_tool_proposal_scope.tool_interfaces
+        ]
+    }
+
+
+def _target_tool_name_schema(
+    effective_tool_proposal_scope: EffectiveToolProposalScope | None,
+) -> Mapping[str, Any]:
+    if effective_tool_proposal_scope is None:
+        return {"type": ["string", "null"]}
+    return {
+        "type": "string",
+        "enum": list(effective_tool_proposal_scope.tool_contract_ids),
+    }
+
+
+def _parameter_schema(value_type: str) -> Mapping[str, Any]:
+    return {
+        "type": value_type if value_type in {"string", "number", "integer", "boolean"} else "string"
+    }
+
+
+def _scope_tool_parameter_allowlist(
+    effective_tool_proposal_scope: EffectiveToolProposalScope,
+) -> Mapping[str, frozenset[str]]:
+    return {
+        interface.tool_contract_id: frozenset(parameter.name for parameter in interface.parameters)
+        for interface in effective_tool_proposal_scope.tool_interfaces
+    }
+
+
+def _tool_scope_prompt_payload(
+    effective_tool_proposal_scope: EffectiveToolProposalScope,
+) -> Mapping[str, Any]:
+    return {
+        "schema_digest": effective_tool_proposal_scope.schema_digest,
+        "tools": [
+            {
+                "tool_contract_id": interface.tool_contract_id,
+                "purpose": interface.purpose,
+                "risk_level": interface.risk_level,
+                "read_only": interface.read_only,
+                "requires_approval": interface.requires_approval,
+                "semantic_result_summary": interface.semantic_result_summary,
+                "parameters": [
+                    {
+                        "name": parameter.name,
+                        "required": parameter.required,
+                        "value_type": parameter.value_type,
+                        "value_source": parameter.value_source.value,
+                        "description": parameter.description,
+                    }
+                    for parameter in interface.parameters
+                ],
+            }
+            for interface in effective_tool_proposal_scope.tool_interfaces
+        ],
+    }
 
 
 def _canonical_string(
@@ -625,7 +726,10 @@ def _deterministic_query(question: str) -> str:
         return "inpatient claim reimbursement required documents"
     if question == "What does deductible mean in inpatient reimbursement coverage?":
         return "deductible out of pocket before reimbursement"
-    if question == "How should I understand the waiting period clause in a health insurance policy?":
+    if (
+        question
+        == "How should I understand the waiting period clause in a health insurance policy?"
+    ):
         return "waiting period policy starts benefits"
     if question == "住院医疗险里的免赔额和等待期是什么意思？":
         return "deductible waiting period policy terms reimbursement"

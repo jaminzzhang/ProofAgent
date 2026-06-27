@@ -8,6 +8,7 @@ from proof_agent.contracts import (
     AnswerEvidenceContext,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
+    EffectiveToolProposalScope,
     EvidenceChunk,
     IntentResolutionResult,
     ObservationTruthArtifact,
@@ -26,6 +27,10 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
 
 class PlannerPort(Protocol):
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal: ...
+
+
+class ToolProposalScopePort(Protocol):
+    def resolve(self, state: ControlledReActRunState) -> EffectiveToolProposalScope: ...
 
 
 class IntentResolutionPort(Protocol):
@@ -50,9 +55,7 @@ class AnswerSynthesisResult:
     reasoning_summary: Mapping[str, Any] | None = None
     model_usage_summary: Mapping[str, Any] = field(default_factory=dict)
     evidence: tuple[EvidenceChunk, ...] = field(default_factory=tuple)
-    stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = field(
-        default_factory=tuple
-    )
+    stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = field(default_factory=tuple)
 
 
 class AnswerSynthesisPort(Protocol):
@@ -120,5 +123,6 @@ class ControlledReActPorts:
     tool_observation: ToolObservationPort | None = None
     policy: PolicyPort | None = None
     review: ReviewPort | None = None
+    tool_proposal_scope: ToolProposalScopePort | None = None
     snapshot_store: SnapshotStorePort | None = None
     observation_truth_store: ObservationTruthStorePort | None = None

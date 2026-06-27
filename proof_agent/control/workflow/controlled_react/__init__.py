@@ -18,6 +18,13 @@ from proof_agent.control.workflow.controlled_react.ports import (
     ReviewPort,
     SnapshotStorePort,
     ToolObservationPort,
+    ToolProposalScopePort,
+)
+from proof_agent.control.workflow.controlled_react.tool_proposal_scope import (
+    ToolProposalScopeResolver,
+)
+from proof_agent.control.workflow.controlled_react.tool_proposal_binding import (
+    ToolProposalParameterBinder,
 )
 from proof_agent.control.workflow.controlled_react.observation_commit import (
     InMemoryObservationTruthStore,
@@ -57,6 +64,9 @@ __all__ = [
     "ReviewPort",
     "SnapshotStorePort",
     "ToolObservationPort",
+    "ToolProposalParameterBinder",
+    "ToolProposalScopePort",
+    "ToolProposalScopeResolver",
     "TransitionCommand",
     "TransitionCommandType",
     "TransitionResult",
