@@ -22,9 +22,9 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 | --- | --- |
 | `../CONTEXT-MAP.md` | Routes agents and humans to the relevant domain context. |
 | `../CONTEXT.md` | Product Core glossary terms shared by every domain. |
-| `domain/*/CONTEXT.md` | Focused domain glossaries for workflow control, configuration, knowledge, tools/models/memory, observability, evaluation, application surfaces, and reference domains. |
+| `domain/*/CONTEXT.md` | Focused domain glossaries for workflow control, configuration, tool proposal governance, knowledge, tools/models/memory, observability, evaluation, application surfaces, and reference domains. |
 | `domain/*/decisions.md` | Optional lightweight ambiguity-resolution and relationship notes for decisions too granular for an ADR but too verbose for a glossary. |
-| `../scripts/check-domain-contexts.py` | Structural checker for glossary-only context files and duplicate terms. |
+| `../scripts/check-domain-contexts.py` | Structural checker for glossary-only context files, duplicate terms, supported decision headings, and operational terms that should live in decisions. |
 
 ## Concept Contracts
 
