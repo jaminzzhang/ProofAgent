@@ -16,6 +16,15 @@ The project is not positioned as local-first or CLI-first. It keeps a determinis
 8. `development-progress.md` — current codebase status; useful, but always verify against the code.
 
 
+## Domain Language
+
+| Document | Purpose |
+| --- | --- |
+| `../CONTEXT-MAP.md` | Routes agents and humans to the relevant domain context. |
+| `../CONTEXT.md` | Product Core glossary terms shared by every domain. |
+| `domain/*/CONTEXT.md` | Focused domain glossaries for workflow control, configuration, knowledge, tools/models/memory, observability, evaluation, application surfaces, and reference domains. |
+| `domain/*/decisions.md` | Optional lightweight ambiguity-resolution and relationship notes for decisions too granular for an ADR but too verbose for a glossary. |
+| `../scripts/check-domain-contexts.py` | Structural checker for glossary-only context files and duplicate terms. |
 
 ## Concept Contracts
 

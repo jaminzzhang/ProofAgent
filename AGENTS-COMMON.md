@@ -29,7 +29,7 @@ Standard triage vocabulary (`needs-triage`, `ready-for-agent`, etc.). See `docs/
 
 ### Domain Docs
 
-Single-context layout at the repo root. Read `CONTEXT.md` for domain language and see `docs/agents/domain.md` for routing rules.
+Multi-context layout rooted at `CONTEXT-MAP.md`. Read the map first, then the smallest relevant `docs/domain/*/CONTEXT.md` file for domain language. The root `CONTEXT.md` keeps product-wide terms only. See `docs/agents/domain.md` for routing rules.
 
 ## Project Overview
 
@@ -70,14 +70,18 @@ Current known gaps and extension directions:
 
 Read these before planning or changing behavior:
 
-1. `CONTEXT.md` — canonical domain language and relationships.
-2. `docs/README.md` — documentation routing.
-3. `docs/technical-design.md` — authoritative architecture, module boundaries, contracts, provider strategy, error codes, trace events, and roadmap.
-4. `docs/developer-guide.md` — user-facing Agent owner workflow, setup, configuration, deployment, and operations.
-5. `docs/evaluation-system.md` — V1 Agent evaluation metrics, deterministic gates, judge diagnostics, suites, thresholds, curation, and artifacts.
-6. `docs/development-progress.md` — current/historical implementation snapshot; useful but may be stale, so verify against code.
-7. `docs/adr/` — architectural decision records.
-8. `docs/concepts/` — normative concept contracts for Control Envelope, Agent Contract, Policy Engine, Approval State, Trace Events, Governance Receipt, and Trust Boundaries.
+1. `CONTEXT-MAP.md` — domain-language routing map.
+2. Relevant `docs/domain/*/CONTEXT.md` files — canonical domain language for the task area.
+3. `CONTEXT.md` — product-wide terms.
+4. `docs/README.md` — documentation routing.
+5. `docs/technical-design.md` — authoritative architecture, module boundaries, contracts, provider strategy, error codes, trace events, and roadmap.
+6. `docs/developer-guide.md` — user-facing Agent owner workflow, setup, configuration, deployment, and operations.
+7. `docs/evaluation-system.md` — V1 Agent evaluation metrics, deterministic gates, judge diagnostics, suites, thresholds, curation, and artifacts.
+8. `docs/development-progress.md` — current/historical implementation snapshot; useful but may be stale, so verify against code.
+9. `docs/adr/` — architectural decision records.
+10. `docs/concepts/` — normative concept contracts for Control Envelope, Agent Contract, Policy Engine, Approval State, Trace Events, Governance Receipt, and Trust Boundaries.
+
+After editing domain documentation, run `python3 scripts/check-domain-contexts.py` and `git diff --check`.
 
 Documentation is bilingual. English docs live under `docs/`; Chinese translations live under `docs/zh/` with the same structure. **Only update English docs during development; Chinese translations are synced at release time.**
 
