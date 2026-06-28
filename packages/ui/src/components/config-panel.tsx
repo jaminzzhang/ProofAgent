@@ -72,12 +72,18 @@ export function ConfigPanel({
       {hasHeader && (
         <header
           className={cn(
-            'flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-[var(--border)] px-5 py-4',
+            'flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-[var(--border)] px-5 py-4',
             stickyHeader &&
               'sticky top-0 z-10 bg-[var(--bg-surface)]/95 backdrop-blur',
           )}
         >
-          <div className="min-w-0 flex flex-col gap-1">
+          {/*
+            Title column is flex-1 so it grows to fill but also shrinks (min-w-0)
+            to keep the actions block pinned to the right on the SAME line even
+            when the title/description is long. Without flex-1 a long description
+            can push the actions block to wrap onto a second row.
+          */}
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
             {title && (
               <Heading className="min-w-0 text-base font-semibold leading-tight tracking-tight text-[var(--text-primary)]">
                 {title}

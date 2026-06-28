@@ -214,13 +214,11 @@ export function WorkflowModuleEditor({
       <ConfigPanel
         headingLevel={3}
         title={t('workflow.template')}
-        description={descriptor?.description ?? t('workflow.descriptorFallback')}
-        footer={
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <Button variant="outline" size="sm" onClick={onSaveCore} disabled={busy}>
-              {busy ? t('agentDetail.saving') : t('workflow.saveCore')}
-            </Button>
-          </div>
+        description={t('workflow.templatePanelDescription')}
+        actions={
+          <Button variant="outline" size="sm" onClick={onSaveCore} disabled={busy}>
+            {busy ? t('agentDetail.saving') : t('workflow.saveCore')}
+          </Button>
         }
       >
         <section aria-label={t('workflow.templateSummary')}>
@@ -322,24 +320,22 @@ export function WorkflowModuleEditor({
 
       {/*
         Panel 2 — Stage Design (job: read the relationship map + edit one stage).
-        Footer holds Save Stages so it sits with the inspector editing job.
+        Save Stages lives in the title row (actions) next to the panel identity.
       */}
       <ConfigPanel
         headingLevel={3}
-        title={t('workflow.saveStages') ? 'Stage Design' : 'Stage Design'}
+        title="Stage Design"
         description="Browse the relationship map and edit a stage's bounded prompt and context."
         bodyPadding="flush"
-        footer={
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={saveStages}
-              disabled={stageBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
-            >
-              {stageBusy ? t('agentDetail.saving') : t('workflow.saveStages')}
-            </Button>
-          </div>
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={saveStages}
+            disabled={stageBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
+          >
+            {stageBusy ? t('agentDetail.saving') : t('workflow.saveStages')}
+          </Button>
         }
       >
         <div className="grid gap-0 lg:grid-cols-[300px_minmax(0,1fr)]">
