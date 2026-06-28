@@ -4,7 +4,17 @@ from pathlib import Path
 
 import yaml
 
-from proof_agent.contracts import ModelResponse, ReceiptOutcome
+from proof_agent.contracts import (
+    IntentResolution,
+    IntentResolutionResult,
+    ModelResponse,
+    ReActActionProposal,
+    ReActActionType,
+    ReasoningSummary,
+    ReceiptOutcome,
+    RetrievalQueryItem,
+    WorkflowStageLlmInteraction,
+)
 from proof_agent.bootstrap import composition
 from proof_agent.delivery.agent_package_execution import (
     AgentPackageRunRequest,
@@ -62,6 +72,110 @@ def test_execute_agent_package_run_projects_v3_answer_governance_trace(
     projected_evidence = evidence_events[-1]["payload"]["metadata"]["evidence"]
     assert projected_evidence
     assert "content" not in projected_evidence[-1]
+
+
+def test_execute_agent_package_run_emits_v3_intent_resolution_trace(
+    tmp_path: Path,
+) -> None:
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    event_types = [event["event_type"] for event in events]
+    assert "intent_resolution" in event_types
+    assert "retrieval_query_set" in event_types
+    assert event_types.index("intent_resolution") < event_types.index(
+        "workflow_stage_result"
+    )
+    receipt = result.receipt_path.read_text(encoding="utf-8")
+    assert "## Intent Resolution" in receipt
+
+
+def test_execute_agent_package_run_uses_v3_intent_retrieval_query_set(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        composition,
+        "resolve_intent_resolver",
+        lambda *_args, **_kwargs: _IntentQuerySetResolver(),
+    )
+    monkeypatch.setattr(
+        composition,
+        "resolve_react_planner",
+        lambda *_args, **_kwargs: _PlannerQueryMustNotWinPlanner(),
+    )
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    retrieval_step = next(
+        event
+        for event in events
+        if event["event_type"] == "retrieval_step"
+        and event["payload"].get("question")
+    )
+    assert retrieval_step["payload"]["question"] == "travel meals reimbursement rule"
+
+
+def test_execute_agent_package_run_captures_v3_intent_resolution_llm_interaction(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        composition,
+        "resolve_intent_resolver",
+        lambda *_args, **_kwargs: _IntentQuerySetResolver(
+            stage_llm_interactions=(
+                WorkflowStageLlmInteraction(
+                    stage_id="intent_resolution",
+                    stage_label="Intent Resolution",
+                    role="intent_resolution",
+                    provider="deterministic",
+                    model="intent-demo",
+                    request_json={"messages": [{"role": "user", "content": "intent"}]},
+                    response_json={"intent_resolution": {"resolution_id": "intent_query_set_1"}},
+                    response_content_length=42,
+                ),
+            )
+        ),
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.workflow_template_execution_result is not None
+    interaction_stage_ids = [
+        interaction.stage_id
+        for interaction in result.workflow_template_execution_result.stage_llm_interactions
+    ]
+    assert "intent_resolution" in interaction_stage_ids
+    assert "model_answer" in interaction_stage_ids
 
 
 def test_execute_agent_package_run_blocks_v3_before_answer_policy_denial(
@@ -536,3 +650,104 @@ class _RetrieveMustNotRunProvider:
     def retrieve(self, query: str, *, top_k: int) -> tuple[object, ...]:
         _ = (query, top_k)
         raise AssertionError("policy denied retrieval must not call provider.retrieve")
+
+
+class _IntentQuerySetResolver:
+    def __init__(
+        self,
+        *,
+        stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = (),
+    ) -> None:
+        self.stage_llm_interactions = stage_llm_interactions
+
+    def resolve(
+        self,
+        *,
+        question: str,
+        system_prompt: str,
+        context_summary: str,
+        workflow_stage_context: object | None = None,
+        business_flow_skill_packs: tuple[object, ...] = (),
+    ) -> IntentResolutionResult:
+        _ = (
+            question,
+            system_prompt,
+            context_summary,
+            workflow_stage_context,
+            business_flow_skill_packs,
+        )
+        return IntentResolutionResult(
+            intent_resolution=IntentResolution(
+                resolution_id="intent_query_set_1",
+                user_goal="Answer a travel meal reimbursement policy question.",
+                domain_intent="enterprise_policy_question",
+                known_facts=("The user asks about travel meal reimbursement.",),
+                missing_fields=(),
+                ambiguities=(),
+                risk_flags=(),
+                confidence=0.9,
+                recommended_next_action=ReActActionType.PLAN_RETRIEVAL,
+                retrieval_query_set=(
+                    RetrievalQueryItem(
+                        query="travel meals reimbursement rule",
+                        intent_angle="business terminology or synonyms",
+                        required=True,
+                        reason="Use the canonical reimbursement wording.",
+                    ),
+                ),
+            )
+        )
+
+
+class _PlannerQueryMustNotWinPlanner:
+    def plan(
+        self,
+        *,
+        question: str,
+        system_prompt: str,
+        context_summary: str,
+        workflow_stage_context: object | None = None,
+        eligible_actions: object | None = None,
+        effective_tool_proposal_scope: object | None = None,
+    ) -> ReActActionProposal:
+        _ = (
+            question,
+            system_prompt,
+            workflow_stage_context,
+            eligible_actions,
+            effective_tool_proposal_scope,
+        )
+        if "accepted_evidence_count=" in context_summary:
+            return _package_action(
+                action_id="act_generate_after_intent_query",
+                action_type=ReActActionType.GENERATE_FINAL_ANSWER,
+                parameters={},
+            )
+        return _package_action(
+            action_id="act_planner_query_must_not_win",
+            action_type=ReActActionType.PLAN_RETRIEVAL,
+            parameters={"query": "planner query should not run"},
+        )
+
+
+def _package_action(
+    *,
+    action_id: str,
+    action_type: ReActActionType,
+    parameters: dict[str, object],
+) -> ReActActionProposal:
+    return ReActActionProposal(
+        action_id=action_id,
+        action_type=action_type,
+        reasoning_summary=ReasoningSummary(
+            goal="answer using governed facts",
+            observations=("the action is selected for the test scenario",),
+            candidate_actions=(action_type,),
+            selected_action=action_type,
+            rationale_summary="Use the selected governed action.",
+            risk_flags=(),
+            required_evidence=("policy evidence",),
+        ),
+        parameters=parameters,
+        risk_level="low",
+    )

@@ -26,6 +26,7 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
     ReceiptOutcome,
+    RetrievalQueryItem,
     RetrievalObservationTruth,
     ReviewDecision,
     ToolObservationTruth,
@@ -129,16 +130,19 @@ class _InvocationIntentResolutionAdapter:
     def __init__(self, invocation: HarnessInvocation) -> None:
         self._invocation = invocation
         self._fallback = DeterministicIntentResolver()
+        self.stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
 
     def resolve(self, state: ControlledReActRunState) -> IntentResolutionResult:
         resolver = self._invocation.intent_resolver or self._fallback
-        return resolver.resolve(
+        result = resolver.resolve(
             question=state.question,
             system_prompt="Resolve user intent before Controlled ReAct planning.",
             context_summary="pre_loop=true",
             workflow_stage_context=None,
             business_flow_skill_packs=self._invocation.business_flow_skill_packs,
         )
+        self.stage_llm_interactions = _intent_resolver_stage_llm_interactions(resolver)
+        return result
 
 
 class _InvocationMemoryAdapter:
@@ -276,6 +280,7 @@ class _InvocationKnowledgeObservationAdapter:
                 max_rounds=retrieval.max_rounds,
                 planner_model=self._invocation.retrieval_planner_model,
                 evaluator_model=self._invocation.retrieval_evaluator_model,
+                retrieval_query_set=_retrieval_query_set_from_intent_state(state),
                 max_queries=retrieval.max_queries,
                 query_concurrency=retrieval.query_concurrency,
                 query_timeout_seconds=retrieval.query_timeout_seconds,
@@ -795,6 +800,50 @@ def _context_summary(state: ControlledReActRunState) -> str:
         f"accepted_evidence_count={accepted_count}; "
         f"observation_count={len(state.observation_records)}"
     )
+
+
+def _retrieval_query_set_from_intent_state(
+    state: ControlledReActRunState,
+) -> tuple[RetrievalQueryItem, ...]:
+    intent_resolution = state.intent_resolution
+    if not isinstance(intent_resolution, Mapping):
+        return ()
+    raw_items = intent_resolution.get("retrieval_query_set")
+    if not isinstance(raw_items, list | tuple):
+        return ()
+    items: list[RetrievalQueryItem] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, Mapping):
+            continue
+        query = _string_value(raw_item.get("query"))
+        intent_angle = _string_value(raw_item.get("intent_angle"))
+        reason = _string_value(raw_item.get("reason"))
+        if query is None or intent_angle is None or reason is None:
+            continue
+        items.append(
+            RetrievalQueryItem(
+                query=query,
+                intent_angle=intent_angle,
+                required=bool(raw_item.get("required", True)),
+                reason=reason,
+            )
+        )
+    return tuple(items)
+
+
+def _intent_resolver_stage_llm_interactions(
+    resolver: object,
+) -> tuple[WorkflowStageLlmInteraction, ...]:
+    raw_interactions = getattr(resolver, "stage_llm_interactions", ())
+    if not isinstance(raw_interactions, list | tuple):
+        return ()
+    interactions: list[WorkflowStageLlmInteraction] = []
+    for raw_interaction in raw_interactions:
+        if isinstance(raw_interaction, WorkflowStageLlmInteraction):
+            interactions.append(raw_interaction)
+        elif isinstance(raw_interaction, Mapping):
+            interactions.append(WorkflowStageLlmInteraction(**dict(raw_interaction)))
+    return tuple(interactions)
 
 
 def _citation_refs(state: ControlledReActRunState) -> tuple[str, ...]:

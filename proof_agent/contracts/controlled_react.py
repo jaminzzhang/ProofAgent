@@ -9,6 +9,7 @@ from pydantic import Field, field_validator
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.evidence import EvidenceChunk
 from proof_agent.contracts.react_workflow import ReActActionProposal, ReActActionType
+from proof_agent.contracts.workflow_execution import WorkflowStageLlmInteraction
 
 
 class ControlledReActRunPhase(str, Enum):
@@ -223,6 +224,9 @@ class ControlledReActRunState(FrozenModel):
     memory_context: Mapping[str, Any] = Field(default_factory=FrozenDict)
     memory_read_performed: bool = False
     observation_trace_projections: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
+    stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = Field(
+        default_factory=tuple
+    )
 
     @field_validator(
         "intent_resolution",

@@ -184,6 +184,49 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
     )
 
 
+def test_llm_intent_resolver_captures_intent_stage_llm_interaction() -> None:
+    provider = FakeIntentProvider(
+        """
+        {
+          "resolution_id": "intent_llm_1",
+          "user_goal": "Answer an enterprise policy question.",
+          "domain_intent": "enterprise_policy_question",
+          "known_facts": ["The user asks for policy evidence."],
+          "missing_fields": [],
+          "ambiguities": [],
+          "risk_flags": [],
+          "confidence": 0.84,
+          "recommended_next_action": "plan_retrieval",
+          "retrieval_query_set": [
+            {
+              "query": "travel meals reimbursement rule",
+              "intent_angle": "business terminology or synonyms",
+              "required": true,
+              "reason": "Use the canonical reimbursement wording."
+            }
+          ]
+        }
+        """
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+
+    resolver.resolve(
+        question="What is the reimbursement rule for travel meals?",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+    )
+
+    assert resolver.stage_llm_interactions
+    interaction = resolver.stage_llm_interactions[0]
+    assert interaction.stage_id == "intent_resolution"
+    assert interaction.role == "intent_resolution"
+    assert interaction.request_json["metadata"]["role"] == "intent_resolution"
+    assert interaction.response_json["resolution_id"] == "intent_llm_1"
+
+
 def test_llm_intent_resolver_exposes_public_query_expansion_policy() -> None:
     provider = FakeIntentProvider(
         """

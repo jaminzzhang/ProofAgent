@@ -28,6 +28,7 @@ from proof_agent.contracts import (
     ValidationResult,
     ValidationStatus,
     WorkflowStageResult,
+    WorkflowStageLlmInteraction,
     WorkflowStageStatus,
     WorkflowTemplateExecutionResult,
 )
@@ -48,6 +49,7 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
 from proof_agent.control.workflow.react_enterprise_qa import (
     compute_eligible_action_set,
     constrain_action,
+    emit_intent_resolution,
     should_block_duplicate_observation_action,
 )
 
@@ -59,6 +61,7 @@ class ControlledReActStartRequest:
     template_descriptor_version: str
     question: str
     max_plan_rounds: int = 4
+    retrieval_max_queries: int = 3
 
 
 @dataclass(frozen=True)
@@ -94,7 +97,10 @@ class ControlledReActOrchestrator:
             question=request.question,
             phase=ControlledReActRunPhase.PLANNING,
         )
-        state = self._prepare_pre_loop_state(state)
+        state = self._prepare_pre_loop_state(
+            state,
+            retrieval_max_queries=request.retrieval_max_queries,
+        )
         state, action = self._plan_next_action(
             state,
             max_plan_rounds=request.max_plan_rounds,
@@ -474,13 +480,27 @@ class ControlledReActOrchestrator:
     def _prepare_pre_loop_state(
         self,
         state: ControlledReActRunState,
+        *,
+        retrieval_max_queries: int,
     ) -> ControlledReActRunState:
         if self._ports.intent_resolution is not None:
             intent_result = self._ports.intent_resolution.resolve(state)
+            stage_llm_interactions = _stage_llm_interactions_from_port(
+                self._ports.intent_resolution
+            )
+            if self._ports.trace is not None:
+                emit_intent_resolution(
+                    self._ports.trace,
+                    intent_result.intent_resolution,
+                    max_queries=retrieval_max_queries,
+                )
             state = state.model_copy(
                 update={
                     "intent_resolution": intent_result.intent_resolution.model_dump(
                         mode="json",
+                    ),
+                    "stage_llm_interactions": (
+                        state.stage_llm_interactions + stage_llm_interactions
                     ),
                 }
             )
@@ -1408,6 +1428,19 @@ def _response_stage_result(answer: AnswerSynthesisResult) -> WorkflowStageResult
     )
 
 
+def _stage_llm_interactions_from_port(
+    port: object,
+) -> tuple[WorkflowStageLlmInteraction, ...]:
+    interactions = getattr(port, "stage_llm_interactions", ())
+    if not isinstance(interactions, list | tuple):
+        return ()
+    return tuple(
+        interaction
+        for interaction in interactions
+        if isinstance(interaction, WorkflowStageLlmInteraction)
+    )
+
+
 def _first_action_of_type(
     state: ControlledReActRunState,
     action_type: ReActActionType,
@@ -1442,5 +1475,7 @@ def _workflow_result_from_answer(
         intent_resolution=state.intent_resolution,
         reasoning_summary=answer.reasoning_summary,
         model_usage_summary=answer.model_usage_summary,
-        stage_llm_interactions=answer.stage_llm_interactions,
+        stage_llm_interactions=(
+            state.stage_llm_interactions + answer.stage_llm_interactions
+        ),
     )

@@ -161,6 +161,7 @@ def _execute_controlled_react_v3_agent_package_run(
             ),
             question=request.question,
             max_plan_rounds=manifest.react.max_plan_rounds,
+            retrieval_max_queries=manifest.retrieval.max_queries,
         )
     ).model_copy(
         update={

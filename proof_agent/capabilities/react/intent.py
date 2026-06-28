@@ -20,9 +20,11 @@ from proof_agent.contracts import (
     ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
+    ModelResponse,
     ModelRole,
     ReActActionType,
     RetrievalQueryItem,
+    WorkflowStageLlmInteraction,
 )
 from proof_agent.contracts.manifest import ModelConfig, ReActPlannerConfig
 
@@ -164,6 +166,7 @@ class LLMIntentResolver:
             raise ValueError("max_queries must be between 1 and 5")
         self.config = config
         self.max_queries = max_queries
+        self.stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
         self.model_provider = model_provider or resolve_provider(
             ModelConfig(
                 provider=config.provider,
@@ -244,6 +247,7 @@ class LLMIntentResolver:
             metadata={"role": "intent_resolution", "question": question},
         )
         response = self.model_provider.generate(request)
+        self.stage_llm_interactions = (_intent_llm_interaction(request, response),)
         try:
             return _parse_and_validate_intent_resolution_result(
                 response.content,
@@ -260,6 +264,10 @@ class LLMIntentResolver:
                 error=exc,
             )
         repair_response = self.model_provider.generate(repair_request)
+        self.stage_llm_interactions = (
+            *self.stage_llm_interactions,
+            _intent_llm_interaction(repair_request, repair_response),
+        )
         return _parse_and_validate_intent_resolution_result(
             repair_response.content,
             max_queries=self.max_queries,
@@ -628,6 +636,62 @@ def _intent_repair_prompt() -> str:
         "the supplied function schema. "
         "Do not include markdown, explanations, final answers, tool calls, or chain-of-thought."
     )
+
+
+def _intent_llm_interaction(
+    request: ModelRequest,
+    response: ModelResponse,
+) -> WorkflowStageLlmInteraction:
+    response_json, parse_error = _model_content_json(response.content)
+    return WorkflowStageLlmInteraction(
+        stage_id="intent_resolution",
+        stage_label="Intent Resolution",
+        role="intent_resolution",
+        provider=response.provider_name,
+        model=response.model_name,
+        request_json=_model_request_json(request),
+        response_json=response_json,
+        response_content_length=len(response.content),
+        response_json_parse_error_code=parse_error,
+    )
+
+
+def _model_request_json(request: ModelRequest) -> dict[str, Any]:
+    return {
+        "provider": request.provider,
+        "model": request.model,
+        "response_format": request.response_format,
+        "function_schema": (
+            request.function_schema.model_dump(mode="json")
+            if request.function_schema is not None
+            else None
+        ),
+        "stream": request.stream,
+        "temperature": request.temperature,
+        "max_output_tokens": request.max_output_tokens,
+        "timeout_seconds": request.timeout_seconds,
+        "metadata": dict(request.metadata),
+        "evidence_sources": list(request.evidence_sources),
+        "messages": [
+            {
+                "role": message.role.value,
+                "content": message.content,
+                "name": message.name,
+                "metadata": dict(message.metadata),
+            }
+            for message in request.messages
+        ],
+    }
+
+
+def _model_content_json(content: str) -> tuple[Any | None, str | None]:
+    stripped = content.strip()
+    if not stripped:
+        return None, "empty_model_output"
+    try:
+        return json.loads(stripped), None
+    except json.JSONDecodeError:
+        return None, "model_output_json_parse_failed"
 
 
 def resolve_intent_resolver(
