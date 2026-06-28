@@ -30,7 +30,13 @@ export function ValidateWorkspace({
   const [fullCapture, setFullCapture] = useState(false)
   const [retainForAudit, setRetainForAudit] = useState(false)
   const latestValidation = validationRecords[validationRecords.length - 1]
-  const history = useMemo(() => [...validationRecords].reverse(), [validationRecords])
+  // History EXCLUDES the latest record: the latest is shown prominently as the
+  // "Latest Validation Result" head of the stream, so listing it again below
+  // would be pure duplication. Older runs are the history.
+  const history = useMemo(
+    () => [...validationRecords.slice(0, -1)].reverse(),
+    [validationRecords],
+  )
   const latestErrorCount = latestValidation?.errors.length ?? 0
   const readiness = readinessSignal(latestValidation, t)
 
@@ -45,9 +51,8 @@ export function ValidateWorkspace({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="space-y-4">
-        <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
+    <div className="mx-auto max-w-6xl space-y-4">
+      <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
           <div className="border-b border-[var(--border)] pb-4">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
               {t('validate.draftReadiness')}
@@ -140,7 +145,6 @@ export function ValidateWorkspace({
             </div>
           )}
         </section>
-      </div>
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)]">
         <div className="border-b border-[var(--border)] p-5">
@@ -149,7 +153,9 @@ export function ValidateWorkspace({
           </h3>
         </div>
         {history.length === 0 ? (
-          <EmptyState message={t('validate.noRuns')} />
+          <div className="px-5 py-4 text-sm text-[var(--text-muted)]">
+            {latestValidation ? t('validate.noEarlierRuns') : t('validate.noRuns')}
+          </div>
         ) : (
           <div className="divide-y divide-[var(--border)]">
             {history.map((record) => (

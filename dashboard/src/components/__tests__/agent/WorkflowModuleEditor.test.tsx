@@ -85,7 +85,7 @@ describe('WorkflowModuleEditor', () => {
     expect(within(summary).getByText('react_enterprise_qa')).toBeInTheDocument()
     expect(within(summary).getByText('react_enterprise_qa.v1')).toBeInTheDocument()
     expect(within(summary).getByText('2 stages')).toBeInTheDocument()
-    expect(screen.getByText('Read-Only Relationship Map')).toBeInTheDocument()
+    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
     expect(screen.getByText('Stage Inspector')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Advanced YAML' })).toBeInTheDocument()
     expect(screen.queryByText(/name: insurance/)).not.toBeInTheDocument()
@@ -105,7 +105,7 @@ describe('WorkflowModuleEditor', () => {
       />,
     )
 
-    expect(screen.getByText('Read-Only Relationship Map')).toBeInTheDocument()
+    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
     expect(screen.getByText('Stage Inspector')).toBeInTheDocument()
     expect(container).not.toHaveTextContent(['Node', 'Panel'].join(' '))
     expect(container).not.toHaveTextContent(['node', 'editor'].join(' '))
@@ -126,10 +126,12 @@ describe('WorkflowModuleEditor', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Explain Template' }))
+    // The "?" affordance is a shared Tooltip (opens on focus/hover, rendered via
+    // Portal as role="tooltip"), replacing the old hand-rolled role="note".
+    fireEvent.focus(screen.getByRole('button', { name: 'Explain Template' }))
 
-    expect(screen.getByRole('note')).toHaveTextContent('Use react_enterprise_qa_v3 (Controlled ReAct Loop) for new Agents')
-    expect(screen.getByRole('note')).toHaveTextContent('enterprise_qa remains a compatibility path')
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Use react_enterprise_qa_v3 (Controlled ReAct Loop) for new Agents')
+    expect(screen.getByRole('tooltip')).toHaveTextContent('enterprise_qa remains a compatibility path')
   })
 
   it('shows a compatibility notice when the selected template is enterprise_qa', () => {
@@ -227,12 +229,13 @@ workflow:
       />,
     )
 
-    expect(screen.getByText('Read-Only Relationship Map')).toBeInTheDocument()
+    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
     expect(screen.getByText('Entry')).toBeInTheDocument()
     expect(screen.getAllByText('Terminal').length).toBeGreaterThan(0)
     expect(screen.getByText(/Response \(STOP\)/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Explain Business Context' }))
-    expect(screen.getByText(/Adds domain-specific context/)).toBeInTheDocument()
+    // Field help is rendered via the shared Tooltip primitive (opens on focus).
+    fireEvent.focus(screen.getByRole('button', { name: 'Explain Business Context' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/Adds domain-specific context/)
 
     fireEvent.change(await screen.findByLabelText('Business Context'), {
       target: { value: 'Claims context' },

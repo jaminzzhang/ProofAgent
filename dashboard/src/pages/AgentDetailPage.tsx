@@ -31,6 +31,7 @@ import type {
 import { CodeBlock } from '../components/CodeBlock'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
+import { Badge, Button, ConfigPanel } from '@proofagent/ui'
 import { AgentDetailShell } from '../components/agent/AgentDetailShell'
 import { AgentMonitor, AgentMonitorSummary } from '../components/agent/AgentMonitor'
 import { ModuleEditor } from '../components/agent/ModuleEditor'
@@ -585,76 +586,90 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'versions' && (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg p-6">
-          <div className="flex items-center justify-between border-b border-[var(--border)] pb-4">
-            <div>
-              <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-                {t('agentDetail.publishedVersions')}
-              </h3>
-              <p className="mt-1 text-xs text-[var(--text-muted)]">
-                {activeVersionId ?? t('agentDetail.noActiveVersion')}
-              </p>
-            </div>
-            <button
+        <ConfigPanel
+          headingLevel={3}
+          title={t('agentDetail.publishedVersions')}
+          description={activeVersionId ?? t('agentDetail.noActiveVersion')}
+          actions={
+            <Button
+              variant="outline"
+              size="sm"
               onClick={publishDraft}
               disabled={busy === 'publish' || !latestValidation}
-              className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
             >
               {t('agentDetail.publish')}
-            </button>
-          </div>
+            </Button>
+          }
+        >
           {versionsLoading ? (
-            <div className="py-8 flex justify-center"><LoadingSpinner size="sm" /></div>
+            <div className="flex justify-center py-8"><LoadingSpinner size="sm" /></div>
           ) : versions.length === 0 ? (
             <EmptyState message={t('agentDetail.noPublishedVersions')} />
           ) : (
-            <div className="mt-4 divide-y divide-[var(--border)]">
-              {versions.map((version) => (
-                <div key={version.version_id} className="flex items-center justify-between gap-4 py-3">
-                  <div>
-                    <div className="font-mono text-xs text-[var(--text-primary)]">{version.version_id}</div>
-                    <div className="mt-1 text-xs text-[var(--text-muted)]">
-                      {t('agentDetail.validatedBy').replace('{runId}', version.validation_run_id)}
-                    </div>
-                  </div>
-                  {version.version_id === activeVersionId ? (
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      <a
-                        href={chatUrl(`/operator/agents/${version.agent_id}/new`)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+            <div className="mt-1 divide-y divide-[var(--border)]">
+              {versions.map((version) => {
+                const isActive = version.version_id === activeVersionId
+                return (
+                  <div
+                    key={version.version_id}
+                    className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div
+                        translate="no"
+                        className="break-all font-mono text-xs text-[var(--text-primary)]"
                       >
-                        {t('agentDetail.openOperator')}
-                      </a>
-                      {isCustomerFacing && (
+                        {version.version_id}
+                      </div>
+                      <div
+                        translate="no"
+                        className="mt-1 break-all text-xs text-[var(--text-muted)]"
+                      >
+                        {t('agentDetail.validatedBy').replace(
+                          '{runId}',
+                          version.validation_run_id,
+                        )}
+                      </div>
+                    </div>
+                    {isActive ? (
+                      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                         <a
-                          href={chatUrl(`/customer/agents/${version.agent_id}`)}
+                          href={chatUrl(`/operator/agents/${version.agent_id}/new`)}
                           target="_blank"
                           rel="noreferrer"
-                          className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                          className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
                         >
-                          {t('agentDetail.openCustomer')}
+                          {t('agentDetail.openOperator')}
                         </a>
-                      )}
-                      <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
-                        {t('agentDetail.active')}
-                      </span>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => rollback(version.version_id)}
-                      disabled={busy === `rollback-${version.version_id}`}
-                      className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-                    >
-                      {t('agentDetail.rollback')}
-                    </button>
-                  )}
-                </div>
-              ))}
+                        {isCustomerFacing && (
+                          <a
+                            href={chatUrl(`/customer/agents/${version.agent_id}`)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                          >
+                            {t('agentDetail.openCustomer')}
+                          </a>
+                        )}
+                        <Badge variant="success">{t('agentDetail.active')}</Badge>
+                      </div>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => rollback(version.version_id)}
+                        disabled={busy === `rollback-${version.version_id}`}
+                        className="shrink-0"
+                      >
+                        {t('agentDetail.rollback')}
+                      </Button>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
-        </div>
+        </ConfigPanel>
       )}
 
       {activeTab === 'contract' && (
@@ -687,11 +702,15 @@ export function AgentDetailPage() {
       />
 
       {(status || actionError) && (
-        <div className={`fixed bottom-4 right-4 rounded-md border px-4 py-3 text-sm shadow-lg ${
-          actionError
-            ? 'border-[var(--danger)]/40 bg-[var(--danger)]/10 text-[var(--danger)]'
-            : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'
-        }`}>
+        <div
+          role={actionError ? 'alert' : 'status'}
+          aria-live={actionError ? 'assertive' : 'polite'}
+          className={`fixed bottom-4 right-4 max-w-sm rounded-md border px-4 py-3 text-sm shadow-lg ${
+            actionError
+              ? 'border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger-fg)]'
+              : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'
+          }`}
+        >
           {actionError ?? status}
         </div>
       )}
