@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from proof_agent.capabilities.models.normalization import (
@@ -60,6 +62,38 @@ def test_parse_model_contract_accepts_fenced_json_object() -> None:
     )
 
     assert proposal.action_id == "act_1"
+
+
+def test_parse_model_contract_accepts_json_encoded_object_fields() -> None:
+    content = json.dumps(
+        {
+            "action_id": "act_1",
+            "action_type": "plan_retrieval",
+            "reasoning_summary": json.dumps(
+                {
+                    "goal": "Find evidence before answering.",
+                    "observations": ["The user asks for an evidence-backed answer."],
+                    "candidate_actions": ["plan_retrieval"],
+                    "selected_action": "plan_retrieval",
+                    "rationale_summary": "Evidence is required before final answer generation.",
+                    "risk_flags": [],
+                    "required_evidence": ["policy evidence"],
+                }
+            ),
+            "parameters": json.dumps({"query": "travel meal reimbursement rule"}),
+            "target_tool_name": None,
+            "risk_level": "low",
+        }
+    )
+
+    proposal = parse_model_contract(
+        content=content,
+        contract_type=ReActActionProposal,
+        role="react_planner",
+    )
+
+    assert proposal.reasoning_summary.goal == "Find evidence before answering."
+    assert proposal.parameters["query"] == "travel meal reimbursement rule"
 
 
 def test_parse_model_contract_rejects_full_non_object_json() -> None:

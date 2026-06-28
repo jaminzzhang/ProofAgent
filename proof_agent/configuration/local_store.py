@@ -4555,13 +4555,18 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(_jsonable(payload), indent=2, sort_keys=True),
+        json.dumps(_jsonable(payload), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    content = json.dumps(_jsonable(payload), indent=2, sort_keys=True).encode("utf-8")
+    content = json.dumps(
+        _jsonable(payload),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ).encode("utf-8")
     _write_bytes_atomic(path, content)
 
 

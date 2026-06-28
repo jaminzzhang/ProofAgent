@@ -171,7 +171,7 @@ class LLMHarnessReviewSubagent:
                                 if decision in allowed_decisions
                             ],
                         },
-                        ensure_ascii=True,
+                        ensure_ascii=False,
                         sort_keys=True,
                     ),
                 ),

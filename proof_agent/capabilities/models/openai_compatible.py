@@ -10,12 +10,15 @@ from proof_agent.errors import ProofAgentError
 
 
 _DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
+_DEEPSEEK_STANDARD_BASE_URL = "https://api.deepseek.com"
+_DEEPSEEK_BETA_BASE_URL = "https://api.deepseek.com/beta"
+_DEEPSEEK_ENDPOINT_MODES = {"beta", "standard"}
 _PROVIDER_DEFAULTS: dict[str, dict[str, str | None]] = {
     "openai_compatible": {"api_key_env": _DEFAULT_API_KEY_ENV, "base_url": None},
     "openai": {"api_key_env": _DEFAULT_API_KEY_ENV, "base_url": None},
     "deepseek": {
         "api_key_env": "DEEPSEEK_API_KEY",
-        "base_url": "https://api.deepseek.com",
+        "base_url": _DEEPSEEK_STANDARD_BASE_URL,
     },
 }
 
@@ -62,6 +65,7 @@ class OpenAICompatibleModelProvider:
             "temperature",
             "max_output_tokens",
             "timeout_seconds",
+            "deepseek_endpoint_mode",
         }
         unsupported = sorted(set(params).difference(allowed))
         if unsupported:
@@ -83,6 +87,14 @@ class OpenAICompatibleModelProvider:
                 f"Set {api_key_env} or switch model.provider to deterministic.",
             )
         base_url = _base_url_from_params(params, provider_defaults["base_url"])
+        deepseek_endpoint_mode = _deepseek_endpoint_mode(
+            params.get("deepseek_endpoint_mode")
+        )
+        resolved_base_url = _deepseek_base_url_for_endpoint_mode(
+            provider_name=model_config.provider,
+            base_url=str(base_url) if base_url else None,
+            endpoint_mode=deepseek_endpoint_mode,
+        )
         organization = _env_value(params.get("organization_env"))
         project = _env_value(params.get("project_env"))
         timeout_seconds = (
@@ -92,7 +104,7 @@ class OpenAICompatibleModelProvider:
             provider_name=model_config.provider,
             model_name=model_config.name,
             api_key=api_key,
-            base_url=str(base_url) if base_url else None,
+            base_url=resolved_base_url,
             organization=organization,
             project=project,
             timeout_seconds=timeout_seconds,
@@ -245,6 +257,41 @@ def _supports_strict_function_schema(*, provider_name: str, base_url: str | None
 def _is_deepseek_provider(*, provider_name: str, base_url: str | None) -> bool:
     normalized_base_url = (base_url or "").rstrip("/")
     return provider_name == "deepseek" or "api.deepseek.com" in normalized_base_url
+
+
+def _deepseek_endpoint_mode(value: Any) -> str:
+    if value is None or str(value).strip() == "":
+        return "beta"
+    endpoint_mode = str(value).strip().lower()
+    if endpoint_mode not in _DEEPSEEK_ENDPOINT_MODES:
+        raise ProofAgentError(
+            "PA_MODEL_001",
+            f"unsupported deepseek_endpoint_mode: {value}",
+            "Use deepseek_endpoint_mode beta or standard.",
+        )
+    return endpoint_mode
+
+
+def _deepseek_base_url_for_endpoint_mode(
+    *,
+    provider_name: str,
+    base_url: str | None,
+    endpoint_mode: str,
+) -> str | None:
+    if not _is_deepseek_provider(provider_name=provider_name, base_url=base_url):
+        return base_url
+
+    normalized_base_url = (base_url or "").rstrip("/")
+    if normalized_base_url not in {
+        "",
+        _DEEPSEEK_STANDARD_BASE_URL,
+        _DEEPSEEK_BETA_BASE_URL,
+    }:
+        return base_url
+
+    if endpoint_mode == "standard":
+        return _DEEPSEEK_STANDARD_BASE_URL
+    return _DEEPSEEK_BETA_BASE_URL
 
 
 def _extract_choice_content(choice: Any) -> str:

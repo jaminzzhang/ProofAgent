@@ -144,7 +144,7 @@ def route_snapshot_documents(
             ),
             ModelMessage(
                 role=ModelRole.USER,
-                content=json.dumps(prompt_payload, ensure_ascii=True, sort_keys=True),
+                content=json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True),
             ),
         ),
         provider=routing_model.provider_name,

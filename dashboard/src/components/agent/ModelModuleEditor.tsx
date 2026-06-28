@@ -41,6 +41,7 @@ const MODEL_NAME_SUGGESTIONS: Record<string, string[]> = {
 const DEFAULT_TEMPERATURE = '0'
 const DEFAULT_MAX_OUTPUT_TOKENS = '800'
 const DEFAULT_TIMEOUT_SECONDS = '20'
+const DEFAULT_DEEPSEEK_ENDPOINT_MODE = 'beta'
 
 interface ModelModuleEditorProps {
   agentYaml: string
@@ -422,14 +423,24 @@ function ModelRoleCard({
   const temperaturePath = fieldPath(basePath, unified, ['params', 'temperature'])
   const maxOutputPath = fieldPath(basePath, unified, ['params', 'max_output_tokens'])
   const timeoutPath = fieldPath(basePath, unified, ['params', 'timeout_seconds'])
+  const deepseekEndpointModePath = fieldPath(basePath, unified, [
+    'params',
+    'deepseek_endpoint_mode',
+  ])
   const timeoutDefault =
     currentConnection?.timeout_seconds?.toString() ?? DEFAULT_TIMEOUT_SECONDS
+  const showDeepSeekEndpointMode = roleUsesDeepSeek(
+    customSelected,
+    effectiveProvider,
+    currentConnection,
+  )
 
   const sourceId = `model-source-${role.basePath.join('-')}`
   const providerId = `model-provider-${role.basePath.join('-')}`
   const nameId = `model-name-${role.basePath.join('-')}`
   const keyEnvId = `model-key-env-${role.basePath.join('-')}`
   const baseUrlId = `model-base-url-${role.basePath.join('-')}`
+  const deepseekEndpointModeId = `model-deepseek-endpoint-${role.basePath.join('-')}`
   const tempId = `model-temperature-${role.basePath.join('-')}`
   const maxTokensId = `model-max-tokens-${role.basePath.join('-')}`
   const timeoutId = `model-timeout-${role.basePath.join('-')}`
@@ -565,6 +576,26 @@ function ModelRoleCard({
             )}
           </>
         )}
+        {showDeepSeekEndpointMode && (
+          <SectionField
+            htmlFor={deepseekEndpointModeId}
+            label={`${labelPrefix ? `${labelPrefix} ` : ''}DeepSeek Endpoint`}
+          >
+            <NativeSelect
+              id={deepseekEndpointModeId}
+              value={deepseekEndpointModeValue(agentYaml, [
+                ...basePath,
+                'params',
+                'deepseek_endpoint_mode',
+              ])}
+              onChange={(value) => onFieldChange(deepseekEndpointModePath, value)}
+              options={[
+                { value: 'beta', label: 'Beta (/beta)' },
+                { value: 'standard', label: 'Standard' },
+              ]}
+            />
+          </SectionField>
+        )}
         <SectionField htmlFor={tempId} label={`${labelPrefix ? `${labelPrefix} ` : ''}Temperature`}>
           <Input
             id={tempId}
@@ -656,6 +687,23 @@ function usageControlValue(
   return value === '' ? fallback : value
 }
 
+function deepseekEndpointModeValue(agentYaml: string, path: string[]): string {
+  const value = readAgentYamlField(agentYaml, path)
+  return value === 'standard' ? 'standard' : DEFAULT_DEEPSEEK_ENDPOINT_MODE
+}
+
+function roleUsesDeepSeek(
+  customSelected: boolean,
+  provider: string,
+  currentConnection: SharedModelConnection | undefined,
+): boolean {
+  if (customSelected) return provider === 'deepseek'
+  return (
+    currentConnection?.provider === 'deepseek' ||
+    (currentConnection?.base_url ?? '').includes('api.deepseek.com')
+  )
+}
+
 function modelConfigForSource(
   agentYaml: string,
   role: ModelRole,
@@ -727,7 +775,12 @@ function sharedConnectionPayload(agentYaml: string, role: ModelRole) {
 
 function usageParams(agentYaml: string, basePath: string[]): AgentYamlMapping {
   const params: AgentYamlMapping = {}
-  for (const key of ['temperature', 'max_output_tokens', 'timeout_seconds']) {
+  for (const key of [
+    'temperature',
+    'max_output_tokens',
+    'timeout_seconds',
+    'deepseek_endpoint_mode',
+  ]) {
     const value = readAgentYamlField(agentYaml, [...basePath, 'params', key])
     if (value !== '') params[key] = value
   }

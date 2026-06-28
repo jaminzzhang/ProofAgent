@@ -108,4 +108,31 @@ describe('LlmInteractionReview', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/Response/)).toBeInTheDocument()
   })
+
+  it('marks parse failures recovered by a later interaction without showing a hard error', () => {
+    render(
+      <LlmInteractionReview
+        interactions={[
+          interaction({
+            stage_id: 'intent_resolution',
+            role: 'intent_resolution',
+            response_json: null,
+            response_json_parse_error_code: 'model_output_json_parse_failed',
+            response_content_length: 2532,
+          }),
+          interaction({
+            stage_id: 'intent_resolution',
+            role: 'intent_resolution',
+            response_json: { intent_resolution: { user_goal: '了解客户影响' } },
+            response_json_parse_error_code: null,
+            response_content_length: 1155,
+          }),
+        ]}
+      />,
+    )
+
+    expect(screen.queryByText(/did not contain a valid JSON object/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/Recovered after retry/i)).toBeInTheDocument()
+    expect(screen.getByText(/model_output_json_parse_failed/)).toBeInTheDocument()
+  })
 })

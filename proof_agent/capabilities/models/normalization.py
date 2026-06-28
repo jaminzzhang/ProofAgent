@@ -55,6 +55,13 @@ def parse_model_contract(
     try:
         return contract_type.model_validate(raw)
     except ValidationError as exc:
+        normalized = _decode_json_container_strings(raw)
+        if normalized != raw:
+            _assert_json_depth(normalized, role=role, raw_content_length=len(content))
+            try:
+                return contract_type.model_validate(normalized)
+            except ValidationError:
+                pass
         field_paths, violation_codes = _validation_error_diagnostics(exc)
         raise ModelOutputNormalizationError(
             role=role,
@@ -116,6 +123,28 @@ def _extract_single_json_object(content: str, *, role: str) -> dict[str, object]
         message="Model output did not contain a valid JSON object.",
         raw_content_length=len(content),
     )
+
+
+def _decode_json_container_strings(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _decode_json_container_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_json_container_strings(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not (
+            (stripped.startswith("{") and stripped.endswith("}"))
+            or (stripped.startswith("[") and stripped.endswith("]"))
+        ):
+            return value
+        try:
+            decoded = json.loads(stripped)
+        except (json.JSONDecodeError, RecursionError):
+            return value
+        if not isinstance(decoded, dict | list):
+            return value
+        return _decode_json_container_strings(decoded)
+    return value
 
 
 def _assert_json_depth(

@@ -236,7 +236,7 @@ class LLMIntentResolver:
                 ModelMessage(role=ModelRole.SYSTEM, content=_intent_control_prompt()),
                 ModelMessage(
                     role=ModelRole.USER,
-                    content=json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                    content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
                 ),
             ),
             response_format="json",
@@ -603,7 +603,7 @@ def _intent_repair_request(
             ModelMessage(role=ModelRole.SYSTEM, content=_intent_repair_prompt()),
             ModelMessage(
                 role=ModelRole.USER,
-                content=json.dumps(repair_payload, ensure_ascii=True, sort_keys=True),
+                content=json.dumps(repair_payload, ensure_ascii=False, sort_keys=True),
             ),
         ),
         response_format="json",

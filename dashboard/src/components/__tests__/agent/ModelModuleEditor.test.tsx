@@ -176,6 +176,40 @@ describe('ModelModuleEditor', () => {
     expect(onFieldChange).toHaveBeenCalledWith(['review', 'subagent', 'params', 'base_url_env'], 'OPENAI_COMPATIBLE_BASE_URL')
   })
 
+  it('applies unified DeepSeek endpoint mode to all model roles', () => {
+    const onFieldChange = vi.fn()
+
+    render(
+      <ModelModuleEditor
+        agentYaml={AGENT_YAML}
+        modelConnections={[modelConnection()]}
+        onFieldChange={onFieldChange}
+        onModelConfigChange={vi.fn()}
+        onSave={vi.fn()}
+        busy={false}
+      />,
+    )
+
+    expect(screen.getByLabelText('DeepSeek Endpoint')).toHaveValue('beta')
+
+    fireEvent.change(screen.getByLabelText('DeepSeek Endpoint'), {
+      target: { value: 'standard' },
+    })
+
+    expect(onFieldChange).toHaveBeenCalledWith(
+      ['model', 'params', 'deepseek_endpoint_mode'],
+      'standard',
+    )
+    expect(onFieldChange).toHaveBeenCalledWith(
+      ['react', 'planner', 'params', 'deepseek_endpoint_mode'],
+      'standard',
+    )
+    expect(onFieldChange).toHaveBeenCalledWith(
+      ['review', 'subagent', 'params', 'deepseek_endpoint_mode'],
+      'standard',
+    )
+  })
+
   it('applies unified shared model selection to answer planner and reviewer', () => {
     const onModelConfigChange = vi.fn()
 

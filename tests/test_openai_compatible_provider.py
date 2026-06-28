@@ -351,7 +351,7 @@ def test_openai_compatible_provider_requires_api_key_env(monkeypatch: pytest.Mon
     ("provider_name", "model_name", "api_key_env", "base_url"),
     [
         ("openai", "gpt-4.1-mini", "OPENAI_API_KEY", None),
-        ("deepseek", "deepseek-v4-flash", "DEEPSEEK_API_KEY", "https://api.deepseek.com"),
+        ("deepseek", "deepseek-v4-flash", "DEEPSEEK_API_KEY", "https://api.deepseek.com/beta"),
     ],
 )
 def test_openai_compatible_named_provider_aliases_use_provider_defaults(
@@ -468,7 +468,7 @@ def test_deepseek_provider_alias_allows_base_url_override(
     assert calls["client"]["base_url"] == "https://deepseek-proxy.example/v1"
 
 
-def test_deepseek_non_beta_function_schema_omits_strict_beta_flag(
+def test_deepseek_function_schema_defaults_standard_base_url_to_beta(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, object] = {}
@@ -515,7 +515,11 @@ def test_deepseek_non_beta_function_schema_omits_strict_beta_flag(
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
 
     provider = OpenAICompatibleModelProvider.from_config(
-        ModelConfig(provider="deepseek", name="deepseek-v4-flash")
+        ModelConfig(
+            provider="deepseek",
+            name="deepseek-v4-flash",
+            params={"base_url": "https://api.deepseek.com"},
+        )
     )
     response = provider.generate(
         ModelRequest(
@@ -539,16 +543,96 @@ def test_deepseek_non_beta_function_schema_omits_strict_beta_flag(
     )
 
     function_payload = calls["payload"]["tools"][0]["function"]
-    assert calls["client"]["base_url"] == "https://api.deepseek.com"
+    assert calls["client"]["base_url"] == "https://api.deepseek.com/beta"
     assert calls["payload"]["extra_body"] == {"thinking": {"type": "disabled"}}
     assert function_payload["name"] == "submit_react_action_proposal"
-    assert "strict" not in function_payload
+    assert function_payload["strict"] is True
     assert calls["payload"]["tool_choice"] == {
         "type": "function",
         "function": {"name": "submit_react_action_proposal"},
     }
     assert "response_format" not in calls["payload"]
     assert response.content == '{"action_type":"plan_retrieval","parameters":{"query":"q"}}'
+
+
+def test_deepseek_standard_endpoint_mode_omits_strict_beta_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            calls["client"] = kwargs
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create),
+            )
+
+        def _create(self, **payload: object) -> object:
+            calls["payload"] = payload
+            return SimpleNamespace(
+                id="chatcmpl_deepseek_tool",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    function=SimpleNamespace(
+                                        arguments='{"action_type":"plan_retrieval","parameters":{"query":"q"}}'
+                                    )
+                                )
+                            ],
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+                usage=None,
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            APIError=RuntimeError,
+            APITimeoutError=TimeoutError,
+            AuthenticationError=PermissionError,
+            OpenAI=FakeOpenAI,
+        ),
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    provider = OpenAICompatibleModelProvider.from_config(
+        ModelConfig(
+            provider="deepseek",
+            name="deepseek-v4-flash",
+            params={"deepseek_endpoint_mode": "standard"},
+        )
+    )
+    provider.generate(
+        ModelRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=(ModelMessage(role=ModelRole.USER, content="plan"),),
+            response_format="json",
+            function_schema=ModelFunctionSchema(
+                name="submit_react_action_proposal",
+                parameters_schema={
+                    "type": "object",
+                    "required": ["action_type", "parameters"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "action_type": {"type": "string"},
+                        "parameters": {"type": "object"},
+                    },
+                },
+            ),
+        )
+    )
+
+    function_payload = calls["payload"]["tools"][0]["function"]
+    assert calls["client"]["base_url"] == "https://api.deepseek.com"
+    assert calls["payload"]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "strict" not in function_payload
 
 
 def test_deepseek_beta_function_schema_keeps_strict_flag(
@@ -652,3 +736,21 @@ def test_named_provider_aliases_require_their_default_api_key_env(
 
     assert exc.value.code == "PA_MODEL_003"
     assert api_key_env in exc.value.message
+
+
+def test_deepseek_endpoint_mode_rejects_unknown_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    with pytest.raises(ProofAgentError) as exc:
+        OpenAICompatibleModelProvider.from_config(
+            ModelConfig(
+                provider="deepseek",
+                name="deepseek-v4-flash",
+                params={"deepseek_endpoint_mode": "preview"},
+            )
+        )
+
+    assert exc.value.code == "PA_MODEL_001"
+    assert "deepseek_endpoint_mode" in exc.value.message

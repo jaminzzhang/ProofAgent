@@ -945,6 +945,39 @@ def test_records_sensitive_validation_capture_artifact_with_default_ttl(
     assert "Bearer secret" not in stored_text
 
 
+def test_sensitive_validation_capture_artifact_writes_readable_unicode(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+
+    artifact = store.record_sensitive_validation_capture_artifact(
+        run_id="run_validation_unicode",
+        draft_id="draft_unicode",
+        payload={
+            "result_summary": {
+                "outcome": "ANSWERED_WITH_CITATIONS",
+                "final_output": "中文回答",
+            },
+            "llm_interactions": [
+                {
+                    "stage_id": "intent_resolution",
+                    "request_json": {"messages": [{"content": "详细介绍优缺点"}]},
+                    "response_json": {"user_goal": "了解客户影响"},
+                }
+            ],
+        },
+        actor="validator",
+    )
+
+    capture_file = tmp_path / artifact.artifact_path
+    capture_text = capture_file.read_text(encoding="utf-8")
+
+    assert "中文回答" in capture_text
+    assert "详细介绍优缺点" in capture_text
+    assert "了解客户影响" in capture_text
+    assert "\\u4e2d\\u6587" not in capture_text
+
+
 def test_publish_version_rejects_archived_resolved_shared_source_inside_store_lock(
     tmp_path: Path,
 ) -> None:

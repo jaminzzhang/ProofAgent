@@ -168,7 +168,7 @@ def _workflow_stage_context_text(
     if isinstance(structured_context, Mapping) and structured_context:
         structured_text = json.dumps(
             structured_context,
-            ensure_ascii=True,
+            ensure_ascii=False,
             sort_keys=True,
         )
     if not addendum_text and not structured_text:

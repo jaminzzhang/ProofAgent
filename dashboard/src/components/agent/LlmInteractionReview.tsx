@@ -18,48 +18,53 @@ export function LlmInteractionReview({ interactions }: LlmInteractionReviewProps
 
   return (
     <div className="grid gap-3">
-      {interactions.map((interaction, index) => (
-        <div key={`${interaction.role}-${index}`} className="grid gap-2">
-          <dl className="grid gap-2 sm:grid-cols-2">
-            <CaptureFact label="Role" value={interaction.role} />
-            <CaptureFact label="Model" value={`${interaction.provider}/${interaction.model}`} />
-          </dl>
-          <div className="grid gap-2">
-            {messagesOf(interaction).map((message, messageIndex) => (
-              <MessageCard
-                key={`${messageIndex}-${message.role}`}
-                message={message}
-              />
-            ))}
+      {interactions.map((interaction, index) => {
+        const recovered = isRecoveredInteraction(interactions, interaction, index)
+        return (
+          <div key={`${interaction.role}-${index}`} className="grid gap-2">
+            <dl className="grid gap-2 sm:grid-cols-2">
+              <CaptureFact label="Role" value={interaction.role} />
+              <CaptureFact label="Model" value={`${interaction.provider}/${interaction.model}`} />
+            </dl>
+            <div className="grid gap-2">
+              {messagesOf(interaction).map((message, messageIndex) => (
+                <MessageCard
+                  key={`${messageIndex}-${message.role}`}
+                  message={message}
+                />
+              ))}
+            </div>
+            {interaction.response_json !== null && interaction.response_json !== undefined && (
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                  Response
+                </div>
+                <CodeBlock className="mt-1 max-h-64">
+                  {stringifyValue(interaction.response_json)}
+                </CodeBlock>
+              </div>
+            )}
+            {interaction.response_json_parse_error_code && (
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                  Response
+                </div>
+                <p className={`mt-1 text-xs ${recovered ? 'text-[var(--text-muted)]' : 'text-[var(--danger-fg)]'}`}>
+                  {recovered
+                    ? 'Recovered after retry.'
+                    : responseDiagnosticCopy(interaction.response_json_parse_error_code)}
+                </p>
+                <p className="mt-1 font-mono text-[10px] text-[var(--text-muted)]">
+                  {interaction.response_json_parse_error_code}
+                  {interaction.response_content_length
+                    ? ` · ${interaction.response_content_length} chars received`
+                    : ''}
+                </p>
+              </div>
+            )}
           </div>
-          {interaction.response_json !== null && interaction.response_json !== undefined && (
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                Response
-              </div>
-              <CodeBlock className="mt-1 max-h-64">
-                {stringifyValue(interaction.response_json)}
-              </CodeBlock>
-            </div>
-          )}
-          {interaction.response_json_parse_error_code && (
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                Response
-              </div>
-              <p className="mt-1 text-xs text-[var(--danger-fg)]">
-                {responseDiagnosticCopy(interaction.response_json_parse_error_code)}
-              </p>
-              <p className="mt-1 font-mono text-[10px] text-[var(--text-muted)]">
-                {interaction.response_json_parse_error_code}
-                {interaction.response_content_length
-                  ? ` · ${interaction.response_content_length} chars received`
-                  : ''}
-              </p>
-            </div>
-          )}
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -72,6 +77,22 @@ interface RequestMessage {
 function messagesOf(interaction: WorkflowStageLlmInteractionCapture): RequestMessage[] {
   const messages = interaction.request_json?.messages
   return Array.isArray(messages) ? (messages as RequestMessage[]) : []
+}
+
+function isRecoveredInteraction(
+  interactions: WorkflowStageLlmInteractionCapture[],
+  interaction: WorkflowStageLlmInteractionCapture,
+  index: number,
+): boolean {
+  if (!interaction.response_json_parse_error_code) return false
+  return interactions.some((candidate, candidateIndex) => (
+    candidateIndex > index
+    && candidate.stage_id === interaction.stage_id
+    && candidate.role === interaction.role
+    && !candidate.response_json_parse_error_code
+    && candidate.response_json !== null
+    && candidate.response_json !== undefined
+  ))
 }
 
 function MessageCard({ message }: { message: RequestMessage }) {

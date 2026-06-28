@@ -214,7 +214,7 @@ class LLMReActPlanner:
                     role=ModelRole.USER,
                     content=json.dumps(
                         user_payload,
-                        ensure_ascii=True,
+                        ensure_ascii=False,
                         sort_keys=True,
                     ),
                 ),
