@@ -631,7 +631,7 @@ Action Constraint — deterministic rewrite of any plan proposal that falls outs
 
 Tool branch in the loop:
 - After a tool executes, control returns to `plan` (the Convergence Check then typically narrows to `{GENERATE_FINAL_ANSWER, REFUSE}` because tool data is frequently terminal).
-- Approval pause stores a `ControlledReActRunStateSnapshot` through the snapshot store port. Approval-granted resume observes the tool, returns to planning, and then synthesizes the terminal answer. The current denial path records a governed approval-denied outcome; a denied-as-observation expansion remains a loop-level extension, not a Runtime Plane responsibility.
+- Approval pause stores a `ControlledReActRunStateSnapshot` through the snapshot store port. Approval-granted resume observes the tool, returns to planning, and then synthesizes the terminal answer. Approval-denied resume records an Approval Denial Observation and replans from the remaining admitted context; if the denied tool is necessary and no governed alternate path can satisfy the request, the run terminates with `TOOL_APPROVAL_DENIED`.
 - Tool Observation Record summaries are extracted from the `summary_fields` declared on the tool contract, so the capability layer does not decide what `plan` may see.
 
 Tiered models and short-circuit:

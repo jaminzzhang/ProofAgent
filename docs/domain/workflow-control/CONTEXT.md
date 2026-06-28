@@ -616,6 +616,10 @@ _Avoid_: Refusal, approval request, model fallback answer
 The run outcome used when a Clarification Request is needed before the Agent can continue.
 _Avoid_: Refused no evidence, waiting for approval
 
+**Policy Denied Outcome**:
+The terminal governed outcome used when a Control Envelope policy decision blocks a required action and no governed alternate path can satisfy the run request.
+_Avoid_: No evidence refusal, model error, generic failure
+
 **Clarification Continuation Run**:
 A follow-up Harness run that carries user-provided clarification through Controlled Conversation Context after an earlier run requested clarification.
 _Avoid_: Checkpoint resume, same-run continuation
@@ -623,6 +627,10 @@ _Avoid_: Checkpoint resume, same-run continuation
 **Approval Checkpoint Resume**:
 The governed continuation of the original run after an external approval decision resolves a PendingApproval, resuming the stored runtime checkpoint and appending the terminal approval event to the original run trace.
 _Avoid_: Approval Continuation Run, new follow-up run, silent retry
+
+**Approval Denial Observation**:
+The governed observation recorded when an operator denies a PendingApproval and the Controlled ReAct Workflow continues planning from the remaining admitted context instead of treating the denial itself as a terminal run outcome.
+_Avoid_: Approval denial terminal, failed approval exception, silent tool skip
 
 **Pending Approval Operation Source**:
 The `PendingApproval` projection used by Approval Console actions to identify an unresolved approval request. Approval Console may display `ApprovalState`, but approve and deny actions must target `PendingApproval.approval_id`, not trace event ids or status-only approval projections.
