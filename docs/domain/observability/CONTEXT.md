@@ -16,6 +16,10 @@ _Avoid_: Chat bubbles, field-decomposed request cards, summarized prompt, render
 The Sensitive Validation Capture Artifact record of Proof Agent's governed final output after Harness normalization, including terminal outcome, final output text, output length, and safe citation or fact references when available.
 _Avoid_: Provider response body, raw model message list, raw evidence payload, raw tool payload, runtime state dict
 
+**Final Answer Validation Failed Event**:
+The trace-safe event emitted when a Final Answer Attempt produces a candidate answer that fails Harness validation before final answer admission, carrying stable validator codes, bounded violation metadata, stage identity, model role, contract name, and output length without raw model output or rejected values.
+_Avoid_: Evidence evaluation event, model output normalization event, raw provider dump, Delivery-inferred diagnostic
+
 **Validation Capture Result Summary**:
 The `validation_capture.v2` terminal result section, containing the governed outcome plus final output capture, approval pause projection, or clarification projection as applicable for the validation attempt.
 _Avoid_: Provider response body, raw runtime state, raw evidence payload, raw tool payload, stage result list

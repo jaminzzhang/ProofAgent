@@ -902,6 +902,7 @@ class ControlledReActOrchestrator:
             model_usage_summary=answer.model_usage_summary,
             evidence=answer.evidence,
             stage_llm_interactions=answer.stage_llm_interactions,
+            stage_failure_diagnostics=answer.stage_failure_diagnostics,
         )
 
     def _answer_evidence_context(
@@ -1619,4 +1620,5 @@ def _workflow_result_from_answer(
         stage_llm_interactions=(
             state.stage_llm_interactions + answer.stage_llm_interactions
         ),
+        stage_failure_diagnostics=answer.stage_failure_diagnostics,
     )

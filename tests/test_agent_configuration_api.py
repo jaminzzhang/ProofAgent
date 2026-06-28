@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 import proof_agent.configuration.local_store as local_store_module
+import proof_agent.bootstrap.composition as bootstrap_composition
 import proof_agent.delivery.configuration_api as configuration_api_module
 import proof_agent.capabilities.knowledge.http_json as http_json_module
 from proof_agent.capabilities.knowledge.ingestion import parse_quarantined_upload
@@ -28,6 +29,7 @@ from proof_agent.contracts import (
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
+    ModelResponse,
     ReceiptOutcome,
     RunResult,
 )
@@ -108,6 +110,33 @@ def _import_react_enterprise_qa_v3(client: TestClient) -> dict:
     )
     assert response.status_code == 200
     return response.json()
+
+
+class _RawEvidenceAnswerProvider:
+    provider_name = "deterministic"
+    model_name = "raw-evidence-answer"
+
+    def estimate_tokens(self, request: object) -> int | None:
+        _ = request
+        return None
+
+    def generate(self, request: object) -> ModelResponse:
+        _ = request
+        return ModelResponse(
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+            content=json.dumps(
+                {
+                    "message": (
+                        "Travel meals are reimbursed up to 50 USD per day when the "
+                        "employee provides receipts.\nQuestions about travel meal "
+                        "reimbursement must cite this policy section."
+                    ),
+                    "citations": ["customer-support-policy.md#travel-meals:L3-L7"],
+                },
+            ),
+        )
 
 
 def test_list_config_agents_empty(tmp_path: Path) -> None:
@@ -2966,6 +2995,46 @@ def test_validate_v3_draft_full_capture_records_model_answer_interaction(
     assert payload["llm_interactions"]
     assert payload["llm_interactions"][0]["stage_id"] == "model_answer"
     assert payload["llm_interactions"][0]["request_json"]["messages"]
+
+
+def test_validate_v3_draft_full_capture_records_model_answer_failure_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bootstrap_composition,
+        "resolve_provider",
+        lambda _config: _RawEvidenceAnswerProvider(),
+    )
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa_v3(client)
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={
+            "question": "What is the reimbursement rule for travel meals?",
+            "full_capture": True,
+        },
+    )
+
+    assert validation.status_code == 200
+    body = validation.json()
+    capture = client.get(body["links"]["validation_capture"])
+
+    assert capture.status_code == 200
+    payload = capture.json()["payload"]
+    diagnostic = payload["failure_diagnostics"][0]
+    assert diagnostic["stage_id"] == "model_answer"
+    assert diagnostic["event_type"] == "final_answer_validation_failed"
+    assert diagnostic["error_code"] == "final_answer_adequacy_failed"
+    assert diagnostic["role"] == "final_answer"
+    assert diagnostic["contract_name"] == "FinalAnswerOutput"
+    assert "raw_evidence_dump" in diagnostic["violation_codes"]
+    assert payload["llm_interactions"][0]["stage_id"] == "model_answer"
+    assert "Questions about travel meal reimbursement" not in json.dumps(diagnostic)
+    detail = client.get(f"/api/runs/{body['run_id']}")
+    assert detail.status_code == 200
+    assert "Questions about travel meal reimbursement" not in json.dumps(detail.json())
 
 
 def test_validate_draft_uses_per_run_history_artifact_dir(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -17,11 +16,8 @@ from proof_agent.contracts import (
     EnforcementPoint,
     IntentResolutionResult,
     ModelCallRole,
-    ModelRequest,
-    ModelResponse,
     ObservationRecord,
     PolicyDecision,
-    PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
     ReasoningSummary,
@@ -31,11 +27,13 @@ from proof_agent.contracts import (
     ReviewDecision,
     ToolObservationTruth,
     ValidationResult,
-    ValidationStatus,
     WorkflowStageLlmInteraction,
 )
 from proof_agent.control.workflow.controlled_react.orchestrator import (
     ControlledReActOrchestrator,
+)
+from proof_agent.control.workflow.controlled_react.final_answer_attempt import (
+    FinalAnswerAttemptRunner,
 )
 from proof_agent.control.workflow.controlled_react.observation_commit import (
     ObservationEffect,
@@ -53,14 +51,7 @@ from proof_agent.control.workflow.controlled_react.ports import (
 from proof_agent.control.workflow.controlled_react.tool_proposal_scope import (
     ToolProposalScopeResolver,
 )
-from proof_agent.control.workflow.harness_helpers import (
-    build_model_request,
-    cost_class,
-    emit_policy_decision,
-    model_response_payload,
-    structured_final_answer_output,
-    validate_model_output,
-)
+from proof_agent.control.workflow.harness_helpers import emit_policy_decision
 from proof_agent.control.workflow.react_enterprise_qa import review_action
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.knowledge.retrieval_service import (
@@ -662,6 +653,7 @@ class _ModelAnswerSynthesisAdapter:
     def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
         self._invocation = invocation
         self._trace = trace
+        self._runner = FinalAnswerAttemptRunner(invocation, trace=trace)
 
     def synthesize(
         self,
@@ -669,7 +661,6 @@ class _ModelAnswerSynthesisAdapter:
         action: ReActActionProposal,
         answer_context: AnswerEvidenceContext,
     ) -> AnswerSynthesisResult:
-        _ = state
         evidence = _evidence_from_answer_context(answer_context)
         if not evidence:
             tool_answer = _tool_answer_from_answer_context(answer_context)
@@ -687,108 +678,11 @@ class _ModelAnswerSynthesisAdapter:
                 message=message,
                 reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
             )
-        model_request = build_model_request(
-            question=state.question,
+        return self._runner.run(
+            state,
+            action,
+            answer_context,
             evidence=evidence,
-            provider=self._invocation.model_provider.provider_name,
-            model=self._invocation.model_provider.model_name,
-        )
-        estimated_tokens = self._invocation.model_provider.estimate_tokens(model_request)
-        policy_decision = self._invocation.policy.evaluate(
-            EnforcementPoint.BEFORE_MODEL_CALL,
-            _model_call_policy_context(model_request, estimated_tokens=estimated_tokens),
-            trace_event_id=f"{state.run_id}:{action.action_id}:before_model_call",
-        )
-        emit_policy_decision(
-            _StageScopedTrace(self._trace, stage_id="model_answer"),
-            policy_decision,
-        )
-        if policy_decision.decision is not PolicyDecisionType.ALLOW:
-            message = "The final-answer model call was blocked by policy."
-            return AnswerSynthesisResult(
-                outcome=ReceiptOutcome.POLICY_DENIED,
-                final_output=message,
-                message=message,
-                reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
-                evidence=evidence,
-                model_usage_summary={
-                    "provider": model_request.provider,
-                    "model": model_request.model,
-                    "role": ModelCallRole.FINAL_ANSWER.value,
-                    "message_count": len(model_request.messages),
-                    "estimated_tokens": estimated_tokens,
-                    "stream": model_request.stream,
-                    "cost_class": cost_class(model_request.provider),
-                },
-            )
-        _emit_model_request_trace(
-            self._trace,
-            model_request,
-            estimated_tokens=estimated_tokens,
-            stage_id="model_answer",
-        )
-        try:
-            model_response = self._invocation.model_provider.generate(model_request)
-        except Exception as exc:
-            _emit_model_error_trace(
-                self._trace,
-                provider=model_request.provider,
-                model=model_request.model,
-                exc=exc,
-                stage_id="model_answer",
-            )
-            raise
-        _emit_model_response_trace(
-            self._trace,
-            model_response,
-            stage_id="model_answer",
-        )
-        interaction = _llm_interaction_capture(
-            stage_id="model_answer",
-            stage_label="Model Answer",
-            role=ModelCallRole.FINAL_ANSWER.value,
-            request=model_request,
-            response=model_response,
-        )
-        outcome = ReceiptOutcome.ANSWERED_WITH_CITATIONS
-        validation_results = validate_model_output(
-            response=model_response,
-            outcome=outcome,
-            evidence=evidence,
-            question=state.question,
-        )
-        if any(result.status is ValidationStatus.FAILED for result in validation_results):
-            message = "I cannot answer because the model output failed validation."
-            return AnswerSynthesisResult(
-                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
-                final_output=message,
-                message=message,
-                reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
-                evidence=evidence,
-                model_usage_summary=_model_usage_summary(
-                    request=model_request,
-                    response=model_response,
-                    estimated_tokens=estimated_tokens,
-                ),
-                stage_llm_interactions=(interaction,),
-            )
-        final_answer_output, _parse_error = structured_final_answer_output(
-            model_response.content,
-            outcome=outcome,
-        )
-        message = str(final_answer_output.get("message", model_response.content))
-        return AnswerSynthesisResult(
-            outcome=outcome,
-            final_output=message,
-            message=message,
-            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
-            evidence=evidence,
-            model_usage_summary=_model_usage_summary(
-                request=model_request,
-                response=model_response,
-                estimated_tokens=estimated_tokens,
-            ),
-            stage_llm_interactions=(interaction,),
         )
 
 
@@ -1030,23 +924,6 @@ def _trace_evidence_source_refs(evidence: tuple[EvidenceChunk, ...]) -> list[str
     return sorted(ref for ref in refs if ref)
 
 
-def _model_call_policy_context(
-    request: ModelRequest,
-    *,
-    estimated_tokens: int | None,
-) -> Mapping[str, Any]:
-    return {
-        "provider": request.provider,
-        "model": request.model,
-        "role": ModelCallRole.FINAL_ANSWER.value,
-        "estimated_tokens": estimated_tokens,
-        "stream": request.stream,
-        "cost_class": cost_class(request.provider),
-        "message_count": len(request.messages),
-        "response_format": request.response_format,
-    }
-
-
 def _admit_evidence(
     chunks: tuple[EvidenceChunk, ...],
     *,
@@ -1115,166 +992,6 @@ def _tool_answer_from_answer_context(
             return f"{tool_name} returned status {status}."
         return f"{tool_name} returned an authorized result."
     return None
-
-
-def _model_usage_summary(
-    *,
-    request: ModelRequest,
-    response: ModelResponse,
-    estimated_tokens: int | None,
-) -> dict[str, Any]:
-    payload = model_response_payload(response)
-    token_usage = payload.get("token_usage")
-    return {
-        "provider": response.provider_name,
-        "model": response.model_name,
-        "role": ModelCallRole.FINAL_ANSWER.value,
-        "message_count": len(request.messages),
-        "estimated_tokens": estimated_tokens,
-        "stream": request.stream,
-        "cost_class": cost_class(request.provider),
-        "finish_reason": response.finish_reason,
-        "content_length": len(response.content),
-        "token_usage": token_usage,
-    }
-
-
-def _emit_model_request_trace(
-    trace: TracePort,
-    request: ModelRequest,
-    *,
-    estimated_tokens: int | None,
-    stage_id: str,
-) -> None:
-    trace.emit(
-        "model_request",
-        status="ok",
-        payload={
-            "provider": request.provider,
-            "model": request.model,
-            "role": ModelCallRole.FINAL_ANSWER.value,
-            "response_format": request.response_format,
-            "message_count": len(request.messages),
-            "prompt_length": sum(len(message.content) for message in request.messages),
-            "system_prompt_length": sum(
-                len(message.content)
-                for message in request.messages
-                if message.role.value == "system"
-            ),
-            "estimated_tokens": estimated_tokens,
-            "stream": request.stream,
-            "cost_class": cost_class(request.provider),
-            "stage_id": stage_id,
-        },
-    )
-
-
-def _emit_model_response_trace(
-    trace: TracePort,
-    response: ModelResponse,
-    *,
-    stage_id: str,
-) -> None:
-    payload = model_response_payload(response)
-    trace.emit(
-        "model_response",
-        status="ok",
-        payload={
-            "provider": response.provider_name,
-            "model": response.model_name,
-            "role": ModelCallRole.FINAL_ANSWER.value,
-            "finish_reason": response.finish_reason,
-            "content_length": len(response.content),
-            "refusal_reason": response.refusal_reason,
-            "token_usage": payload.get("token_usage"),
-            "stage_id": stage_id,
-        },
-    )
-
-
-def _emit_model_error_trace(
-    trace: TracePort,
-    *,
-    provider: str,
-    model: str,
-    exc: BaseException,
-    stage_id: str,
-) -> None:
-    trace.emit(
-        "model_error",
-        status="error",
-        payload={
-            "provider": provider,
-            "model": model,
-            "role": ModelCallRole.FINAL_ANSWER.value,
-            "error_code": getattr(exc, "code", "PA_MODEL_002"),
-            "error_class": exc.__class__.__name__,
-            "retryable": bool(getattr(exc, "retryable", False)),
-            "stage_id": stage_id,
-        },
-    )
-
-
-def _llm_interaction_capture(
-    *,
-    stage_id: str,
-    stage_label: str,
-    role: str,
-    request: ModelRequest,
-    response: ModelResponse,
-) -> WorkflowStageLlmInteraction:
-    response_json, parse_error = (
-        _model_content_json(response.content) if request.response_format == "json" else (None, None)
-    )
-    return WorkflowStageLlmInteraction(
-        stage_id=stage_id,
-        stage_label=stage_label,
-        role=role,
-        provider=response.provider_name,
-        model=response.model_name,
-        request_json=_model_request_json(request),
-        response_json=response_json,
-        response_content_length=len(response.content),
-        response_json_parse_error_code=parse_error,
-    )
-
-
-def _model_request_json(request: ModelRequest) -> dict[str, Any]:
-    return {
-        "provider": request.provider,
-        "model": request.model,
-        "response_format": request.response_format,
-        "function_schema": (
-            request.function_schema.model_dump(mode="json")
-            if request.function_schema is not None
-            else None
-        ),
-        "stream": request.stream,
-        "temperature": request.temperature,
-        "max_output_tokens": request.max_output_tokens,
-        "timeout_seconds": request.timeout_seconds,
-        "metadata": dict(request.metadata),
-        "evidence_sources": list(request.evidence_sources),
-        "messages": [
-            {
-                "role": message.role.value,
-                "content": message.content,
-                "name": message.name,
-                "metadata": dict(message.metadata),
-            }
-            for message in request.messages
-        ],
-    }
-
-
-def _model_content_json(content: str) -> tuple[Any | None, str | None]:
-    stripped = content.strip()
-    if not stripped:
-        return None, "empty_model_output"
-    try:
-        return json.loads(stripped), None
-    except json.JSONDecodeError:
-        return None, "model_output_json_parse_failed"
 
 
 def _evidence_payload(chunk: EvidenceChunk) -> dict[str, Any]:

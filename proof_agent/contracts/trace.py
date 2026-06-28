@@ -58,6 +58,7 @@ class TraceEventType(str, Enum):
     MODEL_RESPONSE = "model_response"
     MODEL_ERROR = "model_error"
     MODEL_OUTPUT_NORMALIZATION_FAILED = "model_output_normalization_failed"
+    FINAL_ANSWER_VALIDATION_FAILED = "final_answer_validation_failed"
     FINAL_OUTPUT = "final_output"
     FINAL_OUTPUT_DISCLOSURE = "final_output_disclosure"
     REDACTION_APPLIED = "redaction_applied"

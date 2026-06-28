@@ -27,6 +27,8 @@ from proof_agent.contracts import (
     ToolObservationTruth,
     ValidationResult,
     ValidationStatus,
+    WorkflowStageFailureDiagnostic,
+    WorkflowStageStatus,
     WorkflowTemplateExecutionResult,
 )
 from proof_agent.control.workflow.controlled_react import (
@@ -68,6 +70,30 @@ def test_start_returns_workflow_template_execution_result_for_terminal_answer() 
     assert result.template_name == "react_enterprise_qa_v3"
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert result.final_output == "Submit the claim form and itemized invoice."
+
+
+def test_answer_synthesis_diagnostics_are_returned_with_workflow_result() -> None:
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_TerminalAnswerPlanner(),
+            answer_synthesis=_DiagnosticAnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_answer_diagnostic",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="What documents are required?",
+        )
+    )
+
+    assert result.stage_failure_diagnostics
+    diagnostic = result.stage_failure_diagnostics[0]
+    assert diagnostic.stage_id == "model_answer"
+    assert diagnostic.event_type == "final_answer_validation_failed"
+    assert diagnostic.error_code == "final_answer_adequacy_failed"
 
 
 def test_default_controlled_react_orchestrator_uses_observation_effects() -> None:
@@ -1016,6 +1042,34 @@ class _AnswerSynthesis:
             final_output="Submit the claim form and itemized invoice.",
             message="Answered with governed citations.",
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+
+
+class _DiagnosticAnswerSynthesis:
+    def synthesize(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
+    ) -> AnswerSynthesisResult:
+        _ = (state, action, answer_context)
+        return AnswerSynthesisResult(
+            outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+            final_output="I cannot answer because the model output failed validation.",
+            message="I cannot answer because the model output failed validation.",
+            stage_failure_diagnostics=(
+                WorkflowStageFailureDiagnostic(
+                    stage_id="model_answer",
+                    stage_label="Model Answer",
+                    event_type="final_answer_validation_failed",
+                    status=WorkflowStageStatus.BLOCKED,
+                    error_code="final_answer_adequacy_failed",
+                    role="final_answer",
+                    contract_name="FinalAnswerOutput",
+                    violation_codes=("missing_question_terms",),
+                    violation_count=1,
+                ),
+            ),
         )
 
 

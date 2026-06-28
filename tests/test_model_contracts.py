@@ -65,3 +65,10 @@ def test_trace_event_type_includes_model_output_normalization_failure() -> None:
         TraceEventType.MODEL_OUTPUT_NORMALIZATION_FAILED.value
         == "model_output_normalization_failed"
     )
+
+
+def test_trace_event_type_includes_final_answer_validation_failure() -> None:
+    assert (
+        TraceEventType.FINAL_ANSWER_VALIDATION_FAILED.value
+        == "final_answer_validation_failed"
+    )

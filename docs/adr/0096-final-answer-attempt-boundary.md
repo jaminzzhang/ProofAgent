@@ -1,0 +1,5 @@
+# Final Answer Attempt Boundary
+
+Controlled ReAct V3 will model final-answer generation as a governed Final Answer Attempt before committing the terminal run outcome. The attempt owns model-call permission, Harness-normalized output, validation status, optional repair eligibility, admission status, sensitive LLM interaction capture, and trace-safe failure diagnostics; `ReceiptOutcome` remains the final terminal outcome after governed attempts are exhausted or admitted.
+
+We choose this over mapping every final-answer validation failure directly to `REFUSED_NO_EVIDENCE` inside the answer adapter because operators need to distinguish no evidence, schema failure, citation-binding failure, adequacy failure, policy denial, and model-call denial without reading raw provider output. We choose attempt-owned diagnostics over Delivery-layer trace reconstruction because the Control Plane produced the failure facts and Observability should consume those facts rather than infer workflow semantics from logs.

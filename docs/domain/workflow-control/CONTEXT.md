@@ -492,6 +492,10 @@ _Avoid_: Final answer from planner summary only, citation refs without evidence 
 The Orchestrator-built final-answer input that resolves required Observation Record `truth_ref` values through the Observation Truth Store and packages typed retrieval/tool truth, citation refs, source refs, and validation precheck facts for AnswerSynthesisPort. AnswerSynthesisPort consumes this resolved context and does not receive a Truth Store handle.
 _Avoid_: Answer adapter store read, summary-derived evidence, planner summary as answer evidence, store handle in model_answer
 
+**Final Answer Attempt**:
+One governed attempt to produce an admissible final answer from an Answer Evidence Context, including model-call permission, Harness-normalized output, validation status, optional repair eligibility, and admission status before a terminal run outcome is committed.
+_Avoid_: ReceiptOutcome, final output, raw model response, validation log, retry loop
+
 **Product Variant Ambiguity**:
 A product-clause ambiguity where the user names a product family or short product name that could map to multiple variants. It does not block Answer-Ready Finalization when Accepted Evidence clearly identifies one product variant; the final answer must state the cited variant scope. It becomes a blocker only when Accepted Evidence contains conflicting variants or cannot establish which variant the answer would cover.
 _Avoid_: Refusal from ambiguity alone, unstated product-scope answer, merging multiple variants without saying so

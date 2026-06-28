@@ -584,6 +584,29 @@ def test_execute_agent_package_run_rejects_v3_raw_evidence_final_answer(
     assert [stage.stage_id for stage in result.workflow_template_execution_result.stage_results][
         -3:
     ] == ["model_answer", "memory", "response"]
+    diagnostic = result.workflow_template_execution_result.stage_failure_diagnostics[0]
+    assert diagnostic.stage_id == "model_answer"
+    assert diagnostic.event_type == "final_answer_validation_failed"
+    assert diagnostic.error_code == "final_answer_adequacy_failed"
+    assert diagnostic.role == "final_answer"
+    assert "raw_evidence_dump" in diagnostic.violation_codes
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    failure = next(
+        event for event in events if event["event_type"] == "final_answer_validation_failed"
+    )
+    assert failure["status"] == "blocked"
+    assert failure["payload"]["stage_id"] == "model_answer"
+    assert failure["payload"]["role"] == "final_answer"
+    assert failure["payload"]["error_code"] == "final_answer_adequacy_failed"
+    assert failure["payload"]["contract_name"] == "FinalAnswerOutput"
+    assert "raw_evidence_dump" in failure["payload"]["violation_codes"]
+    assert diagnostic.related_event_id == failure["event_id"]
+    assert "Questions about travel meal reimbursement" not in json.dumps(
+        [event["payload"] for event in events],
+        sort_keys=True,
+    )
 
 
 def test_execute_agent_package_run_returns_v3_clarification_need(

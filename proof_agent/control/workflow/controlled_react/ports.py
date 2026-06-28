@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     ReceiptOutcome,
     ReviewDecision,
     ValidationResult,
+    WorkflowStageFailureDiagnostic,
     WorkflowStageLlmInteraction,
 )
 from proof_agent.control.workflow.controlled_react.observation_commit import (
@@ -59,6 +60,7 @@ class AnswerSynthesisResult:
     model_usage_summary: Mapping[str, Any] = field(default_factory=dict)
     evidence: tuple[EvidenceChunk, ...] = field(default_factory=tuple)
     stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = field(default_factory=tuple)
+    stage_failure_diagnostics: tuple[WorkflowStageFailureDiagnostic, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
