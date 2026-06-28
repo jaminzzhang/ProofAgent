@@ -111,6 +111,18 @@ export {
 // Content
 export { Markdown } from './components/markdown'
 
+// Configuration layout substrate (Agent Detail config tabs)
+export { ConfigPanel, type ConfigPanelProps, type ConfigPanelVariant } from './components/config-panel'
+export { SectionField, type SectionFieldProps } from './components/section-field'
+export { FieldGrid, type FieldGridProps } from './components/field-grid'
+export {
+  KeyValueList,
+  type KeyValueListProps,
+  type KeyValueItem,
+  type KeyValueValueKind,
+} from './components/key-value-list'
+export { ReferenceChips, type ReferenceChipsProps } from './components/reference-chips'
+
 // Domain-aligned shared components
 export {
   OutcomeBadge,

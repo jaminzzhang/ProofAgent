@@ -21,8 +21,14 @@
   --font-sans: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 
-  /* Map surface tokens to bg-* utilities */
-  --color-base: var(--bg-base);
+  /* Map surface tokens to bg-* utilities.
+   * NOTE: `--color-base` is intentionally NOT registered here. In Tailwind v4 a
+   * `--color-*` theme var generates a matching `text-*` utility, and `--color-base`
+   * would collide with Tailwind's built-in `text-base` font-size utility —
+   * registering it silently redefines `text-base` to also set
+   * `color: var(--bg-base)` (#fafafa), making every `text-base` heading invisible
+   * on a light surface. `bg-base` is provided via an explicit `@utility` below
+   * so the widely-used background utility keeps working without the collision. */
   --color-surface: var(--bg-surface);
   --color-elevated: var(--bg-elevated);
   --color-subtle: var(--bg-subtle);
@@ -77,6 +83,15 @@
   --shadow-sm: var(--shadow-sm);
   --shadow-md: var(--shadow-md);
   --shadow-lg: var(--shadow-lg);
+}
+
+/*
+ * Explicit surface background utility, provided directly (not via --color-base)
+ * to avoid the `text-base` font-size collision documented above. Keeps the
+ * widely-used `bg-base` utility resolving to the page-base surface token.
+ */
+@utility bg-base {
+  background-color: var(--bg-base);
 }
 
 body {

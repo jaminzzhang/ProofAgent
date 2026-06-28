@@ -1,4 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import {
+  Badge,
+  Button,
+  ConfigPanel,
+  FieldGrid,
+  KeyValueList,
+  SectionField,
+  Switch,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@proofagent/ui'
 import type {
   WorkflowStageConfig,
   WorkflowStageContextPreview,
@@ -191,90 +205,81 @@ export function WorkflowModuleEditor({
   }
 
   return (
-    <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--border)] p-5">
-        <div>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            {t('workflow.design')}
-          </h3>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
-            {descriptor?.description ?? t('workflow.descriptorFallback')}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => setShowYaml(!showYaml)}
-            className={`text-xs font-medium px-3 py-1.5 rounded-md transition-colors ${
-              showYaml
-                ? 'bg-[var(--accent)]/10 text-[var(--accent)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
-            }`}
-          >
-            {showYaml ? t('moduleEditor.hideYaml') : t('workflow.advancedYaml')}
-          </button>
-          <button
-            onClick={onSaveCore}
-            disabled={busy}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-          >
-            {busy ? t('agentDetail.saving') : t('workflow.saveCore')}
-          </button>
-          <button
-            onClick={saveStages}
-            disabled={stageBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-          >
-            {stageBusy ? t('agentDetail.saving') : t('workflow.saveStages')}
-          </button>
-        </div>
-      </div>
-
-      <section
-        aria-label={t('workflow.templateSummary')}
-        className="border-b border-[var(--border)] p-5"
+    <div className="mx-auto max-w-6xl space-y-5">
+      {/*
+        Panel 1 — Workflow Template (job: pick the template + core config).
+        Footer holds Save Core so the save action lives where the field job
+        is, not stranded at the top of a giant panel.
+      */}
+      <ConfigPanel
+        headingLevel={3}
+        title={t('workflow.template')}
+        description={descriptor?.description ?? t('workflow.descriptorFallback')}
+        footer={
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <Button variant="outline" size="sm" onClick={onSaveCore} disabled={busy}>
+              {busy ? t('agentDetail.saving') : t('workflow.saveCore')}
+            </Button>
+          </div>
+        }
       >
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        <section aria-label={t('workflow.templateSummary')}>
+          {/* Template summary — its own labeled region, kept separate from the
+              config fields below so the summary stays independently queryable.
+              Template NAME and descriptor VERSION are two distinct fields, so
+              they are labeled explicitly instead of stacked unlabeled. */}
+          <div className="mb-4">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
               {t('workflow.template')}
-            </h4>
-            <p className="mt-1 text-sm text-[var(--text-primary)]">
+            </span>
+            <p translate="no" className="mt-1 break-all font-mono text-sm font-medium text-[var(--text-primary)]">
               {workflowTemplate}
             </p>
+            {descriptor && (
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                <span className="font-medium">Descriptor version:</span>{' '}
+                <span translate="no" className="font-mono">{descriptor.descriptor_version}</span>
+              </p>
+            )}
           </div>
-          {descriptor && (
-            <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs text-[var(--text-secondary)]">
-              {descriptor.descriptor_version}
-            </span>
-          )}
-        </div>
-        <dl className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
-          <SummaryItem label="Runtime" value={workflowRuntime} />
-          <SummaryItem label={t('workflow.checkpointer')} value={checkpointerProvider} />
-          <SummaryItem label={t('workflow.stages')} value={t('workflow.stagesCount').replace('{count}', String(stageCount))} />
-          <SummaryItem label={t('workflow.modelBearing')} value={String(modelBearingStageCount)} />
-          <SummaryItem label={t('workflow.editable')} value={String(editableStageCount)} />
-        </dl>
-        {usesCompatibilityTemplate && (
-          <div className="mt-4 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-secondary)]">
-            <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              {t('workflow.compatibilityTemplate')}
+          <KeyValueList
+            variant="inline"
+            items={[
+              { label: 'Runtime', value: workflowRuntime, kind: 'text' },
+              { label: t('workflow.checkpointer'), value: checkpointerProvider, kind: 'text' },
+              {
+                label: t('workflow.stages'),
+                value: t('workflow.stagesCount').replace('{count}', String(stageCount)),
+                kind: 'number',
+              },
+              { label: t('workflow.modelBearing'), value: String(modelBearingStageCount), kind: 'number' },
+              { label: t('workflow.editable'), value: String(editableStageCount), kind: 'number' },
+            ]}
+          />
+          {usesCompatibilityTemplate && (
+            <div className="mt-4 rounded-md border border-[var(--warning-border)] bg-[var(--warning-bg)] p-3 text-sm text-[var(--warning-fg)]">
+              <div className="text-xs font-semibold uppercase tracking-wider">
+                {t('workflow.compatibilityTemplate')}
+              </div>
+              <p className="mt-1">{t('workflow.compatibilityDescription')}</p>
             </div>
-            <p className="mt-1">
-              {t('workflow.compatibilityDescription')}
-            </p>
-          </div>
-        )}
-      </section>
+          )}
 
-      {showYaml && (
-        <div className="border-b border-[var(--border)] p-5">
-          <CodeBlock>{localYaml}</CodeBlock>
-        </div>
-      )}
+          {descriptorError && (
+            <div
+              role="alert"
+              className="mt-4 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-fg)]"
+            >
+              {descriptorError}
+            </div>
+          )}
+        </section>
 
-      <div className="border-b border-[var(--border)] p-5">
-        <div className="grid gap-4 md:grid-cols-4">
+        {/* Core config fields */}
+        <h4 className="mt-6 mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          {t('workflow.design')}
+        </h4>
+        <FieldGrid cols={4} gap="md">
           {WORKFLOW_FIELDS.map((field) => {
             // The Template selector uses the dynamic catalog (or its static
             // fallback) instead of a hardcoded field.options list.
@@ -282,312 +287,363 @@ export function WorkflowModuleEditor({
               field.path.join('.') === 'workflow.template'
                 ? templateOptions
                 : field.options
+            const fieldId = `workflow-field-${field.path.join('-')}`
             return (
-            <div key={field.path.join('.')} className="block">
-              <FieldHeader
-                label={field.label}
-                help={workflowFieldHelp(field.path.join('.'))}
-              />
-              {field.input === 'select' && fieldOptions ? (
-                <select
-                  aria-label={field.label}
-                  value={readAgentYamlField(agentYaml, field.path)}
-                  onChange={(event) => updateWorkflowField(field.path, event.target.value)}
-                  className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                >
-                  {fieldOptions.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  aria-label={field.label}
-                  type={field.input}
-                  value={readAgentYamlField(agentYaml, field.path)}
-                  onChange={(event) => updateWorkflowField(field.path, event.target.value)}
-                  className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              )}
-            </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {descriptorError && (
-        <div className="border-b border-[var(--border)] p-5 text-sm text-[var(--danger)]">
-          {descriptorError}
-        </div>
-      )}
-
-      <div className="grid gap-0 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <section className="border-b border-[var(--border)] bg-[var(--bg-base)] p-4 lg:border-b-0 lg:border-r">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                Read-Only Relationship Map
-              </h4>
-              <p className="mt-1 text-xs text-[var(--text-muted)]">
-                {descriptor?.descriptor_version ?? 'Descriptor not loaded'}
-              </p>
-            </div>
-            {descriptor && (
-              <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs text-[var(--text-secondary)]">
-                {descriptor.stages.length} stages
-              </span>
-            )}
-          </div>
-
-          {!descriptor ? (
-            <p className="text-sm text-[var(--text-muted)]">No workflow descriptor available.</p>
-          ) : (
-            <div className="space-y-4">
-              {stageGroups.map((group) => (
-                <div key={group.title}>
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <h5 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                      {group.title}
-                    </h5>
-                    <span className="text-[11px] text-[var(--text-muted)]">{group.stages.length}</span>
-                  </div>
-                  <div className="space-y-1">
-                    {group.stages.map((stage, index) => (
-                      <WorkflowMapStage
-                        key={stage.id}
-                        stage={stage}
-                        selected={stage.id === selectedStageId}
-                        stageLabelById={stageLabelById}
-                        isLast={index === group.stages.length - 1}
-                        onSelect={() => setSelectedStageId(stage.id)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section aria-label="Stage Inspector" className="p-5">
-          {!selectedDescriptor || !selectedConfig ? (
-            <p className="text-sm text-[var(--text-muted)]">Select a workflow stage.</p>
-          ) : (
-            <div className="space-y-5">
-              <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                  Stage Inspector
-                </h4>
-                <p className="mt-1 text-xs text-[var(--text-muted)]">
-                  Review the selected stage before editing bounded prompt and context fields.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h4 className="text-base font-semibold text-[var(--text-primary)]">
-                    {selectedDescriptor.label}
-                  </h4>
-                  <p className="mt-1 text-sm text-[var(--text-muted)]">
-                    {selectedDescriptor.description}
-                  </p>
-                </div>
-                <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs text-[var(--text-secondary)]">
-                  {selectedDescriptor.model_bearing ? 'Model-bearing' : 'Governed'}
-                </span>
-              </div>
-
-              <dl className="grid gap-3 text-xs text-[var(--text-muted)] sm:grid-cols-3">
-                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                  <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                    Stage ID
-                  </dt>
-                  <dd className="mt-1 font-mono text-[var(--text-primary)]">
-                    {selectedDescriptor.id}
-                  </dd>
-                </div>
-                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                  <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                    Availability
-                  </dt>
-                  <dd className="mt-1 text-[var(--text-primary)]">
-                    {selectedDescriptor.required ? 'Required' : 'Optional'}
-                  </dd>
-                </div>
-                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                  <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                    Editable prompt fields
-                  </dt>
-                  <dd className="mt-2 flex flex-wrap gap-1.5 font-mono text-[var(--text-primary)]">
-                    {selectedDescriptor.editable_prompt_fields.length > 0 ? (
-                      selectedDescriptor.editable_prompt_fields.map((field) => (
-                        <span
-                          key={field}
-                          className="rounded bg-[var(--bg-hover)] px-2 py-0.5"
-                        >
-                          {field}
-                        </span>
-                      ))
-                    ) : (
-                      <span>None</span>
-                    )}
-                  </dd>
-                </div>
-              </dl>
-
-              <div className="grid gap-3 text-xs text-[var(--text-muted)] sm:grid-cols-2">
-                <div>
-                  <span className="font-semibold text-[var(--text-secondary)]">Input</span>
-                  <p className="mt-1">{selectedDescriptor.input_summary || 'Governed runtime input.'}</p>
-                </div>
-                <div>
-                  <span className="font-semibold text-[var(--text-secondary)]">Output</span>
-                  <p className="mt-1">{selectedDescriptor.output_summary || 'Governed runtime output.'}</p>
-                </div>
-              </div>
-
-              <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-xs text-[var(--text-secondary)]">
-                Harness-owned prompt is locked. Stage Prompt is appended only as Business Context Addendum.
-              </div>
-
-              <div className="block">
+              <div key={field.path.join('.')} className="flex min-w-0 flex-col">
                 <FieldHeader
-                  label="Business Context"
-                  help="Adds domain-specific context to this stage without replacing the harness-owned control prompt. Use it for policy scope, business rules, and stage-specific operating context."
+                  label={field.label}
+                  help={workflowFieldHelp(field.path.join('.'))}
+                  htmlFor={fieldId}
                 />
-                <textarea
-                  aria-label="Business Context"
-                  value={selectedConfig.prompt.business_context ?? ''}
-                  disabled={!canEditPrompt}
-                  onChange={(event) => updateSelectedStage((stage) => ({
-                    ...stage,
-                    prompt: { ...stage.prompt, business_context: event.target.value },
-                  }))}
-                  rows={4}
-                  className="w-full resize-y bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] disabled:opacity-60"
-                />
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="block">
-                  <FieldHeader
-                    label="Task Instructions"
-                    help="Adds short, line-by-line instructions for how this stage should perform its task. Each non-empty line is saved as one instruction."
-                  />
-                  <textarea
-                    aria-label="Task Instructions"
-                    value={selectedConfig.prompt.task_instructions.join('\n')}
-                    disabled={!canEditPrompt}
-                    onChange={(event) => updateSelectedStage((stage) => ({
-                      ...stage,
-                      prompt: {
-                        ...stage.prompt,
-                        task_instructions: splitLines(event.target.value),
-                      },
-                    }))}
-                    rows={5}
-                    className="w-full resize-y bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] disabled:opacity-60"
-                  />
-                </div>
-                <div className="block">
-                  <FieldHeader
-                    label="Output Preferences"
-                    help="Controls how this stage should shape its output, such as evidence style, formatting preferences, or response constraints. Each non-empty line is saved separately."
-                  />
-                  <textarea
-                    aria-label="Output Preferences"
-                    value={selectedConfig.prompt.output_preferences.join('\n')}
-                    disabled={!canEditPrompt}
-                    onChange={(event) => updateSelectedStage((stage) => ({
-                      ...stage,
-                      prompt: {
-                        ...stage.prompt,
-                        output_preferences: splitLines(event.target.value),
-                      },
-                    }))}
-                    rows={5}
-                    className="w-full resize-y bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] disabled:opacity-60"
-                  />
-                </div>
-              </div>
-
-              {selectedDescriptor.context_options.length > 0 && (
-                <div>
-                  <FieldHeader
-                    label="Context Options"
-                    help="Toggles structured runtime context that the harness can safely provide to this stage, such as Agent purpose or prior outcome state."
-                  />
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {selectedDescriptor.context_options.map((option) => (
-                      <label
-                        key={option}
-                        className="flex items-center gap-2 text-sm text-[var(--text-secondary)]"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={Boolean(selectedConfig.context[option])}
-                          disabled={!canConfigureContext}
-                          onChange={(event) => updateSelectedStage((stage) => ({
-                            ...stage,
-                            context: {
-                              ...stage.context,
-                              [option]: event.target.checked,
-                            },
-                          }))}
-                          className="h-4 w-4 rounded border-[var(--border)] bg-[var(--bg-base)]"
-                        />
-                        <span className="font-mono text-xs">{option}</span>
-                      </label>
+                {field.input === 'select' && fieldOptions ? (
+                  <NativeSelect
+                    id={fieldId}
+                    value={readAgentYamlField(agentYaml, field.path)}
+                    onChange={(event) => updateWorkflowField(field.path, event.target.value)}
+                  >
+                    {fieldOptions.map((option) => (
+                      <option key={option} value={option}>{option}</option>
                     ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  onClick={previewSelectedStage}
-                  disabled={previewBusy || !canPreviewSelected}
-                  className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-                >
-                  {previewBusy ? 'Previewing...' : 'Preview Context'}
-                </button>
-                {previewError && (
-                  <span className="text-sm text-[var(--danger)]">{previewError}</span>
+                  </NativeSelect>
+                ) : (
+                  <input
+                    id={fieldId}
+                    type={field.input}
+                    value={readAgentYamlField(agentYaml, field.path)}
+                    onChange={(event) => updateWorkflowField(field.path, event.target.value)}
+                    className="h-9 w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                  />
                 )}
               </div>
+            )
+          })}
+        </FieldGrid>
+      </ConfigPanel>
 
-              {preview && (
-                <div className="space-y-3">
-                  <div>
-                    <h5 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                      Business Context Addendum
-                    </h5>
-                    <CodeBlock>{preview.business_context_addendum.text || 'No addendum configured.'}</CodeBlock>
-                  </div>
-                  <div>
-                    <h5 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                      Structured Control Context
-                    </h5>
-                    <CodeBlock>{JSON.stringify(preview.structured_control_context, null, 2)}</CodeBlock>
-                  </div>
-                </div>
+      {/*
+        Panel 2 — Stage Design (job: read the relationship map + edit one stage).
+        Footer holds Save Stages so it sits with the inspector editing job.
+      */}
+      <ConfigPanel
+        headingLevel={3}
+        title={t('workflow.saveStages') ? 'Stage Design' : 'Stage Design'}
+        description="Browse the relationship map and edit a stage's bounded prompt and context."
+        bodyPadding="flush"
+        footer={
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={saveStages}
+              disabled={stageBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
+            >
+              {stageBusy ? t('agentDetail.saving') : t('workflow.saveStages')}
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-0 lg:grid-cols-[300px_minmax(0,1fr)]">
+          {/* Relationship map */}
+          <section
+            aria-label="Relationship Map"
+            className="bg-[var(--bg-base)] p-4 lg:border-r lg:border-[var(--border)]"
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                  Relationship Map
+                </h4>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">
+                  {descriptor?.descriptor_version ?? 'Descriptor not loaded'}
+                </p>
+              </div>
+              {descriptor && (
+                <Badge variant="subtle" className="shrink-0">
+                  {descriptor.stages.length} stages
+                </Badge>
               )}
             </div>
-          )}
-        </section>
-      </div>
-    </div>
-  )
-}
 
-function SummaryItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-      <dt className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-        {label}
-      </dt>
-      <dd className="mt-1 break-words font-mono text-xs text-[var(--text-primary)]">
-        {value}
-      </dd>
+            {!descriptor ? (
+              <p className="text-sm text-[var(--text-muted)]">No workflow descriptor available.</p>
+            ) : (
+              <div className="space-y-4">
+                {stageGroups.map((group) => (
+                  <div key={group.title}>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h5 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                        {group.title}
+                      </h5>
+                      <span className="text-[11px] tabular-nums text-[var(--text-muted)]">
+                        {group.stages.length}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      {group.stages.map((stage, index) => (
+                        <WorkflowMapStage
+                          key={stage.id}
+                          stage={stage}
+                          selected={stage.id === selectedStageId}
+                          stageLabelById={stageLabelById}
+                          isLast={index === group.stages.length - 1}
+                          onSelect={() => setSelectedStageId(stage.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Stage Inspector */}
+          <section aria-label="Stage Inspector" className="p-5">
+            {!selectedDescriptor || !selectedConfig ? (
+              <p className="text-sm text-[var(--text-muted)]">Select a workflow stage.</p>
+            ) : (
+              <div className="space-y-5">
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    Stage Inspector
+                  </h4>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Review the selected stage before editing bounded prompt and context fields.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h4 className="text-base font-semibold text-[var(--text-primary)]">
+                      {selectedDescriptor.label}
+                    </h4>
+                    <p className="mt-1 break-words text-sm text-[var(--text-muted)]">
+                      {selectedDescriptor.description}
+                    </p>
+                  </div>
+                  <Badge
+                    variant={selectedDescriptor.model_bearing ? 'subtle' : 'outline'}
+                    className="shrink-0"
+                  >
+                    {selectedDescriptor.model_bearing ? 'Model-bearing' : 'Governed'}
+                  </Badge>
+                </div>
+
+                <dl className="grid gap-3 text-xs text-[var(--text-muted)] sm:grid-cols-3">
+                  <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                    <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                      Stage ID
+                    </dt>
+                    <dd translate="no" className="mt-1 break-all font-mono text-[var(--text-primary)]">
+                      {selectedDescriptor.id}
+                    </dd>
+                  </div>
+                  <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                    <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                      Availability
+                    </dt>
+                    <dd className="mt-1 text-[var(--text-primary)]">
+                      {selectedDescriptor.required ? 'Required' : 'Optional'}
+                    </dd>
+                  </div>
+                  <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
+                    <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                      Editable prompt fields
+                    </dt>
+                    <dd className="mt-2 flex flex-wrap gap-1.5 font-mono text-[var(--text-primary)]">
+                      {selectedDescriptor.editable_prompt_fields.length > 0 ? (
+                        selectedDescriptor.editable_prompt_fields.map((field) => (
+                          <span
+                            key={field}
+                            translate="no"
+                            className="rounded bg-[var(--bg-hover)] px-2 py-0.5"
+                          >
+                            {field}
+                          </span>
+                        ))
+                      ) : (
+                        <span>None</span>
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+
+                <div className="grid gap-3 text-xs text-[var(--text-muted)] sm:grid-cols-2">
+                  <div className="min-w-0">
+                    <span className="font-semibold text-[var(--text-secondary)]">Input</span>
+                    <p className="mt-1 break-words">
+                      {selectedDescriptor.input_summary || 'Governed runtime input.'}
+                    </p>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="font-semibold text-[var(--text-secondary)]">Output</span>
+                    <p className="mt-1 break-words">
+                      {selectedDescriptor.output_summary || 'Governed runtime output.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-xs text-[var(--text-secondary)]">
+                  Harness-owned prompt is locked. Stage Prompt is appended only as Business Context Addendum.
+                </div>
+
+                {/* Bounded prompt fields — textareas (genuinely free-form) */}
+                <div className="flex min-w-0 flex-col">
+                  <FieldHeader
+                    label="Business Context"
+                    help="Adds domain-specific context to this stage without replacing the harness-owned control prompt. Use it for policy scope, business rules, and stage-specific operating context."
+                    htmlFor="stage-business-context"
+                  />
+                  <textarea
+                    id="stage-business-context"
+                    value={selectedConfig.prompt.business_context ?? ''}
+                    disabled={!canEditPrompt}
+                    onChange={(event) => updateSelectedStage((stage) => ({
+                      ...stage,
+                      prompt: { ...stage.prompt, business_context: event.target.value },
+                    }))}
+                    rows={4}
+                    className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-60"
+                  />
+                </div>
+
+                <FieldGrid cols={2} gap="md">
+                  <div className="flex min-w-0 flex-col">
+                    <FieldHeader
+                      label="Task Instructions"
+                      help="Adds short, line-by-line instructions for how this stage should perform its task. Each non-empty line is saved as one instruction."
+                      htmlFor="stage-task-instructions"
+                    />
+                    <textarea
+                      id="stage-task-instructions"
+                      value={selectedConfig.prompt.task_instructions.join('\n')}
+                      disabled={!canEditPrompt}
+                      onChange={(event) => updateSelectedStage((stage) => ({
+                        ...stage,
+                        prompt: {
+                          ...stage.prompt,
+                          task_instructions: splitLines(event.target.value),
+                        },
+                      }))}
+                      rows={5}
+                      className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-60"
+                    />
+                  </div>
+                  <div className="flex min-w-0 flex-col">
+                    <FieldHeader
+                      label="Output Preferences"
+                      help="Controls how this stage should shape its output, such as evidence style, formatting preferences, or response constraints. Each non-empty line is saved separately."
+                      htmlFor="stage-output-preferences"
+                    />
+                    <textarea
+                      id="stage-output-preferences"
+                      value={selectedConfig.prompt.output_preferences.join('\n')}
+                      disabled={!canEditPrompt}
+                      onChange={(event) => updateSelectedStage((stage) => ({
+                        ...stage,
+                        prompt: {
+                          ...stage.prompt,
+                          output_preferences: splitLines(event.target.value),
+                        },
+                      }))}
+                      rows={5}
+                      className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-60"
+                    />
+                  </div>
+                </FieldGrid>
+
+                {/* Context Options — shared Switch (was raw checkbox) */}
+                {selectedDescriptor.context_options.length > 0 && (
+                  <div>
+                    <FieldHeader
+                      label="Context Options"
+                      help="Toggles structured runtime context that the harness can safely provide to this stage, such as Agent purpose or prior outcome state."
+                    />
+                    <div className="mt-2">
+                      <FieldGrid cols={2} gap="sm">
+                        {selectedDescriptor.context_options.map((option) => (
+                          <SectionField
+                            key={option}
+                            label={<span translate="no">{option}</span>}
+                            inline
+                          >
+                            <Switch
+                              aria-label={option}
+                              checked={Boolean(selectedConfig.context[option])}
+                              disabled={!canConfigureContext}
+                              onCheckedChange={(checked) => updateSelectedStage((stage) => ({
+                                ...stage,
+                                context: { ...stage.context, [option]: checked },
+                              }))}
+                            />
+                          </SectionField>
+                        ))}
+                      </FieldGrid>
+                    </div>
+                  </div>
+                )}
+
+                {/* Preview action */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={previewSelectedStage}
+                    disabled={previewBusy || !canPreviewSelected}
+                  >
+                    {previewBusy ? 'Previewing…' : 'Preview Context'}
+                  </Button>
+                  {previewError && (
+                    <span role="alert" className="text-sm text-[var(--danger-fg)]">
+                      {previewError}
+                    </span>
+                  )}
+                </div>
+
+                {preview && (
+                  <div className="space-y-3">
+                    <div>
+                      <h5 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                        Business Context Addendum
+                      </h5>
+                      <CodeBlock>{preview.business_context_addendum.text || 'No addendum configured.'}</CodeBlock>
+                    </div>
+                    <div>
+                      <h5 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                        Structured Control Context
+                      </h5>
+                      <CodeBlock>{JSON.stringify(preview.structured_control_context, null, 2)}</CodeBlock>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+      </ConfigPanel>
+
+      {/*
+        Panel 3 — Advanced (disclosed). Raw YAML is a read-only artifact of the
+        same draft contract; no save here (Save Core / Save Stages own persistence).
+      */}
+      <ConfigPanel
+        headingLevel={3}
+        title={t('workflow.advancedYaml')}
+        description="Read-only projection of the current draft contract YAML."
+        actions={
+          <Button variant="ghost" size="sm" onClick={() => setShowYaml(!showYaml)}>
+            {showYaml ? t('moduleEditor.hideYaml') : t('workflow.advancedYaml')}
+          </Button>
+        }
+        variant="nested"
+      >
+        {showYaml ? (
+          <CodeBlock>{localYaml}</CodeBlock>
+        ) : (
+          <p className="text-sm text-[var(--text-muted)]">
+            Reveal the YAML projection with “{t('workflow.advancedYaml')}”.
+          </p>
+        )}
+      </ConfigPanel>
     </div>
   )
 }
@@ -613,68 +669,84 @@ function WorkflowMapStage({
           ? 'border-[var(--accent)] bg-[var(--accent)]'
           : 'border-[var(--border)] bg-[var(--bg-surface)]'
       }`} />
-      <button
+      <Button
         type="button"
+        variant="outline"
+        aria-pressed={selected}
         onClick={onSelect}
-        className={`w-full cursor-pointer rounded-md border px-3 py-2 text-left transition-colors ${
+        className={`h-auto w-full justify-start whitespace-normal rounded-md px-3 py-2 text-left font-normal ${
           selected
-            ? 'border-[var(--accent)] bg-[var(--accent)]/10'
-            : 'border-[var(--border)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)]'
+            ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--text-primary)]'
+            : 'bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
         }`}
       >
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{stage.label}</div>
-            <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]">{stage.id}</div>
+        <div className="w-full">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{stage.label}</div>
+              <div translate="no" className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]">{stage.id}</div>
+            </div>
+            <Badge variant={selected ? 'subtle' : 'outline'} className="shrink-0 text-[10px] uppercase">
+              {stage.model_bearing ? 'model' : 'stage'}
+            </Badge>
           </div>
-          <span className="shrink-0 rounded-full bg-[var(--bg-hover)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
-            {stage.model_bearing ? 'model' : 'stage'}
-          </span>
-        </div>
-        <div className="mt-2 truncate text-[11px] text-[var(--text-muted)]">
-          <span className="font-semibold text-[var(--text-secondary)]">Next: </span>
-          {formatSuccessors(stage, stageLabelById)}
-        </div>
-        {stage.governed_handoff_points.length > 0 && (
-          <div className="mt-1 truncate text-[11px] text-[var(--text-muted)]">
-            <span className="font-semibold text-[var(--text-secondary)]">Handoff: </span>
-            {stage.governed_handoff_points.join(', ')}
+          <div className="mt-2 truncate text-[11px] text-[var(--text-muted)]">
+            <span className="font-semibold text-[var(--text-secondary)]">Next: </span>
+            {formatSuccessors(stage, stageLabelById)}
           </div>
-        )}
-      </button>
+          {stage.governed_handoff_points.length > 0 && (
+            <div className="mt-1 truncate text-[11px] text-[var(--text-muted)]">
+              <span className="font-semibold text-[var(--text-secondary)]">Handoff: </span>
+              {stage.governed_handoff_points.join(', ')}
+            </div>
+          )}
+        </div>
+      </Button>
     </div>
   )
 }
 
-function FieldHeader({ label, help }: { label: string; help: string }) {
-  const [open, setOpen] = useState(false)
-
+/**
+ * FieldHeader — label + a "?" affordance that explains the field. The help is
+ * rendered through the shared `Tooltip` primitive (Portal-based), replacing the
+ * old hand-rolled `absolute role="note"` span that overlapped neighbouring
+ * columns in the config grid.
+ *
+ * The "?" trigger is a sibling of the label text (NOT a child of the <label>),
+ * so it does not pollute the field's accessible name. The <label> associates
+ * to its control via `htmlFor`.
+ */
+function FieldHeader({
+  label,
+  help,
+  htmlFor,
+}: {
+  label: string
+  help: string
+  htmlFor?: string
+}) {
   return (
-    <span className="relative mb-2 flex items-center gap-1.5">
-      <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+    <div className="mb-1.5 flex min-w-0 items-center gap-1.5">
+      <label htmlFor={htmlFor} className="truncate text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
         {label}
-      </span>
-      <button
-        type="button"
-        aria-label={`Explain ${label}`}
-        aria-expanded={open}
-        onClick={(event) => {
-          event.preventDefault()
-          setOpen((current) => !current)
-        }}
-        className="inline-flex h-4 w-4 cursor-pointer items-center justify-center rounded-full border border-[var(--border)] text-[10px] font-semibold text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-      >
-        ?
-      </button>
-      {open && (
-        <span
-          role="note"
-          className="absolute left-0 top-6 z-20 w-72 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3 text-xs normal-case leading-5 tracking-normal text-[var(--text-secondary)] shadow-lg"
-        >
-          {help}
-        </span>
-      )}
-    </span>
+      </label>
+      <TooltipProvider delayDuration={150}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={`Explain ${label}`}
+              className="inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border border-[var(--border)] text-[10px] font-semibold text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            >
+              ?
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs normal-case leading-5 tracking-normal text-[var(--text-secondary)]">
+            {help}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
   )
 }
 
@@ -782,6 +854,42 @@ function sanitizeStageConfigForDescriptor(
 
 function splitLines(value: string): string[] {
   return value.split('\n').map((item) => item.trim()).filter(Boolean)
+}
+
+/**
+ * NativeSelect — the shared select styling used across the refactored editors
+ * (data-URI chevron, semantic border, focus-visible ring). Wraps a native
+ * `<select>` so form value semantics stay identical.
+ */
+function NativeSelect({
+  id,
+  value,
+  onChange,
+  children,
+  ...rest
+}: {
+  id?: string
+  value: string
+  onChange: (event: React.ChangeEvent<HTMLSelectElement>) => void
+  children: ReactNode
+} & Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'value' | 'onChange' | 'id'>) {
+  return (
+    <select
+      id={id}
+      value={value}
+      onChange={onChange}
+      className="h-9 w-full appearance-none rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 pr-9 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+      style={{
+        backgroundImage:
+          "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
+        backgroundRepeat: 'no-repeat',
+        backgroundPosition: 'right 0.625rem center',
+      }}
+      {...rest}
+    >
+      {children}
+    </select>
+  )
 }
 
 function formatSuccessors(

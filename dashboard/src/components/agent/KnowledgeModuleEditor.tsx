@@ -1,9 +1,48 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Badge,
+  Button,
+  ConfigPanel,
+  FieldGrid,
+  Input,
+  KeyValueList,
+  SectionField,
+} from '@proofagent/ui'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
 import { KnowledgeSource } from '../../api/types'
 import { DEFAULT_AGENTIC_RETRIEVAL_MAX_STEPS, KNOWLEDGE_FIELDS } from './module-configs/knowledge'
 import { EmptyState } from '../EmptyState'
 import { useLocale } from '../../i18n/locale'
+
+/** Shared native select styling, used by the bind form. */
+function NativeSelect({
+  id,
+  value,
+  onChange,
+  children,
+}: {
+  id?: string
+  value: string
+  onChange: (value: string) => void
+  children: React.ReactNode
+}) {
+  return (
+    <select
+      id={id}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-9 w-full appearance-none rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 pr-9 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+      style={{
+        backgroundImage:
+          "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
+        backgroundRepeat: 'no-repeat',
+        backgroundPosition: 'right 0.625rem center',
+      }}
+    >
+      {children}
+    </select>
+  )
+}
 
 interface KnowledgeModuleEditorProps {
   agentYaml: string
@@ -98,87 +137,109 @@ export function KnowledgeModuleEditor({
   return (
     <div className="space-y-6">
       {/* SECTION 1: Active Bound Sources */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-          {t('knowledgeEditor.activeSources')}
-        </h3>
-        <p className="mt-1 text-sm text-[var(--text-muted)] mb-4">
-          {t('knowledgeEditor.activeSourcesDescription')}
-        </p>
-
+      <ConfigPanel
+        headingLevel={3}
+        title={t('knowledgeEditor.activeSources')}
+        description={t('knowledgeEditor.activeSourcesDescription')}
+      >
         {parsedBindings.length === 0 ? (
           <EmptyState message={t('knowledgeEditor.noBoundSources')} />
         ) : (
-          <div className="grid gap-4 md:grid-cols-2">
+          <FieldGrid cols={2} gap="md">
             {parsedBindings.map((binding, idx) => {
-              const sourceInfo = knowledgeSources.find(s => s.source_id === binding.source_id)
+              const sourceInfo = knowledgeSources.find(
+                (s) => s.source_id === binding.source_id,
+              )
               return (
-                <div key={`${binding.source_id}-${idx}`} className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-4 flex flex-col justify-between transition-colors hover:border-[var(--accent)]">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-semibold text-[var(--text-primary)]">
+                <div
+                  key={`${binding.source_id}-${idx}`}
+                  className="flex min-w-0 flex-col justify-between rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-4 transition-colors hover:border-[var(--accent)]"
+                >
+                  <div className="min-w-0">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate font-semibold text-[var(--text-primary)]">
                         {sourceInfo ? sourceInfo.name : t('knowledgeEditor.unknownSource')}
                       </span>
                       {binding.failure_mode === 'required' ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[var(--danger)]/10 text-[var(--danger)]">{t('knowledgeEditor.required')}</span>
+                        <Badge variant="danger" className="shrink-0 text-[10px] uppercase">
+                          {t('knowledgeEditor.required')}
+                        </Badge>
                       ) : (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[var(--accent)]/10 text-[var(--accent)]">{t('knowledgeEditor.advisory')}</span>
+                        <Badge variant="neutral" className="shrink-0 text-[10px] uppercase">
+                          {t('knowledgeEditor.advisory')}
+                        </Badge>
                       )}
                     </div>
-                    <div className="text-xs font-mono text-[var(--text-muted)] mb-3">
+                    <div
+                      translate="no"
+                      className="mb-3 break-all font-mono text-xs text-[var(--text-muted)]"
+                    >
                       {binding.source_id}
                     </div>
                   </div>
-                  
-                  <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)]">
-                    <div className="flex items-center gap-1">
-                      <span className="font-semibold text-[var(--text-muted)]">{t('knowledgeEditor.alias')}</span>
-                      <span>{binding.alias || '-'}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="font-semibold text-[var(--text-muted)]">{t('knowledgeEditor.weight')}</span>
-                      <span>{binding.fusion_weight}</span>
-                    </div>
-                    <div className="ml-auto">
-                      <button
-                        onClick={() => onUnbindSource(binding.binding_id)}
-                        disabled={busy}
-                        className="text-[var(--danger)] hover:text-[var(--danger-fg)] font-medium disabled:opacity-50 transition-colors"
-                      >
-                        {t('knowledgeEditor.remove')}
-                      </button>
-                    </div>
+
+                  <div className="flex min-w-0 items-end justify-between gap-3 border-t border-[var(--border)] pt-3">
+                    <KeyValueList
+                      variant="inline"
+                      className="min-w-0 flex-1"
+                      items={[
+                        {
+                          label: t('knowledgeEditor.alias'),
+                          value: binding.alias || '—',
+                          kind: 'text',
+                        },
+                        {
+                          label: t('knowledgeEditor.weight'),
+                          value: binding.fusion_weight,
+                          kind: 'number',
+                        },
+                      ]}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onUnbindSource(binding.binding_id)}
+                      disabled={busy}
+                      className="shrink-0 text-[var(--danger-fg)] hover:bg-[var(--danger-bg)]"
+                    >
+                      {t('knowledgeEditor.remove')}
+                    </Button>
                   </div>
                 </div>
               )
             })}
-          </div>
+          </FieldGrid>
         )}
-      </div>
+      </ConfigPanel>
 
       {/* SECTION 2: Bind New Source Form */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              {t('knowledgeEditor.bindNewSource')}
-            </h3>
-            <p className="mt-1 text-sm text-[var(--text-muted)]">
-              {t('knowledgeEditor.bindDescription')}
-            </p>
-          </div>
-          <span className="rounded-full bg-[var(--bg-hover)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
-            {t('knowledgeEditor.publishedAvailable').replace('{count}', String(publishedSources.length))}
-          </span>
-        </div>
+      <ConfigPanel
+        headingLevel={3}
+        title={t('knowledgeEditor.bindNewSource')}
+        description={t('knowledgeEditor.bindDescription')}
+        actions={
+          <Badge variant="subtle">
+            {t('knowledgeEditor.publishedAvailable').replace(
+              '{count}',
+              String(publishedSources.length),
+            )}
+          </Badge>
+        }
+      >
         {unavailableCount > 0 && (
-          <p className="mb-4 text-xs text-[var(--text-muted)]">
-            {t('knowledgeEditor.unavailableHidden').replace('{count}', String(unavailableCount))}
+          <p className="-mt-2 mb-4 text-xs text-[var(--text-muted)]">
+            {t('knowledgeEditor.unavailableHidden').replace(
+              '{count}',
+              String(unavailableCount),
+            )}
           </p>
         )}
 
         {knowledgeSourceError && (
-          <div className="mb-4 rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
+          <div
+            role="alert"
+            className="mb-4 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-fg)]"
+          >
             {knowledgeSourceError}
           </div>
         )}
@@ -186,148 +247,144 @@ export function KnowledgeModuleEditor({
         {publishedSources.length === 0 ? (
           <EmptyState message={t('knowledgeEditor.noPublished')} />
         ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                {t('knowledgeEditor.knowledgeSource')}
-              </label>
-              <select
+          <FieldGrid cols={2} gap="md">
+            <SectionField
+              htmlFor="knowledge-bind-source"
+              label={t('knowledgeEditor.knowledgeSource')}
+            >
+              <NativeSelect
+                id="knowledge-bind-source"
                 value={selectedSourceId}
-                onChange={(event) => setSelectedSourceId(event.target.value)}
-                className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                onChange={(value) => setSelectedSourceId(value)}
               >
                 {publishedSources.map((source) => (
                   <option key={source.source_id} value={source.source_id}>
                     {source.name} ({source.provider})
                   </option>
                 ))}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                {t('knowledgeEditor.aliasLabel')}
-              </label>
-              <input
+              </NativeSelect>
+            </SectionField>
+
+            <SectionField
+              htmlFor="knowledge-bind-alias"
+              label={t('knowledgeEditor.aliasLabel')}
+            >
+              <Input
+                id="knowledge-bind-alias"
                 value={bindingAlias}
-                onChange={(event) => setBindingAlias(event.target.value)}
+                onChange={(e) => setBindingAlias(e.target.value)}
                 placeholder={t('knowledgeEditor.aliasPlaceholder')}
-                className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
               />
-            </div>
+            </SectionField>
 
-            <div className="grid gap-4 grid-cols-2">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                  {t('knowledgeEditor.failureMode')}
-                </label>
-                <select
-                  value={bindingFailureMode}
-                  onChange={(event) => setBindingFailureMode(event.target.value as 'required' | 'advisory')}
-                  className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                >
-                  <option value="required">required</option>
-                  <option value="advisory">advisory</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                  {t('knowledgeEditor.fusionWeight')}
-                </label>
-                <input
-                  type="number"
-                  min="0.1"
-                  step="0.1"
-                  value={bindingFusionWeight}
-                  onChange={(event) => setBindingFusionWeight(event.target.value)}
-                  className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              </div>
-            </div>
+            <SectionField
+              htmlFor="knowledge-bind-failure-mode"
+              label={t('knowledgeEditor.failureMode')}
+              description="Required sources block the answer if unavailable; advisory sources degrade gracefully."
+            >
+              <NativeSelect
+                id="knowledge-bind-failure-mode"
+                value={bindingFailureMode}
+                onChange={(value) =>
+                  setBindingFailureMode(value as 'required' | 'advisory')
+                }
+              >
+                <option value="required">required</option>
+                <option value="advisory">advisory</option>
+              </NativeSelect>
+            </SectionField>
 
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                {t('knowledgeEditor.topKOverride')}
-              </label>
-              <input
+            <SectionField
+              htmlFor="knowledge-bind-fusion-weight"
+              label={t('knowledgeEditor.fusionWeight')}
+            >
+              <Input
+                id="knowledge-bind-fusion-weight"
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={bindingFusionWeight}
+                onChange={(e) => setBindingFusionWeight(e.target.value)}
+              />
+            </SectionField>
+
+            <SectionField
+              htmlFor="knowledge-bind-top-k"
+              label={t('knowledgeEditor.topKOverride')}
+            >
+              <Input
+                id="knowledge-bind-top-k"
                 type="number"
                 min="1"
                 value={bindingTopK}
-                onChange={(event) => setBindingTopK(event.target.value)}
+                onChange={(e) => setBindingTopK(e.target.value)}
                 placeholder={t('knowledgeEditor.topKPlaceholder')}
-                className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
               />
-            </div>
+            </SectionField>
 
-            <div className="lg:col-span-2 flex justify-end mt-2">
-              <button
+            <div className="flex items-end justify-end">
+              <Button
                 onClick={handleBind}
                 disabled={busy || publishedSources.length === 0}
-                className="rounded-md bg-[var(--accent)] px-6 py-2 text-sm font-medium text-[var(--accent-fg)] hover:opacity-80 disabled:opacity-50 transition-all"
               >
                 {busy ? t('knowledgeEditor.binding') : t('knowledgeEditor.bindSource')}
-              </button>
+              </Button>
             </div>
-          </div>
+          </FieldGrid>
         )}
-      </div>
+      </ConfigPanel>
 
       {/* SECTION 3: Global Retrieval Settings */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-          {t('knowledgeEditor.globalRetrieval')}
-        </h3>
-        <p className="mt-1 text-sm text-[var(--text-muted)] mb-4">
-          {t('knowledgeEditor.globalRetrievalDescription')}
-        </p>
-
-        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+      <ConfigPanel
+        headingLevel={3}
+        title={t('knowledgeEditor.globalRetrieval')}
+        description={t('knowledgeEditor.globalRetrievalDescription')}
+        footer={
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={onSave} disabled={busy}>
+              {busy ? t('agentDetail.saving') : t('knowledgeEditor.saveKnowledge')}
+            </Button>
+          </div>
+        }
+      >
+        <FieldGrid cols={4} gap="md">
           {KNOWLEDGE_FIELDS.map((field) => {
             const currentValue = readAgentYamlField(agentYaml, field.path)
+            const fieldId = `knowledge-field-${field.path.join('-')}`
             return (
-              <div key={field.path.join('.')}>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                  {field.label}
-                </label>
+              <SectionField
+                key={field.path.join('.')}
+                htmlFor={fieldId}
+                label={field.label}
+                description={field.description}
+              >
                 {field.input === 'select' && field.options ? (
-                  <select
+                  <NativeSelect
+                    id={fieldId}
                     value={currentValue}
-                    onChange={(e) => handleRetrievalFieldChange(field.path, e.target.value)}
-                    className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                    onChange={(value) => handleRetrievalFieldChange(field.path, value)}
                   >
                     {field.options.map((opt) => (
                       <option key={opt} value={opt}>
                         {opt}
                       </option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 ) : (
-                  <input
+                  <Input
+                    id={fieldId}
                     type={field.input === 'number' ? 'number' : 'text'}
                     value={currentValue}
-                    onChange={(e) => handleRetrievalFieldChange(field.path, e.target.value)}
-                    className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                    onChange={(e) =>
+                      handleRetrievalFieldChange(field.path, e.target.value)
+                    }
                   />
                 )}
-                {field.description && (
-                  <p className="mt-1 text-[11px] text-[var(--text-muted)]">{field.description}</p>
-                )}
-              </div>
+              </SectionField>
             )
           })}
-        </div>
-
-        <div className="mt-6 flex justify-end">
-          <button
-            onClick={onSave}
-            disabled={busy}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors"
-          >
-            {busy ? t('agentDetail.saving') : t('knowledgeEditor.saveKnowledge')}
-          </button>
-        </div>
-      </div>
+        </FieldGrid>
+      </ConfigPanel>
     </div>
   )
 }

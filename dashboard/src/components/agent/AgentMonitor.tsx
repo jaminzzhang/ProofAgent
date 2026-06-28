@@ -70,32 +70,40 @@ export function AgentMonitor({ agentId, onOpenRunDetail }: AgentMonitorProps) {
         {summary.agentRuns.length === 0 ? (
           <EmptyState message={t('agentMonitor.noRuns')} />
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full table-fixed text-sm">
+            <colgroup>
+              <col className="w-[42%]" />
+              <col className="w-[20%]" />
+              <col className="w-[16%]" />
+              <col className="w-[22%]" />
+            </colgroup>
             <thead>
               <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.question')}</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.outcome')}</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.purpose')}</th>
-                <th className="text-left px-5 py-3 text-xs tracking-wider uppercase text-[var(--text-muted)] font-semibold">{t('common.time')}</th>
+                <th className="truncate px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('common.question')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('common.outcome')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('common.purpose')}</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{t('common.time')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {summary.agentRuns.slice(0, 20).map((run) => (
                 <tr key={run.run_id} className="hover:bg-[var(--bg-hover)] transition-colors">
-                  <td className="px-5 py-3">
+                  <td className="max-w-0 px-5 py-3">
                     <RunDetailEntry
                       runId={run.run_id}
                       onOpenRunDetail={onOpenRunDetail}
-                      className="block max-w-xs truncate text-left font-medium text-[var(--text-primary)] hover:text-[var(--accent)]"
+                      className="block truncate text-left font-medium text-[var(--text-primary)] hover:text-[var(--accent)]"
                     >
                       {run.question}
                     </RunDetailEntry>
                   </td>
-                  <td className="px-5 py-3">
-                    <OutcomeBadge outcome={run.outcome} />
+                  <td className="px-5 py-3 align-middle">
+                    <span className="inline-flex"><OutcomeBadge outcome={run.outcome} /></span>
                   </td>
-                  <td className="px-5 py-3 text-xs text-[var(--text-muted)]">{run.run_purpose}</td>
-                  <td className="px-5 py-3 text-xs text-[var(--text-muted)] font-mono">
+                  <td className="max-w-0 truncate px-5 py-3 text-xs text-[var(--text-muted)]" title={run.run_purpose}>
+                    {run.run_purpose}
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-3 text-left font-mono text-xs tabular-nums text-[var(--text-muted)]">
                     {formatDateTime(run.created_at)}
                   </td>
                 </tr>
@@ -180,7 +188,7 @@ export function AgentMonitorSummary({ agentId, onOpenRunDetail }: AgentMonitorPr
                   <div className="truncate text-sm font-medium text-[var(--text-primary)]">
                     {run.question}
                   </div>
-                  <div className="mt-1 text-xs text-[var(--text-muted)]">
+                  <div className="mt-1 truncate text-xs tabular-nums text-[var(--text-muted)]" title={`${run.run_purpose} · ${formatDateTime(run.created_at)}`}>
                     {run.run_purpose} · {formatDateTime(run.created_at)}
                   </div>
                 </div>

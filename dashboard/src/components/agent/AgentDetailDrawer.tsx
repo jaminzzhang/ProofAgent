@@ -37,7 +37,7 @@ export function AgentDetailDrawer({
             {description}
           </DialogDescription>
         </header>
-        <div className={cn('min-h-0 flex-1 overflow-y-auto px-5 py-5 md:px-8', bodyClassName)}>
+        <div className={cn('min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 md:px-8', bodyClassName)}>
           {children}
         </div>
         {footer ? (

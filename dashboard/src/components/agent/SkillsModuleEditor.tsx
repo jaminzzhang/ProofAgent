@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { Badge, Button, ConfigPanel, KeyValueList, ReferenceChips, Switch } from '@proofagent/ui'
 import { CodeBlock } from '../CodeBlock'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
 import { useLocale } from '../../i18n/locale'
@@ -229,39 +230,35 @@ export function SkillsModuleEditor({
       </div>
 
       <div className="space-y-5 p-5">
-        <section className="border border-[var(--border)] bg-[var(--bg-base)] p-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="flex flex-wrap items-center gap-3">
-                <h4 className="text-sm font-semibold text-[var(--text-primary)]">
-                  {t('skills.businessFlowPacks')}
-                </h4>
-                <span className="rounded-full bg-[var(--bg-hover)] px-2.5 py-1 text-xs text-[var(--text-secondary)]">
-                  {config.packs.length}
-                </span>
-              </div>
-              <p className="mt-1 text-sm text-[var(--text-muted)]">
-                {t('skills.packsDescription')}
-              </p>
-            </div>
-            <button
-              type="button"
+        <ConfigPanel
+          variant="nested"
+          headingLevel={4}
+          title={
+            <span className="flex min-w-0 items-center gap-2">
+              {t('skills.businessFlowPacks')}
+              <Badge variant="subtle">{config.packs.length}</Badge>
+            </span>
+          }
+          description={t('skills.packsDescription')}
+          actions={
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => {
                 resetNewPackForm()
                 setDrawerMode('create')
               }}
-              className="inline-flex items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
             >
               {t('skills.newPack')}
-            </button>
-          </div>
-
+            </Button>
+          }
+        >
           {config.packs.length === 0 ? (
-            <div className="mt-5 border border-dashed border-[var(--border)] bg-[var(--bg-surface)] p-6 text-sm text-[var(--text-muted)]">
+            <div className="mt-1 border border-dashed border-[var(--border)] bg-[var(--bg-surface)] p-6 text-sm text-[var(--text-muted)]">
               {t('skills.noneConfigured')}
             </div>
           ) : (
-            <div className="mt-5 space-y-3">
+            <div className="mt-1 space-y-3">
               {config.packs.map((pack) => (
                 <SkillPackListRow
                   key={pack.id}
@@ -274,35 +271,32 @@ export function SkillsModuleEditor({
               ))}
             </div>
           )}
-        </section>
+        </ConfigPanel>
 
-        <section className="border border-[var(--border)] bg-[var(--bg-base)] p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                {t('skills.availableSlots')}
-              </h4>
-              <p className="mt-1 text-sm text-[var(--text-muted)]">
-                {t('skills.slotsDescription')}
-              </p>
-            </div>
-            <span className="rounded-full bg-[var(--bg-hover)] px-2.5 py-1 text-xs text-[var(--text-secondary)]">
-              {config.addendum_slots.length}
+        <ConfigPanel
+          variant="nested"
+          headingLevel={4}
+          title={
+            <span className="flex min-w-0 items-center gap-2">
+              {t('skills.availableSlots')}
+              <Badge variant="subtle">{config.addendum_slots.length}</Badge>
             </span>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          }
+          description={t('skills.slotsDescription')}
+        >
+          <div className="mt-1 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {config.addendum_slots.length === 0 ? (
               <p className="text-sm text-[var(--text-muted)]">{t('skills.noEmbeddableStages')}</p>
             ) : (
               config.addendum_slots.map((slot) => (
                 <div key={slot.stage_id} className="border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-3">
                   <div className="text-sm font-medium text-[var(--text-primary)]">{slot.stage_label}</div>
-                  <div className="mt-1 break-all font-mono text-xs text-[var(--text-muted)]">{slot.stage_id}</div>
+                  <div translate="no" className="mt-1 break-all font-mono text-xs text-[var(--text-muted)]">{slot.stage_id}</div>
                 </div>
               ))
             )}
           </div>
-        </section>
+        </ConfigPanel>
 
         {drawerMode === 'create' ? (
           <SkillPackDrawer
@@ -334,14 +328,14 @@ export function SkillsModuleEditor({
                   placeholder="Claims QA"
                 />
               </div>
-              <label className="mt-4 flex items-center gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)]">
-                <input
-                  type="checkbox"
+              <div className="mt-4 flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)]">
+                <span>Default for unmatched admitted intents</span>
+                <Switch
                   checked={newPackDefault}
-                  onChange={(event) => setNewPackDefault(event.target.checked)}
+                  onCheckedChange={setNewPackDefault}
+                  aria-label="Default for unmatched admitted intents"
                 />
-                Default for unmatched admitted intents
-              </label>
+              </div>
               <div className="mt-4">
                 <TextArea
                   label="Description"
@@ -476,14 +470,14 @@ export function SkillsModuleEditor({
 
                 <div className="mt-4 grid gap-4 lg:grid-cols-2">
                   <TextInput label="Label" value={draft.label} onChange={(value) => patchDraft({ label: value })} />
-                  <label className="flex items-center gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)]">
-                    <input
-                      type="checkbox"
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)]">
+                    <span>Default for unmatched admitted intents</span>
+                    <Switch
                       checked={draft.default}
-                      onChange={(event) => patchDraft({ default: event.target.checked })}
+                      onCheckedChange={(checked) => patchDraft({ default: checked })}
+                      aria-label="Default for unmatched admitted intents"
                     />
-                    Default for unmatched admitted intents
-                  </label>
+                  </div>
                 </div>
                 <div className="mt-4">
                   <TextArea
@@ -678,14 +672,25 @@ function SkillPackDrawerSection({
         aria-expanded={open}
         aria-controls={contentId}
         onClick={() => setOpen((current) => !current)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[var(--bg-hover)]"
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[var(--bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
       >
         <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
           {title}
         </span>
-        <span aria-hidden="true" className="font-mono text-xs text-[var(--text-muted)]">
-          {open ? 'Collapse' : 'Expand'}
-        </span>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`h-4 w-4 shrink-0 text-[var(--text-muted)] transition-transform ${
+            open ? 'rotate-180' : ''
+          }`}
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
       </button>
       {open ? (
         <div id={contentId} className="border-t border-[var(--border)] p-4">
@@ -714,46 +719,67 @@ function SkillPackListRow({
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_168px] xl:items-start">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h5 className="text-sm font-semibold text-[var(--text-primary)]">{pack.label}</h5>
+            <h5 className="min-w-0 text-sm font-semibold text-[var(--text-primary)]">
+              {pack.label}
+            </h5>
             {pack.default ? (
-              <span className="rounded-full bg-[var(--success)]/10 px-2 py-0.5 text-xs font-medium text-[var(--success)]">
-                Default
-              </span>
+              <Badge variant="success" className="shrink-0">Default</Badge>
             ) : null}
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-[var(--text-muted)]">
-            <span>{pack.id}</span>
-            <span>{pack.definition}</span>
+          <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-[var(--text-muted)]">
+            <span translate="no" className="break-all">{pack.id}</span>
+            <span translate="no" className="break-all">{pack.definition}</span>
           </div>
           {pack.description ? (
-            <p className="mt-2 text-sm text-[var(--text-muted)]">{pack.description}</p>
+            <p className="mt-2 min-w-0 break-words text-sm text-[var(--text-muted)]">
+              {pack.description}
+            </p>
           ) : null}
         </div>
         <div className="grid grid-cols-2 gap-2 xl:w-[168px]">
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={onEdit}
-            className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
           >
             Edit
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="destructive-outline"
+            size="sm"
             onClick={onDelete}
             disabled={busy}
-            className="w-full rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm font-medium text-[var(--danger)] hover:bg-[var(--danger)]/15 disabled:opacity-50"
           >
             Delete
-          </button>
+          </Button>
         </div>
       </div>
 
-      <dl className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <SkillPackSummaryItem label="Intent Pattern Preview" value={formatIntentPreview(pack)} />
-        <SkillPackSummaryItem label="Stage Coverage" value={formatStageCoverage(pack, slotCount)} />
-        <SkillPackSummaryItem label="Capability References" value={formatCapabilityCounts(pack)} />
-        <SkillPackSummaryItem label="Admission" value={formatAdmissionSummary(pack)} />
-      </dl>
+      <div className="mt-4">
+        <KeyValueList
+          variant="inline"
+          items={[
+            { label: 'Intent', value: formatIntentPreview(pack), kind: 'text' },
+            {
+              label: 'Stages',
+              value: formatStageCoverage(pack, slotCount),
+              kind: 'text',
+            },
+            {
+              label: 'Refs',
+              value: formatCapabilityCounts(pack),
+              kind: 'text',
+            },
+            {
+              label: 'Admission',
+              value: formatAdmissionSummary(pack),
+              kind: 'text',
+            },
+          ]}
+        />
+      </div>
     </article>
   )
 }
@@ -762,7 +788,7 @@ function SkillPackSummaryItem({ label, value }: { label: string; value: string }
   return (
     <div className="border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2">
       <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{label}</dt>
-      <dd className="mt-1 text-sm text-[var(--text-primary)]">{value}</dd>
+      <dd className="mt-1 break-words text-sm text-[var(--text-primary)]">{value}</dd>
     </div>
   )
 }
@@ -972,18 +998,15 @@ function ReferenceEditor({
   const refs = splitLines(value)
   return (
     <div>
-      <TextArea label={label} value={value} onChange={onChange} rows={3} />
-      <div className="mt-2 flex flex-wrap gap-2">
-        {refs.length === 0 ? (
-          <span className="text-xs text-[var(--text-muted)]">No references.</span>
-        ) : (
-          refs.map((ref) => (
-            <span key={ref} className="rounded-full bg-[var(--bg-hover)] px-2.5 py-1 font-mono text-xs text-[var(--text-secondary)]">
-              {ref}
-            </span>
-          ))
-        )}
-      </div>
+      <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        {label}
+      </label>
+      <ReferenceChips
+        values={refs}
+        onChange={(next) => onChange(next.join('\n'))}
+        ariaLabel={label}
+        placeholder={`Add a ${label.toLowerCase().replace(/s$/, '')} reference and press Enter`}
+      />
     </div>
   )
 }

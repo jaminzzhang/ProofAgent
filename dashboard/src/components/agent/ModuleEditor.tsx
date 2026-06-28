@@ -1,5 +1,13 @@
 import { useState } from 'react'
-import { Badge, Button, Input, Label } from '@proofagent/ui'
+import {
+  Badge,
+  Button,
+  ConfigPanel,
+  FieldGrid,
+  Input,
+  SectionField,
+  Switch,
+} from '@proofagent/ui'
 import { CodeBlock } from '../CodeBlock'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
 import { useLocale } from '../../i18n/locale'
@@ -7,7 +15,14 @@ import { useLocale } from '../../i18n/locale'
 interface FieldConfig {
   label: string
   path: string[]
-  input: 'text' | 'number' | 'select'
+  /**
+   * Control kind:
+   *  - `text` / `number`: free-form input.
+   *  - `select`: known values, native dropdown.
+   *  - `switch`: boolean (renders as a toggle, value stored as 'true'/'false').
+   *  - `combobox`: free-form input with autocomplete `options` suggestions.
+   */
+  input: 'text' | 'number' | 'select' | 'switch' | 'combobox'
   options?: string[]
   description?: string
   placeholder?: string
@@ -40,67 +55,68 @@ export function ModuleEditor({
   const sectionYaml = extractAgentYamlSection(agentYaml, yamlSection)
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]">
-      <div className="flex flex-col gap-3 border-b border-[var(--border)] p-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-            {title}
-          </h3>
-          {description && (
-            <p className="mt-1 text-sm text-[var(--text-muted)]">{description}</p>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+    <ConfigPanel
+      title={title}
+      description={description}
+      headingLevel={3}
+      actions={
+        <>
           <Button variant="ghost" size="sm" onClick={() => setShowYaml(!showYaml)}>
             {showYaml ? t('moduleEditor.hideYaml') : t('moduleEditor.showYaml')}
           </Button>
           <Button variant="outline" size="sm" onClick={onSave} disabled={busy}>
             {busy ? t('moduleEditor.saving') : t('moduleEditor.save')}
           </Button>
-        </div>
-      </div>
-
-      {showYaml && sectionYaml && (
-        <div className="border-b border-[var(--border)] p-5">
-          <CodeBlock>{sectionYaml}</CodeBlock>
-        </div>
-      )}
-
-      {/*
-        Field grid: each card is a single-column flow (label row on top, input
-        below). This replaces the old left/right two-column card which produced
-        label/value ghosting at certain widths. Label-above-input can never
-        overlap regardless of viewport width.
-      */}
-      <div className="grid gap-4 p-5 xl:grid-cols-2">
+        </>
+      }
+      footer={
+        showYaml && sectionYaml ? (
+          <div className="space-y-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              {yamlSection}.yaml
+            </h4>
+            <CodeBlock>{sectionYaml}</CodeBlock>
+          </div>
+        ) : undefined
+      }
+      bodyPadding="default"
+    >
+      {/* Label-above-input cards. min-w-0 on every cell so long values
+          truncate/wrap instead of pushing the grid. */}
+      <FieldGrid cols={2} gap="md">
         {fields.map((field) => {
           const fieldPath = field.path.join('.')
           const fieldId = `module-field-${fieldPath.replaceAll('.', '-')}`
           const value = readAgentYamlField(agentYaml, field.path)
+          const pathBadge = (
+            <Badge
+              variant="subtle"
+              translate="no"
+              className="shrink-0 font-mono text-[10px] font-normal"
+            >
+              {fieldPath}
+            </Badge>
+          )
 
           return (
-            <div
+            <SectionField
               key={fieldPath}
-              className="flex flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-base)] p-4"
+              htmlFor={fieldId}
+              label={field.label}
+              description={field.description}
+              badge={field.input === 'switch' ? undefined : pathBadge}
+              inline={field.input === 'switch'}
             >
-              {/* Label row: name on the left, mono path badge on the right */}
-              <div className="flex items-start justify-between gap-3">
-                <Label htmlFor={fieldId} className="text-sm text-[var(--text-primary)]">
-                  {field.label}
-                </Label>
-                <Badge variant="subtle" className="shrink-0 font-mono text-[10px] font-normal">
-                  {fieldPath}
-                </Badge>
-              </div>
-
-              {field.description && (
-                <p className="-mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-                  {field.description}
-                </p>
-              )}
-
-              {/* Input below — always clearly separated from the label row */}
-              {field.input === 'select' && field.options ? (
+              {field.input === 'switch' ? (
+                <Switch
+                  id={fieldId}
+                  checked={value === 'true'}
+                  onCheckedChange={(checked) =>
+                    onFieldChange(field.path, checked ? 'true' : 'false')
+                  }
+                  aria-label={field.label}
+                />
+              ) : field.input === 'select' && field.options ? (
                 <select
                   id={fieldId}
                   value={value}
@@ -124,17 +140,25 @@ export function ModuleEditor({
               ) : (
                 <Input
                   id={fieldId}
-                  type={field.input}
+                  type={field.input === 'number' ? 'number' : 'text'}
+                  list={field.input === 'combobox' ? `${fieldId}-list` : undefined}
                   value={value}
                   placeholder={field.placeholder}
                   onChange={(e) => onFieldChange(field.path, e.target.value)}
                 />
               )}
-            </div>
+              {field.input === 'combobox' && field.options && (
+                <datalist id={`${fieldId}-list`}>
+                  {field.options.map((opt) => (
+                    <option key={opt} value={opt} />
+                  ))}
+                </datalist>
+              )}
+            </SectionField>
           )
         })}
-      </div>
-    </div>
+      </FieldGrid>
+    </ConfigPanel>
   )
 }
 

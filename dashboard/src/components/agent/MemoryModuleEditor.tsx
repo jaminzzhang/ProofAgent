@@ -1,6 +1,14 @@
-import React from 'react'
+import {
+  Button,
+  ConfigPanel,
+  FieldGrid,
+  Input,
+  SectionField,
+  Switch,
+} from '@proofagent/ui'
 import { readAgentYamlField } from '../../utils/agentYaml'
 import { useLocale } from '../../i18n/locale'
+import { cn } from '@proofagent/ui'
 
 interface MemoryModuleEditorProps {
   agentYaml: string
@@ -16,6 +24,7 @@ export function MemoryModuleEditor({
   busy,
 }: MemoryModuleEditorProps) {
   const { t } = useLocale()
+
   // Provider Settings
   const providerPath = ['memory', 'provider']
   const provider = readAgentYamlField(agentYaml, providerPath) || 'session'
@@ -25,11 +34,12 @@ export function MemoryModuleEditor({
   const caseRetentionPath = ['memory', 'scopes', 'case', 'retention_days']
   const caseMaxRecordsPath = ['memory', 'scopes', 'case', 'max_records']
   const caseAllowRestrictedPath = ['memory', 'scopes', 'case', 'allow_restricted']
-  
+
   const caseEnabled = readAgentYamlField(agentYaml, caseEnabledPath) === 'true'
   const caseRetention = readAgentYamlField(agentYaml, caseRetentionPath) || '30'
   const caseMaxRecords = readAgentYamlField(agentYaml, caseMaxRecordsPath) || '100'
-  const caseAllowRestricted = readAgentYamlField(agentYaml, caseAllowRestrictedPath) === 'true'
+  const caseAllowRestricted =
+    readAgentYamlField(agentYaml, caseAllowRestrictedPath) === 'true'
 
   // User Scope
   const userEnabledPath = ['memory', 'scopes', 'user', 'enabled']
@@ -42,162 +52,173 @@ export function MemoryModuleEditor({
   return (
     <div className="space-y-6">
       {/* SECTION 1: Storage Provider */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-          {t('memory.storageLayer')}
-        </h3>
-        <p className="mt-1 text-sm text-[var(--text-muted)] mb-4">
-          {t('memory.storageDescription')}
-        </p>
-
-        <div className="max-w-xs">
-          <label
+      <ConfigPanel
+        headingLevel={3}
+        title={t('memory.storageLayer')}
+        description={t('memory.storageDescription')}
+        footer={
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={onSave} disabled={busy}>
+              {busy ? t('agentDetail.saving') : t('memory.saveMemory')}
+            </Button>
+          </div>
+        }
+      >
+        <FieldGrid cols={2} gap="md">
+          <SectionField
             htmlFor="memory-provider"
-            className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]"
+            label={t('memory.provider')}
+            description="Where memory records are persisted. Session is ephemeral; Local and Mem0 persist across runs."
           >
-            {t('memory.provider')}
-          </label>
-          <select
-            id="memory-provider"
-            value={provider}
-            onChange={(e) => onFieldChange(providerPath, e.target.value)}
-            className="w-full bg-[var(--bg-base)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-          >
-            <option value="session">Session (In-Memory, Ephemeral)</option>
-            <option value="local">Local Database (Persistent)</option>
-            <option value="mem0">Mem0 (Cloud/Managed)</option>
-          </select>
-        </div>
-      </div>
+            <select
+              id="memory-provider"
+              value={provider}
+              onChange={(e) => onFieldChange(providerPath, e.target.value)}
+              className="h-9 w-full appearance-none rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 pr-9 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+              style={{
+                backgroundImage:
+                  "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
+                backgroundRepeat: 'no-repeat',
+                backgroundPosition: 'right 0.625rem center',
+              }}
+            >
+              <option value="session">Session (In-Memory, Ephemeral)</option>
+              <option value="local">Local Database (Persistent)</option>
+              <option value="mem0">Mem0 (Cloud/Managed)</option>
+            </select>
+          </SectionField>
+        </FieldGrid>
+      </ConfigPanel>
 
       {/* SECTION 2: Memory Scopes Grid */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 shadow-sm">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              {t('memory.scopes')}
-            </h3>
-            <p className="mt-1 text-sm text-[var(--text-muted)]">
-              {t('memory.scopesDescription')}
-            </p>
-          </div>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-3 items-start">
-          
+      <ConfigPanel
+        headingLevel={3}
+        title={t('memory.scopes')}
+        description={t('memory.scopesDescription')}
+      >
+        <FieldGrid cols={3} gap="md">
           {/* Card: Case Memory */}
-          <div className={`rounded-md border p-4 transition-colors ${caseEnabled ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border)] bg-[var(--bg-base)]'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold text-[var(--text-primary)]">{t('memory.caseMemory')}</span>
-              <button
+          <div
+            className={cn(
+              'flex min-w-0 flex-col rounded-md border p-4 transition-colors',
+              caseEnabled
+                ? 'border-[var(--accent)] bg-[var(--accent)]/5'
+                : 'border-[var(--border)] bg-[var(--bg-base)]',
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 font-semibold text-[var(--text-primary)]">
+                {t('memory.caseMemory')}
+              </span>
+              <Switch
                 aria-label={t('memory.toggleCase')}
-                onClick={() => onFieldChange(caseEnabledPath, caseEnabled ? 'false' : 'true')}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${caseEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-hover)]'}`}
-              >
-                <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${caseEnabled ? 'translate-x-5' : 'translate-x-1'}`} />
-              </button>
+                checked={caseEnabled}
+                onCheckedChange={(checked) =>
+                  onFieldChange(caseEnabledPath, checked ? 'true' : 'false')
+                }
+              />
             </div>
-            <p className="text-xs text-[var(--text-muted)] mb-4">
+            <p className="mt-1 min-w-0 text-xs text-[var(--text-muted)]">
               {t('memory.caseDescription')}
             </p>
-            
+
             {caseEnabled && (
-              <div className="space-y-3 mt-4 pt-4 border-t border-[var(--border)]">
-                <div>
-                  <label
-                    htmlFor="case-memory-retention-days"
-                    className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1"
-                  >
-                    {t('memory.retentionDays')}
-                  </label>
-                  <input
+              <div className="mt-4 space-y-3 border-t border-[var(--border)] pt-4">
+                <SectionField
+                  htmlFor="case-memory-retention-days"
+                  label={t('memory.retentionDays')}
+                >
+                  <Input
                     id="case-memory-retention-days"
                     type="number"
                     value={caseRetention}
                     onChange={(e) => onFieldChange(caseRetentionPath, e.target.value)}
-                    className="w-full bg-[var(--bg-surface)] border border-[var(--border)] rounded px-2 py-1 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                   />
-                </div>
-                <div>
-                  <label
-                    htmlFor="case-memory-max-records"
-                    className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1"
-                  >
-                    {t('memory.maxRecords')}
-                  </label>
-                  <input
+                </SectionField>
+                <SectionField
+                  htmlFor="case-memory-max-records"
+                  label={t('memory.maxRecords')}
+                >
+                  <Input
                     id="case-memory-max-records"
                     type="number"
                     value={caseMaxRecords}
                     onChange={(e) => onFieldChange(caseMaxRecordsPath, e.target.value)}
-                    className="w-full bg-[var(--bg-surface)] border border-[var(--border)] rounded px-2 py-1 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                   />
-                </div>
-                <div className="flex items-center justify-between pt-1">
-                  <label
-                    htmlFor="case-memory-allow-restricted"
-                    className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]"
-                  >
-                    {t('memory.allowRestricted')}
-                  </label>
-                  <input
+                </SectionField>
+                <SectionField
+                  htmlFor="case-memory-allow-restricted"
+                  label={t('memory.allowRestricted')}
+                  inline
+                >
+                  <Switch
                     id="case-memory-allow-restricted"
-                    type="checkbox"
                     checked={caseAllowRestricted}
-                    onChange={(e) => onFieldChange(caseAllowRestrictedPath, e.target.checked ? 'true' : 'false')}
-                    className="accent-[var(--accent)]"
+                    onCheckedChange={(checked) =>
+                      onFieldChange(
+                        caseAllowRestrictedPath,
+                        checked ? 'true' : 'false',
+                      )
+                    }
                   />
-                </div>
+                </SectionField>
               </div>
             )}
           </div>
 
           {/* Card: User Memory */}
-          <div className={`rounded-md border p-4 transition-colors ${userEnabled ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border)] bg-[var(--bg-base)]'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold text-[var(--text-primary)]">{t('memory.userMemory')}</span>
-              <button
+          <div
+            className={cn(
+              'flex min-w-0 flex-col rounded-md border p-4 transition-colors',
+              userEnabled
+                ? 'border-[var(--accent)] bg-[var(--accent)]/5'
+                : 'border-[var(--border)] bg-[var(--bg-base)]',
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 font-semibold text-[var(--text-primary)]">
+                {t('memory.userMemory')}
+              </span>
+              <Switch
                 aria-label={t('memory.toggleUser')}
-                onClick={() => onFieldChange(userEnabledPath, userEnabled ? 'false' : 'true')}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${userEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-hover)]'}`}
-              >
-                <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${userEnabled ? 'translate-x-5' : 'translate-x-1'}`} />
-              </button>
+                checked={userEnabled}
+                onCheckedChange={(checked) =>
+                  onFieldChange(userEnabledPath, checked ? 'true' : 'false')
+                }
+              />
             </div>
-            <p className="text-xs text-[var(--text-muted)]">
+            <p className="mt-1 min-w-0 text-xs text-[var(--text-muted)]">
               {t('memory.userDescription')}
             </p>
           </div>
 
           {/* Card: Shared Memory */}
-          <div className={`rounded-md border p-4 transition-colors ${sharedEnabled ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border)] bg-[var(--bg-base)]'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold text-[var(--text-primary)]">{t('memory.sharedMemory')}</span>
-              <button
+          <div
+            className={cn(
+              'flex min-w-0 flex-col rounded-md border p-4 transition-colors',
+              sharedEnabled
+                ? 'border-[var(--accent)] bg-[var(--accent)]/5'
+                : 'border-[var(--border)] bg-[var(--bg-base)]',
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 font-semibold text-[var(--text-primary)]">
+                {t('memory.sharedMemory')}
+              </span>
+              <Switch
                 aria-label={t('memory.toggleShared')}
-                onClick={() => onFieldChange(sharedEnabledPath, sharedEnabled ? 'false' : 'true')}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${sharedEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-hover)]'}`}
-              >
-                <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${sharedEnabled ? 'translate-x-5' : 'translate-x-1'}`} />
-              </button>
+                checked={sharedEnabled}
+                onCheckedChange={(checked) =>
+                  onFieldChange(sharedEnabledPath, checked ? 'true' : 'false')
+                }
+              />
             </div>
-            <p className="text-xs text-[var(--text-muted)]">
+            <p className="mt-1 min-w-0 text-xs text-[var(--text-muted)]">
               {t('memory.sharedDescription')}
             </p>
           </div>
-
-        </div>
-
-        <div className="mt-6 flex justify-end">
-          <button
-            onClick={onSave}
-            disabled={busy}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors"
-          >
-            {busy ? t('agentDetail.saving') : t('memory.saveMemory')}
-          </button>
-        </div>
-      </div>
+        </FieldGrid>
+      </ConfigPanel>
     </div>
   )
 }

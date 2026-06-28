@@ -195,6 +195,20 @@ function skillPackArticle(label: string): HTMLElement {
   return article
 }
 
+/**
+ * Add a value to a ReferenceChips control. The chip input is labelled
+ * "Add to {fieldLabel}"; typing + Enter commits it.
+ */
+function addReferenceChip(
+  scope: ReturnType<typeof within>,
+  fieldLabel: string,
+  value: string,
+) {
+  const input = scope.getByLabelText(`Add to ${fieldLabel}`)
+  fireEvent.change(input, { target: { value } })
+  fireEvent.keyDown(input, { key: 'Enter' })
+}
+
 describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -800,10 +814,11 @@ workflow:
     renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
 
     expect(await screen.findByText('Stage Inspector')).toBeInTheDocument()
-    expect(screen.getByText('Read-Only Relationship Map')).toBeInTheDocument()
+    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
     expect(screen.getAllByText('Plan').length).toBeGreaterThan(0)
-    fireEvent.click(await screen.findByRole('button', { name: 'Explain Business Context' }))
-    expect(screen.getByText(/Adds domain-specific context/)).toBeInTheDocument()
+    // Field help is rendered via the shared Tooltip primitive (opens on focus).
+    fireEvent.focus(await screen.findByRole('button', { name: 'Explain Business Context' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/Adds domain-specific context/)
     fireEvent.change(await screen.findByLabelText('Business Context'), {
       target: { value: 'Claims context' },
     })
@@ -1066,10 +1081,8 @@ workflow:
     })
     fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), { target: { value: '0.75' } })
     fireEvent.click(within(drawer).getByRole('button', { name: 'Capability References' }))
-    fireEvent.change(within(drawer).getByLabelText('Knowledge Bindings'), { target: { value: 'kb_appeals' } })
-    fireEvent.change(within(drawer).getByLabelText('Policy Rules'), {
-      target: { value: 'answering.require_retrieval' },
-    })
+    addReferenceChip(within(drawer), 'Knowledge Bindings', 'kb_appeals')
+    addReferenceChip(within(drawer), 'Policy Rules', 'answering.require_retrieval')
     fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addenda' }))
     fireEvent.change(within(drawer).getByLabelText('Plan Business Context'), {
       target: { value: 'Appeals stage context.' },
@@ -1102,7 +1115,7 @@ workflow:
     expect(within(drawer).getByDisplayValue('claim status')).toBeInTheDocument()
     expect(within(drawer).getByText('Routing-Safe Summary')).toBeInTheDocument()
     fireEvent.click(within(drawer).getByRole('button', { name: 'Capability References' }))
-    expect(within(drawer).getByDisplayValue('kb_local')).toBeInTheDocument()
+    expect(within(drawer).getByText('kb_local')).toBeInTheDocument()
     fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addendum Slots' }))
     expect(within(drawer).getByDisplayValue('Claims stage context.')).toBeInTheDocument()
     fireEvent.click(within(drawer).getByRole('button', { name: 'Prompt Preview' }))
@@ -1140,7 +1153,7 @@ workflow:
     fireEvent.change(within(drawer).getByLabelText('Intent Patterns'), { target: { value: 'appeal status' } })
     fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), { target: { value: '0.75' } })
     fireEvent.click(within(drawer).getByRole('button', { name: 'Capability References' }))
-    fireEvent.change(within(drawer).getByLabelText('Knowledge Bindings'), { target: { value: 'kb_appeals' } })
+    addReferenceChip(within(drawer), 'Knowledge Bindings', 'kb_appeals')
     fireEvent.click(within(drawer).getByRole('button', { name: 'Stage Addenda' }))
     fireEvent.change(within(drawer).getByLabelText('Plan Business Context'), { target: { value: 'Appeals stage context.' } })
 
@@ -1372,9 +1385,10 @@ workflow:
         '',
       ].join('\n'),
       value: 'false',
+      control: 'switch',
       expected: 'include_reasoning_summary: false',
     },
-  ])('saves $tab configuration through the draft contract API', async ({ tab, label, initialYaml, value, expected }) => {
+  ])('saves $tab configuration through the draft contract API', async ({ tab, label, initialYaml, value, control, expected }) => {
     mockContract = {
       ...mockContract,
       agent_yaml: initialYaml,
@@ -1382,9 +1396,14 @@ workflow:
 
     renderPage(`/agents/agent-1/drafts/draft-1?tab=${tab}`)
 
-    fireEvent.change(screen.getByLabelText(label), {
-      target: { value },
-    })
+    if (control === 'switch') {
+      // Booleans render as a Switch (role="switch"). Clicking toggles the value.
+      fireEvent.click(screen.getByRole('switch', { name: label }))
+    } else {
+      fireEvent.change(screen.getByLabelText(label), {
+        target: { value },
+      })
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => {
@@ -1419,14 +1438,14 @@ workflow:
     fireEvent.change(screen.getByLabelText('Memory Provider'), {
       target: { value: 'session' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle Case Memory' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Toggle Case Memory' }))
     fireEvent.change(screen.getByLabelText('Retention (Days)'), {
       target: { value: '45' },
     })
     fireEvent.change(screen.getByLabelText('Max Records'), {
       target: { value: '9' },
     })
-    fireEvent.click(screen.getByLabelText('Allow Restricted'))
+    fireEvent.click(screen.getByRole('switch', { name: 'Allow Restricted' }))
 
     expect(screen.queryByRole('button', { name: 'Save Workflow' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save Memory' }))
