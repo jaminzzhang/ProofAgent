@@ -23,6 +23,7 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
     ObservationEffect,
     ObservationIdentity,
 )
+from proof_agent.observability.audit.trace import TraceEmitter
 
 
 class PlannerPort(Protocol):
@@ -40,11 +41,13 @@ class IntentResolutionPort(Protocol):
 class MemoryPort(Protocol):
     def read(self, state: ControlledReActRunState) -> Mapping[str, Any]: ...
 
-    def write(
+    def prepare_write(
         self,
         state: ControlledReActRunState,
         answer: AnswerSynthesisResult,
-    ) -> ValidationResult: ...
+    ) -> MemoryWriteCandidate | None: ...
+
+    def commit_write(self, candidate: MemoryWriteCandidate) -> ValidationResult: ...
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,20 @@ class AnswerSynthesisResult:
     model_usage_summary: Mapping[str, Any] = field(default_factory=dict)
     evidence: tuple[EvidenceChunk, ...] = field(default_factory=tuple)
     stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class MemoryWriteCandidate:
+    values: Mapping[str, Any]
+    write_source: str = "controlled_react_v3"
+
+    @property
+    def field_names(self) -> tuple[str, ...]:
+        return tuple(sorted(str(field_name) for field_name in self.values))
+
+    @property
+    def field_count(self) -> int:
+        return len(self.field_names)
 
 
 class AnswerSynthesisPort(Protocol):
@@ -98,6 +115,12 @@ class PolicyPort(Protocol):
         action: ReActActionProposal,
     ) -> PolicyDecision: ...
 
+    def evaluate_memory_write(
+        self,
+        state: ControlledReActRunState,
+        candidate: MemoryWriteCandidate,
+    ) -> PolicyDecision: ...
+
 
 class ReviewPort(Protocol):
     def review(
@@ -107,14 +130,8 @@ class ReviewPort(Protocol):
     ) -> ReviewDecision: ...
 
 
-class TracePort(Protocol):
-    def emit(
-        self,
-        event_type: str,
-        *,
-        status: str = "ok",
-        payload: Mapping[str, Any] | None = None,
-    ) -> None: ...
+class TracePort(TraceEmitter, Protocol):
+    pass
 
 
 class SnapshotStorePort(Protocol):

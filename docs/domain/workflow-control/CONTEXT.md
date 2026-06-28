@@ -240,6 +240,10 @@ _Avoid_: Public stage method, runtime graph node, Orchestrator module boundary, 
 The V3 target-state rule that Workflow Stage projection facts are produced by the Controlled ReAct Orchestrator from real internal transition facts before Delivery writes trace, receipt, RunStore, or validation capture artifacts. Delivery-side stage projection may exist only as a temporary migration shim and must not become the semantic source of stage sequencing.
 _Avoid_: delivery-owned stage sequencing, synthetic full-chain trace, projection-as-execution, artifact writer as workflow authority
 
+**Controlled ReAct Memory Write Gate**:
+The V3 side-effect admission rule that the Controlled ReAct Orchestrator evaluates `before_memory_write` against a prepared Memory Write Candidate before any memory provider is mutated. A denial blocks only the memory write unless policy explicitly makes memory denial terminal.
+_Avoid_: memory adapter-owned policy, memory write as selectable ReAct action, final answer admission, trace payload with raw memory values
+
 **Controlled ReAct Review Stage Execution**:
 The V3 rule that `retrieval_review` and `tool_review` projections must come from real Orchestrator review, policy, and action-constraining facts before an observation action executes. They are not UI filler stages and must not be emitted merely to make a run appear to have traversed the full Workflow Template.
 _Avoid_: synthetic review stage, trace-only review, post-hoc review projection, review-as-display

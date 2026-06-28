@@ -25,6 +25,8 @@ from proof_agent.contracts import (
     ToolProposalParameterSource,
     ReviewDecision,
     ToolObservationTruth,
+    ValidationResult,
+    ValidationStatus,
     WorkflowTemplateExecutionResult,
 )
 from proof_agent.control.workflow.controlled_react import (
@@ -205,6 +207,113 @@ def test_before_answer_policy_denial_blocks_terminal_answer() -> None:
     assert policy.context is not None
     assert policy.context["accepted_evidence_count"] == 1
     assert policy.context["citations_present"] is True
+
+
+def test_before_memory_write_denial_blocks_memory_side_effect_without_changing_answer() -> None:
+    memory = _CandidateMemory()
+    policy = _DenyMemoryWritePolicy()
+    trace = _TraceCapture()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_TerminalAnswerPlanner(),
+            memory=memory,
+            policy=policy,
+            trace=trace,
+            answer_synthesis=_AnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_memory_denied",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="What documents are required?",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert result.final_output == "Submit the claim form and itemized invoice."
+    assert memory.commit_count == 0
+    assert policy.write_context == {
+        "question": "What documents are required?",
+        "outcome": "ANSWERED_WITH_CITATIONS",
+        "final_output_length": 43,
+    }
+    memory_stage = next(stage for stage in result.stage_results if stage.stage_id == "memory")
+    assert memory_stage.status.value == "blocked"
+    assert memory_stage.summary["status"] == "failed"
+    assert memory_stage.summary["written_fields"] == ()
+    event_types = [event["event_type"] for event in trace.events]
+    assert event_types == [
+        "memory_write_requested",
+        "policy_decision",
+        "memory_write_decision",
+    ]
+    assert trace.events[0]["payload"] == {
+        "field_names": ["final_output_length", "outcome", "question"],
+        "field_count": 3,
+        "write_source": "controlled_react_v3",
+    }
+    assert trace.events[1]["status"] == "blocked"
+    assert trace.events[1]["payload"]["enforcement_point"] == "before_memory_write"
+    assert trace.events[1]["payload"]["decision"] == "deny"
+    assert trace.events[2]["status"] == "blocked"
+    assert trace.events[2]["payload"]["decision"] == "deny"
+    assert "Submit the claim form" not in repr(trace.events)
+
+
+def test_before_memory_write_allow_commits_memory_side_effect_without_changing_answer() -> None:
+    memory = _CandidateMemory()
+    policy = _AllowMemoryWritePolicy()
+    trace = _TraceCapture()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_TerminalAnswerPlanner(),
+            memory=memory,
+            policy=policy,
+            trace=trace,
+            answer_synthesis=_AnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_memory_allowed",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="What documents are required?",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert result.final_output == "Submit the claim form and itemized invoice."
+    assert memory.commit_count == 1
+    assert memory.committed_values == {
+        "question": "What documents are required?",
+        "outcome": "ANSWERED_WITH_CITATIONS",
+        "final_output_length": 43,
+    }
+    memory_stage = next(stage for stage in result.stage_results if stage.stage_id == "memory")
+    assert memory_stage.status.value == "completed"
+    assert memory_stage.summary["status"] == "passed"
+    assert memory_stage.summary["written_fields"] == (
+        "final_output_length",
+        "outcome",
+        "question",
+    )
+    event_types = [event["event_type"] for event in trace.events]
+    assert event_types == [
+        "memory_write_requested",
+        "policy_decision",
+        "memory_write_decision",
+    ]
+    assert trace.events[1]["status"] == "ok"
+    assert trace.events[1]["payload"]["enforcement_point"] == "before_memory_write"
+    assert trace.events[1]["payload"]["decision"] == "allow"
+    assert trace.events[2]["status"] == "ok"
+    assert trace.events[2]["payload"]["decision"] == "allow"
+    assert "Submit the claim form" not in repr(trace.events)
 
 
 def test_observation_effect_must_match_allocated_identity() -> None:
@@ -1252,6 +1361,115 @@ class _DenyAnswerAdmissionPolicy:
             policy_rule_id="answer.deny",
             metadata=self.context,
             trace_event_id="trace_answer_deny",
+        )
+
+
+class _MemoryCandidateFixture:
+    def __init__(self, values: dict[str, object]) -> None:
+        self.values = values
+        self.field_names = tuple(sorted(values))
+        self.write_source = "controlled_react_v3"
+
+    @property
+    def field_count(self) -> int:
+        return len(self.field_names)
+
+
+class _CandidateMemory:
+    def __init__(self) -> None:
+        self.commit_count = 0
+        self.committed_values: dict[str, object] | None = None
+
+    def read(self, state: ControlledReActRunState) -> dict[str, object]:
+        _ = state
+        return {}
+
+    def prepare_write(
+        self,
+        state: ControlledReActRunState,
+        answer: AnswerSynthesisResult,
+    ) -> _MemoryCandidateFixture:
+        return _MemoryCandidateFixture(
+            {
+                "question": state.question,
+                "outcome": answer.outcome.value,
+                "final_output_length": len(answer.final_output),
+            }
+        )
+
+    def commit_write(self, candidate: _MemoryCandidateFixture) -> ValidationResult:
+        self.commit_count += 1
+        self.committed_values = dict(candidate.values)
+        return ValidationResult(
+            validator_name="memory",
+            status=ValidationStatus.PASSED,
+            reason="Session memory write allowed.",
+            metadata={"written_fields": candidate.field_names},
+        )
+
+    def write(
+        self,
+        state: ControlledReActRunState,
+        answer: AnswerSynthesisResult,
+    ) -> ValidationResult:
+        _ = (state, answer)
+        raise AssertionError("orchestrator must gate prepared memory writes")
+
+
+class _DenyMemoryWritePolicy:
+    def __init__(self) -> None:
+        self.write_context: dict[str, object] | None = None
+
+    def evaluate_memory_write(
+        self,
+        state: ControlledReActRunState,
+        candidate: _MemoryCandidateFixture,
+    ) -> PolicyDecision:
+        _ = state
+        self.write_context = dict(candidate.values)
+        return PolicyDecision(
+            decision=PolicyDecisionType.DENY,
+            enforcement_point=EnforcementPoint.BEFORE_MEMORY_WRITE,
+            reason="question must not be written to memory",
+            policy_rule_id="memory.deny_question",
+            metadata={"denied_fields": ("question",)},
+            trace_event_id="trace_memory_deny",
+        )
+
+
+class _AllowMemoryWritePolicy:
+    def evaluate_memory_write(
+        self,
+        state: ControlledReActRunState,
+        candidate: _MemoryCandidateFixture,
+    ) -> PolicyDecision:
+        _ = (state, candidate)
+        return PolicyDecision(
+            decision=PolicyDecisionType.ALLOW,
+            enforcement_point=EnforcementPoint.BEFORE_MEMORY_WRITE,
+            reason="memory write is allowed",
+            policy_rule_id="memory.allow",
+            trace_event_id="trace_memory_allow",
+        )
+
+
+class _TraceCapture:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def emit(
+        self,
+        event_type: str,
+        *,
+        status: str = "ok",
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        self.events.append(
+            {
+                "event_type": event_type,
+                "status": status,
+                "payload": dict(payload or {}),
+            }
         )
 
 

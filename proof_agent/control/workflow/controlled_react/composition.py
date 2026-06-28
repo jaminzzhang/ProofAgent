@@ -44,6 +44,7 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
 from proof_agent.control.workflow.controlled_react.ports import (
     AnswerSynthesisResult,
     ControlledReActPorts,
+    MemoryWriteCandidate,
     ObservationTruthStorePort,
     SnapshotStorePort,
     TracePort,
@@ -148,17 +149,22 @@ class _InvocationMemoryAdapter:
         _ = state
         return self._memory.read()
 
-    def write(
+    def prepare_write(
         self,
         state: ControlledReActRunState,
         answer: AnswerSynthesisResult,
-    ) -> ValidationResult:
-        return self._memory.write(
-            {
+    ) -> MemoryWriteCandidate:
+        return MemoryWriteCandidate(
+            values={
                 "question": state.question,
                 "outcome": answer.outcome.value,
                 "final_output_length": len(answer.final_output),
             }
+        )
+
+    def commit_write(self, candidate: MemoryWriteCandidate) -> ValidationResult:
+        return self._memory.write(
+            candidate.values,
         )
 
 
@@ -502,6 +508,22 @@ class _InvocationPolicyAdapter:
         )
         emit_policy_decision(self._trace, decision)
         return decision
+
+    def evaluate_memory_write(
+        self,
+        state: ControlledReActRunState,
+        candidate: MemoryWriteCandidate,
+    ) -> PolicyDecision:
+        return self._invocation.policy.evaluate(
+            EnforcementPoint.BEFORE_MEMORY_WRITE,
+            {
+                "run_id": state.run_id,
+                "write": dict(candidate.values),
+                "field_names": list(candidate.field_names),
+                "write_source": candidate.write_source,
+            },
+            trace_event_id=f"{state.run_id}:memory:before_memory_write",
+        )
 
 
 class _InvocationReviewAdapter:

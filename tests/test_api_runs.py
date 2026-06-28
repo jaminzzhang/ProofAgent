@@ -146,6 +146,22 @@ def test_list_runs_filter_outcome(client, app) -> None:
     assert body["data"][0]["run_id"] == "run_001"
 
 
+def test_policy_denied_outcome_round_trips_through_run_api(client, app) -> None:
+    _seed(client, app, "run_policy_denied", ReceiptOutcome.POLICY_DENIED, "Q")
+    _seed(client, app, "run_answered", ReceiptOutcome.ANSWERED_WITH_CITATIONS, "Q2")
+
+    detail_resp = client.get("/api/runs/run_policy_denied")
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["outcome"] == "POLICY_DENIED"
+
+    list_resp = client.get("/api/runs?outcome=POLICY_DENIED")
+    assert list_resp.status_code == 200
+    body = list_resp.json()
+    assert body["meta"]["total"] == 1
+    assert body["data"][0]["run_id"] == "run_policy_denied"
+    assert body["data"][0]["outcome"] == "POLICY_DENIED"
+
+
 def test_list_runs_search(client, app) -> None:
     _seed(client, app, "run_001", ReceiptOutcome.ANSWERED_WITH_CITATIONS, "discount policy")
     _seed(client, app, "run_002", ReceiptOutcome.REFUSED_NO_EVIDENCE, "remote work")

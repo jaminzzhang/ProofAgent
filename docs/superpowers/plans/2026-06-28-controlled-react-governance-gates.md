@@ -8,7 +8,9 @@
 
 **Tech Stack:** Python 3.12, Pydantic v2 contracts, pytest, existing Controlled ReAct Orchestrator and Knowledge Retrieval Service.
 
-**Relevant Decisions:** ADR-0088, ADR-0089, ADR-0090, ADR-0091, ADR-0092, ADR-0093, ADR-0094.
+**Relevant Decisions:** ADR-0088, ADR-0089, ADR-0090, ADR-0091, ADR-0092, ADR-0093, ADR-0094, ADR-0095.
+
+**Phase 1 status:** Core governance fixes landed in commit `5fe9bbc`. Phase 2 starts with two closeout items from the Phase 1 review: direct `POLICY_DENIED` projection coverage through RunStore/API serialization, and an explicit memory-write TracePort scope decision. Delivery may keep stage/result projection as a temporary migration shim; it must not recreate core V3 governance decisions after execution.
 
 ---
 
@@ -98,26 +100,77 @@
 
 ---
 
-### Phase 2: Memory Governance Completion
+### Phase 2: Memory Governance Completion And Closeout
 
-### Task 7: Add Policy-Gated Memory Write
+### Task 7: Close Phase 1 Projection Coverage
+
+**Files:**
+- Modify: `tests/test_agent_package_execution.py` or `tests/test_dashboard_api.py`
+- Modify: `tests/test_run_store.py` if a lower-level projection fixture is clearer
+- Modify: Dashboard/Chat/API outcome mappings only if focused coverage exposes drift
+
+- [x] Add a focused backend test proving a V3 `POLICY_DENIED` terminal result survives persistence and Dashboard/API serialization without becoming an unknown/default outcome.
+- [x] Add a focused receipt or run-detail projection assertion when the existing test surface does not already cover the same public behavior.
+- [x] Keep this as a closeout test slice; do not broaden Phase 2 into unrelated Dashboard UI refactors.
+
+### Task 8: Split Memory Write Into Candidate And Commit
+
+**Files:**
+- Modify: `proof_agent/control/workflow/controlled_react/ports.py`
+- Modify: `proof_agent/control/workflow/controlled_react/composition.py`
+- Modify: `proof_agent/control/workflow/controlled_react/orchestrator.py`
+- Modify: `tests/test_controlled_react_orchestrator.py`
+
+- [x] Add a trace-safe `MemoryWriteCandidate` value carrying the prepared write `values` for policy evaluation plus derived safe metadata such as field names and field count.
+- [x] Change the V3 memory port from a one-step `write(state, answer)` call into a two-step boundary: `prepare_write(state, answer)` followed by `commit_write(candidate)`.
+- [x] Keep `_InvocationMemoryAdapter` responsible for constructing the same session-summary fields used today: `question`, `outcome`, and `final_output_length`.
+- [x] Make the deterministic/default memory adapter follow the same two-step contract or return `None` when no memory write is configured.
+
+### Task 9: Add Orchestrator-Owned `before_memory_write`
+
+**Files:**
+- Modify: `proof_agent/control/workflow/controlled_react/ports.py`
+- Modify: `proof_agent/control/workflow/controlled_react/composition.py`
+- Modify: `proof_agent/control/workflow/controlled_react/orchestrator.py`
+- Modify: `tests/test_controlled_react_orchestrator.py`
+
+- [x] Add a policy-port method for memory admission, such as `evaluate_memory_write(state, candidate)`, rather than overloading the existing tool-action `evaluate(state, action)` method.
+- [x] Evaluate `before_memory_write` after `prepare_write()` and before `commit_write()`.
+- [x] On deny, do not call `commit_write()`.
+- [x] Return a blocked `ValidationResult` so the memory Workflow Stage Result is `BLOCKED` while the terminal user-facing answer remains unchanged.
+- [x] Reserve terminal `POLICY_DENIED` for future explicit terminal memory policies; ordinary memory-write denial is a blocked side effect, not a failed answer.
+
+### Task 10: Emit Memory Governance Trace Facts
 
 **Files:**
 - Modify: `proof_agent/control/workflow/controlled_react/orchestrator.py`
 - Modify: `proof_agent/control/workflow/controlled_react/composition.py`
-- Modify: `tests/test_controlled_react_orchestrator.py`
-- Modify: `tests/test_memory_boundary.py` or a new focused V3 test
+- Modify: `proof_agent/observability/storage/run_store.py` only if existing projection fails to attribute events
+- Modify: `tests/test_agent_package_execution.py`
 
-- [ ] Evaluate `before_memory_write` before writing V3 session memory.
-- [ ] Emit `memory_write_decision` through `TracePort`.
-- [ ] Preserve current safe session-summary write fields.
-- [ ] If memory write is denied, do not change the terminal user-facing answer unless policy explicitly requires terminal denial.
+- [x] Emit `memory_write_requested` before policy evaluation with safe metadata only: field names, field count, and write source.
+- [x] Emit a normal `policy_decision` for `before_memory_write` using the existing policy trace payload shape.
+- [x] Emit `memory_write_decision` after policy/validator resolution with `status=ok` on allow and `status=blocked` on deny.
+- [x] Do not include raw memory values or final answer text in memory trace payloads.
+- [x] Confirm RunStore already attributes `memory_write_requested` and `memory_write_decision` to the memory stage; update only if the focused V3 trace test proves a gap.
+
+### Task 11: Align V3 And Legacy Memory Semantics
+
+**Files:**
+- Modify: `tests/test_agent_package_execution.py`
+- Modify: `tests/test_customer_run_api.py` only for missing regression assertions
+- Modify: `docs/technical-design.md` only if implementation reveals a contract wording mismatch
+
+- [x] Add a V3 deny test: final answer/outcome remains governed answer/refusal, memory stage is blocked, trace has `policy_decision` and blocked `memory_write_decision`, and session memory is unchanged.
+- [x] Add a V3 allow test: final answer/outcome remains unchanged, memory stage completes, trace has allow decisions, and session memory receives the prepared fields.
+- [x] Keep the legacy Customer API memory path behavior unchanged; add only regression coverage or references needed to prove semantic alignment.
+- [x] Verify the denied-tool replanning behavior from Phase 1 is unaffected by the new memory side-effect gate.
 
 ---
 
 ### Verification
 
-- [ ] Run focused tests after each task.
+- [x] Run focused tests after each task.
 - [ ] Run `uv run --extra dev python -m pytest tests/test_controlled_react_orchestrator.py tests/test_agent_package_execution.py tests/test_run_execution_api.py tests/test_trace_model_events.py -q`.
 - [ ] Run `uv run --extra dev python -m pytest tests/ -q`.
 - [ ] Run `npm test`.

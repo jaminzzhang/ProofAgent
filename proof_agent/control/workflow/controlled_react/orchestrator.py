@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal, cast
 
 from proof_agent.contracts import (
     AnswerEvidenceContext,
@@ -18,6 +18,7 @@ from proof_agent.contracts import (
     EffectiveToolProposalScope,
     ObservationRecord,
     ObservationTruthArtifact,
+    PolicyDecision,
     PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
@@ -33,6 +34,7 @@ from proof_agent.contracts import (
 from proof_agent.control.workflow.controlled_react.ports import (
     AnswerSynthesisResult,
     ControlledReActPorts,
+    MemoryWriteCandidate,
 )
 from proof_agent.control.workflow.controlled_react.tool_proposal_binding import (
     ToolProposalParameterBinder,
@@ -498,7 +500,78 @@ class ControlledReActOrchestrator:
     ) -> ValidationResult | None:
         if self._ports.memory is None:
             return None
-        return self._ports.memory.write(state, answer)
+        candidate = self._ports.memory.prepare_write(state, answer)
+        if candidate is None:
+            return None
+        self._emit_trace(
+            "memory_write_requested",
+            payload=_memory_write_requested_payload(candidate),
+        )
+        policy_decision = self._memory_write_policy_decision(state, candidate)
+        if (
+            policy_decision is not None
+            and policy_decision.decision is not PolicyDecisionType.ALLOW
+        ):
+            result = _memory_write_denied_result(policy_decision)
+            self._emit_trace(
+                "memory_write_decision",
+                status="blocked",
+                payload=_memory_write_decision_payload(
+                    candidate,
+                    result,
+                    policy_decision=policy_decision,
+                ),
+            )
+            return result
+        result = self._ports.memory.commit_write(candidate)
+        self._emit_trace(
+            "memory_write_decision",
+            status="ok" if result.status is ValidationStatus.PASSED else "blocked",
+            payload=_memory_write_decision_payload(
+                candidate,
+                result,
+                policy_decision=policy_decision,
+            ),
+        )
+        return result
+
+    def _memory_write_policy_decision(
+        self,
+        state: ControlledReActRunState,
+        candidate: MemoryWriteCandidate,
+    ) -> PolicyDecision | None:
+        if self._ports.policy is None:
+            return None
+        evaluate_memory_write = getattr(self._ports.policy, "evaluate_memory_write", None)
+        if evaluate_memory_write is None:
+            return None
+        typed_evaluator = cast(
+            Callable[[ControlledReActRunState, MemoryWriteCandidate], PolicyDecision],
+            evaluate_memory_write,
+        )
+        decision = typed_evaluator(state, candidate)
+        self._emit_trace(
+            "policy_decision",
+            status="ok" if decision.decision is PolicyDecisionType.ALLOW else "blocked",
+            payload={
+                "decision": decision.decision.value,
+                "enforcement_point": decision.enforcement_point.value,
+                "policy_rule_id": decision.policy_rule_id,
+                "reason": decision.reason,
+            },
+        )
+        return decision
+
+    def _emit_trace(
+        self,
+        event_type: str,
+        *,
+        status: Literal["ok", "blocked", "waiting", "error"] = "ok",
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        if self._ports.trace is None:
+            return
+        self._ports.trace.emit(event_type, status=status, payload=payload or {})
 
     def _plan_next_action(
         self,
@@ -1273,6 +1346,52 @@ def _memory_write_stage_result(
             "written_fields": list(result.metadata.get("written_fields", ())),
         },
         produced_fact_refs=("memory_write",),
+    )
+
+
+def _memory_write_requested_payload(
+    candidate: MemoryWriteCandidate,
+) -> dict[str, Any]:
+    field_names = list(candidate.field_names)
+    return {
+        "field_names": field_names,
+        "field_count": len(field_names),
+        "write_source": candidate.write_source,
+    }
+
+
+def _memory_write_decision_payload(
+    candidate: MemoryWriteCandidate,
+    result: ValidationResult,
+    *,
+    policy_decision: PolicyDecision | None,
+) -> dict[str, Any]:
+    decision = policy_decision.decision.value if policy_decision is not None else "allow"
+    payload: dict[str, Any] = {
+        "decision": decision,
+        "field_names": list(candidate.field_names),
+        "field_count": candidate.field_count,
+        "write_source": candidate.write_source,
+        "validator_status": result.status.value,
+        "metadata": dict(result.metadata),
+    }
+    if policy_decision is not None:
+        payload["policy_rule_id"] = policy_decision.policy_rule_id
+        payload["reason"] = policy_decision.reason
+    return payload
+
+
+def _memory_write_denied_result(decision: PolicyDecision) -> ValidationResult:
+    denied_fields = tuple(decision.metadata.get("denied_fields", ()))
+    return ValidationResult(
+        validator_name="memory",
+        status=ValidationStatus.FAILED,
+        reason=decision.reason,
+        metadata={
+            "denied_fields": denied_fields,
+            "policy_rule_id": decision.policy_rule_id,
+            "decision": decision.decision.value,
+        },
     )
 
 

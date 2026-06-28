@@ -6,10 +6,20 @@ from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from proof_agent.observability.audit.redaction import redact_payload
 from proof_agent.contracts import TraceEvent, TraceEventType
+
+
+class TraceEmitter(Protocol):
+    def emit(
+        self,
+        event_type: TraceEventType | str,
+        *,
+        status: Literal["ok", "blocked", "waiting", "error"],
+        payload: Mapping[str, Any],
+    ) -> object: ...
 
 
 class TraceWriter:

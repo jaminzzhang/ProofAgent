@@ -31,7 +31,7 @@ from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner
 from proof_agent.errors import ProofAgentError
-from proof_agent.observability.audit.trace import TraceWriter
+from proof_agent.observability.audit.trace import TraceEmitter
 
 _TRACE_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,300}$")
 _TRACE_SAFE_ERROR_CODE_RE = re.compile(r"^PA_[A-Z0-9_]{1,96}$")
@@ -157,7 +157,7 @@ class _GovernedRoutingModelProvider:
         *,
         provider: ModelProvider,
         policy: PolicyEngine,
-        trace: TraceWriter,
+        trace: TraceEmitter,
         execution_context: _RetrievalExecutionContext | None = None,
     ) -> None:
         self.inner_provider = provider
@@ -180,7 +180,7 @@ class _GovernedRoutingModelProvider:
         self,
         *,
         policy: PolicyEngine,
-        trace: TraceWriter,
+        trace: TraceEmitter,
         execution_context: _RetrievalExecutionContext | None = None,
     ) -> None:
         self._policy = policy
@@ -286,7 +286,7 @@ class KnowledgeRetrievalService:
     def __init__(
         self,
         *,
-        trace: TraceWriter,
+        trace: TraceEmitter,
         policy: PolicyEngine,
         knowledge_provider: KnowledgeProvider,
         model_resolver: Callable[[ModelConfig], ModelProvider] = resolve_provider,
@@ -1530,7 +1530,7 @@ def _query_item_payload(item: RetrievalQueryItem) -> dict[str, Any]:
     }
 
 
-def _emit_policy(trace: TraceWriter, decision: PolicyDecision) -> None:
+def _emit_policy(trace: TraceEmitter, decision: PolicyDecision) -> None:
     trace.emit(
         "policy_decision",
         status="ok" if _allowed(decision) else "blocked",
@@ -1859,7 +1859,7 @@ def _bind_provider_routing_model_governance(
     provider: KnowledgeProvider,
     *,
     policy: PolicyEngine,
-    trace: TraceWriter,
+    trace: TraceEmitter,
     execution_context: _RetrievalExecutionContext | None = None,
 ) -> None:
     bind = getattr(provider, "bind_runtime_routing_provider", None)

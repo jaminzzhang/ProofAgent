@@ -32,7 +32,7 @@ from proof_agent.control.validators.citations import (
 from proof_agent.control.validators.safety import validate_no_secret_strings
 from proof_agent.control.validators.schema import validate_final_output_schema
 from proof_agent.observability.audit.receipt import generate_receipt
-from proof_agent.observability.audit.trace import TraceWriter
+from proof_agent.observability.audit.trace import TraceEmitter, TraceWriter
 from proof_agent.observability.storage.compat import update_latest_symlink
 from proof_agent.observability.storage.run_store import RunStore
 
@@ -40,7 +40,7 @@ from proof_agent.observability.storage.run_store import RunStore
 _FINAL_ANSWER_FUNCTION_SCHEMA_NAME = "submit_final_answer"
 
 
-def emit_policy_decision(trace: TraceWriter, decision: object) -> None:
+def emit_policy_decision(trace: TraceEmitter, decision: object) -> None:
     """Record a policy decision in the trace without leaking engine internals."""
 
     decision_type = getattr(decision, "decision")
@@ -60,7 +60,7 @@ def emit_policy_decision(trace: TraceWriter, decision: object) -> None:
 
 
 def emit_model_error(
-    trace: TraceWriter, provider: str, model: str, exc: BaseException
+    trace: TraceEmitter, provider: str, model: str, exc: BaseException
 ) -> None:
     """Record a normalized model error without provider payloads."""
 

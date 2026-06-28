@@ -142,6 +142,74 @@ def test_execute_agent_package_run_blocks_v3_before_model_call_without_generate(
     assert result.final_output == "The final-answer model call was blocked by policy."
 
 
+def test_execute_agent_package_run_blocks_v3_memory_write_without_blocking_answer(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    policy_path = agent_dir / "policy.yaml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    memory_rule = next(
+        rule
+        for rule in policy["rules"]
+        if rule["enforcement_point"] == "before_memory_write"
+    )
+    memory_rule["condition"]["deny_fields"].append("question")
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=agent_dir / "agent.yaml",
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert result.workflow_template_execution_result is not None
+    memory_stage = next(
+        stage
+        for stage in result.workflow_template_execution_result.stage_results
+        if stage.stage_id == "memory"
+    )
+    assert memory_stage.status.value == "blocked"
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    memory_requested_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["event_type"] == "memory_write_requested"
+    )
+    memory_policy_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["event_type"] == "policy_decision"
+        and event["payload"]["enforcement_point"] == "before_memory_write"
+    )
+    memory_decision_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["event_type"] == "memory_write_decision"
+    )
+    assert memory_requested_index < memory_policy_index < memory_decision_index
+    assert events[memory_requested_index]["payload"] == {
+        "field_names": ["final_output_length", "outcome", "question"],
+        "field_count": 3,
+        "write_source": "controlled_react_v3",
+    }
+    assert events[memory_policy_index]["status"] == "blocked"
+    assert events[memory_policy_index]["payload"]["decision"] == "deny"
+    assert events[memory_decision_index]["status"] == "blocked"
+    assert events[memory_decision_index]["payload"]["decision"] == "deny"
+    assert "Travel meals are reimbursed" not in json.dumps(
+        events[memory_decision_index]["payload"]
+    )
+
+
 def test_execute_agent_package_run_blocks_v3_before_retrieval_without_provider_call(
     tmp_path: Path,
     monkeypatch,
