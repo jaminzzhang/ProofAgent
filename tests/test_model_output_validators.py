@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -159,6 +160,51 @@ def test_structured_final_answer_accepts_short_evidence_aligned_answer() -> None
     assert adequacy.status.value == "passed"
 
 
+def test_structured_final_answer_accepts_chinese_clause_list_answer() -> None:
+    citation = (
+        "knowledge://source/ks_myks2/document/doc_5750121a/"
+        "revision/rev_5750121a#node=026e5a0a"
+    )
+    message = """根据已接受证据，平安御享一生终身寿险（分红型）的主要条款包括：
+1. 产品提供身故保障及保单红利。
+2. 犹豫期为20日，可要求全额退还保险费。
+3. 保险期间为被保险人终身。
+4. 红利领取方式包括累积生息、抵交保险费、购买交清增额保险。
+5. 责任免除包括故意伤害、犯罪、自杀、毒品、酒驾等情形。
+6. 还包含保单贷款、自动垫交、退保和现金价值等权益。"""
+    response = ModelResponse(
+        content=json.dumps(
+            {"message": message, "citations": [citation]},
+            ensure_ascii=False,
+        ),
+        provider_name="deepseek",
+        model_name="deepseek-v4-flash",
+        finish_reason="tool_calls",
+    )
+
+    results = validate_model_output(
+        response=response,
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        evidence=(
+            EvidenceChunk(
+                source="knowledge://source/ks_myks2/document/doc_5750121a",
+                content=(
+                    "平安御享一生终身寿险（分红型）产品提供身故保障及保单红利。"
+                    "犹豫期为20日。保险期间为被保险人终身。责任免除包括故意伤害、"
+                    "犯罪、自杀、毒品、酒驾等情形。"
+                ),
+                admission_score=1.0,
+                status=EvidenceStatus.ACCEPTED,
+                citation=citation,
+            ),
+        ),
+        question="平安御享的主要保险产品条款有哪些？",
+    )
+
+    adequacy = next(result for result in results if result.validator_name == "final_answer_adequacy")
+    assert adequacy.status.value == "passed"
+
+
 def test_structured_final_answer_matches_inflected_question_terms() -> None:
     citation = "claim-service-process.md#claim-review:L5-L6"
     response = ModelResponse(
@@ -193,6 +239,38 @@ def test_structured_final_answer_matches_inflected_question_terms() -> None:
 
     adequacy = next(result for result in results if result.validator_name == "final_answer_adequacy")
     assert adequacy.status.value == "passed"
+
+
+def test_structured_final_answer_rejects_short_table_fragment() -> None:
+    citation = "performance.md#table:L1-L8"
+    response = ModelResponse(
+        content=(
+            '{"message": "Ping An\\nrevenue\\n2023\\n2024\\nRMB 10.5b\\n+4%", '
+            f'"citations": ["{citation}"]}}'
+        ),
+        provider_name="deterministic",
+        model_name="demo",
+        finish_reason="stop",
+    )
+
+    results = validate_model_output(
+        response=response,
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        evidence=(
+            EvidenceChunk(
+                source="performance.md",
+                content="Ping An revenue grew to RMB 10.5b in 2024, up 4% year over year.",
+                admission_score=1.0,
+                status=EvidenceStatus.ACCEPTED,
+                citation=citation,
+            ),
+        ),
+        question="What was Ping An revenue in 2024?",
+    )
+
+    adequacy = next(result for result in results if result.validator_name == "final_answer_adequacy")
+    assert adequacy.status.value == "failed"
+    assert "missing_business_conclusion" in adequacy.metadata["violation_codes"]
 
 
 def test_structured_final_answer_rejects_missing_question_terms() -> None:

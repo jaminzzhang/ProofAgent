@@ -331,7 +331,26 @@ def _looks_like_table_fragment_without_conclusion(message: str) -> bool:
     if len(lines) < 6:
         return False
     short_line_count = sum(1 for line in lines if len(line) <= 48)
-    return short_line_count / len(lines) >= 0.7
+    if short_line_count / len(lines) < 0.7:
+        return False
+    return sum(1 for line in lines if _has_answer_sentence_signal(line)) < 2
+
+
+_LIST_MARKER_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)、]\s*)")
+_SENTENCE_ENDINGS = frozenset(".!?;:。！？；：")
+
+
+def _has_answer_sentence_signal(line: str) -> bool:
+    stripped = line.strip()
+    if len(stripped) < 8:
+        return False
+    if stripped[-1] in _SENTENCE_ENDINGS:
+        return True
+    if _LIST_MARKER_RE.match(stripped):
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", stripped))
+        latin_word_count = len(re.findall(r"[A-Za-z]{2,}", stripped))
+        return cjk_count >= 8 or latin_word_count >= 3
+    return False
 
 
 _LATIN_STOPWORDS = frozenset(
