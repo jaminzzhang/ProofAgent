@@ -15,13 +15,10 @@ from proof_agent.contracts import (
     ApprovalPause,
     ClarificationNeed,
     ContextAdmission,
-    EnforcementPoint,
-    EvidenceChunk,
     PublishedAgentRuntimeFacts,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
     RunResult,
-    WorkflowStageLlmInteraction,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionResult,
@@ -33,7 +30,6 @@ from proof_agent.control.workflow.controlled_react import (
 from proof_agent.control.workflow.controlled_react.ports import SnapshotStorePort
 from proof_agent.control.workflow.controlled_react.ports import ObservationTruthStorePort
 from proof_agent.control.workflow.harness_helpers import (
-    emit_policy_decision,
     finalize_run,
 )
 from proof_agent.control.workflow.templates import resolve_workflow_template
@@ -118,6 +114,12 @@ def _execute_controlled_react_v3_agent_package_run(
     if trace_path.exists():
         trace_path.unlink()
     run_id = request.run_id or f"run_{uuid4().hex[:8]}"
+    trace = TraceWriter(trace_path, run_id=run_id)
+    _emit_controlled_react_run_started(
+        trace,
+        manifest=manifest,
+        question=request.question,
+    )
     stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
         agent_yaml=request.agent_yaml,
         manifest=manifest,
@@ -147,6 +149,7 @@ def _execute_controlled_react_v3_agent_package_run(
             invocation,
             snapshot_store=request.controlled_react_snapshot_store,
             observation_truth_store=request.controlled_react_observation_truth_store,
+            trace=trace,
         )
     template = resolve_workflow_template(manifest.workflow.template)
     execution_result = orchestrator.start(
@@ -174,16 +177,9 @@ def _execute_controlled_react_v3_agent_package_run(
             ),
         }
     )
-    trace = TraceWriter(trace_path, run_id=run_id)
-    _emit_controlled_react_answer_policy_decision(
-        trace,
-        invocation=invocation,
-        execution_result=execution_result,
-    )
     emit_controlled_react_trace_projection(
         trace,
         manifest=manifest,
-        question=request.question,
         execution_result=execution_result,
         agent_version_id=request.agent_version_id,
     )
@@ -209,13 +205,11 @@ def _execute_controlled_react_v3_agent_package_run(
     )
 
 
-def emit_controlled_react_trace_projection(
+def _emit_controlled_react_run_started(
     trace: TraceWriter,
     *,
     manifest: AgentManifest,
     question: str,
-    execution_result: WorkflowTemplateExecutionResult,
-    agent_version_id: str | None,
 ) -> None:
     trace.emit(
         "run_started",
@@ -223,10 +217,19 @@ def emit_controlled_react_trace_projection(
         payload={
             "agent_name": manifest.name,
             "question": question,
-            "template_name": execution_result.template_name,
+            "template_name": manifest.workflow.template,
             "runtime": "controlled_react_orchestrator",
         },
     )
+
+
+def emit_controlled_react_trace_projection(
+    trace: TraceWriter,
+    *,
+    manifest: AgentManifest,
+    execution_result: WorkflowTemplateExecutionResult,
+    agent_version_id: str | None,
+) -> None:
     trace.emit(
         "workflow_stage_configuration_trace_summary",
         status="ok",
@@ -249,9 +252,6 @@ def emit_controlled_react_trace_projection(
             ],
         },
     )
-    if execution_result.evidence:
-        _emit_controlled_react_evidence_projection(trace, execution_result)
-    _emit_controlled_react_model_usage_projection(trace, execution_result)
     for stage_result in execution_result.stage_results:
         _emit_controlled_react_stage_result(trace, stage_result)
     if execution_result.approval_pause is not None:
@@ -264,156 +264,6 @@ def emit_controlled_react_trace_projection(
             trace,
             execution_result.clarification_need,
         )
-
-
-def _emit_controlled_react_evidence_projection(
-    trace: TraceWriter,
-    execution_result: WorkflowTemplateExecutionResult,
-) -> None:
-    evidence_payload = [
-        {
-            "source": chunk.source,
-            "status": chunk.status.value,
-            "evidence_id": chunk.evidence_id,
-            "provider_native_score": chunk.provider_native_score,
-            "admission_score": chunk.admission_score,
-            "citation": chunk.citation,
-            "metadata": dict(chunk.metadata),
-        }
-        for chunk in execution_result.evidence
-    ]
-    source_refs = _evidence_source_refs(execution_result.evidence)
-    citations = [
-        chunk.citation for chunk in execution_result.evidence if chunk.citation is not None
-    ]
-    trace.emit(
-        "retrieval_result",
-        status="ok",
-        payload={
-            "query": "controlled_react_observation",
-            "chunk_count": len(execution_result.evidence),
-            "sources": [chunk.source for chunk in execution_result.evidence],
-        },
-    )
-    trace.emit(
-        "evidence_evaluation",
-        status="ok",
-        payload={
-            "accepted_count": len(execution_result.evidence),
-            "accepted_sources": source_refs,
-            "source_refs": source_refs,
-            "citations": citations,
-            "metadata": {
-                "accepted_sources": source_refs,
-                "source_refs": source_refs,
-                "citations": citations,
-                "evidence": evidence_payload,
-            },
-        },
-    )
-
-
-def _emit_controlled_react_answer_policy_decision(
-    trace: TraceWriter,
-    *,
-    invocation: Any,
-    execution_result: WorkflowTemplateExecutionResult,
-) -> None:
-    if not execution_result.evidence:
-        return
-    decision = invocation.policy.evaluate(
-        EnforcementPoint.BEFORE_ANSWER,
-        {
-            "accepted_evidence_count": len(execution_result.evidence),
-            "citations_present": any(
-                chunk.citation is not None for chunk in execution_result.evidence
-            ),
-        },
-        trace_event_id=f"{execution_result.run_id}:controlled_react:before_answer",
-    )
-    emit_policy_decision(trace, decision)
-
-
-def _emit_controlled_react_model_usage_projection(
-    trace: TraceWriter,
-    execution_result: WorkflowTemplateExecutionResult,
-) -> None:
-    for interaction in execution_result.stage_llm_interactions:
-        _emit_controlled_react_model_interaction(
-            trace,
-            interaction,
-            model_usage_summary=dict(execution_result.model_usage_summary),
-        )
-
-
-def _emit_controlled_react_model_interaction(
-    trace: TraceWriter,
-    interaction: WorkflowStageLlmInteraction,
-    *,
-    model_usage_summary: Mapping[str, Any],
-) -> None:
-    request_json = dict(interaction.request_json)
-    messages = request_json.get("messages")
-    message_items = list(messages) if isinstance(messages, list | tuple) else []
-    trace.emit(
-        "model_request",
-        status="ok",
-        payload={
-            "provider": interaction.provider,
-            "model": interaction.model,
-            "role": interaction.role,
-            "response_format": request_json.get("response_format"),
-            "message_count": len(message_items),
-            "prompt_length": _message_content_length(message_items),
-            "system_prompt_length": _system_message_content_length(message_items),
-            "estimated_tokens": model_usage_summary.get("estimated_tokens"),
-            "stream": request_json.get("stream"),
-            "cost_class": model_usage_summary.get("cost_class"),
-            "stage_id": interaction.stage_id,
-        },
-    )
-    trace.emit(
-        "model_response",
-        status="ok",
-        payload={
-            "provider": interaction.provider,
-            "model": interaction.model,
-            "finish_reason": model_usage_summary.get("finish_reason"),
-            "content_length": interaction.response_content_length,
-            "refusal_reason": None,
-            "token_usage": model_usage_summary.get("token_usage"),
-            "stage_id": interaction.stage_id,
-        },
-    )
-
-
-def _message_content_length(messages: list[Any]) -> int:
-    total = 0
-    for message in messages:
-        if isinstance(message, Mapping):
-            total += len(str(message.get("content", "")))
-    return total
-
-
-def _system_message_content_length(messages: list[Any]) -> int:
-    total = 0
-    for message in messages:
-        if not isinstance(message, Mapping):
-            continue
-        if message.get("role") == "system":
-            total += len(str(message.get("content", "")))
-    return total
-
-
-def _evidence_source_refs(evidence: tuple[EvidenceChunk, ...]) -> list[str]:
-    refs: set[str] = set()
-    for chunk in evidence:
-        refs.add(chunk.source)
-        refs.add(Path(chunk.source).stem)
-        if chunk.citation is not None:
-            refs.add(chunk.citation)
-            refs.add(Path(chunk.citation.split("#", maxsplit=1)[0]).stem)
-    return sorted(refs)
 
 
 def _emit_controlled_react_stage_result(

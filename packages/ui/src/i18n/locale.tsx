@@ -72,6 +72,7 @@ const CORE_TRANSLATIONS: Record<Locale, Record<string, string>> = {
     'outcome.clarify': 'Clarify',
     'outcome.waiting': 'Waiting',
     'outcome.denied': 'Denied',
+    'outcome.policyDenied': 'Policy denied',
     'outcome.failed': 'Failed',
   },
   'zh-CN': {
@@ -92,6 +93,7 @@ const CORE_TRANSLATIONS: Record<Locale, Record<string, string>> = {
     'outcome.clarify': '需澄清',
     'outcome.waiting': '等待中',
     'outcome.denied': '已拒批',
+    'outcome.policyDenied': '策略拒绝',
     'outcome.failed': '失败',
   },
 }

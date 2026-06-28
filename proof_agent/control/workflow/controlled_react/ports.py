@@ -107,6 +107,16 @@ class ReviewPort(Protocol):
     ) -> ReviewDecision: ...
 
 
+class TracePort(Protocol):
+    def emit(
+        self,
+        event_type: str,
+        *,
+        status: str = "ok",
+        payload: Mapping[str, Any] | None = None,
+    ) -> None: ...
+
+
 class SnapshotStorePort(Protocol):
     def save(self, snapshot: ControlledReActRunStateSnapshot) -> str: ...
 
@@ -123,6 +133,7 @@ class ControlledReActPorts:
     tool_observation: ToolObservationPort | None = None
     policy: PolicyPort | None = None
     review: ReviewPort | None = None
+    trace: TracePort | None = None
     tool_proposal_scope: ToolProposalScopePort | None = None
     snapshot_store: SnapshotStorePort | None = None
     observation_truth_store: ObservationTruthStorePort | None = None

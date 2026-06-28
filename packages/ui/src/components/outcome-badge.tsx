@@ -3,7 +3,7 @@ import { cn } from '../lib/cn'
 /**
  * Governance outcome values. Defined here (not imported from an app's api types)
  * so the shared badge has no app coupling; apps map their backend string to
- * this union. The 8 values match Proof Agent's ReceiptOutcome contract.
+ * this union. The 9 values match Proof Agent's ReceiptOutcome contract.
  */
 export type ReceiptOutcome =
   | 'ANSWERED_WITH_CITATIONS'
@@ -12,6 +12,7 @@ export type ReceiptOutcome =
   | 'WAITING_FOR_USER_CLARIFICATION'
   | 'WAITING_FOR_APPROVAL'
   | 'TOOL_APPROVAL_DENIED'
+  | 'POLICY_DENIED'
   | 'FAILED_WITH_TRACE'
   | 'FAILED_RECEIPT_UNAVAILABLE'
 
@@ -55,6 +56,11 @@ export const OUTCOME_STYLES: Record<ReceiptOutcome, OutcomeStyle> = {
     labelKey: 'outcome.denied',
     defaultLabel: 'Denied',
   },
+  POLICY_DENIED: {
+    category: 'danger',
+    labelKey: 'outcome.policyDenied',
+    defaultLabel: 'Policy denied',
+  },
   FAILED_WITH_TRACE: {
     category: 'danger',
     labelKey: 'outcome.failed',
@@ -97,7 +103,7 @@ interface OutcomeBadgeProps {
 }
 
 /**
- * Governance outcome badge. Differentiates all 8 outcomes by semantic category
+ * Governance outcome badge. Differentiates all 9 outcomes by semantic category
  * (success/warning/danger/neutral) with tinted background + border + foreground
  * + dot, so e.g. "Refused" vs "Answered" vs "Denied" are visually distinct at a
  * glance — critical for a governance product. Restrained tints, not loud fills.

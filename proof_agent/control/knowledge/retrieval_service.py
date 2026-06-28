@@ -1536,6 +1536,7 @@ def _emit_policy(trace: TraceWriter, decision: PolicyDecision) -> None:
         status="ok" if _allowed(decision) else "blocked",
         payload={
             "decision": decision.decision.value,
+            "enforcement_point": decision.enforcement_point.value,
             "policy_rule_id": decision.policy_rule_id,
             "reason": decision.reason,
         },

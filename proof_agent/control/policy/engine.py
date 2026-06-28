@@ -164,7 +164,11 @@ class PolicyEngine:
         require_citations = bool(condition.get("require_citations", False))
         accepted_count = int(context.get("accepted_evidence_count", 0))
         citations_present = bool(context.get("citations_present", False))
-        passed = accepted_count >= min_count and (not require_citations or citations_present)
+        evidence_passed = accepted_count >= min_count and (
+            not require_citations or citations_present
+        )
+        tool_result_passed = bool(context.get("authorized_tool_result_support", False))
+        passed = evidence_passed or tool_result_passed
         return self._decision_from_rule(rule, "on_pass" if passed else "on_fail")
 
     def _evaluate_before_tool_call(

@@ -21,6 +21,7 @@ from proof_agent.contracts import (
     ModelResponse,
     ObservationRecord,
     PolicyDecision,
+    PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
     ReasoningSummary,
@@ -45,6 +46,7 @@ from proof_agent.control.workflow.controlled_react.ports import (
     ControlledReActPorts,
     ObservationTruthStorePort,
     SnapshotStorePort,
+    TracePort,
 )
 from proof_agent.control.workflow.controlled_react.tool_proposal_scope import (
     ToolProposalScopeResolver,
@@ -52,11 +54,16 @@ from proof_agent.control.workflow.controlled_react.tool_proposal_scope import (
 from proof_agent.control.workflow.harness_helpers import (
     build_model_request,
     cost_class,
+    emit_policy_decision,
     model_response_payload,
     structured_final_answer_output,
     validate_model_output,
 )
 from proof_agent.control.validators.evidence import evaluate_evidence
+from proof_agent.control.knowledge.retrieval_service import (
+    KnowledgeRetrievalRequest,
+    KnowledgeRetrievalService,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -79,22 +86,28 @@ def build_controlled_react_orchestrator_for_invocation(
     *,
     snapshot_store: SnapshotStorePort | None = None,
     observation_truth_store: ObservationTruthStorePort | None = None,
+    trace: TracePort | None = None,
 ) -> ControlledReActOrchestrator:
     """Assemble a run-scoped V3 orchestrator from resolved Harness capabilities."""
 
+    trace_port = trace or _NoopTrace()
     return ControlledReActOrchestrator(
         ports=ControlledReActPorts(
             planner=_InvocationPlannerAdapter(invocation),
             intent_resolution=_InvocationIntentResolutionAdapter(invocation),
             memory=_InvocationMemoryAdapter(invocation),
-            knowledge_observation=_InvocationKnowledgeObservationAdapter(invocation),
+            knowledge_observation=_InvocationKnowledgeObservationAdapter(
+                invocation,
+                trace=trace_port,
+            ),
             tool_observation=_InvocationToolObservationAdapter(invocation),
-            policy=_InvocationPolicyAdapter(invocation),
+            policy=_InvocationPolicyAdapter(invocation, trace=trace_port),
             review=_InvocationReviewAdapter(invocation),
+            trace=trace_port,
             tool_proposal_scope=_InvocationToolProposalScopeAdapter(invocation),
             snapshot_store=snapshot_store or _InMemorySnapshotStoreAdapter(),
             observation_truth_store=observation_truth_store,
-            answer_synthesis=_ModelAnswerSynthesisAdapter(invocation),
+            answer_synthesis=_ModelAnswerSynthesisAdapter(invocation, trace=trace_port),
         )
     )
 
@@ -229,9 +242,10 @@ class _DeterministicKnowledgeObservationAdapter:
 
 
 class _InvocationKnowledgeObservationAdapter:
-    def __init__(self, invocation: HarnessInvocation) -> None:
+    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
         self._invocation = invocation
         self._summary_builder = ObservationSummaryBuilder()
+        self._trace = trace
 
     def observe(
         self,
@@ -240,12 +254,34 @@ class _InvocationKnowledgeObservationAdapter:
         identity: ObservationIdentity,
     ) -> ObservationEffect:
         query = _string_value(action.parameters.get("query")) or state.question
+        retrieval = self._invocation.manifest.retrieval
+        service = KnowledgeRetrievalService(
+            trace=self._trace,
+            policy=self._invocation.policy,
+            knowledge_provider=self._invocation.knowledge_provider,
+        )
+        retrieval_result = service.retrieve(
+            KnowledgeRetrievalRequest(
+                question=query,
+                strategy=retrieval.strategy,
+                top_k=retrieval.top_k,
+                min_score=retrieval.min_score,
+                max_steps=retrieval.max_steps,
+                max_rounds=retrieval.max_rounds,
+                planner_model=self._invocation.retrieval_planner_model,
+                evaluator_model=self._invocation.retrieval_evaluator_model,
+                max_queries=retrieval.max_queries,
+                query_concurrency=retrieval.query_concurrency,
+                query_timeout_seconds=retrieval.query_timeout_seconds,
+            )
+        )
         evidence, accepted_evidence, evaluation_metadata = _admit_evidence(
-            self._invocation.knowledge_provider.retrieve(
-                query,
-                top_k=self._invocation.manifest.retrieval.top_k,
-            ),
-            min_score=self._invocation.manifest.retrieval.min_score,
+            retrieval_result.evidence,
+            min_score=retrieval.min_score,
+        )
+        _emit_admitted_evidence_trace(
+            self._trace,
+            accepted_evidence=accepted_evidence,
         )
         truth = RetrievalObservationTruth(
             truth_ref=identity.truth_ref,
@@ -417,9 +453,21 @@ def _require_summary_fields(
         )
 
 
+class _NoopTrace:
+    def emit(
+        self,
+        event_type: str,
+        *,
+        status: str = "ok",
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        _ = (event_type, status, payload)
+
+
 class _InvocationPolicyAdapter:
-    def __init__(self, invocation: HarnessInvocation) -> None:
+    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
         self._invocation = invocation
+        self._trace = trace
 
     def evaluate(
         self,
@@ -427,7 +475,7 @@ class _InvocationPolicyAdapter:
         action: ReActActionProposal,
     ) -> PolicyDecision:
         tool_name = action.target_tool_name or "unknown_tool"
-        return self._invocation.policy.evaluate(
+        decision = self._invocation.policy.evaluate(
             EnforcementPoint.BEFORE_TOOL_CALL,
             {
                 "run_id": state.run_id,
@@ -437,6 +485,23 @@ class _InvocationPolicyAdapter:
             },
             trace_event_id=f"{state.run_id}:{action.action_id}:policy",
         )
+        emit_policy_decision(self._trace, decision)
+        return decision
+
+    def evaluate_answer(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
+        answer: AnswerSynthesisResult,
+    ) -> PolicyDecision:
+        decision = self._invocation.policy.evaluate(
+            EnforcementPoint.BEFORE_ANSWER,
+            _answer_policy_context(state, answer_context, answer),
+            trace_event_id=f"{state.run_id}:{action.action_id}:before_answer",
+        )
+        emit_policy_decision(self._trace, decision)
+        return decision
 
 
 class _InvocationReviewAdapter:
@@ -484,8 +549,9 @@ class _InvocationReviewAdapter:
 
 
 class _ModelAnswerSynthesisAdapter:
-    def __init__(self, invocation: HarnessInvocation) -> None:
+    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
         self._invocation = invocation
+        self._trace = trace
 
     def synthesize(
         self,
@@ -518,7 +584,52 @@ class _ModelAnswerSynthesisAdapter:
             model=self._invocation.model_provider.model_name,
         )
         estimated_tokens = self._invocation.model_provider.estimate_tokens(model_request)
-        model_response = self._invocation.model_provider.generate(model_request)
+        policy_decision = self._invocation.policy.evaluate(
+            EnforcementPoint.BEFORE_MODEL_CALL,
+            _model_call_policy_context(model_request, estimated_tokens=estimated_tokens),
+            trace_event_id=f"{state.run_id}:{action.action_id}:before_model_call",
+        )
+        emit_policy_decision(self._trace, policy_decision)
+        if policy_decision.decision is not PolicyDecisionType.ALLOW:
+            message = "The final-answer model call was blocked by policy."
+            return AnswerSynthesisResult(
+                outcome=ReceiptOutcome.POLICY_DENIED,
+                final_output=message,
+                message=message,
+                reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+                evidence=evidence,
+                model_usage_summary={
+                    "provider": model_request.provider,
+                    "model": model_request.model,
+                    "role": ModelCallRole.FINAL_ANSWER.value,
+                    "message_count": len(model_request.messages),
+                    "estimated_tokens": estimated_tokens,
+                    "stream": model_request.stream,
+                    "cost_class": cost_class(model_request.provider),
+                },
+            )
+        _emit_model_request_trace(
+            self._trace,
+            model_request,
+            estimated_tokens=estimated_tokens,
+            stage_id="model_answer",
+        )
+        try:
+            model_response = self._invocation.model_provider.generate(model_request)
+        except Exception as exc:
+            _emit_model_error_trace(
+                self._trace,
+                provider=model_request.provider,
+                model=model_request.model,
+                exc=exc,
+                stage_id="model_answer",
+            )
+            raise
+        _emit_model_response_trace(
+            self._trace,
+            model_response,
+            stage_id="model_answer",
+        )
         interaction = _llm_interaction_capture(
             stage_id="model_answer",
             stage_label="Model Answer",
@@ -684,6 +795,101 @@ def _evidence_from_answer_context(
     return tuple(evidence)
 
 
+def _answer_policy_context(
+    state: ControlledReActRunState,
+    answer_context: AnswerEvidenceContext,
+    answer: AnswerSynthesisResult,
+) -> Mapping[str, Any]:
+    evidence = _evidence_from_answer_context(answer_context)
+    authorized_tool_support = any(
+        isinstance(truth, ToolObservationTruth)
+        and _string_value(truth.authorized_result.get("approval_state")) != "denied"
+        for truth in answer_context.observation_truth
+    )
+    return {
+        "run_id": state.run_id,
+        "question": state.question,
+        "answer_outcome": answer.outcome.value,
+        "accepted_evidence_count": len(evidence),
+        "citations_present": bool(answer_context.citation_refs),
+        "citation_ref_count": len(answer_context.citation_refs),
+        "source_ref_count": len(answer_context.source_refs),
+        "citation_binding": "validated" if answer_context.citation_refs else "none",
+        "authorized_tool_result_support": authorized_tool_support,
+        "validation_status": (
+            "passed"
+            if answer.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+            else "blocked"
+        ),
+    }
+
+
+def _emit_admitted_evidence_trace(
+    trace: TracePort,
+    *,
+    accepted_evidence: tuple[EvidenceChunk, ...],
+) -> None:
+    source_refs = _trace_evidence_source_refs(accepted_evidence)
+    citations = [
+        chunk.citation for chunk in accepted_evidence if chunk.citation is not None
+    ]
+    trace.emit(
+        "evidence_evaluation",
+        status="ok" if accepted_evidence else "blocked",
+        payload={
+            "accepted_count": len(accepted_evidence),
+            "accepted_sources": source_refs,
+            "source_refs": source_refs,
+            "citations": citations,
+            "metadata": {
+                "accepted_sources": source_refs,
+                "source_refs": source_refs,
+                "citations": citations,
+                "evidence": [
+                    {
+                        "source": chunk.source,
+                        "status": chunk.status.value,
+                        "evidence_id": chunk.evidence_id,
+                        "provider_native_score": chunk.provider_native_score,
+                        "admission_score": chunk.admission_score,
+                        "citation": chunk.citation,
+                        "metadata": dict(chunk.metadata),
+                    }
+                    for chunk in accepted_evidence
+                ],
+            },
+        },
+    )
+
+
+def _trace_evidence_source_refs(evidence: tuple[EvidenceChunk, ...]) -> list[str]:
+    refs: set[str] = set()
+    for chunk in evidence:
+        refs.add(chunk.source)
+        refs.add(chunk.source.rsplit("/", maxsplit=1)[-1].split(".", maxsplit=1)[0])
+        if chunk.citation is not None:
+            refs.add(chunk.citation)
+            refs.add(chunk.citation.split("#", maxsplit=1)[0].rsplit("/", maxsplit=1)[-1])
+    return sorted(ref for ref in refs if ref)
+
+
+def _model_call_policy_context(
+    request: ModelRequest,
+    *,
+    estimated_tokens: int | None,
+) -> Mapping[str, Any]:
+    return {
+        "provider": request.provider,
+        "model": request.model,
+        "role": ModelCallRole.FINAL_ANSWER.value,
+        "estimated_tokens": estimated_tokens,
+        "stream": request.stream,
+        "cost_class": cost_class(request.provider),
+        "message_count": len(request.messages),
+        "response_format": request.response_format,
+    }
+
+
 def _admit_evidence(
     chunks: tuple[EvidenceChunk, ...],
     *,
@@ -745,6 +951,8 @@ def _tool_answer_from_answer_context(
             continue
         tool_name = truth.tool_name
         raw_result = truth.authorized_result
+        if _string_value(raw_result.get("approval_state")) == "denied":
+            continue
         status = _string_value(raw_result.get("status"))
         if status:
             return f"{tool_name} returned status {status}."
@@ -772,6 +980,82 @@ def _model_usage_summary(
         "content_length": len(response.content),
         "token_usage": token_usage,
     }
+
+
+def _emit_model_request_trace(
+    trace: TracePort,
+    request: ModelRequest,
+    *,
+    estimated_tokens: int | None,
+    stage_id: str,
+) -> None:
+    trace.emit(
+        "model_request",
+        status="ok",
+        payload={
+            "provider": request.provider,
+            "model": request.model,
+            "role": ModelCallRole.FINAL_ANSWER.value,
+            "response_format": request.response_format,
+            "message_count": len(request.messages),
+            "prompt_length": sum(len(message.content) for message in request.messages),
+            "system_prompt_length": sum(
+                len(message.content)
+                for message in request.messages
+                if message.role.value == "system"
+            ),
+            "estimated_tokens": estimated_tokens,
+            "stream": request.stream,
+            "cost_class": cost_class(request.provider),
+            "stage_id": stage_id,
+        },
+    )
+
+
+def _emit_model_response_trace(
+    trace: TracePort,
+    response: ModelResponse,
+    *,
+    stage_id: str,
+) -> None:
+    payload = model_response_payload(response)
+    trace.emit(
+        "model_response",
+        status="ok",
+        payload={
+            "provider": response.provider_name,
+            "model": response.model_name,
+            "role": ModelCallRole.FINAL_ANSWER.value,
+            "finish_reason": response.finish_reason,
+            "content_length": len(response.content),
+            "refusal_reason": response.refusal_reason,
+            "token_usage": payload.get("token_usage"),
+            "stage_id": stage_id,
+        },
+    )
+
+
+def _emit_model_error_trace(
+    trace: TracePort,
+    *,
+    provider: str,
+    model: str,
+    exc: BaseException,
+    stage_id: str,
+) -> None:
+    trace.emit(
+        "model_error",
+        status="error",
+        payload={
+            "provider": provider,
+            "model": model,
+            "role": ModelCallRole.FINAL_ANSWER.value,
+            "error_code": getattr(exc, "code", "PA_MODEL_002"),
+            "error_class": exc.__class__.__name__,
+            "retryable": bool(getattr(exc, "retryable", False)),
+            "stage_id": stage_id,
+        },
+    )
 
 
 def _llm_interaction_capture(

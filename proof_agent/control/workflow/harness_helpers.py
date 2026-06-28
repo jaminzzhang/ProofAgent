@@ -43,11 +43,16 @@ _FINAL_ANSWER_FUNCTION_SCHEMA_NAME = "submit_final_answer"
 def emit_policy_decision(trace: TraceWriter, decision: object) -> None:
     """Record a policy decision in the trace without leaking engine internals."""
 
+    decision_type = getattr(decision, "decision")
+    decision_value = getattr(decision_type, "value", decision_type)
+    enforcement_point = getattr(decision, "enforcement_point", None)
+    enforcement_point_value = getattr(enforcement_point, "value", enforcement_point)
     trace.emit(
         "policy_decision",
-        status="ok" if getattr(decision, "decision") == "allow" else "blocked",
+        status="ok" if decision_value == "allow" else "blocked",
         payload={
-            "decision": getattr(decision, "decision").value,
+            "decision": decision_value,
+            "enforcement_point": enforcement_point_value,
             "policy_rule_id": getattr(decision, "policy_rule_id"),
             "reason": getattr(decision, "reason"),
         },

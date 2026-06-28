@@ -118,7 +118,21 @@ class ControlledReActOrchestrator:
             if action.action_type is ReActActionType.ASK_CLARIFICATION:
                 return self._ask_clarification(request, action)
             if action.action_type is ReActActionType.GENERATE_FINAL_ANSWER:
-                answer = self._synthesize_answer(state, action)
+                if _final_answer_blocked_by_denied_tool(state):
+                    answer = _tool_approval_denied_answer(state, action)
+                    return _workflow_result_from_answer(state, answer, action)
+                answer_context = self._answer_evidence_context(state)
+                answer = self._ports.answer_synthesis.synthesize(
+                    state,
+                    action,
+                    answer_context,
+                )
+                answer = self._admit_final_answer(
+                    state,
+                    action,
+                    answer_context,
+                    answer,
+                )
                 memory_write = self._write_memory(state, answer)
                 return _workflow_result_from_answer(
                     state,
@@ -671,13 +685,33 @@ class ControlledReActOrchestrator:
             }
         )
 
-    def _synthesize_answer(
+    def _admit_final_answer(
         self,
         state: ControlledReActRunState,
         action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
+        answer: AnswerSynthesisResult,
     ) -> AnswerSynthesisResult:
-        context = self._answer_evidence_context(state)
-        return self._ports.answer_synthesis.synthesize(state, action, context)
+        if answer.outcome is not ReceiptOutcome.ANSWERED_WITH_CITATIONS:
+            return answer
+        if self._ports.policy is None:
+            return answer
+        evaluate_answer = getattr(self._ports.policy, "evaluate_answer", None)
+        if evaluate_answer is None:
+            return answer
+        decision = evaluate_answer(state, action, answer_context, answer)
+        if decision.decision is PolicyDecisionType.ALLOW:
+            return answer
+        message = "The final answer was blocked by policy."
+        return AnswerSynthesisResult(
+            outcome=ReceiptOutcome.POLICY_DENIED,
+            final_output=message,
+            message=message,
+            reasoning_summary=answer.reasoning_summary,
+            model_usage_summary=answer.model_usage_summary,
+            evidence=answer.evidence,
+            stage_llm_interactions=answer.stage_llm_interactions,
+        )
 
     def _answer_evidence_context(
         self,
@@ -881,6 +915,39 @@ def _observation_payloads(state: ControlledReActRunState) -> list[Mapping[str, A
         }
         for record in state.observation_records
     ]
+
+
+def _final_answer_blocked_by_denied_tool(state: ControlledReActRunState) -> bool:
+    return bool(_denied_tool_names(state)) and all(
+        record.accepted_evidence_count <= 0 for record in state.observation_records
+    )
+
+
+def _tool_approval_denied_answer(
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+) -> AnswerSynthesisResult:
+    tool_names = _denied_tool_names(state)
+    tool_name = tool_names[0] if tool_names else "requested"
+    message = f"The {tool_name} tool is still required after approval was denied."
+    return AnswerSynthesisResult(
+        outcome=ReceiptOutcome.TOOL_APPROVAL_DENIED,
+        final_output=message,
+        message=message,
+        reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+    )
+
+
+def _denied_tool_names(state: ControlledReActRunState) -> tuple[str, ...]:
+    names: list[str] = []
+    for record in state.observation_records:
+        if "tool_approval_denied" not in record.unresolved_subgoals:
+            continue
+        for source_ref in record.source_refs:
+            if source_ref.startswith("tool://"):
+                names.append(source_ref.removeprefix("tool://"))
+                break
+    return tuple(names)
 
 
 def _clarification_missing_fields(

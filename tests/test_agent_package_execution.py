@@ -64,6 +64,123 @@ def test_execute_agent_package_run_projects_v3_answer_governance_trace(
     assert "content" not in projected_evidence[-1]
 
 
+def test_execute_agent_package_run_blocks_v3_before_answer_policy_denial(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    policy_path = agent_dir / "policy.yaml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["rules"][0]["condition"]["min_evidence_count"] = 99
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=agent_dir / "agent.yaml",
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.POLICY_DENIED
+    assert result.final_output == "The final answer was blocked by policy."
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    before_answer_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["event_type"] == "policy_decision"
+        and event["payload"]["enforcement_point"] == "before_answer"
+    )
+    final_output_index = next(
+        index for index, event in enumerate(events) if event["event_type"] == "final_output"
+    )
+    assert before_answer_index < final_output_index
+    assert events[final_output_index]["payload"]["outcome"] == "POLICY_DENIED"
+
+
+def test_execute_agent_package_run_blocks_v3_before_model_call_without_generate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        composition,
+        "resolve_provider",
+        lambda _config: _GenerateMustNotRunProvider(),
+    )
+    agent_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    policy_path = agent_dir / "policy.yaml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["rules"].append(
+        {
+            "rule_id": "model.final_answer.max_tokens",
+            "enforcement_point": "before_model_call",
+            "condition": {"provider": "deterministic", "max_estimated_tokens": 1},
+            "decision": {"on_fail": "deny", "on_match": "allow"},
+            "reason_template": "Final-answer model call exceeds token policy.",
+        }
+    )
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=agent_dir / "agent.yaml",
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.POLICY_DENIED
+    assert result.final_output == "The final-answer model call was blocked by policy."
+
+
+def test_execute_agent_package_run_blocks_v3_before_retrieval_without_provider_call(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        composition,
+        "resolve_blended_knowledge_provider",
+        lambda *args, **kwargs: _RetrieveMustNotRunProvider(),
+    )
+    agent_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    policy_path = agent_dir / "policy.yaml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["rules"].append(
+        {
+            "rule_id": "retrieval.blocked",
+            "enforcement_point": "before_retrieval",
+            "condition": {},
+            "decision": {"on_match": "deny"},
+            "reason_template": "Retrieval is blocked for this run.",
+        }
+    )
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=agent_dir / "agent.yaml",
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert "no governed evidence" in result.final_output
+
+
 def test_execute_agent_package_run_projects_v3_complete_model_answer_chain(
     tmp_path: Path,
 ) -> None:
@@ -330,3 +447,24 @@ class _RawEvidenceAnswerProvider:
                 },
             ),
         )
+
+
+class _GenerateMustNotRunProvider:
+    provider_name = "deterministic"
+    model_name = "demo"
+
+    def estimate_tokens(self, request: object) -> int:
+        _ = request
+        return 42
+
+    def generate(self, request: object) -> ModelResponse:
+        _ = request
+        raise AssertionError("policy denied model call must not call provider.generate")
+
+
+class _RetrieveMustNotRunProvider:
+    provider_name = "blocked-knowledge"
+
+    def retrieve(self, query: str, *, top_k: int) -> tuple[object, ...]:
+        _ = (query, top_k)
+        raise AssertionError("policy denied retrieval must not call provider.retrieve")

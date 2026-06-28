@@ -45,6 +45,7 @@ const OUTCOME_FILTERS: { value: ReceiptOutcome | 'all'; labelKey: string }[] = [
   { value: 'REFUSED_NO_EVIDENCE', labelKey: 'runs.refusedNoEvidence' },
   { value: 'WAITING_FOR_APPROVAL', labelKey: 'runs.waitingForApproval' },
   { value: 'TOOL_APPROVAL_DENIED', labelKey: 'runs.toolApprovalDenied' },
+  { value: 'POLICY_DENIED', labelKey: 'runs.policyDenied' },
   { value: 'FAILED_WITH_TRACE', labelKey: 'runs.failed' },
 ]
 

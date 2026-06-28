@@ -180,6 +180,33 @@ def test_answer_synthesis_receives_answer_evidence_context() -> None:
     assert answer_synthesis.context.citation_refs == ("claims-guide.md#documents",)
 
 
+def test_before_answer_policy_denial_blocks_terminal_answer() -> None:
+    policy = _DenyAnswerAdmissionPolicy()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_RetrievalThenAnswerPlanner(),
+            knowledge_observation=_EffectKnowledgeObservation(),
+            policy=policy,
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_answer_denied",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="What documents are required?",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.POLICY_DENIED
+    assert result.final_output == "The final answer was blocked by policy."
+    assert policy.context is not None
+    assert policy.context["accepted_evidence_count"] == 1
+    assert policy.context["citations_present"] is True
+
+
 def test_observation_effect_must_match_allocated_identity() -> None:
     orchestrator = ControlledReActOrchestrator(
         ports=ControlledReActPorts(
@@ -705,6 +732,36 @@ def test_tool_answer_fallback_does_not_echo_raw_authorized_result() -> None:
     assert result.final_output == "customer_lookup returned an authorized result."
 
 
+def test_tool_answer_fallback_does_not_treat_approval_denial_as_authorized_result() -> None:
+    truth = ToolObservationTruth(
+        truth_ref="observation://run_001/obs_tool/truth",
+        observation_id="obs_tool",
+        action_id="act_tool",
+        tool_name="customer_lookup",
+        authorized_result={"approval_state": "denied", "actor": "ops"},
+        result_schema_id="customer_lookup.approval.v1",
+        approval_ref="appr_act_tool",
+    )
+
+    result = _EvidenceAnswerSynthesisAdapter().synthesize(
+        ControlledReActRunState(
+            run_id="run_001",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up this customer.",
+        ),
+        _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER),
+        AnswerEvidenceContext(
+            run_id="run_001",
+            observation_truth=(truth,),
+            source_refs=("tool://customer_lookup",),
+        ),
+    )
+
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert result.final_output == "Unable to answer without accepted governed evidence."
+
+
 def test_tool_summary_projection_requires_configured_fields() -> None:
     with pytest.raises(ProofAgentError, match="missing summary_fields"):
         _tool_summary_projection(
@@ -747,8 +804,8 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
     )
 
     assert result.run_id == "run_005"
-    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
-    assert result.final_output == "Submit the claim form and itemized invoice."
+    assert result.outcome is ReceiptOutcome.TOOL_APPROVAL_DENIED
+    assert result.final_output == "The customer_lookup tool is still required after approval was denied."
     assert result.approval_pause is None
     assert [stage.stage_id for stage in result.stage_results] == [
         "plan",
@@ -758,6 +815,52 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
         "model_answer",
         "response",
     ]
+    tool_stage = next(stage for stage in result.stage_results if stage.stage_id == "tool")
+    assert tool_stage.summary["approval_state"] == "denied"
+
+
+def test_resume_denied_tool_snapshot_can_replan_to_alternate_retrieval_answer() -> None:
+    action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_run_alt",
+        run_id="run_alt",
+        state=ControlledReActRunState(
+            run_id="run_alt",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up this customer's claim status.",
+            action_history=(action,),
+        ),
+    )
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_DeniedToolThenRetrievalThenAnswerPlanner(),
+            snapshot_store=_ResumeSnapshotStore(snapshot),
+            tool_observation=_FailingToolObservation(),
+            knowledge_observation=_EffectKnowledgeObservation(),
+            answer_synthesis=_EvidenceAnswerSynthesisAdapter(),
+        )
+    )
+
+    result = orchestrator.resume(
+        ControlledReActResumeRequest(
+            snapshot_ref="snapshot://run_004/snap_001",
+            approval_id="appr_act_tool",
+            approved=False,
+            actor="ops",
+        )
+    )
+
+    assert result.run_id == "run_alt"
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert result.final_output == (
+        "Submit the claim form and itemized invoice. Citation: claims-guide.md#documents."
+    )
+    stage_ids = [stage.stage_id for stage in result.stage_results]
+    assert "tool" in stage_ids
+    assert "retrieval" in stage_ids
     tool_stage = next(stage for stage in result.stage_results if stage.stage_id == "tool")
     assert tool_stage.summary["approval_state"] == "denied"
 
@@ -1120,6 +1223,38 @@ class _DenyRetrievalReview:
         )
 
 
+class _DenyAnswerAdmissionPolicy:
+    def __init__(self) -> None:
+        self.context: dict[str, object] | None = None
+
+    def evaluate_answer(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
+        answer: AnswerSynthesisResult,
+    ) -> PolicyDecision:
+        _ = (state, action, answer)
+        self.context = {
+            "accepted_evidence_count": sum(
+                1
+                for truth in answer_context.observation_truth
+                if isinstance(truth, RetrievalObservationTruth)
+                for chunk in truth.accepted_evidence
+                if chunk.status is EvidenceStatus.ACCEPTED
+            ),
+            "citations_present": bool(answer_context.citation_refs),
+        }
+        return PolicyDecision(
+            decision=PolicyDecisionType.DENY,
+            enforcement_point=EnforcementPoint.BEFORE_ANSWER,
+            reason="answer admission denied",
+            policy_rule_id="answer.deny",
+            metadata=self.context,
+            trace_event_id="trace_answer_deny",
+        )
+
+
 class _ToolObservationThenAnswerPlanner:
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
         if not state.observation_records:
@@ -1145,6 +1280,17 @@ class _CreateTicketThenAnswerPlanner:
 
 
 class _ToolThenRetrievalThenAnswerPlanner:
+    def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
+        if not state.observation_records:
+            return _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+                update={"target_tool_name": "customer_lookup"}
+            )
+        if len(state.observation_records) == 1:
+            return _proposal("act_retrieve", ReActActionType.PLAN_RETRIEVAL)
+        return _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER)
+
+
+class _DeniedToolThenRetrievalThenAnswerPlanner:
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
         if not state.observation_records:
             return _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
