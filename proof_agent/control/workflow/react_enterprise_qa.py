@@ -46,6 +46,7 @@ def emit_intent_resolution(
     resolution: IntentResolution,
     *,
     max_queries: int = 3,
+    stage_id: str = "intent_resolution",
 ) -> None:
     """Emit an audit-safe intent summary without raw chain-of-thought."""
 
@@ -64,6 +65,7 @@ def emit_intent_resolution(
             "confidence": resolution.confidence,
             "recommended_next_action": resolution.recommended_next_action.value,
             "retrieval_query_set": query_set,
+            "stage_id": stage_id,
         },
     )
     trace.emit(
@@ -76,6 +78,7 @@ def emit_intent_resolution(
             "queries": query_set,
             "recommended_next_action": resolution.recommended_next_action.value,
             "validation_status": "passed",
+            "stage_id": stage_id,
         },
     )
 

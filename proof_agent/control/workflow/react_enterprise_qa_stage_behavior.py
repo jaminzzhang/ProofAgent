@@ -1032,10 +1032,12 @@ class _TracingModelProvider:
         provider: ModelProvider,
         trace: TraceWriter,
         role: ModelCallRole,
+        stage_id: str | None = None,
     ) -> None:
         self._provider = provider
         self._trace = trace
         self._role = role
+        self._stage_id = stage_id
         self._sensitive_interactions: list[dict[str, Any]] = []
 
     @property
@@ -1046,8 +1048,9 @@ class _TracingModelProvider:
     def role(self) -> ModelCallRole:
         return self._role
 
-    def bind_trace(self, trace: TraceWriter) -> None:
+    def bind_trace(self, trace: TraceWriter, *, stage_id: str | None = None) -> None:
         self._trace = trace
+        self._stage_id = stage_id
 
     @property
     def provider_name(self) -> str:
@@ -1062,21 +1065,24 @@ class _TracingModelProvider:
 
     def generate(self, request: ModelRequest) -> ModelResponse:
         estimated_tokens = self._provider.estimate_tokens(request)
+        request_payload = {
+            "provider": self.provider_name,
+            "model": self.model_name,
+            "role": self._role.value,
+            "response_format": request.response_format,
+            "message_count": len(request.messages),
+            "prompt_length": sum(len(message.content) for message in request.messages),
+            "system_prompt_length": system_prompt_length(request),
+            "estimated_tokens": estimated_tokens,
+            "stream": request.stream,
+            "cost_class": cost_class(self.provider_name),
+        }
+        if self._stage_id is not None:
+            request_payload["stage_id"] = self._stage_id
         self._trace.emit(
             "model_request",
             status="ok",
-            payload={
-                "provider": self.provider_name,
-                "model": self.model_name,
-                "role": self._role.value,
-                "response_format": request.response_format,
-                "message_count": len(request.messages),
-                "prompt_length": sum(len(message.content) for message in request.messages),
-                "system_prompt_length": system_prompt_length(request),
-                "estimated_tokens": estimated_tokens,
-                "stream": request.stream,
-                "cost_class": cost_class(self.provider_name),
-            },
+            payload=request_payload,
         )
         try:
             response = self._provider.generate(request)
@@ -1087,10 +1093,13 @@ class _TracingModelProvider:
                 provider=self.provider_name,
                 model=self.model_name,
                 exc=exc,
+                stage_id=self._stage_id,
             )
             raise
         payload = model_response_payload(response)
         payload["role"] = self._role.value
+        if self._stage_id is not None:
+            payload["stage_id"] = self._stage_id
         self._trace.emit("model_response", status="ok", payload=payload)
         self._sensitive_interactions.append(
             _llm_interaction_capture(
@@ -1124,21 +1133,35 @@ class _TracingModelProvider:
 def wrap_control_plane_model_providers(
     invocation: HarnessInvocation,
     trace: TraceWriter,
+    *,
+    stage_id_by_role: Mapping[ModelCallRole, str] | None = None,
 ) -> None:
     _wrap_model_provider_attribute(
         invocation.intent_resolver,
         trace=trace,
         role=ModelCallRole.INTENT_RESOLUTION,
+        stage_id=_stage_id_for_control_plane_role(
+            ModelCallRole.INTENT_RESOLUTION,
+            stage_id_by_role,
+        ),
     )
     _wrap_model_provider_attribute(
         invocation.react_planner,
         trace=trace,
         role=ModelCallRole.REACT_PLANNER,
+        stage_id=_stage_id_for_control_plane_role(
+            ModelCallRole.REACT_PLANNER,
+            stage_id_by_role,
+        ),
     )
     _wrap_model_provider_attribute(
         invocation.review_subagent,
         trace=trace,
         role=ModelCallRole.HARNESS_REVIEW,
+        stage_id=_stage_id_for_control_plane_role(
+            ModelCallRole.HARNESS_REVIEW,
+            stage_id_by_role,
+        ),
     )
 
 
@@ -1147,6 +1170,7 @@ def _wrap_model_provider_attribute(
     *,
     trace: TraceWriter,
     role: ModelCallRole,
+    stage_id: str | None = None,
 ) -> None:
     if owner is None or not hasattr(owner, "model_provider"):
         return
@@ -1155,14 +1179,28 @@ def _wrap_model_provider_attribute(
         return
     if isinstance(provider, _TracingModelProvider):
         if provider.role == role:
-            provider.bind_trace(trace)
+            provider.bind_trace(trace, stage_id=stage_id)
             return
         provider = provider.inner_provider
     setattr(
         owner,
         "model_provider",
-        _TracingModelProvider(provider=provider, trace=trace, role=role),
+        _TracingModelProvider(
+            provider=provider,
+            trace=trace,
+            role=role,
+            stage_id=stage_id,
+        ),
     )
+
+
+def _stage_id_for_control_plane_role(
+    role: ModelCallRole,
+    stage_id_by_role: Mapping[ModelCallRole, str] | None,
+) -> str | None:
+    if stage_id_by_role is None:
+        return None
+    return stage_id_by_role.get(role)
 
 
 def _emit_control_plane_model_error(
@@ -1172,18 +1210,22 @@ def _emit_control_plane_model_error(
     provider: str,
     model: str,
     exc: BaseException,
+    stage_id: str | None = None,
 ) -> None:
+    payload = {
+        "role": role.value,
+        "provider": provider,
+        "model": model,
+        "error_code": getattr(exc, "code", "PA_MODEL_002"),
+        "error_class": exc.__class__.__name__,
+        "retryable": bool(getattr(exc, "retryable", False)),
+    }
+    if stage_id is not None:
+        payload["stage_id"] = stage_id
     trace.emit(
         "model_error",
         status="error",
-        payload={
-            "role": role.value,
-            "provider": provider,
-            "model": model,
-            "error_code": getattr(exc, "code", "PA_MODEL_002"),
-            "error_class": exc.__class__.__name__,
-            "retryable": bool(getattr(exc, "retryable", False)),
-        },
+        payload=payload,
     )
 
 

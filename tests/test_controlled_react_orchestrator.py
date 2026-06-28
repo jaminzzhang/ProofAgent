@@ -251,14 +251,17 @@ def test_before_memory_write_denial_blocks_memory_side_effect_without_changing_a
         "memory_write_decision",
     ]
     assert trace.events[0]["payload"] == {
+        "stage_id": "memory",
         "field_names": ["final_output_length", "outcome", "question"],
         "field_count": 3,
         "write_source": "controlled_react_v3",
     }
     assert trace.events[1]["status"] == "blocked"
+    assert trace.events[1]["payload"]["stage_id"] == "memory"
     assert trace.events[1]["payload"]["enforcement_point"] == "before_memory_write"
     assert trace.events[1]["payload"]["decision"] == "deny"
     assert trace.events[2]["status"] == "blocked"
+    assert trace.events[2]["payload"]["stage_id"] == "memory"
     assert trace.events[2]["payload"]["decision"] == "deny"
     assert "Submit the claim form" not in repr(trace.events)
 
@@ -410,6 +413,11 @@ def test_start_review_denies_retrieval_without_observation() -> None:
 
     assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
     assert result.final_output == "The retrieval action was not run because review denied it."
+    assert [stage.stage_id for stage in result.stage_results] == [
+        "plan",
+        "retrieval_review",
+        "response",
+    ]
 
 
 def test_empty_effective_tool_scope_removes_tool_action_from_planner_state() -> None:
@@ -475,6 +483,12 @@ def test_scope_outside_tool_proposal_fails_before_policy_and_execution() -> None
         "The customer_lookup tool was not run because it is outside "
         "the effective tool proposal scope."
     )
+    assert [stage.stage_id for stage in result.stage_results] == [
+        "tool_proposal_scope",
+        "plan",
+        "tool_review",
+        "response",
+    ]
 
 
 def test_tool_proposal_binding_runs_before_policy_review() -> None:
@@ -599,6 +613,11 @@ def test_start_policy_denies_tool_action_without_snapshot_or_tool_execution() ->
     assert result.outcome is ReceiptOutcome.TOOL_APPROVAL_DENIED
     assert result.final_output == "The customer_lookup tool was not run because policy denied it."
     assert result.approval_pause is None
+    assert [stage.stage_id for stage in result.stage_results] == [
+        "plan",
+        "tool_review",
+        "response",
+    ]
 
 
 def test_start_policy_allows_tool_action_then_replans_to_answer_without_snapshot() -> None:
@@ -762,6 +781,11 @@ def test_resume_fails_closed_when_approved_tool_snapshot_integrity_mismatches() 
     assert result.final_output == (
         "The approved tool proposal no longer matches the pending execution request."
     )
+    assert [stage.stage_id for stage in result.stage_results] == [
+        "plan",
+        "tool_review",
+        "response",
+    ]
 
 
 def test_resume_can_observe_tool_then_retrieval_before_answering() -> None:

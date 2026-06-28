@@ -7,19 +7,24 @@ import yaml
 from proof_agent.contracts import (
     IntentResolution,
     IntentResolutionResult,
+    ModelCallRole,
+    ModelRequest,
     ModelResponse,
     ReActActionProposal,
     ReActActionType,
+    ReActPlannerConfig,
     ReasoningSummary,
     ReceiptOutcome,
     RetrievalQueryItem,
     WorkflowStageLlmInteraction,
 )
+from proof_agent.capabilities.react.planner import LLMReActPlanner
 from proof_agent.bootstrap import composition
 from proof_agent.delivery.agent_package_execution import (
     AgentPackageRunRequest,
     execute_agent_package_run,
 )
+from proof_agent.observability.storage.run_store import RunStore
 
 
 def test_execute_agent_package_run_executes_v3_with_controlled_react(
@@ -178,6 +183,54 @@ def test_execute_agent_package_run_captures_v3_intent_resolution_llm_interaction
     assert "model_answer" in interaction_stage_ids
 
 
+def test_execute_agent_package_run_traces_v3_llm_react_planner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        composition,
+        "resolve_react_planner",
+        lambda *_args, **_kwargs: LLMReActPlanner(
+            config=ReActPlannerConfig(provider="deterministic", name="react-planner-llm"),
+            model_provider=_LlmPlannerProvider(),
+        ),
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert result.workflow_template_execution_result is not None
+    interaction_stage_roles = [
+        (interaction.stage_id, interaction.role)
+        for interaction in result.workflow_template_execution_result.stage_llm_interactions
+    ]
+    assert ("plan", ModelCallRole.REACT_PLANNER.value) in interaction_stage_roles
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    planner_model_events = [
+        event
+        for event in events
+        if event["event_type"] in {"model_request", "model_response"}
+        and event["payload"].get("role") == ModelCallRole.REACT_PLANNER.value
+    ]
+    assert [event["event_type"] for event in planner_model_events] == [
+        "model_request",
+        "model_response",
+        "model_request",
+        "model_response",
+    ]
+    assert all(event["payload"].get("stage_id") == "plan" for event in planner_model_events)
+
+
 def test_execute_agent_package_run_blocks_v3_before_answer_policy_denial(
     tmp_path: Path,
 ) -> None:
@@ -311,13 +364,16 @@ def test_execute_agent_package_run_blocks_v3_memory_write_without_blocking_answe
     )
     assert memory_requested_index < memory_policy_index < memory_decision_index
     assert events[memory_requested_index]["payload"] == {
+        "stage_id": "memory",
         "field_names": ["final_output_length", "outcome", "question"],
         "field_count": 3,
         "write_source": "controlled_react_v3",
     }
     assert events[memory_policy_index]["status"] == "blocked"
+    assert events[memory_policy_index]["payload"]["stage_id"] == "memory"
     assert events[memory_policy_index]["payload"]["decision"] == "deny"
     assert events[memory_decision_index]["status"] == "blocked"
+    assert events[memory_decision_index]["payload"]["stage_id"] == "memory"
     assert events[memory_decision_index]["payload"]["decision"] == "deny"
     assert "Travel meals are reimbursed" not in json.dumps(
         events[memory_decision_index]["payload"]
@@ -545,6 +601,9 @@ def test_execute_agent_package_run_returns_v3_clarification_need(
 
     assert result.outcome is ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION
     assert result.workflow_template_execution_result is not None
+    assert [
+        stage.stage_id for stage in result.workflow_template_execution_result.stage_results
+    ] == ["intent_resolution", "memory_read", "tool_proposal_scope", "plan", "clarification"]
     need = result.workflow_template_execution_result.clarification_need
     assert need is not None
     assert need.missing_fields == ("customer_id", "policy_id", "claim_type")
@@ -561,6 +620,129 @@ def test_execute_agent_package_run_returns_v3_clarification_need(
         ]
         for event in events
     )
+
+
+def test_execute_agent_package_run_attributes_v3_runtime_events_to_workflow_stages(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "history")
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            run_id="run_v3_observability",
+            store=store,
+        )
+    )
+
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    retrieval_runtime_event_ids = {
+        event["event_id"]
+        for event in events
+        if event["event_type"]
+        in {"retrieval_step", "retrieval_result", "evidence_evaluation"}
+    }
+    assert retrieval_runtime_event_ids
+
+    detail = store.get_run_detail("run_v3_observability")
+    assert detail is not None
+    by_stage = {stage.stage_id: stage for stage in detail.workflow_projection.stages}
+    retrieval_stage = by_stage["retrieval"]
+    assert retrieval_runtime_event_ids.issubset(set(retrieval_stage.related_event_ids))
+
+
+def test_execute_agent_package_run_traces_v3_retrieval_review_decision(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "history")
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            run_id="run_v3_review_observability",
+            store=store,
+        )
+    )
+
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    review_events = [
+        event
+        for event in events
+        if event["event_type"] in {"review_requested", "review_decision"}
+    ]
+    review_policy_events = [
+        event
+        for event in events
+        if event["event_type"] == "policy_decision"
+        and event["payload"].get("enforcement_point") == "before_retrieval_plan"
+    ]
+    assert [event["event_type"] for event in review_events] == [
+        "review_requested",
+        "review_decision",
+    ]
+    assert review_policy_events
+    assert all(
+        event["payload"].get("stage_id") == "retrieval_review"
+        for event in review_events + review_policy_events
+    )
+
+    detail = store.get_run_detail("run_v3_review_observability")
+    assert detail is not None
+    by_stage = {stage.stage_id: stage for stage in detail.workflow_projection.stages}
+    retrieval_review_stage = by_stage["retrieval_review"]
+    review_event_ids = {
+        event["event_id"] for event in review_events + review_policy_events
+    }
+    assert review_event_ids.issubset(set(retrieval_review_stage.related_event_ids))
+
+
+def test_execute_agent_package_run_stage_scopes_all_v3_runtime_events(
+    tmp_path: Path,
+) -> None:
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    stage_scoped_event_types = {
+        "policy_decision",
+        "model_request",
+        "model_response",
+        "model_error",
+        "model_output_normalization_failed",
+        "review_requested",
+        "review_decision",
+        "review_error",
+        "review_overridden",
+        "memory_write_requested",
+        "memory_write_decision",
+        "final_output",
+    }
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    unscoped = [
+        event["event_type"]
+        for event in events
+        if event["event_type"] in stage_scoped_event_types
+        and "stage_id" not in event.get("payload", {})
+    ]
+    assert unscoped == []
 
 
 def test_execute_agent_package_run_projects_v3_tool_approval_payload(
@@ -650,6 +832,37 @@ class _RetrieveMustNotRunProvider:
     def retrieve(self, query: str, *, top_k: int) -> tuple[object, ...]:
         _ = (query, top_k)
         raise AssertionError("policy denied retrieval must not call provider.retrieve")
+
+
+class _LlmPlannerProvider:
+    provider_name = "deterministic"
+    model_name = "react-planner-llm"
+
+    def estimate_tokens(self, request: ModelRequest) -> int:
+        return sum(len(message.content) for message in request.messages)
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        content = json.dumps(
+            {
+                "action_type": (
+                    "generate_final_answer"
+                    if "accepted_evidence_count=" in request.messages[-1].content
+                    else "plan_retrieval"
+                ),
+                "parameters": (
+                    {}
+                    if "accepted_evidence_count=" in request.messages[-1].content
+                    else {"query": "What is the reimbursement rule for travel meals?"}
+                ),
+                "target_tool_name": None,
+            }
+        )
+        return ModelResponse(
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+            content=content,
+        )
 
 
 class _IntentQuerySetResolver:

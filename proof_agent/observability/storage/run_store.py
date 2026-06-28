@@ -837,16 +837,10 @@ class RunStore:
                 add_related_event(stage, event)
                 continue
 
-            if event_type in {
-                "retrieval_result",
-                "evidence_evaluation",
-                "model_request",
-                "model_response",
-                "model_error",
-                "approval_requested",
-                "pending_approval_created",
-                "clarification_requested",
-            }:
+            if (
+                event_type in _RUNTIME_STAGE_WINDOW_EVENT_TYPES
+                or event_type == "tool_proposal_scope"
+            ):
                 stage = ensure_stage(stage_id)
                 stage["visited"] = True
                 add_related_event(stage, event)

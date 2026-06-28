@@ -197,6 +197,7 @@ def _execute_controlled_react_v3_agent_package_run(
         agent_id=request.agent_id,
         agent_version_id=request.agent_version_id,
         draft_id=request.draft_id,
+        final_output_stage_id=_final_output_stage_id(execution_result),
     )
     return result.model_copy(
         update={
@@ -204,6 +205,12 @@ def _execute_controlled_react_v3_agent_package_run(
             "workflow_template_execution_result": execution_result,
         }
     )
+
+
+def _final_output_stage_id(execution_result: WorkflowTemplateExecutionResult) -> str | None:
+    if not execution_result.stage_results:
+        return None
+    return execution_result.stage_results[-1].stage_id
 
 
 def _emit_controlled_react_run_started(
@@ -275,7 +282,7 @@ def _emit_controlled_react_stage_result(
         trace.emit(
             "tool_proposal_scope",
             status="ok",
-            payload=dict(stage_result.summary),
+            payload={"stage_id": stage_result.stage_id, **dict(stage_result.summary)},
         )
     trace.emit(
         "workflow_stage_result",
@@ -309,6 +316,7 @@ def _emit_controlled_react_approval_pause(
         "status": "requested",
         "expires_at": approval_pause.expires_at,
         "summary": summary,
+        "stage_id": "tool_review",
     }
     trace.emit("approval_requested", status="waiting", payload=payload)
     trace.emit("pending_approval_created", status="waiting", payload=payload)
@@ -322,6 +330,7 @@ def _emit_controlled_react_clarification_requested(
         "clarification_requested",
         status="waiting",
         payload={
+            "stage_id": "clarification",
             "action_id": clarification_need.action_id,
             "missing_fields": list(clarification_need.missing_fields),
             "message": clarification_need.message,

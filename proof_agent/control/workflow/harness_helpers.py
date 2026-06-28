@@ -501,18 +501,22 @@ def finalize_run(
     agent_version_id: str | None = None,
     draft_id: str | None = None,
     error_code: str | None = None,
+    final_output_stage_id: str | None = None,
 ) -> RunResult:
     """Emit the final output, render the receipt, and return CLI-facing metadata."""
 
+    payload = {
+        "agent_name": agent_name,
+        "question": question,
+        "outcome": outcome.value,
+        "message": message,
+    }
+    if final_output_stage_id is not None:
+        payload["stage_id"] = final_output_stage_id
     trace.emit(
         "final_output",
         status="ok" if outcome == ReceiptOutcome.ANSWERED_WITH_CITATIONS else "blocked",
-        payload={
-            "agent_name": agent_name,
-            "question": question,
-            "outcome": outcome.value,
-            "message": message,
-        },
+        payload=payload,
     )
     generate_receipt(trace_path, receipt_path)
     result = RunResult(

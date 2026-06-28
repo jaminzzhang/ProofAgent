@@ -124,7 +124,7 @@ class ControlledReActOrchestrator:
             if action.action_type is ReActActionType.REFUSE:
                 return self._refuse_plan_budget_exhausted(request, action, state=state)
             if action.action_type is ReActActionType.ASK_CLARIFICATION:
-                return self._ask_clarification(request, action)
+                return self._ask_clarification(request, action, state=state)
             if action.action_type is ReActActionType.GENERATE_FINAL_ANSWER:
                 if _final_answer_blocked_by_denied_tool(state):
                     answer = _tool_approval_denied_answer(state, action)
@@ -150,7 +150,7 @@ class ControlledReActOrchestrator:
                 )
             if action.action_type is ReActActionType.PLAN_RETRIEVAL:
                 if self._review_denies(state, action):
-                    return self._deny_retrieval_review(request, action)
+                    return self._deny_retrieval_review(request, action, state=state)
                 state = self._observe_knowledge(state, action)
                 state, action = self._plan_next_action(
                     state,
@@ -159,11 +159,11 @@ class ControlledReActOrchestrator:
                 continue
             if action.action_type is ReActActionType.PROPOSE_TOOL_CALL:
                 if _tool_scope_violation(state, action):
-                    return self._deny_tool_scope_violation(request, action)
+                    return self._deny_tool_scope_violation(request, action, state=state)
                 state, action = self._bind_tool_proposal(state, action)
                 policy_decision = self._policy_decision(state, action)
                 if policy_decision is PolicyDecisionType.DENY:
-                    return self._deny_tool_policy(request, action)
+                    return self._deny_tool_policy(request, action, state=state)
                 if policy_decision is PolicyDecisionType.ALLOW:
                     state = self._observe_tool(state, action)
                     state, action = self._plan_next_action(
@@ -213,6 +213,8 @@ class ControlledReActOrchestrator:
         self,
         request: ControlledReActStartRequest,
         action: ReActActionProposal,
+        *,
+        state: ControlledReActRunState,
     ) -> WorkflowTemplateExecutionResult:
         missing_fields = _clarification_missing_fields(action)
         message = f"Please provide {_human_join(missing_fields)} before I can continue."
@@ -233,16 +235,21 @@ class ControlledReActOrchestrator:
             final_output=message,
             message=message,
             clarification_need=clarification_need,
-            stage_results=(
-                WorkflowStageResult(
-                    stage_id="clarification",
-                    status=WorkflowStageStatus.WAITING,
-                    outcome=ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION,
-                    summary={"missing_fields": list(missing_fields)},
-                    produced_fact_refs=("clarification_need",),
-                ),
+            stage_results=tuple(
+                _stage_results_before_terminal(state, action)
+                + [
+                    WorkflowStageResult(
+                        stage_id="clarification",
+                        status=WorkflowStageStatus.WAITING,
+                        outcome=ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION,
+                        summary={"missing_fields": list(missing_fields)},
+                        produced_fact_refs=("clarification_need",),
+                    ),
+                ]
             ),
+            intent_resolution=state.intent_resolution,
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+            stage_llm_interactions=state.stage_llm_interactions,
         )
 
     def _review_denies(
@@ -259,16 +266,36 @@ class ControlledReActOrchestrator:
         self,
         request: ControlledReActStartRequest,
         action: ReActActionProposal,
+        *,
+        state: ControlledReActRunState,
     ) -> WorkflowTemplateExecutionResult:
         message = "The retrieval action was not run because review denied it."
-        return WorkflowTemplateExecutionResult(
-            run_id=request.run_id,
-            template_name=request.template_name,
-            template_descriptor_version=request.template_descriptor_version,
+        answer = AnswerSynthesisResult(
             outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
             final_output=message,
             message=message,
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+        return WorkflowTemplateExecutionResult(
+            run_id=request.run_id,
+            template_name=request.template_name,
+            template_descriptor_version=request.template_descriptor_version,
+            outcome=answer.outcome,
+            final_output=message,
+            message=message,
+            stage_results=_stage_results_for_review_denial(
+                state,
+                action,
+                answer,
+                _retrieval_review_stage_result(
+                    action,
+                    status=WorkflowStageStatus.BLOCKED,
+                    review_status="denied",
+                ),
+            ),
+            intent_resolution=state.intent_resolution,
+            reasoning_summary=answer.reasoning_summary,
+            stage_llm_interactions=state.stage_llm_interactions,
         )
 
     def _policy_decision(
@@ -285,37 +312,77 @@ class ControlledReActOrchestrator:
         self,
         request: ControlledReActStartRequest,
         action: ReActActionProposal,
+        *,
+        state: ControlledReActRunState,
     ) -> WorkflowTemplateExecutionResult:
         tool_name = action.target_tool_name or "unknown_tool"
         message = f"The {tool_name} tool was not run because policy denied it."
-        return WorkflowTemplateExecutionResult(
-            run_id=request.run_id,
-            template_name=request.template_name,
-            template_descriptor_version=request.template_descriptor_version,
+        answer = AnswerSynthesisResult(
             outcome=ReceiptOutcome.TOOL_APPROVAL_DENIED,
             final_output=message,
             message=message,
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+        return WorkflowTemplateExecutionResult(
+            run_id=request.run_id,
+            template_name=request.template_name,
+            template_descriptor_version=request.template_descriptor_version,
+            outcome=answer.outcome,
+            final_output=message,
+            message=message,
+            stage_results=_stage_results_for_review_denial(
+                state,
+                action,
+                answer,
+                _tool_review_stage_result(
+                    action,
+                    status=WorkflowStageStatus.BLOCKED,
+                    review_status="denied",
+                ),
+            ),
+            intent_resolution=state.intent_resolution,
+            reasoning_summary=answer.reasoning_summary,
+            stage_llm_interactions=state.stage_llm_interactions,
         )
 
     def _deny_tool_scope_violation(
         self,
         request: ControlledReActStartRequest,
         action: ReActActionProposal,
+        *,
+        state: ControlledReActRunState,
     ) -> WorkflowTemplateExecutionResult:
         tool_name = action.target_tool_name or "unknown_tool"
         message = (
             f"The {tool_name} tool was not run because it is outside "
             "the effective tool proposal scope."
         )
-        return WorkflowTemplateExecutionResult(
-            run_id=request.run_id,
-            template_name=request.template_name,
-            template_descriptor_version=request.template_descriptor_version,
+        answer = AnswerSynthesisResult(
             outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
             final_output=message,
             message=message,
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+        return WorkflowTemplateExecutionResult(
+            run_id=request.run_id,
+            template_name=request.template_name,
+            template_descriptor_version=request.template_descriptor_version,
+            outcome=answer.outcome,
+            final_output=message,
+            message=message,
+            stage_results=_stage_results_for_review_denial(
+                state,
+                action,
+                answer,
+                _tool_review_stage_result(
+                    action,
+                    status=WorkflowStageStatus.BLOCKED,
+                    review_status="scope_violation",
+                ),
+            ),
+            intent_resolution=state.intent_resolution,
+            reasoning_summary=answer.reasoning_summary,
+            stage_llm_interactions=state.stage_llm_interactions,
         )
 
     def resume(
@@ -405,14 +472,32 @@ class ControlledReActOrchestrator:
         action: ReActActionProposal,
     ) -> WorkflowTemplateExecutionResult:
         message = "The approved tool proposal no longer matches the pending execution request."
-        return WorkflowTemplateExecutionResult(
-            run_id=state.run_id,
-            template_name=state.template_name,
-            template_descriptor_version=state.template_descriptor_version,
+        answer = AnswerSynthesisResult(
             outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
             final_output=message,
             message=message,
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+        return WorkflowTemplateExecutionResult(
+            run_id=state.run_id,
+            template_name=state.template_name,
+            template_descriptor_version=state.template_descriptor_version,
+            outcome=answer.outcome,
+            final_output=message,
+            message=message,
+            stage_results=_stage_results_for_review_denial(
+                state,
+                action,
+                answer,
+                _tool_review_stage_result(
+                    action,
+                    status=WorkflowStageStatus.BLOCKED,
+                    review_status="integrity_mismatch",
+                ),
+            ),
+            intent_resolution=state.intent_resolution,
+            reasoning_summary=answer.reasoning_summary,
+            stage_llm_interactions=state.stage_llm_interactions,
         )
 
     def _pause_for_tool_approval(
@@ -525,7 +610,10 @@ class ControlledReActOrchestrator:
             return None
         self._emit_trace(
             "memory_write_requested",
-            payload=_memory_write_requested_payload(candidate),
+            payload={
+                "stage_id": "memory",
+                **_memory_write_requested_payload(candidate),
+            },
         )
         policy_decision = self._memory_write_policy_decision(state, candidate)
         if (
@@ -574,6 +662,7 @@ class ControlledReActOrchestrator:
             "policy_decision",
             status="ok" if decision.decision is PolicyDecisionType.ALLOW else "blocked",
             payload={
+                "stage_id": "memory",
                 "decision": decision.decision.value,
                 "enforcement_point": decision.enforcement_point.value,
                 "policy_rule_id": decision.policy_rule_id,
@@ -604,6 +693,15 @@ class ControlledReActOrchestrator:
             max_plan_rounds=max_plan_rounds,
         )
         action = self._ports.planner.plan(planning_state)
+        planner_llm_interactions = _stage_llm_interactions_from_port(self._ports.planner)
+        if planner_llm_interactions:
+            planning_state = planning_state.model_copy(
+                update={
+                    "stage_llm_interactions": (
+                        planning_state.stage_llm_interactions + planner_llm_interactions
+                    )
+                }
+            )
         action = self._constrain_next_action(
             planning_state,
             action,
@@ -1220,6 +1318,42 @@ def _stage_results_for_waiting_approval(
     return tuple(results)
 
 
+def _stage_results_for_review_denial(
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+    answer: AnswerSynthesisResult,
+    review_stage: WorkflowStageResult,
+) -> tuple[WorkflowStageResult, ...]:
+    results = _stage_results_before_terminal(state, action)
+    if any(history.action_id == action.action_id for history in state.action_history):
+        results = _dedupe_prior_review_stages_for_action(results, action)
+    results.append(review_stage)
+    results.append(_response_stage_result(answer))
+    return tuple(results)
+
+
+def _dedupe_prior_review_stages_for_action(
+    results: list[WorkflowStageResult],
+    action: ReActActionProposal,
+) -> list[WorkflowStageResult]:
+    deduped: list[WorkflowStageResult] = []
+    kept_plan = False
+    for stage in results:
+        summary = dict(stage.summary)
+        stage_action_id = summary.get("final_action_id") or summary.get("action_id")
+        if stage_action_id != action.action_id:
+            deduped.append(stage)
+            continue
+        if stage.stage_id in {"retrieval_review", "tool_review"}:
+            continue
+        if stage.stage_id == "plan":
+            if kept_plan:
+                continue
+            kept_plan = True
+        deduped.append(stage)
+    return deduped
+
+
 def _stage_results_before_terminal(
     state: ControlledReActRunState,
     final_action: ReActActionProposal,
@@ -1303,14 +1437,17 @@ def _plan_stage_result(
 
 def _retrieval_review_stage_result(
     action: ReActActionProposal,
+    *,
+    status: WorkflowStageStatus = WorkflowStageStatus.COMPLETED,
+    review_status: str = "allowed",
 ) -> WorkflowStageResult:
     return WorkflowStageResult(
         stage_id="retrieval_review",
-        status=WorkflowStageStatus.COMPLETED,
+        status=status,
         summary={
             "action_id": action.action_id,
             "action_type": action.action_type.value,
-            "review_status": "allowed",
+            "review_status": review_status,
         },
         produced_fact_refs=("review_results",),
     )
@@ -1318,15 +1455,18 @@ def _retrieval_review_stage_result(
 
 def _tool_review_stage_result(
     action: ReActActionProposal,
+    *,
+    status: WorkflowStageStatus = WorkflowStageStatus.COMPLETED,
+    review_status: str = "allowed",
 ) -> WorkflowStageResult:
     return WorkflowStageResult(
         stage_id="tool_review",
-        status=WorkflowStageStatus.COMPLETED,
+        status=status,
         summary={
             "action_id": action.action_id,
             "action_type": action.action_type.value,
             "tool_name": action.target_tool_name or "",
-            "review_status": "allowed",
+            "review_status": review_status,
         },
         produced_fact_refs=("review_results",),
     )
@@ -1388,6 +1528,7 @@ def _memory_write_decision_payload(
 ) -> dict[str, Any]:
     decision = policy_decision.decision.value if policy_decision is not None else "allow"
     payload: dict[str, Any] = {
+        "stage_id": "memory",
         "decision": decision,
         "field_names": list(candidate.field_names),
         "field_count": candidate.field_count,

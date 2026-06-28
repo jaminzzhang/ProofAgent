@@ -61,6 +61,7 @@ from proof_agent.control.workflow.harness_helpers import (
     structured_final_answer_output,
     validate_model_output,
 )
+from proof_agent.control.workflow.react_enterprise_qa import review_action
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.knowledge.retrieval_service import (
     KnowledgeRetrievalRequest,
@@ -93,6 +94,7 @@ def build_controlled_react_orchestrator_for_invocation(
     """Assemble a run-scoped V3 orchestrator from resolved Harness capabilities."""
 
     trace_port = trace or _NoopTrace()
+    _wrap_control_plane_model_providers_for_v3(invocation, trace_port)
     return ControlledReActOrchestrator(
         ports=ControlledReActPorts(
             planner=_InvocationPlannerAdapter(invocation),
@@ -104,7 +106,7 @@ def build_controlled_react_orchestrator_for_invocation(
             ),
             tool_observation=_InvocationToolObservationAdapter(invocation),
             policy=_InvocationPolicyAdapter(invocation, trace=trace_port),
-            review=_InvocationReviewAdapter(invocation),
+            review=_InvocationReviewAdapter(invocation, trace=trace_port),
             trace=trace_port,
             tool_proposal_scope=_InvocationToolProposalScopeAdapter(invocation),
             snapshot_store=snapshot_store or _InMemorySnapshotStoreAdapter(),
@@ -176,12 +178,14 @@ class _InvocationPlannerAdapter:
     def __init__(self, invocation: HarnessInvocation) -> None:
         self._invocation = invocation
         self._fallback = DeterministicReActPlanner()
+        self.stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
 
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
+        self.stage_llm_interactions = ()
         if _has_tool_observation(state):
             return _final_answer_action("act_generate_after_tool")
         planner = self._invocation.react_planner or self._fallback
-        return planner.plan(
+        action = planner.plan(
             question=state.question,
             system_prompt="Controlled ReAct Orchestrator V3",
             context_summary=_context_summary(state),
@@ -192,6 +196,12 @@ class _InvocationPlannerAdapter:
             ),
             effective_tool_proposal_scope=state.effective_tool_proposal_scope,
         )
+        self.stage_llm_interactions = _drain_model_provider_stage_llm_interactions(
+            planner,
+            stage_id="plan",
+            stage_label="Plan",
+        )
+        return action
 
 
 class _InvocationToolProposalScopeAdapter:
@@ -265,8 +275,9 @@ class _InvocationKnowledgeObservationAdapter:
     ) -> ObservationEffect:
         query = _string_value(action.parameters.get("query")) or state.question
         retrieval = self._invocation.manifest.retrieval
+        trace = _StageScopedTrace(self._trace, stage_id="retrieval")
         service = KnowledgeRetrievalService(
-            trace=self._trace,
+            trace=trace,
             policy=self._invocation.policy,
             knowledge_provider=self._invocation.knowledge_provider,
         )
@@ -291,7 +302,7 @@ class _InvocationKnowledgeObservationAdapter:
             min_score=retrieval.min_score,
         )
         _emit_admitted_evidence_trace(
-            self._trace,
+            trace,
             accepted_evidence=accepted_evidence,
         )
         truth = RetrievalObservationTruth(
@@ -475,6 +486,64 @@ class _NoopTrace:
         _ = (event_type, status, payload)
 
 
+def _wrap_control_plane_model_providers_for_v3(
+    invocation: HarnessInvocation,
+    trace: TracePort,
+) -> None:
+    from proof_agent.control.workflow.react_enterprise_qa_stage_behavior import (
+        wrap_control_plane_model_providers,
+    )
+
+    wrap_control_plane_model_providers(
+        invocation,
+        trace,
+        stage_id_by_role={
+            ModelCallRole.INTENT_RESOLUTION: "intent_resolution",
+            ModelCallRole.REACT_PLANNER: "plan",
+            ModelCallRole.HARNESS_REVIEW: "retrieval_review",
+        },
+    )
+
+
+def _drain_model_provider_stage_llm_interactions(
+    owner: object,
+    *,
+    stage_id: str,
+    stage_label: str,
+) -> tuple[WorkflowStageLlmInteraction, ...]:
+    provider = getattr(owner, "model_provider", None)
+    drain = getattr(provider, "drain_sensitive_interactions", None)
+    if not callable(drain):
+        return ()
+    raw_interactions = drain(stage_id=stage_id, stage_label=stage_label)
+    if not isinstance(raw_interactions, list | tuple):
+        return ()
+    interactions: list[WorkflowStageLlmInteraction] = []
+    for raw_interaction in raw_interactions:
+        if isinstance(raw_interaction, WorkflowStageLlmInteraction):
+            interactions.append(raw_interaction)
+        elif isinstance(raw_interaction, Mapping):
+            interactions.append(WorkflowStageLlmInteraction(**dict(raw_interaction)))
+    return tuple(interactions)
+
+
+class _StageScopedTrace:
+    def __init__(self, trace: TracePort, *, stage_id: str) -> None:
+        self._trace = trace
+        self._stage_id = stage_id
+
+    def emit(
+        self,
+        event_type: str,
+        *,
+        status: str = "ok",
+        payload: Mapping[str, Any] | None = None,
+    ) -> object:
+        stage_payload = dict(payload or {})
+        stage_payload.setdefault("stage_id", self._stage_id)
+        return self._trace.emit(event_type, status=status, payload=stage_payload)
+
+
 class _InvocationPolicyAdapter:
     def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
         self._invocation = invocation
@@ -496,7 +565,10 @@ class _InvocationPolicyAdapter:
             },
             trace_event_id=f"{state.run_id}:{action.action_id}:policy",
         )
-        emit_policy_decision(self._trace, decision)
+        emit_policy_decision(
+            _StageScopedTrace(self._trace, stage_id="tool_review"),
+            decision,
+        )
         return decision
 
     def evaluate_answer(
@@ -511,7 +583,10 @@ class _InvocationPolicyAdapter:
             _answer_policy_context(state, answer_context, answer),
             trace_event_id=f"{state.run_id}:{action.action_id}:before_answer",
         )
-        emit_policy_decision(self._trace, decision)
+        emit_policy_decision(
+            _StageScopedTrace(self._trace, stage_id="model_answer"),
+            decision,
+        )
         return decision
 
     def evaluate_memory_write(
@@ -532,8 +607,9 @@ class _InvocationPolicyAdapter:
 
 
 class _InvocationReviewAdapter:
-    def __init__(self, invocation: HarnessInvocation) -> None:
+    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
         self._invocation = invocation
+        self._trace = trace
 
     def review(
         self,
@@ -548,19 +624,23 @@ class _InvocationReviewAdapter:
             "risk_level": action.risk_level,
             "parameters": dict(action.parameters),
         }
-        if (
-            self._invocation.manifest.review is not None
+        auto_review_enabled = bool(
+            self._invocation.manifest.review
             and self._invocation.manifest.review.mode == "auto"
-            and self._invocation.review_subagent is not None
-        ):
-            return self._invocation.review_subagent.review(
-                enforcement_point=point,
-                action=action,
-                context=context,
-            )
-        decision = self._invocation.policy.evaluate(
-            point,
-            context,
+        )
+        low_risk_fast_path_enabled = bool(
+            self._invocation.manifest.review
+            and self._invocation.manifest.review.low_risk_fast_path
+        )
+        decision, review_event = review_action(
+            trace=_StageScopedTrace(self._trace, stage_id="retrieval_review"),
+            policy=self._invocation.policy,
+            enforcement_point=point,
+            context=context,
+            proposal=action,
+            auto_review_enabled=auto_review_enabled,
+            review_subagent=self._invocation.review_subagent,
+            low_risk_fast_path_enabled=low_risk_fast_path_enabled,
             trace_event_id=f"{state.run_id}:{action.action_id}:retrieval_review",
         )
         return ReviewDecision(
@@ -571,7 +651,10 @@ class _InvocationReviewAdapter:
             confidence=1.0,
             risk_flags=tuple(action.reasoning_summary.risk_flags),
             subject_action_id=action.action_id,
-            metadata={"policy_rule_id": decision.policy_rule_id},
+            metadata={
+                "policy_rule_id": decision.policy_rule_id,
+                "review_event": review_event,
+            },
         )
 
 
@@ -616,7 +699,10 @@ class _ModelAnswerSynthesisAdapter:
             _model_call_policy_context(model_request, estimated_tokens=estimated_tokens),
             trace_event_id=f"{state.run_id}:{action.action_id}:before_model_call",
         )
-        emit_policy_decision(self._trace, policy_decision)
+        emit_policy_decision(
+            _StageScopedTrace(self._trace, stage_id="model_answer"),
+            policy_decision,
+        )
         if policy_decision.decision is not PolicyDecisionType.ALLOW:
             message = "The final-answer model call was blocked by policy."
             return AnswerSynthesisResult(
