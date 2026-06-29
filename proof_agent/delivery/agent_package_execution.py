@@ -160,6 +160,7 @@ def _execute_controlled_react_v3_agent_package_run(
                 manifest.workflow.template_descriptor_version or template.descriptor_version
             ),
             question=request.question,
+            conversation_context=request.conversation_context,
             max_plan_rounds=manifest.react.max_plan_rounds,
             retrieval_max_queries=manifest.retrieval.max_queries,
         )

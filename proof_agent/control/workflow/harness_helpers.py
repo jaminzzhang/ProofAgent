@@ -40,22 +40,30 @@ from proof_agent.observability.storage.run_store import RunStore
 _FINAL_ANSWER_FUNCTION_SCHEMA_NAME = "submit_final_answer"
 
 
-def emit_policy_decision(trace: TraceEmitter, decision: object) -> None:
+def emit_policy_decision(
+    trace: TraceEmitter,
+    decision: object,
+    *,
+    payload_extra: Mapping[str, Any] | None = None,
+) -> None:
     """Record a policy decision in the trace without leaking engine internals."""
 
     decision_type = getattr(decision, "decision")
     decision_value = getattr(decision_type, "value", decision_type)
     enforcement_point = getattr(decision, "enforcement_point", None)
     enforcement_point_value = getattr(enforcement_point, "value", enforcement_point)
+    payload = {
+        "decision": decision_value,
+        "enforcement_point": enforcement_point_value,
+        "policy_rule_id": getattr(decision, "policy_rule_id"),
+        "reason": getattr(decision, "reason"),
+    }
+    if payload_extra:
+        payload.update(payload_extra)
     trace.emit(
         "policy_decision",
         status="ok" if decision_value == "allow" else "blocked",
-        payload={
-            "decision": decision_value,
-            "enforcement_point": enforcement_point_value,
-            "policy_rule_id": getattr(decision, "policy_rule_id"),
-            "reason": getattr(decision, "reason"),
-        },
+        payload=payload,
     )
 
 

@@ -12,6 +12,7 @@ from proof_agent.contracts import (
     ApprovalPause,
     ApprovedToolProposalSnapshot,
     ClarificationNeed,
+    ContextAdmission,
     ControlledReActRunPhase,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
@@ -60,6 +61,7 @@ class ControlledReActStartRequest:
     template_name: str
     template_descriptor_version: str
     question: str
+    conversation_context: ContextAdmission | None = None
     max_plan_rounds: int = 4
     retrieval_max_queries: int = 3
 
@@ -95,6 +97,7 @@ class ControlledReActOrchestrator:
             template_name=request.template_name,
             template_descriptor_version=request.template_descriptor_version,
             question=request.question,
+            conversation_context=request.conversation_context,
             phase=ControlledReActRunPhase.PLANNING,
         )
         state = self._prepare_pre_loop_state(

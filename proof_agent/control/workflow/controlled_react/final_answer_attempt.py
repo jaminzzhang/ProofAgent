@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import Enum
 from typing import Any, Literal
 
 from proof_agent.bootstrap.composition import HarnessInvocation
@@ -12,8 +13,10 @@ from proof_agent.contracts import (
     EnforcementPoint,
     EvidenceChunk,
     ModelCallRole,
+    ModelMessage,
     ModelRequest,
     ModelResponse,
+    ModelRole,
     PolicyDecisionType,
     ReActActionProposal,
     ReceiptOutcome,
@@ -37,6 +40,18 @@ from proof_agent.control.workflow.controlled_react.ports import AnswerSynthesisR
 
 
 FINAL_ANSWER_OUTPUT_CONTRACT = "FinalAnswerOutput"
+MAX_FINAL_ANSWER_REPAIR_ATTEMPTS = 1
+
+
+class FinalAnswerAttemptStatus(str, Enum):
+    ADMITTED = "admitted"
+    POLICY_DENIED = "policy_denied"
+    SCHEMA_FAILED = "schema_failed"
+    SAFETY_FAILED = "safety_failed"
+    CITATION_BINDING_FAILED = "citation_binding_failed"
+    FINAL_ANSWER_ADEQUACY_FAILED = "final_answer_adequacy_failed"
+    VALIDATION_FAILED = "validation_failed"
+    MODEL_ERROR = "model_error"
 
 
 @dataclass(frozen=True)
@@ -57,8 +72,10 @@ class GeneratedFinalAnswerAttempt:
 class NormalizedFinalAnswerAttempt:
     generated: GeneratedFinalAnswerAttempt
     validation_results: tuple[ValidationResult, ...]
+    status: FinalAnswerAttemptStatus
     diagnostic: WorkflowStageFailureDiagnostic | None = None
     message: str | None = None
+    prior_generated_attempts: tuple[GeneratedFinalAnswerAttempt, ...] = ()
 
 
 class FinalAnswerAttemptRunner:
@@ -79,7 +96,9 @@ class FinalAnswerAttemptRunner:
         if isinstance(generated, AnswerSynthesisResult):
             return generated
         normalized = self.normalize(state, generated)
-        repaired = self.repair(normalized)
+        repaired = self.repair(state, action, normalized)
+        if isinstance(repaired, AnswerSynthesisResult):
+            return repaired
         return self.admit(state, action, repaired)
 
     def prepare(
@@ -95,6 +114,7 @@ class FinalAnswerAttemptRunner:
             evidence=evidence,
             provider=self._invocation.model_provider.provider_name,
             model=self._invocation.model_provider.model_name,
+            conversation_context=state.conversation_context,
         )
         estimated_tokens = self._invocation.model_provider.estimate_tokens(request)
         return PreparedFinalAnswerAttempt(
@@ -117,9 +137,15 @@ class FinalAnswerAttemptRunner:
             ),
             trace_event_id=f"{state.run_id}:{action.action_id}:before_model_call",
         )
+        repair_attempt = _request_repair_attempt(prepared.request)
         emit_policy_decision(
             _StageScopedTrace(self._trace, stage_id="model_answer"),
             policy_decision,
+            payload_extra=(
+                {"repair_attempt": repair_attempt}
+                if repair_attempt is not None
+                else None
+            ),
         )
         if policy_decision.decision is not PolicyDecisionType.ALLOW:
             message = "The final-answer model call was blocked by policy."
@@ -159,6 +185,7 @@ class FinalAnswerAttemptRunner:
         _emit_model_response_trace(
             self._trace,
             response,
+            repair_attempt=_request_repair_attempt(prepared.request),
             stage_id="model_answer",
         )
         interaction = _llm_interaction_capture(
@@ -200,6 +227,7 @@ class FinalAnswerAttemptRunner:
             return NormalizedFinalAnswerAttempt(
                 generated=generated,
                 validation_results=validation_results,
+                status=_attempt_status(failed),
                 diagnostic=diagnostic,
             )
         final_answer_output, _parse_error = structured_final_answer_output(
@@ -209,14 +237,38 @@ class FinalAnswerAttemptRunner:
         return NormalizedFinalAnswerAttempt(
             generated=generated,
             validation_results=validation_results,
+            status=FinalAnswerAttemptStatus.ADMITTED,
             message=str(final_answer_output.get("message", generated.response.content)),
         )
 
     def repair(
         self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
         normalized: NormalizedFinalAnswerAttempt,
-    ) -> NormalizedFinalAnswerAttempt:
-        return normalized
+    ) -> NormalizedFinalAnswerAttempt | AnswerSynthesisResult:
+        if not _repair_eligible(normalized):
+            return normalized
+        repair_request = _final_answer_repair_request(state, normalized)
+        repair_prepared = PreparedFinalAnswerAttempt(
+            request=repair_request,
+            estimated_tokens=self._invocation.model_provider.estimate_tokens(repair_request),
+            evidence=normalized.generated.prepared.evidence,
+        )
+        repair_generated = self.generate(state, action, repair_prepared)
+        if isinstance(repair_generated, AnswerSynthesisResult):
+            return replace(
+                repair_generated,
+                stage_llm_interactions=_stage_llm_interactions(normalized),
+            )
+        repaired = self.normalize(state, repair_generated)
+        return replace(
+            repaired,
+            prior_generated_attempts=(
+                *normalized.prior_generated_attempts,
+                normalized.generated,
+            ),
+        )
 
     def admit(
         self,
@@ -238,7 +290,7 @@ class FinalAnswerAttemptRunner:
                     response=generated.response,
                     estimated_tokens=generated.prepared.estimated_tokens,
                 ),
-                stage_llm_interactions=(generated.interaction,),
+                stage_llm_interactions=_stage_llm_interactions(normalized),
                 stage_failure_diagnostics=(normalized.diagnostic,),
             )
         message = normalized.message or generated.response.content
@@ -253,8 +305,138 @@ class FinalAnswerAttemptRunner:
                 response=generated.response,
                 estimated_tokens=generated.prepared.estimated_tokens,
             ),
-            stage_llm_interactions=(generated.interaction,),
+            stage_llm_interactions=_stage_llm_interactions(normalized),
         )
+
+
+def _attempt_status(
+    failed_validation_results: tuple[ValidationResult, ...],
+) -> FinalAnswerAttemptStatus:
+    error_code = _primary_error_code(failed_validation_results)
+    if error_code == "schema_failed":
+        return FinalAnswerAttemptStatus.SCHEMA_FAILED
+    if error_code == "safety_failed":
+        return FinalAnswerAttemptStatus.SAFETY_FAILED
+    if error_code == "citation_binding_failed":
+        return FinalAnswerAttemptStatus.CITATION_BINDING_FAILED
+    if error_code == "final_answer_adequacy_failed":
+        return FinalAnswerAttemptStatus.FINAL_ANSWER_ADEQUACY_FAILED
+    return FinalAnswerAttemptStatus.VALIDATION_FAILED
+
+
+def _repair_eligible(normalized: NormalizedFinalAnswerAttempt) -> bool:
+    if len(normalized.prior_generated_attempts) >= MAX_FINAL_ANSWER_REPAIR_ATTEMPTS:
+        return False
+    if not normalized.generated.prepared.evidence:
+        return False
+    if normalized.status is FinalAnswerAttemptStatus.SCHEMA_FAILED:
+        return True
+    if normalized.status is FinalAnswerAttemptStatus.CITATION_BINDING_FAILED:
+        return bool(_allowed_citation_refs(normalized.generated.prepared.evidence))
+    return normalized.status is FinalAnswerAttemptStatus.FINAL_ANSWER_ADEQUACY_FAILED
+
+
+def _final_answer_repair_request(
+    state: ControlledReActRunState,
+    normalized: NormalizedFinalAnswerAttempt,
+) -> ModelRequest:
+    generated = normalized.generated
+    request = generated.prepared.request
+    previous_json, previous_parse_error = _model_content_json(generated.response.content)
+    validation_error = {
+        "error_code": normalized.status.value,
+        "contract_name": FINAL_ANSWER_OUTPUT_CONTRACT,
+        "field_paths": list(normalized.diagnostic.field_paths if normalized.diagnostic else ()),
+        "violation_codes": list(
+            normalized.diagnostic.violation_codes if normalized.diagnostic else ()
+        ),
+        "violation_count": normalized.diagnostic.violation_count
+        if normalized.diagnostic
+        else 0,
+    }
+    repair_payload: dict[str, Any] = {
+        "question": state.question,
+        "instruction": (
+            "Repair the previous final answer output. Return only one JSON object "
+            "matching the required output contract. Use only the accepted evidence and "
+            "copy allowed citation refs exactly."
+        ),
+        "required_output_contract": {
+            "name": FINAL_ANSWER_OUTPUT_CONTRACT,
+            "required_fields": ["message", "citations"],
+            "field_types": {
+                "message": "string answer using accepted evidence only",
+                "citations": "array of exact allowed citation refs",
+            },
+        },
+        "accepted_evidence": [
+            {
+                "source": chunk.source,
+                "citation": chunk.citation,
+                "content": chunk.content,
+            }
+            for chunk in generated.prepared.evidence
+        ],
+        "allowed_citation_refs": list(
+            _allowed_citation_refs(generated.prepared.evidence)
+        ),
+        "validation_error": validation_error,
+        "previous_response_json": previous_json,
+        "previous_response_parse_error_code": previous_parse_error,
+    }
+    if state.conversation_context is not None and state.conversation_context.admitted:
+        repair_payload["conversation_context"] = {
+            "summary": state.conversation_context.summary,
+            "usage": "follow_up_resolution_only_not_evidence",
+        }
+    return ModelRequest(
+        provider=request.provider,
+        model=request.model,
+        messages=(
+            ModelMessage(
+                role=ModelRole.SYSTEM,
+                content=(
+                    "You are repairing a Proof Agent final answer JSON object. "
+                    "Do not add facts beyond accepted evidence. Do not include markdown, "
+                    "explanations, tool calls, or chain-of-thought."
+                ),
+            ),
+            ModelMessage(
+                role=ModelRole.USER,
+                content=json.dumps(repair_payload, ensure_ascii=False, sort_keys=True),
+            ),
+        ),
+        response_format="json",
+        function_schema=request.function_schema,
+        stream=request.stream,
+        metadata={
+            **dict(request.metadata),
+            "role": ModelCallRole.FINAL_ANSWER.value,
+            "repair_attempt": 1,
+        },
+        evidence_sources=request.evidence_sources,
+    )
+
+
+def _allowed_citation_refs(evidence: tuple[EvidenceChunk, ...]) -> tuple[str, ...]:
+    refs: list[str] = []
+    for chunk in evidence:
+        for value in (chunk.citation, chunk.source):
+            if isinstance(value, str) and value.strip() and value not in refs:
+                refs.append(value)
+    return tuple(refs)
+
+
+def _stage_llm_interactions(
+    normalized: NormalizedFinalAnswerAttempt,
+) -> tuple[WorkflowStageLlmInteraction, ...]:
+    return tuple(
+        attempt.interaction
+        for attempt in (
+            *normalized.prior_generated_attempts,
+            normalized.generated,
+        )
+    )
 
 
 def final_answer_validation_failure_diagnostic(
@@ -419,26 +601,30 @@ def _emit_model_request_trace(
     estimated_tokens: int | None,
     stage_id: str,
 ) -> None:
+    repair_attempt = _request_repair_attempt(request)
+    payload: dict[str, Any] = {
+        "provider": request.provider,
+        "model": request.model,
+        "role": ModelCallRole.FINAL_ANSWER.value,
+        "response_format": request.response_format,
+        "message_count": len(request.messages),
+        "prompt_length": sum(len(message.content) for message in request.messages),
+        "system_prompt_length": sum(
+            len(message.content)
+            for message in request.messages
+            if message.role.value == "system"
+        ),
+        "estimated_tokens": estimated_tokens,
+        "stream": request.stream,
+        "cost_class": cost_class(request.provider),
+        "stage_id": stage_id,
+    }
+    if repair_attempt is not None:
+        payload["repair_attempt"] = repair_attempt
     trace.emit(
         "model_request",
         status="ok",
-        payload={
-            "provider": request.provider,
-            "model": request.model,
-            "role": ModelCallRole.FINAL_ANSWER.value,
-            "response_format": request.response_format,
-            "message_count": len(request.messages),
-            "prompt_length": sum(len(message.content) for message in request.messages),
-            "system_prompt_length": sum(
-                len(message.content)
-                for message in request.messages
-                if message.role.value == "system"
-            ),
-            "estimated_tokens": estimated_tokens,
-            "stream": request.stream,
-            "cost_class": cost_class(request.provider),
-            "stage_id": stage_id,
-        },
+        payload=payload,
     )
 
 
@@ -446,23 +632,32 @@ def _emit_model_response_trace(
     trace: TracePort,
     response: ModelResponse,
     *,
+    repair_attempt: int | None = None,
     stage_id: str,
 ) -> None:
     payload = model_response_payload(response)
+    event_payload = {
+        "provider": response.provider_name,
+        "model": response.model_name,
+        "role": ModelCallRole.FINAL_ANSWER.value,
+        "finish_reason": response.finish_reason,
+        "content_length": len(response.content),
+        "refusal_reason": response.refusal_reason,
+        "token_usage": payload.get("token_usage"),
+        "stage_id": stage_id,
+    }
+    if repair_attempt is not None:
+        event_payload["repair_attempt"] = repair_attempt
     trace.emit(
         "model_response",
         status="ok",
-        payload={
-            "provider": response.provider_name,
-            "model": response.model_name,
-            "role": ModelCallRole.FINAL_ANSWER.value,
-            "finish_reason": response.finish_reason,
-            "content_length": len(response.content),
-            "refusal_reason": response.refusal_reason,
-            "token_usage": payload.get("token_usage"),
-            "stage_id": stage_id,
-        },
+        payload=event_payload,
     )
+
+
+def _request_repair_attempt(request: ModelRequest) -> int | None:
+    repair_attempt = request.metadata.get("repair_attempt")
+    return repair_attempt if isinstance(repair_attempt, int) else None
 
 
 def _emit_model_error_trace(

@@ -12,6 +12,7 @@ from proof_agent.contracts import (
     BusinessFlowSkillPackAdmissionConfig,
     BusinessFlowSkillPackDefinition,
     BusinessFlowSkillPackRecommendationType,
+    ContextAdmission,
     ModelRequest,
     ModelResponse,
     ReActActionType,
@@ -182,6 +183,63 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
     assert resolution.retrieval_query_set[0].query == (
         "inpatient reimbursement required documents"
     )
+
+
+def test_llm_intent_resolver_includes_admitted_conversation_context() -> None:
+    provider = FakeIntentProvider(
+        """
+        {
+          "resolution_id": "intent_followup_1",
+          "user_goal": "Resolve a follow-up product comparison question.",
+          "domain_intent": "public_insurance_product_explanation",
+          "known_facts": ["The user asks a follow-up about prior products."],
+          "missing_fields": [],
+          "ambiguities": [],
+          "risk_flags": [],
+          "confidence": 0.87,
+          "recommended_next_action": "plan_retrieval",
+          "retrieval_query_set": [
+            {
+              "query": "Product A Product B advantages disadvantages",
+              "intent_angle": "follow_up_reference_resolution",
+              "required": true,
+              "reason": "The admitted conversation context identifies the products."
+            }
+          ]
+        }
+        """
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared Product A and Product B.",
+        char_count=48,
+        max_turns=3,
+    )
+
+    resolver.resolve(
+        question="What are their pros and cons?",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+        conversation_context=conversation_context,
+    )
+
+    assert provider.last_request is not None
+    user_payload = json.loads(provider.last_request.messages[1].content)
+    assert user_payload["conversation_context"] == {
+        "admitted": True,
+        "turn_count": 1,
+        "included_turn_ids": ["turn_1"],
+        "summary": "Previous answer compared Product A and Product B.",
+        "char_count": 48,
+        "max_turns": 3,
+        "usage": "follow_up_resolution_only_not_evidence",
+    }
 
 
 def test_llm_intent_resolver_captures_intent_stage_llm_interaction() -> None:
@@ -520,6 +578,73 @@ def test_llm_intent_resolver_repairs_missing_contract_fields_once() -> None:
     repair_function_schema = provider.requests[1].function_schema
     assert repair_function_schema is not None
     assert repair_function_schema.name == "submit_intent_resolution"
+
+
+def test_llm_intent_repair_preserves_admitted_conversation_context() -> None:
+    provider = FakeIntentProvider(
+        [
+            """
+            {
+              "known_facts": ["The user asks about prior products."],
+              "missing_fields": [],
+              "ambiguities": [],
+              "risk_flags": [],
+              "confidence": 0.64,
+              "recommended_next_action": "plan_retrieval"
+            }
+            """,
+            """
+            {
+              "resolution_id": "intent_repaired_followup_1",
+              "user_goal": "Resolve follow-up product pros and cons.",
+              "domain_intent": "public_insurance_product_explanation",
+              "known_facts": ["The user asks about prior products."],
+              "missing_fields": [],
+              "ambiguities": [],
+              "risk_flags": [],
+              "confidence": 0.76,
+              "recommended_next_action": "plan_retrieval",
+              "retrieval_query_set": [
+                {
+                  "query": "Product A Product B advantages disadvantages",
+                  "intent_angle": "follow_up_reference_resolution",
+                  "required": true,
+                  "reason": "The admitted conversation context identifies products."
+                }
+              ]
+            }
+            """,
+        ]
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared Product A and Product B.",
+        char_count=48,
+        max_turns=3,
+    )
+
+    resolver.resolve(
+        question="What are their pros and cons?",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+        conversation_context=conversation_context,
+    )
+
+    assert len(provider.requests) == 2
+    repair_payload = json.loads(provider.requests[1].messages[1].content)
+    assert repair_payload["conversation_context"]["summary"] == (
+        "Previous answer compared Product A and Product B."
+    )
+    assert (
+        repair_payload["conversation_context"]["usage"]
+        == "follow_up_resolution_only_not_evidence"
+    )
 
 
 def test_llm_intent_resolver_repairs_business_flow_result_with_function_schema() -> None:

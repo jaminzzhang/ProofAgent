@@ -15,6 +15,7 @@ from proof_agent.contracts import (
     BusinessFlowSkillPackDefinition,
     BusinessFlowSkillPackRecommendation,
     BusinessFlowSkillPackRecommendationType,
+    ContextAdmission,
     IntentResolution,
     IntentResolutionResult,
     ModelFunctionSchema,
@@ -27,6 +28,7 @@ from proof_agent.contracts import (
     WorkflowStageLlmInteraction,
 )
 from proof_agent.contracts.manifest import ModelConfig, ReActPlannerConfig
+from proof_agent.contracts.conversation import context_admission_payload
 
 
 _ALLOWED_RECOMMENDED_ACTIONS = frozenset(
@@ -60,6 +62,7 @@ class IntentResolver(Protocol):
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        conversation_context: ContextAdmission | None = None,
         business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
     ) -> IntentResolutionResult:
         """Resolve user intent into an audit-safe structured summary."""
@@ -75,9 +78,10 @@ class DeterministicIntentResolver:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        conversation_context: ContextAdmission | None = None,
         business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
     ) -> IntentResolutionResult:
-        _ = (system_prompt, context_summary, workflow_stage_context)
+        _ = (system_prompt, context_summary, workflow_stage_context, conversation_context)
         normalized_question = question.lower()
         if "can this customer" in normalized_question or "claim it" in normalized_question:
             resolution = IntentResolution(
@@ -182,6 +186,7 @@ class LLMIntentResolver:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        conversation_context: ContextAdmission | None = None,
         business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
     ) -> IntentResolutionResult:
         business_flow_routing = _business_flow_skill_pack_routing_payload(
@@ -227,6 +232,9 @@ class LLMIntentResolver:
         }
         if workflow_stage_context:
             payload["workflow_stage_context"] = dict(workflow_stage_context)
+        conversation_payload = _conversation_context_prompt_payload(conversation_context)
+        if conversation_payload is not None:
+            payload["conversation_context"] = conversation_payload
         if business_flow_routing:
             payload["business_flow_skill_pack_routing"] = business_flow_routing
         request = ModelRequest(
@@ -339,6 +347,16 @@ def _intent_required_output_contract(
             _business_flow_skill_pack_recommendation_contract()
         ),
     }
+
+
+def _conversation_context_prompt_payload(
+    conversation_context: ContextAdmission | None,
+) -> dict[str, Any] | None:
+    if conversation_context is None or not conversation_context.admitted:
+        return None
+    payload = context_admission_payload(conversation_context)
+    payload["usage"] = "follow_up_resolution_only_not_evidence"
+    return payload
 
 
 def _business_flow_skill_pack_recommendation_contract() -> dict[str, Any]:
@@ -596,6 +614,8 @@ def _intent_repair_request(
         repair_payload["workflow_stage_context"] = original_payload[
             "workflow_stage_context"
         ]
+    if "conversation_context" in original_payload:
+        repair_payload["conversation_context"] = original_payload["conversation_context"]
     return ModelRequest(
         provider=provider,
         model=model,

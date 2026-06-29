@@ -8,6 +8,7 @@ from proof_agent.contracts import (
     ControlledReActRunPhase,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
+    ContextAdmission,
     EffectiveToolProposalScope,
     EvidenceChunk,
     EvidenceStatus,
@@ -206,6 +207,38 @@ def test_answer_synthesis_receives_answer_evidence_context() -> None:
     assert answer_synthesis.context.run_id == "run_answer_context"
     assert answer_synthesis.context.observation_truth
     assert answer_synthesis.context.citation_refs == ("claims-guide.md#documents",)
+
+
+def test_start_carries_conversation_context_into_run_state() -> None:
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous turn identified short-term accident insurance.",
+        char_count=55,
+        max_turns=3,
+    )
+    answer_synthesis = _StateCapturingAnswerSynthesis()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_TerminalAnswerPlanner(),
+            answer_synthesis=answer_synthesis,
+        )
+    )
+
+    result = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_followup_state",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="What are its pros and cons?",
+            conversation_context=conversation_context,
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert answer_synthesis.state is not None
+    assert answer_synthesis.state.conversation_context == conversation_context
 
 
 def test_before_answer_policy_denial_blocks_terminal_answer() -> None:
@@ -1070,6 +1103,26 @@ class _DiagnosticAnswerSynthesis:
                     violation_count=1,
                 ),
             ),
+        )
+
+
+class _StateCapturingAnswerSynthesis:
+    def __init__(self) -> None:
+        self.state: ControlledReActRunState | None = None
+
+    def synthesize(
+        self,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        answer_context: AnswerEvidenceContext,
+    ) -> AnswerSynthesisResult:
+        self.state = state
+        _ = answer_context
+        return AnswerSynthesisResult(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            final_output="Answered from governed state.",
+            message="Answered from governed state.",
+            reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
         )
 
 

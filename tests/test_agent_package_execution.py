@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 
 from proof_agent.contracts import (
+    ContextAdmission,
     IntentResolution,
     IntentResolutionResult,
     ModelCallRole,
@@ -16,8 +17,10 @@ from proof_agent.contracts import (
     ReasoningSummary,
     ReceiptOutcome,
     RetrievalQueryItem,
+    WorkflowTemplateExecutionResult,
     WorkflowStageLlmInteraction,
 )
+from proof_agent.control.workflow.controlled_react import ControlledReActStartRequest
 from proof_agent.capabilities.react.planner import LLMReActPlanner
 from proof_agent.bootstrap import composition
 from proof_agent.delivery.agent_package_execution import (
@@ -50,6 +53,35 @@ def test_execute_agent_package_run_executes_v3_with_controlled_react(
         and event["payload"]["runtime"] == "controlled_react_orchestrator"
         for event in events
     )
+
+
+def test_execute_agent_package_run_passes_conversation_context_to_v3_orchestrator(
+    tmp_path: Path,
+) -> None:
+    orchestrator = _CapturingControlledReActOrchestrator()
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared Product A and Product B.",
+        char_count=48,
+        max_turns=3,
+    )
+
+    execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What are their pros and cons?",
+            runs_dir=tmp_path / "run",
+            conversation_context=conversation_context,
+            controlled_react_orchestrator=orchestrator,
+        )
+    )
+
+    assert orchestrator.start_request is not None
+    assert orchestrator.start_request.conversation_context == conversation_context
 
 
 def test_execute_agent_package_run_projects_v3_answer_governance_trace(
@@ -141,6 +173,39 @@ def test_execute_agent_package_run_uses_v3_intent_retrieval_query_set(
     assert retrieval_step["payload"]["question"] == "travel meals reimbursement rule"
 
 
+def test_execute_agent_package_run_passes_conversation_context_to_intent_resolver(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    resolver = _ConversationContextCapturingIntentResolver()
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared Product A and Product B.",
+        char_count=48,
+        max_turns=3,
+    )
+    monkeypatch.setattr(
+        composition,
+        "resolve_intent_resolver",
+        lambda *_args, **_kwargs: resolver,
+    )
+
+    execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What are their pros and cons?",
+            runs_dir=tmp_path / "run",
+            conversation_context=conversation_context,
+        )
+    )
+
+    assert resolver.conversation_context == conversation_context
+
+
 def test_execute_agent_package_run_captures_v3_intent_resolution_llm_interaction(
     tmp_path: Path,
     monkeypatch,
@@ -229,6 +294,41 @@ def test_execute_agent_package_run_traces_v3_llm_react_planner(
         "model_response",
     ]
     assert all(event["payload"].get("stage_id") == "plan" for event in planner_model_events)
+
+
+def test_execute_agent_package_run_passes_conversation_context_to_react_planner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    planner = _ConversationContextCapturingPlanner()
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared Product A and Product B.",
+        char_count=48,
+        max_turns=3,
+    )
+    monkeypatch.setattr(
+        composition,
+        "resolve_react_planner",
+        lambda *_args, **_kwargs: planner,
+    )
+
+    execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What are their pros and cons?",
+            runs_dir=tmp_path / "run",
+            conversation_context=conversation_context,
+        )
+    )
+
+    assert planner.conversation_context == conversation_context
+    assert planner.context_summary is not None
+    assert "Product A and Product B" not in planner.context_summary
 
 
 def test_execute_agent_package_run_blocks_v3_before_answer_policy_denial(
@@ -480,6 +580,48 @@ def test_execute_agent_package_run_projects_v3_complete_model_answer_chain(
     assert "evidence" not in retrieval_stage.summary
 
 
+def test_execute_agent_package_run_passes_conversation_context_to_model_answer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    provider = _ConversationContextAnswerProvider()
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared reimbursement requirements.",
+        char_count=50,
+        max_turns=3,
+    )
+    monkeypatch.setattr(
+        composition,
+        "resolve_provider",
+        lambda _config: provider,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            conversation_context=conversation_context,
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert provider.requests
+    request = provider.requests[0]
+    assert request.metadata["conversation_context_admitted"] is True
+    assert "Conversation context admitted for follow-up resolution only" in (
+        request.messages[1].content
+    )
+    assert "Previous answer compared reimbursement requirements." in (
+        request.messages[1].content
+    )
+
+
 def test_execute_agent_package_run_refuses_v3_when_no_evidence_is_admitted(
     tmp_path: Path,
 ) -> None:
@@ -593,9 +735,11 @@ def test_execute_agent_package_run_rejects_v3_raw_evidence_final_answer(
     events = [
         json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
-    failure = next(
+    failures = [
         event for event in events if event["event_type"] == "final_answer_validation_failed"
-    )
+    ]
+    assert len(failures) == 2
+    failure = failures[-1]
     assert failure["status"] == "blocked"
     assert failure["payload"]["stage_id"] == "model_answer"
     assert failure["payload"]["role"] == "final_answer"
@@ -607,6 +751,118 @@ def test_execute_agent_package_run_rejects_v3_raw_evidence_final_answer(
         [event["payload"] for event in events],
         sort_keys=True,
     )
+
+
+def test_execute_agent_package_run_repairs_schema_failed_v3_final_answer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    provider = _RepairingAnswerProvider()
+    monkeypatch.setattr(
+        composition,
+        "resolve_provider",
+        lambda _config: provider,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert provider.request_count == 2
+    assert result.workflow_template_execution_result is not None
+    model_answer_interactions = [
+        interaction
+        for interaction in result.workflow_template_execution_result.stage_llm_interactions
+        if interaction.stage_id == "model_answer"
+    ]
+    assert len(model_answer_interactions) == 2
+    assert result.workflow_template_execution_result.stage_failure_diagnostics == ()
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        event["event_type"] == "final_answer_validation_failed"
+        and event["payload"]["error_code"] == "schema_failed"
+        for event in events
+    )
+    repair_model_events = [
+        event
+        for event in events
+        if event["event_type"] in {"model_request", "model_response"}
+        and event["payload"].get("role") == ModelCallRole.FINAL_ANSWER.value
+        and event["payload"].get("repair_attempt") == 1
+    ]
+    assert [event["event_type"] for event in repair_model_events] == [
+        "model_request",
+        "model_response",
+    ]
+
+
+def test_execute_agent_package_run_preserves_initial_interaction_when_repair_policy_denies(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    provider = _RepairPolicyDeniedAnswerProvider()
+    monkeypatch.setattr(
+        composition,
+        "resolve_provider",
+        lambda _config: provider,
+    )
+    agent_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    policy_path = agent_dir / "policy.yaml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["rules"].append(
+        {
+            "rule_id": "model.final_answer.repair.max_tokens",
+            "enforcement_point": "before_model_call",
+            "condition": {"provider": "deterministic", "max_estimated_tokens": 100},
+            "decision": {"on_fail": "deny", "on_match": "allow"},
+            "reason_template": "Final-answer repair model call exceeds token policy.",
+        }
+    )
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=agent_dir / "agent.yaml",
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.POLICY_DENIED
+    assert provider.request_count == 1
+    assert result.workflow_template_execution_result is not None
+    assert result.workflow_template_execution_result.stage_failure_diagnostics == ()
+    model_answer_interactions = [
+        interaction
+        for interaction in result.workflow_template_execution_result.stage_llm_interactions
+        if interaction.stage_id == "model_answer"
+    ]
+    assert len(model_answer_interactions) == 1
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    blocked_policy_events = [
+        event
+        for event in events
+        if event["event_type"] == "policy_decision"
+        and event["status"] == "blocked"
+        and event["payload"]["enforcement_point"] == "before_model_call"
+    ]
+    assert blocked_policy_events
+    assert blocked_policy_events[-1]["payload"]["repair_attempt"] == 1
 
 
 def test_execute_agent_package_run_returns_v3_clarification_need(
@@ -836,6 +1092,94 @@ class _RawEvidenceAnswerProvider:
         )
 
 
+class _ConversationContextAnswerProvider:
+    provider_name = "deterministic"
+    model_name = "demo"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    def estimate_tokens(self, request: ModelRequest) -> int:
+        return sum(len(message.content) for message in request.messages)
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        return ModelResponse(
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+            content=json.dumps(
+                {
+                    "message": (
+                        "Travel meals are reimbursed up to 50 USD per day when the "
+                        "employee provides receipts."
+                    ),
+                    "citations": ["customer-support-policy.md#travel-meals:L3-L7"],
+                },
+            ),
+        )
+
+
+class _RepairingAnswerProvider:
+    provider_name = "deterministic"
+    model_name = "demo"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    @property
+    def request_count(self) -> int:
+        return len(self.requests)
+
+    def estimate_tokens(self, request: ModelRequest) -> int:
+        return sum(len(message.content) for message in request.messages)
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            content = "not-json"
+        else:
+            content = json.dumps(
+                {
+                    "message": (
+                        "Travel meals are reimbursed up to 50 USD per day when the "
+                        "employee provides receipts."
+                    ),
+                    "citations": ["customer-support-policy.md#travel-meals:L3-L7"],
+                }
+            )
+        return ModelResponse(
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+            content=content,
+        )
+
+
+class _RepairPolicyDeniedAnswerProvider:
+    provider_name = "deterministic"
+    model_name = "demo"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    @property
+    def request_count(self) -> int:
+        return len(self.requests)
+
+    def estimate_tokens(self, request: ModelRequest) -> int:
+        return 999 if request.metadata.get("repair_attempt") == 1 else 10
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        return ModelResponse(
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+            content="not-json",
+        )
+
+
 class _GenerateMustNotRunProvider:
     provider_name = "deterministic"
     model_name = "demo"
@@ -847,6 +1191,25 @@ class _GenerateMustNotRunProvider:
     def generate(self, request: object) -> ModelResponse:
         _ = request
         raise AssertionError("policy denied model call must not call provider.generate")
+
+
+class _CapturingControlledReActOrchestrator:
+    def __init__(self) -> None:
+        self.start_request: ControlledReActStartRequest | None = None
+
+    def start(
+        self,
+        request: ControlledReActStartRequest,
+    ) -> WorkflowTemplateExecutionResult:
+        self.start_request = request
+        return WorkflowTemplateExecutionResult(
+            run_id=request.run_id,
+            template_name=request.template_name,
+            template_descriptor_version=request.template_descriptor_version,
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            final_output="Captured controlled run.",
+            message="Captured controlled run.",
+        )
 
 
 class _RetrieveMustNotRunProvider:
@@ -903,6 +1266,7 @@ class _IntentQuerySetResolver:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: object | None = None,
+        conversation_context: ContextAdmission | None = None,
         business_flow_skill_packs: tuple[object, ...] = (),
     ) -> IntentResolutionResult:
         _ = (
@@ -910,6 +1274,7 @@ class _IntentQuerySetResolver:
             system_prompt,
             context_summary,
             workflow_stage_context,
+            conversation_context,
             business_flow_skill_packs,
         )
         return IntentResolutionResult(
@@ -935,6 +1300,69 @@ class _IntentQuerySetResolver:
         )
 
 
+class _ConversationContextCapturingIntentResolver(_IntentQuerySetResolver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.conversation_context: ContextAdmission | None = None
+
+    def resolve(
+        self,
+        *,
+        question: str,
+        system_prompt: str,
+        context_summary: str,
+        workflow_stage_context: object | None = None,
+        conversation_context: ContextAdmission | None = None,
+        business_flow_skill_packs: tuple[object, ...] = (),
+    ) -> IntentResolutionResult:
+        self.conversation_context = conversation_context
+        return super().resolve(
+            question=question,
+            system_prompt=system_prompt,
+            context_summary=context_summary,
+            workflow_stage_context=workflow_stage_context,
+            business_flow_skill_packs=business_flow_skill_packs,
+        )
+
+
+class _ConversationContextCapturingPlanner:
+    def __init__(self) -> None:
+        self.conversation_context: ContextAdmission | None = None
+        self.context_summary: str | None = None
+
+    def plan(
+        self,
+        *,
+        question: str,
+        system_prompt: str,
+        context_summary: str,
+        workflow_stage_context: object | None = None,
+        conversation_context: ContextAdmission | None = None,
+        eligible_actions: object | None = None,
+        effective_tool_proposal_scope: object | None = None,
+    ) -> ReActActionProposal:
+        _ = (
+            question,
+            system_prompt,
+            workflow_stage_context,
+            eligible_actions,
+            effective_tool_proposal_scope,
+        )
+        self.conversation_context = conversation_context
+        self.context_summary = context_summary
+        if "accepted_evidence_count=" in context_summary:
+            return _package_action(
+                action_id="act_generate_after_followup_context_capture",
+                action_type=ReActActionType.GENERATE_FINAL_ANSWER,
+                parameters={},
+            )
+        return _package_action(
+            action_id="act_retrieve_after_followup_context_capture",
+            action_type=ReActActionType.PLAN_RETRIEVAL,
+            parameters={"query": "Product A Product B advantages disadvantages"},
+        )
+
+
 class _PlannerQueryMustNotWinPlanner:
     def plan(
         self,
@@ -943,6 +1371,7 @@ class _PlannerQueryMustNotWinPlanner:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: object | None = None,
+        conversation_context: ContextAdmission | None = None,
         eligible_actions: object | None = None,
         effective_tool_proposal_scope: object | None = None,
     ) -> ReActActionProposal:
@@ -950,6 +1379,7 @@ class _PlannerQueryMustNotWinPlanner:
             question,
             system_prompt,
             workflow_stage_context,
+            conversation_context,
             eligible_actions,
             effective_tool_proposal_scope,
         )

@@ -116,6 +116,7 @@ class _DeterministicPlannerAdapter:
             question=state.question,
             system_prompt="Controlled ReAct Orchestrator V3",
             context_summary=_context_summary(state),
+            conversation_context=state.conversation_context,
         )
 
 
@@ -132,6 +133,7 @@ class _InvocationIntentResolutionAdapter:
             system_prompt="Resolve user intent before Controlled ReAct planning.",
             context_summary="pre_loop=true",
             workflow_stage_context=None,
+            conversation_context=state.conversation_context,
             business_flow_skill_packs=self._invocation.business_flow_skill_packs,
         )
         self.stage_llm_interactions = _intent_resolver_stage_llm_interactions(resolver)
@@ -180,6 +182,7 @@ class _InvocationPlannerAdapter:
             question=state.question,
             system_prompt="Controlled ReAct Orchestrator V3",
             context_summary=_context_summary(state),
+            conversation_context=state.conversation_context,
             eligible_actions=(
                 frozenset(state.effective_react_action_set)
                 if state.effective_react_action_set

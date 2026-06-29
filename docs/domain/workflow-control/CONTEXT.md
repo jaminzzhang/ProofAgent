@@ -104,6 +104,10 @@ _Avoid_: Continuation state, scheduler state, raw stage result dump, runtime sta
 The validation-safe explanation of why a Workflow Template Stage stopped because of an exceptional or repairable diagnostic condition, carried as an independent execution fact rather than inside Workflow Stage Result Summary, and limited to stable error codes, role names, bounded lengths, stage status, trace event references, and bounded contract-field diagnostics without free-form diagnostic messages.
 _Avoid_: Governed refusal, approval pause, clarification need, provider response body, raw failed output, rejected field value, free-form exception message, stack trace, runtime state, chain-of-thought
 
+**Repaired Attempt Trace**:
+The trace history and sensitive validation-only LLM Interaction Capture left by a failed candidate that was successfully repaired inside the same governed attempt boundary. It is not a Workflow Stage Failure Diagnostic Projection because the stage did not finally stop.
+_Avoid_: final stage failure, terminal diagnostic, hidden retry, Dashboard failure state
+
 **ReAct Self-Loop Iteration Count**:
 The number of ReAct reasoning cycles executed inside a single model-bearing Workflow Stage during one run, derived by counting `reasoning_summary` trace events linked to that stage, and rendered on the Run Flow Diagram as a self-loop badge on the stage node. Refusal paths that skip reasoning render with count zero and no self-loop, surfacing as a visually distinct Refusal terminal node rather than a missing loop.
 _Avoid_: Workflow Stage visit count, outer pipeline step count, action_proposal count, tool call count, loop budget, max_rounds
@@ -492,6 +496,22 @@ _Avoid_: Final answer from planner summary only, citation refs without evidence 
 The Orchestrator-built final-answer input that resolves required Observation Record `truth_ref` values through the Observation Truth Store and packages typed retrieval/tool truth, citation refs, source refs, and validation precheck facts for AnswerSynthesisPort. AnswerSynthesisPort consumes this resolved context and does not receive a Truth Store handle.
 _Avoid_: Answer adapter store read, summary-derived evidence, planner summary as answer evidence, store handle in model_answer
 
+**Final Answer Follow-up Context**:
+The admitted Controlled Conversation Context made available to a Final Answer Attempt to resolve follow-up references in the user's current question while remaining non-evidence and non-citable.
+_Avoid_: Answer Evidence Context, accepted evidence, citation basis, memory evidence, raw prior conversation
+
+**Controlled ReAct Follow-up Context Injection**:
+The typed delivery of admitted Controlled Conversation Context through Controlled ReAct run state into intent resolution, planning, and final answer generation so follow-up references can influence understanding and action selection without becoming accepted evidence.
+_Avoid_: context_summary string stuffing, Answer Evidence Context, retrieval evidence, citation basis, raw prior conversation
+
+**Final Answer Repair Eligibility**:
+The deterministic classification of a failed Final Answer Attempt candidate as repairable or non-repairable before a bounded repair retry is allowed. Schema failures, citation binding failures with available allowed citation refs, and adequacy failures without safety failure are repairable; safety failure, policy denial, no accepted evidence, citation binding without allowed refs, and exhausted retry budget are non-repairable.
+_Avoid_: retry every failure, repair policy denial, repair safety failure, citation invention
+
+**Final Answer Attempt Status**:
+The internal typed status for the latest Final Answer Attempt candidate before mapping to a terminal ReceiptOutcome. Known statuses include admitted, policy_denied, schema_failed, safety_failed, citation_binding_failed, final_answer_adequacy_failed, validation_failed, and model_error; repairability is derived from status, evidence facts, citation refs, and retry budget rather than being a status itself.
+_Avoid_: ReceiptOutcome, retry flag, validator name string, user-visible refusal
+
 **Final Answer Attempt**:
 One governed attempt to produce an admissible final answer from an Answer Evidence Context, including model-call permission, Harness-normalized output, validation status, optional repair eligibility, and admission status before a terminal run outcome is committed.
 _Avoid_: ReceiptOutcome, final output, raw model response, validation log, retry loop
@@ -629,8 +649,8 @@ The terminal governed outcome used when a Control Envelope policy decision block
 _Avoid_: No evidence refusal, model error, generic failure
 
 **Clarification Continuation Run**:
-A follow-up Harness run that carries user-provided clarification through Controlled Conversation Context after an earlier run requested clarification.
-_Avoid_: Checkpoint resume, same-run continuation
+A new governed Harness run that carries user-provided clarification through Controlled Conversation Context after the immediately prior relevant run ended with Waiting For User Clarification.
+_Avoid_: Checkpoint resume, same-run continuation, ordinary follow-up after answered or refused run
 
 **Approval Checkpoint Resume**:
 The governed continuation of the original run after an external approval decision resolves a PendingApproval, resuming the stored runtime checkpoint and appending the terminal approval event to the original run trace.

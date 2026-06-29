@@ -9,6 +9,7 @@ from proof_agent.capabilities.react import (
     resolve_react_planner,
 )
 from proof_agent.contracts import (
+    ContextAdmission,
     EffectiveToolProposalScope,
     ModelRequest,
     ModelResponse,
@@ -202,6 +203,42 @@ def test_llm_react_planner_uses_model_provider_and_json_contract() -> None:
     assert proposal.parameters["query"] == "travel meal reimbursement rule"
     assert provider.requests[0].response_format == "json"
     assert provider.requests[0].stream is False
+
+
+def test_llm_react_planner_includes_admitted_conversation_context_as_typed_payload() -> None:
+    provider = FakePlannerProvider(VALID_PLANNER_OUTPUT)
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared Product A and Product B.",
+        char_count=48,
+        max_turns=3,
+    )
+
+    planner.plan(
+        question="What are their pros and cons?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="observation_count=0",
+        conversation_context=conversation_context,
+    )
+
+    user_payload = json.loads(provider.requests[0].messages[1].content)
+    assert user_payload["context_summary"] == "observation_count=0"
+    assert "Product A and Product B" not in user_payload["context_summary"]
+    assert user_payload["conversation_context"] == {
+        "admitted": True,
+        "turn_count": 1,
+        "included_turn_ids": ["turn_1"],
+        "summary": "Previous answer compared Product A and Product B.",
+        "char_count": 48,
+        "max_turns": 3,
+        "usage": "follow_up_resolution_only_not_evidence",
+    }
 
 
 def test_llm_react_planner_accepts_compact_deepseek_style_parameters() -> None:

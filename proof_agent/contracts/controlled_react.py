@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import Field, field_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts.conversation import ContextAdmission
 from proof_agent.contracts.evidence import EvidenceChunk
 from proof_agent.contracts.react_workflow import ReActActionProposal, ReActActionType
 from proof_agent.contracts.workflow_execution import WorkflowStageLlmInteraction
@@ -209,6 +210,7 @@ class ControlledReActRunState(FrozenModel):
     template_name: str
     template_descriptor_version: str
     question: str
+    conversation_context: ContextAdmission | None = None
     phase: ControlledReActRunPhase = ControlledReActRunPhase.PLANNING
     plan_round: int = 0
     action_history: tuple[ReActActionProposal, ...] = Field(default_factory=tuple)

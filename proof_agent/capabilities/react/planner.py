@@ -12,6 +12,7 @@ from proof_agent.capabilities.models.normalization import (
     parse_model_contract,
 )
 from proof_agent.contracts import (
+    ContextAdmission,
     EffectiveToolProposalScope,
     ModelFunctionSchema,
     ModelMessage,
@@ -21,6 +22,7 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
 )
+from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.contracts.manifest import ModelConfig, ReActPlannerConfig
 
 
@@ -48,6 +50,7 @@ class ReActPlanner(Protocol):
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        conversation_context: ContextAdmission | None = None,
         eligible_actions: AbstractSet[ReActActionType] | None = None,
         effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
@@ -64,6 +67,7 @@ class DeterministicReActPlanner:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        conversation_context: ContextAdmission | None = None,
         eligible_actions: AbstractSet[ReActActionType] | None = None,
         effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
@@ -71,6 +75,7 @@ class DeterministicReActPlanner:
             system_prompt,
             context_summary,
             workflow_stage_context,
+            conversation_context,
             eligible_actions,
             effective_tool_proposal_scope,
         )
@@ -190,6 +195,7 @@ class LLMReActPlanner:
         system_prompt: str,
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
+        conversation_context: ContextAdmission | None = None,
         eligible_actions: AbstractSet[ReActActionType] | None = None,
         effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
@@ -201,6 +207,9 @@ class LLMReActPlanner:
         }
         if workflow_stage_context:
             user_payload["workflow_stage_context"] = dict(workflow_stage_context)
+        conversation_payload = _conversation_context_prompt_payload(conversation_context)
+        if conversation_payload is not None:
+            user_payload["conversation_context"] = conversation_payload
         if effective_tool_proposal_scope is not None:
             user_payload["effective_tool_proposal_scope"] = _tool_scope_prompt_payload(
                 effective_tool_proposal_scope
@@ -243,6 +252,16 @@ def _planner_allowed_actions(
 ) -> list[str]:
     actions = eligible_actions if eligible_actions is not None else _PLANNER_ACTION_TYPE_SET
     return [action.value for action in sorted(actions, key=lambda item: item.value)]
+
+
+def _conversation_context_prompt_payload(
+    conversation_context: ContextAdmission | None,
+) -> dict[str, Any] | None:
+    if conversation_context is None or not conversation_context.admitted:
+        return None
+    payload = context_admission_payload(conversation_context)
+    payload["usage"] = "follow_up_resolution_only_not_evidence"
+    return payload
 
 
 def _planner_function_schema(
