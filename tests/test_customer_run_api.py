@@ -474,9 +474,7 @@ def test_personalized_coverage_or_payment_decision_refuses_and_handoffs(
     assert "will be paid" not in message
 
     handoffs = client.get("/api/handoffs").json()["data"]
-    assert [item["reason"] for item in handoffs] == [
-        "payment_or_coverage_guarantee_request"
-    ]
+    assert [item["reason"] for item in handoffs] == ["payment_or_coverage_guarantee_request"]
 
 
 def test_multi_claim_status_request_asks_customer_to_choose_one_resource(
@@ -725,9 +723,47 @@ def test_customer_run_traces_case_memory_write_decision(tmp_path: Path) -> None:
     assert response.status_code == 200
     trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
     event_types = [event["event_type"] for event in trace]
+    promotion = next(event for event in trace if event["event_type"] == "memory_promotion_decision")
+    assert promotion["payload"] == {
+        "outcome": "case_memory",
+        "source_turn_id": response.json()["turn_id"],
+        "target_scope": "case",
+        "reasons": ["case_memory_candidate_generated"],
+    }
     assert "memory_candidate_generated" in event_types
     assert "memory_write_requested" in event_types
     assert "memory_write_decision" in event_types
+
+
+def test_customer_run_traces_no_memory_promotion_when_no_candidate(tmp_path: Path) -> None:
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={"agent_id": "insurance_customer_service", "customer_id": "CUST-001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "Hello."},
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
+    promotion = next(event for event in trace if event["event_type"] == "memory_promotion_decision")
+    assert promotion["status"] == "blocked"
+    assert promotion["payload"] == {
+        "outcome": "no_memory",
+        "source_turn_id": response.json()["turn_id"],
+        "target_scope": None,
+        "reasons": ["case_memory_candidate_not_generated"],
+    }
+    assert "memory_candidate_generated" not in [event["event_type"] for event in trace]
 
 
 def test_customer_run_can_use_mem0_case_memory_adapter(tmp_path: Path) -> None:
@@ -895,10 +931,24 @@ def test_customer_persistent_user_memory_is_admitted_across_conversations_with_c
         },
     )
     first_conversation_id = first.json()["conversation_id"]
-    client.post(
+    first_run = client.post(
         f"/api/customer/conversations/{first_conversation_id}/runs",
         json={"question": "I usually care about monthly claim reports."},
     )
+    assert first_run.status_code == 200
+    first_trace = client.get(f"/api/runs/{first_run.json()['run_id']}/trace").json()["events"]
+    user_promotion = next(
+        event
+        for event in first_trace
+        if event["event_type"] == "memory_promotion_decision"
+        and event["payload"]["outcome"] == "persistent_user_memory"
+    )
+    assert user_promotion["payload"] == {
+        "outcome": "persistent_user_memory",
+        "source_turn_id": first_run.json()["turn_id"],
+        "target_scope": "user",
+        "reasons": ["persistent_user_memory_candidate_generated"],
+    }
     second = client.post(
         "/api/customer/conversations",
         json={
@@ -1006,8 +1056,7 @@ def test_customer_persistent_user_memory_can_be_exported_and_deleted(
     delete_event = next(
         event
         for event in trace
-        if event["event_type"] == "memory_delete_decision"
-        and event["payload"]["scope"] == "user"
+        if event["event_type"] == "memory_delete_decision" and event["payload"]["scope"] == "user"
     )
     assert export_event["payload"]["exported_count"] == 1
     assert export_event["payload"]["subject_ref"] == "CUST-001"
@@ -1041,7 +1090,7 @@ def test_customer_persistent_user_memory_is_not_written_without_consent(
     )
     conversation_id = created.json()["conversation_id"]
 
-    client.post(
+    run = client.post(
         f"/api/customer/conversations/{conversation_id}/runs",
         json={"question": "I usually care about monthly claim reports."},
     )
@@ -1050,5 +1099,78 @@ def test_customer_persistent_user_memory_is_not_written_without_consent(
         params={"agent_id": "insurance_user_memory"},
     )
 
+    assert run.status_code == 200
+    trace = client.get(f"/api/runs/{run.json()['run_id']}/trace").json()["events"]
+    user_no_memory = next(
+        event
+        for event in trace
+        if event["event_type"] == "memory_promotion_decision"
+        and event["payload"]["outcome"] == "no_memory"
+        and event["payload"]["reasons"] == ["user_memory_consent_not_granted"]
+    )
+    assert user_no_memory["payload"] == {
+        "outcome": "no_memory",
+        "source_turn_id": run.json()["turn_id"],
+        "target_scope": None,
+        "reasons": ["user_memory_consent_not_granted"],
+    }
+    assert exported.status_code == 200
+    assert exported.json()["memories"] == []
+
+
+def test_customer_persistent_user_memory_records_no_memory_when_no_candidate(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "insurance_customer_service_user_memory"
+    shutil.copytree(Path("examples/insurance_customer_service"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "      user:\n        enabled: false",
+            "      user:\n        enabled: true",
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={"insurance_user_memory": manifest_path},
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/customer/conversations",
+        json={
+            "agent_id": "insurance_user_memory",
+            "customer_id": "CUST-001",
+            "memory_consent": True,
+        },
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    run = client.post(
+        f"/api/customer/conversations/{conversation_id}/runs",
+        json={"question": "Hello."},
+    )
+    exported = client.get(
+        "/api/customer/memory/CUST-001",
+        params={"agent_id": "insurance_user_memory"},
+    )
+
+    assert run.status_code == 200
+    trace = client.get(f"/api/runs/{run.json()['run_id']}/trace").json()["events"]
+    user_no_memory = next(
+        event
+        for event in trace
+        if event["event_type"] == "memory_promotion_decision"
+        and event["payload"]["outcome"] == "no_memory"
+        and event["payload"]["reasons"] == ["persistent_user_memory_candidate_not_generated"]
+    )
+    assert user_no_memory["payload"] == {
+        "outcome": "no_memory",
+        "source_turn_id": run.json()["turn_id"],
+        "target_scope": None,
+        "reasons": ["persistent_user_memory_candidate_not_generated"],
+    }
     assert exported.status_code == 200
     assert exported.json()["memories"] == []

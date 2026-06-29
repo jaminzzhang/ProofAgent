@@ -27,6 +27,8 @@ from proof_agent.contracts import (
     HandoffReason,
     MemoryAdmission,
     MemoryCandidate,
+    MemoryPromotionDecision,
+    MemoryPromotionOutcome,
     MemoryQuery,
     MemoryRecord,
     MemoryScope,
@@ -390,16 +392,37 @@ def execute_customer_run_for_conversation(
             turn_id=str(payload["turn_id"]),
             manifest=manifest,
         )
-    if user_memory_enabled and user_memory_consent and conversation.customer_ref is not None:
-        _write_user_memory(
-            app_request=app_request,
-            conversation=conversation,
-            safe_response=safe_response,
-            question=request.question,
-            run_id=str(detail.run_id),
-            turn_id=str(payload["turn_id"]),
-            manifest=manifest,
-        )
+    if user_memory_enabled:
+        if not user_memory_consent:
+            _append_memory_promotion_decision_event(
+                app_request=app_request,
+                run_id=str(detail.run_id),
+                decision=MemoryPromotionDecision(
+                    outcome=MemoryPromotionOutcome.NO_MEMORY,
+                    source_turn_id=str(payload["turn_id"]),
+                    reasons=("user_memory_consent_not_granted",),
+                ),
+            )
+        elif conversation.customer_ref is None:
+            _append_memory_promotion_decision_event(
+                app_request=app_request,
+                run_id=str(detail.run_id),
+                decision=MemoryPromotionDecision(
+                    outcome=MemoryPromotionOutcome.NO_MEMORY,
+                    source_turn_id=str(payload["turn_id"]),
+                    reasons=("user_memory_subject_ref_missing",),
+                ),
+            )
+        else:
+            _write_user_memory(
+                app_request=app_request,
+                conversation=conversation,
+                safe_response=safe_response,
+                question=request.question,
+                run_id=str(detail.run_id),
+                turn_id=str(payload["turn_id"]),
+                manifest=manifest,
+            )
     return payload
 
 
@@ -608,7 +631,26 @@ def _write_case_memory(
         retention_days=_memory_scope_config(manifest, "case")["retention_days"],
     )
     if candidate is None:
+        _append_memory_promotion_decision_event(
+            app_request=app_request,
+            run_id=run_id,
+            decision=MemoryPromotionDecision(
+                outcome=MemoryPromotionOutcome.NO_MEMORY,
+                source_turn_id=turn_id,
+                reasons=("case_memory_candidate_not_generated",),
+            ),
+        )
         return
+    _append_memory_promotion_decision_event(
+        app_request=app_request,
+        run_id=run_id,
+        decision=MemoryPromotionDecision(
+            outcome=MemoryPromotionOutcome.CASE_MEMORY,
+            source_turn_id=turn_id,
+            target_scope=MemoryScope.CASE,
+            reasons=("case_memory_candidate_generated",),
+        ),
+    )
     _write_memory_candidate(
         app_request=app_request,
         run_id=run_id,
@@ -639,7 +681,26 @@ def _write_user_memory(
         retention_days=_memory_scope_config(manifest, "user")["retention_days"],
     )
     if candidate is None:
+        _append_memory_promotion_decision_event(
+            app_request=app_request,
+            run_id=run_id,
+            decision=MemoryPromotionDecision(
+                outcome=MemoryPromotionOutcome.NO_MEMORY,
+                source_turn_id=turn_id,
+                reasons=("persistent_user_memory_candidate_not_generated",),
+            ),
+        )
         return
+    _append_memory_promotion_decision_event(
+        app_request=app_request,
+        run_id=run_id,
+        decision=MemoryPromotionDecision(
+            outcome=MemoryPromotionOutcome.PERSISTENT_USER_MEMORY,
+            source_turn_id=turn_id,
+            target_scope=MemoryScope.USER,
+            reasons=("persistent_user_memory_candidate_generated",),
+        ),
+    )
     _write_memory_candidate(
         app_request=app_request,
         run_id=run_id,
@@ -720,6 +781,21 @@ def _write_memory_candidate(
             "case_id": record.case_id,
             "subject_ref": record.subject_ref,
         },
+    )
+
+
+def _append_memory_promotion_decision_event(
+    *,
+    app_request: Request,
+    run_id: str,
+    decision: MemoryPromotionDecision,
+) -> None:
+    _append_run_trace_event(
+        app_request=app_request,
+        run_id=run_id,
+        event_type="memory_promotion_decision",
+        status="ok" if decision.outcome is not MemoryPromotionOutcome.NO_MEMORY else "blocked",
+        payload=decision.model_dump(mode="json"),
     )
 
 

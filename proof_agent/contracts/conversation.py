@@ -18,6 +18,9 @@ class ContextAdmission(FrozenModel):
     summary: str = ""
     char_count: int = 0
     max_turns: int = 3
+    dropped_turn_ids: tuple[str, ...] = Field(default_factory=tuple)
+    fallback_reasons: tuple[str, ...] = Field(default_factory=tuple)
+    clarification_turn_ids: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class ConversationTurn(FrozenModel):
@@ -77,6 +80,9 @@ def context_admission_payload(admission: ContextAdmission) -> dict[str, Any]:
         "summary": admission.summary,
         "char_count": admission.char_count,
         "max_turns": admission.max_turns,
+        "dropped_turn_ids": list(admission.dropped_turn_ids),
+        "fallback_reasons": list(admission.fallback_reasons),
+        "clarification_turn_ids": list(admission.clarification_turn_ids),
     }
 
 

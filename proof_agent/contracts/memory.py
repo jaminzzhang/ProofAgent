@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenModel, freeze_value
 
@@ -31,6 +31,39 @@ class MemoryStatus(str, Enum):
     ACTIVE = "active"
     SUPERSEDED = "superseded"
     DELETED = "deleted"
+
+
+class MemoryPromotionOutcome(str, Enum):
+    """Result of deciding whether conversation facts should become memory."""
+
+    CASE_MEMORY = "case_memory"
+    PERSISTENT_USER_MEMORY = "persistent_user_memory"
+    NO_MEMORY = "no_memory"
+
+
+class MemoryPromotionDecision(FrozenModel):
+    """Trace-safe decision for promoting conversation-derived facts into memory."""
+
+    outcome: MemoryPromotionOutcome
+    source_turn_id: str
+    target_scope: MemoryScope | None = None
+    reasons: tuple[str, ...] = Field(default_factory=tuple)
+
+    @model_validator(mode="after")
+    def validate_target_scope(self) -> "MemoryPromotionDecision":
+        if self.outcome is MemoryPromotionOutcome.NO_MEMORY and self.target_scope is not None:
+            raise ValueError("No Memory Classification cannot carry a target scope.")
+        if (
+            self.outcome is MemoryPromotionOutcome.CASE_MEMORY
+            and self.target_scope is not MemoryScope.CASE
+        ):
+            raise ValueError("Case Memory promotion requires case target scope.")
+        if (
+            self.outcome is MemoryPromotionOutcome.PERSISTENT_USER_MEMORY
+            and self.target_scope is not MemoryScope.USER
+        ):
+            raise ValueError("Persistent User Memory promotion requires user target scope.")
+        return self
 
 
 class MemoryCandidate(FrozenModel):

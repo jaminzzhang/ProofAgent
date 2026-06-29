@@ -28,6 +28,14 @@ _Avoid_: Provider response body, raw runtime state, raw evidence payload, raw to
 The rule that full validation capture records Workflow Stage Prompt and selected context from the run-start Workflow Template Execution Input selected for the executed run.
 _Avoid_: Raw Agent Contract override replay, latest descriptor recomputation, post-run manifest reinterpretation
 
+**Trace-Safe Context Assembly Summary**:
+The ordinary trace and RunStore projection of run-start context assembly, recording admitted source references, included turn ids, memory ids, compaction summary ids, budget decisions, and fallback status without raw transcript, raw memory content, or complete Working Context.
+_Avoid_: Prompt transcript, raw Working Context dump, sensitive validation artifact
+
+**Sensitive Context Capture**:
+The authorized validation, test, or debug capture of complete Working Context or detailed context assembly content through a sensitive artifact path with explicit access control, safety gates, and short retention.
+_Avoid_: Ordinary production trace, default receipt export, customer-support-visible context dump
+
 **Validation Capture Source Reference**:
 The `validation_capture.v2` source section containing run, validation, Agent, Workflow Template, descriptor, runtime source, Published Agent Version, and snapshot references needed to identify the executed configuration without embedding raw Agent Contract YAML, workflow YAML, or capability dumps.
 _Avoid_: Raw manifest snapshot, raw workflow YAML, raw capabilities dump, latest descriptor replay

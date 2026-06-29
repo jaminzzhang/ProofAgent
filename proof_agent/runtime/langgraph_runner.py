@@ -19,6 +19,10 @@ from proof_agent.contracts import (
     ApprovalStatus,
     ClarificationNeed,
     ContextAdmission,
+    ContextAssemblyBudget,
+    ContextSourceRef,
+    ContextSourceType,
+    ControlledRunContext,
     EvidenceChunk,
     PolicyDecisionType,
     PublishedAgentRuntimeFacts,
@@ -36,6 +40,7 @@ from proof_agent.contracts import (
     WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
     WorkflowTemplateExecutionResult,
+    WorkingContextSection,
 )
 from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.control.workflow.stage_configuration import (
@@ -94,6 +99,16 @@ def run_with_langgraph(
             "context_admission",
             status="ok" if conversation_context.admitted else "blocked",
             payload=context_admission_payload(conversation_context),
+        )
+        trace.emit(
+            TraceEventType.CONTEXT_ASSEMBLY_SUMMARY,
+            status="ok",
+            payload=_controlled_run_context_from_admission(
+                run_id=actual_run_id,
+                conversation_context=conversation_context,
+            )
+            .trace_safe_summary()
+            .model_dump(mode="json"),
         )
     stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
         agent_yaml=agent_yaml,
@@ -453,8 +468,7 @@ def _workflow_execution_result_from_state(
         draft_id=draft_id,
         effective_stage_configuration_ref=execution_input.effective_stage_configuration_ref,
         evidence=tuple(
-            EvidenceChunk.model_validate(item)
-            for item in final_state.get("evidence", ())
+            EvidenceChunk.model_validate(item) for item in final_state.get("evidence", ())
         ),
         clarification_need=_clarification_need_from_state(final_state),
         stage_results=tuple(
@@ -507,8 +521,7 @@ def _workflow_execution_result_from_interrupt(
     draft_id: str | None,
 ) -> WorkflowTemplateExecutionResult:
     message = str(
-        final_state.get("governance_message")
-        or _approval_waiting_message(interrupt_payload)
+        final_state.get("governance_message") or _approval_waiting_message(interrupt_payload)
     )
     final_output = str(final_state.get("final_output") or message)
     return WorkflowTemplateExecutionResult(
@@ -524,8 +537,7 @@ def _workflow_execution_result_from_interrupt(
         effective_stage_configuration_ref=execution_input.effective_stage_configuration_ref,
         approval_pause=_approval_pause_from_interrupt(interrupt_payload),
         evidence=tuple(
-            EvidenceChunk.model_validate(item)
-            for item in final_state.get("evidence", ())
+            EvidenceChunk.model_validate(item) for item in final_state.get("evidence", ())
         ),
         stage_results=_stage_results_from_interrupt(final_state, interrupt_payload),
         intent_resolution=(
@@ -560,28 +572,21 @@ def _approval_pause_from_interrupt(
     pending_payload = pending if isinstance(pending, Mapping) else {}
     requested_payload = requested if isinstance(requested, Mapping) else {}
     policy_decision = _policy_decision(
-        pending_payload.get("policy_decision")
-        or PolicyDecisionType.REQUIRE_APPROVAL.value
+        pending_payload.get("policy_decision") or PolicyDecisionType.REQUIRE_APPROVAL.value
     )
     parameters = pending_payload.get("parameters")
     parameter_count = len(parameters) if isinstance(parameters, Mapping) else 0
     return ApprovalPause(
         approval_id=str(
-            pending_payload.get("approval_id")
-            or requested_payload.get("approval_id")
-            or ""
+            pending_payload.get("approval_id") or requested_payload.get("approval_id") or ""
         ),
         action_id=str(pending_payload.get("action_id") or ""),
         tool_name=str(
-            pending_payload.get("tool_name")
-            or requested_payload.get("tool_name")
-            or "unknown"
+            pending_payload.get("tool_name") or requested_payload.get("tool_name") or "unknown"
         ),
         policy_decision=policy_decision,
         checkpoint_ref=str(
-            pending_payload.get("checkpoint_id")
-            or pending_payload.get("checkpoint_ref")
-            or ""
+            pending_payload.get("checkpoint_id") or pending_payload.get("checkpoint_ref") or ""
         ),
         expires_at=(
             str(pending_payload["expires_at"])
@@ -590,9 +595,7 @@ def _approval_pause_from_interrupt(
         ),
         summary={
             "status": str(
-                pending_payload.get("status")
-                or requested_payload.get("state")
-                or "requested"
+                pending_payload.get("status") or requested_payload.get("state") or "requested"
             ),
             "parameter_count": parameter_count,
         },
@@ -604,8 +607,7 @@ def _stage_results_from_interrupt(
     interrupt_payload: Mapping[str, Any],
 ) -> tuple[WorkflowStageResult, ...]:
     stage_results = tuple(
-        WorkflowStageResult.model_validate(item)
-        for item in final_state.get("stage_results", ())
+        WorkflowStageResult.model_validate(item) for item in final_state.get("stage_results", ())
     )
     if any(
         stage.stage_id == "tool" and stage.status is WorkflowStageStatus.WAITING
@@ -646,9 +648,7 @@ def _approval_waiting_message(interrupt_payload: Mapping[str, Any]) -> str:
     pending_payload = pending if isinstance(pending, Mapping) else {}
     requested_payload = requested if isinstance(requested, Mapping) else {}
     tool_name = str(
-        pending_payload.get("tool_name")
-        or requested_payload.get("tool_name")
-        or "customer_lookup"
+        pending_payload.get("tool_name") or requested_payload.get("tool_name") or "customer_lookup"
     )
     return f"Waiting for approval before {tool_name} can execute."
 
@@ -716,9 +716,7 @@ def _resolve_workflow_stage_runtime_configuration(
             artifact_path=agent_yaml,
         )
         return ResolvedWorkflowStageRuntimeConfiguration(
-            workflow_stage_availability=(
-                published_agent_runtime_facts.workflow_stage_availability
-            ),
+            workflow_stage_availability=(published_agent_runtime_facts.workflow_stage_availability),
             effective_stage_configuration=(
                 published_agent_runtime_facts.effective_stage_configuration
             ),
@@ -795,9 +793,7 @@ def _workflow_template_execution_input(
         run_id=run_id,
         template_name=stage_runtime_configuration.effective_stage_configuration.template_name,
         template_descriptor_version=(
-            stage_runtime_configuration
-            .effective_stage_configuration
-            .template_descriptor_version
+            stage_runtime_configuration.effective_stage_configuration.template_descriptor_version
         ),
         question=question,
         agent_id=agent_id,
@@ -806,15 +802,9 @@ def _workflow_template_execution_input(
         effective_stage_configuration_ref=(
             stage_runtime_configuration.configuration_source.reference
         ),
-        workflow_stage_availability=(
-            stage_runtime_configuration.workflow_stage_availability
-        ),
-        effective_stage_configuration=(
-            stage_runtime_configuration.effective_stage_configuration
-        ),
-        stage_configuration_source=(
-            stage_runtime_configuration.configuration_source
-        ),
+        workflow_stage_availability=(stage_runtime_configuration.workflow_stage_availability),
+        effective_stage_configuration=(stage_runtime_configuration.effective_stage_configuration),
+        stage_configuration_source=(stage_runtime_configuration.configuration_source),
         conversation_context_summary=_conversation_context_summary(conversation_context),
     )
 
@@ -825,6 +815,78 @@ def _conversation_context_summary(
     if conversation_context is None:
         return {}
     return context_admission_payload(conversation_context)
+
+
+def _controlled_run_context_from_admission(
+    *,
+    run_id: str,
+    conversation_context: ContextAdmission,
+) -> ControlledRunContext:
+    source_refs = tuple(
+        ContextSourceRef(
+            source_type=_context_source_type(source_id),
+            source_id=source_id,
+        )
+        for source_id in conversation_context.included_turn_ids
+    )
+    clarification_source_refs = tuple(
+        ContextSourceRef(
+            source_type=ContextSourceType.CLARIFICATION_STATE,
+            source_id=source_id,
+        )
+        for source_id in conversation_context.clarification_turn_ids
+    )
+    source_refs = (*source_refs, *clarification_source_refs)
+    section_refs = tuple(conversation_context.included_turn_ids)
+    working_sections = (
+        (
+            WorkingContextSection(
+                section_id=_context_section_id(source_refs),
+                source_refs=section_refs,
+                priority=60,
+                stable_prefix=False,
+                estimated_tokens=conversation_context.char_count,
+            ),
+        )
+        if conversation_context.admitted and section_refs
+        else ()
+    )
+    if clarification_source_refs:
+        working_sections = (
+            WorkingContextSection(
+                section_id="clarification_continuation",
+                source_refs=tuple(source.source_id for source in clarification_source_refs),
+                priority=30,
+                stable_prefix=False,
+                estimated_tokens=0,
+            ),
+            *working_sections,
+        )
+    return ControlledRunContext(
+        run_id=run_id,
+        sources=source_refs,
+        working_sections=working_sections,
+        budget=ContextAssemblyBudget(
+            max_tokens=0,
+            estimated_tokens=conversation_context.char_count,
+            dropped_source_refs=conversation_context.dropped_turn_ids,
+            fallback_reasons=conversation_context.fallback_reasons,
+        ),
+    )
+
+
+def _context_source_type(source_id: str) -> ContextSourceType:
+    if source_id.startswith(("turn_", "cust_turn_")):
+        return ContextSourceType.CONVERSATION_TURN
+    return ContextSourceType.MEMORY_RECALL
+
+
+def _context_section_id(source_refs: tuple[ContextSourceRef, ...]) -> str:
+    if source_refs and all(
+        source.source_type is ContextSourceType.MEMORY_RECALL for source in source_refs
+    ):
+        return "memory_recall"
+    return "recent_turns"
 
 
 def _receipt_outcome(value: Any) -> ReceiptOutcome | None:
@@ -842,9 +904,7 @@ def _create_checkpointer(manifest: AgentManifest) -> Any:
         from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore[import-not-found]
         import sqlite3
 
-        conn = sqlite3.connect(
-            (manifest.workflow.checkpointer.uri or "").replace("sqlite:///", "")
-        )
+        conn = sqlite3.connect((manifest.workflow.checkpointer.uri or "").replace("sqlite:///", ""))
         return SqliteSaver(conn)
     return MemorySaver()
 

@@ -124,6 +124,9 @@ export interface ContextAdmission {
   summary: string
   char_count: number
   max_turns: number
+  dropped_turn_ids: string[]
+  fallback_reasons: string[]
+  clarification_turn_ids: string[]
 }
 
 export interface ConversationTurn {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from proof_agent.contracts import ContextAdmission, ConversationRecord
+from proof_agent.contracts import ContextAdmission, ConversationRecord, ReceiptOutcome
 
 
 def admit_conversation_context(
@@ -13,7 +13,11 @@ def admit_conversation_context(
 ) -> ContextAdmission:
     """Admit a trace-safe summary of recent conversation turns."""
 
-    turns = conversation.turns[-max_turns:]
+    turns = conversation.turns[-max_turns:] if max_turns > 0 else ()
+    dropped_turn_ids = tuple(
+        turn.turn_id for turn in conversation.turns[: max(0, len(conversation.turns) - len(turns))]
+    )
+    clarification_turn_ids = _clarification_turn_ids(conversation)
     if not turns:
         return ContextAdmission(
             admitted=False,
@@ -22,6 +26,9 @@ def admit_conversation_context(
             summary="No prior turns admitted.",
             char_count=0,
             max_turns=max_turns,
+            dropped_turn_ids=dropped_turn_ids,
+            fallback_reasons=(("older_turns_outside_recent_window",) if dropped_turn_ids else ()),
+            clarification_turn_ids=clarification_turn_ids,
         )
 
     parts = []
@@ -40,6 +47,9 @@ def admit_conversation_context(
         summary=summary,
         char_count=len(summary),
         max_turns=max_turns,
+        dropped_turn_ids=dropped_turn_ids,
+        fallback_reasons=(("older_turns_outside_recent_window",) if dropped_turn_ids else ()),
+        clarification_turn_ids=clarification_turn_ids,
     )
 
 
@@ -51,3 +61,12 @@ def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return f"{value[: max(0, limit - 3)]}..."
+
+
+def _clarification_turn_ids(conversation: ConversationRecord) -> tuple[str, ...]:
+    if not conversation.turns:
+        return ()
+    latest_turn = conversation.turns[-1]
+    if latest_turn.outcome is ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION:
+        return (latest_turn.turn_id,)
+    return ()

@@ -324,9 +324,45 @@ _Avoid_: Dashboard-supplied actor, anonymous local command, production authentic
 The named internal permissions used by Operator Identity Context, initially covering approval resolution, run viewing, Agent configuration, Knowledge Source administration, Model Connection administration, and Tool Source administration while local mode grants the full set.
 _Avoid_: Generic admin flag, frontend-only permission labels, resource operation without a named permission
 
+**Controlled Run Context**:
+The governed context package assembled for one Harness run from separately admitted context sources such as recent turns, clarification state, compaction summaries, memory, and retrieval facts.
+_Avoid_: Single prompt transcript, raw chat history, one-size-fits-all context blob
+
+**Working Context**:
+The bounded model-facing subset of Controlled Run Context selected for one model call after budget, relevance, safety, and stage-purpose checks.
+_Avoid_: Full conversation timeline, complete memory dump, hidden prompt stuffing
+
+**Cache-Stable Context Ordering**:
+The Working Context assembly rule that keeps stable Harness, Agent, policy, tool, and stage sections in a fixed order while placing frequently changing user, evidence, memory, and recent-turn sections later.
+_Avoid_: Chronological prompt stuffing, random section ordering, volatile prefix context
+
+**Context Assembler**:
+The Control Plane component that assembles Controlled Run Context from admitted context sources, applies Working Context budget and ordering rules, and emits trace-safe admission summaries without executing retrieval, tools, policy, or answer generation.
+_Avoid_: Frontend prompt builder, runtime adapter context hack, model provider memory layer
+
+**Conversation Timeline**:
+The complete per-conversation turn record that links user turns, governed run artifacts, and safe response projections without itself becoming model-facing context.
+_Avoid_: Prompt history, memory store, audit trace
+
+**Conversation Recall**:
+A Controlled Conversation Context use case where the Agent answers questions about prior turns, prior responses, or confirmed conversation preferences without treating those prior turns as business evidence.
+_Avoid_: Business evidence reuse, memory retrieval, transcript-as-knowledge
+
 **Controlled Conversation Context**:
 Conversation history and short-lived clarification state admitted into a new Harness run only after policy, redaction, length, and relevance checks.
 _Avoid_: Raw transcript injection, unrestricted chat memory
+
+**Conversation Compaction**:
+The governed reduction of older conversation turns into a trace-safe summary when the Working Context budget cannot carry the full recent-turn window.
+_Avoid_: Silent truncation, lossy memory write, model-owned summary cache
+
+**Conversation Compaction Summary**:
+A provenance-bearing summary produced by Conversation Compaction, recording the covered turn range, compaction strategy, safety notes, and known omission risks without replacing the Conversation Timeline.
+_Avoid_: Full transcript replacement, memory record, evidence citation
+
+**Schema-Bound Conversation Compaction**:
+The Conversation Compaction strategy that builds a deterministic context skeleton first, lets a model fill only a bounded summary contract when configured, validates the result, and falls back safely on compaction failure.
+_Avoid_: Free-form summary, hidden transcript rewrite, best-effort prompt compression
 
 **Controlled Agent Memory**:
 The governed memory capability set that lets an Agent retain, retrieve, and admit prior information only through explicit Control Envelope checks.
@@ -344,6 +380,10 @@ _Avoid_: Direct memory backend, model-owned memory, uncontrolled memory plugin
 The Agent-specific memory settings that choose a Memory Provider Adapter and configure governed memory scopes, retention, record limits, restricted-data handling, and lifecycle controls.
 _Avoid_: Reusable memory asset, Accepted Evidence source, cross-Agent memory pool
 
+**Memory Promotion**:
+The governed decision to convert conversation-derived facts into Controlled Agent Memory records only when they are structured, policy-admitted, scoped, deletable, and safe for later retrieval.
+_Avoid_: Transcript archiving, automatic chat learning, saving model answers as memory
+
 **Case Memory**:
 Memory scoped to one case, task, customer issue, or conversation journey, containing admitted structured case facts or bounded trace-safe summaries rather than complete customer-visible messages.
 _Avoid_: Persistent user profile, audit log, raw conversation transcript
@@ -360,6 +400,10 @@ _Avoid_: Persistent user interest profile, marketing preference, cross-session b
 Long-lived memory about a user or customer that may be reused across conversations only when consent, retention, deletion, redaction, tenant boundary, and policy admission rules are defined.
 _Avoid_: Case Memory, customer transcript archive, automatic behavioral profile
 
+**No Memory Classification**:
+The Memory Promotion result for conversation content that must remain only in the Conversation Timeline, such as one-off questions, business answer text, model reasoning, unverified facts, sensitive raw text, and complete transcripts.
+_Avoid_: Best-effort memory save, hidden summary, profile enrichment
+
 **Memory Subject Reference**:
 A provider-neutral identifier for the subject a memory is about; Customer Persistent User Memory uses the customer reference as its Memory Subject Reference.
 _Avoid_: Case id, raw customer identity document, provider user id, authentication token
@@ -371,6 +415,10 @@ _Avoid_: Knowledge Provider, uncontrolled internal notes, model fine-tuning data
 **Memory Admission**:
 The Control Plane decision that determines whether retrieved memory may enter the Structured Control Context or model request for a governed run.
 _Avoid_: Automatic memory injection, raw memory recall
+
+**Memory Recall Context**:
+Admitted memory used to resolve references, restore task state, or apply stable preferences in Working Context without becoming Accepted Evidence for business fact answers.
+_Avoid_: Memory evidence, citation source, direct business answer basis
 
 **Knowledge Source Permission Model**:
 The configuration capability boundary for reusable knowledge assets. `knowledge_source.view` gates Source, document, upload, job, candidate snapshot, frozen snapshot, publication validation, publication, and deletion-eligibility reads. `knowledge_source.edit` gates Source creation, document upload, document routing metadata edits, ingestion retry, foundation validation, snapshot freeze, and restore. `knowledge_source.publish` gates publication validation and publication. `knowledge_source.archive` gates Archive and Knowledge Source Physical Deletion. Knowledge Source API command requests do not carry actor fields; the API resolves Operator Identity Context server-side and records the resolved operator in Knowledge Configuration Operation Audit. V1 local single-user mode may grant all capabilities by default, but API operations, Dashboard actions, and audit records preserve the distinctions for future RBAC.

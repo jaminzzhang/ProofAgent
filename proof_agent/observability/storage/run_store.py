@@ -720,13 +720,9 @@ class RunStore:
         if business_flow_admission:
             details["business_flow_skill_pack_admission"] = business_flow_admission
 
-        business_flow_recommendation = (
-            self._extract_business_flow_skill_pack_recommendation(events)
-        )
+        business_flow_recommendation = self._extract_business_flow_skill_pack_recommendation(events)
         if business_flow_recommendation:
-            details["business_flow_skill_pack_recommendation"] = (
-                business_flow_recommendation
-            )
+            details["business_flow_skill_pack_recommendation"] = business_flow_recommendation
 
         review_results = self._extract_review_results(events)
         if review_results:
@@ -894,6 +890,7 @@ _RUNTIME_STAGE_WINDOW_EVENT_TYPES = frozenset(
         "retrieval_result",
         "evidence_evaluation",
         "context_admission",
+        "context_assembly_summary",
         "intent_resolution",
         "reasoning_summary",
         "action_proposal",
@@ -904,6 +901,7 @@ _RUNTIME_STAGE_WINDOW_EVENT_TYPES = frozenset(
         "approval_denied",
         "approval_timeout",
         "memory_read",
+        "memory_promotion_decision",
         "memory_candidate_generated",
         "memory_write_requested",
         "memory_write_decision",

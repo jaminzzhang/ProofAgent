@@ -11,9 +11,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.api.app import create_app
 
 
-def _client(
-    tmp_path: Path, *, published_agents: dict[str, Path] | None = None
-) -> TestClient:
+def _client(tmp_path: Path, *, published_agents: dict[str, Path] | None = None) -> TestClient:
     store = LocalAgentConfigurationStore(tmp_path / "config")
     if published_agents is None:
         published_agents = {
@@ -121,6 +119,22 @@ def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
     context_event = next(event for event in trace if event["event_type"] == "context_admission")
     assert context_event["payload"]["admitted"] is True
     assert context_event["payload"]["turn_count"] == 1
+    assembly_event = next(
+        event for event in trace if event["event_type"] == "context_assembly_summary"
+    )
+    assert assembly_event["payload"]["source_refs"] == [
+        {"source_type": "conversation_turn", "source_id": first_body["turn_id"]}
+    ]
+    assert assembly_event["payload"]["working_sections"] == [
+        {
+            "section_id": "recent_turns",
+            "source_refs": [first_body["turn_id"]],
+            "priority": 60,
+            "stable_prefix": False,
+            "estimated_tokens": second_body["context_admission"]["char_count"],
+        }
+    ]
+    assert assembly_event["payload"]["budget"]["fallback_reasons"] == []
 
     conversation = client.get(f"/api/chat/conversations/{conversation_id}")
     assert conversation.status_code == 200
@@ -128,6 +142,83 @@ def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
     assert len(timeline["turns"]) == 2
     assert timeline["turns"][0]["run_id"] == first_body["run_id"]
     assert timeline["turns"][1]["run_id"] == second_body["run_id"]
+
+
+def test_conversation_run_context_assembly_records_dropped_turn_refs(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    conversation_id = created.json()["conversation_id"]
+
+    first = client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "Question one?"},
+    ).json()
+    client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "Question two?"},
+    )
+    client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "Question three?"},
+    )
+    client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "Question four?"},
+    )
+    fifth = client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "Question five?"},
+    ).json()
+
+    trace = client.get(fifth["links"]["trace"]).json()["events"]
+    assembly_event = next(
+        event for event in trace if event["event_type"] == "context_assembly_summary"
+    )
+
+    assert assembly_event["payload"]["budget"]["dropped_source_refs"] == [first["turn_id"]]
+    assert assembly_event["payload"]["budget"]["fallback_reasons"] == [
+        "older_turns_outside_recent_window"
+    ]
+
+
+def test_conversation_run_context_assembly_marks_clarification_continuation(
+    tmp_path: Path,
+) -> None:
+    client = _client(
+        tmp_path,
+        published_agents={
+            "react_enterprise_qa": Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"
+            ),
+        },
+    )
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa"})
+    conversation_id = created.json()["conversation_id"]
+
+    first = client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "Can this customer claim it?"},
+    ).json()
+    assert first["outcome"] == "WAITING_FOR_USER_CLARIFICATION"
+    second = client.post(
+        f"/api/chat/conversations/{conversation_id}/runs",
+        json={"question": "The customer is asking about claim CLM-001."},
+    ).json()
+
+    trace = client.get(second["links"]["trace"]).json()["events"]
+    assembly_event = next(
+        event for event in trace if event["event_type"] == "context_assembly_summary"
+    )
+
+    assert {
+        "source_type": "clarification_state",
+        "source_id": first["turn_id"],
+    } in assembly_event["payload"]["source_refs"]
+    assert "clarification_continuation" in [
+        section["section_id"] for section in assembly_event["payload"]["working_sections"]
+    ]
 
 
 def test_conversation_run_resolves_shared_model_connection_from_configuration_store(
