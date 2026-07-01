@@ -340,6 +340,26 @@ _Avoid_: Chronological prompt stuffing, random section ordering, volatile prefix
 The Control Plane component that assembles Controlled Run Context from admitted context sources, applies Working Context budget and ordering rules, and emits trace-safe admission summaries without executing retrieval, tools, policy, or answer generation.
 _Avoid_: Frontend prompt builder, runtime adapter context hack, model provider memory layer
 
+**Agent Context Configuration**:
+The Agent Contract section that configures Context Assembler behavior for governed runs, including budget profiles, convergence thresholds, dynamic calibration, and source-specific context policies.
+_Avoid_: Model parameters, retrieval settings, memory scope config, workflow stage context options
+
+**Context Budget Profile**:
+The configured or dynamically inferred Working Context token budget used by Context Assembler before provider-specific model-call guards run.
+_Avoid_: Model output token limit, retrieval top-k, provider-only tokenizer result
+
+**Context Convergence Ladder**:
+The tiered Working Context reduction policy that applies progressively stronger context convergence as estimated context usage crosses configured thresholds such as 50 percent, 80 percent, and the hard limit.
+_Avoid_: One-step truncation, silent overflow retry, provider-owned context pruning
+
+**Dynamic Context Budget Calibration**:
+The fallback budget-learning behavior used when no explicit Context Budget Profile is configured, where provider or model context-limit failures trigger deep compression and update the default budget for later context assembly.
+_Avoid_: Static hidden default, repeated overflow retry, model-provider memory behavior
+
+**Context Budget Calibration Store**:
+The Control Plane store of dynamically learned default context budgets, keyed by provider, model or connection, model-call role, and context budget profile version without modifying Agent Contract source.
+_Avoid_: Agent YAML rewrite, provider tokenizer cache, user preference memory
+
 **Conversation Timeline**:
 The complete per-conversation turn record that links user turns, governed run artifacts, and safe response projections without itself becoming model-facing context.
 _Avoid_: Prompt history, memory store, audit trace
@@ -419,6 +439,22 @@ _Avoid_: Automatic memory injection, raw memory recall
 **Memory Recall Context**:
 Admitted memory used to resolve references, restore task state, or apply stable preferences in Working Context without becoming Accepted Evidence for business fact answers.
 _Avoid_: Memory evidence, citation source, direct business answer basis
+
+**Memory Recall Admission**:
+The trace-safe Control Plane decision that admits memory records into Memory Recall Context with explicit scope, source memory ids, bounded summary facts, rejection reasons, and lifecycle references.
+_Avoid_: Conversation turn admission, memory id hidden in chat history, provider-native memory recall
+
+**Memory Recall Trace Summary**:
+The ordinary trace-safe projection of Memory Recall Admission, recording scope, source refs, included and rejected memory ids, bounded summary, fact keys or counts, and lifecycle references without complete memory facts.
+_Avoid_: Full memory facts, provider-native memory payload, prompt-ready memory dump
+
+**Memory Recall Working Payload**:
+The model-facing Memory Recall Context subset selected for Working Context, containing bounded summaries and policy-admitted fact values after budget, relevance, and convergence checks.
+_Avoid_: Trace summary, complete memory record, Accepted Evidence
+
+**Memory Recall Stage Visibility**:
+The stage-specific rule that determines where Memory Recall Working Payload may influence intent, planning, retrieval query construction, final answer context, or tool parameter assistance without becoming business evidence.
+_Avoid_: Global memory prompt injection, tool parameter shortcut, memory evidence
 
 **Knowledge Source Permission Model**:
 The configuration capability boundary for reusable knowledge assets. `knowledge_source.view` gates Source, document, upload, job, candidate snapshot, frozen snapshot, publication validation, publication, and deletion-eligibility reads. `knowledge_source.edit` gates Source creation, document upload, document routing metadata edits, ingestion retry, foundation validation, snapshot freeze, and restore. `knowledge_source.publish` gates publication validation and publication. `knowledge_source.archive` gates Archive and Knowledge Source Physical Deletion. Knowledge Source API command requests do not carry actor fields; the API resolves Operator Identity Context server-side and records the resolved operator in Knowledge Configuration Operation Audit. V1 local single-user mode may grant all capabilities by default, but API operations, Dashboard actions, and audit records preserve the distinctions for future RBAC.

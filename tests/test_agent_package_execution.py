@@ -84,6 +84,86 @@ def test_execute_agent_package_run_passes_conversation_context_to_v3_orchestrato
     assert orchestrator.start_request.conversation_context == conversation_context
 
 
+def test_execute_agent_package_run_emits_shared_run_start_context_summary_for_v3(
+    tmp_path: Path,
+) -> None:
+    orchestrator = _CapturingControlledReActOrchestrator()
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared Product A and Product B.",
+        char_count=48,
+        max_turns=3,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What are their pros and cons?",
+            runs_dir=tmp_path / "run",
+            conversation_context=conversation_context,
+            controlled_react_orchestrator=orchestrator,
+        )
+    )
+
+    assert result.workflow_template_execution_input is not None
+    summary = result.workflow_template_execution_input.model_dump(mode="json")[
+        "controlled_run_context_summary"
+    ]
+    assert summary["source_refs"] == [
+        {"source_type": "conversation_turn", "source_id": "turn_1"}
+    ]
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assembly_events = [
+        event for event in events if event["event_type"] == "context_assembly_summary"
+    ]
+    assert len(assembly_events) == 1
+    assert assembly_events[0]["payload"] == summary
+
+
+def test_execute_agent_package_run_records_shared_run_start_context_summary_for_langgraph(
+    tmp_path: Path,
+) -> None:
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared Product A and Product B.",
+        char_count=48,
+        max_turns=3,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+            question="What are their pros and cons?",
+            runs_dir=tmp_path / "run",
+            conversation_context=conversation_context,
+        )
+    )
+
+    assert result.workflow_template_execution_input is not None
+    summary = result.workflow_template_execution_input.model_dump(mode="json")[
+        "controlled_run_context_summary"
+    ]
+    assert summary["source_refs"] == [
+        {"source_type": "conversation_turn", "source_id": "turn_1"}
+    ]
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assembly_events = [
+        event for event in events if event["event_type"] == "context_assembly_summary"
+    ]
+    assert len(assembly_events) == 1
+    assert assembly_events[0]["payload"] == summary
+
+
 def test_execute_agent_package_run_projects_v3_answer_governance_trace(
     tmp_path: Path,
 ) -> None:

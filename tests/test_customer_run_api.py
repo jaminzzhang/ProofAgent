@@ -668,6 +668,26 @@ def test_customer_run_admits_same_case_memory_on_follow_up(tmp_path: Path) -> No
     assert admission["payload"]["admitted"] is True
     assert admission["payload"]["included_memory_ids"]
     assert "inpatient" in admission["payload"]["summary"].lower()
+    context_admissions = [
+        event for event in trace if event["event_type"] == "context_admission"
+    ]
+    for event in context_admissions:
+        assert not any(
+            turn_id.startswith("mem")
+            for turn_id in event["payload"].get("included_turn_ids", [])
+        )
+    recall = next(event for event in trace if event["event_type"] == "memory_recall_summary")
+    assert recall["payload"]["scope"] == "case"
+    assert recall["payload"]["included_memory_ids"] == admission["payload"][
+        "included_memory_ids"
+    ]
+    assembly = next(
+        event for event in trace if event["event_type"] == "context_assembly_summary"
+    )
+    assert {
+        "source_type": "memory_recall",
+        "source_id": admission["payload"]["included_memory_ids"][0],
+    } in assembly["payload"]["source_refs"]
 
 
 def test_customer_run_does_not_admit_memory_from_another_case(tmp_path: Path) -> None:

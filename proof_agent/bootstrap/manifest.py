@@ -5,9 +5,12 @@ from typing import Any
 
 from proof_agent.contracts import (
     AgentManifest,
+    AgentContextConfiguration,
     AuditConfig,
     BusinessFlowSkillPackBindingConfig,
     CapabilitiesConfig,
+    ContextBudgetProfile,
+    ContextConvergenceLadder,
     CustomerConfig,
     KnowledgeBindingConfig,
     KnowledgeSourceReferenceConfig,
@@ -102,6 +105,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         react=_react_config_from_mapping(raw.get("react")),
         review=_review_config_from_mapping(raw.get("review")),
         response=_response_config_from_mapping(raw.get("response")),
+        context=_agent_context_config_from_mapping(raw.get("context")),
     )
 
 
@@ -237,6 +241,38 @@ def _checkpointer_config_from_mapping(raw: Any) -> CheckpointerConfig | None:
     return CheckpointerConfig(
         provider=raw["provider"],
         uri=raw.get("uri"),
+    )
+
+
+def _agent_context_config_from_mapping(raw: Any) -> AgentContextConfiguration | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("context must be a mapping")
+    budget_profile = raw.get("budget_profile")
+    convergence = raw.get("convergence")
+    return AgentContextConfiguration(
+        budget_profile=(
+            ContextBudgetProfile(
+                max_tokens=budget_profile["max_tokens"],
+                reserved_output_tokens=budget_profile.get("reserved_output_tokens", 0),
+                estimation_strategy=budget_profile.get("estimation_strategy", "heuristic"),
+                profile_version=budget_profile.get("profile_version", "context_budget.v1"),
+            )
+            if isinstance(budget_profile, dict)
+            else None
+        ),
+        convergence=(
+            ContextConvergenceLadder(
+                level1_ratio=convergence.get("level1_ratio", 0.5),
+                level2_ratio=convergence.get("level2_ratio", 0.8),
+                hard_limit_ratio=convergence.get("hard_limit_ratio", 1.0),
+            )
+            if isinstance(convergence, dict)
+            else ContextConvergenceLadder()
+        ),
+        dynamic_calibration=raw.get("dynamic_calibration", True),
+        source_policies=raw.get("source_policies", {}),
     )
 
 

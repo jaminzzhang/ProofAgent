@@ -1,4 +1,7 @@
 from pathlib import Path
+import shutil
+
+import yaml
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
@@ -44,6 +47,36 @@ def test_insurance_customer_service_is_customer_facing_by_default() -> None:
     assert agent.customer_facing
     assert agent.manifest_path == Path("examples/insurance_customer_service/agent.yaml")
     assert agent.source == "configured"
+
+
+def test_agent_manifest_loads_top_level_context_configuration(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "insurance_customer_service"
+    shutil.copytree(Path("examples/insurance_customer_service"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    raw["context"] = {
+        "budget_profile": {
+            "max_tokens": 8192,
+            "reserved_output_tokens": 1024,
+            "estimation_strategy": "heuristic",
+            "profile_version": "context_budget.v1",
+        },
+        "convergence": {
+            "level1_ratio": 0.5,
+            "level2_ratio": 0.8,
+            "hard_limit_ratio": 1.0,
+        },
+        "dynamic_calibration": True,
+        "source_policies": {"memory_recall": {"max_records": 3}},
+    }
+    manifest_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    manifest = load_agent_manifest(manifest_path)
+
+    assert manifest.context is not None
+    assert manifest.context.budget_profile is not None
+    assert manifest.context.budget_profile.max_tokens == 8192
+    assert manifest.context.convergence.level2_ratio == 0.8
 
 
 def test_published_insurance_customer_service_resolves_from_configuration_store(

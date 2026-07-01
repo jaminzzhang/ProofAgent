@@ -15,6 +15,7 @@ from proof_agent.contracts import (
     ContextAdmission,
     ConversationRecord,
     ConversationTurn,
+    MemoryRecallAdmission,
     RunPurpose,
 )
 from proof_agent.contracts.conversation import (
@@ -248,6 +249,7 @@ def _execute_published_agent_run(
     published_agent: PublishedAgent,
     question: str,
     conversation_context: ContextAdmission | None = None,
+    memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     allow_untrusted_web_supplement: bool = False,
 ) -> tuple[Any, Any, AgentManifest]:
@@ -262,6 +264,7 @@ def _execute_published_agent_run(
             published_agent=published_agent,
             question=question,
             conversation_context=conversation_context,
+            memory_recall_admissions=memory_recall_admissions,
             run_purpose=run_purpose,
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
         )

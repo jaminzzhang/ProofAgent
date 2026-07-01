@@ -10,6 +10,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
+    MemoryRecallAdmission,
     RunPurpose,
 )
 from proof_agent.delivery.agent_package_execution import (
@@ -48,6 +49,7 @@ def execute_published_agent_run(
     published_agent: PublishedAgent,
     question: str,
     conversation_context: ContextAdmission | None = None,
+    memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     allow_untrusted_web_supplement: bool = False,
 ) -> PublishedAgentRunExecution:
@@ -68,6 +70,7 @@ def execute_published_agent_run(
             question=question,
             runs_dir=run_artifact_dir,
             conversation_context=conversation_context,
+            memory_recall_admissions=memory_recall_admissions,
             run_id=run_id,
             store=dependencies.store,
             checkpointer=checkpointer,

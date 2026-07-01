@@ -53,6 +53,7 @@ class TraceEventType(str, Enum):
     MEMORY_WRITE_REQUESTED = "memory_write_requested"
     MEMORY_WRITE_DECISION = "memory_write_decision"
     MEMORY_ADMISSION = "memory_admission"
+    MEMORY_RECALL_SUMMARY = "memory_recall_summary"
     MEMORY_EXPORT_DECISION = "memory_export_decision"
     MEMORY_DELETE_DECISION = "memory_delete_decision"
     MODEL_REQUEST = "model_request"

@@ -7,9 +7,12 @@ from proof_agent.contracts import (
     ContextSourceType,
     ControlledRunContext,
     ConversationRecord,
+    MemoryRecallAdmission,
     ReceiptOutcome,
+    RunStartContextAssembly,
     WorkingContextSection,
 )
+from proof_agent.contracts import ContextAdmission
 from proof_agent.control.conversation import admit_conversation_context
 
 
@@ -19,6 +22,7 @@ def assemble_controlled_run_context(
     conversation: ConversationRecord,
     max_recent_turns: int = 3,
     compact_older_turns: bool = False,
+    memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
 ) -> ControlledRunContext:
     """Assemble the first Controlled Run Context slice from a conversation timeline."""
 
@@ -43,7 +47,13 @@ def assemble_controlled_run_context(
         )
         for summary in compaction_summaries
     )
-    all_source_refs = (*source_refs, *clarification_source_refs, *compaction_source_refs)
+    memory_source_refs = _memory_recall_source_refs(memory_recall_admissions)
+    all_source_refs = (
+        *source_refs,
+        *clarification_source_refs,
+        *compaction_source_refs,
+        *memory_source_refs,
+    )
     working_sections = (
         (
             WorkingContextSection(
@@ -79,18 +89,194 @@ def assemble_controlled_run_context(
             ),
             *working_sections,
         )
+    if memory_source_refs:
+        working_sections = (
+            *working_sections,
+            WorkingContextSection(
+                section_id="memory_recall",
+                source_refs=tuple(source.source_id for source in memory_source_refs),
+                priority=70,
+                stable_prefix=False,
+                estimated_tokens=sum(
+                    len(memory.summary)
+                    for memory in memory_recall_admissions
+                    if memory.admitted
+                ),
+            ),
+        )
     return ControlledRunContext(
         run_id=run_id,
         sources=all_source_refs,
         working_sections=working_sections,
         budget=ContextAssemblyBudget(
             max_tokens=0,
-            estimated_tokens=admission.char_count,
+            estimated_tokens=admission.char_count
+            + sum(
+                len(memory.summary)
+                for memory in memory_recall_admissions
+                if memory.admitted
+            ),
             dropped_source_refs=admission.dropped_turn_ids,
             fallback_reasons=admission.fallback_reasons,
         ),
         compaction_summaries=compaction_summaries,
     )
+
+
+def assemble_run_start_context_from_admission(
+    *,
+    run_id: str,
+    conversation_context: ContextAdmission,
+    memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
+) -> RunStartContextAssembly:
+    """Build a run-start context package from the compatibility admission result."""
+
+    controlled_run_context = _controlled_run_context_from_admission(
+        run_id=run_id,
+        conversation_context=conversation_context,
+        memory_recall_admissions=memory_recall_admissions,
+    )
+    return RunStartContextAssembly.from_controlled_run_context(
+        controlled_run_context,
+        conversation_context=conversation_context,
+        memory_recall_admissions=memory_recall_admissions,
+    )
+
+
+def assemble_run_start_context(
+    *,
+    run_id: str,
+    conversation: ConversationRecord,
+    max_recent_turns: int = 3,
+    compact_older_turns: bool = False,
+    memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
+) -> RunStartContextAssembly:
+    """Assemble the run-start context package from a conversation timeline."""
+
+    conversation_context = admit_conversation_context(
+        conversation,
+        max_turns=max_recent_turns,
+    )
+    controlled_run_context = assemble_controlled_run_context(
+        run_id=run_id,
+        conversation=conversation,
+        max_recent_turns=max_recent_turns,
+        compact_older_turns=compact_older_turns,
+        memory_recall_admissions=memory_recall_admissions,
+    )
+    return RunStartContextAssembly.from_controlled_run_context(
+        controlled_run_context,
+        conversation_context=conversation_context,
+        memory_recall_admissions=memory_recall_admissions,
+    )
+
+
+def _controlled_run_context_from_admission(
+    *,
+    run_id: str,
+    conversation_context: ContextAdmission,
+    memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
+) -> ControlledRunContext:
+    source_refs = tuple(
+        ContextSourceRef(
+            source_type=_context_source_type(source_id),
+            source_id=source_id,
+        )
+        for source_id in conversation_context.included_turn_ids
+    )
+    clarification_source_refs = tuple(
+        ContextSourceRef(
+            source_type=ContextSourceType.CLARIFICATION_STATE,
+            source_id=source_id,
+        )
+        for source_id in conversation_context.clarification_turn_ids
+    )
+    memory_source_refs = _memory_recall_source_refs(memory_recall_admissions)
+    source_refs = (*source_refs, *clarification_source_refs, *memory_source_refs)
+    section_refs = tuple(conversation_context.included_turn_ids)
+    working_sections = (
+        (
+            WorkingContextSection(
+                section_id=_context_section_id(source_refs),
+                source_refs=section_refs,
+                priority=60,
+                stable_prefix=False,
+                estimated_tokens=conversation_context.char_count,
+            ),
+        )
+        if conversation_context.admitted and section_refs
+        else ()
+    )
+    if clarification_source_refs:
+        working_sections = (
+            WorkingContextSection(
+                section_id="clarification_continuation",
+                source_refs=tuple(source.source_id for source in clarification_source_refs),
+                priority=30,
+                stable_prefix=False,
+                estimated_tokens=0,
+            ),
+            *working_sections,
+        )
+    if memory_source_refs:
+        working_sections = (
+            *working_sections,
+            WorkingContextSection(
+                section_id="memory_recall",
+                source_refs=tuple(source.source_id for source in memory_source_refs),
+                priority=70,
+                stable_prefix=False,
+                estimated_tokens=sum(
+                    len(admission.summary)
+                    for admission in memory_recall_admissions
+                    if admission.admitted
+                ),
+            ),
+        )
+    return ControlledRunContext(
+        run_id=run_id,
+        sources=source_refs,
+        working_sections=working_sections,
+        budget=ContextAssemblyBudget(
+            max_tokens=0,
+            estimated_tokens=conversation_context.char_count
+            + sum(
+                len(admission.summary)
+                for admission in memory_recall_admissions
+                if admission.admitted
+            ),
+            dropped_source_refs=conversation_context.dropped_turn_ids,
+            fallback_reasons=conversation_context.fallback_reasons,
+        ),
+    )
+
+
+def _memory_recall_source_refs(
+    admissions: tuple[MemoryRecallAdmission, ...],
+) -> tuple[ContextSourceRef, ...]:
+    return tuple(
+        ContextSourceRef(
+            source_type=ContextSourceType.MEMORY_RECALL,
+            source_id=memory_id,
+        )
+        for admission in admissions
+        if admission.admitted
+        for memory_id in admission.included_memory_ids
+    )
+
+
+def _context_source_type(source_id: str) -> ContextSourceType:
+    if source_id.startswith(("turn_", "cust_turn_")):
+        return ContextSourceType.CONVERSATION_TURN
+    return ContextSourceType.MEMORY_RECALL
+
+
+def _context_section_id(source_refs: tuple[ContextSourceRef, ...]) -> str:
+    if source_refs and all(
+        source.source_type is ContextSourceType.MEMORY_RECALL for source in source_refs
+    ):
+        return "memory_recall"
+    return "recent_turns"
 
 
 def _clarification_source_refs(

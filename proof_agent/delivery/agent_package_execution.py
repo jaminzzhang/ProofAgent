@@ -15,14 +15,19 @@ from proof_agent.contracts import (
     ApprovalPause,
     ClarificationNeed,
     ContextAdmission,
+    MemoryRecallAdmission,
     PublishedAgentRuntimeFacts,
     ResolvedKnowledgeBindingSet,
+    RunStartContextAssembly,
     RunPurpose,
     RunResult,
+    TraceEventType,
     WorkflowStageResult,
     WorkflowStageStatus,
     WorkflowTemplateExecutionResult,
 )
+from proof_agent.contracts.conversation import context_admission_payload
+from proof_agent.control.context_assembler import assemble_run_start_context_from_admission
 from proof_agent.control.workflow.controlled_react import (
     ControlledReActStartRequest,
     build_controlled_react_orchestrator_for_invocation,
@@ -55,6 +60,7 @@ class AgentPackageRunRequest:
     question: str
     runs_dir: Path
     conversation_context: ContextAdmission | None = None
+    memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = ()
     run_id: str | None = None
     store: RunStore | None = None
     checkpointer: Any | None = None
@@ -77,13 +83,19 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
     """Execute one governed Agent Package run through the correct runtime."""
 
     manifest = request.manifest or load_agent_manifest(request.agent_yaml)
+    run_id = request.run_id or f"run_{uuid4().hex[:8]}"
+    run_start_context = _run_start_context_assembly(
+        run_id=run_id,
+        conversation_context=request.conversation_context,
+        memory_recall_admissions=request.memory_recall_admissions,
+    )
     if manifest.workflow.template != "react_enterprise_qa_v3":
         return run_with_langgraph(
             request.agent_yaml,
             question=request.question,
             runs_dir=request.runs_dir,
             conversation_context=request.conversation_context,
-            run_id=request.run_id,
+            run_id=run_id,
             store=request.store,
             checkpointer=request.checkpointer,
             manifest=manifest,
@@ -96,14 +108,22 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
             draft_id=request.draft_id,
             allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
             published_agent_runtime_facts=request.published_agent_runtime_facts,
+            run_start_context=run_start_context,
         )
-    return _execute_controlled_react_v3_agent_package_run(request, manifest=manifest)
+    return _execute_controlled_react_v3_agent_package_run(
+        request,
+        manifest=manifest,
+        run_id=run_id,
+        run_start_context=run_start_context,
+    )
 
 
 def _execute_controlled_react_v3_agent_package_run(
     request: AgentPackageRunRequest,
     *,
     manifest: AgentManifest,
+    run_id: str,
+    run_start_context: RunStartContextAssembly | None,
 ) -> RunResult:
     if manifest.react is None:
         raise RuntimeError("react_enterprise_qa_v3 requires react configuration.")
@@ -113,13 +133,13 @@ def _execute_controlled_react_v3_agent_package_run(
     receipt_path = request.runs_dir / "governance_receipt.md"
     if trace_path.exists():
         trace_path.unlink()
-    run_id = request.run_id or f"run_{uuid4().hex[:8]}"
     trace = TraceWriter(trace_path, run_id=run_id)
     _emit_controlled_react_run_started(
         trace,
         manifest=manifest,
         question=request.question,
     )
+    _emit_run_start_context_trace(trace, run_start_context)
     stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
         agent_yaml=request.agent_yaml,
         manifest=manifest,
@@ -135,6 +155,7 @@ def _execute_controlled_react_v3_agent_package_run(
         draft_id=request.draft_id,
         stage_runtime_configuration=stage_runtime_configuration,
         conversation_context=request.conversation_context,
+        run_start_context=run_start_context,
     )
     invocation = compose_harness_invocation(
         request.agent_yaml,
@@ -205,6 +226,46 @@ def _execute_controlled_react_v3_agent_package_run(
             "workflow_template_execution_input": execution_input,
             "workflow_template_execution_result": execution_result,
         }
+    )
+
+
+def _run_start_context_assembly(
+    *,
+    run_id: str,
+    conversation_context: ContextAdmission | None,
+    memory_recall_admissions: tuple[MemoryRecallAdmission, ...],
+) -> RunStartContextAssembly | None:
+    if conversation_context is None and not memory_recall_admissions:
+        return None
+    return assemble_run_start_context_from_admission(
+        run_id=run_id,
+        conversation_context=conversation_context or ContextAdmission(admitted=False),
+        memory_recall_admissions=memory_recall_admissions,
+    )
+
+
+def _emit_run_start_context_trace(
+    trace: TraceWriter,
+    run_start_context: RunStartContextAssembly | None,
+) -> None:
+    if run_start_context is None:
+        return
+    if run_start_context.conversation_context is not None:
+        trace.emit(
+            TraceEventType.CONTEXT_ADMISSION,
+            status="ok" if run_start_context.conversation_context.admitted else "blocked",
+            payload=context_admission_payload(run_start_context.conversation_context),
+        )
+    for admission in run_start_context.memory_recall_admissions:
+        trace.emit(
+            TraceEventType.MEMORY_RECALL_SUMMARY,
+            status="ok" if admission.admitted else "blocked",
+            payload=admission.trace_summary().model_dump(mode="json"),
+        )
+    trace.emit(
+        TraceEventType.CONTEXT_ASSEMBLY_SUMMARY,
+        status="ok",
+        payload=run_start_context.trace_safe_summary.model_dump(mode="json"),
     )
 
 

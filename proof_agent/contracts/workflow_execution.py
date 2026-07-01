@@ -80,6 +80,7 @@ class WorkflowTemplateExecutionInput(WorkflowExecutionModel):
     effective_stage_configuration: EffectiveWorkflowStageConfiguration
     stage_configuration_source: WorkflowStageConfigurationRuntimeSource
     conversation_context_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
+    controlled_run_context_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
 
     @field_validator("conversation_context_summary", mode="after")
     @classmethod
@@ -87,8 +88,25 @@ class WorkflowTemplateExecutionInput(WorkflowExecutionModel):
         _reject_forbidden_keys(value, SUMMARY_FORBIDDEN_KEYS, root="conversation_context_summary")
         return freeze_value(value)
 
+    @field_validator("controlled_run_context_summary", mode="after")
+    @classmethod
+    def freeze_controlled_run_context_summary(cls, value: Any) -> Any:
+        _reject_forbidden_keys(
+            value,
+            SUMMARY_FORBIDDEN_KEYS,
+            root="controlled_run_context_summary",
+        )
+        return freeze_value(value)
+
     @field_serializer("conversation_context_summary")
     def serialize_conversation_context_summary(
+        self,
+        value: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return cast(dict[str, Any], _jsonable(value))
+
+    @field_serializer("controlled_run_context_summary")
+    def serialize_controlled_run_context_summary(
         self,
         value: Mapping[str, Any],
     ) -> dict[str, Any]:

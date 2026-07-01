@@ -18,7 +18,6 @@ from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
 
 from proof_agent.contracts import (
     AgentManifest,
-    ContextAdmission,
     CustomerConversationRecord,
     CustomerDisambiguationOption,
     CustomerFeedbackSignal,
@@ -30,6 +29,8 @@ from proof_agent.contracts import (
     MemoryPromotionDecision,
     MemoryPromotionOutcome,
     MemoryQuery,
+    MemoryRecallAdmission,
+    MemoryRecallWorkingPayload,
     MemoryRecord,
     MemoryScope,
     RunPurpose,
@@ -348,9 +349,21 @@ def execute_customer_run_for_conversation(
         app_request=app_request,
         published_agent=published_agent,
         question=request.question,
-        conversation_context=_memory_context(
-            ("Case Memory", case_memory_admission),
-            ("Customer Persistent User Memory", user_memory_admission),
+        memory_recall_admissions=_memory_recall_admissions(
+            (
+                MemoryScope.CASE,
+                case_memory_admission,
+                conversation.conversation_id,
+                "",
+                conversation.agent_id,
+            ),
+            (
+                MemoryScope.USER,
+                user_memory_admission,
+                "",
+                conversation.customer_ref or "",
+                conversation.agent_id,
+            ),
         ),
         run_purpose=run_purpose,
     )
@@ -582,22 +595,41 @@ def _admit_customer_user_memory(
     return admit_memory(records, query=query)
 
 
-def _memory_context(*admissions: tuple[str, MemoryAdmission]) -> ContextAdmission | None:
-    admitted = [(label, admission) for label, admission in admissions if admission.admitted]
-    if not admitted:
-        return None
-    included_ids = tuple(
-        memory_id for _label, admission in admitted for memory_id in admission.included_memory_ids
-    )
-    summary = " | ".join(f"Admitted {label}: {admission.summary}" for label, admission in admitted)
-    return ContextAdmission(
-        admitted=True,
-        turn_count=len(included_ids),
-        included_turn_ids=included_ids,
-        summary=summary,
-        char_count=len(summary),
-        max_turns=5,
-    )
+def _memory_recall_admissions(
+    *admissions: tuple[MemoryScope, MemoryAdmission, str, str, str],
+) -> tuple[MemoryRecallAdmission, ...]:
+    recall_admissions: list[MemoryRecallAdmission] = []
+    for scope, admission, case_id, subject_ref, agent_id in admissions:
+        if not admission.admitted and not admission.rejected_memory_ids:
+            continue
+        fact_keys = tuple(sorted(str(key) for key in admission.facts))
+        working_payload = (
+            MemoryRecallWorkingPayload(
+                scope=scope,
+                source_refs=admission.included_memory_ids,
+                summary=admission.summary,
+                facts=admission.facts,
+            )
+            if admission.admitted
+            else None
+        )
+        recall_admissions.append(
+            MemoryRecallAdmission(
+                admitted=admission.admitted,
+                scope=scope,
+                case_id=case_id,
+                subject_ref=subject_ref,
+                agent_id=agent_id,
+                included_memory_ids=admission.included_memory_ids,
+                rejected_memory_ids=admission.rejected_memory_ids,
+                summary=admission.summary,
+                fact_keys=fact_keys,
+                fact_count=len(fact_keys),
+                rejection_reasons=admission.rejection_reasons,
+                working_payload=working_payload,
+            )
+        )
+    return tuple(recall_admissions)
 
 
 def _customer_memory_consent(

@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 
@@ -41,6 +41,38 @@ class WorkflowConfig(FrozenModel):
     checkpointer: CheckpointerConfig | None = None
     template_descriptor_version: str | None = None
     stages: tuple[WorkflowStageConfig, ...] = Field(default_factory=tuple)
+
+
+class ContextBudgetProfile(FrozenModel):
+    max_tokens: int = Field(gt=0)
+    reserved_output_tokens: int = Field(default=0, ge=0)
+    estimation_strategy: Literal["heuristic", "provider_estimate"] = "heuristic"
+    profile_version: str = "context_budget.v1"
+
+
+class ContextConvergenceLadder(FrozenModel):
+    level1_ratio: float = Field(default=0.5, gt=0.0, lt=1.0)
+    level2_ratio: float = Field(default=0.8, gt=0.0, lt=1.0)
+    hard_limit_ratio: float = Field(default=1.0, gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_threshold_order(self) -> "ContextConvergenceLadder":
+        if not self.level1_ratio < self.level2_ratio < self.hard_limit_ratio:
+            raise ValueError("Context convergence thresholds must be ordered.")
+        return self
+
+
+class AgentContextConfiguration(FrozenModel):
+    budget_profile: ContextBudgetProfile | None = None
+    convergence: ContextConvergenceLadder = Field(default_factory=ContextConvergenceLadder)
+    dynamic_calibration: bool = True
+    source_policies: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @field_validator("source_policies", mode="after")
+    @classmethod
+    def freeze_source_policies(cls, value: Any) -> Any:
+        _reject_forbidden_context_policy_keys(value)
+        return freeze_value(value)
 
 
 class ToolCapabilityConfig(FrozenModel):
@@ -294,3 +326,34 @@ class AgentManifest(FrozenModel):
     react: ReActConfig | None = None
     review: ReviewConfig | None = None
     response: ResponseConfig | None = None
+    context: AgentContextConfiguration | None = None
+
+
+CONTEXT_POLICY_FORBIDDEN_KEYS = frozenset(
+    {
+        "raw_prompt",
+        "raw_context",
+        "raw_transcript",
+        "raw_memory",
+        "provider_response",
+        "chain_of_thought",
+        "raw_chain_of_thought",
+        "secret",
+        "password",
+        "api_key",
+        "access_token",
+        "bearer",
+        "authorization",
+    }
+)
+
+
+def _reject_forbidden_context_policy_keys(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key).strip().lower() in CONTEXT_POLICY_FORBIDDEN_KEYS:
+                raise ValueError("Agent Context Configuration contains a forbidden key.")
+            _reject_forbidden_context_policy_keys(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            _reject_forbidden_context_policy_keys(item)

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from proof_agent.contracts import (
     ContextAdmission,
+    MemoryRecallAdmission,
+    MemoryRecallWorkingPayload,
+    MemoryScope,
     ContextSourceType,
     ConversationRecord,
     ConversationTurn,
     ReceiptOutcome,
 )
 from proof_agent.control.context_assembler import assemble_controlled_run_context
+from proof_agent.control.context_assembler import assemble_run_start_context_from_admission
 
 
 def _turn(
@@ -123,3 +127,64 @@ def test_context_assembler_creates_compaction_summary_for_older_turns() -> None:
     assert "conversation_compaction_summary" in [
         section.section_id for section in context.cache_stable_working_sections()
     ]
+
+
+def test_context_assembler_builds_run_start_context_from_compatibility_admission() -> None:
+    admission = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_001",),
+        summary="1 prior turn admitted.",
+        char_count=180,
+        max_turns=3,
+    )
+
+    assembly = assemble_run_start_context_from_admission(
+        run_id="run_next",
+        conversation_context=admission,
+    )
+
+    assert assembly.conversation_context == admission
+    assert assembly.controlled_run_context.run_id == "run_next"
+    assert assembly.trace_safe_summary.source_refs[0].source_type is (
+        ContextSourceType.CONVERSATION_TURN
+    )
+    assert assembly.trace_safe_summary.source_refs[0].source_id == "turn_001"
+    assert assembly.trace_safe_summary.working_sections[0].section_id == "recent_turns"
+    assert assembly.trace_safe_summary.budget.estimated_tokens == 180
+
+
+def test_context_assembler_adds_memory_recall_source_refs_and_section() -> None:
+    admission = MemoryRecallAdmission(
+        admitted=True,
+        scope=MemoryScope.CASE,
+        case_id="cust_conv_001",
+        agent_id="insurance_customer_service",
+        included_memory_ids=("mem_case_001",),
+        summary="Case focus: inpatient reimbursement.",
+        fact_keys=("case_focus",),
+        fact_count=1,
+        working_payload=MemoryRecallWorkingPayload(
+            scope=MemoryScope.CASE,
+            source_refs=("mem_case_001",),
+            summary="Case focus: inpatient reimbursement.",
+            facts={"case_focus": "inpatient reimbursement"},
+        ),
+    )
+
+    assembly = assemble_run_start_context_from_admission(
+        run_id="run_next",
+        conversation_context=ContextAdmission(admitted=False),
+        memory_recall_admissions=(admission,),
+    )
+
+    assert (
+        ContextSourceType.MEMORY_RECALL,
+        "mem_case_001",
+    ) in {
+        (source.source_type, source.source_id)
+        for source in assembly.trace_safe_summary.source_refs
+    }
+    assert [
+        section.section_id for section in assembly.trace_safe_summary.working_sections
+    ] == ["memory_recall"]

@@ -19,16 +19,13 @@ from proof_agent.contracts import (
     ApprovalStatus,
     ClarificationNeed,
     ContextAdmission,
-    ContextAssemblyBudget,
-    ContextSourceRef,
-    ContextSourceType,
-    ControlledRunContext,
     EvidenceChunk,
     PolicyDecisionType,
     PublishedAgentRuntimeFacts,
     ReceiptOutcome,
     ResolvedWorkflowStageRuntimeConfiguration,
     ResolvedKnowledgeBindingSet,
+    RunStartContextAssembly,
     RunPurpose,
     RunResult,
     TraceEventType,
@@ -40,9 +37,9 @@ from proof_agent.contracts import (
     WorkflowStageStatus,
     WorkflowTemplateExecutionInput,
     WorkflowTemplateExecutionResult,
-    WorkingContextSection,
 )
 from proof_agent.contracts.conversation import context_admission_payload
+from proof_agent.control.context_assembler import assemble_run_start_context_from_admission
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
     summarize_workflow_stage_configuration,
@@ -79,6 +76,7 @@ def run_with_langgraph(
     draft_id: str | None = None,
     allow_untrusted_web_supplement: bool = False,
     published_agent_runtime_facts: PublishedAgentRuntimeFacts | None = None,
+    run_start_context: RunStartContextAssembly | None = None,
 ) -> RunResult:
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
@@ -91,24 +89,31 @@ def run_with_langgraph(
         trace_path.unlink()
     actual_run_id = run_id or f"run_{uuid4().hex[:8]}"
     trace = TraceWriter(trace_path, run_id=actual_run_id)
+    context_assembly = _run_start_context_assembly(
+        run_id=actual_run_id,
+        conversation_context=conversation_context,
+        run_start_context=run_start_context,
+    )
 
     trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
     trace.emit("manifest_loaded", status="ok", payload={"agent_name": resolved_manifest.name})
-    if conversation_context is not None:
-        trace.emit(
-            "context_admission",
-            status="ok" if conversation_context.admitted else "blocked",
-            payload=context_admission_payload(conversation_context),
-        )
+    if context_assembly is not None:
+        if context_assembly.conversation_context is not None:
+            trace.emit(
+                TraceEventType.CONTEXT_ADMISSION,
+                status="ok" if context_assembly.conversation_context.admitted else "blocked",
+                payload=context_admission_payload(context_assembly.conversation_context),
+            )
+        for admission in context_assembly.memory_recall_admissions:
+            trace.emit(
+                TraceEventType.MEMORY_RECALL_SUMMARY,
+                status="ok" if admission.admitted else "blocked",
+                payload=admission.trace_summary().model_dump(mode="json"),
+            )
         trace.emit(
             TraceEventType.CONTEXT_ASSEMBLY_SUMMARY,
             status="ok",
-            payload=_controlled_run_context_from_admission(
-                run_id=actual_run_id,
-                conversation_context=conversation_context,
-            )
-            .trace_safe_summary()
-            .model_dump(mode="json"),
+            payload=context_assembly.trace_safe_summary.model_dump(mode="json"),
         )
     stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
         agent_yaml=agent_yaml,
@@ -130,6 +135,7 @@ def run_with_langgraph(
         draft_id=draft_id,
         stage_runtime_configuration=stage_runtime_configuration,
         conversation_context=conversation_context,
+        run_start_context=context_assembly,
     )
     try:
         invocation = compose_harness_invocation(
@@ -311,6 +317,7 @@ def resume_langgraph_approval(
             draft_id=draft_id,
             stage_runtime_configuration=stage_runtime_configuration,
             conversation_context=None,
+            run_start_context=None,
         )
     builder = _build_graph(
         manifest=resolved_manifest,
@@ -788,6 +795,7 @@ def _workflow_template_execution_input(
     draft_id: str | None,
     stage_runtime_configuration: ResolvedWorkflowStageRuntimeConfiguration,
     conversation_context: ContextAdmission | None,
+    run_start_context: RunStartContextAssembly | None = None,
 ) -> WorkflowTemplateExecutionInput:
     return WorkflowTemplateExecutionInput(
         run_id=run_id,
@@ -806,6 +814,7 @@ def _workflow_template_execution_input(
         effective_stage_configuration=(stage_runtime_configuration.effective_stage_configuration),
         stage_configuration_source=(stage_runtime_configuration.configuration_source),
         conversation_context_summary=_conversation_context_summary(conversation_context),
+        controlled_run_context_summary=_controlled_run_context_summary(run_start_context),
     )
 
 
@@ -817,76 +826,28 @@ def _conversation_context_summary(
     return context_admission_payload(conversation_context)
 
 
-def _controlled_run_context_from_admission(
+def _controlled_run_context_summary(
+    run_start_context: RunStartContextAssembly | None,
+) -> Mapping[str, Any]:
+    if run_start_context is None:
+        return {}
+    return run_start_context.trace_safe_summary.model_dump(mode="json")
+
+
+def _run_start_context_assembly(
     *,
     run_id: str,
-    conversation_context: ContextAdmission,
-) -> ControlledRunContext:
-    source_refs = tuple(
-        ContextSourceRef(
-            source_type=_context_source_type(source_id),
-            source_id=source_id,
-        )
-        for source_id in conversation_context.included_turn_ids
-    )
-    clarification_source_refs = tuple(
-        ContextSourceRef(
-            source_type=ContextSourceType.CLARIFICATION_STATE,
-            source_id=source_id,
-        )
-        for source_id in conversation_context.clarification_turn_ids
-    )
-    source_refs = (*source_refs, *clarification_source_refs)
-    section_refs = tuple(conversation_context.included_turn_ids)
-    working_sections = (
-        (
-            WorkingContextSection(
-                section_id=_context_section_id(source_refs),
-                source_refs=section_refs,
-                priority=60,
-                stable_prefix=False,
-                estimated_tokens=conversation_context.char_count,
-            ),
-        )
-        if conversation_context.admitted and section_refs
-        else ()
-    )
-    if clarification_source_refs:
-        working_sections = (
-            WorkingContextSection(
-                section_id="clarification_continuation",
-                source_refs=tuple(source.source_id for source in clarification_source_refs),
-                priority=30,
-                stable_prefix=False,
-                estimated_tokens=0,
-            ),
-            *working_sections,
-        )
-    return ControlledRunContext(
+    conversation_context: ContextAdmission | None,
+    run_start_context: RunStartContextAssembly | None,
+) -> RunStartContextAssembly | None:
+    if run_start_context is not None:
+        return run_start_context
+    if conversation_context is None:
+        return None
+    return assemble_run_start_context_from_admission(
         run_id=run_id,
-        sources=source_refs,
-        working_sections=working_sections,
-        budget=ContextAssemblyBudget(
-            max_tokens=0,
-            estimated_tokens=conversation_context.char_count,
-            dropped_source_refs=conversation_context.dropped_turn_ids,
-            fallback_reasons=conversation_context.fallback_reasons,
-        ),
+        conversation_context=conversation_context,
     )
-
-
-def _context_source_type(source_id: str) -> ContextSourceType:
-    if source_id.startswith(("turn_", "cust_turn_")):
-        return ContextSourceType.CONVERSATION_TURN
-    return ContextSourceType.MEMORY_RECALL
-
-
-def _context_section_id(source_refs: tuple[ContextSourceRef, ...]) -> str:
-    if source_refs and all(
-        source.source_type is ContextSourceType.MEMORY_RECALL for source in source_refs
-    ):
-        return "memory_recall"
-    return "recent_turns"
 
 
 def _receipt_outcome(value: Any) -> ReceiptOutcome | None:

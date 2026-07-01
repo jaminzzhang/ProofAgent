@@ -238,6 +238,9 @@ def test_llm_intent_resolver_includes_admitted_conversation_context() -> None:
         "summary": "Previous answer compared Product A and Product B.",
         "char_count": 48,
         "max_turns": 3,
+        "dropped_turn_ids": [],
+        "fallback_reasons": [],
+        "clarification_turn_ids": [],
         "usage": "follow_up_resolution_only_not_evidence",
     }
 
