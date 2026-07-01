@@ -13,6 +13,8 @@ from proof_agent.contracts import (
     BusinessFlowSkillPackDefinition,
     BusinessFlowSkillPackRecommendationType,
     ContextAdmission,
+    MemoryRecallWorkingPayload,
+    MemoryScope,
     ModelRequest,
     ModelResponse,
     ReActActionType,
@@ -119,10 +121,7 @@ def test_deterministic_intent_resolver_selects_matching_business_flow_pack() -> 
 
     recommendation = result.business_flow_skill_pack_recommendation
     assert recommendation is not None
-    assert (
-        recommendation.recommendation_type
-        == BusinessFlowSkillPackRecommendationType.SINGLE_PACK
-    )
+    assert recommendation.recommendation_type == BusinessFlowSkillPackRecommendationType.SINGLE_PACK
     assert recommendation.candidate_packs[0].pack_id == "product_clause_consultation"
 
 
@@ -180,9 +179,7 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
         "retrieval_query_set",
     ]
     assert user_payload["retrieval_query_set_budget"]["max_queries"] == 3
-    assert resolution.retrieval_query_set[0].query == (
-        "inpatient reimbursement required documents"
-    )
+    assert resolution.retrieval_query_set[0].query == ("inpatient reimbursement required documents")
 
 
 def test_llm_intent_resolver_includes_admitted_conversation_context() -> None:
@@ -243,6 +240,62 @@ def test_llm_intent_resolver_includes_admitted_conversation_context() -> None:
         "clarification_turn_ids": [],
         "usage": "follow_up_resolution_only_not_evidence",
     }
+
+
+def test_llm_intent_resolver_includes_memory_recall_for_reference_resolution() -> None:
+    provider = FakeIntentProvider(
+        """
+        {
+          "resolution_id": "intent_memory_recall_1",
+          "user_goal": "Resolve a follow-up report view question.",
+          "domain_intent": "customer_report_view_question",
+          "known_facts": ["The user asks to reuse a remembered report view."],
+          "missing_fields": [],
+          "ambiguities": [],
+          "risk_flags": [],
+          "confidence": 0.83,
+          "recommended_next_action": "plan_retrieval",
+          "retrieval_query_set": [
+            {
+              "query": "monthly claim reports report view",
+              "intent_angle": "memory_recall_reference_resolution",
+              "required": true,
+              "reason": "Memory recall identifies the user's preferred report view."
+            }
+          ]
+        }
+        """
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+
+    resolver.resolve(
+        question="Can we use that report view again?",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+        memory_recall_payloads=(
+            MemoryRecallWorkingPayload(
+                scope=MemoryScope.USER,
+                source_refs=("mem_user_001",),
+                summary="User prefers monthly claim reports.",
+                facts={"preferred_report_view": "monthly claim reports"},
+            ),
+        ),
+    )
+
+    assert provider.last_request is not None
+    user_payload = json.loads(provider.last_request.messages[1].content)
+    assert user_payload["memory_recall_context"] == [
+        {
+            "scope": "user",
+            "source_refs": ["mem_user_001"],
+            "summary": "User prefers monthly claim reports.",
+            "facts": {"preferred_report_view": "monthly claim reports"},
+            "usage": "reference_resolution_and_task_continuity_only_not_evidence",
+        }
+    ]
 
 
 def test_llm_intent_resolver_captures_intent_stage_llm_interaction() -> None:
@@ -325,9 +378,7 @@ def test_llm_intent_resolver_exposes_public_query_expansion_policy() -> None:
 
     assert provider.last_request is not None
     user_payload = json.loads(provider.last_request.messages[1].content)
-    expansion_policy = user_payload["retrieval_query_set_budget"][
-        "query_expansion_policy"
-    ]
+    expansion_policy = user_payload["retrieval_query_set_budget"]["query_expansion_policy"]
     assert expansion_policy["name"] == "knowledge_query_expansion"
     assert expansion_policy["domain_specific_query_types_allowed"] is False
     assert "original wording" in expansion_policy["required_angles"]
@@ -388,9 +439,7 @@ def test_llm_intent_resolver_includes_business_flow_pack_summaries() -> None:
         intent_patterns=("产品咨询", "优缺点"),
         intent_taxonomy_refs=("insurance.product_clause",),
         stage_prompt_addenda={
-            "plan": {
-                "business_context": "This must never be exposed during intent resolution."
-            }
+            "plan": {"business_context": "This must never be exposed during intent resolution."}
         },
         tool_contract_refs=("internal_tool",),
         policy_rule_refs=("internal_policy",),
@@ -503,9 +552,7 @@ def test_llm_intent_resolver_sends_function_schema_for_business_flow_result() ->
         "intent_resolution",
         "business_flow_skill_pack_recommendation",
     )
-    recommendation_schema = root_schema["properties"][
-        "business_flow_skill_pack_recommendation"
-    ]
+    recommendation_schema = root_schema["properties"]["business_flow_skill_pack_recommendation"]
     assert recommendation_schema["additionalProperties"] is False
     assert recommendation_schema["required"] == (
         "recommendation_id",
@@ -575,9 +622,7 @@ def test_llm_intent_resolver_repairs_missing_contract_fields_once() -> None:
         "user_goal",
         "domain_intent",
     ]
-    assert repair_payload["previous_response_json"]["recommended_next_action"] == (
-        "plan_retrieval"
-    )
+    assert repair_payload["previous_response_json"]["recommended_next_action"] == ("plan_retrieval")
     repair_function_schema = provider.requests[1].function_schema
     assert repair_function_schema is not None
     assert repair_function_schema.name == "submit_intent_resolution"
@@ -645,8 +690,7 @@ def test_llm_intent_repair_preserves_admitted_conversation_context() -> None:
         "Previous answer compared Product A and Product B."
     )
     assert (
-        repair_payload["conversation_context"]["usage"]
-        == "follow_up_resolution_only_not_evidence"
+        repair_payload["conversation_context"]["usage"] == "follow_up_resolution_only_not_evidence"
     )
 
 

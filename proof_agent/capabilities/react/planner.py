@@ -14,6 +14,7 @@ from proof_agent.capabilities.models.normalization import (
 from proof_agent.contracts import (
     ContextAdmission,
     EffectiveToolProposalScope,
+    MemoryRecallWorkingPayload,
     ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
@@ -51,6 +52,7 @@ class ReActPlanner(Protocol):
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         eligible_actions: AbstractSet[ReActActionType] | None = None,
         effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
@@ -68,6 +70,7 @@ class DeterministicReActPlanner:
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         eligible_actions: AbstractSet[ReActActionType] | None = None,
         effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
@@ -76,6 +79,7 @@ class DeterministicReActPlanner:
             context_summary,
             workflow_stage_context,
             conversation_context,
+            memory_recall_payloads,
             eligible_actions,
             effective_tool_proposal_scope,
         )
@@ -196,6 +200,7 @@ class LLMReActPlanner:
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         eligible_actions: AbstractSet[ReActActionType] | None = None,
         effective_tool_proposal_scope: EffectiveToolProposalScope | None = None,
     ) -> ReActActionProposal:
@@ -210,6 +215,9 @@ class LLMReActPlanner:
         conversation_payload = _conversation_context_prompt_payload(conversation_context)
         if conversation_payload is not None:
             user_payload["conversation_context"] = conversation_payload
+        memory_recall_context = _memory_recall_context_prompt_payload(memory_recall_payloads)
+        if memory_recall_context:
+            user_payload["memory_recall_context"] = memory_recall_context
         if effective_tool_proposal_scope is not None:
             user_payload["effective_tool_proposal_scope"] = _tool_scope_prompt_payload(
                 effective_tool_proposal_scope
@@ -262,6 +270,22 @@ def _conversation_context_prompt_payload(
     payload = context_admission_payload(conversation_context)
     payload["usage"] = "follow_up_resolution_only_not_evidence"
     return payload
+
+
+def _memory_recall_context_prompt_payload(
+    payloads: tuple[MemoryRecallWorkingPayload, ...],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "scope": payload.scope.value,
+            "source_refs": list(payload.source_refs),
+            "summary": payload.summary,
+            "facts": dict(payload.facts),
+            "usage": "reference_resolution_and_task_continuity_only_not_evidence",
+            "tool_parameter_use_allowed": False,
+        }
+        for payload in payloads
+    ]
 
 
 def _planner_function_schema(

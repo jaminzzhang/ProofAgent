@@ -17,9 +17,11 @@ from proof_agent.contracts import (
     AgentManifest,
     ApprovalPause,
     ApprovalStatus,
+    AgentContextConfiguration,
     ClarificationNeed,
     ContextAdmission,
     EvidenceChunk,
+    MemoryRecallWorkingPayload,
     PolicyDecisionType,
     PublishedAgentRuntimeFacts,
     ReceiptOutcome,
@@ -40,6 +42,7 @@ from proof_agent.contracts import (
 )
 from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.control.context_assembler import assemble_run_start_context_from_admission
+from proof_agent.control.context_budget import InMemoryContextBudgetCalibrationStore
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
     summarize_workflow_stage_configuration,
@@ -77,6 +80,7 @@ def run_with_langgraph(
     allow_untrusted_web_supplement: bool = False,
     published_agent_runtime_facts: PublishedAgentRuntimeFacts | None = None,
     run_start_context: RunStartContextAssembly | None = None,
+    context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
 ) -> RunResult:
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
@@ -93,6 +97,7 @@ def run_with_langgraph(
         run_id=actual_run_id,
         conversation_context=conversation_context,
         run_start_context=run_start_context,
+        context_config=resolved_manifest.context,
     )
 
     trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
@@ -167,6 +172,7 @@ def run_with_langgraph(
         trace=trace,
         execution_input=execution_input,
         conversation_context=conversation_context,
+        memory_recall_payloads=_memory_recall_working_payloads(context_assembly),
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )
     checkpointer = checkpointer or _create_checkpointer(resolved_manifest)
@@ -275,6 +281,7 @@ def resume_langgraph_approval(
     draft_id: str | None = None,
     allow_untrusted_web_supplement: bool = False,
     execution_input: WorkflowTemplateExecutionInput | None = None,
+    context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
 ) -> RunResult:
     """Resume a LangGraph run from an approval interrupt."""
 
@@ -300,6 +307,7 @@ def resume_langgraph_approval(
         knowledge_binding_resolver=knowledge_binding_resolver,
         resolved_knowledge_bindings=resolved_knowledge_bindings,
         configuration_store=configuration_store,
+        context_budget_calibration_store=context_budget_calibration_store,
     )
     if execution_input is None:
         stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
@@ -325,6 +333,7 @@ def resume_langgraph_approval(
         trace=trace,
         execution_input=execution_input,
         conversation_context=None,
+        memory_recall_payloads=(),
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )
     graph = builder.compile(checkpointer=checkpointer)
@@ -428,6 +437,7 @@ def _build_graph(
     trace: TraceWriter,
     execution_input: WorkflowTemplateExecutionInput,
     conversation_context: ContextAdmission | None,
+    memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...],
     allow_untrusted_web_supplement: bool,
 ) -> Any:
     if manifest.workflow.template == "enterprise_qa":
@@ -435,6 +445,7 @@ def _build_graph(
             invocation=invocation,
             trace=trace,
             conversation_context=conversation_context,
+            memory_recall_payloads=memory_recall_payloads,
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
         )
     return build_react_enterprise_qa_graph(
@@ -442,6 +453,7 @@ def _build_graph(
         trace=trace,
         execution_input=execution_input,
         conversation_context=conversation_context,
+        memory_recall_payloads=memory_recall_payloads,
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )
 
@@ -839,6 +851,7 @@ def _run_start_context_assembly(
     run_id: str,
     conversation_context: ContextAdmission | None,
     run_start_context: RunStartContextAssembly | None,
+    context_config: AgentContextConfiguration | None,
 ) -> RunStartContextAssembly | None:
     if run_start_context is not None:
         return run_start_context
@@ -847,6 +860,19 @@ def _run_start_context_assembly(
     return assemble_run_start_context_from_admission(
         run_id=run_id,
         conversation_context=conversation_context,
+        context_config=context_config,
+    )
+
+
+def _memory_recall_working_payloads(
+    run_start_context: RunStartContextAssembly | None,
+) -> tuple[MemoryRecallWorkingPayload, ...]:
+    if run_start_context is None:
+        return ()
+    return tuple(
+        admission.working_payload
+        for admission in run_start_context.memory_recall_admissions
+        if admission.admitted and admission.working_payload is not None
     )
 
 

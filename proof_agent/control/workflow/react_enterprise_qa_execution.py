@@ -9,6 +9,7 @@ from proof_agent.contracts import (
     ApprovalState,
     ApprovalStatus,
     ContextAdmission,
+    MemoryRecallWorkingPayload,
     PolicyDecisionType,
     ReceiptOutcome,
     WorkflowTemplateExecutionInput,
@@ -28,7 +29,8 @@ class ReActEnterpriseQAWorkflowExecution:
         trace: TraceWriter,
         execution_input: WorkflowTemplateExecutionInput,
         conversation_context: ContextAdmission | None,
-        allow_untrusted_web_supplement: bool,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
+        allow_untrusted_web_supplement: bool = False,
     ) -> None:
         self.invocation = invocation
         self.trace = trace
@@ -44,6 +46,7 @@ class ReActEnterpriseQAWorkflowExecution:
             trace=trace,
             execution_input=execution_input,
             conversation_context=conversation_context,
+            memory_recall_payloads=memory_recall_payloads,
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
         )
 
@@ -61,9 +64,7 @@ class ReActEnterpriseQAWorkflowExecution:
                 "risk_level": str(action.get("risk_level", "")),
                 "step_count": int(delta.get("step_count", state.get("step_count", 0)) or 0),
             },
-            produced_fact_refs=("reasoning_summary", "action_proposal")
-            if action
-            else (),
+            produced_fact_refs=("reasoning_summary", "action_proposal") if action else (),
             continuation=delta,
         )
 
@@ -109,9 +110,7 @@ class ReActEnterpriseQAWorkflowExecution:
         summary = {
             "resolution_id": str(resolution.get("resolution_id", "")),
             "domain_intent": str(resolution.get("domain_intent", "")),
-            "recommended_next_action": str(
-                resolution.get("recommended_next_action", "")
-            ),
+            "recommended_next_action": str(resolution.get("recommended_next_action", "")),
             "confidence": resolution.get("confidence", 0),
         }
         if clarification_need:

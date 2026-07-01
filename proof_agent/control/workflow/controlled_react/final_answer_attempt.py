@@ -27,6 +27,10 @@ from proof_agent.contracts import (
     WorkflowStageLlmInteraction,
     WorkflowStageStatus,
 )
+from proof_agent.control.context_budget import (
+    ContextBudgetKey,
+    record_context_overflow_calibration,
+)
 from proof_agent.control.workflow.harness_helpers import (
     build_model_request,
     cost_class,
@@ -115,6 +119,7 @@ class FinalAnswerAttemptRunner:
             provider=self._invocation.model_provider.provider_name,
             model=self._invocation.model_provider.model_name,
             conversation_context=state.conversation_context,
+            memory_recall_payloads=state.memory_recall_payloads,
         )
         estimated_tokens = self._invocation.model_provider.estimate_tokens(request)
         return PreparedFinalAnswerAttempt(
@@ -142,9 +147,7 @@ class FinalAnswerAttemptRunner:
             _StageScopedTrace(self._trace, stage_id="model_answer"),
             policy_decision,
             payload_extra=(
-                {"repair_attempt": repair_attempt}
-                if repair_attempt is not None
-                else None
+                {"repair_attempt": repair_attempt} if repair_attempt is not None else None
             ),
         )
         if policy_decision.decision is not PolicyDecisionType.ALLOW:
@@ -174,6 +177,33 @@ class FinalAnswerAttemptRunner:
         try:
             response = self._invocation.model_provider.generate(prepared.request)
         except Exception as exc:
+            if _context_overflow_recovery_allowed(
+                exc,
+                request=prepared.request,
+                manifest_context=self._invocation.manifest.context,
+            ):
+                _emit_model_error_trace(
+                    self._trace,
+                    provider=prepared.request.provider,
+                    model=prepared.request.model,
+                    exc=exc,
+                    stage_id="model_answer",
+                )
+                retry_prepared = self._prepare_context_overflow_retry(
+                    state,
+                    prepared,
+                )
+                _emit_context_budget_calibration_update(
+                    self._trace,
+                    prepared=prepared,
+                    retry_prepared=retry_prepared,
+                    update_ref=_record_context_overflow_calibration(
+                        self._invocation,
+                        prepared=prepared,
+                        retry_prepared=retry_prepared,
+                    ),
+                )
+                return self.generate(state, action, retry_prepared)
             _emit_model_error_trace(
                 self._trace,
                 provider=prepared.request.provider,
@@ -201,6 +231,39 @@ class FinalAnswerAttemptRunner:
             interaction=interaction,
         )
 
+    def _prepare_context_overflow_retry(
+        self,
+        state: ControlledReActRunState,
+        prepared: PreparedFinalAnswerAttempt,
+    ) -> PreparedFinalAnswerAttempt:
+        retry_request = build_model_request(
+            question=state.question,
+            evidence=prepared.evidence,
+            provider=prepared.request.provider,
+            model=prepared.request.model,
+            conversation_context=None,
+            memory_recall_payloads=(),
+        ).model_copy(
+            update={
+                "temperature": prepared.request.temperature,
+                "max_output_tokens": prepared.request.max_output_tokens,
+                "timeout_seconds": prepared.request.timeout_seconds,
+                "stream": prepared.request.stream,
+                "metadata": {
+                    **dict(prepared.request.metadata),
+                    "conversation_context_admitted": False,
+                    "memory_recall_admitted": False,
+                    "context_convergence_level": "deep_compression",
+                    "context_overflow_recovery": True,
+                },
+            }
+        )
+        return PreparedFinalAnswerAttempt(
+            request=retry_request,
+            estimated_tokens=self._invocation.model_provider.estimate_tokens(retry_request),
+            evidence=prepared.evidence,
+        )
+
     def normalize(
         self,
         state: ControlledReActRunState,
@@ -214,9 +277,7 @@ class FinalAnswerAttemptRunner:
             question=state.question,
         )
         failed = tuple(
-            result
-            for result in validation_results
-            if result.status is ValidationStatus.FAILED
+            result for result in validation_results if result.status is ValidationStatus.FAILED
         )
         if failed:
             diagnostic = final_answer_validation_failure_diagnostic(
@@ -336,6 +397,72 @@ def _repair_eligible(normalized: NormalizedFinalAnswerAttempt) -> bool:
     return normalized.status is FinalAnswerAttemptStatus.FINAL_ANSWER_ADEQUACY_FAILED
 
 
+def _context_overflow_recovery_allowed(
+    exc: Exception,
+    *,
+    request: ModelRequest,
+    manifest_context: Any,
+) -> bool:
+    if request.metadata.get("context_overflow_recovery"):
+        return False
+    if manifest_context is not None:
+        if getattr(manifest_context, "budget_profile", None) is not None:
+            return False
+        if getattr(manifest_context, "dynamic_calibration", True) is False:
+            return False
+    return _is_context_limit_error(exc)
+
+
+def _is_context_limit_error(exc: Exception) -> bool:
+    code = str(getattr(exc, "code", "") or "")
+    if code in {"PA_MODEL_CONTEXT_LIMIT", "context_length_exceeded"}:
+        return True
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "context length",
+            "context window",
+            "maximum context",
+            "too many tokens",
+            "token limit",
+            "context limit",
+        )
+    )
+
+
+def _record_context_overflow_calibration(
+    invocation: HarnessInvocation,
+    *,
+    prepared: PreparedFinalAnswerAttempt,
+    retry_prepared: PreparedFinalAnswerAttempt,
+) -> str | None:
+    update = record_context_overflow_calibration(
+        context_config=invocation.manifest.context,
+        calibration_store=invocation.context_budget_calibration_store,
+        key=ContextBudgetKey(
+            provider=prepared.request.provider,
+            model=prepared.request.model,
+            role=ModelCallRole.FINAL_ANSWER.value,
+            profile_version=(
+                invocation.manifest.context.budget_profile.profile_version
+                if invocation.manifest.context is not None
+                and invocation.manifest.context.budget_profile is not None
+                else "context_budget.v1"
+            ),
+        ),
+        failed_estimated_tokens=_estimated_tokens(prepared),
+        recovered_estimated_tokens=_estimated_tokens(retry_prepared),
+    )
+    return update.update_ref if update is not None else None
+
+
+def _estimated_tokens(prepared: PreparedFinalAnswerAttempt) -> int:
+    if prepared.estimated_tokens is not None:
+        return prepared.estimated_tokens
+    return sum(len(message.content) for message in prepared.request.messages)
+
+
 def _final_answer_repair_request(
     state: ControlledReActRunState,
     normalized: NormalizedFinalAnswerAttempt,
@@ -350,9 +477,7 @@ def _final_answer_repair_request(
         "violation_codes": list(
             normalized.diagnostic.violation_codes if normalized.diagnostic else ()
         ),
-        "violation_count": normalized.diagnostic.violation_count
-        if normalized.diagnostic
-        else 0,
+        "violation_count": normalized.diagnostic.violation_count if normalized.diagnostic else 0,
     }
     repair_payload: dict[str, Any] = {
         "question": state.question,
@@ -377,9 +502,7 @@ def _final_answer_repair_request(
             }
             for chunk in generated.prepared.evidence
         ],
-        "allowed_citation_refs": list(
-            _allowed_citation_refs(generated.prepared.evidence)
-        ),
+        "allowed_citation_refs": list(_allowed_citation_refs(generated.prepared.evidence)),
         "validation_error": validation_error,
         "previous_response_json": previous_json,
         "previous_response_parse_error_code": previous_parse_error,
@@ -610,9 +733,7 @@ def _emit_model_request_trace(
         "message_count": len(request.messages),
         "prompt_length": sum(len(message.content) for message in request.messages),
         "system_prompt_length": sum(
-            len(message.content)
-            for message in request.messages
-            if message.role.value == "system"
+            len(message.content) for message in request.messages if message.role.value == "system"
         ),
         "estimated_tokens": estimated_tokens,
         "stream": request.stream,
@@ -621,6 +742,9 @@ def _emit_model_request_trace(
     }
     if repair_attempt is not None:
         payload["repair_attempt"] = repair_attempt
+    if request.metadata.get("context_overflow_recovery"):
+        payload["context_overflow_recovery"] = True
+        payload["context_convergence_level"] = request.metadata.get("context_convergence_level")
     trace.emit(
         "model_request",
         status="ok",
@@ -652,6 +776,28 @@ def _emit_model_response_trace(
         "model_response",
         status="ok",
         payload=event_payload,
+    )
+
+
+def _emit_context_budget_calibration_update(
+    trace: TracePort,
+    *,
+    prepared: PreparedFinalAnswerAttempt,
+    retry_prepared: PreparedFinalAnswerAttempt,
+    update_ref: str | None,
+) -> None:
+    trace.emit(
+        "context_budget_calibration_update",
+        status="ok",
+        payload={
+            "provider": prepared.request.provider,
+            "model": prepared.request.model,
+            "role": ModelCallRole.FINAL_ANSWER.value,
+            "convergence_level": "deep_compression",
+            "failed_estimated_tokens": _estimated_tokens(prepared),
+            "recovered_estimated_tokens": _estimated_tokens(retry_prepared),
+            "calibration_update_ref": update_ref,
+        },
     )
 
 

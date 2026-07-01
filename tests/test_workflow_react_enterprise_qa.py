@@ -18,6 +18,8 @@ from proof_agent.contracts import (
     EvidenceStatus,
     IntentResolution,
     IntentResolutionResult,
+    MemoryRecallWorkingPayload,
+    MemoryScope,
     ModelConfig,
     ModelRequest,
     ModelResponse,
@@ -42,7 +44,7 @@ from proof_agent.control.workflow.react_enterprise_qa_execution import (
 from proof_agent.control.workflow.react_enterprise_qa_stage_behavior import (
     _llm_interaction_capture,
 )
-from proof_agent.control.workflow.harness_helpers import build_model_request
+from proof_agent.control.workflow.harness_helpers import build_model_request, validate_model_output
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.runtime.langgraph_runner import resume_langgraph_approval, run_with_langgraph
@@ -55,9 +57,7 @@ REACT_V3_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_
 
 def _trace_events(path: Path) -> list[dict[str, Any]]:
     return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
 
 
@@ -69,8 +69,7 @@ def _final_answer_model_request(events: list[dict[str, Any]]) -> dict[str, Any]:
     return next(
         event
         for event in events
-        if event["event_type"] == "model_request"
-        and event["payload"].get("role") == "final_answer"
+        if event["event_type"] == "model_request" and event["payload"].get("role") == "final_answer"
     )
 
 
@@ -214,8 +213,7 @@ def test_text_llm_interaction_capture_does_not_report_json_parse_failure() -> No
 
 def test_final_answer_model_request_lists_allowed_citation_refs() -> None:
     citation = (
-        "knowledge://source/ks_myks/document/doc_1c78ce23/"
-        "revision/rev_1c78ce23#node=82ac0f38"
+        "knowledge://source/ks_myks/document/doc_1c78ce23/revision/rev_1c78ce23#node=82ac0f38"
     )
     request = build_model_request(
         question="平安去年业绩怎么样？",
@@ -270,6 +268,70 @@ def test_final_answer_model_request_uses_fixed_function_schema() -> None:
         "type": "array",
         "items": {"type": "string"},
     }
+
+
+def test_final_answer_model_request_includes_memory_recall_as_non_evidence_context() -> None:
+    citation = "claims-guide.md#documents"
+    request = build_model_request(
+        question="Can we use that report view again?",
+        evidence=(
+            EvidenceChunk(
+                source="claims-guide.md",
+                content="Claim reports must be generated from current claim data.",
+                admission_score=1.0,
+                status=EvidenceStatus.CANDIDATE,
+                citation=citation,
+            ),
+        ),
+        provider="deterministic",
+        model="demo",
+        memory_recall_payloads=(
+            MemoryRecallWorkingPayload(
+                scope=MemoryScope.USER,
+                source_refs=("mem_user_001",),
+                summary="User prefers monthly claim reports.",
+                facts={"preferred_report_view": "monthly claim reports"},
+            ),
+        ),
+    )
+
+    user_message = request.messages[1].content
+    assert "Memory recall admitted for preferences and continuity only" in user_message
+    assert "User prefers monthly claim reports." in user_message
+    assert "Do not cite memory recall" in user_message
+    assert "mem_user_001" not in user_message
+    assert citation in user_message
+    assert request.metadata["memory_recall_admitted"] is True
+
+
+def test_final_answer_validation_rejects_memory_recall_citation_ref() -> None:
+    results = validate_model_output(
+        response=ModelResponse(
+            content=json.dumps(
+                {
+                    "message": "Use the monthly claim report view.",
+                    "citations": ["mem_user_001"],
+                }
+            ),
+            provider_name="deterministic",
+            model_name="demo",
+            finish_reason="stop",
+        ),
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        evidence=(
+            EvidenceChunk(
+                source="claims-guide.md",
+                content="Claim reports must be generated from current claim data.",
+                admission_score=1.0,
+                status=EvidenceStatus.CANDIDATE,
+                citation="claims-guide.md#documents",
+            ),
+        ),
+        question="Can we use that report view again?",
+    )
+
+    citation_result = next(result for result in results if result.validator_name == "citations")
+    assert citation_result.status.value == "failed"
 
 
 def test_supported_travel_meal_question_answers_with_react_review_trace(
@@ -337,9 +399,7 @@ def test_low_risk_review_fast_path_skips_reviewer_model_when_policy_allows(
     assert provider.requests == []
     events = _trace_events(result.trace_path)
     review_requests = [
-        event["payload"]
-        for event in events
-        if event["event_type"] == "review_requested"
+        event["payload"] for event in events if event["event_type"] == "review_requested"
     ]
     assert {event["enforcement_point"] for event in review_requests} >= {
         "before_retrieval_plan",
@@ -353,10 +413,7 @@ def test_low_risk_review_fast_path_skips_reviewer_model_when_policy_allows(
         if event["event_type"] == "review_decision"
         and event["payload"].get("fast_path_reason") == "low_risk_policy_allow"
     ]
-    assert {
-        event["review_enforcement_point"]
-        for event in fast_path_reviews
-    } == {
+    assert {event["review_enforcement_point"] for event in fast_path_reviews} == {
         "before_retrieval_plan",
         "before_retrieval_step",
         "before_model_call",
@@ -406,9 +463,7 @@ def test_react_run_emits_workflow_stage_result_trace_events(tmp_path: Path) -> N
     )
 
     events = _trace_events(result.trace_path)
-    stage_events = [
-        event for event in events if event["event_type"] == "workflow_stage_result"
-    ]
+    stage_events = [event for event in events if event["event_type"] == "workflow_stage_result"]
 
     assert [event["payload"]["stage_id"] for event in stage_events] == [
         "plan",
@@ -438,17 +493,14 @@ def test_react_run_emits_workflow_stage_context_applied_for_visited_stages(
 
     events = _trace_events(result.trace_path)
     context_applied = [
-        event
-        for event in events
-        if event["event_type"] == "workflow_stage_context_applied"
+        event for event in events if event["event_type"] == "workflow_stage_context_applied"
     ]
 
     # The same visited stages as workflow_stage_result above.
     stage_ids = [event["payload"]["stage_id"] for event in context_applied]
     for visited in ("plan", "retrieval_review", "retrieval", "model_answer"):
         assert visited in stage_ids, (
-            f"stage {visited!r} did not emit workflow_stage_context_applied; "
-            f"got {stage_ids}"
+            f"stage {visited!r} did not emit workflow_stage_context_applied; got {stage_ids}"
         )
 
 
@@ -461,7 +513,9 @@ def test_configured_stage_context_emits_boundary_even_without_rich_summary(
     """
     execution = _react_execution(tmp_path)
 
-    execution.plan({"question": "What is the reimbursement rule for travel meals?", "step_count": 0})
+    execution.plan(
+        {"question": "What is the reimbursement rule for travel meals?", "step_count": 0}
+    )
 
     events = _trace_events(tmp_path / "trace.jsonl")
     boundary = next(
@@ -558,16 +612,12 @@ admission:
         "enterprise_policy_qa"
     )
     admission_event = next(
-        event
-        for event in events
-        if event["event_type"] == "business_flow_skill_pack_admission"
+        event for event in events if event["event_type"] == "business_flow_skill_pack_admission"
     )
     assert admission_event["payload"]["decision"] == "admitted"
     assert admission_event["payload"]["selected_pack_id"] == "enterprise_policy_qa"
     assert admission_event["payload"]["recommendation_type"] == "single_pack"
-    assert admission_event["payload"]["candidate_packs"][0]["pack_id"] == (
-        "enterprise_policy_qa"
-    )
+    assert admission_event["payload"]["candidate_packs"][0]["pack_id"] == ("enterprise_policy_qa")
     assert result.workflow_template_execution_result is not None
     intent_stage = next(
         stage
@@ -609,13 +659,10 @@ def test_v2_no_pack_business_flow_admission_is_normal_routing(
                     BusinessFlowSkillPackRecommendation(
                         recommendation_id="bfsp_rec_no_pack_1",
                         intent_resolution_id=resolution.resolution_id,
-                        recommendation_type=(
-                            BusinessFlowSkillPackRecommendationType.NO_PACK
-                        ),
+                        recommendation_type=(BusinessFlowSkillPackRecommendationType.NO_PACK),
                         confidence=0.82,
                         reason=(
-                            "No published Business Flow Skill Pack is suitable "
-                            "for this request."
+                            "No published Business Flow Skill Pack is suitable for this request."
                         ),
                     )
                 ),
@@ -673,9 +720,7 @@ admission:
     event_types = _event_types(events)
     assert "clarification_requested" not in event_types
     admission_event = next(
-        event
-        for event in events
-        if event["event_type"] == "business_flow_skill_pack_admission"
+        event for event in events if event["event_type"] == "business_flow_skill_pack_admission"
     )
     assert admission_event["status"] == "ok"
     assert admission_event["payload"]["decision"] == "no_pack"
@@ -755,7 +800,7 @@ admission:
             {
                 "id": "billing_review",
                 "definition": "./skill_packs/billing.yaml",
-            }
+            },
         ],
     }
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
@@ -772,10 +817,7 @@ admission:
     assert result.workflow_template_execution_result is not None
     assert result.workflow_template_execution_result.clarification_need is not None
     assert (
-        result.workflow_template_execution_result.clarification_need.summary[
-            "candidate_count"
-        ]
-        == 2
+        result.workflow_template_execution_result.clarification_need.summary["candidate_count"] == 2
     )
     intent_stage = next(
         stage
@@ -926,8 +968,7 @@ admission:
         if event["event_type"] == "retrieval_result"
     )
     assert [
-        binding["binding_id"]
-        for binding in retrieval_result["payload"]["selected_bindings"]
+        binding["binding_id"] for binding in retrieval_result["payload"]["selected_bindings"]
     ] == ["policy_binding"]
     assert (
         retrieval_result["payload"]["routing"]["selection_reason"]
@@ -982,11 +1023,13 @@ def test_workflow_stage_context_extends_model_prompt_without_replacing_system_pr
     baseline_answer_request = _final_answer_model_request(baseline_events)
     configured_answer_request = _final_answer_model_request(configured_events)
 
-    assert configured_answer_request["payload"]["system_prompt_length"] == (
-        baseline_answer_request["payload"]["system_prompt_length"]
+    assert (
+        configured_answer_request["payload"]["system_prompt_length"]
+        == (baseline_answer_request["payload"]["system_prompt_length"])
     )
-    assert configured_answer_request["payload"]["prompt_length"] > (
-        baseline_answer_request["payload"]["prompt_length"]
+    assert (
+        configured_answer_request["payload"]["prompt_length"]
+        > (baseline_answer_request["payload"]["prompt_length"])
     )
 
     context_events = [
@@ -1100,9 +1143,7 @@ def test_disabled_tools_block_react_tool_action_before_review(tmp_path: Path) ->
         for event in events
         if event["event_type"] == "workflow_stage_configuration_trace_summary"
     )
-    assert "tool_review" not in {
-        stage["stage_id"] for stage in summary["payload"]["stages"]
-    }
+    assert "tool_review" not in {stage["stage_id"] for stage in summary["payload"]["stages"]}
     assert "tool" not in {stage["stage_id"] for stage in summary["payload"]["stages"]}
 
 
@@ -1301,38 +1342,32 @@ def test_llm_planner_and_reviewer_calls_emit_safe_model_events(
     assert sentinel not in json.dumps(payloads, sort_keys=True)
 
     request_roles = [
-        event["payload"]["role"]
-        for event in events
-        if event["event_type"] == "model_request"
+        event["payload"]["role"] for event in events if event["event_type"] == "model_request"
     ]
     response_roles = [
-        event["payload"].get("role")
-        for event in events
-        if event["event_type"] == "model_response"
+        event["payload"].get("role") for event in events if event["event_type"] == "model_response"
     ]
     assert "react_planner" in request_roles
     assert "harness_review" in request_roles
     assert "react_planner" in response_roles
     assert "harness_review" in response_roles
     for event in events:
-        if (
-            event["event_type"] == "model_request"
-            and event["payload"]["role"] in {"react_planner", "harness_review"}
-        ):
+        if event["event_type"] == "model_request" and event["payload"]["role"] in {
+            "react_planner",
+            "harness_review",
+        }:
             assert "messages" not in event["payload"]
             assert "content" not in event["payload"]
-        if (
-            event["event_type"] == "model_response"
-            and event["payload"].get("role") in {"react_planner", "harness_review"}
-        ):
+        if event["event_type"] == "model_response" and event["payload"].get("role") in {
+            "react_planner",
+            "harness_review",
+        }:
             assert "messages" not in event["payload"]
             assert "content" not in event["payload"]
     execution_result = result.workflow_template_execution_result
     assert execution_result is not None
     planner_interaction = next(
-        item
-        for item in execution_result.stage_llm_interactions
-        if item.role == "react_planner"
+        item for item in execution_result.stage_llm_interactions if item.role == "react_planner"
     )
     assert planner_interaction.stage_id == "plan"
     assert planner_interaction.request_json["response_format"] == "json"
@@ -1396,14 +1431,13 @@ def test_retrieval_review_stage_context_reaches_reviewer_model_request(
     )
     user_payload = json.loads(retrieval_review_request.messages[1].content)
 
-    assert (
-        user_payload["context"]["workflow_stage_context"]["business_context_addendum"]["text"]
-        == (
-            "Business context:\n"
-            "Reviewer should consider regulator-facing claims context.\n"
-            "Task instructions:\n"
-            "- Require a retrieval query before allowing retrieval."
-        )
+    assert user_payload["context"]["workflow_stage_context"]["business_context_addendum"][
+        "text"
+    ] == (
+        "Business context:\n"
+        "Reviewer should consider regulator-facing claims context.\n"
+        "Task instructions:\n"
+        "- Require a retrieval query before allowing retrieval."
     )
     assert user_payload["context"]["workflow_stage_context"]["structured_control_context"] == {
         "include_agent_purpose": (
@@ -1493,9 +1527,7 @@ def test_llm_planner_invalid_output_fails_closed_with_trace(
         sort_keys=True,
     )
     failure = next(
-        event
-        for event in events
-        if event["event_type"] == "model_output_normalization_failed"
+        event for event in events if event["event_type"] == "model_output_normalization_failed"
     )
     assert failure["payload"]["role"] == "react_planner"
     assert failure["payload"]["error_code"] == "model_output_json_parse_failed"
@@ -1551,9 +1583,7 @@ def test_review_normalization_failure_fails_closed_with_trace(
         sort_keys=True,
     )
     failure = next(
-        event
-        for event in events
-        if event["event_type"] == "model_output_normalization_failed"
+        event for event in events if event["event_type"] == "model_output_normalization_failed"
     )
     assert failure["payload"]["role"] == "harness_review"
     assert failure["payload"]["error_code"] == "model_output_json_parse_failed"

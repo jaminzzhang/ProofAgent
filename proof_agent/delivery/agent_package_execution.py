@@ -12,10 +12,12 @@ from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
+    AgentContextConfiguration,
     ApprovalPause,
     ClarificationNeed,
     ContextAdmission,
     MemoryRecallAdmission,
+    MemoryRecallWorkingPayload,
     PublishedAgentRuntimeFacts,
     ResolvedKnowledgeBindingSet,
     RunStartContextAssembly,
@@ -28,6 +30,7 @@ from proof_agent.contracts import (
 )
 from proof_agent.contracts.conversation import context_admission_payload
 from proof_agent.control.context_assembler import assemble_run_start_context_from_admission
+from proof_agent.control.context_budget import InMemoryContextBudgetCalibrationStore
 from proof_agent.control.workflow.controlled_react import (
     ControlledReActStartRequest,
     build_controlled_react_orchestrator_for_invocation,
@@ -77,6 +80,7 @@ class AgentPackageRunRequest:
     controlled_react_orchestrator: ControlledReActOrchestratorDependency | None = None
     controlled_react_snapshot_store: SnapshotStorePort | None = None
     controlled_react_observation_truth_store: ObservationTruthStorePort | None = None
+    context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None
 
 
 def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
@@ -88,6 +92,8 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
         run_id=run_id,
         conversation_context=request.conversation_context,
         memory_recall_admissions=request.memory_recall_admissions,
+        context_config=manifest.context,
+        context_budget_calibration_store=request.context_budget_calibration_store,
     )
     if manifest.workflow.template != "react_enterprise_qa_v3":
         return run_with_langgraph(
@@ -109,6 +115,7 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
             allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
             published_agent_runtime_facts=request.published_agent_runtime_facts,
             run_start_context=run_start_context,
+            context_budget_calibration_store=request.context_budget_calibration_store,
         )
     return _execute_controlled_react_v3_agent_package_run(
         request,
@@ -163,6 +170,7 @@ def _execute_controlled_react_v3_agent_package_run(
         knowledge_binding_resolver=request.knowledge_binding_resolver,
         resolved_knowledge_bindings=request.resolved_knowledge_bindings,
         configuration_store=request.configuration_store,
+        context_budget_calibration_store=request.context_budget_calibration_store,
     )
     orchestrator = request.controlled_react_orchestrator
     if orchestrator is None:
@@ -182,6 +190,7 @@ def _execute_controlled_react_v3_agent_package_run(
             ),
             question=request.question,
             conversation_context=request.conversation_context,
+            memory_recall_payloads=_memory_recall_working_payloads(run_start_context),
             max_plan_rounds=manifest.react.max_plan_rounds,
             retrieval_max_queries=manifest.retrieval.max_queries,
         )
@@ -234,6 +243,8 @@ def _run_start_context_assembly(
     run_id: str,
     conversation_context: ContextAdmission | None,
     memory_recall_admissions: tuple[MemoryRecallAdmission, ...],
+    context_config: AgentContextConfiguration | None,
+    context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None,
 ) -> RunStartContextAssembly | None:
     if conversation_context is None and not memory_recall_admissions:
         return None
@@ -241,6 +252,20 @@ def _run_start_context_assembly(
         run_id=run_id,
         conversation_context=conversation_context or ContextAdmission(admitted=False),
         memory_recall_admissions=memory_recall_admissions,
+        context_config=context_config,
+        context_budget_calibration_store=context_budget_calibration_store,
+    )
+
+
+def _memory_recall_working_payloads(
+    run_start_context: RunStartContextAssembly | None,
+) -> tuple[MemoryRecallWorkingPayload, ...]:
+    if run_start_context is None:
+        return ()
+    return tuple(
+        admission.working_payload
+        for admission in run_start_context.memory_recall_admissions
+        if admission.admitted and admission.working_payload is not None
     )
 
 

@@ -11,6 +11,8 @@ from proof_agent.capabilities.react import (
 from proof_agent.contracts import (
     ContextAdmission,
     EffectiveToolProposalScope,
+    MemoryRecallWorkingPayload,
+    MemoryScope,
     ModelRequest,
     ModelResponse,
     ReActActionProposal,
@@ -242,6 +244,40 @@ def test_llm_react_planner_includes_admitted_conversation_context_as_typed_paylo
         "clarification_turn_ids": [],
         "usage": "follow_up_resolution_only_not_evidence",
     }
+
+
+def test_llm_react_planner_includes_memory_recall_without_tool_parameter_permission() -> None:
+    provider = FakePlannerProvider(VALID_PLANNER_OUTPUT)
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="openai_compatible", name="planner-test"),
+        model_provider=provider,
+    )
+
+    planner.plan(
+        question="Can we use that report view again?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="observation_count=0",
+        memory_recall_payloads=(
+            MemoryRecallWorkingPayload(
+                scope=MemoryScope.USER,
+                source_refs=("mem_user_001",),
+                summary="User prefers monthly claim reports.",
+                facts={"preferred_report_view": "monthly claim reports"},
+            ),
+        ),
+    )
+
+    user_payload = json.loads(provider.requests[0].messages[1].content)
+    assert user_payload["memory_recall_context"] == [
+        {
+            "scope": "user",
+            "source_refs": ["mem_user_001"],
+            "summary": "User prefers monthly claim reports.",
+            "facts": {"preferred_report_view": "monthly claim reports"},
+            "usage": "reference_resolution_and_task_continuity_only_not_evidence",
+            "tool_parameter_use_allowed": False,
+        }
+    ]
 
 
 def test_llm_react_planner_accepts_compact_deepseek_style_parameters() -> None:

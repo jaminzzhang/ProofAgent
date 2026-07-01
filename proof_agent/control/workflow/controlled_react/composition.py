@@ -117,6 +117,7 @@ class _DeterministicPlannerAdapter:
             system_prompt="Controlled ReAct Orchestrator V3",
             context_summary=_context_summary(state),
             conversation_context=state.conversation_context,
+            memory_recall_payloads=state.memory_recall_payloads,
         )
 
 
@@ -134,6 +135,7 @@ class _InvocationIntentResolutionAdapter:
             context_summary="pre_loop=true",
             workflow_stage_context=None,
             conversation_context=state.conversation_context,
+            memory_recall_payloads=state.memory_recall_payloads,
             business_flow_skill_packs=self._invocation.business_flow_skill_packs,
         )
         self.stage_llm_interactions = _intent_resolver_stage_llm_interactions(resolver)
@@ -183,6 +185,7 @@ class _InvocationPlannerAdapter:
             system_prompt="Controlled ReAct Orchestrator V3",
             context_summary=_context_summary(state),
             conversation_context=state.conversation_context,
+            memory_recall_payloads=state.memory_recall_payloads,
             eligible_actions=(
                 frozenset(state.effective_react_action_set)
                 if state.effective_react_action_set
@@ -619,12 +622,10 @@ class _InvocationReviewAdapter:
             "parameters": dict(action.parameters),
         }
         auto_review_enabled = bool(
-            self._invocation.manifest.review
-            and self._invocation.manifest.review.mode == "auto"
+            self._invocation.manifest.review and self._invocation.manifest.review.mode == "auto"
         )
         low_risk_fast_path_enabled = bool(
-            self._invocation.manifest.review
-            and self._invocation.manifest.review.low_risk_fast_path
+            self._invocation.manifest.review and self._invocation.manifest.review.low_risk_fast_path
         )
         decision, review_event = review_action(
             trace=_StageScopedTrace(self._trace, stage_id="retrieval_review"),
@@ -871,9 +872,7 @@ def _answer_policy_context(
         "citation_binding": "validated" if answer_context.citation_refs else "none",
         "authorized_tool_result_support": authorized_tool_support,
         "validation_status": (
-            "passed"
-            if answer.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
-            else "blocked"
+            "passed" if answer.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS else "blocked"
         ),
     }
 
@@ -884,9 +883,7 @@ def _emit_admitted_evidence_trace(
     accepted_evidence: tuple[EvidenceChunk, ...],
 ) -> None:
     source_refs = _trace_evidence_source_refs(accepted_evidence)
-    citations = [
-        chunk.citation for chunk in accepted_evidence if chunk.citation is not None
-    ]
+    citations = [chunk.citation for chunk in accepted_evidence if chunk.citation is not None]
     trace.emit(
         "evidence_evaluation",
         status="ok" if accepted_evidence else "blocked",

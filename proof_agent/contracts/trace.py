@@ -39,6 +39,7 @@ class TraceEventType(str, Enum):
     EVIDENCE_EVALUATION = "evidence_evaluation"
     CONTEXT_ADMISSION = "context_admission"
     CONTEXT_ASSEMBLY_SUMMARY = "context_assembly_summary"
+    CONTEXT_BUDGET_CALIBRATION_UPDATE = "context_budget_calibration_update"
     APPROVAL_REQUESTED = "approval_requested"
     PENDING_APPROVAL_CREATED = "pending_approval_created"
     APPROVAL_GRANTED = "approval_granted"

@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     EffectiveToolProposalScope,
+    MemoryRecallWorkingPayload,
     ObservationRecord,
     ObservationTruthArtifact,
     PolicyDecision,
@@ -62,6 +63,7 @@ class ControlledReActStartRequest:
     template_descriptor_version: str
     question: str
     conversation_context: ContextAdmission | None = None
+    memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = ()
     max_plan_rounds: int = 4
     retrieval_max_queries: int = 3
 
@@ -98,6 +100,7 @@ class ControlledReActOrchestrator:
             template_descriptor_version=request.template_descriptor_version,
             question=request.question,
             conversation_context=request.conversation_context,
+            memory_recall_payloads=request.memory_recall_payloads,
             phase=ControlledReActRunPhase.PLANNING,
         )
         state = self._prepare_pre_loop_state(
@@ -619,10 +622,7 @@ class ControlledReActOrchestrator:
             },
         )
         policy_decision = self._memory_write_policy_decision(state, candidate)
-        if (
-            policy_decision is not None
-            and policy_decision.decision is not PolicyDecisionType.ALLOW
-        ):
+        if policy_decision is not None and policy_decision.decision is not PolicyDecisionType.ALLOW:
             result = _memory_write_denied_result(policy_decision)
             self._emit_trace(
                 "memory_write_decision",
@@ -1620,8 +1620,6 @@ def _workflow_result_from_answer(
         intent_resolution=state.intent_resolution,
         reasoning_summary=answer.reasoning_summary,
         model_usage_summary=answer.model_usage_summary,
-        stage_llm_interactions=(
-            state.stage_llm_interactions + answer.stage_llm_interactions
-        ),
+        stage_llm_interactions=(state.stage_llm_interactions + answer.stage_llm_interactions),
         stage_failure_diagnostics=answer.stage_failure_diagnostics,
     )

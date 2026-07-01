@@ -83,8 +83,11 @@ def test_controlled_run_context_produces_trace_safe_assembly_summary() -> None:
         "budget": {
             "max_tokens": 4096,
             "estimated_tokens": 420,
+            "convergence_level": "none",
+            "budget_source": "unknown",
             "dropped_source_refs": ["turn_000"],
             "fallback_reasons": ["older_turn_compacted"],
+            "calibration_update_refs": [],
         },
     }
 
@@ -190,8 +193,11 @@ def test_run_start_context_assembly_carries_trace_summary_and_compatibility_admi
         "budget": {
             "max_tokens": 4096,
             "estimated_tokens": 180,
+            "convergence_level": "none",
+            "budget_source": "unknown",
             "dropped_source_refs": [],
             "fallback_reasons": [],
+            "calibration_update_refs": [],
         },
     }
 

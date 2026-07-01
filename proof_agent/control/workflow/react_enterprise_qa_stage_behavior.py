@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     BusinessFlowSkillPackAdmissionDecision,
     IntentResolution,
     IntentResolutionResult,
+    MemoryRecallWorkingPayload,
     ModelCallRole,
     ModelRequest,
     ModelResponse,
@@ -74,12 +75,14 @@ class ReActEnterpriseQAStageBehavior:
         trace: TraceWriter,
         execution_input: WorkflowTemplateExecutionInput,
         conversation_context: ContextAdmission | None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...],
         allow_untrusted_web_supplement: bool,
     ) -> None:
         self.invocation = invocation
         self.trace = trace
         self.execution_input = execution_input
         self.conversation_context = conversation_context
+        self.memory_recall_payloads = memory_recall_payloads
         self.allow_untrusted_web_supplement = allow_untrusted_web_supplement
         self.manifest = invocation.manifest
         self.react = self.manifest.react
@@ -172,6 +175,7 @@ class ReActEnterpriseQAStageBehavior:
                 system_prompt="Resolve user intent without raw chain-of-thought.",
                 context_summary=_conversation_context_summary(self.conversation_context),
                 workflow_stage_context=stage_context,
+                memory_recall_payloads=self.memory_recall_payloads,
                 business_flow_skill_packs=self.invocation.business_flow_skill_packs,
             )
         except ModelOutputNormalizationError as exc:
@@ -258,9 +262,7 @@ class ReActEnterpriseQAStageBehavior:
         self.trace.emit(
             "business_flow_skill_pack_recommendation",
             status="ok",
-            payload=_business_flow_skill_pack_recommendation_trace_payload(
-                recommendation_payload
-            ),
+            payload=_business_flow_skill_pack_recommendation_trace_payload(recommendation_payload),
         )
         self.trace.emit(
             "business_flow_skill_pack_admission",
@@ -335,6 +337,7 @@ class ReActEnterpriseQAStageBehavior:
                 system_prompt="Use governed ReAct planning without raw chain-of-thought.",
                 context_summary=_intent_context_summary(state),
                 workflow_stage_context=stage_context,
+                memory_recall_payloads=self.memory_recall_payloads,
             )
         except ModelOutputNormalizationError as exc:
             return self._plan_normalization_failure(state, stage_context, exc)
@@ -544,6 +547,7 @@ class ReActEnterpriseQAStageBehavior:
             provider=self.invocation.model_provider.provider_name,
             model=self.invocation.model_provider.model_name,
             conversation_context=self.conversation_context,
+            memory_recall_payloads=self.memory_recall_payloads,
             workflow_stage_context=stage_context,
         )
         estimated_tokens = self.invocation.model_provider.estimate_tokens(model_request)
@@ -960,9 +964,7 @@ def _llm_interaction_capture(
     response: ModelResponse,
 ) -> dict[str, Any]:
     response_json, parse_error = (
-        _model_content_json(response.content)
-        if request.response_format == "json"
-        else (None, None)
+        _model_content_json(response.content) if request.response_format == "json" else (None, None)
     )
     capture = {
         "stage_id": stage_id,
@@ -1510,11 +1512,7 @@ def _business_flow_skill_pack_recommendation_trace_payload(
     recommendation: Mapping[str, Any],
 ) -> dict[str, Any]:
     raw_candidate_packs = recommendation.get("candidate_packs", ())
-    candidate_packs = (
-        raw_candidate_packs
-        if isinstance(raw_candidate_packs, list | tuple)
-        else ()
-    )
+    candidate_packs = raw_candidate_packs if isinstance(raw_candidate_packs, list | tuple) else ()
     return {
         "recommendation_id": recommendation.get("recommendation_id"),
         "intent_resolution_id": recommendation.get("intent_resolution_id"),

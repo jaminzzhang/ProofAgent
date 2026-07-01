@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from typing import cast
@@ -29,6 +29,7 @@ from proof_agent.contracts import (
     ReviewSubagentConfig,
 )
 from proof_agent.control.policy.engine import PolicyEngine
+from proof_agent.control.context_budget import InMemoryContextBudgetCalibrationStore
 from proof_agent.control.workflow.templates import WorkflowTemplate, resolve_workflow_template
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.bootstrap.knowledge_resolution import (
@@ -62,6 +63,9 @@ class HarnessInvocation:
     retrieval_evaluator_model: ModelConfig | None = None
     business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = ()
     model_resolution_records: tuple[ModelConnectionResolutionRecord, ...] = ()
+    context_budget_calibration_store: InMemoryContextBudgetCalibrationStore = field(
+        default_factory=InMemoryContextBudgetCalibrationStore
+    )
 
     def create_memory(self) -> SessionMemory:
         """Create per-run memory with the configured sensitivity boundary."""
@@ -77,6 +81,7 @@ def compose_harness_invocation(
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
     configuration_store: LocalAgentConfigurationStore | None = None,
     require_runtime_credentials: bool = True,
+    context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
 
@@ -199,6 +204,11 @@ def compose_harness_invocation(
         retrieval_evaluator_model=resolved_retrieval_evaluator_model,
         business_flow_skill_packs=business_flow_skill_packs,
         model_resolution_records=tuple(model_resolution_records),
+        context_budget_calibration_store=(
+            context_budget_calibration_store
+            if context_budget_calibration_store is not None
+            else InMemoryContextBudgetCalibrationStore()
+        ),
     )
 
 

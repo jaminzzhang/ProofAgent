@@ -46,7 +46,18 @@
 - `proof_agent/delivery/api.py`
   - Chat conversation runs still use `admit_conversation_context(conversation)` and pass a `ContextAdmission` into the run.
 - `proof_agent/delivery/customer_api.py`
-  - `_memory_context()` currently converts admitted memory ids into `ContextAdmission.included_turn_ids`, which is the main Memory Recall cleanup target.
+  - Customer memory recall is now projected as `MemoryRecallAdmission` with optional bounded `MemoryRecallWorkingPayload`, instead of masquerading memory ids as conversation turn ids.
+
+## Implementation Status
+
+- Run-start Memory Recall Admission now carries trace-safe summaries plus bounded model-facing `MemoryRecallWorkingPayload`.
+- V3 Controlled ReAct and LangGraph runtime paths pass admitted memory recall payloads to intent resolution, planning, and final-answer synthesis without treating memory as evidence.
+- `ContextBudgetProfile`, `ContextConvergenceLadder`, and top-level Agent Contract `context:` are loaded from manifest YAML.
+- `proof_agent/control/context_budget.py` resolves explicit, calibrated, and built-in default context budgets and records dynamic overflow calibration facts.
+- `ContextAssemblyBudget` trace summaries now include `convergence_level`, `budget_source`, and `calibration_update_refs`.
+- Context Assembler applies Level 1, Level 2, and deep compression decisions while keeping cache-stable section ordering.
+- V3 final-answer synthesis has a bounded provider context-limit recovery hook for unconfigured dynamic budgets: emit model error, deep-compress continuity context, retry once, and record a calibration update.
+- Remaining follow-up slices: durable calibration storage beyond the in-memory runtime store, LangGraph final-answer overflow recovery parity, approval-resume reuse tests for changed post-pause context, and Dashboard/API read projections for convergence and calibration fields.
 
 ---
 
@@ -196,10 +207,11 @@ git diff --check
 - Add `tests/test_context_budget.py` if needed
 
 - [ ] Resolve explicit Agent Context Configuration first.
-- [ ] If no explicit config exists, resolve a dynamic/default profile from calibration store.
-- [ ] Fall back to a conservative built-in default when no calibration exists.
-- [ ] Keep provider estimate as a model-call guard, not the source of the assembly budget.
-- [ ] Add tests for explicit config, calibrated default, and built-in default.
+- [x] Resolve explicit Agent Context Configuration first.
+- [x] If no explicit config exists, resolve a dynamic/default profile from calibration store.
+- [x] Fall back to a conservative built-in default when no calibration exists.
+- [x] Keep provider estimate as a model-call guard, not the source of the assembly budget.
+- [x] Add tests for explicit config, calibrated default, and built-in default.
 
 ### Task 2.3: Add Level 1 And Level 2 Convergence
 
@@ -209,12 +221,12 @@ git diff --check
 - Add focused helpers if convergence rules become dense
 - Add or modify `tests/test_context_assembler.py`
 
-- [ ] Level 1, around 50 percent, reduces redundancy while preserving most semantics.
-- [ ] Level 1 may deduplicate repeated summaries, collapse repeated references, and trim clearly irrelevant older low-priority sections.
-- [ ] Level 2, around 80 percent, performs structured trade-offs: compact older turns and narrow low-relevance memory recall.
-- [ ] Keep current user input, active clarification/task state, governance facts, and evidence constraints.
-- [ ] Add tests proving level 1 keeps rich recent conversation details.
-- [ ] Add tests proving level 2 compacts older turns and narrows low-relevance memory without mutating Conversation Timeline.
+- [x] Level 1, around 50 percent, reduces redundancy while preserving most semantics.
+- [x] Level 1 may deduplicate repeated summaries, collapse repeated references, and trim clearly irrelevant older low-priority sections.
+- [x] Level 2, around 80 percent, performs structured trade-offs: compact older turns and narrow low-relevance memory recall.
+- [x] Keep current user input, active clarification/task state, governance facts, and evidence constraints.
+- [x] Add tests proving level 1 keeps rich recent conversation details.
+- [x] Add tests proving level 2 compacts older turns and narrows low-relevance memory without mutating Conversation Timeline.
 
 ### Task 2.4: Add Deep Compression And Provider Overflow Recovery
 
@@ -226,13 +238,13 @@ git diff --check
 - Add or modify `tests/test_model_providers.py`
 - Add or modify `tests/test_agent_package_execution.py`
 
-- [ ] Deep compression keeps a task-continuity skeleton only.
-- [ ] Preserve current user input, active clarification/task state, required governance facts, necessary memory recall, and provenance or omission-risk refs.
-- [ ] On provider context-limit failure with no explicit config, deep compress and retry only if the call site already permits bounded repair/retry behavior.
-- [ ] Update Context Budget Calibration Store after overflow recovery.
-- [ ] Do not update calibration when explicit Agent Context Configuration is present.
-- [ ] Add tests proving calibration updates are persisted as runtime facts and do not mutate YAML.
-- [ ] Add tests proving provider overflow fallback emits trace-safe convergence and calibration summaries.
+- [x] Deep compression keeps a task-continuity skeleton only.
+- [x] Preserve current user input, active clarification/task state, required governance facts, necessary memory recall, and provenance or omission-risk refs.
+- [x] On provider context-limit failure with no explicit config, deep compress and retry only if the call site already permits bounded repair/retry behavior.
+- [x] Update Context Budget Calibration Store after overflow recovery.
+- [x] Do not update calibration when explicit Agent Context Configuration is present.
+- [x] Add tests proving calibration updates are persisted as runtime facts and do not mutate YAML.
+- [x] Add tests proving provider overflow fallback emits trace-safe convergence and calibration summaries.
 
 ### Task 2.5: Keep Prompt Caching Stable
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from proof_agent.contracts import (
+    AgentContextConfiguration,
     ContextAdmission,
+    ContextBudgetProfile,
     MemoryRecallAdmission,
     MemoryRecallWorkingPayload,
     MemoryScope,
@@ -182,9 +184,130 @@ def test_context_assembler_adds_memory_recall_source_refs_and_section() -> None:
         ContextSourceType.MEMORY_RECALL,
         "mem_case_001",
     ) in {
-        (source.source_type, source.source_id)
-        for source in assembly.trace_safe_summary.source_refs
+        (source.source_type, source.source_id) for source in assembly.trace_safe_summary.source_refs
     }
-    assert [
-        section.section_id for section in assembly.trace_safe_summary.working_sections
-    ] == ["memory_recall"]
+    assert [section.section_id for section in assembly.trace_safe_summary.working_sections] == [
+        "memory_recall"
+    ]
+
+
+def test_context_assembler_applies_explicit_context_budget_profile() -> None:
+    assembly = assemble_run_start_context_from_admission(
+        run_id="run_next",
+        conversation_context=ContextAdmission(
+            admitted=True,
+            turn_count=1,
+            included_turn_ids=("turn_001",),
+            summary="1 prior turn admitted.",
+            char_count=300,
+            max_turns=3,
+        ),
+        context_config=AgentContextConfiguration(
+            budget_profile=ContextBudgetProfile(max_tokens=1000)
+        ),
+    )
+
+    assert assembly.trace_safe_summary.budget.max_tokens == 1000
+    assert assembly.trace_safe_summary.budget.budget_source == "agent_config"
+    assert assembly.trace_safe_summary.budget.convergence_level == "none"
+
+
+def test_context_assembler_level1_keeps_recent_turn_details() -> None:
+    assembly = assemble_run_start_context_from_admission(
+        run_id="run_next",
+        conversation_context=ContextAdmission(
+            admitted=True,
+            turn_count=3,
+            included_turn_ids=("turn_001", "turn_002", "turn_003"),
+            summary="3 prior turns admitted.",
+            char_count=500,
+            max_turns=3,
+        ),
+        context_config=AgentContextConfiguration(
+            budget_profile=ContextBudgetProfile(max_tokens=1000)
+        ),
+    )
+
+    recent_turns = assembly.trace_safe_summary.working_sections[0]
+    assert assembly.trace_safe_summary.budget.convergence_level == "level1"
+    assert recent_turns.section_id == "recent_turns"
+    assert recent_turns.source_refs == ("turn_001", "turn_002", "turn_003")
+
+
+def test_context_assembler_level2_compacts_older_turns_and_narrows_memory() -> None:
+    memory_recall = MemoryRecallAdmission(
+        admitted=True,
+        scope=MemoryScope.USER,
+        subject_ref="customer_123",
+        included_memory_ids=("mem_user_001", "mem_user_002"),
+        summary="Monthly reports.",
+        fact_keys=("preferred_report_view",),
+        fact_count=1,
+        working_payload=MemoryRecallWorkingPayload(
+            scope=MemoryScope.USER,
+            source_refs=("mem_user_001", "mem_user_002"),
+            summary="Monthly reports.",
+            facts={"preferred_report_view": "monthly claim reports"},
+        ),
+    )
+
+    assembly = assemble_run_start_context_from_admission(
+        run_id="run_next",
+        conversation_context=ContextAdmission(
+            admitted=True,
+            turn_count=3,
+            included_turn_ids=("turn_001", "turn_002", "turn_003"),
+            summary="3 prior turns admitted.",
+            char_count=805,
+            max_turns=3,
+        ),
+        memory_recall_admissions=(memory_recall,),
+        context_config=AgentContextConfiguration(
+            budget_profile=ContextBudgetProfile(max_tokens=1000)
+        ),
+    )
+
+    sections = {
+        section.section_id: section for section in assembly.trace_safe_summary.working_sections
+    }
+    assert assembly.trace_safe_summary.budget.convergence_level == "level2"
+    assert sections["recent_turns"].source_refs == ("turn_002", "turn_003")
+    assert sections["memory_recall"].source_refs == ("mem_user_001",)
+    assert assembly.trace_safe_summary.budget.dropped_source_refs == (
+        "turn_001",
+        "mem_user_002",
+    )
+    assert "conversation_turns_compacted_for_level2" in (
+        assembly.trace_safe_summary.budget.fallback_reasons
+    )
+    assert "memory_recall_narrowed_for_level2" in (
+        assembly.trace_safe_summary.budget.fallback_reasons
+    )
+
+
+def test_context_assembler_deep_compression_keeps_task_continuity_skeleton() -> None:
+    assembly = assemble_run_start_context_from_admission(
+        run_id="run_next",
+        conversation_context=ContextAdmission(
+            admitted=True,
+            turn_count=3,
+            included_turn_ids=("turn_001", "turn_002", "turn_003"),
+            summary="3 prior turns admitted.",
+            char_count=1000,
+            max_turns=3,
+        ),
+        context_config=AgentContextConfiguration(
+            budget_profile=ContextBudgetProfile(max_tokens=1000)
+        ),
+    )
+
+    recent_turns = assembly.trace_safe_summary.working_sections[0]
+    assert assembly.trace_safe_summary.budget.convergence_level == "deep_compression"
+    assert recent_turns.source_refs == ("turn_003",)
+    assert assembly.trace_safe_summary.budget.dropped_source_refs == (
+        "turn_001",
+        "turn_002",
+    )
+    assert "task_continuity_skeleton_deep_compression" in (
+        assembly.trace_safe_summary.budget.fallback_reasons
+    )

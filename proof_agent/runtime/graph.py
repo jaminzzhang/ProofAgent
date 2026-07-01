@@ -11,11 +11,15 @@ from proof_agent.contracts import (
     ApprovalStatus,
     ContextAdmission,
     EvidenceChunk,
+    MemoryRecallWorkingPayload,
     ModelCallRole,
     PolicyDecisionType,
     ReceiptOutcome,
 )
-from proof_agent.capabilities.tools.approval import create_pending_approval, pending_approval_payload
+from proof_agent.capabilities.tools.approval import (
+    create_pending_approval,
+    pending_approval_payload,
+)
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
 from proof_agent.control.workflow.harness_helpers import (
     build_model_request,
@@ -46,6 +50,7 @@ def build_enterprise_qa_graph(
     invocation: HarnessInvocation,
     trace: TraceWriter,
     conversation_context: ContextAdmission | None = None,
+    memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
     allow_untrusted_web_supplement: bool = False,
 ) -> StateGraph:  # type: ignore[type-arg]
     manifest = invocation.manifest
@@ -206,6 +211,7 @@ def build_enterprise_qa_graph(
             provider=invocation.model_provider.provider_name,
             model=invocation.model_provider.model_name,
             conversation_context=conversation_context,
+            memory_recall_payloads=memory_recall_payloads,
         )
         estimated_tokens = invocation.model_provider.estimate_tokens(model_request)
         model_decision = invocation.policy.evaluate(

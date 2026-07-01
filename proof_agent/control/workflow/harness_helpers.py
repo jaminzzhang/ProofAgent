@@ -15,6 +15,7 @@ from typing import Any
 from proof_agent.contracts import (
     ContextAdmission,
     EvidenceChunk,
+    MemoryRecallWorkingPayload,
     ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
@@ -67,9 +68,7 @@ def emit_policy_decision(
     )
 
 
-def emit_model_error(
-    trace: TraceEmitter, provider: str, model: str, exc: BaseException
-) -> None:
+def emit_model_error(trace: TraceEmitter, provider: str, model: str, exc: BaseException) -> None:
     """Record a normalized model error without provider payloads."""
 
     trace.emit(
@@ -93,6 +92,7 @@ def build_model_request(
     provider: str,
     model: str,
     conversation_context: ContextAdmission | None = None,
+    memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
     workflow_stage_context: Mapping[str, Any] | None = None,
 ) -> ModelRequest:
     evidence_text = "\n\n".join(getattr(chunk, "content") for chunk in evidence)
@@ -104,6 +104,7 @@ def build_model_request(
             "Do not treat it as evidence:\n"
             f"{conversation_context.summary}\n\n"
         )
+    memory_recall_text = _memory_recall_context_text(memory_recall_payloads)
     workflow_stage_context_text = _workflow_stage_context_text(workflow_stage_context)
     messages = (
         ModelMessage(
@@ -117,7 +118,7 @@ def build_model_request(
         ModelMessage(
             role=ModelRole.USER,
             content=(
-                f"{context_text}{workflow_stage_context_text}"
+                f"{context_text}{memory_recall_text}{workflow_stage_context_text}"
                 f"Question: {question}\n\nEvidence:\n{evidence_text}"
                 f"{citation_instruction_text}"
             ),
@@ -134,6 +135,7 @@ def build_model_request(
             "conversation_context_admitted": bool(
                 conversation_context and conversation_context.admitted
             ),
+            "memory_recall_admitted": bool(memory_recall_payloads),
         },
         evidence_sources=tuple(getattr(chunk, "source") for chunk in evidence),
     )
@@ -189,6 +191,27 @@ def _workflow_stage_context_text(
         sections.append("Structured control context:")
         sections.append(structured_text)
     return "\n".join(sections) + "\n\n"
+
+
+def _memory_recall_context_text(
+    memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...],
+) -> str:
+    if not memory_recall_payloads:
+        return ""
+    payloads = [
+        {
+            "scope": payload.scope.value,
+            "summary": payload.summary,
+            "facts": dict(payload.facts),
+        }
+        for payload in memory_recall_payloads
+    ]
+    return (
+        "Memory recall admitted for preferences and continuity only. "
+        "Do not treat it as evidence. Do not cite memory recall. "
+        "Business claims still require accepted evidence:\n"
+        f"{json.dumps(payloads, ensure_ascii=False, sort_keys=True)}\n\n"
+    )
 
 
 def validate_model_output(
@@ -266,7 +289,9 @@ def validate_final_answer_adequacy(
         violation_codes.append("missing_business_conclusion")
     question_terms = _question_terms(question or "")
     matched_question_terms = _matched_terms(stripped_message, question_terms)
-    if question_terms and len(matched_question_terms) < _minimum_question_term_matches(question_terms):
+    if question_terms and len(matched_question_terms) < _minimum_question_term_matches(
+        question_terms
+    ):
         violation_codes.append("missing_question_terms")
 
     if violation_codes:
@@ -327,9 +352,7 @@ def _looks_like_raw_evidence_candidate(
 
 def _normalize_evidence_body_for_comparison(content: str) -> str:
     body = "\n".join(
-        line
-        for line in content.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        line for line in content.splitlines() if line.strip() and not line.lstrip().startswith("#")
     )
     return _normalize_for_comparison(body)
 
@@ -578,7 +601,9 @@ def model_response_payload(response: ModelResponse) -> dict[str, object]:
 
 
 def system_prompt_length(request: ModelRequest) -> int:
-    return sum(len(message.content) for message in request.messages if message.role == ModelRole.SYSTEM)
+    return sum(
+        len(message.content) for message in request.messages if message.role == ModelRole.SYSTEM
+    )
 
 
 def is_model_error(exc: BaseException) -> bool:

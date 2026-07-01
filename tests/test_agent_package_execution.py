@@ -8,6 +8,9 @@ from proof_agent.contracts import (
     ContextAdmission,
     IntentResolution,
     IntentResolutionResult,
+    MemoryRecallAdmission,
+    MemoryRecallWorkingPayload,
+    MemoryScope,
     ModelCallRole,
     ModelRequest,
     ModelResponse,
@@ -23,6 +26,10 @@ from proof_agent.contracts import (
 from proof_agent.control.workflow.controlled_react import ControlledReActStartRequest
 from proof_agent.capabilities.react.planner import LLMReActPlanner
 from proof_agent.bootstrap import composition
+from proof_agent.control.context_budget import (
+    ContextBudgetKey,
+    InMemoryContextBudgetCalibrationStore,
+)
 from proof_agent.delivery.agent_package_execution import (
     AgentPackageRunRequest,
     execute_agent_package_run,
@@ -113,9 +120,7 @@ def test_execute_agent_package_run_emits_shared_run_start_context_summary_for_v3
     summary = result.workflow_template_execution_input.model_dump(mode="json")[
         "controlled_run_context_summary"
     ]
-    assert summary["source_refs"] == [
-        {"source_type": "conversation_turn", "source_id": "turn_1"}
-    ]
+    assert summary["source_refs"] == [{"source_type": "conversation_turn", "source_id": "turn_1"}]
     events = [
         json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
@@ -124,6 +129,57 @@ def test_execute_agent_package_run_emits_shared_run_start_context_summary_for_v3
     ]
     assert len(assembly_events) == 1
     assert assembly_events[0]["payload"] == summary
+
+
+def test_execute_agent_package_run_applies_manifest_context_budget_to_run_start_summary(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        agent_dir,
+    )
+    manifest_path = agent_dir / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["context"] = {
+        "budget_profile": {
+            "max_tokens": 1000,
+            "reserved_output_tokens": 0,
+            "profile_version": "context_budget.v1",
+        },
+        "convergence": {
+            "level1_ratio": 0.5,
+            "level2_ratio": 0.8,
+            "hard_limit_ratio": 1.0,
+        },
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    conversation_context = ContextAdmission(
+        admitted=True,
+        turn_count=1,
+        included_turn_ids=("turn_1",),
+        summary="Previous answer compared reimbursement requirements.",
+        char_count=500,
+        max_turns=3,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=manifest_path,
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            conversation_context=conversation_context,
+            controlled_react_orchestrator=_CapturingControlledReActOrchestrator(),
+        )
+    )
+
+    assert result.workflow_template_execution_input is not None
+    budget = result.workflow_template_execution_input.model_dump(mode="json")[
+        "controlled_run_context_summary"
+    ]["budget"]
+    assert budget["max_tokens"] == 1000
+    assert budget["budget_source"] == "agent_config"
+    assert budget["convergence_level"] == "level1"
 
 
 def test_execute_agent_package_run_records_shared_run_start_context_summary_for_langgraph(
@@ -151,9 +207,7 @@ def test_execute_agent_package_run_records_shared_run_start_context_summary_for_
     summary = result.workflow_template_execution_input.model_dump(mode="json")[
         "controlled_run_context_summary"
     ]
-    assert summary["source_refs"] == [
-        {"source_type": "conversation_turn", "source_id": "turn_1"}
-    ]
+    assert summary["source_refs"] == [{"source_type": "conversation_turn", "source_id": "turn_1"}]
     events = [
         json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
@@ -162,6 +216,38 @@ def test_execute_agent_package_run_records_shared_run_start_context_summary_for_
     ]
     assert len(assembly_events) == 1
     assert assembly_events[0]["payload"] == summary
+
+
+def test_execute_agent_package_run_passes_memory_recall_to_langgraph_model_answer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    provider = _ConversationContextAnswerProvider()
+    memory_recall = _user_memory_recall_admission()
+    monkeypatch.setattr(
+        composition,
+        "resolve_provider",
+        lambda _config: provider,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            memory_recall_admissions=(memory_recall,),
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert provider.requests
+    request = provider.requests[0]
+    assert request.metadata["memory_recall_admitted"] is True
+    assert "Memory recall admitted for preferences and continuity only" in (
+        request.messages[1].content
+    )
+    assert "User prefers monthly claim reports." in request.messages[1].content
+    assert "mem_user_001" not in request.messages[1].content
 
 
 def test_execute_agent_package_run_projects_v3_answer_governance_trace(
@@ -210,9 +296,7 @@ def test_execute_agent_package_run_emits_v3_intent_resolution_trace(
     event_types = [event["event_type"] for event in events]
     assert "intent_resolution" in event_types
     assert "retrieval_query_set" in event_types
-    assert event_types.index("intent_resolution") < event_types.index(
-        "workflow_stage_result"
-    )
+    assert event_types.index("intent_resolution") < event_types.index("workflow_stage_result")
     receipt = result.receipt_path.read_text(encoding="utf-8")
     assert "## Intent Resolution" in receipt
 
@@ -247,8 +331,7 @@ def test_execute_agent_package_run_uses_v3_intent_retrieval_query_set(
     retrieval_step = next(
         event
         for event in events
-        if event["event_type"] == "retrieval_step"
-        and event["payload"].get("question")
+        if event["event_type"] == "retrieval_step" and event["payload"].get("question")
     )
     assert retrieval_step["payload"]["question"] == "travel meals reimbursement rule"
 
@@ -284,6 +367,32 @@ def test_execute_agent_package_run_passes_conversation_context_to_intent_resolve
     )
 
     assert resolver.conversation_context == conversation_context
+
+
+def test_execute_agent_package_run_passes_memory_recall_to_intent_resolver(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    resolver = _MemoryRecallCapturingIntentResolver()
+    memory_recall = _user_memory_recall_admission()
+    monkeypatch.setattr(
+        composition,
+        "resolve_intent_resolver",
+        lambda *_args, **_kwargs: resolver,
+    )
+
+    execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What should I review next?",
+            runs_dir=tmp_path / "run",
+            memory_recall_admissions=(memory_recall,),
+        )
+    )
+
+    assert resolver.memory_recall_payloads == (memory_recall.working_payload,)
 
 
 def test_execute_agent_package_run_captures_v3_intent_resolution_llm_interaction(
@@ -411,6 +520,32 @@ def test_execute_agent_package_run_passes_conversation_context_to_react_planner(
     assert "Product A and Product B" not in planner.context_summary
 
 
+def test_execute_agent_package_run_passes_memory_recall_to_react_planner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    planner = _MemoryRecallCapturingPlanner()
+    memory_recall = _user_memory_recall_admission()
+    monkeypatch.setattr(
+        composition,
+        "resolve_react_planner",
+        lambda *_args, **_kwargs: planner,
+    )
+
+    execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What should I review next?",
+            runs_dir=tmp_path / "run",
+            memory_recall_admissions=(memory_recall,),
+        )
+    )
+
+    assert planner.memory_recall_payloads == (memory_recall.working_payload,)
+
+
 def test_execute_agent_package_run_blocks_v3_before_answer_policy_denial(
     tmp_path: Path,
 ) -> None:
@@ -500,9 +635,7 @@ def test_execute_agent_package_run_blocks_v3_memory_write_without_blocking_answe
     policy_path = agent_dir / "policy.yaml"
     policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
     memory_rule = next(
-        rule
-        for rule in policy["rules"]
-        if rule["enforcement_point"] == "before_memory_write"
+        rule for rule in policy["rules"] if rule["enforcement_point"] == "before_memory_write"
     )
     memory_rule["condition"]["deny_fields"].append("question")
     policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
@@ -555,9 +688,7 @@ def test_execute_agent_package_run_blocks_v3_memory_write_without_blocking_answe
     assert events[memory_decision_index]["status"] == "blocked"
     assert events[memory_decision_index]["payload"]["stage_id"] == "memory"
     assert events[memory_decision_index]["payload"]["decision"] == "deny"
-    assert "Travel meals are reimbursed" not in json.dumps(
-        events[memory_decision_index]["payload"]
-    )
+    assert "Travel meals are reimbursed" not in json.dumps(events[memory_decision_index]["payload"])
 
 
 def test_execute_agent_package_run_blocks_v3_before_retrieval_without_provider_call(
@@ -697,8 +828,111 @@ def test_execute_agent_package_run_passes_conversation_context_to_model_answer(
     assert "Conversation context admitted for follow-up resolution only" in (
         request.messages[1].content
     )
-    assert "Previous answer compared reimbursement requirements." in (
+    assert "Previous answer compared reimbursement requirements." in (request.messages[1].content)
+
+
+def test_execute_agent_package_run_passes_memory_recall_to_model_answer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    provider = _ConversationContextAnswerProvider()
+    memory_recall = MemoryRecallAdmission(
+        admitted=True,
+        scope=MemoryScope.USER,
+        subject_ref="customer_123",
+        agent_id="agent_customer_service",
+        included_memory_ids=("mem_user_001",),
+        summary="User prefers monthly claim reports.",
+        fact_keys=("preferred_report_view",),
+        fact_count=1,
+        working_payload=MemoryRecallWorkingPayload(
+            scope=MemoryScope.USER,
+            source_refs=("mem_user_001",),
+            summary="User prefers monthly claim reports.",
+            facts={"preferred_report_view": "monthly claim reports"},
+        ),
+    )
+    monkeypatch.setattr(
+        composition,
+        "resolve_provider",
+        lambda _config: provider,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            memory_recall_admissions=(memory_recall,),
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert provider.requests
+    request = provider.requests[0]
+    assert request.metadata["memory_recall_admitted"] is True
+    assert "Memory recall admitted for preferences and continuity only" in (
         request.messages[1].content
+    )
+    assert "User prefers monthly claim reports." in request.messages[1].content
+    assert "Do not cite memory recall" in request.messages[1].content
+    assert "mem_user_001" not in request.messages[1].content
+
+
+def test_execute_agent_package_run_recovers_v3_final_answer_context_overflow(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    provider = _ContextLimitThenAnswerProvider()
+    calibration_store = InMemoryContextBudgetCalibrationStore()
+    monkeypatch.setattr(
+        composition,
+        "resolve_provider",
+        lambda _config: provider,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            conversation_context=ContextAdmission(
+                admitted=True,
+                turn_count=1,
+                included_turn_ids=("turn_1",),
+                summary="Previous answer compared reimbursement requirements.",
+                char_count=500,
+                max_turns=3,
+            ),
+            context_budget_calibration_store=calibration_store,
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert len(provider.requests) == 2
+    assert provider.requests[1].metadata["context_convergence_level"] == ("deep_compression")
+    assert provider.requests[1].metadata["context_overflow_recovery"] is True
+    assert "Conversation context admitted" not in provider.requests[1].messages[1].content
+    calibration = calibration_store.get(
+        ContextBudgetKey(
+            provider="deterministic",
+            model="demo",
+            role=ModelCallRole.FINAL_ANSWER.value,
+            profile_version="context_budget.v1",
+        )
+    )
+    assert calibration is not None
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        event["event_type"] == "context_budget_calibration_update"
+        and event["payload"]["convergence_level"] == "deep_compression"
+        for event in events
     )
 
 
@@ -1003,8 +1237,7 @@ def test_execute_agent_package_run_attributes_v3_runtime_events_to_workflow_stag
     retrieval_runtime_event_ids = {
         event["event_id"]
         for event in events
-        if event["event_type"]
-        in {"retrieval_step", "retrieval_result", "evidence_evaluation"}
+        if event["event_type"] in {"retrieval_step", "retrieval_result", "evidence_evaluation"}
     }
     assert retrieval_runtime_event_ids
 
@@ -1035,9 +1268,7 @@ def test_execute_agent_package_run_traces_v3_retrieval_review_decision(
         json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
     review_events = [
-        event
-        for event in events
-        if event["event_type"] in {"review_requested", "review_decision"}
+        event for event in events if event["event_type"] in {"review_requested", "review_decision"}
     ]
     review_policy_events = [
         event
@@ -1059,9 +1290,7 @@ def test_execute_agent_package_run_traces_v3_retrieval_review_decision(
     assert detail is not None
     by_stage = {stage.stage_id: stage for stage in detail.workflow_projection.stages}
     retrieval_review_stage = by_stage["retrieval_review"]
-    review_event_ids = {
-        event["event_id"] for event in review_events + review_policy_events
-    }
+    review_event_ids = {event["event_id"] for event in review_events + review_policy_events}
     assert review_event_ids.issubset(set(retrieval_review_stage.related_event_ids))
 
 
@@ -1184,6 +1413,31 @@ class _ConversationContextAnswerProvider:
 
     def generate(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
+        return ModelResponse(
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+            content=json.dumps(
+                {
+                    "message": (
+                        "Travel meals are reimbursed up to 50 USD per day when the "
+                        "employee provides receipts."
+                    ),
+                    "citations": ["customer-support-policy.md#travel-meals:L3-L7"],
+                },
+            ),
+        )
+
+
+class _ContextLimitError(Exception):
+    code = "PA_MODEL_002"
+
+
+class _ContextLimitThenAnswerProvider(_ConversationContextAnswerProvider):
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            raise _ContextLimitError("maximum context length exceeded")
         return ModelResponse(
             provider_name=self.provider_name,
             model_name=self.model_name,
@@ -1347,6 +1601,7 @@ class _IntentQuerySetResolver:
         context_summary: str,
         workflow_stage_context: object | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         business_flow_skill_packs: tuple[object, ...] = (),
     ) -> IntentResolutionResult:
         _ = (
@@ -1355,6 +1610,7 @@ class _IntentQuerySetResolver:
             context_summary,
             workflow_stage_context,
             conversation_context,
+            memory_recall_payloads,
             business_flow_skill_packs,
         )
         return IntentResolutionResult(
@@ -1393,6 +1649,7 @@ class _ConversationContextCapturingIntentResolver(_IntentQuerySetResolver):
         context_summary: str,
         workflow_stage_context: object | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         business_flow_skill_packs: tuple[object, ...] = (),
     ) -> IntentResolutionResult:
         self.conversation_context = conversation_context
@@ -1401,6 +1658,35 @@ class _ConversationContextCapturingIntentResolver(_IntentQuerySetResolver):
             system_prompt=system_prompt,
             context_summary=context_summary,
             workflow_stage_context=workflow_stage_context,
+            memory_recall_payloads=memory_recall_payloads,
+            business_flow_skill_packs=business_flow_skill_packs,
+        )
+
+
+class _MemoryRecallCapturingIntentResolver(_IntentQuerySetResolver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = ()
+
+    def resolve(
+        self,
+        *,
+        question: str,
+        system_prompt: str,
+        context_summary: str,
+        workflow_stage_context: object | None = None,
+        conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
+        business_flow_skill_packs: tuple[object, ...] = (),
+    ) -> IntentResolutionResult:
+        self.memory_recall_payloads = memory_recall_payloads
+        return super().resolve(
+            question=question,
+            system_prompt=system_prompt,
+            context_summary=context_summary,
+            workflow_stage_context=workflow_stage_context,
+            conversation_context=conversation_context,
+            memory_recall_payloads=memory_recall_payloads,
             business_flow_skill_packs=business_flow_skill_packs,
         )
 
@@ -1418,6 +1704,7 @@ class _ConversationContextCapturingPlanner:
         context_summary: str,
         workflow_stage_context: object | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         eligible_actions: object | None = None,
         effective_tool_proposal_scope: object | None = None,
     ) -> ReActActionProposal:
@@ -1425,6 +1712,7 @@ class _ConversationContextCapturingPlanner:
             question,
             system_prompt,
             workflow_stage_context,
+            memory_recall_payloads,
             eligible_actions,
             effective_tool_proposal_scope,
         )
@@ -1443,6 +1731,36 @@ class _ConversationContextCapturingPlanner:
         )
 
 
+class _MemoryRecallCapturingPlanner(_ConversationContextCapturingPlanner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = ()
+
+    def plan(
+        self,
+        *,
+        question: str,
+        system_prompt: str,
+        context_summary: str,
+        workflow_stage_context: object | None = None,
+        conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
+        eligible_actions: object | None = None,
+        effective_tool_proposal_scope: object | None = None,
+    ) -> ReActActionProposal:
+        self.memory_recall_payloads = memory_recall_payloads
+        return super().plan(
+            question=question,
+            system_prompt=system_prompt,
+            context_summary=context_summary,
+            workflow_stage_context=workflow_stage_context,
+            conversation_context=conversation_context,
+            memory_recall_payloads=memory_recall_payloads,
+            eligible_actions=eligible_actions,
+            effective_tool_proposal_scope=effective_tool_proposal_scope,
+        )
+
+
 class _PlannerQueryMustNotWinPlanner:
     def plan(
         self,
@@ -1452,6 +1770,7 @@ class _PlannerQueryMustNotWinPlanner:
         context_summary: str,
         workflow_stage_context: object | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         eligible_actions: object | None = None,
         effective_tool_proposal_scope: object | None = None,
     ) -> ReActActionProposal:
@@ -1460,6 +1779,7 @@ class _PlannerQueryMustNotWinPlanner:
             system_prompt,
             workflow_stage_context,
             conversation_context,
+            memory_recall_payloads,
             eligible_actions,
             effective_tool_proposal_scope,
         )
@@ -1496,4 +1816,23 @@ def _package_action(
         ),
         parameters=parameters,
         risk_level="low",
+    )
+
+
+def _user_memory_recall_admission() -> MemoryRecallAdmission:
+    return MemoryRecallAdmission(
+        admitted=True,
+        scope=MemoryScope.USER,
+        subject_ref="customer_123",
+        agent_id="agent_customer_service",
+        included_memory_ids=("mem_user_001",),
+        summary="User prefers monthly claim reports.",
+        fact_keys=("preferred_report_view",),
+        fact_count=1,
+        working_payload=MemoryRecallWorkingPayload(
+            scope=MemoryScope.USER,
+            source_refs=("mem_user_001",),
+            summary="User prefers monthly claim reports.",
+            facts={"preferred_report_view": "monthly claim reports"},
+        ),
     )

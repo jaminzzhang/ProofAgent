@@ -10,6 +10,7 @@ from langgraph.types import interrupt
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.contracts import (
     ContextAdmission,
+    MemoryRecallWorkingPayload,
     ReActActionProposal,
     ReActActionType,
     ReceiptOutcome,
@@ -54,11 +55,13 @@ class ReActGraphState(TypedDict, total=False):
     governance_message: str | None
     final_output: str | None
 
+
 def build_react_enterprise_qa_graph(
     invocation: HarnessInvocation,
     trace: TraceWriter,
     execution_input: WorkflowTemplateExecutionInput,
     conversation_context: ContextAdmission | None = None,
+    memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
     allow_untrusted_web_supplement: bool = False,
 ) -> StateGraph:  # type: ignore[type-arg]
     descriptor_version = invocation.template.descriptor_version
@@ -74,6 +77,7 @@ def build_react_enterprise_qa_graph(
         trace=trace,
         execution_input=execution_input,
         conversation_context=conversation_context,
+        memory_recall_payloads=memory_recall_payloads,
         allow_untrusted_web_supplement=allow_untrusted_web_supplement,
     )
     stage_adapter = WorkflowStageResultRuntimeAdapter()

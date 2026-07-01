@@ -18,6 +18,7 @@ from proof_agent.contracts import (
     ContextAdmission,
     IntentResolution,
     IntentResolutionResult,
+    MemoryRecallWorkingPayload,
     ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
@@ -63,6 +64,7 @@ class IntentResolver(Protocol):
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
     ) -> IntentResolutionResult:
         """Resolve user intent into an audit-safe structured summary."""
@@ -79,9 +81,16 @@ class DeterministicIntentResolver:
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
     ) -> IntentResolutionResult:
-        _ = (system_prompt, context_summary, workflow_stage_context, conversation_context)
+        _ = (
+            system_prompt,
+            context_summary,
+            workflow_stage_context,
+            conversation_context,
+            memory_recall_payloads,
+        )
         normalized_question = question.lower()
         if "can this customer" in normalized_question or "claim it" in normalized_question:
             resolution = IntentResolution(
@@ -187,11 +196,10 @@ class LLMIntentResolver:
         context_summary: str,
         workflow_stage_context: Mapping[str, Any] | None = None,
         conversation_context: ContextAdmission | None = None,
+        memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = (),
         business_flow_skill_packs: tuple[BusinessFlowSkillPackDefinition, ...] = (),
     ) -> IntentResolutionResult:
-        business_flow_routing = _business_flow_skill_pack_routing_payload(
-            business_flow_skill_packs
-        )
+        business_flow_routing = _business_flow_skill_pack_routing_payload(business_flow_skill_packs)
         payload: dict[str, Any] = {
             "question": question,
             "system_prompt_summary": system_prompt,
@@ -235,6 +243,12 @@ class LLMIntentResolver:
         conversation_payload = _conversation_context_prompt_payload(conversation_context)
         if conversation_payload is not None:
             payload["conversation_context"] = conversation_payload
+        memory_recall_context = _memory_recall_context_prompt_payload(
+            memory_recall_payloads,
+            tool_parameter_use_allowed=False,
+        )
+        if memory_recall_context:
+            payload["memory_recall_context"] = memory_recall_context
         if business_flow_routing:
             payload["business_flow_skill_pack_routing"] = business_flow_routing
         request = ModelRequest(
@@ -301,8 +315,7 @@ def _intent_required_output_contract(
             "confidence": "number between 0 and 1",
             "recommended_next_action": "one of allowed_recommended_next_actions",
             "retrieval_query_set": (
-                "array of RetrievalQueryItem objects with query, "
-                "intent_angle, required, and reason"
+                "array of RetrievalQueryItem objects with query, intent_angle, required, and reason"
             ),
         },
         "example": {
@@ -359,6 +372,28 @@ def _conversation_context_prompt_payload(
     return payload
 
 
+def _memory_recall_context_prompt_payload(
+    payloads: tuple[MemoryRecallWorkingPayload, ...],
+    *,
+    tool_parameter_use_allowed: bool,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "scope": payload.scope.value,
+            "source_refs": list(payload.source_refs),
+            "summary": payload.summary,
+            "facts": dict(payload.facts),
+            "usage": "reference_resolution_and_task_continuity_only_not_evidence",
+            **(
+                {"tool_parameter_use_allowed": tool_parameter_use_allowed}
+                if tool_parameter_use_allowed
+                else {}
+            ),
+        }
+        for payload in payloads
+    ]
+
+
 def _business_flow_skill_pack_recommendation_contract() -> dict[str, Any]:
     return {
         "name": "BusinessFlowSkillPackRecommendation",
@@ -381,9 +416,7 @@ def _business_flow_skill_pack_recommendation_contract() -> dict[str, Any]:
                 "array of objects with pack_id, confidence, and reason; exactly one "
                 "for single_pack, empty for no_pack, two or more for ambiguous"
             ),
-            "requires_task_split": (
-                "boolean; true only when recommendation_type is ambiguous"
-            ),
+            "requires_task_split": ("boolean; true only when recommendation_type is ambiguous"),
         },
         "forbidden_fields": ["route_confidence", "recommended_pack_id"],
     }
@@ -536,9 +569,7 @@ def _business_flow_skill_pack_routing_payload(
                 "intent_taxonomy_refs": list(pack.intent_taxonomy_refs),
                 "admission": {
                     "min_confidence": pack.admission.min_confidence,
-                    "require_authorization_context": (
-                        pack.admission.require_authorization_context
-                    ),
+                    "require_authorization_context": (pack.admission.require_authorization_context),
                 },
             }
             for pack in skill_packs
@@ -597,9 +628,7 @@ def _intent_repair_request(
             "answer the user."
         ),
         "required_output_contract": original_payload["required_output_contract"],
-        "allowed_recommended_next_actions": original_payload[
-            "allowed_recommended_next_actions"
-        ],
+        "allowed_recommended_next_actions": original_payload["allowed_recommended_next_actions"],
         "validation_error": {
             "error_code": error.error_code,
             "contract_name": error.contract_name,
@@ -611,9 +640,7 @@ def _intent_repair_request(
         "previous_response_parse_error_code": previous_parse_error,
     }
     if "workflow_stage_context" in original_payload:
-        repair_payload["workflow_stage_context"] = original_payload[
-            "workflow_stage_context"
-        ]
+        repair_payload["workflow_stage_context"] = original_payload["workflow_stage_context"]
     if "conversation_context" in original_payload:
         repair_payload["conversation_context"] = original_payload["conversation_context"]
     return ModelRequest(
@@ -778,8 +805,7 @@ def _deterministic_business_flow_recommendation(
             recommendation_type=BusinessFlowSkillPackRecommendationType.NO_PACK,
             confidence=resolution.confidence,
             reason=(
-                "Deterministic resolver found no matching Business Flow Skill "
-                "Pack routing pattern."
+                "Deterministic resolver found no matching Business Flow Skill Pack routing pattern."
             ),
         )
     top_score = ranked_matches[0][1]

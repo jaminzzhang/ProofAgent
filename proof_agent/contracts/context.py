@@ -73,8 +73,11 @@ class ContextAssemblyBudget(ContextModel):
 
     max_tokens: int
     estimated_tokens: int
+    convergence_level: str = "none"
+    budget_source: str = "unknown"
     dropped_source_refs: tuple[str, ...] = Field(default_factory=tuple)
     fallback_reasons: tuple[str, ...] = Field(default_factory=tuple)
+    calibration_update_refs: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class ConversationCompactionSummary(ContextModel):
