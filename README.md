@@ -1,112 +1,98 @@
 # Proof Agent
 
-Proof Agent is a **Controlled Agent Harness Framework** for building enterprise Agents that are workflow-governed, policy-enforced, tool-gated, memory-bounded, validated, and auditable.
+> Controlled Agent Harness Framework for governed, auditable enterprise AI Agents.
 
-The long-term vision is an enterprise Agent Control Platform. The current release keeps a deterministic local demo as the regression baseline, while supporting CLI and Docker entry points plus adapter-driven remote model, runtime, vector, MCP, and Dashboard API paths.
+Proof Agent wraps Agent execution in a **Control Envelope**: workflow
+orchestration, policy gates, evidence admission, model-provider governance, tool
+approval, memory boundaries, validators, JSONL trace, Dashboard APIs, and a
+human-readable Governance Receipt.
 
-Proof Agent still ships as an **Enterprise Agent Delivery Kit**, but that is the delivery shape rather than the core identity. The framework provides the Harness; the delivery kit packages it; the enterprise Q&A template proves it.
+It is designed for teams that need to explain why an Agent answered, refused,
+asked for clarification, or paused for approval. The project keeps a
+no-network, no-API-key deterministic demo as its regression baseline, while
+supporting adapter-driven model, retrieval, tool, Dashboard, and chat surfaces.
 
-## What is Harness
+## Table of Contents
 
-Proof Agent uses **Harness Engineering** to build the Control Envelope. A Harness is a control layer that wraps around the Agent execution flow, inserting explicit policy decision points at every critical step — retrieval, answer generation, tool calls, and memory writes. This is what makes the Agent flow controlled (受控), not just orchestrated.
+- [Why Proof Agent](#why-proof-agent)
+- [What It Provides](#what-it-provides)
+- [Current Status](#current-status)
+- [Architecture](#architecture)
+- [Repository Layout](#repository-layout)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [Run Example Agent Packages](#run-example-agent-packages)
+- [Local Backend and Frontends](#local-backend-and-frontends)
+- [Agent Package Format](#agent-package-format)
+- [Configuration and Credentials](#configuration-and-credentials)
+- [Development](#development)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
 
-**Harness RAG** is an **Agentic RAG** implementation governed by the Harness. Unlike Plain RAG (retrieve → generate), Harness RAG adds policy gates at each step: mandatory retrieval before answering, evidence quality evaluation, citation enforcement, refusal on weak evidence, and explicit tool approval. The result is not just a better answer — it is a governed, auditable answer.
+## Why Proof Agent
 
-```text
-Plain RAG:      Retrieve → Generate (no control gates)
-Harness RAG:    Retrieve → Policy → Evidence → Policy → Answer/Refuse → Tool Approval → Audit
-```
+Most Agent and RAG demos show that a model can produce an answer. Proof Agent is
+about whether an enterprise Agent is allowed to act:
 
-## Why This Exists
+- Was retrieval required before answering?
+- Was the evidence strong enough?
+- Were citations enforced?
+- Did a tool call require approval?
+- Was memory allowed to store the proposed fact?
+- Which validators accepted or blocked the output?
+- What does the audit record prove after the run?
 
-普通 Agent 或 RAG demo 证明模型能回答问题。Proof Agent 证明 Agent 为什么可以行动、什么时候必须拒答、什么时候必须等待人工审批、哪些记忆可以写入、以及事后如何复盘。
+Proof Agent does not replace LangGraph, MCP, vector stores, model providers, or
+observability tools. It composes them behind a contract-first Harness so runtime
+mechanics cannot bypass governance semantics.
 
-The first v1 template is a strongly controlled enterprise knowledge Q&A Agent:
+## What It Provides
 
-- mandatory knowledge retrieval before answering
-- evidence-based answer, refusal, or escalation
-- citation requirements for supported answers
-- explicit MCP tool approval state
-- bounded session memory writes
-- JSONL trace as the audit source of truth
-- human-readable Governance Receipt for every run
+- **Agent Contract**: `agent.yaml` declares workflow, model, knowledge, policy,
+  tools, memory, and audit behavior.
+- **Control Plane**: workflow templates, `PolicyEngine`, approval semantics,
+  evidence admission, validators, memory checks, and outcome mapping.
+- **Tool Gateway**: governed tool proposal, approval, execution, summarization,
+  and trace projection.
+- **Knowledge and evidence**: local Markdown, local index, and trusted remote
+  adapter paths behind Proof Agent contracts.
+- **Model boundaries**: deterministic provider plus OpenAI-compatible provider
+  paths and clean-failure placeholders for future providers.
+- **Trace and receipt**: JSONL trace as the execution source of truth, with a
+  readable Governance Receipt projection for review.
+- **Application surfaces**: CLI, Docker entry point, Dashboard API, Dashboard
+  SPA, and Unified Chat SPA for operator and customer modes.
+- **Evaluation utilities**: deterministic demos, Plain RAG vs Harness RAG
+  comparison, suites, campaigns, and post-run analysis artifacts.
 
-## The 2-Minute Demo
+## Current Status
 
-```bash
-uv run --extra dev proof-agent demo
-```
+Proof Agent is an active Python MVP with frontend application surfaces.
 
-The framework regression demo must run without an LLM API key. It uses internal bundled fixtures and a deterministic provider to show:
+Implemented paths include:
 
-- Plain RAG answering loosely
-- Harness RAG refusing or escalating unsupported questions
-- a supported answer with citations
-- a tool-required question pausing for approval
-- `runs/latest/trace.jsonl`
-- `runs/latest/governance_receipt.md`
+- Python package and CLI for deterministic demos, governed Agent package runs,
+  inspection, comparison, evaluation, local API serving, and knowledge worker
+  execution.
+- Public example Agent packages under `examples/insurance_customer_service/`
+  and `examples/institution_insurance_specialist/`.
+- Dashboard frontend under `dashboard/` for run history, run detail, evidence,
+  approvals, receipts, model usage, configuration, knowledge, and evaluation
+  workflows.
+- Unified Chat frontend under `chat/` with operator-facing Assisted QA Chat and
+  customer-facing Customer Service Chat modes.
+- CI for pytest, Ruff, mypy, and CLI smoke coverage.
+- Docker assets for running the deterministic demo.
 
-## The 30-Minute Enterprise Evaluation
+Current extension areas include production RBAC, richer hosted operations, real
+MCP stdio/HTTP transport, streaming hooks, additional provider adapters, and
+more production-grade deployment packaging.
 
-```bash
-docker compose up
-uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
-uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml --question "What documents are required for inpatient claim reimbursement?"
-uv run --extra dev proof-agent run examples/institution_insurance_specialist/agent.yaml --question "For short-term accident claims, what should a branch specialist explain to an agent when the claim is still pending?"
-uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml --question "What discount should we give this customer next year?"
-uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
-uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
-```
+## Architecture
 
-`proof-agent dev` is the local Dashboard backend path: it loads `.env` and starts
-both the API server and Knowledge Worker so Knowledge uploads can be processed.
-On an empty local configuration store, it also imports and publishes the canonical
-`insurance_customer_service` Agent so Dashboard configuration, operator chat, and
-customer chat have an immediate closed-loop example.
-
-The regression demo and public package smoke paths together must show three visible outcomes:
-
-| Question type | Example | Expected Harness behavior |
-| --- | --- | --- |
-| Supported | "What documents are required for inpatient claim reimbursement?" | Answer with citations and receipt |
-| Unsupported | "What discount should we give this customer next year?" | Refuse or escalate because evidence is missing |
-| Tool-required regression | `proof-agent demo` fixture: "Look up customer policy status before answering." | Pause for approval before the MCP mock tool runs |
-
-The side-by-side evaluation should show two paths:
-
-1. **Plain RAG** answers loosely.
-2. **Harness RAG** answers only when policy, evidence, tool approval, and audit requirements are satisfied.
-
-The output includes a final answer or refusal plus:
-
-- `runs/latest/trace.jsonl`
-- `runs/latest/governance_receipt.md`
-
-Expected deterministic regression and public smoke questions:
-
-- Regression fixture: `What is the reimbursement rule for travel meals?`
-- `What documents are required for inpatient claim reimbursement?`
-- `What discount should we give this customer next year?`
-- Regression fixture: `Look up customer policy status before answering.`
-
-## Developer Model
-
-Proof Agent is built around an Agent package:
-
-```text
-agent.yaml      # Agent Contract
-policy.yaml     # Control Plane policy
-tools.yaml      # Tool / MCP declaration
-knowledge/      # business knowledge source
-questions.yaml  # optional evaluation set
-expected/       # optional expected trace or receipt examples
-```
-
-Developers configure the Agent package, run deterministic validation, inspect trace and receipt artifacts, then optionally switch to a remote model provider or deploy with Docker.
-
-Proof Agent does not replace LangGraph, MCP, vector stores, or observability tools. It composes them behind an enterprise Control Plane. Runtime frameworks execute mechanics; the Control Plane decides whether retrieval, model calls, tool calls, memory writes, and final answers are allowed.
-
-## Architecture Layers
+Proof Agent is organized around a governed Agent lifecycle:
 
 ```text
 Delivery / Entry
@@ -117,58 +103,293 @@ Delivery / Entry
   -> Infrastructure
 
 Contracts & Ports define the shared language.
-Audit & Observability records facts as a side channel.
+Audit & Observability records execution facts as a side channel.
 ```
 
-v1 implements the narrow local path:
+Current package execution follows this shape:
 
 ```text
-Delivery CLI / Docker
-  -> Bootstrap: load and validate agent.yaml
-  -> Control: workflow, policy gates, validators, outcome
-  -> Runtime: LangGraph adapter boundary, currently delegated to orchestrator
-  -> Capability: deterministic model, local knowledge, session memory, mock Tool/MCP
-  -> Observability: JSONL trace, RunStore, Governance Receipt, Dashboard API
+CLI / API / Docker
+  -> load and validate agent.yaml
+  -> compose Harness dependencies
+  -> run the selected governed workflow template
+  -> apply policy, evidence, tool, memory, and validator decisions
+  -> write trace and run metadata
+  -> render Governance Receipt
+  -> expose Dashboard and inspection projections
 ```
 
-The package layout mirrors the architecture:
+The Control Plane owns decisions. Runtime and capability adapters can execute
+mechanics, call providers, or load integrations, but they must not redefine
+policy, evidence, approval, memory, outcome, trace, or receipt semantics.
+
+## Repository Layout
+
+| Path | Purpose |
+| --- | --- |
+| `proof_agent/bootstrap/` | Agent Contract loading, validation, path resolution, and Harness composition |
+| `proof_agent/contracts/` | Provider-neutral Pydantic v2 contracts and ports |
+| `proof_agent/control/` | Workflow orchestration, policy, validators, approval, evidence, memory, and governed outcomes |
+| `proof_agent/runtime/` | Runtime adapter boundaries for historical and future runtime mechanics |
+| `proof_agent/capabilities/` | Model, knowledge, memory, tool, MCP, ReAct planner, and review adapters |
+| `proof_agent/observability/` | Trace, redaction, Governance Receipt, RunStore, ConversationStore, and read APIs |
+| `proof_agent/delivery/` | CLI, Run Execution API, Conversation API, Configuration API, and customer API |
+| `proof_agent/evaluation/` | Deterministic demos, comparison helpers, suites, campaigns, and analysis |
+| `examples/` | Runnable public Agent packages |
+| `dashboard/` | Vite/React Dashboard SPA |
+| `chat/` | Vite/React Unified Chat SPA |
+| `packages/ui/` | Shared React design system package |
+| `docs/` | Product, architecture, concept, evaluation, frontend, ADR, and example docs |
+| `tests/` | Pytest coverage for contracts, control, APIs, adapters, examples, and evaluation |
+| `runs/` | Generated local audit output; only `runs/.gitkeep` is committed |
+
+## Requirements
+
+- Python 3.12+
+- `uv` for Python dependency management and command execution
+- Node.js and npm for the Dashboard, Chat, and shared UI package
+- Docker and Docker Compose for the optional container demo
+
+The deterministic demo does not require API keys, network model calls, vector
+databases, or external services.
+
+## Quick Start
+
+From the repository root:
+
+```bash
+uv run --extra dev proof-agent demo
+```
+
+Expected deterministic outcomes:
 
 ```text
-proof_agent/
-  bootstrap/      # manifest loading, validation, composition boundary
-  control/        # workflow, policy, validators, governed decisions
-  runtime/        # LangGraph/LangChain runtime adapter boundaries
-  capabilities/   # models, knowledge, memory, tools, future Skill packs
-  observability/  # trace, receipt, RunStore, Dashboard read API
-  delivery/       # CLI and future execution entry points
-  evaluation/     # demo and Plain RAG vs Harness RAG comparison
-  contracts/      # provider-neutral public contracts and ports
+supported: ANSWERED_WITH_CITATIONS
+unsupported: REFUSED_NO_EVIDENCE
+clarify: WAITING_FOR_USER_CLARIFICATION
+tool_required: WAITING_FOR_APPROVAL
 ```
+
+The run writes:
+
+```text
+runs/latest/trace.jsonl
+runs/latest/governance_receipt.md
+```
+
+Inspect the latest artifacts:
+
+```bash
+uv run --extra dev proof-agent inspect runs/latest/governance_receipt.md
+uv run --extra dev proof-agent inspect runs/latest/trace.jsonl
+```
+
+## Run Example Agent Packages
+
+Run the customer-facing Insurance Customer Service Agent:
+
+```bash
+uv run --extra dev proof-agent run examples/insurance_customer_service/agent.yaml \
+  --question "What documents are required for inpatient claim reimbursement?"
+```
+
+Run the staff-facing Institution Insurance Specialist Agent:
+
+```bash
+uv run --extra dev proof-agent run examples/institution_insurance_specialist/agent.yaml \
+  --question "For short-term accident claims, what should a branch specialist explain to an agent when the claim is still pending?"
+```
+
+Compare Plain RAG with Harness RAG on an unsupported question:
+
+```bash
+uv run --extra dev proof-agent compare examples/insurance_customer_service/agent.yaml \
+  --question "What discount should we give this customer next year?"
+```
+
+Run the Docker demo:
+
+```bash
+docker compose up
+```
+
+## Local Backend and Frontends
+
+Start the local backend API plus the continuous Knowledge Worker:
+
+```bash
+uv run --extra dashboard --extra ingestion --extra tree proof-agent dev
+```
+
+The backend defaults to `http://127.0.0.1:8000` and seeds the canonical
+`insurance_customer_service` Agent into an empty local configuration store.
+
+Install frontend dependencies from the repository root:
+
+```bash
+npm install
+```
+
+Start the Dashboard:
+
+```bash
+npm run dev -w proof-agent-dashboard -- --host 127.0.0.1 --port 5173
+```
+
+Start Unified Chat:
+
+```bash
+npm run dev -w proof-agent-chat -- --host 127.0.0.1 --port 5174
+```
+
+Useful local URLs:
+
+- API health: `http://127.0.0.1:8000/api/health`
+- Dashboard: `http://127.0.0.1:5173/`
+- Operator chat: `http://127.0.0.1:5174/operator`
+- Customer chat: `http://127.0.0.1:5174/customer`
+
+## Agent Package Format
+
+The developer-facing unit is an Agent package:
+
+```text
+agent.yaml      # Agent Contract
+policy.yaml     # Control Plane policy
+tools.yaml      # Tool / MCP declarations
+knowledge/      # Package-local knowledge sources
+questions.yaml  # Optional evaluation questions
+expected/       # Optional expected trace or receipt examples
+```
+
+`agent.yaml` can declare provider names, model names, environment variable
+names, timeouts, token limits, retrieval settings, capability files, and audit
+paths. It must not contain raw secrets.
+
+Minimal development loop:
+
+```text
+create or copy an Agent package
+  -> configure agent.yaml, policy.yaml, tools.yaml, and knowledge
+  -> run deterministic validation
+  -> inspect trace and Governance Receipt
+  -> compare Plain RAG vs Harness RAG on unsupported questions
+  -> optionally switch to a remote model or shared model connection
+  -> operate through CLI, APIs, Dashboard, Chat, trace, and receipt
+```
+
+## Configuration and Credentials
+
+Copy `.env.example` to `.env` for optional provider credentials:
+
+```bash
+cp .env.example .env
+```
+
+The default deterministic path does not require credentials. Optional provider
+paths use environment variables such as:
+
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_COMPATIBLE_API_KEY`
+- `OPENAI_COMPATIBLE_BASE_URL`
+- `DEEPSEEK_API_KEY`
+- `DEEPSEEK_BASE_URL`
+- `PA_KNOWLEDGE_TOKEN`
+
+Keep real secrets in ignored local environment files or deployment secret
+stores. Do not commit secrets in Agent packages, traces, receipts, fixtures, or
+documentation.
+
+## Development
+
+Python checks:
+
+```bash
+uv run --extra dev python -m pytest tests/ -v
+uv run --extra dev ruff check proof_agent tests
+uv run --extra dev --extra openai mypy proof_agent
+uv run --extra dev proof-agent demo
+```
+
+Frontend checks:
+
+```bash
+npm install
+npm run build
+npm test
+```
+
+Documentation-only check:
+
+```bash
+git diff --check
+```
+
+CI runs pytest, Ruff, mypy, and a CLI smoke test that verifies the generated
+trace and Governance Receipt.
 
 ## Documentation
 
+Start here:
+
 - [Documentation Index](docs/README.md)
 - [Developer Guide](docs/developer-guide.md)
-- [Product Requirements](docs/prd.md)
 - [Technical Design](docs/technical-design.md)
-- [Feasibility Analysis](docs/feasibility-analysis.md)
-- [Development Progress](docs/development-progress.md)
+- [Product Requirements](docs/prd.md)
+- [Evaluation System](docs/evaluation-system.md)
+- [Evaluation Campaign System](docs/evaluation-campaign-system.md)
+- [Frontend Design Principles](docs/frontend-design-principles.md)
+
+Core concept contracts:
+
 - [Control Envelope](docs/concepts/control-envelope.md)
 - [Agent Contract](docs/concepts/agent-contract.md)
 - [Policy Engine](docs/concepts/policy-engine.md)
-- [Governance Receipt Contract](docs/concepts/governance-receipt-contract.md)
-- [Trace Event Contract](docs/concepts/trace-event-contract.md)
 - [Approval State Contract](docs/concepts/approval-state-contract.md)
+- [Trace Event Contract](docs/concepts/trace-event-contract.md)
+- [Governance Receipt Contract](docs/concepts/governance-receipt-contract.md)
 - [Trust Boundaries](docs/concepts/trust-boundaries.md)
-- [Launch Script](docs/examples/launch-script.md)
+
+Example docs:
+
 - [Insurance Customer Service Agent](docs/examples/insurance-customer-service.md)
 - [Institution Insurance Specialist Agent](docs/examples/institution-insurance-specialist.md)
-- [Governance Receipt](docs/examples/governance-receipt.md)
+- [Launch Script](docs/examples/launch-script.md)
+- [Governance Receipt Example](docs/examples/governance-receipt.md)
 
-Docs are bilingual: English (default) under `docs/`, Chinese translations under `docs/zh/`.
+Docs are bilingual: English docs live under `docs/`, and Chinese translations
+live under `docs/zh/`. During development, update English docs first; Chinese
+translations are synced at release time.
 
-## v1 Scope
+## Contributing
 
-v1 is intentionally narrow: public insurance Agent packages for customer-facing service and staff-facing institution specialist assistance, internal deterministic framework fixtures, local knowledge, optional OpenAI-compatible remote model provider paths, bounded memory, governed tools, validators, JSONL trace, RunStore, Governance Receipt, Dashboard API, Docker Compose, and CI.
+Contributions should preserve the Harness boundaries:
 
-Production LangChain/LangGraph adapters, real MCP transport, richer vector providers, Dashboard UI, Approval Console, policy packs, and additional industry templates are vNext.
+- Keep public contracts provider-neutral.
+- Keep Control Plane decisions out of runtime and capability adapters.
+- Keep trace and receipt output audit-safe and redacted.
+- Keep deterministic demos runnable without network access, API keys, or
+  external services.
+- Add or update tests for externally visible behavior.
+- For documentation changes, keep terminology aligned with `CONTEXT.md`,
+  `CONTEXT-MAP.md`, and the relevant `docs/domain/*/CONTEXT.md` file.
+
+Before opening a pull request, run the smallest relevant verification set from
+[Development](#development).
+
+## Security
+
+- Do not commit API keys, bearer tokens, passwords, connection strings, provider
+  secrets, or production URLs containing secrets.
+- Use environment variable references in Agent packages instead of raw secret
+  values.
+- Treat generated traces and receipts as audit artifacts. They are ignored by
+  git under `runs/`, except for `runs/.gitkeep`.
+- If you need to report a vulnerability and no private channel is available,
+  open a minimal public issue requesting a private disclosure path. Do not put
+  exploit details or secrets in the issue.
+
+## License
+
+Proof Agent is licensed under the [Apache License 2.0](LICENSE).
