@@ -3,15 +3,21 @@ from types import SimpleNamespace
 
 import pytest
 
+from proof_agent.capabilities.models.openai_compatible import OpenAICompatibleModelProvider
+from proof_agent.capabilities.react.planner import _planner_function_schema
 from proof_agent.contracts import (
+    EffectiveToolProposalScope,
     ModelConfig,
     ModelFunctionSchema,
     ModelMessage,
     ModelRequest,
     ModelRole,
+    ReActActionType,
+    ToolProposalInterface,
+    ToolProposalParameter,
+    ToolProposalParameterSource,
 )
 from proof_agent.errors import ProofAgentError
-from proof_agent.capabilities.models.openai_compatible import OpenAICompatibleModelProvider
 
 
 def test_openai_compatible_provider_maps_request_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -331,6 +337,66 @@ def test_openai_compatible_provider_prefers_request_timeout(
     assert calls["client"]["timeout"] == 3
 
 
+def test_openai_compatible_provider_preserves_safe_api_error_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ProviderAPIError(RuntimeError):
+        status_code = 400
+        body = {
+            "error": {
+                "type": "invalid_request_error",
+                "code": "model_not_found",
+                "message": "raw provider message may contain request details",
+            }
+        }
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create),
+            )
+
+        def _create(self, **payload: object) -> object:
+            _ = payload
+            raise ProviderAPIError("raw provider failure text")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            APIError=ProviderAPIError,
+            APITimeoutError=TimeoutError,
+            AuthenticationError=PermissionError,
+            OpenAI=FakeOpenAI,
+        ),
+    )
+    monkeypatch.setenv("PROOF_AGENT_OPENAI_KEY", "test-key")
+
+    provider = OpenAICompatibleModelProvider.from_config(
+        ModelConfig(
+            provider="openai_compatible",
+            name="gpt-test",
+            params={"api_key_env": "PROOF_AGENT_OPENAI_KEY"},
+        )
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        provider.generate(
+            ModelRequest(
+                provider="openai_compatible",
+                model="gpt-test",
+                messages=(ModelMessage(role=ModelRole.USER, content="user"),),
+            )
+        )
+
+    assert exc.value.code == "PA_MODEL_002"
+    assert "upstream status 400" in exc.value.message
+    assert "invalid_request_error" in exc.value.message
+    assert "model_not_found" in exc.value.message
+    assert "raw provider message" not in exc.value.message
+    assert "model name" in exc.value.fix
+
+
 def test_openai_compatible_provider_requires_api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MISSING_OPENAI_KEY", raising=False)
 
@@ -535,7 +601,12 @@ def test_deepseek_function_schema_defaults_standard_base_url_to_beta(
                     "additionalProperties": False,
                     "properties": {
                         "action_type": {"type": "string"},
-                        "parameters": {"type": "object"},
+                        "parameters": {
+                            "type": "object",
+                            "required": ["query"],
+                            "additionalProperties": False,
+                            "properties": {"query": {"type": "string"}},
+                        },
                     },
                 },
             ),
@@ -622,7 +693,12 @@ def test_deepseek_standard_endpoint_mode_omits_strict_beta_flag(
                     "additionalProperties": False,
                     "properties": {
                         "action_type": {"type": "string"},
-                        "parameters": {"type": "object"},
+                        "parameters": {
+                            "type": "object",
+                            "required": ["query"],
+                            "additionalProperties": False,
+                            "properties": {"query": {"type": "string"}},
+                        },
                     },
                 },
             ),
@@ -702,7 +778,12 @@ def test_deepseek_beta_function_schema_keeps_strict_flag(
                     "additionalProperties": False,
                     "properties": {
                         "action_type": {"type": "string"},
-                        "parameters": {"type": "object"},
+                        "parameters": {
+                            "type": "object",
+                            "required": ["query"],
+                            "additionalProperties": False,
+                            "properties": {"query": {"type": "string"}},
+                        },
                     },
                 },
             ),
@@ -712,6 +793,178 @@ def test_deepseek_beta_function_schema_keeps_strict_flag(
     assert calls["client"]["base_url"] == "https://api.deepseek.com/beta"
     assert calls["payload"]["extra_body"] == {"thinking": {"type": "disabled"}}
     assert calls["payload"]["tools"][0]["function"]["strict"] is True
+
+
+def test_deepseek_beta_omits_strict_for_incompatible_planner_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            calls["client"] = kwargs
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create),
+            )
+
+        def _create(self, **payload: object) -> object:
+            calls["payload"] = payload
+            return SimpleNamespace(
+                id="chatcmpl_deepseek_planner_tool",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    function=SimpleNamespace(
+                                        arguments='{"action_type":"plan_retrieval","parameters":{"query":"q"},"target_tool_name":null}'
+                                    )
+                                )
+                            ],
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+                usage=None,
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            APIError=RuntimeError,
+            APITimeoutError=TimeoutError,
+            AuthenticationError=PermissionError,
+            OpenAI=FakeOpenAI,
+        ),
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    provider = OpenAICompatibleModelProvider.from_config(
+        ModelConfig(
+            provider="deepseek",
+            name="deepseek-v4-flash",
+            params={"base_url": "https://api.deepseek.com/beta"},
+        )
+    )
+    provider.generate(
+        ModelRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=(ModelMessage(role=ModelRole.USER, content="plan"),),
+            response_format="json",
+            function_schema=_planner_function_schema(
+                frozenset(
+                    {
+                        ReActActionType.GENERATE_FINAL_ANSWER,
+                        ReActActionType.PLAN_RETRIEVAL,
+                    }
+                )
+            ),
+        )
+    )
+
+    function_payload = calls["payload"]["tools"][0]["function"]
+    assert calls["client"]["base_url"] == "https://api.deepseek.com/beta"
+    assert calls["payload"]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert function_payload["name"] == "submit_react_action_proposal"
+    assert "strict" not in function_payload
+
+
+def test_deepseek_beta_omits_strict_for_scoped_planner_oneof_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            calls["client"] = kwargs
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create),
+            )
+
+        def _create(self, **payload: object) -> object:
+            calls["payload"] = payload
+            return SimpleNamespace(
+                id="chatcmpl_deepseek_scoped_planner_tool",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    function=SimpleNamespace(
+                                        arguments='{"action_type":"propose_tool_call","parameters":{"claim_id":"CLM-001"},"target_tool_name":"claim_status_lookup"}'
+                                    )
+                                )
+                            ],
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+                usage=None,
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            APIError=RuntimeError,
+            APITimeoutError=TimeoutError,
+            AuthenticationError=PermissionError,
+            OpenAI=FakeOpenAI,
+        ),
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    effective_scope = EffectiveToolProposalScope(
+        run_id="run_scope",
+        plan_round=0,
+        schema_digest="sha256:scope",
+        tool_interfaces=(
+            ToolProposalInterface(
+                tool_contract_id="claim_status_lookup",
+                purpose="claim status lookup",
+                risk_level="medium",
+                read_only=True,
+                requires_approval=False,
+                semantic_result_summary="Returns claim status.",
+                parameters=(
+                    ToolProposalParameter(
+                        name="claim_id",
+                        required=True,
+                        value_type="string",
+                        value_source=ToolProposalParameterSource.USER_SUPPLIED,
+                    ),
+                ),
+            ),
+        ),
+    )
+    provider = OpenAICompatibleModelProvider.from_config(
+        ModelConfig(
+            provider="deepseek",
+            name="deepseek-v4-flash",
+            params={"base_url": "https://api.deepseek.com/beta"},
+        )
+    )
+    provider.generate(
+        ModelRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=(ModelMessage(role=ModelRole.USER, content="plan"),),
+            response_format="json",
+            function_schema=_planner_function_schema(
+                frozenset({ReActActionType.PROPOSE_TOOL_CALL}),
+                effective_tool_proposal_scope=effective_scope,
+            ),
+        )
+    )
+
+    function_payload = calls["payload"]["tools"][0]["function"]
+    assert calls["client"]["base_url"] == "https://api.deepseek.com/beta"
+    assert "oneOf" in function_payload["parameters"]["properties"]["parameters"]
+    assert "strict" not in function_payload
 
 
 @pytest.mark.parametrize(

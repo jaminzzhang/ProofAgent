@@ -82,6 +82,7 @@ from proof_agent.delivery.agent_package_execution import (
     AgentPackageRunRequest,
     execute_agent_package_run,
 )
+from proof_agent.delivery.http_errors import proof_agent_http_exception
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import (
@@ -1521,10 +1522,7 @@ def import_config_agent(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
     return _draft_payload(draft)
 
 
@@ -1590,10 +1588,7 @@ def get_config_workflow_template(
     try:
         descriptor = resolve_workflow_template(template_id)
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
     return _workflow_template_payload(descriptor)
 
 
@@ -1657,10 +1652,7 @@ def bind_knowledge_source_to_draft(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
     updated = store.update_draft(
         agent_id=agent_id,
         draft_id=draft_id,
@@ -1704,10 +1696,7 @@ def unbind_knowledge_source_from_draft(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
     updated = store.update_draft(
         agent_id=agent_id,
         draft_id=draft_id,
@@ -1887,10 +1876,7 @@ def update_config_draft_contract(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
 
     updated = store.update_draft(
         agent_id=agent_id,
@@ -1942,10 +1928,7 @@ def update_config_draft_workflow_stages(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
 
     updated = store.update_draft(
         agent_id=agent_id,
@@ -1994,10 +1977,7 @@ def preview_config_draft_workflow_stage(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/validate")
@@ -2023,10 +2003,7 @@ def validate_config_draft(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
     run_store = _get_run_store(app_request)
     run_id = f"run_{uuid4().hex[:8]}"
     run_artifact_dir = run_store.create_run_dir(run_id)
@@ -2047,10 +2024,7 @@ def validate_config_draft(
             )
         )
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
     detail = run_store.get_run_detail(run_id)
     if detail is None:
         raise HTTPException(status_code=500, detail="Validation run artifacts were not persisted.")
@@ -2413,10 +2387,7 @@ def publish_config_draft(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise _proof_agent_http_exception(exc) from exc
     return _version_payload(version)
 
 
@@ -3483,11 +3454,4 @@ def _decode_upload_content(content_base64: str) -> bytes:
 
 
 def _proof_agent_http_exception(exc: ProofAgentError) -> HTTPException:
-    status_code = {
-        "PA_INGESTION_004": 503,
-        "PA_INGESTION_005": 409,
-    }.get(exc.code, 400)
-    return HTTPException(
-        status_code=status_code,
-        detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-    )
+    return proof_agent_http_exception(exc)

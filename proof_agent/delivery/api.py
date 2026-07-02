@@ -32,6 +32,7 @@ from proof_agent.delivery.run_execution_service import (
     RunExecutionDependencies,
     execute_published_agent_run,
 )
+from proof_agent.delivery.http_errors import proof_agent_http_exception
 from proof_agent.errors import ProofAgentError
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.storage.conversation_store import ConversationStore
@@ -269,10 +270,7 @@ def _execute_published_agent_run(
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
         )
     except ProofAgentError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": exc.message, "fix": exc.fix},
-        ) from exc
+        raise proof_agent_http_exception(exc) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return execution.result, execution.detail, execution.manifest

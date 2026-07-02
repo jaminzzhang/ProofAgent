@@ -3093,6 +3093,39 @@ def test_validate_draft_uses_per_run_history_artifact_dir(
     assert not (tmp_path / "latest" / "trace.jsonl").exists()
 
 
+def test_validate_draft_maps_model_provider_error_to_upstream_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+
+    def fake_execute_agent_package_run(request: Any) -> RunResult:
+        _ = request
+        raise ProofAgentError(
+            "PA_MODEL_002",
+            "model provider API error (upstream status 400).",
+            (
+                "Check the configured provider, model name, base_url, endpoint mode, "
+                "and structured-output support before retrying."
+            ),
+        )
+
+    monkeypatch.setattr(
+        configuration_api_module,
+        "execute_agent_package_run",
+        fake_execute_agent_package_run,
+    )
+
+    validation = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={"question": "What is the reimbursement rule for travel meals?"},
+    )
+
+    assert validation.status_code == 502
+    assert validation.json()["detail"]["code"] == "PA_MODEL_002"
+
+
 def test_validation_run_defaults_to_summary_only_trace_capture(tmp_path: Path) -> None:
     client = _client(tmp_path)
     draft = _import_enterprise_qa(client)

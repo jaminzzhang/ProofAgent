@@ -194,10 +194,11 @@ class OpenAICompatibleModelProvider:
                 "Increase timeout_seconds or retry later.",
             ) from exc
         except APIError as exc:
+            provider_error = _provider_api_error_summary(exc)
             raise ProofAgentError(
                 "PA_MODEL_002",
-                "model provider API error.",
-                "Retry later or inspect provider status.",
+                f"model provider API error{provider_error.message_suffix}.",
+                provider_error.fix,
             ) from exc
 
         choice = response.choices[0]
@@ -231,6 +232,7 @@ def _function_tool_payload(
         "parameters": function_schema.model_dump(mode="json")["parameters_schema"],
     }
     if function_schema.strict and _supports_strict_function_schema(
+        function_schema,
         provider_name=provider_name,
         base_url=base_url,
     ):
@@ -247,16 +249,109 @@ def _function_tool_payload(
     return payload
 
 
-def _supports_strict_function_schema(*, provider_name: str, base_url: str | None) -> bool:
+def _supports_strict_function_schema(
+    function_schema: ModelFunctionSchema,
+    *,
+    provider_name: str,
+    base_url: str | None,
+) -> bool:
     normalized_base_url = (base_url or "").rstrip("/")
     if _is_deepseek_provider(provider_name=provider_name, base_url=base_url):
-        return normalized_base_url.endswith("/beta")
+        return normalized_base_url.endswith("/beta") and _deepseek_strict_schema_compatible(
+            function_schema.parameters_schema
+        )
     return True
 
 
 def _is_deepseek_provider(*, provider_name: str, base_url: str | None) -> bool:
     normalized_base_url = (base_url or "").rstrip("/")
     return provider_name == "deepseek" or "api.deepseek.com" in normalized_base_url
+
+
+_DEEPSEEK_STRICT_UNSUPPORTED_SCHEMA_KEYS = frozenset(
+    {
+        "additionalItems",
+        "allOf",
+        "contains",
+        "dependentRequired",
+        "dependentSchemas",
+        "else",
+        "if",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "not",
+        "oneOf",
+        "patternProperties",
+        "propertyNames",
+        "then",
+        "uniqueItems",
+        "unevaluatedProperties",
+    }
+)
+_DEEPSEEK_STRICT_SUPPORTED_SCHEMA_TYPES = frozenset(
+    {"array", "boolean", "integer", "number", "object", "string"}
+)
+
+
+def _deepseek_strict_schema_compatible(schema: Any) -> bool:
+    if not isinstance(schema, Mapping):
+        return False
+    if _DEEPSEEK_STRICT_UNSUPPORTED_SCHEMA_KEYS.intersection(schema):
+        return False
+
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list | tuple):
+        return False
+    if schema_type is not None and schema_type not in _DEEPSEEK_STRICT_SUPPORTED_SCHEMA_TYPES:
+        return False
+    if schema_type == "object" and not _deepseek_strict_object_schema_compatible(schema):
+        return False
+
+    properties = schema.get("properties")
+    if isinstance(properties, Mapping):
+        for property_schema in properties.values():
+            if not _deepseek_strict_schema_compatible(property_schema):
+                return False
+
+    items = schema.get("items")
+    if items is not None and not _deepseek_strict_schema_compatible(items):
+        return False
+
+    any_of = schema.get("anyOf")
+    if any_of is not None:
+        if not isinstance(any_of, list | tuple) or not any_of:
+            return False
+        for option_schema in any_of:
+            if not _deepseek_strict_schema_compatible(option_schema):
+                return False
+
+    definitions = schema.get("$defs", schema.get("$def"))
+    if definitions is not None:
+        if not isinstance(definitions, Mapping):
+            return False
+        for definition_schema in definitions.values():
+            if not _deepseek_strict_schema_compatible(definition_schema):
+                return False
+
+    return True
+
+
+def _deepseek_strict_object_schema_compatible(schema: Mapping[str, Any]) -> bool:
+    if schema.get("additionalProperties") is not False:
+        return False
+    properties = schema.get("properties")
+    if properties is None:
+        properties = {}
+    if not isinstance(properties, Mapping):
+        return False
+    required = schema.get("required")
+    if not isinstance(required, list | tuple):
+        return False
+    return set(required) == set(properties)
 
 
 def _deepseek_endpoint_mode(value: Any) -> str:
@@ -325,3 +420,78 @@ def _base_url_from_params(
     if "base_url_env" in params:
         return os.environ.get(str(params["base_url_env"]))
     return default_base_url
+
+
+class _ProviderApiErrorSummary:
+    def __init__(self, *, message_suffix: str, fix: str) -> None:
+        self.message_suffix = message_suffix
+        self.fix = fix
+
+
+def _provider_api_error_summary(exc: BaseException) -> _ProviderApiErrorSummary:
+    status_code = getattr(exc, "status_code", None)
+    provider_error = _provider_error_payload(exc)
+    provider_type = _safe_provider_error_field(provider_error, "type")
+    provider_code = _safe_provider_error_field(provider_error, "code")
+
+    parts: list[str] = []
+    if isinstance(status_code, int):
+        parts.append(f"upstream status {status_code}")
+    if provider_type is not None:
+        parts.append(f"type {provider_type}")
+    if provider_code is not None:
+        parts.append(f"code {provider_code}")
+
+    message_suffix = f" ({', '.join(parts)})" if parts else ""
+    fix = "Inspect provider status and retry later."
+    if status_code in {400, 404, 422}:
+        fix = (
+            "Check the configured provider, model name, base_url, endpoint mode, "
+            "and structured-output support before retrying."
+        )
+    elif status_code in {401, 403}:
+        fix = "Check the configured API key environment variable and provider account permissions."
+    elif status_code in {408, 409, 429} or (
+        isinstance(status_code, int) and 500 <= status_code < 600
+    ):
+        fix = "Retry later or inspect provider status."
+    return _ProviderApiErrorSummary(message_suffix=message_suffix, fix=fix)
+
+
+def _provider_error_payload(exc: BaseException) -> Mapping[str, Any] | None:
+    body = getattr(exc, "body", None)
+    if isinstance(body, Mapping):
+        error = body.get("error")
+        if isinstance(error, Mapping):
+            return error
+        return body
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    if not isinstance(body, Mapping):
+        return None
+    error = body.get("error")
+    if isinstance(error, Mapping):
+        return error
+    return body
+
+
+def _safe_provider_error_field(
+    provider_error: Mapping[str, Any] | None,
+    field: str,
+) -> str | None:
+    if provider_error is None:
+        return None
+    value = provider_error.get(field)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > 80:
+        return None
+    if not all(char.isalnum() or char in {"_", "-", ".", "/"} for char in value):
+        return None
+    return value

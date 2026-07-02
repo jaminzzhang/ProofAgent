@@ -10,6 +10,8 @@ from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts.dashboard import RunPurpose
 from proof_agent.contracts.receipt import ReceiptOutcome
+from proof_agent.errors import ProofAgentError
+import proof_agent.delivery.run_execution_service as run_execution_service
 from proof_agent.observability.api.app import create_app
 from proof_agent.observability.api.operator_identity import (
     OperatorIdentityContext,
@@ -188,6 +190,44 @@ def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Pa
     detail = client.get(f"/api/runs/{body['run_id']}")
     assert detail.status_code == 200
     assert detail.json()["question"] == "What is the reimbursement rule for travel meals?"
+
+
+def test_chat_run_maps_model_provider_error_to_upstream_failure(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    app = _app_with_published_agent(
+        tmp_path, Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+    )
+    client = TestClient(app)
+
+    def fake_execute_agent_package_run(request: object) -> object:
+        _ = request
+        raise ProofAgentError(
+            "PA_MODEL_002",
+            "model provider API error (upstream status 400).",
+            (
+                "Check the configured provider, model name, base_url, endpoint mode, "
+                "and structured-output support before retrying."
+            ),
+        )
+
+    monkeypatch.setattr(
+        run_execution_service,
+        "execute_agent_package_run",
+        fake_execute_agent_package_run,
+    )
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "enterprise_qa",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "PA_MODEL_002"
 
 
 def test_chat_run_response_includes_citation_refs_when_available(
