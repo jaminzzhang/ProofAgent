@@ -249,6 +249,20 @@ Useful local URLs:
 - Operator chat: `http://127.0.0.1:5174/operator`
 - Customer chat: `http://127.0.0.1:5174/customer`
 
+For a restartable single-command verification session, including backend,
+Dashboard, Chat, a single local gateway, and a public quick tunnel, run:
+
+```bash
+uv run --extra dashboard --extra ingestion --extra tree proof-agent verify-remote
+```
+
+`verify-remote` defaults to `cloudflared` quick tunnel exposure and prints the
+public URL from cloudflared output. It first cleans the configured verification
+ports for Python/Node/Vite-style dev processes, then exposes these paths through
+one gateway at `http://127.0.0.1:18080`: `/` for Dashboard, `/operator` and
+`/customer` for Unified Chat, and `/api/*` for the backend API. Use
+`--local-only` to skip the public tunnel.
+
 ## Agent Package Format
 
 The developer-facing unit is an Agent package:

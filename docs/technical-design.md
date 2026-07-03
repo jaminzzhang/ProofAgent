@@ -243,7 +243,7 @@ Layer boundary rules:
 
 | Area | Current implementation |
 | --- | --- |
-| Delivery | `delivery/cli.py` exposes `demo`, `react-demo`, `run`, `doctor`, `inspect`, `compare`, `dev`, `server`, continuous `knowledge-worker`, and bounded `knowledge-worker --once`; `delivery/agent_package_execution.py` is the shared Agent package execution seam for CLI, validation, Run Execution API, and Conversation API |
+| Delivery | `delivery/cli.py` exposes `demo`, `react-demo`, `run`, `doctor`, `inspect`, `compare`, `dev`, `verify-remote`, `server`, continuous `knowledge-worker`, and bounded `knowledge-worker --once`; `delivery/agent_package_execution.py` is the shared Agent package execution seam for CLI, validation, Run Execution API, and Conversation API |
 | Docker | `Dockerfile`, `docker-compose.yml` runs demo by default |
 | Contracts | Pydantic v2 frozen models |
 | Bootstrap | `bootstrap/` owns YAML loading, path resolution, secret-looking params rejection, Shared Model Connection resolution, and `HarnessInvocation` composition |
@@ -1347,6 +1347,7 @@ CLI commands:
 | `proof-agent evaluate analyze` | planned post-run Evaluation Analyzer over an Evaluation Suite and Evaluation Subject Manifest; does not create Agent runs |
 | `proof-agent evaluate campaign run` | manifest-driven Evaluation Campaign command that invokes the Analyzer over declared suite and subject refs, writes Campaign summary artifacts, and produces private Evaluation Lab page data; module-level Campaign execution also supports injected `evaluation_sample` production, Run Execution API-backed and Customer Run API-backed sample adapters, and injected Coding Agent Evaluation Assist diagnostics |
 | `proof-agent dev` | start the local backend API and Knowledge Worker with `.env` loaded |
+| `proof-agent verify-remote` | start or restart the local backend, Dashboard, Chat, single-entry verification gateway, and default `cloudflared` quick tunnel for external review |
 | `proof-agent server` | start only the Dashboard API |
 
 Docker:

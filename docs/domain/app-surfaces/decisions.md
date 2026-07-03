@@ -30,6 +30,7 @@
 - "Agent-specific monitoring" could mean a separate tab, split view, or lifecycle integration. Resolved: the Monitor **Agent Lifecycle Tab** appears under LIFECYCLE alongside Validate & Test, Versions, and Contract View.
 - "Workflow editing" could mean a linear list, visual diagram, accordion, or tabbed editor. Resolved: the Workflow **Agent Configuration Module** uses an expandable accordion showing all nodes with inline configuration fields.
 - "Agent creation" could mean inline form, modal wizard, or template selection. Resolved: the **Agent Creation Wizard** starts with template selection (Enterprise QA, Customer Service, Blank) before collecting agent details.
+- "Remote validation" could mean a production deployment, direct exposure of three local dev servers, or one review URL over local services. Resolved: use a **Remote Verification Session** with a **Remote Verification Gateway** and optional public quick tunnel; it is a development verification path, not production hosting.
 
 ## Relationship And Reference Notes
 
@@ -37,6 +38,9 @@
 
 - Presentation vocabulary belongs here when it describes UI slicing or labels rather than runtime semantics.
 
+- A **Remote Verification Gateway** routes `/api` to the backend API, `/operator` and `/customer` to **Unified Chat Frontend**, and all other browser paths to **Internal Governance Dashboard**.
+- A **Remote Verification Session** may stop existing Python, Node, Vite, npm, uvicorn, Proof Agent, or cloudflared processes only when they are tied to configured verification ports or the matching quick tunnel target.
+- A **Remote Verification Session** defaults to public quick tunnel exposure and fails before cleanup or startup when `cloudflared` is unavailable; `--local-only` keeps the same single local gateway without external exposure.
 - Extending Sensitive Validation Capture Retention through `retain_for_audit` requires an explicit authorized validation/test-run request and must show the artifact expiry or audit-retention status in Dashboard.
 - **Dashboard Stage Configuration Surface Cutover** changes Agent Configuration API request and response fields to `stages`, renames Dashboard helpers to stage terminology, updates UI labels from legacy node-labeled panels to stage-centered surfaces, and migrates Dashboard tests and fixtures in the same Slice 1 cutover.
 - An **Assisted QA Chat Frontend** submits questions through the **Run Execution API**.

@@ -78,6 +78,21 @@ seed it with the canonical `insurance_customer_service` Agent as an active Publi
 Agent Version. This makes Dashboard configuration, `/operator`, and `/customer`
 usable immediately while preserving explicit empty stores in tests and controlled deployments.
 
+Start a full local plus remote verification session:
+
+```bash
+uv run --extra dashboard --extra ingestion --extra tree proof-agent verify-remote
+```
+
+`verify-remote` starts the same backend API and Knowledge Worker pair used by
+`proof-agent dev`, starts the Dashboard and Unified Chat Vite servers, starts a
+single local gateway at `http://127.0.0.1:18080`, and by default starts a
+`cloudflared` quick tunnel to that gateway. The gateway routes `/api/*` to the
+backend API, `/operator` and `/customer` to Unified Chat, and other browser paths
+to Dashboard. It cleans configured verification ports before startup for
+Python/Node/Vite-style development processes; pass `--no-cleanup` to keep
+existing listeners, or `--local-only` to skip public tunnel exposure.
+
 Run the customer journey acceptance suite:
 
 ```bash
@@ -1012,6 +1027,15 @@ targeted API-only debugging, run:
 ```bash
 uv run --extra dashboard proof-agent server --host 127.0.0.1 --port 8000
 ```
+
+Full frontend/backend remote verification path:
+```bash
+uv run --extra dashboard --extra ingestion --extra tree proof-agent verify-remote
+```
+
+This command restarts the backend API, Knowledge Worker, Dashboard, Chat, and
+single-entry verification gateway together. The default public path requires
+`cloudflared`; use `--local-only` when the external tunnel is not needed.
 
 Run Execution API path:
 ```bash

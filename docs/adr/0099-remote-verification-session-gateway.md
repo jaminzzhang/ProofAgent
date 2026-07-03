@@ -1,0 +1,5 @@
+# Remote Verification Session Uses a Single Gateway and Quick Tunnel
+
+Proof Agent local remote verification will use `proof-agent verify-remote` to start the backend API, Knowledge Worker, Dashboard, Unified Chat, a single local HTTP gateway, and by default a `cloudflared` quick tunnel to that gateway. We chose one gateway URL instead of exposing the API, Dashboard, and Chat dev servers separately so external reviewers can use stable same-origin `/api`, `/operator`, `/customer`, and Dashboard paths without hand-configuring frontend cross-links. This is a development verification command, not a production hosting or deployment model.
+
+The command may clean up existing Python, Node, Vite, npm, uvicorn, Proof Agent, and cloudflared processes when they are bound to the configured verification ports or the matching tunnel target. It fails before cleanup when public exposure is requested but `cloudflared` is unavailable; `--local-only` keeps the same local gateway without creating an external tunnel.

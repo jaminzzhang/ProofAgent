@@ -48,6 +48,14 @@ _Avoid_: Direct customer chatbot, observability dashboard
 A shared browser chat surface that presents consistent design and conversation flow for operator and customer chat modes while preserving audience-specific response projections.
 _Avoid_: Merged internal/customer permissions, customer-visible audit console
 
+**Remote Verification Session**:
+A local development orchestration session that starts or restarts the Proof Agent backend services, Dashboard, Unified Chat, Remote Verification Gateway, and optional public quick tunnel for external review of the current application surfaces.
+_Avoid_: Production deployment, hosted environment, deterministic CLI demo
+
+**Remote Verification Gateway**:
+The single local HTTP entry point for a Remote Verification Session. It routes `/api` to the backend API, `/operator` and `/customer` to Unified Chat, and all other browser paths to Dashboard so remote reviewers can use one external URL.
+_Avoid_: API server, production reverse proxy, frontend dev server
+
 **Internal Governance Dashboard**:
 The internal observability surface for inspecting governed runs, traces, receipts, stats, and escalation handoff records.
 _Avoid_: Customer Service Chat Frontend, customer response UI, full admin console

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -50,6 +51,17 @@ DEV_PROCESS_POLL_SECONDS = 0.5
 SERVER_HISTORY_DIR_ENV = "PROOF_AGENT_SERVER_HISTORY_DIR"
 SERVER_CONFIG_DIR_ENV = "PROOF_AGENT_SERVER_CONFIG_DIR"
 SERVER_SEED_EXAMPLE_AGENT_ENV = "PROOF_AGENT_SERVER_SEED_EXAMPLE_AGENT"
+VERIFY_REMOTE_GATEWAY_PORT = 18080
+VERIFY_REMOTE_STOP_MARKERS = (
+    "proof_agent",
+    "proof-agent",
+    "uvicorn",
+    "python",
+    "node",
+    "npm",
+    "vite",
+    "cloudflared",
+)
 
 
 def agent_package_run_request(*args: Any, **kwargs: Any) -> Any:
@@ -130,6 +142,100 @@ def dev(
     typer.echo("Starting Proof Agent local backend dev services")
     typer.echo("Loaded local .env before spawning dev services.")
     _run_dev_processes(specs)
+
+
+@app.command("verify-remote")
+def verify_remote(
+    backend_port: int = typer.Option(8000, "--backend-port", help="Backend API port"),
+    dashboard_port: int = typer.Option(5173, "--dashboard-port", help="Dashboard Vite port"),
+    chat_port: int = typer.Option(5174, "--chat-port", help="Unified Chat Vite port"),
+    gateway_port: int = typer.Option(
+        VERIFY_REMOTE_GATEWAY_PORT,
+        "--gateway-port",
+        help="Single-entry local verification gateway port",
+    ),
+    history_dir: str = typer.Option("runs/history", "--history-dir", help="Run history directory"),
+    config_dir: str = typer.Option("runs/config", "--config-dir", help="Local configuration store"),
+    worker_poll_interval_seconds: float = typer.Option(
+        2.0,
+        "--worker-poll-interval",
+        min=0.01,
+        help="Seconds to wait after an idle knowledge worker poll.",
+    ),
+    reload: bool = typer.Option(
+        False,
+        "--reload",
+        help="Reload the backend API server when Python source files change.",
+    ),
+    no_worker: bool = typer.Option(
+        False,
+        "--no-worker",
+        help="Start only the API server for targeted backend debugging.",
+    ),
+    local_only: bool = typer.Option(
+        False,
+        "--local-only",
+        help="Skip the public cloudflared tunnel and expose only the local gateway.",
+    ),
+    cleanup: bool = typer.Option(
+        True,
+        "--cleanup/--no-cleanup",
+        help="Stop Python/Node/Vite/cloudflared processes on verification ports before starting.",
+    ),
+) -> None:
+    """Start a restartable local and public remote verification session."""
+
+    npm_path = which("npm")
+    if npm_path is None:
+        typer.echo("npm not found. Install Node.js/npm before starting frontends.", err=True)
+        raise typer.Exit(code=1)
+
+    cloudflared_path = None if local_only else which("cloudflared")
+    if not local_only and cloudflared_path is None:
+        typer.echo(
+            "cloudflared not found. Install cloudflared or pass --local-only.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if cleanup:
+        messages = _stop_verify_remote_processes(
+            ports=(backend_port, dashboard_port, chat_port, gateway_port),
+            gateway_port=gateway_port,
+        )
+        for message in messages:
+            typer.echo(message)
+
+    previous_chat_url = os.environ.get("VITE_CHAT_URL")
+    previous_dashboard_url = os.environ.get("VITE_DASHBOARD_URL")
+    os.environ["VITE_CHAT_URL"] = ""
+    os.environ["VITE_DASHBOARD_URL"] = ""
+    try:
+        specs = _verify_remote_process_specs(
+            npm_path=npm_path,
+            cloudflared_path=cloudflared_path,
+            backend_port=backend_port,
+            dashboard_port=dashboard_port,
+            chat_port=chat_port,
+            gateway_port=gateway_port,
+            history_dir=history_dir,
+            config_dir=config_dir,
+            worker_poll_interval_seconds=worker_poll_interval_seconds,
+            reload=reload,
+            no_worker=no_worker,
+        )
+
+        typer.echo("Starting Proof Agent remote verification session")
+        typer.echo(f"Local gateway: http://127.0.0.1:{gateway_port}")
+        typer.echo(f"Dashboard: http://127.0.0.1:{gateway_port}/")
+        typer.echo(f"Operator chat: http://127.0.0.1:{gateway_port}/operator")
+        typer.echo(f"Customer chat: http://127.0.0.1:{gateway_port}/customer")
+        if cloudflared_path is not None:
+            typer.echo("Public tunnel: waiting for cloudflared to print the quick tunnel URL")
+        _run_dev_processes(specs)
+    finally:
+        _restore_optional_env("VITE_CHAT_URL", previous_chat_url)
+        _restore_optional_env("VITE_DASHBOARD_URL", previous_dashboard_url)
 
 
 @app.command()
@@ -271,8 +377,7 @@ def evaluate_analyze(
     typer.echo(f"Release Decision: {summary.release_decision.status.value}")
     if summary.release_decision.blocking_reasons:
         typer.echo(
-            "Release Blocking Reasons: "
-            + ", ".join(summary.release_decision.blocking_reasons)
+            "Release Blocking Reasons: " + ", ".join(summary.release_decision.blocking_reasons)
         )
     if summary.release_decision.status == EvaluationReleaseDecisionStatus.BLOCKED:
         raise typer.Exit(code=1)
@@ -373,8 +478,7 @@ def evaluate_run_suite(
     typer.echo(f"Release Decision: {summary.release_decision.status.value}")
     if summary.release_decision.blocking_reasons:
         typer.echo(
-            "Release Blocking Reasons: "
-            + ", ".join(summary.release_decision.blocking_reasons)
+            "Release Blocking Reasons: " + ", ".join(summary.release_decision.blocking_reasons)
         )
     if summary.release_decision.status == EvaluationReleaseDecisionStatus.BLOCKED:
         raise typer.Exit(code=1)
@@ -631,6 +735,13 @@ def _load_local_dotenv() -> None:
     load_dotenv(dotenv_path if dotenv_path else None)
 
 
+def _restore_optional_env(name: str, value: str | None) -> None:
+    if value is None:
+        os.environ.pop(name, None)
+        return
+    os.environ[name] = value
+
+
 def _dev_process_specs(
     *,
     host: str,
@@ -677,6 +788,227 @@ def _dev_process_specs(
             )
         )
     return specs
+
+
+def _verify_remote_process_specs(
+    *,
+    npm_path: str,
+    cloudflared_path: str | None,
+    backend_port: int,
+    dashboard_port: int,
+    chat_port: int,
+    gateway_port: int,
+    history_dir: str,
+    config_dir: str,
+    worker_poll_interval_seconds: float,
+    reload: bool,
+    no_worker: bool,
+) -> list[tuple[str, list[str]]]:
+    specs = _dev_process_specs(
+        host="127.0.0.1",
+        port=backend_port,
+        history_dir=history_dir,
+        config_dir=config_dir,
+        reload=reload,
+        worker_poll_interval_seconds=worker_poll_interval_seconds,
+        no_worker=no_worker,
+    )
+    specs.extend(
+        [
+            (
+                "dashboard",
+                [
+                    npm_path,
+                    "run",
+                    "dev",
+                    "-w",
+                    "proof-agent-dashboard",
+                    "--",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(dashboard_port),
+                ],
+            ),
+            (
+                "chat",
+                [
+                    npm_path,
+                    "run",
+                    "dev",
+                    "-w",
+                    "proof-agent-chat",
+                    "--",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(chat_port),
+                ],
+            ),
+            (
+                "verify-gateway",
+                [
+                    sys.executable,
+                    "-m",
+                    "proof_agent.delivery.remote_verify_gateway",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(gateway_port),
+                    "--backend-origin",
+                    f"http://127.0.0.1:{backend_port}",
+                    "--dashboard-origin",
+                    f"http://127.0.0.1:{dashboard_port}",
+                    "--chat-origin",
+                    f"http://127.0.0.1:{chat_port}",
+                ],
+            ),
+        ]
+    )
+    if cloudflared_path is not None:
+        specs.append(
+            (
+                "cloudflared",
+                [
+                    cloudflared_path,
+                    "tunnel",
+                    "--url",
+                    f"http://127.0.0.1:{gateway_port}",
+                ],
+            )
+        )
+    return specs
+
+
+def _stop_verify_remote_processes(*, ports: Iterable[int], gateway_port: int) -> list[str]:
+    messages: list[str] = []
+    seen_pids: set[int] = set()
+    candidates = [
+        *_find_verify_remote_port_listeners(ports),
+        *_find_verify_remote_cloudflared_processes(gateway_port),
+    ]
+    for pid, label, command in candidates:
+        if pid in seen_pids:
+            continue
+        seen_pids.add(pid)
+        if pid == os.getpid():
+            continue
+        if not _verify_remote_process_is_safe_to_stop(command):
+            messages.append(f"leaving {label} listener pid {pid}: {command}")
+            continue
+        if _terminate_verify_remote_process(pid):
+            messages.append(f"stopped {label} pid {pid}: {command}")
+        else:
+            messages.append(f"could not stop {label} pid {pid}: {command}")
+    return messages
+
+
+def _find_verify_remote_port_listeners(ports: Iterable[int]) -> list[tuple[int, str, str]]:
+    listeners: list[tuple[int, str, str]] = []
+    for port in ports:
+        try:
+            result = subprocess.run(
+                ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return listeners
+        if result.returncode not in (0, 1):
+            continue
+        pids = {
+            int(line[1:])
+            for line in result.stdout.splitlines()
+            if line.startswith("p") and line[1:].isdigit()
+        }
+        for pid in sorted(pids):
+            listeners.append((pid, f"port {port}", _process_command(pid)))
+    return listeners
+
+
+def _find_verify_remote_cloudflared_processes(gateway_port: int) -> list[tuple[int, str, str]]:
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return []
+    if result.returncode != 0:
+        return []
+
+    gateway_target = f":{gateway_port}"
+    processes: list[tuple[int, str, str]] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        pid_text, separator, command = stripped.partition(" ")
+        if not separator or not pid_text.isdigit():
+            continue
+        lowered = command.lower()
+        if (
+            "cloudflared" in lowered
+            and "tunnel" in lowered
+            and "--url" in lowered
+            and gateway_target in lowered
+        ):
+            processes.append((int(pid_text), "cloudflared tunnel", command))
+    return processes
+
+
+def _process_command(pid: int) -> str:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _verify_remote_process_is_safe_to_stop(command: str) -> bool:
+    lowered = command.lower()
+    return any(marker in lowered for marker in VERIFY_REMOTE_STOP_MARKERS)
+
+
+def _terminate_verify_remote_process(pid: int) -> bool:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if not _process_exists(pid):
+            return True
+        time.sleep(0.1)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return not _process_exists(pid)
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _run_dev_processes(specs: list[tuple[str, list[str]]]) -> None:
