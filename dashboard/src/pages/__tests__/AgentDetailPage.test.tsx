@@ -629,6 +629,163 @@ describe('AgentDetailPage', () => {
     })
   })
 
+  it('blocks validation when gated Persistent User Memory is enabled', () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'capabilities:',
+        '  memory:',
+        '    enabled: true',
+        '    provider: local',
+        '    scopes:',
+        '      case:',
+        '        enabled: true',
+        '      user:',
+        '        enabled: true',
+        '      shared:',
+        '        enabled: false',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
+
+    expect(screen.getByText(/Persistent User Memory requires subject identity, consent policy, and lifecycle controls/)).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Enter a test question...'), {
+      target: { value: 'What documents are required?' },
+    })
+    expect(screen.getByRole('button', { name: 'Run Validation' })).toBeDisabled()
+    expect(validateConfigDraft).not.toHaveBeenCalled()
+  })
+
+  it('blocks validation when context-only Persistent User Memory recall is enabled', () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'context:',
+        '  source_policies:',
+        '    memory_recall:',
+        '      scopes:',
+        '        user:',
+        '          enabled: true',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
+
+    expect(screen.getByText(/Persistent User Memory requires subject identity, consent policy, and lifecycle controls/)).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Enter a test question...'), {
+      target: { value: 'What documents are required?' },
+    })
+    expect(screen.getByRole('button', { name: 'Run Validation' })).toBeDisabled()
+    expect(validateConfigDraft).not.toHaveBeenCalled()
+  })
+
+  it('blocks validation when context-only Shared Memory recall is enabled', () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'context:',
+        '  source_policies:',
+        '    memory_recall:',
+        '      scopes:',
+        '        shared:',
+        '          enabled: true',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
+
+    expect(screen.getByText(/Shared Memory is unavailable until cross-user governance is defined/)).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Enter a test question...'), {
+      target: { value: 'What documents are required?' },
+    })
+    expect(screen.getByRole('button', { name: 'Run Validation' })).toBeDisabled()
+    expect(validateConfigDraft).not.toHaveBeenCalled()
+  })
+
+  it('blocks publication when gated Persistent User Memory is enabled', () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'capabilities:',
+        '  memory:',
+        '    enabled: true',
+        '    provider: local',
+        '    scopes:',
+        '      case:',
+        '        enabled: true',
+        '      user:',
+        '        enabled: true',
+        '      shared:',
+        '        enabled: false',
+        '',
+      ].join('\n'),
+    }
+    mockDraft = {
+      ...mockDraft,
+      validation_records: [
+        {
+          validation_id: 'validation-1',
+          run_id: 'run-validation-1',
+          status: 'completed',
+          draft_id: 'draft-1',
+          created_at: '2026-05-28T01:00:00Z',
+          errors: [],
+          summary: 'Ready.',
+          validation_capture_id: null,
+        },
+      ],
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=versions')
+
+    expect(screen.getByText(/Persistent User Memory requires subject identity, consent policy, and lifecycle controls/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
+  })
+
+  it('blocks publication when context-only Shared Memory recall is enabled', () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'context:',
+        '  source_policies:',
+        '    memory_recall:',
+        '      scopes:',
+        '        shared:',
+        '          enabled: true',
+        '',
+      ].join('\n'),
+    }
+    mockDraft = {
+      ...mockDraft,
+      validation_records: [
+        {
+          validation_id: 'validation-1',
+          run_id: 'run-validation-1',
+          status: 'completed',
+          draft_id: 'draft-1',
+          created_at: '2026-05-28T01:00:00Z',
+          errors: [],
+          summary: 'Ready.',
+          validation_capture_id: null,
+        },
+      ],
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=versions')
+
+    expect(screen.getByText(/Shared Memory is unavailable until cross-user governance is defined/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
+  })
+
   it('restores the Validate & Test module from the route query', () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
 
@@ -1417,18 +1574,20 @@ workflow:
       ...mockContract,
       agent_yaml: [
         'name: insurance',
-        'memory:',
-        '  provider: local',
-        '  scopes:',
-        '    case:',
-        '      enabled: false',
-        '      retention_days: 30',
-        '      max_records: 5',
-        '      allow_restricted: false',
-        '    user:',
-        '      enabled: false',
-        '    shared:',
-        '      enabled: false',
+        'capabilities:',
+        '  memory:',
+        '    enabled: true',
+        '    provider: local',
+        '    scopes:',
+        '      case:',
+        '        enabled: false',
+        '        retention_days: 30',
+        '        max_records: 5',
+        '        allow_restricted: false',
+        '      user:',
+        '        enabled: false',
+        '      shared:',
+        '        enabled: false',
         '',
       ].join('\n'),
     }
@@ -1454,11 +1613,167 @@ workflow:
       expect(updateConfigDraftContract).toHaveBeenCalled()
     })
     const savedYaml = latestSavedAgentYaml()
-    expect(savedYaml).toContain('provider: session')
-    expect(savedYaml).toContain('enabled: true')
-    expect(savedYaml).toContain('retention_days: 45')
-    expect(savedYaml).toContain('max_records: 9')
-    expect(savedYaml).toContain('allow_restricted: true')
+    expect(savedYaml).toContain(`capabilities:
+  memory:
+    enabled: true
+    provider: session
+    scopes:
+      case:
+        enabled: true
+        retention_days: 45
+        max_records: 9
+        allow_restricted: true
+      user:
+        enabled: false
+      shared:
+        enabled: false`)
+    expect(savedYaml).not.toContain('\nmemory:\n')
+    expect(savedYaml).not.toContain('\ncontext:\n')
+  })
+
+  it('cuts legacy top-level memory over to canonical capabilities when saving Memory settings', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'memory:',
+        '  provider: local',
+        'policy:',
+        '  file: ./policy.yaml',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=memory')
+
+    fireEvent.change(screen.getByLabelText('Memory Provider'), {
+      target: { value: 'mem0' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Memory' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    const savedYaml = latestSavedAgentYaml()
+    expect(savedYaml).toContain(`capabilities:
+  memory:
+    enabled: true
+    provider: mem0
+    scopes:
+      case:
+        enabled: false
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false`)
+    expect(savedYaml).not.toContain('\nmemory:\n')
+    expect(savedYaml).toContain(`policy:
+  file: ./policy.yaml`)
+  })
+
+  it('does not persist an explicit budget profile when saving Memory Recall Admission only', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'capabilities:',
+        '  memory:',
+        '    enabled: true',
+        '    provider: local',
+        '    scopes:',
+        '      case:',
+        '        enabled: true',
+        '        retention_days: 30',
+        '        max_records: 5',
+        '        allow_restricted: false',
+        '      user:',
+        '        enabled: false',
+        '      shared:',
+        '        enabled: false',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=memory')
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Toggle Case Memory Recall' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Memory' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    const savedYaml = latestSavedAgentYaml()
+    expect(savedYaml).toContain(`context:
+  source_policies:
+    memory_recall:
+      scopes:
+        case:
+          enabled: false
+        user:
+          enabled: false
+        shared:
+          enabled: false`)
+    expect(savedYaml).not.toContain('budget_profile:')
+  })
+
+  it('writes complete explicit context configuration after a memory budget override', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'capabilities:',
+        '  memory:',
+        '    enabled: true',
+        '    provider: local',
+        '    scopes:',
+        '      case:',
+        '        enabled: true',
+        '        retention_days: 30',
+        '        max_records: 5',
+        '        allow_restricted: false',
+        '      user:',
+        '        enabled: false',
+        '      shared:',
+        '        enabled: false',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=memory')
+
+    expect(screen.getAllByPlaceholderText('Runtime dynamic default')).toHaveLength(2)
+    fireEvent.change(screen.getByLabelText('Max Tokens'), {
+      target: { value: '4096' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Memory' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    const savedYaml = latestSavedAgentYaml()
+    expect(savedYaml).toContain(`context:
+  source_policies:
+    memory_recall:
+      scopes:
+        case:
+          enabled: true
+        user:
+          enabled: false
+        shared:
+          enabled: false
+  budget_profile:
+    max_tokens: 4096
+    reserved_output_tokens: 0
+    estimation_strategy: heuristic
+    profile_version: context_budget.v1
+  convergence:
+    level1_ratio: 0.5
+    level2_ratio: 0.8
+    hard_limit_ratio: 1.0
+  dynamic_calibration: true`)
   })
 
   it('saves unified Model settings across answer, planner, and reviewer roles', async () => {

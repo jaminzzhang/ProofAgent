@@ -1426,6 +1426,7 @@ uv run --extra dev proof-agent demo
 
 Documentation-only changes should run:
 ```bash
+python3 scripts/check-domain-contexts.py
 git diff --check
 ```
 

@@ -323,6 +323,7 @@ npm test
 Documentation-only check:
 
 ```bash
+python3 scripts/check-domain-contexts.py
 git diff --check
 ```
 

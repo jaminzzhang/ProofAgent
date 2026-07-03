@@ -104,6 +104,10 @@ _Avoid_: Runtime graph editor, production publish action, generic settings page
 One of the eight editable sub-features in the Agent Configuration Workspace: General, Workflow, Knowledge, Tools, Policy, Model, Memory, and Response. Each module owns a focused set of Agent Contract fields and uses a hybrid forms plus code editor.
 _Avoid_: Agent Lifecycle Tab, free-form settings page, monolithic configuration form
 
+**Dashboard Memory Configuration Module**:
+The Agent Configuration Module for configuring an Agent's memory storage, Memory Scope eligibility, and memory-recall context budget policy without creating a separate top-level Context workspace. It distinguishes retained memory records from admitted Working Context and keeps final-answer evidence authority with Knowledge or authorized Tool results.
+_Avoid_: Dashboard Context module, memory as evidence, prompt-only memory toggle
+
 **Agent Lifecycle Tab**:
 One of the four operational tabs in the Agent detail view: Validate & Test, Versions, Contract View, and Monitor. Lifecycle tabs operate on the Draft Agent or Published Agent Version rather than editing configuration fields.
 _Avoid_: Agent Configuration Module, inline publishing action, detached monitoring dashboard

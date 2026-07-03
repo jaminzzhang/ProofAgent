@@ -15,6 +15,7 @@ interface ValidateWorkspaceProps {
   ) => Promise<void>
   busy: boolean
   onOpenRunDetail?: (runId: string) => void
+  readinessBlockers?: string[]
 }
 
 export function ValidateWorkspace({
@@ -24,6 +25,7 @@ export function ValidateWorkspace({
   onValidate,
   busy,
   onOpenRunDetail,
+  readinessBlockers = [],
 }: ValidateWorkspaceProps) {
   const { t } = useLocale()
   const [question, setQuestion] = useState('')
@@ -39,10 +41,11 @@ export function ValidateWorkspace({
   )
   const latestErrorCount = latestValidation?.errors.length ?? 0
   const readiness = readinessSignal(latestValidation, t)
+  const blocked = readinessBlockers.length > 0
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!question.trim()) return
+    if (!question.trim() || blocked) return
     await onValidate(question.trim(), {
       full_capture: fullCapture,
       retain_for_audit: fullCapture && retainForAudit,
@@ -68,6 +71,16 @@ export function ValidateWorkspace({
             <span className="font-medium text-[var(--text-primary)]">{readiness.label}</span>
             <span className="ml-2 text-[var(--text-muted)]">{readiness.detail}</span>
           </div>
+          {blocked && (
+            <div className="mt-4 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] p-3 text-sm text-[var(--danger-fg)]">
+              <div className="font-semibold">{t('validate.readinessBlocked')}</div>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {readinessBlockers.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
 
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
@@ -85,7 +98,7 @@ export function ValidateWorkspace({
             />
             <button
               type="submit"
-              disabled={busy || !question.trim()}
+              disabled={busy || !question.trim() || blocked}
               className="shrink-0 rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent)]/90 disabled:opacity-50"
             >
               {busy ? t('validate.running') : t('validate.runValidation')}

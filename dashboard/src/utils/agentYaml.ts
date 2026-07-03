@@ -48,13 +48,233 @@ export function replaceAgentYamlMapping(
     if (path.length === 1) {
       return [...trimTrailingEmptyLines(lines), ...rendered].join('\n')
     }
-    return updateAgentYamlField(agentYaml, path, '').split('\n').join('\n')
+    const parentPath = path.slice(0, -1)
+    const parentIndex = findYamlPathLineIndex(lines, parentPath)
+    if (parentIndex !== -1) {
+      const parentIndent = (parentPath.length - 1) * 2
+      const parentEnd = findBlockEnd(lines, parentIndex, parentIndent)
+      lines.splice(parentEnd, 0, ...rendered)
+      return lines.join('\n')
+    }
+    return [...trimTrailingEmptyLines(lines), ...renderNestedYamlMapping(path, value, 0)].join('\n')
   }
 
   const indent = (path.length - 1) * 2
   const end = findBlockEnd(lines, lineIndex, indent)
   lines.splice(lineIndex, end - lineIndex, ...rendered)
   return lines.join('\n')
+}
+
+export function replaceMemoryCapabilityConfiguration(
+  agentYaml: string,
+  changedPath: string[],
+  changedValue: string,
+): string {
+  const normalizedYaml = removeTopLevelYamlSection(agentYaml, 'memory')
+  const hasCanonicalMemory = Boolean(
+    extractAgentYamlPathSection(normalizedYaml, ['capabilities', 'memory']),
+  )
+  if (hasCanonicalMemory) {
+    return updateAgentYamlField(normalizedYaml, changedPath, changedValue)
+  }
+
+  const readOrChanged = (path: string[], fallback: string): string => {
+    if (samePath(path, changedPath)) return changedValue || fallback
+    return readAgentYamlField(normalizedYaml, path) || fallback
+  }
+  const boolOrChanged = (path: string[], fallback: boolean): boolean =>
+    readOrChanged(path, fallback ? 'true' : 'false') === 'true'
+
+  const memoryConfig: AgentYamlMapping = {
+    enabled: boolOrChanged(['capabilities', 'memory', 'enabled'], true),
+    provider: readOrChanged(['capabilities', 'memory', 'provider'], 'session'),
+    scopes: {
+      case: {
+        enabled: boolOrChanged(
+          ['capabilities', 'memory', 'scopes', 'case', 'enabled'],
+          false,
+        ),
+        retention_days: readOrChanged(
+          ['capabilities', 'memory', 'scopes', 'case', 'retention_days'],
+          '30',
+        ),
+        max_records: readOrChanged(
+          ['capabilities', 'memory', 'scopes', 'case', 'max_records'],
+          '5',
+        ),
+        allow_restricted: boolOrChanged(
+          ['capabilities', 'memory', 'scopes', 'case', 'allow_restricted'],
+          false,
+        ),
+      },
+      user: {
+        enabled: boolOrChanged(
+          ['capabilities', 'memory', 'scopes', 'user', 'enabled'],
+          false,
+        ),
+      },
+      shared: {
+        enabled: boolOrChanged(
+          ['capabilities', 'memory', 'scopes', 'shared', 'enabled'],
+          false,
+        ),
+      },
+    },
+  }
+
+  return replaceAgentYamlMapping(normalizedYaml, ['capabilities', 'memory'], memoryConfig)
+}
+
+export function replaceMemoryContextConfiguration(
+  agentYaml: string,
+  changedPath: string[],
+  changedValue: string,
+): string {
+  const normalizedYaml = removeTopLevelYamlSection(agentYaml, 'memory')
+  const changedGroup = memoryContextConfigurationGroup(changedPath)
+  if (!changedGroup) return updateAgentYamlField(normalizedYaml, changedPath, changedValue)
+
+  const readOrChanged = (path: string[], fallback: string): string => {
+    if (samePath(path, changedPath)) return changedValue || fallback
+    return readAgentYamlField(normalizedYaml, path) || fallback
+  }
+  const boolOrChanged = (path: string[], fallback: boolean): boolean =>
+    readOrChanged(path, fallback ? 'true' : 'false') === 'true'
+  const maxTokensPath = ['context', 'budget_profile', 'max_tokens']
+  const reservedOutputTokensPath = ['context', 'budget_profile', 'reserved_output_tokens']
+  const budgetValues = [
+    samePath(changedPath, maxTokensPath)
+      ? changedValue.trim()
+      : readAgentYamlField(normalizedYaml, maxTokensPath),
+    samePath(changedPath, reservedOutputTokensPath)
+      ? changedValue.trim()
+      : readAgentYamlField(normalizedYaml, reservedOutputTokensPath),
+  ]
+  const hasBudgetOverride = budgetValues.some(Boolean)
+
+  const recallConfig: AgentYamlMapping = {
+    source_policies: {
+      memory_recall: {
+        scopes: {
+          case: {
+            enabled: boolOrChanged(
+              ['context', 'source_policies', 'memory_recall', 'scopes', 'case', 'enabled'],
+              true,
+            ),
+          },
+          user: {
+            enabled: boolOrChanged(
+              ['context', 'source_policies', 'memory_recall', 'scopes', 'user', 'enabled'],
+              false,
+            ),
+          },
+          shared: {
+            enabled: boolOrChanged(
+              ['context', 'source_policies', 'memory_recall', 'scopes', 'shared', 'enabled'],
+              false,
+            ),
+          },
+        },
+      },
+    },
+  }
+  const budgetProfile: AgentYamlMapping = {
+    max_tokens: readOrChanged(maxTokensPath, '8192'),
+    reserved_output_tokens: readOrChanged(reservedOutputTokensPath, '0'),
+    estimation_strategy: 'heuristic',
+    profile_version: 'context_budget.v1',
+  }
+  const convergence: AgentYamlMapping = {
+    level1_ratio: readOrChanged(['context', 'convergence', 'level1_ratio'], '0.5'),
+    level2_ratio: readOrChanged(['context', 'convergence', 'level2_ratio'], '0.8'),
+    hard_limit_ratio: readOrChanged(['context', 'convergence', 'hard_limit_ratio'], '1.0'),
+  }
+  const dynamicCalibration = boolOrChanged(['context', 'dynamic_calibration'], true)
+
+  const includeBudget = changedGroup === 'budget' && hasBudgetOverride
+  const includeRecall = changedGroup === 'recall' || includeBudget
+  const includeConvergence = changedGroup === 'convergence' || includeBudget
+  const includeDynamic = changedGroup === 'dynamic' || includeBudget
+
+  const contextConfig: AgentYamlMapping = {}
+  if (includeRecall) {
+    contextConfig.source_policies = recallConfig.source_policies
+  }
+  if (includeBudget) {
+    contextConfig.budget_profile = budgetProfile
+  }
+  if (includeConvergence) {
+    contextConfig.convergence = convergence
+  }
+  if (includeDynamic) {
+    contextConfig.dynamic_calibration = dynamicCalibration
+  }
+  if (Object.keys(contextConfig).length === 0) {
+    return changedGroup === 'budget'
+      ? removeYamlPathSection(normalizedYaml, ['context', 'budget_profile'])
+      : normalizedYaml
+  }
+
+  if (!extractAgentYamlSection(normalizedYaml, 'context')) {
+    return replaceAgentYamlMapping(normalizedYaml, ['context'], contextConfig)
+  }
+
+  const memoryRecall = (recallConfig.source_policies as AgentYamlMapping)
+    .memory_recall as AgentYamlMapping
+  const memoryRecallScopes = memoryRecall.scopes as AgentYamlMapping
+  const caseRecall = memoryRecallScopes.case as AgentYamlMapping
+  const userRecall = memoryRecallScopes.user as AgentYamlMapping
+  const sharedRecall = memoryRecallScopes.shared as AgentYamlMapping
+
+  const fields: Array<[string[], string]> = []
+  if (includeRecall) {
+    fields.push([
+      ['context', 'source_policies', 'memory_recall', 'scopes', 'case', 'enabled'],
+      String(caseRecall.enabled),
+    ])
+    fields.push([
+      ['context', 'source_policies', 'memory_recall', 'scopes', 'user', 'enabled'],
+      String(userRecall.enabled),
+    ])
+    fields.push([
+      ['context', 'source_policies', 'memory_recall', 'scopes', 'shared', 'enabled'],
+      String(sharedRecall.enabled),
+    ])
+  }
+  if (includeBudget) {
+    fields.push([
+      ['context', 'budget_profile', 'max_tokens'],
+      String(budgetProfile.max_tokens),
+    ])
+    fields.push([
+      ['context', 'budget_profile', 'reserved_output_tokens'],
+      String(budgetProfile.reserved_output_tokens),
+    ])
+    fields.push(['context.budget_profile.estimation_strategy'.split('.'), 'heuristic'])
+    fields.push(['context.budget_profile.profile_version'.split('.'), 'context_budget.v1'])
+  }
+  if (includeConvergence) {
+    fields.push([
+      ['context', 'convergence', 'level1_ratio'],
+      String(convergence.level1_ratio),
+    ])
+    fields.push([
+      ['context', 'convergence', 'level2_ratio'],
+      String(convergence.level2_ratio),
+    ])
+    fields.push([
+      ['context', 'convergence', 'hard_limit_ratio'],
+      String(convergence.hard_limit_ratio),
+    ])
+  }
+  if (includeDynamic) {
+    fields.push([['context', 'dynamic_calibration'], String(dynamicCalibration)])
+  }
+
+  return fields.reduce(
+    (current, [path, value]) => updateAgentYamlField(current, path, value),
+    normalizedYaml,
+  )
 }
 
 export function readWorkflowTemplateDescriptorVersion(agentYaml: string): string {
@@ -167,6 +387,18 @@ function insertYamlPath(lines: string[], path: string[], value: string): string[
 
 function renderYamlMapping(key: string, value: AgentYamlMapping, indent: number): string[] {
   return [`${' '.repeat(indent)}${key}:`, ...renderYamlObject(value, indent + 2)]
+}
+
+function renderNestedYamlMapping(
+  path: string[],
+  value: AgentYamlMapping,
+  indent: number,
+): string[] {
+  if (path.length === 1) return renderYamlMapping(path[0], value, indent)
+  return [
+    `${' '.repeat(indent)}${path[0]}:`,
+    ...renderNestedYamlMapping(path.slice(1), value, indent + 2),
+  ]
 }
 
 function renderYamlObject(value: AgentYamlMapping, indent: number): string[] {
@@ -326,6 +558,24 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
   return copy
 }
 
+function samePath(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index])
+}
+
+function startsWithPath(path: string[], prefix: string[]): boolean {
+  return prefix.every((segment, index) => path[index] === segment)
+}
+
+function memoryContextConfigurationGroup(
+  path: string[],
+): 'recall' | 'budget' | 'convergence' | 'dynamic' | null {
+  if (startsWithPath(path, ['context', 'source_policies', 'memory_recall'])) return 'recall'
+  if (startsWithPath(path, ['context', 'budget_profile'])) return 'budget'
+  if (startsWithPath(path, ['context', 'convergence'])) return 'convergence'
+  if (samePath(path, ['context', 'dynamic_calibration'])) return 'dynamic'
+  return null
+}
+
 export function readAgentYamlField(agentYaml: string, path: string[]): string {
   const lines = agentYaml.split('\n')
   const lineIndex = findYamlPathLineIndex(lines, path)
@@ -341,6 +591,29 @@ export function extractAgentYamlSection(
   const start = findLineIndex(lines, 0, sectionName)
   if (start === -1) return ''
   return lines.slice(start, findBlockEnd(lines, start, 0)).join('\n')
+}
+
+function extractAgentYamlPathSection(agentYaml: string, path: string[]): string {
+  const lines = agentYaml.split('\n')
+  const start = findYamlPathLineIndex(lines, path)
+  if (start === -1) return ''
+  return lines.slice(start, findBlockEnd(lines, start, (path.length - 1) * 2)).join('\n')
+}
+
+function removeTopLevelYamlSection(agentYaml: string, sectionName: string): string {
+  const lines = agentYaml.split('\n')
+  const start = findLineIndex(lines, 0, sectionName)
+  if (start === -1) return agentYaml
+  lines.splice(start, findBlockEnd(lines, start, 0) - start)
+  return lines.join('\n')
+}
+
+function removeYamlPathSection(agentYaml: string, path: string[]): string {
+  const lines = agentYaml.split('\n')
+  const start = findYamlPathLineIndex(lines, path)
+  if (start === -1) return agentYaml
+  lines.splice(start, findBlockEnd(lines, start, (path.length - 1) * 2) - start)
+  return lines.join('\n')
 }
 
 function findLineIndex(

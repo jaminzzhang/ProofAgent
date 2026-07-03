@@ -3,6 +3,8 @@ import {
   readWorkflowStageConfigs,
   readWorkflowTemplateDescriptorVersion,
   replaceAgentYamlMapping,
+  replaceMemoryCapabilityConfiguration,
+  replaceMemoryContextConfiguration,
   replaceWorkflowStages,
   updateAgentYamlField,
 } from './agentYaml'
@@ -10,30 +12,160 @@ import {
 const AGENT_YAML = `name: insurance_customer_service
 purpose: "Provide customer service."
 
-memory:
-  provider: local
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: false
-    shared:
-      enabled: false
+capabilities:
+  memory:
+    enabled: true
+    provider: local
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
 `
 
 describe('agentYaml', () => {
   it('updates deeply nested memory scope scalars', () => {
     const updated = updateAgentYamlField(
       AGENT_YAML,
-      ['memory', 'scopes', 'case', 'retention_days'],
+      ['capabilities', 'memory', 'scopes', 'case', 'retention_days'],
       '45',
     )
 
-    expect(updated).toContain('      retention_days: 45')
-    expect(updated).toContain('      max_records: 5')
+    expect(updated).toContain('        retention_days: 45')
+    expect(updated).toContain('        max_records: 5')
+  })
+
+  it('writes a complete explicit memory context configuration on override', () => {
+    const updated = replaceMemoryContextConfiguration(
+      AGENT_YAML,
+      ['context', 'budget_profile', 'max_tokens'],
+      '4096',
+    )
+
+    expect(updated).toContain(`context:
+  source_policies:
+    memory_recall:
+      scopes:
+        case:
+          enabled: true
+        user:
+          enabled: false
+        shared:
+          enabled: false
+  budget_profile:
+    max_tokens: 4096
+    reserved_output_tokens: 0
+    estimation_strategy: heuristic
+    profile_version: context_budget.v1
+  convergence:
+    level1_ratio: 0.5
+    level2_ratio: 0.8
+    hard_limit_ratio: 1.0
+  dynamic_calibration: true`)
+  })
+
+  it('preserves existing context siblings when writing memory context controls', () => {
+    const updated = replaceMemoryContextConfiguration(
+      `name: insurance
+context:
+  source_policies:
+    conversation:
+      max_turns: 6
+`,
+      ['context', 'budget_profile', 'max_tokens'],
+      '4096',
+    )
+
+    expect(updated).toContain(`conversation:
+      max_turns: 6`)
+    expect(updated).toContain('max_tokens: 4096')
+  })
+
+  it('does not materialize an explicit budget profile when editing memory recall policy', () => {
+    const updated = replaceMemoryContextConfiguration(
+      AGENT_YAML,
+      ['context', 'source_policies', 'memory_recall', 'scopes', 'case', 'enabled'],
+      'false',
+    )
+
+    expect(updated).toContain(`context:
+  source_policies:
+    memory_recall:
+      scopes:
+        case:
+          enabled: false
+        user:
+          enabled: false
+        shared:
+          enabled: false`)
+    expect(updated).not.toContain('budget_profile:')
+  })
+
+  it('does not materialize an explicit budget profile when a blank budget value is submitted without an existing budget', () => {
+    const updated = replaceMemoryContextConfiguration(
+      AGENT_YAML,
+      ['context', 'budget_profile', 'max_tokens'],
+      '',
+    )
+
+    expect(updated).not.toContain('budget_profile:')
+  })
+
+  it('preserves unrelated top-level context siblings when writing memory context controls', () => {
+    const updated = replaceMemoryContextConfiguration(
+      `name: insurance
+context:
+  custom_runtime_policy:
+    mode: strict
+  source_policies:
+    conversation:
+      max_turns: 6
+`,
+      ['context', 'budget_profile', 'max_tokens'],
+      '4096',
+    )
+
+    expect(updated).toContain(`custom_runtime_policy:
+    mode: strict`)
+    expect(updated).toContain(`conversation:
+      max_turns: 6`)
+    expect(updated).toContain('max_tokens: 4096')
+  })
+
+  it('creates canonical memory configuration and strips legacy top-level memory', () => {
+    const updated = replaceMemoryCapabilityConfiguration(
+      `name: insurance
+memory:
+  provider: local
+policy:
+  file: ./policy.yaml
+`,
+      ['capabilities', 'memory', 'provider'],
+      'session',
+    )
+
+    expect(updated).toContain(`capabilities:
+  memory:
+    enabled: true
+    provider: session
+    scopes:
+      case:
+        enabled: false
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false`)
+    expect(updated).not.toContain('\nmemory:\n')
+    expect(updated).toContain(`policy:
+  file: ./policy.yaml`)
   })
 
   it('inserts missing nested model params under an existing parent section', () => {

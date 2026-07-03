@@ -8,18 +8,20 @@ import { MEMORY_FIELDS } from '../../agent/module-configs/memory'
 const AGENT_YAML = `name: insurance_customer_service
 purpose: "Provide customer service."
 
-memory:
-  provider: local
-  scopes:
-    case:
-      enabled: true
-      retention_days: 30
-      max_records: 5
-      allow_restricted: false
-    user:
-      enabled: false
-    shared:
-      enabled: false
+capabilities:
+  memory:
+    enabled: true
+    provider: local
+    scopes:
+      case:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
+      user:
+        enabled: false
+      shared:
+        enabled: false
 `
 
 describe('ModuleEditor', () => {
@@ -28,7 +30,7 @@ describe('ModuleEditor', () => {
       <ModuleEditor
         title="Memory Configuration"
         fields={MEMORY_FIELDS}
-        yamlSection="memory"
+        yamlSection="capabilities"
         agentYaml={AGENT_YAML}
         onFieldChange={vi.fn()}
         onSave={vi.fn()}
@@ -46,7 +48,7 @@ describe('ModuleEditor', () => {
         title="Memory Configuration"
         description="Memory controls"
         fields={MEMORY_FIELDS}
-        yamlSection="memory"
+        yamlSection="capabilities"
         agentYaml={AGENT_YAML}
         onFieldChange={vi.fn()}
         onSave={vi.fn()}
@@ -56,7 +58,7 @@ describe('ModuleEditor', () => {
 
     expect(screen.getByText('Memory controls')).toBeInTheDocument()
     expect(screen.getByText('Controls where admitted memory records are stored between runs.')).toBeInTheDocument()
-    expect(screen.getByText('memory.provider')).toBeInTheDocument()
-    expect(screen.getByText('memory.scopes.case.retention_days')).toBeInTheDocument()
+    expect(screen.getByText('capabilities.memory.provider')).toBeInTheDocument()
+    expect(screen.getByText('capabilities.memory.scopes.case.retention_days')).toBeInTheDocument()
   })
 })

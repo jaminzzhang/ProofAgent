@@ -53,6 +53,8 @@ import { useLocale } from '../i18n/locale'
 import {
   extractAgentYamlSection,
   readAgentYamlField,
+  replaceMemoryCapabilityConfiguration,
+  replaceMemoryContextConfiguration,
   replaceAgentYamlMapping,
   updateAgentYamlField,
 } from '../utils/agentYaml'
@@ -190,6 +192,10 @@ export function AgentDetailPage() {
 
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
   const isCustomerFacing = Boolean(extractAgentYamlSection(agentYaml, 'customer'))
+  const memoryReadinessBlockers = useMemo(
+    () => memoryConfigurationBlockers(agentYaml, t),
+    [agentYaml, t],
+  )
 
   async function runAction(label: string, action: () => Promise<void>) {
     setBusy(label)
@@ -311,7 +317,7 @@ export function AgentDetailPage() {
   }
 
   async function publishDraft() {
-    if (!agentId || !draftId || !latestValidation) return
+    if (!agentId || !draftId || !latestValidation || memoryReadinessBlockers.length > 0) return
     await runAction('publish', async () => {
       const version = await publishConfigDraft(agentId, draftId, {
         validation_run_id: latestValidation.run_id,
@@ -319,6 +325,16 @@ export function AgentDetailPage() {
       setStatus(t('agentDetail.publishedVersion').replace('{version}', version.version_id))
       refreshVersions()
     })
+  }
+
+  function updateMemoryYamlField(current: string, path: string[], value: string): string {
+    if (path[0] === 'context') {
+      return replaceMemoryContextConfiguration(current, path, value)
+    }
+    if (path[0] === 'capabilities' && path[1] === 'memory') {
+      return replaceMemoryCapabilityConfiguration(current, path, value)
+    }
+    return updateAgentYamlField(current, path, value)
   }
 
   async function rollback(versionId: string) {
@@ -542,7 +558,7 @@ export function AgentDetailPage() {
       {activeTab === 'memory' && (
         <MemoryModuleEditor
           agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateMemoryYamlField(current, path, value))}
           onSave={() => saveAgentYaml(t('agentDetail.memorySaved'))}
           busy={busy === 'workflow'}
         />
@@ -582,6 +598,7 @@ export function AgentDetailPage() {
             })
           }
           busy={busy === 'validation'}
+          readinessBlockers={memoryReadinessBlockers}
         />
       )}
 
@@ -595,12 +612,15 @@ export function AgentDetailPage() {
               variant="outline"
               size="sm"
               onClick={publishDraft}
-              disabled={busy === 'publish' || !latestValidation}
+              disabled={busy === 'publish' || !latestValidation || memoryReadinessBlockers.length > 0}
             >
               {t('agentDetail.publish')}
             </Button>
           }
         >
+          {memoryReadinessBlockers.length > 0 && (
+            <BlockingReasons title={t('validate.readinessBlocked')} reasons={memoryReadinessBlockers} />
+          )}
           {versionsLoading ? (
             <div className="flex justify-center py-8"><LoadingSpinner size="sm" /></div>
           ) : versions.length === 0 ? (
@@ -716,6 +736,68 @@ export function AgentDetailPage() {
       )}
     </AgentDetailShell>
   )
+}
+
+function BlockingReasons({ title, reasons }: { title: string; reasons: string[] }) {
+  return (
+    <div className="mb-4 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] p-3 text-sm text-[var(--danger-fg)]">
+      <div className="font-semibold">{title}</div>
+      <ul className="mt-2 list-disc space-y-1 pl-5">
+        {reasons.map((reason) => (
+          <li key={reason}>{reason}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function memoryConfigurationBlockers(
+  agentYaml: string,
+  t: (key: string, fallback?: string) => string,
+): string[] {
+  const blockers: string[] = []
+  const memoryEnabledValue = readAgentYamlField(agentYaml, ['capabilities', 'memory', 'enabled'])
+  const memoryProvider = readAgentYamlField(agentYaml, ['capabilities', 'memory', 'provider'])
+  const canonicalMemoryFields = [
+    memoryEnabledValue,
+    memoryProvider,
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'case', 'enabled']),
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'case', 'retention_days']),
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'case', 'max_records']),
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'case', 'allow_restricted']),
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'user', 'enabled']),
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'shared', 'enabled']),
+  ]
+  const contextRecallFields = [
+    readAgentYamlField(agentYaml, ['context', 'source_policies', 'memory_recall', 'scopes', 'case', 'enabled']),
+    readAgentYamlField(agentYaml, ['context', 'source_policies', 'memory_recall', 'scopes', 'user', 'enabled']),
+    readAgentYamlField(agentYaml, ['context', 'source_policies', 'memory_recall', 'scopes', 'shared', 'enabled']),
+  ]
+  const hasMemoryConfiguration =
+    canonicalMemoryFields.some(Boolean) || contextRecallFields.some(Boolean)
+  if (!hasMemoryConfiguration) return blockers
+
+  const memoryEnabled = memoryEnabledValue !== 'false'
+
+  if (memoryEnabled && !memoryProvider) {
+    blockers.push(t('memory.blockProviderRequired'))
+  }
+
+  const userMemoryEnabled =
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'user', 'enabled']) === 'true' ||
+    readAgentYamlField(agentYaml, ['context', 'source_policies', 'memory_recall', 'scopes', 'user', 'enabled']) === 'true'
+  if (userMemoryEnabled) {
+    blockers.push(t('memory.blockPersistentUser'))
+  }
+
+  const sharedMemoryEnabled =
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'shared', 'enabled']) === 'true' ||
+    readAgentYamlField(agentYaml, ['context', 'source_policies', 'memory_recall', 'scopes', 'shared', 'enabled']) === 'true'
+  if (sharedMemoryEnabled) {
+    blockers.push(t('memory.blockShared'))
+  }
+
+  return blockers
 }
 
 function agentDetailTab(value: string | null): Tab {
