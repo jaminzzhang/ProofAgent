@@ -177,6 +177,22 @@ Expected local URLs after restart:
 - Dashboard: `http://127.0.0.1:5173/`
 - Chat: `http://127.0.0.1:5174/operator` or `http://127.0.0.1:5174/customer`
 
+For a full frontend/backend verification session that should also be reachable
+from the public internet, prefer the single command:
+
+```bash
+uv run --extra dashboard --extra ingestion --extra tree proof-agent verify-remote
+```
+
+`verify-remote` starts or restarts the backend API, continuous Knowledge Worker,
+Dashboard, Unified Chat, a single local verification gateway, and by default a
+`cloudflared` quick tunnel. It cleans the configured verification ports before
+startup for Python/Node/Vite-style development processes, then exposes one local
+gateway at `http://127.0.0.1:18080`: `/` for Dashboard, `/operator` and
+`/customer` for Unified Chat, and `/api/*` for the backend API. Use
+`--local-only` when external access is not needed, and `--no-cleanup` when
+existing listeners must be preserved.
+
 For documentation-only edits, at minimum run:
 
 ```bash
