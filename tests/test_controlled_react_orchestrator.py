@@ -1047,9 +1047,7 @@ def test_resume_denied_tool_snapshot_can_replan_to_alternate_retrieval_answer() 
 
     assert result.run_id == "run_alt"
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
-    assert result.final_output == (
-        "Submit the claim form and itemized invoice. Citation: claims-guide.md#documents."
-    )
+    assert result.final_output == "Submit the claim form and itemized invoice."
     stage_ids = [stage.stage_id for stage in result.stage_results]
     assert "tool" in stage_ids
     assert "retrieval" in stage_ids

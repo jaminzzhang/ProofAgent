@@ -36,6 +36,36 @@ def test_resolve_deterministic_provider_generates_response() -> None:
     assert "Travel meals" in response.content
 
 
+def test_deterministic_provider_keeps_final_answer_citations_structured() -> None:
+    provider = resolve_provider(ModelConfig(provider="deterministic", name="demo"))
+
+    response = provider.generate(
+        build_model_request(
+            question="What is the reimbursement rule for travel meals?",
+            evidence=(
+                EvidenceChunk(
+                    source="customer-support-policy.md",
+                    content=(
+                        "Travel meals are reimbursed up to 50 USD per day when "
+                        "the employee provides receipts."
+                    ),
+                    status=EvidenceStatus.ACCEPTED,
+                    admission_score=1.0,
+                    citation="customer-support-policy.md#travel-meals:L3-L7",
+                ),
+            ),
+            provider="deterministic",
+            model="demo",
+        )
+    )
+
+    payload = json.loads(response.content)
+    assert payload["message"] == "Travel meals are reimbursed up to 50 USD per day with receipts."
+    assert "Citation:" not in payload["message"]
+    assert "customer-support-policy.md#travel-meals:L3-L7" not in payload["message"]
+    assert payload["citations"] == ["customer-support-policy.md#travel-meals:L3-L7"]
+
+
 def test_deterministic_provider_synthesizes_final_answer_from_request_evidence() -> None:
     provider = resolve_provider(ModelConfig(provider="deterministic", name="demo"))
     citation = "sapphire-meals.md#reimbursement:L3-L5"

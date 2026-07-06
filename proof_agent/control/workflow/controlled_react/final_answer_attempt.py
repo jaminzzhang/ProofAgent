@@ -484,13 +484,18 @@ def _final_answer_repair_request(
         "instruction": (
             "Repair the previous final answer output. Return only one JSON object "
             "matching the required output contract. Use only the accepted evidence and "
-            "copy allowed citation refs exactly."
+            "copy allowed citation refs exactly into citations. Keep message as natural "
+            "user-visible prose with no citation refs, source labels, bracketed numeric "
+            "references, knowledge:// URIs, or reference blocks."
         ),
         "required_output_contract": {
             "name": FINAL_ANSWER_OUTPUT_CONTRACT,
             "required_fields": ["message", "citations"],
             "field_types": {
-                "message": "string answer using accepted evidence only",
+                "message": (
+                    "customer-visible prose only; no citation refs, source labels, "
+                    "or reference blocks"
+                ),
                 "citations": "array of exact allowed citation refs",
             },
         },

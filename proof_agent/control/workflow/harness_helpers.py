@@ -39,6 +39,12 @@ from proof_agent.observability.storage.run_store import RunStore
 
 
 _FINAL_ANSWER_FUNCTION_SCHEMA_NAME = "submit_final_answer"
+_INTERNAL_CITATION_MARKER_RE = re.compile(r"\s*\[citation:[^\]]+\]")
+_CITATION_LABEL_RE = re.compile(
+    r"(?im)(?:^|\s)(?:citation|citations|引用|参考)[:：]\s*\S+"
+)
+_NUMBERED_REFERENCE_LINE_RE = re.compile(r"(?:\[\d+\]|`\[\d+\]`)")
+_NUMBERED_REFERENCE_TOKEN_RE = re.compile(r"(?<!\S)(?:\[\d+\]|`\[\d+\]`)(?!\S)")
 
 
 def emit_policy_decision(
@@ -112,7 +118,9 @@ def build_model_request(
             content=(
                 "Answer using only accepted evidence. Refuse when evidence is insufficient. "
                 "Call submit_final_answer with the answer in message and exact allowed "
-                "citation refs in citations."
+                "citation refs in citations. The message field must be user-visible prose "
+                "only: do not include citation refs, source labels, knowledge:// URIs, "
+                "bracketed numeric references like [1], or reference blocks in message."
             ),
         ),
         ModelMessage(
@@ -150,7 +158,8 @@ def _citation_instruction_text(evidence: tuple[EvidenceChunk, ...]) -> str:
         "\n\nAllowed citation refs:\n"
         f"{bullet_list}\n"
         "Copy at least one allowed citation ref exactly when making factual claims. "
-        "Put citation refs in the structured citations field only."
+        "Put citation refs in the structured citations field only. Keep the message field "
+        "as natural user-facing prose with no visible citation markers or reference list."
     )
 
 
@@ -283,6 +292,8 @@ def validate_final_answer_adequacy(
         violation_codes.append("empty_answer")
     if not citations:
         violation_codes.append("missing_claim_citation_binding")
+    if _has_visible_citation_artifact(stripped_message, evidence):
+        violation_codes.append("visible_citation_artifact")
     if _looks_like_raw_evidence_dump(stripped_message, evidence):
         violation_codes.append("raw_evidence_dump")
     if _looks_like_table_fragment_without_conclusion(stripped_message):
@@ -314,6 +325,24 @@ def validate_final_answer_adequacy(
             "matched_question_terms": tuple(sorted(matched_question_terms)),
         },
     )
+
+
+def _has_visible_citation_artifact(
+    message: str,
+    evidence: tuple[EvidenceChunk, ...],
+) -> bool:
+    if _INTERNAL_CITATION_MARKER_RE.search(message):
+        return True
+    if _CITATION_LABEL_RE.search(message):
+        return True
+    if "knowledge://source/" in message:
+        return True
+    if _NUMBERED_REFERENCE_TOKEN_RE.search(message):
+        return True
+    for ref in _allowed_citation_refs(evidence):
+        if ref and ref in message:
+            return True
+    return False
 
 
 def _looks_like_raw_evidence_dump(
@@ -459,6 +488,30 @@ def _normalize_for_comparison(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def strip_internal_citation_markers(message: str) -> str:
+    """Remove provider/internal citation markers from user-visible answer prose."""
+
+    cleaned = _INTERNAL_CITATION_MARKER_RE.sub("", message)
+    cleaned = _strip_trailing_numbered_reference_lines(cleaned)
+    cleaned = re.sub(r"[ \t]+([。！？；，、,.!?;:])", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _strip_trailing_numbered_reference_lines(message: str) -> str:
+    lines = message.splitlines()
+    removed = False
+    while lines and not lines[-1].strip():
+        lines.pop()
+    while lines and _NUMBERED_REFERENCE_LINE_RE.fullmatch(lines[-1].strip()):
+        removed = True
+        lines.pop()
+        while lines and not lines[-1].strip():
+            lines.pop()
+    return "\n".join(lines) if removed else message
+
+
 def structured_final_answer_output(
     content: str,
     *,
@@ -506,7 +559,14 @@ def _final_answer_function_schema() -> ModelFunctionSchema:
             "additionalProperties": False,
             "required": ["message", "citations"],
             "properties": {
-                "message": {"type": "string"},
+                "message": {
+                    "type": "string",
+                    "description": (
+                        "Natural user-visible prose only. Do not include citation refs, "
+                        "source labels, knowledge:// URIs, bracketed numeric references, "
+                        "or reference blocks."
+                    ),
+                },
                 "citations": {
                     "type": "array",
                     "items": {"type": "string"},

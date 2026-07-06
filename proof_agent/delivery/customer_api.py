@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+import re
 from typing import Any, Literal, cast
 from uuid import uuid4
 
@@ -44,6 +45,7 @@ from proof_agent.control.memory.extractor import (
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.validators.customer_response import validate_customer_safe_response
+from proof_agent.control.workflow.harness_helpers import strip_internal_citation_markers
 from proof_agent.delivery.api import _execute_published_agent_run
 from proof_agent.delivery.customer_adapters import (
     CustomerAdapterRequest,
@@ -59,6 +61,10 @@ from proof_agent.observability.storage.run_store import RunStore
 
 
 router = APIRouter(tags=["customer"])
+
+
+_KNOWLEDGE_SOURCE_URI_RE = re.compile(r"knowledge://source/([^/#?]+)")
+_NUMBERED_REFERENCE_LABEL_RE = re.compile(r"^\[\d+\]$")
 
 
 class CustomerConversationCreateRequest(BaseModel):
@@ -385,7 +391,14 @@ def execute_customer_run_for_conversation(
         )
     safe_response = CustomerSafeResponse(
         message=str(result.final_output),
-        safe_sources=_safe_sources(cast(RunDetail, detail)),
+        safe_sources=_safe_sources(
+            cast(RunDetail, detail),
+            knowledge_source_store=getattr(
+                app_request.app.state,
+                "agent_configuration_store",
+                None,
+            ),
+        ),
     )
     payload = _store_customer_response(
         app_request=app_request,
@@ -470,6 +483,9 @@ def _store_customer_response(
     created_at: str,
     question: str,
 ) -> dict[str, Any]:
+    safe_response = safe_response.model_copy(
+        update={"message": _customer_safe_message(safe_response.message)}
+    )
     validation = validate_customer_safe_response(safe_response)
     if validation.status == ValidationStatus.FAILED:
         raise HTTPException(
@@ -1126,16 +1142,76 @@ def _plain_payload(value: Any) -> Any:
     return value
 
 
-def _safe_sources(detail: RunDetail) -> tuple[str, ...]:
+def _customer_safe_message(message: str) -> str:
+    return strip_internal_citation_markers(message)
+
+
+def _safe_sources(
+    detail: RunDetail,
+    *,
+    knowledge_source_store: object | None = None,
+) -> tuple[str, ...]:
     labels: list[str] = []
     for chunk in detail.evidence_chunks:
-        raw_source = chunk.get("source")
-        if raw_source is None:
+        label = _safe_source_label(chunk, knowledge_source_store=knowledge_source_store)
+        if label is None:
             continue
-        label = Path(str(raw_source)).name or str(raw_source)
         if label and label not in labels:
             labels.append(label)
     return tuple(labels)
+
+
+def _safe_source_label(
+    chunk: Mapping[str, Any],
+    *,
+    knowledge_source_store: object | None,
+) -> str | None:
+    source_id = _knowledge_source_id_from_chunk(chunk)
+    if source_id is not None:
+        source_name = _knowledge_source_name(knowledge_source_store, source_id)
+        if source_name is not None:
+            return source_name
+        raw_source = str(chunk.get("source") or "").strip()
+        if not raw_source or _NUMBERED_REFERENCE_LABEL_RE.match(raw_source):
+            return f"Knowledge Source {source_id}"
+
+    raw_source = chunk.get("source")
+    if raw_source is None:
+        return None
+    label = Path(str(raw_source)).name or str(raw_source)
+    return label.strip() or None
+
+
+def _knowledge_source_id_from_chunk(chunk: Mapping[str, Any]) -> str | None:
+    for value in (chunk.get("source_id"), chunk.get("citation"), chunk.get("source")):
+        if not isinstance(value, str):
+            continue
+        match = _KNOWLEDGE_SOURCE_URI_RE.search(value)
+        if match is not None:
+            return match.group(1)
+        if value.startswith("ks_"):
+            return value
+    return None
+
+
+def _knowledge_source_name(
+    knowledge_source_store: object | None,
+    source_id: str,
+) -> str | None:
+    if knowledge_source_store is None:
+        return None
+    get_knowledge_source = getattr(knowledge_source_store, "get_knowledge_source", None)
+    if not callable(get_knowledge_source):
+        return None
+    try:
+        source = get_knowledge_source(source_id)
+    except Exception:
+        return None
+    name = getattr(source, "name", None)
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    return name or None
 
 
 def _single_resource_id(values: tuple[str, ...]) -> str | None:

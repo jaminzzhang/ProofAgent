@@ -44,6 +44,7 @@ class DeterministicModelProvider:
         ):
             if _missing_deterministic_answer(answer):
                 answer = _answer_from_request_evidence(request)
+            answer = _user_visible_final_answer_message(answer)
             answer = json.dumps(
                 {
                     "message": answer,
@@ -121,6 +122,15 @@ def _paraphrase_evidence_sentence(sentence: str) -> str:
     return f"Based on the accepted evidence, {sentence[0].lower()}{sentence[1:]}"
 
 
+def _user_visible_final_answer_message(answer: str) -> str:
+    return re.sub(
+        r"\s*(?:Citation|Citations|引用|参考)[:：]\s*\S+.*$",
+        "",
+        answer,
+        flags=re.IGNORECASE | re.MULTILINE,
+    ).strip()
+
+
 def _singular_reimbursement_subject(subject: str) -> str:
     stripped = subject.strip()
     if stripped.lower().endswith(" meals"):
@@ -142,4 +152,19 @@ def _allowed_citation_refs_from_request(request: ModelRequest) -> list[str]:
         ref = line[2:].strip()
         if ref:
             refs.append(ref)
-    return refs[:1]
+    if refs:
+        return refs[:1]
+    return _allowed_citation_refs_from_repair_payload(_last_user_message(request))[:1]
+
+
+def _allowed_citation_refs_from_repair_payload(content: str) -> list[str]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    refs = payload.get("allowed_citation_refs")
+    if not isinstance(refs, list):
+        return []
+    return [ref for ref in refs if isinstance(ref, str) and ref.strip()]

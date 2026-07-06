@@ -716,8 +716,7 @@ class _EvidenceAnswerSynthesisAdapter:
                 reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
             )
         first = evidence[0]
-        citation_suffix = f" Citation: {first.citation}." if first.citation else ""
-        message = f"{first.content.strip()}{citation_suffix}"
+        message = first.content.strip()
         return AnswerSynthesisResult(
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             final_output=message,
@@ -735,11 +734,9 @@ class _DeterministicAnswerSynthesisAdapter:
         answer_context: AnswerEvidenceContext,
     ) -> AnswerSynthesisResult:
         _ = state
-        citation_refs = answer_context.citation_refs
-        citation_suffix = f" Citation: {citation_refs[0]}." if citation_refs else ""
+        _ = answer_context
         message = (
             "Travel meals are reimbursed when supported by governed policy evidence."
-            f"{citation_suffix}"
         )
         return AnswerSynthesisResult(
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,

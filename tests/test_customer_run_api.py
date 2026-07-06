@@ -4,9 +4,11 @@ import shutil
 import pytest
 from fastapi.testclient import TestClient
 
+from proof_agent.contracts import ReceiptOutcome, RunDetail
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.delivery.customer_api import _customer_safe_message, _safe_sources
 from proof_agent.observability.api.app import create_app as create_dashboard_app
 
 
@@ -128,6 +130,49 @@ def test_customer_run_returns_customer_safe_projection(tmp_path: Path) -> None:
     assert "links" not in body
     assert "governance_details" not in body
     assert "approval_state" not in body
+
+
+def test_customer_safe_message_removes_internal_citation_markers() -> None:
+    message = (
+        "住院理赔需要提供理赔申请书和费用清单 "
+        "[citation:knowledge://source/ks_myks2/document/doc_5750121a]。"
+    )
+
+    safe_message = _customer_safe_message(message)
+
+    assert safe_message == "住院理赔需要提供理赔申请书和费用清单。"
+    assert "[citation:" not in safe_message
+    assert "knowledge://source/" not in safe_message
+
+
+def test_customer_safe_sources_resolve_shared_knowledge_source_names(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_knowledge_source(
+        source_id="ks_myks2",
+        name="理赔知识库",
+        provider="local_index",
+        params={},
+        actor="test-user",
+    )
+    detail = RunDetail(
+        run_id="run_citation",
+        question="住院理赔需要哪些材料？",
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        created_at="2026-07-05T00:00:00Z",
+        updated_at="2026-07-05T00:00:01Z",
+        evidence_chunks=(
+            {
+                "source": "[1]",
+                "citation": (
+                    "knowledge://source/ks_myks2/document/doc_5750121a/"
+                    "revision/rev_5750121a#node=node_1"
+                ),
+                "status": "accepted",
+            },
+        ),
+    )
+
+    assert _safe_sources(detail, knowledge_source_store=store) == ("理赔知识库",)
 
 
 def test_customer_conversation_rejects_unknown_agent(tmp_path: Path) -> None:

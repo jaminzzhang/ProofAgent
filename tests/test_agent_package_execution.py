@@ -1119,6 +1119,53 @@ def test_execute_agent_package_run_repairs_schema_failed_v3_final_answer(
     ]
 
 
+def test_execute_agent_package_run_repairs_visible_citation_artifacts_in_answer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    provider = _CitationArtifactRepairingAnswerProvider()
+    monkeypatch.setattr(
+        composition,
+        "resolve_provider",
+        lambda _config: provider,
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert provider.request_count == 2
+    assert result.final_output == (
+        "Travel meals are reimbursed up to 50 USD per day when the employee provides receipts."
+    )
+    assert "[1]" not in result.final_output
+
+    repair_payload = json.loads(provider.requests[1].messages[1].content)
+    assert "visible_citation_artifact" in repair_payload["validation_error"][
+        "violation_codes"
+    ]
+    assert (
+        repair_payload["required_output_contract"]["field_types"]["message"]
+        == "customer-visible prose only; no citation refs, source labels, or reference blocks"
+    )
+
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        event["event_type"] == "final_answer_validation_failed"
+        and "visible_citation_artifact" in event["payload"]["violation_codes"]
+        for event in events
+    )
+
+
 def test_execute_agent_package_run_preserves_initial_interaction_when_repair_policy_denies(
     tmp_path: Path,
     monkeypatch,
@@ -1487,6 +1534,41 @@ class _RepairingAnswerProvider:
             model_name=self.model_name,
             finish_reason="stop",
             content=content,
+        )
+
+
+class _CitationArtifactRepairingAnswerProvider:
+    provider_name = "deterministic"
+    model_name = "demo"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    @property
+    def request_count(self) -> int:
+        return len(self.requests)
+
+    def estimate_tokens(self, request: ModelRequest) -> int:
+        return sum(len(message.content) for message in request.messages)
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        message = (
+            "Travel meals are reimbursed up to 50 USD per day when the employee "
+            "provides receipts."
+        )
+        if len(self.requests) == 1:
+            message = f"{message}\n\n    [1]"
+        return ModelResponse(
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            finish_reason="stop",
+            content=json.dumps(
+                {
+                    "message": message,
+                    "citations": ["customer-support-policy.md#travel-meals:L3-L7"],
+                }
+            ),
         )
 
 

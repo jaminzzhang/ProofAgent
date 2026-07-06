@@ -85,6 +85,121 @@ def test_structured_final_answer_citations_are_validated_without_parsing_message
     }
 
 
+def test_final_answer_adequacy_rejects_internal_citation_markers_in_message() -> None:
+    citation = (
+        "knowledge://source/ks_myks2/document/doc_5750121a/revision/rev_5750121a#node=82ac0f38"
+    )
+    response = ModelResponse(
+        content=json.dumps(
+            {
+                "message": (
+                    "住院理赔需要提供理赔申请书和费用清单 "
+                    "[citation:knowledge://source/ks_myks2/document/doc_5750121a]。"
+                ),
+                "citations": [citation],
+            }
+        ),
+        provider_name="deterministic",
+        model_name="demo",
+        finish_reason="stop",
+    )
+
+    results = validate_model_output(
+        response=response,
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        evidence=(
+            EvidenceChunk(
+                source="knowledge://source/ks_myks2/document/doc_5750121a",
+                content="住院理赔需要提供理赔申请书和费用清单。",
+                admission_score=1.0,
+                status=EvidenceStatus.ACCEPTED,
+                citation=citation,
+            ),
+        ),
+        question="住院理赔需要哪些材料？",
+    )
+
+    adequacy = next(result for result in results if result.validator_name == "final_answer_adequacy")
+    assert adequacy.status.value == "failed"
+    assert "visible_citation_artifact" in adequacy.metadata["violation_codes"]
+
+
+def test_final_answer_adequacy_rejects_trailing_numbered_reference_lines() -> None:
+    citation = "knowledge://source/ks_policy/document/doc_policy/revision/rev_policy#node=node_1"
+    response = ModelResponse(
+        content=json.dumps(
+            {
+                "message": (
+                    "现有证据中缺乏上述对比信息，无法做出有依据的竞争力判断。\n\n"
+                    "    [1]\n\n"
+                    "    [2]\n\n"
+                    "    [10]"
+                ),
+                "citations": [citation],
+            }
+        ),
+        provider_name="deterministic",
+        model_name="demo",
+        finish_reason="stop",
+    )
+
+    results = validate_model_output(
+        response=response,
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        evidence=(
+            EvidenceChunk(
+                source="knowledge://source/ks_policy/document/doc_policy",
+                content="现有证据中缺乏上述对比信息，无法做出有依据的竞争力判断。",
+                admission_score=1.0,
+                status=EvidenceStatus.ACCEPTED,
+                citation=citation,
+            ),
+        ),
+        question="现有证据能判断竞争力吗？",
+    )
+
+    adequacy = next(result for result in results if result.validator_name == "final_answer_adequacy")
+    assert adequacy.status.value == "failed"
+    assert "visible_citation_artifact" in adequacy.metadata["violation_codes"]
+
+
+def test_final_answer_adequacy_rejects_visible_citation_label_in_message() -> None:
+    citation = "customer-support-policy.md#travel-meals:L3-L7"
+    response = ModelResponse(
+        content=json.dumps(
+            {
+                "message": (
+                    "Travel meals are reimbursed up to 50 USD per day. "
+                    f"Citation: {citation}"
+                ),
+                "citations": [citation],
+            }
+        ),
+        provider_name="deterministic",
+        model_name="demo",
+        finish_reason="stop",
+    )
+
+    results = validate_model_output(
+        response=response,
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        evidence=(
+            EvidenceChunk(
+                source="customer-support-policy.md",
+                content="Travel meals are reimbursed up to 50 USD per day.",
+                admission_score=1.0,
+                status=EvidenceStatus.ACCEPTED,
+                citation=citation,
+            ),
+        ),
+        question="What is the reimbursement rule for travel meals?",
+    )
+
+    adequacy = next(result for result in results if result.validator_name == "final_answer_adequacy")
+    assert adequacy.status.value == "failed"
+    assert "visible_citation_artifact" in adequacy.metadata["violation_codes"]
+
+
 def test_structured_final_answer_rejects_raw_evidence_dump() -> None:
     citation = "customer-support-policy.md#travel-meals:L3-L7"
     raw_evidence = (
