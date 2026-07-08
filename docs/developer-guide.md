@@ -903,7 +903,7 @@ capabilities:
 
 Customer Persistent User Memory can be enabled with `capabilities.memory.scopes.user.enabled: true` for Customer Service conversations. Shared Memory is still rejected when enabled.
 
-Use `capabilities.memory.provider: mem0` only when the runtime environment supplies the optional `mem0ai` package or an injected compatible Mem0 client. The Mem0 adapter maps Proof Agent Case Memory to Mem0 storage, search, and filtered deletion, then Proof Agent still applies Memory Admission before context injection.
+Use `capabilities.memory.provider: mem0` only when the runtime environment supplies the optional `mem0ai` package or an injected compatible Mem0 client. The Mem0 adapter maps Proof Agent Case Memory to Mem0 `run_id`, Customer Persistent User Memory to Mem0 `user_id`, and keeps Proof Agent Agent/scope fields in metadata for search and deletion filters. Proof Agent still applies Memory Admission before context injection.
 
 Customer Service conversations can request Case Memory deletion through `DELETE /api/customer/conversations/{conversation_id}/memory`. The response returns the deleted count and, when the conversation already has an audited run, the run id whose trace received the `memory_delete_decision` event. The endpoint does not expose memory summaries, facts, raw transcripts, or provider payloads.
 

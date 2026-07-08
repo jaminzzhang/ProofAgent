@@ -964,7 +964,7 @@ Admitted Case Memory can enter Structured Control Context for follow-up resoluti
 
 The first Case Memory implementation should define Proof Agent memory contracts and a local memory store before adding external adapters. Mem0 or similar systems should be integrated afterward through a Memory Provider Adapter so external framework behavior cannot shape the Proof Agent memory contract.
 
-A Mem0 adapter may provide storage, retrieval, summarization enhancement, and similarity recall after the local contract is stable. It must not decide whether memory can be written, whether memory can enter a run, how retention works, or whether a remembered fact may support an answer. Those decisions remain in Proof Agent policy, redaction, retention, tenant boundary, and Memory Admission logic. The adapter maps Proof Agent Case Memory to Mem0 `add`, `search`, and filtered deletion calls while preserving `case_id`, `agent_id`, source ids, expiration, sensitivity, status, and facts in metadata.
+A Mem0 adapter may provide storage, retrieval, summarization enhancement, and similarity recall after the local contract is stable. It must not decide whether memory can be written, whether memory can enter a run, how retention works, or whether a remembered fact may support an answer. Those decisions remain in Proof Agent policy, redaction, retention, tenant boundary, and Memory Admission logic. The adapter maps Proof Agent memory into Mem0 `add`, `search`, and filtered deletion calls using one Mem0 primary entity per scope: Case Memory uses `run_id = case_id`, Customer Persistent User Memory uses `user_id = subject_ref`, and Proof Agent `agent_id`, scope, source ids, expiration, sensitivity, status, and facts remain in metadata.
 
 `memory.provider: mem0` is optional. The deterministic baseline and local Case Memory path do not require Mem0, network access, API keys, or external services. Deployments that enable the Mem0 provider must install the `mem0ai` package in their environment or inject a compatible Mem0 client into the application factory.
 
@@ -995,7 +995,7 @@ The first Case Memory read path should use same-case bounded recall:
 
 Cross-case semantic recall is out of the first Case Memory stage because it increases tenant, privacy, and false-transfer risk.
 
-The first Case Memory retention behavior should require `expires_at`, default to 30 days, support deletion by `case_id`, and exclude deleted or expired records from recall. The local adapter marks records as `deleted`; the Mem0 adapter deletes records with `delete_all(agent_id=agent_id, run_id=case_id)`. Both behaviors satisfy the same Proof Agent lifecycle contract: deleted Case Memory must not enter future Memory Admission. Delete operations must be audit-linked. Expired records may remain until cleanup, but they must not be admitted.
+The first Case Memory retention behavior should require `expires_at`, default to 30 days, support deletion by `case_id`, and exclude deleted or expired records from recall. The local adapter marks records as `deleted`; the Mem0 adapter deletes Case Memory with `delete_all(run_id=case_id, metadata={proof_agent_agent_id, proof_agent_scope: "case"})`. Both behaviors satisfy the same Proof Agent lifecycle contract: deleted Case Memory must not enter future Memory Admission. Delete operations must be audit-linked. Expired records may remain until cleanup, but they must not be admitted.
 
 The first Memory Admission rules are deterministic:
 - `scope` is `case`
@@ -1082,7 +1082,7 @@ Stage 3 Customer Persistent User Memory design:
 - Admitted Customer Persistent User Memory may enter Structured Control Context for intent understanding, preference-aware follow-up, missing-field prompts, and next-step suggestions. It is not Accepted Evidence and cannot support customer-facing business claims.
 - It must not automatically trigger sensitive data retrieval. If a remembered interest suggests a report or account-data direction, the run must still ask for required fields or use authorized tools under normal policy.
 - Writes happen after a governed run completes, using deterministic extraction from customer-safe run facts and Case Focus-style signals. LLM summarization remains deferred until it can emit validated JSON and fail closed.
-- Stage 3 should support the same provider boundary as Case Memory. The local adapter should support `scope: user` using `agent_id + subject_ref`; the Mem0 adapter should map `subject_ref` into provider metadata while leaving admission and lifecycle decisions in Proof Agent.
+- Stage 3 should support the same provider boundary as Case Memory. The local adapter should support `scope: user` using `agent_id + subject_ref`; the Mem0 adapter should map `subject_ref` to Mem0 `user_id` and keep Proof Agent `agent_id` in metadata while leaving admission and lifecycle decisions in Proof Agent.
 
 Stage 3 acceptance:
 - Enabling `memory.scopes.user.enabled: true` succeeds only when Customer Persistent User Memory governance is implemented; `shared.enabled: true` remains rejected.

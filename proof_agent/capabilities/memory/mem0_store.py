@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
+import os
 from typing import Any, Protocol, cast
 
 from proof_agent.contracts import (
@@ -33,11 +34,14 @@ class Mem0MemoryStore:
 
     def append(self, candidate: MemoryCandidate) -> MemoryRecord:
         metadata = _metadata_from_candidate(candidate)
-        kwargs: dict[str, object] = {"agent_id": candidate.agent_id, "metadata": metadata}
-        if candidate.scope == MemoryScope.USER:
-            kwargs["user_id"] = candidate.subject_ref
-        else:
-            kwargs["run_id"] = candidate.case_id
+        kwargs = _entity_kwargs_from_candidate(candidate)
+        kwargs.update(
+            {
+                "metadata": metadata,
+                "infer": False,
+                "expiration_date": _expiration_date(candidate.expires_at),
+            }
+        )
         response = self._client.add([{"role": "assistant", "content": candidate.summary}], **kwargs)
         memory_id = _memory_id_from_response(response)
         return MemoryRecord(
@@ -60,26 +64,16 @@ class Mem0MemoryStore:
         if query.scope == MemoryScope.CASE:
             response = self._client.search(
                 query.query_text or query.case_id,
-                agent_id=query.agent_id,
-                run_id=query.case_id,
-                filters={
-                    "AND": [
-                        {"agent_id": query.agent_id},
-                        {"run_id": query.case_id},
-                    ]
-                },
+                filters=_filters_from_query(query),
                 top_k=query.max_records,
+                show_expired=False,
             )
         elif query.scope == MemoryScope.USER:
             response = self._client.search(
                 query.query_text or query.subject_ref,
-                filters={
-                    "AND": [
-                        {"user_id": query.subject_ref},
-                        {"agent_id": query.agent_id},
-                    ]
-                },
+                filters=_filters_from_query(query),
                 top_k=query.max_records,
+                show_expired=False,
             )
         else:
             return ()
@@ -107,7 +101,10 @@ class Mem0MemoryStore:
                 max_records=10_000,
             )
         )
-        self._client.delete_all(agent_id=agent_id, run_id=case_id)
+        self._client.delete_all(
+            run_id=case_id,
+            metadata=_metadata_scope_filter(agent_id=agent_id, scope=MemoryScope.CASE),
+        )
         return len(existing_records)
 
     def export_subject(self, *, agent_id: str, subject_ref: str) -> tuple[MemoryRecord, ...]:
@@ -122,13 +119,20 @@ class Mem0MemoryStore:
 
     def soft_delete_subject(self, *, agent_id: str, subject_ref: str) -> int:
         existing_records = self.export_subject(agent_id=agent_id, subject_ref=subject_ref)
-        self._client.delete_all(agent_id=agent_id, user_id=subject_ref)
+        self._client.delete_all(
+            user_id=subject_ref,
+            metadata=_metadata_scope_filter(agent_id=agent_id, scope=MemoryScope.USER),
+        )
         return len(existing_records)
 
 
 def _create_default_client() -> Mem0Client:
     try:
-        from mem0 import Memory  # type: ignore[import-not-found]
+        if api_key := os.getenv("MEM0_API_KEY"):
+            from mem0 import MemoryClient  # type: ignore[import-not-found]
+
+            return cast(Mem0Client, MemoryClient(api_key=api_key))
+        from mem0 import Memory
     except ImportError as exc:
         raise ProofAgentError(
             "PA_CONFIG_002",
@@ -136,6 +140,43 @@ def _create_default_client() -> Mem0Client:
             "Install mem0ai or inject a compatible Mem0 client before using memory.provider: mem0.",
         ) from exc
     return cast(Mem0Client, Memory())
+
+
+def _entity_kwargs_from_candidate(candidate: MemoryCandidate) -> dict[str, object]:
+    if candidate.scope == MemoryScope.USER:
+        return {"user_id": candidate.subject_ref}
+    if candidate.scope == MemoryScope.CASE:
+        return {"run_id": candidate.case_id}
+    raise ProofAgentError(
+        "PA_CONFIG_002",
+        f"unsupported Mem0 memory scope: {candidate.scope.value}",
+        "Use case or user memory scopes for the Mem0 memory provider.",
+    )
+
+
+def _filters_from_query(query: MemoryQuery) -> dict[str, object]:
+    if query.scope == MemoryScope.CASE:
+        return {
+            "AND": [
+                {"run_id": query.case_id},
+                {"metadata": _metadata_scope_filter(agent_id=query.agent_id, scope=query.scope)},
+            ]
+        }
+    if query.scope == MemoryScope.USER:
+        return {
+            "AND": [
+                {"user_id": query.subject_ref},
+                {"metadata": _metadata_scope_filter(agent_id=query.agent_id, scope=query.scope)},
+            ]
+        }
+    return {"AND": [{"agent_id": query.agent_id}]}
+
+
+def _metadata_scope_filter(*, agent_id: str, scope: MemoryScope) -> dict[str, str]:
+    return {
+        "proof_agent_agent_id": agent_id,
+        "proof_agent_scope": scope.value,
+    }
 
 
 def _metadata_from_candidate(candidate: MemoryCandidate) -> dict[str, object]:
@@ -183,6 +224,19 @@ def _memory_id_from_response(response: object) -> str:
         raw_id = response.get("id") or response.get("memory_id")
         if raw_id is not None:
             return str(raw_id)
+        event_id = response.get("event_id")
+        if event_id is not None:
+            return f"mem0_event_{event_id}"
+        for key in ("results", "memories"):
+            nested = response.get(key)
+            if isinstance(nested, list) and nested:
+                nested_id = _memory_id_from_response(nested[0])
+                if nested_id != "mem0_unknown":
+                    return nested_id
+    if isinstance(response, list) and response:
+        nested_id = _memory_id_from_response(response[0])
+        if nested_id != "mem0_unknown":
+            return nested_id
     return "mem0_unknown"
 
 
@@ -210,6 +264,13 @@ def _plain_mapping(value: Mapping[str, Any]) -> dict[str, object]:
         else:
             plain[str(key)] = item
     return plain
+
+
+def _expiration_date(expires_at: str) -> str:
+    try:
+        return datetime.fromisoformat(expires_at.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return expires_at[:10]
 
 
 def _now() -> str:

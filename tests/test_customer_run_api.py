@@ -75,28 +75,35 @@ class RecordingMem0Client:
         _ = query
         filters = kwargs.get("filters")
         assert isinstance(filters, dict)
-        expected_agent = filters["AND"][0]["agent_id"]  # type: ignore[index]
-        expected_case = filters["AND"][1]["run_id"]  # type: ignore[index]
+        expected_case = filters["AND"][0]["run_id"]  # type: ignore[index]
+        metadata_filter = filters["AND"][1]["metadata"]  # type: ignore[index]
+        expected_agent = metadata_filter["proof_agent_agent_id"]  # type: ignore[index]
+        expected_scope = metadata_filter["proof_agent_scope"]  # type: ignore[index]
         return {
             "results": [
                 memory
                 for memory in self.memories
                 if isinstance(memory["metadata"], dict)
                 and memory["metadata"]["proof_agent_agent_id"] == expected_agent
+                and memory["metadata"]["proof_agent_scope"] == expected_scope
                 and memory["metadata"]["proof_agent_case_id"] == expected_case
             ]
         }
 
     def delete_all(self, **kwargs: object) -> dict[str, object]:
         self.delete_all_calls.append(kwargs)
-        expected_agent = kwargs["agent_id"]
         expected_case = kwargs["run_id"]
+        metadata_filter = kwargs["metadata"]
+        assert isinstance(metadata_filter, dict)
+        expected_agent = metadata_filter["proof_agent_agent_id"]
+        expected_scope = metadata_filter["proof_agent_scope"]
         self.memories = [
             memory
             for memory in self.memories
             if not (
                 isinstance(memory["metadata"], dict)
                 and memory["metadata"]["proof_agent_agent_id"] == expected_agent
+                and memory["metadata"]["proof_agent_scope"] == expected_scope
                 and memory["metadata"]["proof_agent_case_id"] == expected_case
             )
         ]
@@ -952,7 +959,13 @@ def test_customer_case_memory_can_be_deleted_for_mem0_provider(tmp_path: Path) -
     assert deleted.status_code == 200
     assert deleted.json()["deleted_count"] == 1
     assert mem0_client.delete_all_calls == [
-        {"agent_id": "insurance_mem0", "run_id": conversation_id}
+        {
+            "run_id": conversation_id,
+            "metadata": {
+                "proof_agent_agent_id": "insurance_mem0",
+                "proof_agent_scope": "case",
+            },
+        }
     ]
 
     response = client.post(
