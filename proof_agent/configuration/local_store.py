@@ -418,7 +418,17 @@ class LocalAgentConfigurationStore:
                 version = self.get_version(agent_id, version_dir.name)
                 if version is not None:
                     versions.append(version)
-        return sorted(versions, key=lambda version: version.published_at)
+        # Newest-first for the Dashboard Published Versions panel: primary key
+        # published_at descending, secondary key version_id ascending so equal
+        # timestamps get a deterministic, human-friendly order. Two-stage sort
+        # (rather than reverse=True on a tuple) keeps the secondary key ascending
+        # instead of being silently reversed.
+        by_version_id = sorted(versions, key=lambda version: version.version_id)
+        return sorted(
+            by_version_id,
+            key=lambda version: version.published_at,
+            reverse=True,
+        )
 
     def get_active_version(self, agent_id: str) -> ActiveAgentVersion | None:
         path = self._active_version_path(agent_id)

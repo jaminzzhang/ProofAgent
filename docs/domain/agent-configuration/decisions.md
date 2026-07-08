@@ -50,6 +50,7 @@
 - "Agent binds a knowledge source" could mean following its latest published snapshot forever or freezing the validated corpus at Agent publication. Resolved: Draft Agents may preview the latest published snapshot, while each **Published Agent Version** records a **Resolved Knowledge Snapshot Binding** to the exact `snapshot_id`.
 - "Rollback an Agent version" could mean restoring only its YAML or restoring its effective knowledge corpus too. Resolved: rollback selects the immutable **Published Agent Version** and therefore restores its captured **Resolved Knowledge Snapshot Binding**.
 - "Draft save behavior" could mean auto-save per field, save per module, or single draft save. Resolved: **Draft Agent** uses auto-save for all configuration changes with explicit publish in the Versions **Agent Lifecycle Tab**.
+- "Published Agent Version list order" could mean ascending publication time or newest-first for the Dashboard Published Versions panel. Resolved: `list_versions` returns **Published Agent Versions** newest-first by `published_at`, with `version_id` ascending as the tie-breaker for equal timestamps; reference-count callers are order-independent.
 
 ## Relationship And Reference Notes
 

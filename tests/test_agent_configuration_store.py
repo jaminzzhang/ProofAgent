@@ -1412,6 +1412,103 @@ def test_rollback_changes_active_pointer_without_mutating_versions(tmp_path: Pat
     ).read_text(encoding="utf-8") == "name: enterprise_qa_v2\n"
 
 
+def test_list_versions_returns_newest_first_with_version_id_tiebreaker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=_bundle("enterprise_qa"),
+        actor="local-user",
+    )
+
+    # Control published_at via _now so the test is deterministic without sleeps.
+    # _now is called several times per publish (published_at, audit, active
+    # pointer), so return a strictly increasing value per call. publish_version
+    # captures published_at before the other calls, so each published version's
+    # published_at is strictly greater than the previous one.
+    from proof_agent.configuration import local_store as store_module
+
+    counter = {"n": 0}
+
+    def _fake_now() -> str:
+        counter["n"] += 1
+        return f"2026-07-01T{counter['n']:02d}:00:00.000000Z"
+
+    monkeypatch.setattr(store_module, "_now", _fake_now, raising=True)
+
+    first = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_001",
+        actor="publisher",
+    )
+    second = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_002",
+        actor="publisher",
+    )
+    third = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_003",
+        actor="publisher",
+    )
+
+    listed = store.list_versions(draft.agent_id)
+    assert [version.version_id for version in listed] == [
+        third.version_id,
+        second.version_id,
+        first.version_id,
+    ]
+
+
+def test_list_versions_breaks_published_at_ties_by_version_id_ascending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    draft = store.create_draft(
+        agent_id="enterprise_qa",
+        display_name="Enterprise QA",
+        purpose="Answer enterprise questions with evidence.",
+        contract_bundle=_bundle("enterprise_qa"),
+        actor="local-user",
+    )
+
+    from proof_agent.configuration import local_store as store_module
+
+    # Same published_at for both publishes -> tie broken by version_id ascending.
+    monkeypatch.setattr(
+        store_module,
+        "_now",
+        lambda: "2026-07-01T01:00:00.000000Z",
+        raising=True,
+    )
+
+    one = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_001",
+        actor="publisher",
+    )
+    two = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_002",
+        actor="publisher",
+    )
+
+    listed = store.list_versions(draft.agent_id)
+    # version_id values are random; sort the pair for a stable assertion.
+    expected = sorted([one.version_id, two.version_id])
+    assert [version.version_id for version in listed] == expected
+
+
 def test_create_list_and_store_knowledge_source_documents(tmp_path: Path) -> None:
     store = LocalAgentConfigurationStore(tmp_path)
 
