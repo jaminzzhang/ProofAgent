@@ -71,10 +71,24 @@ export function replaceMemoryCapabilityConfiguration(
   changedValue: string,
 ): string {
   const normalizedYaml = removeTopLevelYamlSection(agentYaml, 'memory')
+  const changedEnabled = samePath(changedPath, ['capabilities', 'memory', 'enabled'])
+  if (changedEnabled && changedValue === 'false') {
+    return replaceAgentYamlMapping(normalizedYaml, ['capabilities', 'memory'], {
+      enabled: false,
+    })
+  }
+  const changedUserEnabled = samePath(
+    changedPath,
+    ['capabilities', 'memory', 'scopes', 'user', 'enabled'],
+  )
   const hasCanonicalMemory = Boolean(
     extractAgentYamlPathSection(normalizedYaml, ['capabilities', 'memory']),
   )
-  if (hasCanonicalMemory) {
+  if (
+    hasCanonicalMemory &&
+    !(changedEnabled && changedValue === 'true') &&
+    !(changedUserEnabled && changedValue === 'true')
+  ) {
     return updateAgentYamlField(normalizedYaml, changedPath, changedValue)
   }
 
@@ -112,6 +126,18 @@ export function replaceMemoryCapabilityConfiguration(
           ['capabilities', 'memory', 'scopes', 'user', 'enabled'],
           false,
         ),
+        retention_days: readOrChanged(
+          ['capabilities', 'memory', 'scopes', 'user', 'retention_days'],
+          '30',
+        ),
+        max_records: readOrChanged(
+          ['capabilities', 'memory', 'scopes', 'user', 'max_records'],
+          '5',
+        ),
+        allow_restricted: boolOrChanged(
+          ['capabilities', 'memory', 'scopes', 'user', 'allow_restricted'],
+          false,
+        ),
       },
       shared: {
         enabled: boolOrChanged(
@@ -125,13 +151,13 @@ export function replaceMemoryCapabilityConfiguration(
   return replaceAgentYamlMapping(normalizedYaml, ['capabilities', 'memory'], memoryConfig)
 }
 
-export function replaceMemoryContextConfiguration(
+export function replaceAgentContextConfiguration(
   agentYaml: string,
   changedPath: string[],
   changedValue: string,
 ): string {
   const normalizedYaml = removeTopLevelYamlSection(agentYaml, 'memory')
-  const changedGroup = memoryContextConfigurationGroup(changedPath)
+  const changedGroup = agentContextConfigurationGroup(changedPath)
   if (!changedGroup) return updateAgentYamlField(normalizedYaml, changedPath, changedValue)
 
   const readOrChanged = (path: string[], fallback: string): string => {
@@ -184,17 +210,8 @@ export function replaceMemoryContextConfiguration(
     estimation_strategy: 'heuristic',
     profile_version: 'context_budget.v1',
   }
-  const convergence: AgentYamlMapping = {
-    level1_ratio: readOrChanged(['context', 'convergence', 'level1_ratio'], '0.5'),
-    level2_ratio: readOrChanged(['context', 'convergence', 'level2_ratio'], '0.8'),
-    hard_limit_ratio: readOrChanged(['context', 'convergence', 'hard_limit_ratio'], '1.0'),
-  }
-  const dynamicCalibration = boolOrChanged(['context', 'dynamic_calibration'], true)
-
   const includeBudget = changedGroup === 'budget' && hasBudgetOverride
-  const includeRecall = changedGroup === 'recall' || includeBudget
-  const includeConvergence = changedGroup === 'convergence' || includeBudget
-  const includeDynamic = changedGroup === 'dynamic' || includeBudget
+  const includeRecall = changedGroup === 'recall'
 
   const contextConfig: AgentYamlMapping = {}
   if (includeRecall) {
@@ -202,12 +219,6 @@ export function replaceMemoryContextConfiguration(
   }
   if (includeBudget) {
     contextConfig.budget_profile = budgetProfile
-  }
-  if (includeConvergence) {
-    contextConfig.convergence = convergence
-  }
-  if (includeDynamic) {
-    contextConfig.dynamic_calibration = dynamicCalibration
   }
   if (Object.keys(contextConfig).length === 0) {
     return changedGroup === 'budget'
@@ -252,23 +263,6 @@ export function replaceMemoryContextConfiguration(
     ])
     fields.push(['context.budget_profile.estimation_strategy'.split('.'), 'heuristic'])
     fields.push(['context.budget_profile.profile_version'.split('.'), 'context_budget.v1'])
-  }
-  if (includeConvergence) {
-    fields.push([
-      ['context', 'convergence', 'level1_ratio'],
-      String(convergence.level1_ratio),
-    ])
-    fields.push([
-      ['context', 'convergence', 'level2_ratio'],
-      String(convergence.level2_ratio),
-    ])
-    fields.push([
-      ['context', 'convergence', 'hard_limit_ratio'],
-      String(convergence.hard_limit_ratio),
-    ])
-  }
-  if (includeDynamic) {
-    fields.push([['context', 'dynamic_calibration'], String(dynamicCalibration)])
   }
 
   return fields.reduce(
@@ -566,13 +560,11 @@ function startsWithPath(path: string[], prefix: string[]): boolean {
   return prefix.every((segment, index) => path[index] === segment)
 }
 
-function memoryContextConfigurationGroup(
+function agentContextConfigurationGroup(
   path: string[],
-): 'recall' | 'budget' | 'convergence' | 'dynamic' | null {
+): 'recall' | 'budget' | null {
   if (startsWithPath(path, ['context', 'source_policies', 'memory_recall'])) return 'recall'
   if (startsWithPath(path, ['context', 'budget_profile'])) return 'budget'
-  if (startsWithPath(path, ['context', 'convergence'])) return 'convergence'
-  if (samePath(path, ['context', 'dynamic_calibration'])) return 'dynamic'
   return null
 }
 

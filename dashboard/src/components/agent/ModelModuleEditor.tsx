@@ -328,6 +328,58 @@ export function ModelModuleEditor({
           </div>
         )}
 
+        <ConfigPanel variant="nested" headingLevel={4} title={t('model.contextWindowBudget')}>
+          <p className="-mt-2 mb-4 text-xs text-[var(--text-muted)]">
+            {t('model.contextWindowBudgetDescription')}
+          </p>
+          <FieldGrid cols={2} gap="md">
+            <SectionField
+              htmlFor="context-budget-max-tokens"
+              label={t('model.workingContextMaxTokens')}
+              description={t('model.runtimeDynamicDefaultDescription')}
+            >
+              <Input
+                id="context-budget-max-tokens"
+                type="number"
+                value={readAgentYamlField(agentYaml, [
+                  'context',
+                  'budget_profile',
+                  'max_tokens',
+                ])}
+                placeholder={t('model.runtimeDynamicDefault')}
+                onChange={(e) =>
+                  onFieldChange(
+                    ['context', 'budget_profile', 'max_tokens'],
+                    e.target.value,
+                  )
+                }
+              />
+            </SectionField>
+            <SectionField
+              htmlFor="context-budget-reserved-output"
+              label={t('model.reservedOutputTokens')}
+              description={t('model.reservedOutputTokensDescription')}
+            >
+              <Input
+                id="context-budget-reserved-output"
+                type="number"
+                value={readAgentYamlField(agentYaml, [
+                  'context',
+                  'budget_profile',
+                  'reserved_output_tokens',
+                ])}
+                placeholder={t('model.runtimeDynamicDefault')}
+                onChange={(e) =>
+                  onFieldChange(
+                    ['context', 'budget_profile', 'reserved_output_tokens'],
+                    e.target.value,
+                  )
+                }
+              />
+            </SectionField>
+          </FieldGrid>
+        </ConfigPanel>
+
         {/* ReAct controls section */}
         <ConfigPanel variant="nested" headingLevel={4} title={t('model.reactControls')}>
           <p className="-mt-2 mb-4 text-xs text-[var(--text-muted)]">

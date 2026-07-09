@@ -1,5 +1,12 @@
 export const MEMORY_FIELDS = [
   {
+    label: 'Enable Memory',
+    path: ['capabilities', 'memory', 'enabled'],
+    input: 'select' as const,
+    options: ['true', 'false'],
+    description: 'Controls whether retained memory capability settings are active.',
+  },
+  {
     label: 'Memory Provider',
     path: ['capabilities', 'memory', 'provider'],
     input: 'select' as const,
@@ -37,7 +44,26 @@ export const MEMORY_FIELDS = [
     path: ['capabilities', 'memory', 'scopes', 'user', 'enabled'],
     input: 'select' as const,
     options: ['true', 'false'],
-    description: 'Enables longer-lived user-scoped memory across cases for the same user identity.',
+    description: 'Enables consent-gated customer memory across cases for the same subject reference.',
+  },
+  {
+    label: 'User Retention (days)',
+    path: ['capabilities', 'memory', 'scopes', 'user', 'retention_days'],
+    input: 'number' as const,
+    description: 'Sets how long user-scoped memory remains eligible for retrieval.',
+  },
+  {
+    label: 'User Max Records',
+    path: ['capabilities', 'memory', 'scopes', 'user', 'max_records'],
+    input: 'number' as const,
+    description: 'Caps how many user memory records can be returned to the Agent context.',
+  },
+  {
+    label: 'User Allow Restricted',
+    path: ['capabilities', 'memory', 'scopes', 'user', 'allow_restricted'],
+    input: 'select' as const,
+    options: ['true', 'false'],
+    description: 'Controls whether restricted user memory can be admitted into context.',
   },
   {
     label: 'Shared Memory',

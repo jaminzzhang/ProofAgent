@@ -1055,6 +1055,79 @@ def test_customer_persistent_user_memory_is_admitted_across_conversations_with_c
     assert "claim reports" in user_admission["payload"]["summary"]
 
 
+def test_customer_user_memory_recall_policy_can_disable_working_context_admission(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "insurance_customer_service_user_memory_recall_disabled"
+    shutil.copytree(Path("examples/insurance_customer_service"), agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "      user:\n        enabled: false",
+            "      user:\n        enabled: true",
+        )
+        + """
+context:
+  source_policies:
+    memory_recall:
+      scopes:
+        user:
+          enabled: false
+""",
+        encoding="utf-8",
+    )
+    app = create_app(
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        published_agents={"insurance_user_memory": manifest_path},
+    )
+    client = TestClient(app)
+    first = client.post(
+        "/api/customer/conversations",
+        json={
+            "agent_id": "insurance_user_memory",
+            "customer_id": "CUST-001",
+            "memory_consent": True,
+        },
+    )
+    first_conversation_id = first.json()["conversation_id"]
+    first_run = client.post(
+        f"/api/customer/conversations/{first_conversation_id}/runs",
+        json={"question": "I usually care about monthly claim reports."},
+    )
+    assert first_run.status_code == 200
+    first_trace = client.get(f"/api/runs/{first_run.json()['run_id']}/trace").json()["events"]
+    assert any(
+        event["event_type"] == "memory_promotion_decision"
+        and event["payload"]["outcome"] == "persistent_user_memory"
+        for event in first_trace
+    )
+    second = client.post(
+        "/api/customer/conversations",
+        json={
+            "agent_id": "insurance_user_memory",
+            "customer_id": "CUST-001",
+            "memory_consent": True,
+        },
+    )
+    second_conversation_id = second.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/customer/conversations/{second_conversation_id}/runs",
+        json={"question": "Can we use that report view again?"},
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()["events"]
+    user_admissions = [
+        event
+        for event in trace
+        if event["event_type"] == "memory_admission" and event["payload"]["scope"] == "user"
+    ]
+    assert user_admissions == []
+
+
 def test_customer_persistent_user_memory_can_be_exported_and_deleted(
     tmp_path: Path,
 ) -> None:

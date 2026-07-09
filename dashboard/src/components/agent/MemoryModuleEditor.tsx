@@ -27,7 +27,7 @@ export function MemoryModuleEditor({
 
   const memoryEnabledPath = ['capabilities', 'memory', 'enabled']
   const providerPath = ['capabilities', 'memory', 'provider']
-  const memoryEnabled = readAgentYamlField(agentYaml, memoryEnabledPath) !== 'false'
+  const memoryEnabled = readAgentYamlField(agentYaml, memoryEnabledPath) === 'true'
   const provider = readAgentYamlField(agentYaml, providerPath) || 'session'
 
   const caseEnabledPath = ['capabilities', 'memory', 'scopes', 'case', 'enabled']
@@ -42,7 +42,14 @@ export function MemoryModuleEditor({
     readAgentYamlField(agentYaml, caseAllowRestrictedPath) === 'true'
 
   const userEnabledPath = ['capabilities', 'memory', 'scopes', 'user', 'enabled']
+  const userRetentionPath = ['capabilities', 'memory', 'scopes', 'user', 'retention_days']
+  const userMaxRecordsPath = ['capabilities', 'memory', 'scopes', 'user', 'max_records']
+  const userAllowRestrictedPath = ['capabilities', 'memory', 'scopes', 'user', 'allow_restricted']
   const userEnabled = readAgentYamlField(agentYaml, userEnabledPath) === 'true'
+  const userRetention = readAgentYamlField(agentYaml, userRetentionPath) || '30'
+  const userMaxRecords = readAgentYamlField(agentYaml, userMaxRecordsPath) || '5'
+  const userAllowRestricted =
+    readAgentYamlField(agentYaml, userAllowRestrictedPath) === 'true'
 
   const sharedEnabledPath = ['capabilities', 'memory', 'scopes', 'shared', 'enabled']
   const sharedEnabled = readAgentYamlField(agentYaml, sharedEnabledPath) === 'true'
@@ -50,23 +57,9 @@ export function MemoryModuleEditor({
   const memoryRecallCasePath = ['context', 'source_policies', 'memory_recall', 'scopes', 'case', 'enabled']
   const memoryRecallUserPath = ['context', 'source_policies', 'memory_recall', 'scopes', 'user', 'enabled']
   const memoryRecallSharedPath = ['context', 'source_policies', 'memory_recall', 'scopes', 'shared', 'enabled']
-  const memoryRecallCase = readAgentYamlField(agentYaml, memoryRecallCasePath) !== 'false'
-  const memoryRecallUser = readAgentYamlField(agentYaml, memoryRecallUserPath) === 'true'
+  const memoryRecallCase = caseEnabled && readAgentYamlField(agentYaml, memoryRecallCasePath) !== 'false'
+  const memoryRecallUser = userEnabled && readAgentYamlField(agentYaml, memoryRecallUserPath) !== 'false'
   const memoryRecallShared = readAgentYamlField(agentYaml, memoryRecallSharedPath) === 'true'
-
-  const maxTokensPath = ['context', 'budget_profile', 'max_tokens']
-  const reservedOutputTokensPath = ['context', 'budget_profile', 'reserved_output_tokens']
-  const level1Path = ['context', 'convergence', 'level1_ratio']
-  const level2Path = ['context', 'convergence', 'level2_ratio']
-  const hardLimitPath = ['context', 'convergence', 'hard_limit_ratio']
-  const dynamicCalibrationPath = ['context', 'dynamic_calibration']
-
-  const maxTokens = readAgentYamlField(agentYaml, maxTokensPath)
-  const reservedOutputTokens = readAgentYamlField(agentYaml, reservedOutputTokensPath)
-  const level1 = readAgentYamlField(agentYaml, level1Path) || '0.5'
-  const level2 = readAgentYamlField(agentYaml, level2Path) || '0.8'
-  const hardLimit = readAgentYamlField(agentYaml, hardLimitPath) || '1.0'
-  const dynamicCalibration = readAgentYamlField(agentYaml, dynamicCalibrationPath) !== 'false'
 
   return (
     <div className="space-y-6">
@@ -106,6 +99,7 @@ export function MemoryModuleEditor({
             <select
               id="memory-provider"
               value={provider}
+              disabled={!memoryEnabled}
               onChange={(e) => onFieldChange(providerPath, e.target.value)}
               className="h-9 w-full appearance-none rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 pr-9 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
               style={{
@@ -146,6 +140,7 @@ export function MemoryModuleEditor({
                 id="case-memory-enabled"
                 aria-label={t('memory.toggleCase')}
                 checked={caseEnabled}
+                disabled={!memoryEnabled}
                 onCheckedChange={(checked) =>
                   onFieldChange(caseEnabledPath, checked ? 'true' : 'false')
                 }
@@ -159,7 +154,7 @@ export function MemoryModuleEditor({
               <Switch
                 id="case-memory-allow-restricted"
                 checked={caseAllowRestricted}
-                disabled={!caseEnabled}
+                disabled={!memoryEnabled || !caseEnabled}
                 onCheckedChange={(checked) =>
                   onFieldChange(
                     caseAllowRestrictedPath,
@@ -176,7 +171,7 @@ export function MemoryModuleEditor({
                 id="case-memory-retention-days"
                 type="number"
                 value={caseRetention}
-                disabled={!caseEnabled}
+                disabled={!memoryEnabled || !caseEnabled}
                 onChange={(e) => onFieldChange(caseRetentionPath, e.target.value)}
               />
             </SectionField>
@@ -188,7 +183,7 @@ export function MemoryModuleEditor({
                 id="case-memory-max-records"
                 type="number"
                 value={caseMaxRecords}
-                disabled={!caseEnabled}
+                disabled={!memoryEnabled || !caseEnabled}
                 onChange={(e) => onFieldChange(caseMaxRecordsPath, e.target.value)}
               />
             </SectionField>
@@ -198,24 +193,64 @@ export function MemoryModuleEditor({
 
       <ConfigPanel
         headingLevel={3}
-        title={t('memory.userGate')}
+        title={t('memory.userMemory')}
         description={t('memory.userDescription')}
       >
         <FieldGrid cols={2} gap="md">
           <SectionField
             htmlFor="user-memory-enabled"
             label={t('memory.userMemory')}
-            description={t('memory.userGateReason')}
             inline
           >
             <Switch
               id="user-memory-enabled"
               aria-label={t('memory.toggleUser')}
               checked={userEnabled}
-              disabled
+              disabled={!memoryEnabled}
               onCheckedChange={(checked) =>
                 onFieldChange(userEnabledPath, checked ? 'true' : 'false')
               }
+            />
+          </SectionField>
+          <SectionField
+            htmlFor="user-memory-allow-restricted"
+            label={t('memory.allowRestricted')}
+            inline
+          >
+            <Switch
+              id="user-memory-allow-restricted"
+              checked={userAllowRestricted}
+              disabled={!memoryEnabled || !userEnabled}
+              onCheckedChange={(checked) =>
+                onFieldChange(
+                  userAllowRestrictedPath,
+                  checked ? 'true' : 'false',
+                )
+              }
+            />
+          </SectionField>
+          <SectionField
+            htmlFor="user-memory-retention-days"
+            label={t('memory.retentionDays')}
+          >
+            <Input
+              id="user-memory-retention-days"
+              type="number"
+              value={userRetention}
+              disabled={!memoryEnabled || !userEnabled}
+              onChange={(e) => onFieldChange(userRetentionPath, e.target.value)}
+            />
+          </SectionField>
+          <SectionField
+            htmlFor="user-memory-max-records"
+            label={t('memory.maxRecords')}
+          >
+            <Input
+              id="user-memory-max-records"
+              type="number"
+              value={userMaxRecords}
+              disabled={!memoryEnabled || !userEnabled}
+              onChange={(e) => onFieldChange(userMaxRecordsPath, e.target.value)}
             />
           </SectionField>
         </FieldGrid>
@@ -257,17 +292,18 @@ export function MemoryModuleEditor({
               id="memory-recall-case"
               aria-label={t('memory.toggleCaseRecall')}
               checked={memoryRecallCase}
+              disabled={!memoryEnabled || !caseEnabled}
               onCheckedChange={(checked) =>
                 onFieldChange(memoryRecallCasePath, checked ? 'true' : 'false')
               }
             />
           </SectionField>
-          <SectionField htmlFor="memory-recall-user" label={t('memory.userMemory')} description={t('memory.userGateReason')} inline>
+          <SectionField htmlFor="memory-recall-user" label={t('memory.userMemory')} inline>
             <Switch
               id="memory-recall-user"
               aria-label={t('memory.toggleUserRecall')}
               checked={memoryRecallUser}
-              disabled
+              disabled={!memoryEnabled || !userEnabled}
               onCheckedChange={(checked) =>
                 onFieldChange(memoryRecallUserPath, checked ? 'true' : 'false')
               }
@@ -281,84 +317,6 @@ export function MemoryModuleEditor({
               disabled
               onCheckedChange={(checked) =>
                 onFieldChange(memoryRecallSharedPath, checked ? 'true' : 'false')
-              }
-            />
-          </SectionField>
-        </FieldGrid>
-      </ConfigPanel>
-
-      <ConfigPanel
-        headingLevel={3}
-        title={t('memory.contextBudgetThresholds')}
-        description={t('memory.contextBudgetDescription')}
-      >
-        <FieldGrid cols={2} gap="md">
-          <SectionField htmlFor="memory-context-max-tokens" label={t('memory.maxTokens')} description={t('memory.dynamicDefaultDescription')}>
-            <Input
-              id="memory-context-max-tokens"
-              type="number"
-              value={maxTokens}
-              placeholder={t('memory.runtimeDynamicDefault')}
-              onChange={(e) => onFieldChange(maxTokensPath, e.target.value)}
-            />
-          </SectionField>
-          <SectionField htmlFor="memory-context-reserved-output" label={t('memory.reservedOutputTokens')} description={t('memory.dynamicDefaultDescription')}>
-            <Input
-              id="memory-context-reserved-output"
-              type="number"
-              value={reservedOutputTokens}
-              placeholder={t('memory.runtimeDynamicDefault')}
-              onChange={(e) => onFieldChange(reservedOutputTokensPath, e.target.value)}
-            />
-          </SectionField>
-        </FieldGrid>
-      </ConfigPanel>
-
-      <ConfigPanel
-        headingLevel={3}
-        title={t('memory.convergenceLevels')}
-        description={t('memory.convergenceDescription')}
-      >
-        <FieldGrid cols={3} gap="md">
-          <SectionField htmlFor="memory-level1-ratio" label={t('memory.level1Ratio')}>
-            <Input
-              id="memory-level1-ratio"
-              type="number"
-              value={level1}
-              onChange={(e) => onFieldChange(level1Path, e.target.value)}
-            />
-          </SectionField>
-          <SectionField htmlFor="memory-level2-ratio" label={t('memory.level2Ratio')}>
-            <Input
-              id="memory-level2-ratio"
-              type="number"
-              value={level2}
-              onChange={(e) => onFieldChange(level2Path, e.target.value)}
-            />
-          </SectionField>
-          <SectionField htmlFor="memory-hard-limit-ratio" label={t('memory.hardLimitRatio')}>
-            <Input
-              id="memory-hard-limit-ratio"
-              type="number"
-              value={hardLimit}
-              onChange={(e) => onFieldChange(hardLimitPath, e.target.value)}
-            />
-          </SectionField>
-        </FieldGrid>
-      </ConfigPanel>
-
-      <ConfigPanel
-        headingLevel={3}
-        title={t('memory.dynamicCalibration')}
-        description={t('memory.dynamicCalibrationDescription')}
-      >
-        <FieldGrid cols={2} gap="md">
-          <SectionField htmlFor="memory-dynamic-calibration" label={t('memory.dynamicCalibration')} inline>
-            <Switch
-              id="memory-dynamic-calibration"
-              checked={dynamicCalibration}
-              onCheckedChange={(checked) =>
-                onFieldChange(dynamicCalibrationPath, checked ? 'true' : 'false')
               }
             />
           </SectionField>

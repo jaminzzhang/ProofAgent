@@ -629,7 +629,7 @@ describe('AgentDetailPage', () => {
     })
   })
 
-  it('blocks validation when gated Persistent User Memory is enabled', () => {
+  it('blocks validation when local memory has no enabled scopes', () => {
     mockContract = {
       ...mockContract,
       agent_yaml: [
@@ -640,9 +640,9 @@ describe('AgentDetailPage', () => {
         '    provider: local',
         '    scopes:',
         '      case:',
-        '        enabled: true',
+        '        enabled: false',
         '      user:',
-        '        enabled: true',
+        '        enabled: false',
         '      shared:',
         '        enabled: false',
         '',
@@ -651,7 +651,7 @@ describe('AgentDetailPage', () => {
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
 
-    expect(screen.getByText(/Persistent User Memory requires subject identity, consent policy, and lifecycle controls/)).toBeInTheDocument()
+    expect(screen.getByText(/Local or Mem0 memory requires at least one enabled memory scope/)).toBeInTheDocument()
     fireEvent.change(screen.getByPlaceholderText('Enter a test question...'), {
       target: { value: 'What documents are required?' },
     })
@@ -659,7 +659,7 @@ describe('AgentDetailPage', () => {
     expect(validateConfigDraft).not.toHaveBeenCalled()
   })
 
-  it('blocks validation when context-only Persistent User Memory recall is enabled', () => {
+  it('does not block validation for context-only User Memory recall policy', () => {
     mockContract = {
       ...mockContract,
       agent_yaml: [
@@ -676,12 +676,11 @@ describe('AgentDetailPage', () => {
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
 
-    expect(screen.getByText(/Persistent User Memory requires subject identity, consent policy, and lifecycle controls/)).toBeInTheDocument()
+    expect(screen.queryByText(/Persistent User Memory requires subject identity, consent policy, and lifecycle controls/)).not.toBeInTheDocument()
     fireEvent.change(screen.getByPlaceholderText('Enter a test question...'), {
       target: { value: 'What documents are required?' },
     })
-    expect(screen.getByRole('button', { name: 'Run Validation' })).toBeDisabled()
-    expect(validateConfigDraft).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Run Validation' })).not.toBeDisabled()
   })
 
   it('blocks validation when context-only Shared Memory recall is enabled', () => {
@@ -709,7 +708,7 @@ describe('AgentDetailPage', () => {
     expect(validateConfigDraft).not.toHaveBeenCalled()
   })
 
-  it('blocks publication when gated Persistent User Memory is enabled', () => {
+  it('blocks publication when local memory has no enabled scopes', () => {
     mockContract = {
       ...mockContract,
       agent_yaml: [
@@ -720,9 +719,9 @@ describe('AgentDetailPage', () => {
         '    provider: local',
         '    scopes:',
         '      case:',
-        '        enabled: true',
+        '        enabled: false',
         '      user:',
-        '        enabled: true',
+        '        enabled: false',
         '      shared:',
         '        enabled: false',
         '',
@@ -746,7 +745,7 @@ describe('AgentDetailPage', () => {
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=versions')
 
-    expect(screen.getByText(/Persistent User Memory requires subject identity, consent policy, and lifecycle controls/)).toBeInTheDocument()
+    expect(screen.getByText(/Local or Mem0 memory requires at least one enabled memory scope/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
   })
 
@@ -1598,13 +1597,13 @@ workflow:
       target: { value: 'session' },
     })
     fireEvent.click(screen.getByRole('switch', { name: 'Toggle Case Memory' }))
-    fireEvent.change(screen.getByLabelText('Retention (Days)'), {
+    fireEvent.change(screen.getAllByLabelText('Retention (Days)')[0], {
       target: { value: '45' },
     })
-    fireEvent.change(screen.getByLabelText('Max Records'), {
+    fireEvent.change(screen.getAllByLabelText('Max Records')[0], {
       target: { value: '9' },
     })
-    fireEvent.click(screen.getByRole('switch', { name: 'Allow Restricted' }))
+    fireEvent.click(screen.getAllByRole('switch', { name: 'Allow Restricted' })[0])
 
     expect(screen.queryByRole('button', { name: 'Save Workflow' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save Memory' }))
@@ -1667,6 +1666,9 @@ workflow:
         allow_restricted: false
       user:
         enabled: false
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
       shared:
         enabled: false`)
     expect(savedYaml).not.toContain('\nmemory:\n')
@@ -1719,7 +1721,7 @@ workflow:
     expect(savedYaml).not.toContain('budget_profile:')
   })
 
-  it('writes complete explicit context configuration after a memory budget override', async () => {
+  it('does not render Context Budget controls in the Memory module', async () => {
     mockContract = {
       ...mockContract,
       agent_yaml: [
@@ -1744,36 +1746,9 @@ workflow:
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=memory')
 
-    expect(screen.getAllByPlaceholderText('Runtime dynamic default')).toHaveLength(2)
-    fireEvent.change(screen.getByLabelText('Max Tokens'), {
-      target: { value: '4096' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Memory' }))
-
-    await waitFor(() => {
-      expect(updateConfigDraftContract).toHaveBeenCalled()
-    })
-    const savedYaml = latestSavedAgentYaml()
-    expect(savedYaml).toContain(`context:
-  source_policies:
-    memory_recall:
-      scopes:
-        case:
-          enabled: true
-        user:
-          enabled: false
-        shared:
-          enabled: false
-  budget_profile:
-    max_tokens: 4096
-    reserved_output_tokens: 0
-    estimation_strategy: heuristic
-    profile_version: context_budget.v1
-  convergence:
-    level1_ratio: 0.5
-    level2_ratio: 0.8
-    hard_limit_ratio: 1.0
-  dynamic_calibration: true`)
+    expect(screen.queryByText('Context Window & Budget')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Working Context Max Tokens')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Reserved Output Tokens')).not.toBeInTheDocument()
   })
 
   it('saves unified Model settings across answer, planner, and reviewer roles', async () => {
@@ -1848,6 +1823,56 @@ workflow:
     expect(savedYaml).toContain('subagent:\n    provider: openai\n    name: gpt-4.1-mini')
     expect(savedYaml).toContain('temperature: 0.2')
     expect(savedYaml).toContain('max_steps: 9')
+  })
+
+  it('saves Context Window budget from the Model module to top-level context configuration', async () => {
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'model:',
+        '  provider: deepseek',
+        '  name: deepseek-chat',
+        '  params:',
+        '    temperature: 0',
+        'react:',
+        '  max_steps: 6',
+        '  max_tool_calls: 4',
+        '  record_reasoning_summary: true',
+        '  planner:',
+        '    provider: deepseek',
+        '    name: deepseek-chat',
+        'review:',
+        '  mode: rules_only',
+        '  subagent:',
+        '    provider: deepseek',
+        '    name: deepseek-chat',
+        '    fail_closed: true',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=model')
+    expect(await screen.findByText('Model Configuration')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Working Context Max Tokens'), {
+      target: { value: '4096' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Config' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftContract).toHaveBeenCalled()
+    })
+    const savedYaml = latestSavedAgentYaml()
+    expect(savedYaml).toContain(`context:
+  budget_profile:
+    max_tokens: 4096
+    reserved_output_tokens: 0
+    estimation_strategy: heuristic
+    profile_version: context_budget.v1`)
+    expect(savedYaml).not.toContain('memory_recall:')
+    expect(savedYaml).not.toContain('convergence:')
+    expect(savedYaml).not.toContain('dynamic_calibration:')
   })
 
   it('loads shared model connections for the Model module selector', async () => {

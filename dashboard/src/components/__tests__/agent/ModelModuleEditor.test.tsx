@@ -210,6 +210,39 @@ describe('ModelModuleEditor', () => {
     )
   })
 
+  it('edits Working Context budget under top-level Agent Context Configuration', () => {
+    const onFieldChange = vi.fn()
+
+    render(
+      <ModelModuleEditor
+        agentYaml={AGENT_YAML}
+        modelConnections={[modelConnection()]}
+        onFieldChange={onFieldChange}
+        onModelConfigChange={vi.fn()}
+        onSave={vi.fn()}
+        busy={false}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Context Window & Budget' })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Working Context Max Tokens'), {
+      target: { value: '4096' },
+    })
+    fireEvent.change(screen.getByLabelText('Reserved Output Tokens'), {
+      target: { value: '512' },
+    })
+
+    expect(onFieldChange).toHaveBeenCalledWith(
+      ['context', 'budget_profile', 'max_tokens'],
+      '4096',
+    )
+    expect(onFieldChange).toHaveBeenCalledWith(
+      ['context', 'budget_profile', 'reserved_output_tokens'],
+      '512',
+    )
+  })
+
   it('applies unified shared model selection to answer planner and reviewer', () => {
     const onModelConfigChange = vi.fn()
 

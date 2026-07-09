@@ -50,10 +50,13 @@ describe('module configuration field options', () => {
     expect(optionsFor(MODEL_FIELDS, 'Review Fail Closed')).toEqual(['true'])
     expect(optionsFor(MEMORY_FIELDS, 'Memory Provider')).toEqual(['session', 'local', 'mem0'])
     expect(fieldPaths(MEMORY_FIELDS)).toEqual(expect.arrayContaining([
+      'capabilities.memory.enabled',
       'capabilities.memory.provider',
       'capabilities.memory.scopes.case.enabled',
       'capabilities.memory.scopes.case.retention_days',
       'capabilities.memory.scopes.user.enabled',
+      'capabilities.memory.scopes.user.retention_days',
+      'capabilities.memory.scopes.user.max_records',
       'capabilities.memory.scopes.shared.enabled',
     ]))
   })

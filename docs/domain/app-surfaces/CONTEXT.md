@@ -17,8 +17,8 @@ The Dashboard configuration workspace for administering Shared Model Connections
 _Avoid_: Provider model catalog, Agent Model module, runtime model endpoint
 
 **Dashboard Model Configuration**:
-The Dashboard configuration workspace may directly configure Model Role Configuration values for final answers, ReAct planning, and Harness review, including named Model Providers such as DeepSeek. Dashboard editing still writes Agent Contract fields and must preserve the same secret, validation, and Harness-normalization boundaries as YAML editing.
-_Avoid_: Dashboard-only model semantics, provider credential storage, bypassing Agent Contract validation
+The Dashboard configuration workspace may directly configure Model Role Configuration values for final answers, ReAct planning, and Harness review, including named Model Providers such as DeepSeek, and may present model-adjacent Context Window and budget controls that still write Agent Context Configuration rather than Model Role Configuration.
+_Avoid_: Dashboard-only model semantics, provider credential storage, bypassing Agent Contract validation, model-owned context assembly
 
 **Dashboard DeepSeek Model Selection**:
 Dashboard DeepSeek configuration uses provider selection plus editable model names with recommended current DeepSeek model values, not a hard model-name allowlist. API keys remain environment variable references, not stored credentials.
@@ -113,8 +113,8 @@ One of the eight editable sub-features in the Agent Configuration Workspace: Gen
 _Avoid_: Agent Lifecycle Tab, free-form settings page, monolithic configuration form
 
 **Dashboard Memory Configuration Module**:
-The Agent Configuration Module for configuring an Agent's memory storage, Memory Scope eligibility, and memory-recall context budget policy without creating a separate top-level Context workspace. It distinguishes retained memory records from admitted Working Context and keeps final-answer evidence authority with Knowledge or authorized Tool results.
-_Avoid_: Dashboard Context module, memory as evidence, prompt-only memory toggle
+The Agent Configuration Module for configuring an Agent's memory storage, Memory Scope eligibility, and Memory Recall Admission policy. It distinguishes retained memory records from admitted Working Context and keeps final-answer evidence authority with Knowledge or authorized Tool results.
+_Avoid_: Dashboard Context module, memory as evidence, prompt-only memory toggle, context budget workspace
 
 **Agent Lifecycle Tab**:
 One of the four operational tabs in the Agent detail view: Validate & Test, Versions, Contract View, and Monitor. Lifecycle tabs operate on the Draft Agent or Published Agent Version rather than editing configuration fields.

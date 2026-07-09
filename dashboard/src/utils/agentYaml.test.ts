@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   readWorkflowStageConfigs,
   readWorkflowTemplateDescriptorVersion,
+  replaceAgentContextConfiguration,
   replaceAgentYamlMapping,
   replaceMemoryCapabilityConfiguration,
-  replaceMemoryContextConfiguration,
   replaceWorkflowStages,
   updateAgentYamlField,
 } from './agentYaml'
@@ -40,37 +40,25 @@ describe('agentYaml', () => {
     expect(updated).toContain('        max_records: 5')
   })
 
-  it('writes a complete explicit memory context configuration on override', () => {
-    const updated = replaceMemoryContextConfiguration(
+  it('writes only an explicit context budget override from Agent Context controls', () => {
+    const updated = replaceAgentContextConfiguration(
       AGENT_YAML,
       ['context', 'budget_profile', 'max_tokens'],
       '4096',
     )
 
     expect(updated).toContain(`context:
-  source_policies:
-    memory_recall:
-      scopes:
-        case:
-          enabled: true
-        user:
-          enabled: false
-        shared:
-          enabled: false
   budget_profile:
     max_tokens: 4096
     reserved_output_tokens: 0
     estimation_strategy: heuristic
-    profile_version: context_budget.v1
-  convergence:
-    level1_ratio: 0.5
-    level2_ratio: 0.8
-    hard_limit_ratio: 1.0
-  dynamic_calibration: true`)
+    profile_version: context_budget.v1`)
+    expect(updated).not.toContain('convergence:')
+    expect(updated).not.toContain('dynamic_calibration:')
   })
 
-  it('preserves existing context siblings when writing memory context controls', () => {
-    const updated = replaceMemoryContextConfiguration(
+  it('preserves existing context siblings when writing Agent Context controls', () => {
+    const updated = replaceAgentContextConfiguration(
       `name: insurance
 context:
   source_policies:
@@ -87,7 +75,7 @@ context:
   })
 
   it('does not materialize an explicit budget profile when editing memory recall policy', () => {
-    const updated = replaceMemoryContextConfiguration(
+    const updated = replaceAgentContextConfiguration(
       AGENT_YAML,
       ['context', 'source_policies', 'memory_recall', 'scopes', 'case', 'enabled'],
       'false',
@@ -107,7 +95,7 @@ context:
   })
 
   it('does not materialize an explicit budget profile when a blank budget value is submitted without an existing budget', () => {
-    const updated = replaceMemoryContextConfiguration(
+    const updated = replaceAgentContextConfiguration(
       AGENT_YAML,
       ['context', 'budget_profile', 'max_tokens'],
       '',
@@ -116,8 +104,8 @@ context:
     expect(updated).not.toContain('budget_profile:')
   })
 
-  it('preserves unrelated top-level context siblings when writing memory context controls', () => {
-    const updated = replaceMemoryContextConfiguration(
+  it('preserves unrelated top-level context siblings when writing Agent Context controls', () => {
+    const updated = replaceAgentContextConfiguration(
       `name: insurance
 context:
   custom_runtime_policy:
@@ -161,11 +149,42 @@ policy:
         allow_restricted: false
       user:
         enabled: false
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false
       shared:
         enabled: false`)
     expect(updated).not.toContain('\nmemory:\n')
     expect(updated).toContain(`policy:
   file: ./policy.yaml`)
+  })
+
+  it('writes minimal memory configuration when memory is disabled', () => {
+    const updated = replaceMemoryCapabilityConfiguration(
+      AGENT_YAML,
+      ['capabilities', 'memory', 'enabled'],
+      'false',
+    )
+
+    expect(updated).toContain(`capabilities:
+  memory:
+    enabled: false`)
+    expect(updated).not.toContain('provider: local')
+    expect(updated).not.toContain('scopes:')
+  })
+
+  it('materializes user memory scope defaults when User Memory is enabled', () => {
+    const updated = replaceMemoryCapabilityConfiguration(
+      AGENT_YAML,
+      ['capabilities', 'memory', 'scopes', 'user', 'enabled'],
+      'true',
+    )
+
+    expect(updated).toContain(`user:
+        enabled: true
+        retention_days: 30
+        max_records: 5
+        allow_restricted: false`)
   })
 
   it('inserts missing nested model params under an existing parent section', () => {

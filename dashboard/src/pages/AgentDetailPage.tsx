@@ -45,7 +45,6 @@ import { RunDetailDrawer } from '../components/agent/RunDetailDrawer'
 import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
 import { TOOLS_FIELDS } from '../components/agent/module-configs/tools'
 import { POLICY_FIELDS } from '../components/agent/module-configs/policy'
-import { MEMORY_FIELDS } from '../components/agent/module-configs/memory'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
 import { useConfigVersions } from '../hooks/useConfigVersions'
@@ -53,9 +52,9 @@ import { useLocale } from '../i18n/locale'
 import {
   extractAgentYamlSection,
   readAgentYamlField,
-  replaceMemoryCapabilityConfiguration,
-  replaceMemoryContextConfiguration,
+  replaceAgentContextConfiguration,
   replaceAgentYamlMapping,
+  replaceMemoryCapabilityConfiguration,
   updateAgentYamlField,
 } from '../utils/agentYaml'
 
@@ -327,9 +326,9 @@ export function AgentDetailPage() {
     })
   }
 
-  function updateMemoryYamlField(current: string, path: string[], value: string): string {
+  function updateConfigurationYamlField(current: string, path: string[], value: string): string {
     if (path[0] === 'context') {
-      return replaceMemoryContextConfiguration(current, path, value)
+      return replaceAgentContextConfiguration(current, path, value)
     }
     if (path[0] === 'capabilities' && path[1] === 'memory') {
       return replaceMemoryCapabilityConfiguration(current, path, value)
@@ -543,7 +542,7 @@ export function AgentDetailPage() {
         <ModelModuleEditor
           agentYaml={agentYaml}
           modelConnections={modelConnections}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))}
           onModelConfigChange={(path, value) => setAgentYaml((current: string) => replaceAgentYamlMapping(current, path, value))}
           onCreateSharedModelConnection={async (payload) => {
             const connection = await createModelConnection(payload)
@@ -558,7 +557,7 @@ export function AgentDetailPage() {
       {activeTab === 'memory' && (
         <MemoryModuleEditor
           agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateMemoryYamlField(current, path, value))}
+          onFieldChange={(path, value) => setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))}
           onSave={() => saveAgentYaml(t('agentDetail.memorySaved'))}
           busy={busy === 'workflow'}
         />
@@ -766,6 +765,9 @@ function memoryConfigurationBlockers(
     readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'case', 'max_records']),
     readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'case', 'allow_restricted']),
     readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'user', 'enabled']),
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'user', 'retention_days']),
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'user', 'max_records']),
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'user', 'allow_restricted']),
     readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'shared', 'enabled']),
   ]
   const contextRecallFields = [
@@ -777,17 +779,23 @@ function memoryConfigurationBlockers(
     canonicalMemoryFields.some(Boolean) || contextRecallFields.some(Boolean)
   if (!hasMemoryConfiguration) return blockers
 
-  const memoryEnabled = memoryEnabledValue !== 'false'
+  const memoryEnabled = memoryEnabledValue === 'true'
 
   if (memoryEnabled && !memoryProvider) {
     blockers.push(t('memory.blockProviderRequired'))
   }
 
+  const caseMemoryEnabled =
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'case', 'enabled']) === 'true'
   const userMemoryEnabled =
-    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'user', 'enabled']) === 'true' ||
-    readAgentYamlField(agentYaml, ['context', 'source_policies', 'memory_recall', 'scopes', 'user', 'enabled']) === 'true'
-  if (userMemoryEnabled) {
-    blockers.push(t('memory.blockPersistentUser'))
+    readAgentYamlField(agentYaml, ['capabilities', 'memory', 'scopes', 'user', 'enabled']) === 'true'
+  if (
+    memoryEnabled &&
+    (memoryProvider === 'local' || memoryProvider === 'mem0') &&
+    !caseMemoryEnabled &&
+    !userMemoryEnabled
+  ) {
+    blockers.push(t('memory.blockScopeRequired'))
   }
 
   const sharedMemoryEnabled =

@@ -340,15 +340,30 @@ def execute_customer_run_for_conversation(
     manifest = _load_manifest(manifest_path)
     case_memory_enabled = _case_memory_enabled(manifest)
     user_memory_enabled = _user_memory_enabled(manifest)
+    case_memory_recall_enabled = _memory_recall_scope_enabled(
+        manifest,
+        "case",
+        default=True,
+    )
+    user_memory_recall_enabled = _memory_recall_scope_enabled(
+        manifest,
+        "user",
+        default=True,
+    )
     user_memory_consent = _customer_memory_consent(conversation, request)
     case_memory_admission = (
         _admit_customer_case_memory(app_request, conversation, manifest)
-        if case_memory_enabled
+        if case_memory_enabled and case_memory_recall_enabled
         else MemoryAdmission(admitted=False)
     )
     user_memory_admission = (
         _admit_customer_user_memory(app_request, conversation, manifest)
-        if user_memory_enabled and user_memory_consent and conversation.customer_ref is not None
+        if (
+            user_memory_enabled
+            and user_memory_recall_enabled
+            and user_memory_consent
+            and conversation.customer_ref is not None
+        )
         else MemoryAdmission(admitted=False)
     )
     result, detail, _ = _execute_published_agent_run(
@@ -373,7 +388,7 @@ def execute_customer_run_for_conversation(
         ),
         run_purpose=run_purpose,
     )
-    if case_memory_enabled:
+    if case_memory_enabled and case_memory_recall_enabled:
         _append_memory_admission_event(
             app_request=app_request,
             detail=cast(RunDetail, detail),
@@ -381,7 +396,12 @@ def execute_customer_run_for_conversation(
             conversation=conversation,
             scope=MemoryScope.CASE,
         )
-    if user_memory_enabled and user_memory_consent and conversation.customer_ref is not None:
+    if (
+        user_memory_enabled
+        and user_memory_recall_enabled
+        and user_memory_consent
+        and conversation.customer_ref is not None
+    ):
         _append_memory_admission_event(
             app_request=app_request,
             detail=cast(RunDetail, detail),
@@ -863,6 +883,27 @@ def _user_memory_enabled(manifest: AgentManifest) -> bool:
 
 def _memory_provider(manifest: AgentManifest) -> str:
     return str(manifest.capabilities.memory.provider or "")
+
+
+def _memory_recall_scope_enabled(
+    manifest: AgentManifest,
+    scope: str,
+    *,
+    default: bool,
+) -> bool:
+    if manifest.context is None:
+        return default
+    source_policies = manifest.context.source_policies
+    memory_recall = source_policies.get("memory_recall")
+    if not isinstance(memory_recall, Mapping):
+        return default
+    scopes = memory_recall.get("scopes")
+    if not isinstance(scopes, Mapping):
+        return default
+    scope_policy = scopes.get(scope)
+    if not isinstance(scope_policy, Mapping) or "enabled" not in scope_policy:
+        return default
+    return scope_policy.get("enabled") is True
 
 
 def _memory_scope_config(manifest: AgentManifest, scope: str) -> dict[str, Any]:
