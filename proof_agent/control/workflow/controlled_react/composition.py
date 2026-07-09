@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from proof_agent.capabilities.react.planner import DeterministicReActPlanner
 from proof_agent.capabilities.react.intent import DeterministicIntentResolver
@@ -533,7 +533,7 @@ class _StageScopedTrace:
         self,
         event_type: str,
         *,
-        status: str = "ok",
+        status: Literal["ok", "blocked", "waiting", "error"] = "ok",
         payload: Mapping[str, Any] | None = None,
     ) -> object:
         stage_payload = dict(payload or {})

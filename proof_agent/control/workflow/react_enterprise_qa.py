@@ -18,10 +18,10 @@ from proof_agent.contracts import (
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.policy.review import fail_closed_policy_decision
 from proof_agent.control.workflow.harness_helpers import emit_policy_decision
-from proof_agent.observability.audit.trace import TraceWriter
+from proof_agent.observability.audit.trace import TraceEmitter
 
 
-def emit_reasoning_summary(trace: TraceWriter, proposal: ReActActionProposal) -> None:
+def emit_reasoning_summary(trace: TraceEmitter, proposal: ReActActionProposal) -> None:
     """Emit an audit-safe reasoning summary without raw chain-of-thought."""
 
     summary = proposal.reasoning_summary
@@ -42,7 +42,7 @@ def emit_reasoning_summary(trace: TraceWriter, proposal: ReActActionProposal) ->
 
 
 def emit_intent_resolution(
-    trace: TraceWriter,
+    trace: TraceEmitter,
     resolution: IntentResolution,
     *,
     max_queries: int = 3,
@@ -83,7 +83,7 @@ def emit_intent_resolution(
     )
 
 
-def emit_action_proposal(trace: TraceWriter, proposal: ReActActionProposal) -> None:
+def emit_action_proposal(trace: TraceEmitter, proposal: ReActActionProposal) -> None:
     """Emit the proposed governed action using JSON-serializable fields."""
 
     trace.emit(
@@ -113,7 +113,7 @@ def _retrieval_query_set_payload(resolution: IntentResolution) -> list[dict[str,
 
 def review_action(
     *,
-    trace: TraceWriter,
+    trace: TraceEmitter,
     policy: PolicyEngine,
     enforcement_point: EnforcementPoint,
     context: Mapping[str, Any],

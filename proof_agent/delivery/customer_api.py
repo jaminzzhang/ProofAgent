@@ -1175,10 +1175,10 @@ def _safe_source_label(
         if not raw_source or _NUMBERED_REFERENCE_LABEL_RE.match(raw_source):
             return f"Knowledge Source {source_id}"
 
-    raw_source = chunk.get("source")
-    if raw_source is None:
+    source_value = chunk.get("source")
+    if source_value is None:
         return None
-    label = Path(str(raw_source)).name or str(raw_source)
+    label = Path(str(source_value)).name or str(source_value)
     return label.strip() or None
 
 

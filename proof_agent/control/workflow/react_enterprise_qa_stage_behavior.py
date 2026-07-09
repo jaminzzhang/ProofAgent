@@ -58,7 +58,7 @@ from proof_agent.control.workflow.react_enterprise_qa import (
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.demo.scenarios import UNSUPPORTED_QUESTION
-from proof_agent.observability.audit.trace import TraceWriter
+from proof_agent.observability.audit.trace import TraceEmitter, TraceWriter
 from proof_agent.runtime.graph import (
     _format_untrusted_web_supplement,
     _maybe_untrusted_web_supplement,
@@ -1032,7 +1032,7 @@ class _TracingModelProvider:
         self,
         *,
         provider: ModelProvider,
-        trace: TraceWriter,
+        trace: TraceEmitter,
         role: ModelCallRole,
         stage_id: str | None = None,
     ) -> None:
@@ -1050,7 +1050,7 @@ class _TracingModelProvider:
     def role(self) -> ModelCallRole:
         return self._role
 
-    def bind_trace(self, trace: TraceWriter, *, stage_id: str | None = None) -> None:
+    def bind_trace(self, trace: TraceEmitter, *, stage_id: str | None = None) -> None:
         self._trace = trace
         self._stage_id = stage_id
 
@@ -1134,7 +1134,7 @@ class _TracingModelProvider:
 
 def wrap_control_plane_model_providers(
     invocation: HarnessInvocation,
-    trace: TraceWriter,
+    trace: TraceEmitter,
     *,
     stage_id_by_role: Mapping[ModelCallRole, str] | None = None,
 ) -> None:
@@ -1170,7 +1170,7 @@ def wrap_control_plane_model_providers(
 def _wrap_model_provider_attribute(
     owner: object | None,
     *,
-    trace: TraceWriter,
+    trace: TraceEmitter,
     role: ModelCallRole,
     stage_id: str | None = None,
 ) -> None:
@@ -1206,7 +1206,7 @@ def _stage_id_for_control_plane_role(
 
 
 def _emit_control_plane_model_error(
-    trace: TraceWriter,
+    trace: TraceEmitter,
     *,
     role: ModelCallRole,
     provider: str,
