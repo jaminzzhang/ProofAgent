@@ -61,12 +61,8 @@ class ConversationStore:
         record = self.get_conversation(conversation_id)
         if record is None:
             return None
-        updated = ConversationRecord(
-            conversation_id=record.conversation_id,
-            agent_id=record.agent_id,
-            created_at=record.created_at,
-            updated_at=_now(),
-            turns=(*record.turns, turn),
+        updated = record.model_copy(
+            update={"updated_at": _now(), "turns": (*record.turns, turn)}
         )
         self._write(updated)
         return updated
