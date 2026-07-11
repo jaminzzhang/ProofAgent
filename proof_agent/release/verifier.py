@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import stat
 from collections import Counter
@@ -20,6 +21,7 @@ from proof_agent.release.contracts import (
 from proof_agent.release.digests import (
     candidate_binding_sha256,
     digest_ref,
+    gate_result_sha256,
     parse_content_addressed_uri,
     sha256_hex,
 )
@@ -42,6 +44,28 @@ class ReleaseDecision(StrictFrozenModel):
     blocker_codes: tuple[str, ...]
 
 
+class VerifiedAttestationClaims(StrictFrozenModel):
+    artifact_sha256: Sha256
+    candidate_binding_sha256: Sha256
+    gate_result_sha256: Sha256
+
+
+class ArtifactUnavailableError(OSError):
+    """An expected artifact lookup or read failure."""
+
+
+class AttestationUnavailableError(RuntimeError):
+    """The configured cryptographic attestation verifier is unavailable."""
+
+
+class AttestationVerificationError(RuntimeError):
+    """The attestation verifier could not verify a supplied envelope."""
+
+
+class VerifierInternalError(RuntimeError):
+    """An unexpected verifier or adapter defect that must not become evidence state."""
+
+
 class ArtifactReader(Protocol):
     def read(self, evidence: EvidenceRef) -> bytes: ...
 
@@ -50,10 +74,11 @@ class AttestationVerifier(Protocol):
     def verify(
         self,
         *,
+        result: GateResult,
         evidence: EvidenceRef,
         artifact: bytes,
         candidate_binding_sha256: Sha256,
-    ) -> bool: ...
+    ) -> VerifiedAttestationClaims | None: ...
 
 
 class EvidenceRootArtifactReader:
@@ -66,17 +91,58 @@ class EvidenceRootArtifactReader:
 
     def read(self, evidence: EvidenceRef) -> bytes:
         artifact_sha256 = parse_content_addressed_uri(evidence.uri)
+        if os.name == "posix" and hasattr(os, "O_NOFOLLOW"):
+            return self._read_posix(artifact_sha256)
+        return self._read_fallback(artifact_sha256)
+
+    def _read_posix(self, artifact_sha256: Sha256) -> bytes:
+        root_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | os.O_NOFOLLOW
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        artifact_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        root_fd = -1
+        artifact_fd = -1
+        try:
+            root_fd = os.open(self._root, root_flags)
+            artifact_fd = os.open(artifact_sha256, artifact_flags, dir_fd=root_fd)
+            if not stat.S_ISREG(os.fstat(artifact_fd).st_mode):
+                raise ArtifactUnavailableError("evidence artifact must be a regular file")
+            chunks: list[bytes] = []
+            while chunk := os.read(artifact_fd, 1024 * 1024):
+                chunks.append(chunk)
+            return b"".join(chunks)
+        except ArtifactUnavailableError:
+            raise
+        except OSError as exc:
+            raise ArtifactUnavailableError(
+                "evidence artifact is unavailable or is a symlink"
+            ) from exc
+        finally:
+            if artifact_fd >= 0:
+                os.close(artifact_fd)
+            if root_fd >= 0:
+                os.close(root_fd)
+
+    def _read_fallback(self, artifact_sha256: Sha256) -> bytes:
         artifact_path = self._root / artifact_sha256
         if artifact_path.is_symlink():
-            raise OSError("evidence artifact must not be a symlink")
+            raise ArtifactUnavailableError("evidence artifact must not be a symlink")
         try:
             resolved = artifact_path.resolve(strict=True)
             resolved.relative_to(self._root)
         except (OSError, ValueError) as exc:
-            raise OSError("evidence artifact is unavailable or escapes its root") from exc
+            raise ArtifactUnavailableError(
+                "evidence artifact is unavailable or escapes its root"
+            ) from exc
         if not stat.S_ISREG(artifact_path.lstat().st_mode):
-            raise OSError("evidence artifact must be a regular file")
-        return artifact_path.read_bytes()
+            raise ArtifactUnavailableError("evidence artifact must be a regular file")
+        try:
+            return artifact_path.read_bytes()
+        except OSError as exc:
+            raise ArtifactUnavailableError("evidence artifact is unavailable") from exc
 
 
 class UnavailableAttestationVerifier:
@@ -85,12 +151,15 @@ class UnavailableAttestationVerifier:
     def verify(
         self,
         *,
+        result: GateResult,
         evidence: EvidenceRef,
         artifact: bytes,
         candidate_binding_sha256: Sha256,
-    ) -> bool:
-        del evidence, artifact, candidate_binding_sha256
-        raise RuntimeError("release evidence attestation verification is unavailable")
+    ) -> VerifiedAttestationClaims | None:
+        del result, evidence, artifact, candidate_binding_sha256
+        raise AttestationUnavailableError(
+            "release evidence attestation verification is unavailable"
+        )
 
 
 def verify_release_manifest(
@@ -109,7 +178,7 @@ def verify_release_manifest(
     binding = candidate_binding_sha256(manifest.candidate)
     blockers: list[str] = []
 
-    packaged_digest = digest_ref(profile.exact_bytes)
+    packaged_digest = digest_ref(profile.binding_bytes)
     if manifest.candidate.gate_profile.sha256 != packaged_digest.sha256:
         blockers.append("profile.sha256_mismatch")
     if manifest.candidate.gate_profile.length != packaged_digest.length:
@@ -117,7 +186,7 @@ def verify_release_manifest(
 
     if manifest.generated_at > checked_at:
         blockers.append("manifest.generated_in_future")
-    if checked_at > manifest.generated_at + _DEPLOYMENT_WINDOW:
+    elif checked_at - manifest.generated_at > _DEPLOYMENT_WINDOW:
         blockers.append("deployment.window_expired")
 
     results_by_gate: dict[str, GateResult] = {}
@@ -136,11 +205,15 @@ def verify_release_manifest(
         if gate_id not in required_gate_ids:
             blockers.append(f"gate.unknown:{gate_id}")
 
+    all_evidence = tuple(evidence for result in manifest.results for evidence in result.evidence)
+    _verify_evidence_identity(all_evidence, blockers)
+
     required_expiries: list[datetime] = []
     for result in manifest.results:
         if result.status != "passed":
             blockers.append(f"gate.status:{result.gate_id}:{result.status}")
-        if result.candidate_binding_sha256 != binding:
+        result_binding_valid = result.candidate_binding_sha256 == binding
+        if not result_binding_valid:
             blockers.append(f"gate.binding_mismatch:{result.gate_id}")
         for reported_blocker in result.blocker_codes:
             blockers.append(f"gate.reported_blocker:{result.gate_id}:{reported_blocker}")
@@ -160,11 +233,14 @@ def verify_release_manifest(
                 blockers=blockers,
                 required_expiries=required_expiries,
             )
-            if evidence.candidate_binding_sha256 != binding:
+            evidence_binding_valid = evidence.candidate_binding_sha256 == binding
+            if not evidence_binding_valid:
                 blockers.append(f"evidence.binding_mismatch:{evidence.evidence_id}")
             _verify_evidence_artifact(
+                result,
                 evidence,
                 binding=binding,
+                bindings_valid=result_binding_valid and evidence_binding_valid,
                 artifact_reader=artifact_reader,
                 attestation_verifier=attestation_verifier,
                 blockers=blockers,
@@ -197,6 +273,21 @@ def _evidence_rule(gate_rule: GateRule | None, kind: str) -> EvidenceRule | None
     return next((rule for rule in gate_rule.evidence if rule.kind == kind), None)
 
 
+def _verify_evidence_identity(
+    evidence_items: tuple[EvidenceRef, ...],
+    blockers: list[str],
+) -> None:
+    identities = (
+        ("duplicate_id", (evidence.evidence_id for evidence in evidence_items)),
+        ("duplicate_uri", (evidence.uri for evidence in evidence_items)),
+        ("duplicate_digest", (evidence.digest.sha256 for evidence in evidence_items)),
+    )
+    for category, values in identities:
+        for value, count in Counter(values).items():
+            if count > 1:
+                blockers.append(f"evidence.{category}:{value}")
+
+
 def _verify_evidence_kinds(
     result: GateResult,
     gate_rule: GateRule,
@@ -205,8 +296,11 @@ def _verify_evidence_kinds(
     actual_kinds = tuple(evidence.kind for evidence in result.evidence)
     allowed_kinds = tuple(rule.kind for rule in gate_rule.evidence)
     for kind in allowed_kinds:
-        if kind not in actual_kinds:
+        count = actual_kinds.count(kind)
+        if count == 0:
             blockers.append(f"evidence.missing:{result.gate_id}:{kind}")
+        elif count != 1:
+            blockers.append(f"evidence.cardinality:{result.gate_id}:{kind}")
     for kind in actual_kinds:
         if kind not in allowed_kinds:
             blockers.append(f"evidence.kind_unknown:{result.gate_id}:{kind}")
@@ -241,17 +335,25 @@ def _verify_evidence_time(
     if evidence_rule.max_age is None:
         return
 
-    policy_expiry = evidence.produced_at + evidence_rule.max_age
-    if expires_at is not None and expires_at > policy_expiry:
+    if (
+        expires_at is not None
+        and expires_at > evidence.produced_at
+        and expires_at - evidence.produced_at > evidence_rule.max_age
+    ):
         blockers.append(f"evidence.expiry_exceeds_policy:{evidence.evidence_id}")
-    if checked_at >= policy_expiry:
+    if (
+        checked_at >= evidence.produced_at
+        and checked_at - evidence.produced_at >= evidence_rule.max_age
+    ):
         blockers.append(f"evidence.policy_stale:{evidence.evidence_id}")
 
 
 def _verify_evidence_artifact(
+    result: GateResult,
     evidence: EvidenceRef,
     *,
     binding: Sha256,
+    bindings_valid: bool,
     artifact_reader: ArtifactReader,
     attestation_verifier: AttestationVerifier,
     blockers: list[str],
@@ -263,27 +365,53 @@ def _verify_evidence_artifact(
         return
     if uri_digest != evidence.digest.sha256:
         blockers.append(f"evidence.uri_digest_mismatch:{evidence.evidence_id}")
+        return
 
     try:
         artifact = artifact_reader.read(evidence)
-    except Exception:
+    except (ArtifactUnavailableError, OSError):
         blockers.append(f"evidence.unavailable:{evidence.evidence_id}")
         return
+    except Exception as exc:
+        raise VerifierInternalError("unexpected artifact reader failure") from exc
 
+    if type(artifact) is not bytes:
+        raise VerifierInternalError("artifact reader returned non-bytes data")
+
+    artifact_valid = True
     if len(artifact) != evidence.digest.length:
         blockers.append(f"evidence.length_mismatch:{evidence.evidence_id}")
+        artifact_valid = False
     if sha256_hex(artifact) != evidence.digest.sha256:
         blockers.append(f"evidence.digest_mismatch:{evidence.evidence_id}")
+        artifact_valid = False
+    if not artifact_valid or not bindings_valid:
+        return
     try:
-        accepted = attestation_verifier.verify(
+        claims = attestation_verifier.verify(
+            result=result,
             evidence=evidence,
             artifact=artifact,
             candidate_binding_sha256=binding,
         )
-    except Exception:
-        accepted = False
-    if not accepted:
-        blockers.append(f"evidence.attestation_failed:{evidence.evidence_id}")
+    except AttestationUnavailableError:
+        blockers.append(f"evidence.attestation_unavailable:{evidence.evidence_id}")
+        return
+    except AttestationVerificationError:
+        blockers.append(f"evidence.attestation_error:{evidence.evidence_id}")
+        return
+    except Exception as exc:
+        raise VerifierInternalError("unexpected attestation verifier failure") from exc
+    if claims is None:
+        blockers.append(f"evidence.attestation_invalid:{evidence.evidence_id}")
+        return
+    expected_claims = VerifiedAttestationClaims(
+        artifact_sha256=sha256_hex(artifact),
+        candidate_binding_sha256=binding,
+        gate_result_sha256=gate_result_sha256(result),
+    )
+    if claims != expected_claims:
+        blockers.append(f"evidence.attestation_claim_mismatch:{evidence.evidence_id}")
 
 
 def _verify_metrics(

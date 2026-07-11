@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from importlib import resources
 from typing import Literal
@@ -8,6 +8,11 @@ from typing import Literal
 from proof_agent.release.contracts import (
     INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS,
     GateProfile,
+)
+from proof_agent.release.digests import (
+    canonical_json_bytes,
+    reject_duplicate_json_keys,
+    sha256_hex,
 )
 
 
@@ -46,7 +51,8 @@ class GateRule:
 @dataclass(frozen=True, slots=True)
 class ReleaseProfile:
     gate_profile: GateProfile
-    exact_bytes: bytes
+    source_bytes: bytes
+    binding_bytes: bytes
     gates: tuple[GateRule, ...]
 
     @property
@@ -272,7 +278,7 @@ _GATE_RULES = (
 )
 
 
-def initial_private_pilot_profile_bytes() -> bytes:
+def initial_private_pilot_profile_source_bytes() -> bytes:
     return (
         resources.files("proof_agent.release")
         .joinpath("profiles")
@@ -281,16 +287,69 @@ def initial_private_pilot_profile_bytes() -> bytes:
     )
 
 
+def release_profile_binding_bytes(profile: ReleaseProfile) -> bytes:
+    payload = {
+        "schema_version": "proofagent.release-profile-binding.v1",
+        "gate_profile": profile.gate_profile.model_dump(mode="json"),
+        "source": {
+            "sha256": sha256_hex(profile.source_bytes),
+            "length": len(profile.source_bytes),
+        },
+        "gates": [
+            {
+                "gate_id": gate.gate_id,
+                "evidence": [
+                    {
+                        "kind": evidence.kind,
+                        "max_age_seconds": (
+                            None
+                            if evidence.max_age is None
+                            else int(evidence.max_age.total_seconds())
+                        ),
+                        "expiry_required": evidence.expiry_required,
+                    }
+                    for evidence in gate.evidence
+                ],
+                "metrics": [
+                    {
+                        "key": metric.key,
+                        "kind": metric.kind,
+                        "comparison": metric.comparison,
+                        "expected": metric.expected,
+                        "failure": metric.failure,
+                        "binding_target": metric.binding_target,
+                        "minimum_allowed": metric.minimum_allowed,
+                        "maximum_allowed": metric.maximum_allowed,
+                    }
+                    for metric in gate.metrics
+                ],
+            }
+            for gate in profile.gates
+        ],
+    }
+    return canonical_json_bytes(payload)
+
+
 def _load_initial_private_pilot_profile() -> ReleaseProfile:
-    exact_bytes = initial_private_pilot_profile_bytes()
-    gate_profile = GateProfile.model_validate_json(exact_bytes)
-    profile = ReleaseProfile(gate_profile=gate_profile, exact_bytes=exact_bytes, gates=_GATE_RULES)
+    source_bytes = initial_private_pilot_profile_source_bytes()
+    reject_duplicate_json_keys(source_bytes)
+    gate_profile = GateProfile.model_validate_json(source_bytes)
+    profile = ReleaseProfile(
+        gate_profile=gate_profile,
+        source_bytes=source_bytes,
+        binding_bytes=b"",
+        gates=_GATE_RULES,
+    )
     if profile.gate_ids != INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS:
         raise RuntimeError("release policy gate ids do not match the packaged Gate Profile")
-    return profile
+    return replace(profile, binding_bytes=release_profile_binding_bytes(profile))
 
 
 INITIAL_PRIVATE_PILOT_PROFILE = _load_initial_private_pilot_profile()
+
+
+def initial_private_pilot_profile_bytes() -> bytes:
+    return INITIAL_PRIVATE_PILOT_PROFILE.binding_bytes
 
 
 def initial_private_pilot_profile() -> ReleaseProfile:

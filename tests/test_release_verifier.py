@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 from typer.testing import CliRunner
 
 from proof_agent.delivery import cli as cli_module
+from proof_agent.release import digests as digests_module
+from proof_agent.release import profile as profile_module
+from proof_agent.release import verifier as verifier_module
 from proof_agent.release.contracts import (
     DigestRef,
     EvidenceRef,
@@ -22,7 +27,9 @@ from proof_agent.release.digests import (
     candidate_binding_sha256,
     canonical_json_bytes,
     digest_ref,
+    gate_result_sha256,
     parse_content_addressed_uri,
+    sha256_hex,
 )
 from proof_agent.release.profile import (
     INITIAL_PRIVATE_PILOT_PROFILE,
@@ -31,6 +38,7 @@ from proof_agent.release.profile import (
 from proof_agent.release.verifier import (
     EvidenceRootArtifactReader,
     ReleaseDecision,
+    VerifiedAttestationClaims,
     verify_release_manifest,
 )
 
@@ -49,28 +57,67 @@ class MappingArtifactReader:
 
     def read(self, evidence: EvidenceRef) -> bytes:
         if evidence.evidence_id in self.error_ids:
-            raise OSError("artifact unavailable")
-        return self.artifacts[evidence.evidence_id]
+            raise verifier_module.ArtifactUnavailableError("artifact unavailable")
+        try:
+            return self.artifacts[evidence.evidence_id]
+        except KeyError as exc:
+            raise verifier_module.ArtifactUnavailableError("artifact missing") from exc
 
 
 class AttestationStub:
-    def __init__(self, *, accepted: bool = True, raises: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        accepted: bool = True,
+        fixed_claims: dict[str, VerifiedAttestationClaims] | None = None,
+    ) -> None:
         self.accepted = accepted
-        self.raises = raises
+        self.fixed_claims = fixed_claims or {}
         self.calls = 0
 
     def verify(
         self,
         *,
+        result: GateResult,
         evidence: EvidenceRef,
         artifact: bytes,
         candidate_binding_sha256: str,
-    ) -> bool:
-        del evidence, artifact, candidate_binding_sha256
+    ) -> VerifiedAttestationClaims | None:
         self.calls += 1
-        if self.raises:
-            raise RuntimeError("attestation backend unavailable")
-        return self.accepted
+        if not self.accepted:
+            return None
+        if evidence.evidence_id in self.fixed_claims:
+            return self.fixed_claims[evidence.evidence_id]
+        return VerifiedAttestationClaims(
+            artifact_sha256=sha256_hex(artifact),
+            candidate_binding_sha256=candidate_binding_sha256,
+            gate_result_sha256=gate_result_sha256(result),
+        )
+
+
+class RaisingAttestationStub:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def verify(
+        self,
+        *,
+        result: GateResult,
+        evidence: EvidenceRef,
+        artifact: bytes,
+        candidate_binding_sha256: str,
+    ) -> VerifiedAttestationClaims | None:
+        del result, evidence, artifact, candidate_binding_sha256
+        raise self.error
+
+
+class RaisingArtifactReader:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def read(self, evidence: EvidenceRef) -> bytes:
+        del evidence
+        raise self.error
 
 
 VALID_METRICS: dict[str, dict[str, bool | int | float | str]] = {
@@ -296,6 +343,45 @@ def _replace_evidence(
     return _replace_result(manifest, gate_id, evidence=tuple(evidence))
 
 
+def _with_extreme_valid_times(manifest: ReleaseGateManifest) -> ReleaseGateManifest:
+    produced_at = datetime(9999, 12, 31, 22, 0, tzinfo=timezone.utc)
+    expires_at = datetime(9999, 12, 31, 23, 45, tzinfo=timezone.utc)
+    results = tuple(
+        result.model_copy(
+            update={
+                "evidence": tuple(
+                    evidence.model_copy(
+                        update={
+                            "produced_at": produced_at,
+                            "expires_at": (None if MAX_AGES[evidence.kind] is None else expires_at),
+                        }
+                    )
+                    for evidence in result.evidence
+                )
+            }
+        )
+        for result in manifest.results
+    )
+    return manifest.model_copy(
+        update={
+            "results": results,
+            "generated_at": datetime(9999, 12, 31, 23, 0, tzinfo=timezone.utc),
+        }
+    )
+
+
+def _attestation_claims(
+    result: GateResult,
+    artifact: bytes,
+    candidate_binding: str,
+) -> VerifiedAttestationClaims:
+    return VerifiedAttestationClaims(
+        artifact_sha256=sha256_hex(artifact),
+        candidate_binding_sha256=candidate_binding,
+        gate_result_sha256=gate_result_sha256(result),
+    )
+
+
 def test_all_exact_thirteen_passing_gates_produce_go() -> None:
     manifest, artifacts = _valid_manifest()
 
@@ -331,6 +417,46 @@ def test_missing_and_unknown_gates_produce_no_go() -> None:
     assert "gate.unknown:producer_optional_gate" in decision.blocker_codes
 
 
+def test_repeated_evidence_ref_blocks_identity_reuse_and_required_kind_cardinality() -> None:
+    manifest, artifacts = _valid_manifest()
+    result = manifest.results[0]
+    evidence = result.evidence[0]
+    manifest = _replace_result(manifest, result.gate_id, evidence=(evidence, evidence))
+
+    decision = _verify(manifest, artifacts)
+
+    assert decision.decision == "NO-GO"
+    assert f"evidence.duplicate_id:{evidence.evidence_id}" in decision.blocker_codes
+    assert f"evidence.duplicate_uri:{evidence.uri}" in decision.blocker_codes
+    assert f"evidence.duplicate_digest:{evidence.digest.sha256}" in decision.blocker_codes
+    assert f"evidence.cardinality:{result.gate_id}:{evidence.kind}" in decision.blocker_codes
+
+
+def test_same_evidence_id_with_different_refs_is_globally_rejected() -> None:
+    manifest, artifacts = _valid_manifest()
+    first = manifest.results[0].evidence[0]
+    second_result = manifest.results[1]
+    second = second_result.evidence[0].model_copy(update={"evidence_id": first.evidence_id})
+    manifest = _replace_result(manifest, second_result.gate_id, evidence=(second,))
+
+    decision = _verify(manifest, artifacts)
+
+    assert f"evidence.duplicate_id:{first.evidence_id}" in decision.blocker_codes
+
+
+def test_same_evidence_uri_and_digest_across_gates_is_globally_rejected() -> None:
+    manifest, artifacts = _valid_manifest()
+    first = manifest.results[0].evidence[0]
+    second_result = manifest.results[1]
+    second = second_result.evidence[0].model_copy(update={"uri": first.uri, "digest": first.digest})
+    manifest = _replace_result(manifest, second_result.gate_id, evidence=(second,))
+
+    decision = _verify(manifest, artifacts)
+
+    assert f"evidence.duplicate_uri:{first.uri}" in decision.blocker_codes
+    assert f"evidence.duplicate_digest:{first.digest.sha256}" in decision.blocker_codes
+
+
 def test_candidate_mutation_invalidates_old_result_and_evidence_bindings() -> None:
     manifest, artifacts = _valid_manifest()
     changed_candidate = manifest.candidate.model_copy(update={"product_version": "0.1.1"})
@@ -353,6 +479,51 @@ def test_artifact_length_and_digest_mismatch_are_blockers() -> None:
     assert decision.decision == "NO-GO"
     assert f"evidence.length_mismatch:{target.evidence_id}" in decision.blocker_codes
     assert f"evidence.digest_mismatch:{target.evidence_id}" in decision.blocker_codes
+
+
+@pytest.mark.parametrize(
+    "invalidity",
+    [
+        "uri_invalid",
+        "uri_digest_mismatch",
+        "result_binding_mismatch",
+        "evidence_binding_mismatch",
+        "length_mismatch",
+        "sha_mismatch",
+    ],
+)
+def test_invalid_evidence_never_reaches_attestation_but_valid_items_still_do(
+    invalidity: str,
+) -> None:
+    manifest, artifacts = _valid_manifest()
+    result = manifest.results[0]
+    evidence = result.evidence[0]
+    if invalidity == "uri_invalid":
+        manifest = _replace_evidence(manifest, result.gate_id, uri="runs/latest/evidence.json")
+    elif invalidity == "uri_digest_mismatch":
+        manifest = _replace_evidence(
+            manifest,
+            result.gate_id,
+            uri=build_content_addressed_uri(SHA_A),
+        )
+    elif invalidity == "result_binding_mismatch":
+        manifest = _replace_result(manifest, result.gate_id, candidate_binding_sha256=SHA_B)
+    elif invalidity == "evidence_binding_mismatch":
+        manifest = _replace_evidence(
+            manifest,
+            result.gate_id,
+            candidate_binding_sha256=SHA_B,
+        )
+    elif invalidity == "length_mismatch":
+        artifacts[evidence.evidence_id] = b"short"
+    else:
+        artifacts[evidence.evidence_id] = artifacts[evidence.evidence_id][::-1]
+    attestation = AttestationStub()
+
+    decision = _verify(manifest, artifacts, attestation=attestation)
+
+    assert decision.decision == "NO-GO"
+    assert attestation.calls == sum(len(item.evidence) for item in manifest.results) - 1
 
 
 def test_gate_and_evidence_binding_mismatches_are_both_blockers() -> None:
@@ -425,15 +596,138 @@ def test_missing_or_unreadable_artifact_is_a_no_go_without_exception() -> None:
     assert f"evidence.unavailable:{second.evidence_id}" in decision.blocker_codes
 
 
-@pytest.mark.parametrize("accepted,raises", [(False, False), (True, True)])
-def test_attestation_rejection_or_exception_is_a_no_go(accepted: bool, raises: bool) -> None:
+def test_gate_result_digest_binds_status_metrics_and_all_claims() -> None:
+    manifest, _artifacts = _valid_manifest()
+    result = manifest.results[0]
+    metrics = dict(result.metrics)
+    metrics["line_coverage_percent"] = 91
+
+    assert gate_result_sha256(result) != gate_result_sha256(
+        result.model_copy(update={"status": "failed"})
+    )
+    assert gate_result_sha256(result) != gate_result_sha256(
+        result.model_copy(update={"metrics": metrics})
+    )
+
+
+@pytest.mark.parametrize("mutation", ["status", "passing_metric"])
+def test_fixed_old_attestation_claims_reject_changed_gate_result(mutation: str) -> None:
     manifest, artifacts = _valid_manifest()
-    verifier = AttestationStub(accepted=accepted, raises=raises)
+    original = manifest.results[0]
+    evidence = original.evidence[0]
+    old_claims = _attestation_claims(
+        original,
+        artifacts[evidence.evidence_id],
+        candidate_binding_sha256(manifest.candidate),
+    )
+    if mutation == "status":
+        manifest = _replace_result(manifest, original.gate_id, status="failed")
+    else:
+        metrics = dict(original.metrics)
+        metrics["line_coverage_percent"] = 91
+        manifest = _replace_result(manifest, original.gate_id, metrics=metrics)
+    verifier = AttestationStub(fixed_claims={evidence.evidence_id: old_claims})
 
     decision = _verify(manifest, artifacts, attestation=verifier)
 
     assert decision.decision == "NO-GO"
-    assert any(code.startswith("evidence.attestation_failed:") for code in decision.blocker_codes)
+    assert f"evidence.attestation_claim_mismatch:{evidence.evidence_id}" in decision.blocker_codes
+
+
+@pytest.mark.parametrize(
+    "claim_field",
+    ["artifact_sha256", "candidate_binding_sha256", "gate_result_sha256"],
+)
+def test_attestation_claim_digest_mismatch_is_a_no_go(claim_field: str) -> None:
+    manifest, artifacts = _valid_manifest()
+    result = manifest.results[0]
+    evidence = result.evidence[0]
+    claims = _attestation_claims(
+        result,
+        artifacts[evidence.evidence_id],
+        candidate_binding_sha256(manifest.candidate),
+    ).model_copy(update={claim_field: "0" * 64})
+    verifier = AttestationStub(fixed_claims={evidence.evidence_id: claims})
+
+    decision = _verify(manifest, artifacts, attestation=verifier)
+
+    assert f"evidence.attestation_claim_mismatch:{evidence.evidence_id}" in decision.blocker_codes
+
+
+def test_missing_verified_attestation_claims_is_invalid() -> None:
+    manifest, artifacts = _valid_manifest()
+
+    decision = _verify(manifest, artifacts, attestation=AttestationStub(accepted=False))
+
+    assert any(code.startswith("evidence.attestation_invalid:") for code in decision.blocker_codes)
+
+
+@pytest.mark.parametrize(
+    ("error_name", "blocker_prefix"),
+    [
+        ("AttestationUnavailableError", "evidence.attestation_unavailable:"),
+        ("AttestationVerificationError", "evidence.attestation_error:"),
+    ],
+)
+def test_expected_attestation_domain_errors_have_distinct_blockers(
+    error_name: str,
+    blocker_prefix: str,
+) -> None:
+    manifest, artifacts = _valid_manifest()
+    error_type = getattr(verifier_module, error_name)
+
+    decision = _verify(
+        manifest,
+        artifacts,
+        attestation=RaisingAttestationStub(error_type("expected domain failure")),
+    )
+
+    assert any(code.startswith(blocker_prefix) for code in decision.blocker_codes)
+
+
+def test_expected_artifact_unavailable_error_is_an_evidence_blocker() -> None:
+    manifest, artifacts = _valid_manifest()
+    error_type = getattr(verifier_module, "ArtifactUnavailableError")
+
+    decision = _verify(
+        manifest,
+        artifacts,
+        reader=RaisingArtifactReader(error_type("missing artifact")),
+    )
+
+    assert any(code.startswith("evidence.unavailable:") for code in decision.blocker_codes)
+
+
+@pytest.mark.parametrize("boundary", ["artifact", "attestation"])
+def test_unexpected_adapter_bug_propagates_as_verifier_internal_error(boundary: str) -> None:
+    manifest, artifacts = _valid_manifest()
+    internal_error = getattr(verifier_module, "VerifierInternalError")
+
+    with pytest.raises(internal_error) as exc_info:
+        if boundary == "artifact":
+            _verify(
+                manifest,
+                artifacts,
+                reader=RaisingArtifactReader(AssertionError("artifact adapter bug")),
+            )
+        else:
+            _verify(
+                manifest,
+                artifacts,
+                attestation=RaisingAttestationStub(TypeError("attestation adapter bug")),
+            )
+
+    assert isinstance(exc_info.value.__cause__, AssertionError | TypeError)
+
+
+def test_attestation_rejection_is_invalid_and_no_go() -> None:
+    manifest, artifacts = _valid_manifest()
+    verifier = AttestationStub(accepted=False)
+
+    decision = _verify(manifest, artifacts, attestation=verifier)
+
+    assert decision.decision == "NO-GO"
+    assert any(code.startswith("evidence.attestation_invalid:") for code in decision.blocker_codes)
     assert verifier.calls == sum(len(result.evidence) for result in manifest.results)
 
 
@@ -537,6 +831,47 @@ def test_exact_packaged_gate_profile_bytes_must_match_candidate(field: str) -> N
 
     assert decision.decision == "NO-GO"
     assert f"profile.{field}_mismatch" in decision.blocker_codes
+
+
+def test_complete_policy_binding_has_versioned_canonical_golden() -> None:
+    profile = INITIAL_PRIVATE_PILOT_PROFILE
+
+    assert sha256_hex(profile.binding_bytes) == (
+        "93d87701d3fc57f54f05b99fccba0acc178c407756a743b2b5afefbff0b60b8b"
+    )
+    payload = json.loads(profile.binding_bytes)
+    assert payload["schema_version"] == "proofagent.release-profile-binding.v1"
+    assert payload["source"] == {
+        "sha256": sha256_hex(profile.source_bytes),
+        "length": len(profile.source_bytes),
+    }
+
+
+@pytest.mark.parametrize("mutation", ["rto_threshold", "freshness"])
+def test_policy_binding_changes_when_rules_change_but_source_ids_do_not(mutation: str) -> None:
+    profile = INITIAL_PRIVATE_PILOT_PROFILE
+    gates = list(profile.gates)
+    if mutation == "rto_threshold":
+        gate_index = next(
+            index for index, gate in enumerate(gates) if gate.gate_id == "resilience_recovery"
+        )
+        gate = gates[gate_index]
+        metrics = tuple(
+            replace(metric, expected=999) if metric.key == "rto_minutes" else metric
+            for metric in gate.metrics
+        )
+        gates[gate_index] = replace(gate, metrics=metrics)
+    else:
+        gate_index = next(
+            index for index, gate in enumerate(gates) if gate.gate_id == "identity_authorization"
+        )
+        gate = gates[gate_index]
+        evidence = tuple(replace(rule, max_age=timedelta(hours=73)) for rule in gate.evidence)
+        gates[gate_index] = replace(gate, evidence=evidence)
+    changed = replace(profile, gates=tuple(gates))
+
+    assert changed.source_bytes == profile.source_bytes
+    assert profile_module.release_profile_binding_bytes(changed) != profile.binding_bytes
 
 
 @pytest.mark.parametrize(
@@ -887,6 +1222,16 @@ def test_naive_checked_at_is_invalid_api_input() -> None:
         _verify(manifest, artifacts, checked_at=datetime(2026, 7, 12, 9, 0))
 
 
+def test_extreme_aware_datetimes_do_not_overflow_verifier() -> None:
+    manifest, artifacts = _valid_manifest()
+    manifest = _with_extreme_valid_times(manifest)
+    checked_at = datetime(9999, 12, 31, 23, 30, tzinfo=timezone.utc)
+
+    decision = _verify(manifest, artifacts, checked_at=checked_at)
+
+    assert decision.decision == "GO"
+
+
 def test_blocker_codes_are_unique_sorted_and_deterministic() -> None:
     manifest, artifacts = _valid_manifest()
     artifacts[manifest.results[0].evidence[0].evidence_id] = b"bad"
@@ -908,6 +1253,24 @@ def test_canonical_candidate_digest_is_key_order_stable_and_mutation_sensitive()
     assert candidate_binding_sha256(candidate) != candidate_binding_sha256(
         candidate.model_copy(update={"agent_version": "2026.07.13"})
     )
+
+
+def test_canonical_unicode_bytes_and_sha_are_pinned_and_nan_is_rejected() -> None:
+    value = {"z": "雪", "a": ["é", 1, True, None]}
+    expected = '{"a":["é",1,true,null],"z":"雪"}'.encode()
+
+    assert canonical_json_bytes(value) == expected
+    assert (
+        sha256_hex(expected) == "bbb4debf13aea8a7df44bd37502b362ee4b58ad4cfba76ae2a6fb2f460de82aa"
+    )
+    with pytest.raises(ValueError, match="Out of range float values"):
+        canonical_json_bytes({"not_a_number": float("nan")})
+
+
+def test_candidate_binding_digest_has_a_narrow_provider_neutral_input_type() -> None:
+    annotation = get_type_hints(candidate_binding_sha256)["candidate"]
+
+    assert annotation is not Any
 
 
 def test_content_addressed_uri_builder_and_parser_are_exact() -> None:
@@ -970,6 +1333,50 @@ def test_evidence_root_reader_rejects_symlink_escape(
         EvidenceRootArtifactReader(tmp_path).read(evidence)
 
 
+def test_evidence_root_reader_rejects_file_swapped_to_external_symlink_before_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = b"trusted release evidence"
+    external = b"untrusted external bytes"
+    artifact_digest = digest_ref(artifact)
+    artifact_path = tmp_path / artifact_digest.sha256
+    artifact_path.write_bytes(artifact)
+    outside_path = tmp_path.parent / f"{tmp_path.name}-external"
+    outside_path.write_bytes(external)
+    evidence = EvidenceRef(
+        evidence_id="swapped-symlink",
+        kind="candidate_static",
+        uri=build_content_addressed_uri(artifact_digest.sha256),
+        digest=artifact_digest,
+        candidate_binding_sha256=SHA_A,
+        produced_at=GENERATED_AT,
+    )
+    reader = EvidenceRootArtifactReader(tmp_path)
+    original_open = os.open
+    swapped = False
+
+    def swap_then_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == artifact_digest.sha256 and dir_fd is not None and not swapped:
+            artifact_path.unlink()
+            artifact_path.symlink_to(outside_path)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", swap_then_open)
+
+    with pytest.raises(OSError):
+        reader.read(evidence)
+    assert swapped is True
+
+
 def _write_cli_manifest(tmp_path: Path) -> tuple[Path, Path, ReleaseGateManifest]:
     manifest, artifacts = _valid_manifest()
     manifest_path = tmp_path / "release-gate-manifest.json"
@@ -1016,7 +1423,40 @@ def test_release_verify_cli_valid_manifest_is_real_no_go_with_unavailable_attest
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["decision"] == "NO-GO"
-    assert any(code.startswith("evidence.attestation_failed:") for code in payload["blocker_codes"])
+    assert any(
+        code.startswith("evidence.attestation_unavailable:") for code in payload["blocker_codes"]
+    )
+
+
+def test_release_verify_cli_real_artifact_tamper_is_no_go(tmp_path: Path) -> None:
+    manifest_path, evidence_root, manifest = _write_cli_manifest(tmp_path)
+    evidence = manifest.results[0].evidence[0]
+    artifact_path = evidence_root / evidence.digest.sha256
+    artifact_path.write_bytes(artifact_path.read_bytes()[::-1])
+
+    result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, evidence_root))
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert f"evidence.digest_mismatch:{evidence.evidence_id}" in payload["blocker_codes"]
+
+
+def test_release_verify_cli_extreme_rfc3339_time_returns_decision_json(tmp_path: Path) -> None:
+    manifest_path, evidence_root, manifest = _write_cli_manifest(tmp_path)
+    manifest = _with_extreme_valid_times(manifest)
+    manifest_path.write_text(manifest.model_dump_json(), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        _release_cli_args(
+            manifest_path,
+            evidence_root,
+            at="9999-12-31T23:30:00Z",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["decision"] == "NO-GO"
 
 
 def test_release_verify_cli_maps_trusted_go_decision_to_json_and_exit_zero(
@@ -1036,6 +1476,92 @@ def test_release_verify_cli_maps_trusted_go_decision_to_json_and_exit_zero(
 
     assert result.exit_code == 0
     assert json.loads(result.stdout) == trusted.model_dump(mode="json")
+
+
+def test_release_verify_cli_skips_global_dotenv_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, evidence_root, manifest = _write_cli_manifest(tmp_path)
+    trusted = ReleaseDecision(
+        decision="GO",
+        candidate_binding_sha256=candidate_binding_sha256(manifest.candidate),
+        checked_at=CHECKED_AT,
+        blocker_codes=(),
+    )
+    dotenv_calls = 0
+
+    def record_dotenv_call() -> None:
+        nonlocal dotenv_calls
+        dotenv_calls += 1
+
+    monkeypatch.setattr(cli_module, "_load_local_dotenv", record_dotenv_call)
+    monkeypatch.setattr(cli_module, "verify_release_manifest", lambda *args, **kwargs: trusted)
+
+    result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, evidence_root))
+
+    assert result.exit_code == 0
+    assert dotenv_calls == 0
+
+
+def test_release_verify_cli_reports_internal_verifier_bug_as_structured_exit_two(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, evidence_root, _manifest = _write_cli_manifest(tmp_path)
+    internal_error = getattr(verifier_module, "VerifierInternalError")
+
+    def fail_internally(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise internal_error("unexpected verifier defect")
+
+    monkeypatch.setattr(cli_module, "verify_release_manifest", fail_internally)
+
+    result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, evidence_root))
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr) == {"error": "release_verifier_internal_error"}
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        (
+            '"profile_id":"initial-private-pilot-v1"',
+            '"profile_id":"initial-private-pilot-v1","profile_id":"initial-private-pilot-v1"',
+        ),
+        ('"status":"passed"', '"status":"passed","status":"passed"'),
+        (
+            '"line_coverage_percent":90',
+            '"line_coverage_percent":90,"line_coverage_percent":90',
+        ),
+        (
+            '"evidence_id":"backend_frontend_quality-candidate_static"',
+            '"evidence_id":"backend_frontend_quality-candidate_static",'
+            '"evidence_id":"backend_frontend_quality-candidate_static"',
+        ),
+    ],
+)
+def test_release_verify_cli_rejects_duplicate_json_keys_at_every_object_depth(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    manifest_path, evidence_root, manifest = _write_cli_manifest(tmp_path)
+    raw = manifest.model_dump_json()
+    assert needle in raw
+    manifest_path.write_text(raw.replace(needle, replacement, 1), encoding="utf-8")
+
+    result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, evidence_root))
+
+    assert result.exit_code == 2
+
+
+def test_duplicate_json_key_scanner_rejects_nested_duplicates_without_returning_data() -> None:
+    with pytest.raises(ValueError, match="duplicate JSON key: value"):
+        digests_module.reject_duplicate_json_keys('{"outer":{"value":1,"value":2}}')
+
+    assert digests_module.reject_duplicate_json_keys('{"outer":{"value":1}}') is None
 
 
 @pytest.mark.parametrize("case", ["malformed", "unknown", "duplicate"])

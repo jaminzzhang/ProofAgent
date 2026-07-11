@@ -36,9 +36,11 @@ from proof_agent.evaluation.frozen_bundles import (
 from proof_agent.evaluation.suites import load_evaluation_suite
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.release.contracts import ReleaseGateManifest
+from proof_agent.release.digests import reject_duplicate_json_keys
 from proof_agent.release.verifier import (
     EvidenceRootArtifactReader,
     UnavailableAttestationVerifier,
+    VerifierInternalError,
     verify_release_manifest,
 )
 
@@ -114,10 +116,11 @@ def run_plain_rag(*args: Any, **kwargs: Any) -> Any:
 
 
 @app.callback()
-def load_environment() -> None:
+def load_environment(ctx: typer.Context) -> None:
     """Load local environment variables before running any CLI command."""
 
-    _load_local_dotenv()
+    if ctx.invoked_subcommand != "release":
+        _load_local_dotenv()
 
 
 @release_app.command("verify")
@@ -150,20 +153,24 @@ def release_verify(
 
     try:
         checked_at = _parse_release_checked_at(at)
-        release_manifest = ReleaseGateManifest.model_validate_json(
-            manifest.read_text(encoding="utf-8")
-        )
+        raw_manifest = manifest.read_text(encoding="utf-8")
+        reject_duplicate_json_keys(raw_manifest)
+        release_manifest = ReleaseGateManifest.model_validate_json(raw_manifest)
         artifact_reader = EvidenceRootArtifactReader(evidence_root)
     except (OSError, UnicodeError, ValidationError, ValueError) as exc:
-        typer.echo(str(exc), err=True)
+        typer.echo('{"error":"release_verifier_invalid_input"}', err=True)
         raise typer.Exit(code=2) from exc
 
-    decision = verify_release_manifest(
-        release_manifest,
-        checked_at=checked_at,
-        artifact_reader=artifact_reader,
-        attestation_verifier=UnavailableAttestationVerifier(),
-    )
+    try:
+        decision = verify_release_manifest(
+            release_manifest,
+            checked_at=checked_at,
+            artifact_reader=artifact_reader,
+            attestation_verifier=UnavailableAttestationVerifier(),
+        )
+    except VerifierInternalError as exc:
+        typer.echo('{"error":"release_verifier_internal_error"}', err=True)
+        raise typer.Exit(code=2) from exc
     typer.echo(decision.model_dump_json())
     if decision.decision == "NO-GO":
         raise typer.Exit(code=1)
