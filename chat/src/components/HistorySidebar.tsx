@@ -9,6 +9,7 @@ interface HistorySidebarProps {
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
   onTogglePin: (id: string, pinned: boolean) => void
+  onNavigate?: () => void
   routePrefix?: string
 }
 
@@ -18,6 +19,7 @@ export function HistorySidebar({
   onRename,
   onDelete,
   onTogglePin,
+  onNavigate,
   routePrefix = '',
 }: HistorySidebarProps) {
   const location = useLocation()
@@ -84,10 +86,13 @@ export function HistorySidebar({
   }, [onDelete])
 
   return (
-    <aside className="w-64 shrink-0 border-r border-[var(--border)] bg-[var(--bg-surface)] flex flex-col overflow-hidden">
+    <aside className="flex h-full w-64 max-w-full shrink-0 flex-col overflow-hidden border-r border-[var(--border)] bg-[var(--bg-surface)]">
       <div className="p-4">
         <button
-          onClick={onNewChat}
+          onClick={() => {
+            onNavigate?.()
+            onNewChat()
+          }}
           className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[var(--accent)] text-white text-sm font-medium rounded-lg hover:opacity-90 transition-all shadow-sm active:scale-95"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
@@ -114,6 +119,7 @@ export function HistorySidebar({
                   <div className="group relative">
                     <NavLink
                       to={`${routePrefix}/c/${conv.conversation_id}`}
+                      onClick={onNavigate}
                       className={`flex flex-col px-3 py-2.5 rounded-lg transition-colors ${
                         isActive
                           ? 'bg-[var(--bg-hover)] text-[var(--text-primary)]'
