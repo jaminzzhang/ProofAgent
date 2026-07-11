@@ -1,0 +1,19 @@
+{
+  "schema_version": "proofagent.gate-profile.v1",
+  "profile_id": "initial-private-pilot-v1",
+  "required_gate_ids": [
+    "backend_frontend_quality",
+    "distribution_image",
+    "supply_chain_runtime_security",
+    "identity_authorization",
+    "secrets_egress",
+    "deterministic_evaluation",
+    "real_llm_evaluation",
+    "dependency_compatibility",
+    "capacity_responsiveness",
+    "queue_progress",
+    "resilience_recovery",
+    "deployment",
+    "browser_operations"
+  ]
+}
