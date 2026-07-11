@@ -143,6 +143,49 @@ def test_gate_result_metrics_are_required() -> None:
         GateResult.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    "non_finite",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+    ],
+)
+def test_gate_result_rejects_non_finite_metric_python_input(non_finite: float) -> None:
+    with pytest.raises(ValidationError, match="finite"):
+        _gate_result(metrics={"score": non_finite})
+
+
+@pytest.mark.parametrize(
+    ("non_finite", "json_token"),
+    [
+        pytest.param(float("nan"), "NaN", id="nan"),
+        pytest.param(float("inf"), "Infinity", id="positive-infinity"),
+        pytest.param(float("-inf"), "-Infinity", id="negative-infinity"),
+    ],
+)
+def test_gate_result_rejects_non_finite_metric_json_tokens(
+    non_finite: float,
+    json_token: str,
+) -> None:
+    payload = _gate_result().model_dump(mode="json")
+    payload["metrics"] = {"score": non_finite}
+    raw_json = json.dumps(payload, allow_nan=True)
+    assert f'"score": {json_token}' in raw_json
+
+    with pytest.raises(ValidationError, match="finite"):
+        GateResult.model_validate_json(raw_json)
+
+
+def test_gate_result_finite_float_metric_round_trips_as_float() -> None:
+    result = _gate_result(metrics={"score": 0.125})
+
+    round_tripped = GateResult.model_validate_json(result.model_dump_json())
+
+    assert type(round_tripped.metrics["score"]) is float
+    assert round_tripped.metrics["score"] == 0.125
+
+
 def test_release_manifest_rejects_duplicate_gate_ids() -> None:
     duplicate = _gate_result()
 

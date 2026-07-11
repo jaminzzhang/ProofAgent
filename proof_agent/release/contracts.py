@@ -55,7 +55,12 @@ INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS: tuple[str, ...] = (
 class StrictFrozenModel(FrozenModel):
     """Strict, closed, immutable base for release-boundary contracts."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        strict=True,
+        allow_inf_nan=False,
+    )
 
 
 class DigestRef(StrictFrozenModel):
