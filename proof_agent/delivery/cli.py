@@ -3,17 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 from shutil import which
 from typing import TYPE_CHECKING, Any
 
 import typer
 import yaml  # type: ignore[import-untyped]
+from pydantic import ValidationError
 
 from proof_agent import __version__
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
@@ -32,6 +35,12 @@ from proof_agent.evaluation.frozen_bundles import (
 )
 from proof_agent.evaluation.suites import load_evaluation_suite
 from proof_agent.observability.storage.run_store import RunStore
+from proof_agent.release.contracts import ReleaseGateManifest
+from proof_agent.release.verifier import (
+    EvidenceRootArtifactReader,
+    UnavailableAttestationVerifier,
+    verify_release_manifest,
+)
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.ingestion.worker import (
@@ -42,8 +51,10 @@ if TYPE_CHECKING:
 app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
 campaign_app = typer.Typer(no_args_is_help=True)
+release_app = typer.Typer(no_args_is_help=True)
 app.add_typer(evaluate_app, name="evaluate")
 evaluate_app.add_typer(campaign_app, name="campaign")
+app.add_typer(release_app, name="release")
 
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
@@ -62,6 +73,9 @@ VERIFY_REMOTE_STOP_MARKERS = (
     "npm",
     "vite",
     "cloudflared",
+)
+_STRICT_RFC3339 = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
 )
 
 
@@ -104,6 +118,55 @@ def load_environment() -> None:
     """Load local environment variables before running any CLI command."""
 
     _load_local_dotenv()
+
+
+@release_app.command("verify")
+def release_verify(
+    manifest: Path = typer.Option(
+        ...,
+        "--manifest",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Release Gate Manifest JSON file",
+    ),
+    evidence_root: Path = typer.Option(
+        ...,
+        "--evidence-root",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+        help="Directory containing content-addressed Evidence artifacts",
+    ),
+    at: str = typer.Option(
+        ...,
+        "--at",
+        help="Explicit RFC3339 verification time",
+    ),
+) -> None:
+    """Verify an Initial Private Pilot release manifest offline."""
+
+    try:
+        checked_at = _parse_release_checked_at(at)
+        release_manifest = ReleaseGateManifest.model_validate_json(
+            manifest.read_text(encoding="utf-8")
+        )
+        artifact_reader = EvidenceRootArtifactReader(evidence_root)
+    except (OSError, UnicodeError, ValidationError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    decision = verify_release_manifest(
+        release_manifest,
+        checked_at=checked_at,
+        artifact_reader=artifact_reader,
+        attestation_verifier=UnavailableAttestationVerifier(),
+    )
+    typer.echo(decision.model_dump_json())
+    if decision.decision == "NO-GO":
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -725,6 +788,16 @@ def knowledge_worker(
 
 def main() -> None:
     app()
+
+
+def _parse_release_checked_at(value: str) -> datetime:
+    if _STRICT_RFC3339.fullmatch(value) is None:
+        raise ValueError("--at must be a complete timezone-aware RFC3339 datetime")
+    normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("--at must be timezone-aware")
+    return parsed
 
 
 def _load_local_dotenv() -> None:
