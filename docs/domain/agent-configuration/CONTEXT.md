@@ -85,8 +85,8 @@ The configuration-system store for Draft Agents, version history, validation res
 _Avoid_: RunStore, Conversation Store, arbitrary local filesystem path
 
 **Local Agent Configuration Store**:
-The first Agent Configuration Store implementation using local directories and JSON/contract files while preserving a replaceable store boundary.
-_Avoid_: Production database requirement, router-owned file layout, hidden in-memory drafts
+The development-and-test Agent Configuration Store implementation using local directories and JSON/contract files while preserving a replaceable store boundary.
+_Avoid_: Production Transactional State Store, router-owned file layout, hidden in-memory drafts
 
 **Agent Package Import**:
 The migration path that converts an existing reviewable Agent Package into a Draft Agent while preserving its contract files and unsupported advanced fields.

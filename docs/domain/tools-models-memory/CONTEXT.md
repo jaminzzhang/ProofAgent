@@ -41,7 +41,7 @@ The dependency boundary where the official MCP SDK performs protocol operations 
 _Avoid_: LangChain tool execution path, SDK-owned governance, provider-native tool semantics
 
 **MCP HTTP Credential Boundary**:
-The V1 authentication boundary for HTTP MCP Tool Sources: no auth or static environment-variable credential references are allowed, while OAuth, refresh-token management, and per-user delegated authorization are excluded.
+The V1 authentication boundary for HTTP MCP Tool Sources supports unauthenticated endpoints or credential references, with Production Secret Handle required in production and static environment-variable references limited to local development; OAuth, refresh-token management, and per-user delegated authorization are excluded.
 _Avoid_: Raw secret in Agent Contract, runtime OAuth flow, customer-delegated MCP authorization
 
 **MCP Tool Discovery**:
@@ -96,6 +96,22 @@ _Avoid_: Tool Source, ungoverned tool list, provider-native tool call
 An Agent-package-owned Python callable referenced from `tools.yaml` for deterministic local demos or fixtures behind Tool Gateway.
 _Avoid_: Framework-owned business tool registry, ungoverned function call
 
+**Production Local Execution Prohibition**:
+The initial-release boundary that makes MCP stdio and Local Tool Handler execution unavailable in production while preserving them for deterministic local demos and tests.
+_Avoid_: Approval-only subprocess, production package code loading, future sandbox capability
+
+**Initial Production Read-Only Tool Boundary**:
+The first-release rule that every Agent-bound production Tool Contract is read-only while all external state-changing tool execution remains unavailable until approval governance exists.
+_Avoid_: Idempotency-only write permission, unapproved action tool, Dashboard configuration command
+
+**Sandbox Execution Service**:
+The future isolated execution plane that runs governed script or command jobs outside the Proof Agent API and worker process and container boundaries.
+_Avoid_: In-process subprocess, API container shell, Local Tool Handler, MCP stdio production exception
+
+**Production Egress Policy**:
+The active default-deny set of exact HTTPS origins that may receive server-side model, Knowledge Source, MCP, tool, or other governed outbound requests in production.
+_Avoid_: Agent-owned endpoint allowlist, one-time URL check, unrestricted internet access, frontend-only network rule
+
 **Untrusted Web Search Tool**:
 A governed Tool Gateway capability that searches the public web to provide realtime external context outside the controlled Knowledge Source boundary.
 _Avoid_: Web Knowledge Source, remote_search provider, uncontrolled browser plugin
@@ -141,12 +157,20 @@ The Operator Permission Vocabulary slice for reusable model access assets. `mode
 _Avoid_: One model admin boolean, Agent permission reuse, frontend-only permission check
 
 **Model Credential Reference**:
-A secret-safe pointer from a Shared Model Connection to the credential material needed for provider authentication, such as an environment variable name or future secret-store reference.
+A secret-safe pointer from a Shared Model Connection to credential material, represented by Production Secret Handle in production or Environment Model Credential Reference in local development.
 _Avoid_: Raw API key, stored provider secret, exported credential value
 
 **Environment Model Credential Reference**:
-The V1 Model Credential Reference type that stores an environment variable name for provider authentication while keeping the credential value outside Proof Agent configuration.
-_Avoid_: Dashboard-stored API key, local secret vault, exported credential material
+The local-development Model Credential Reference type that names an environment variable while keeping the credential value outside Proof Agent configuration; it is not accepted by production configuration.
+_Avoid_: Production credential reference, Dashboard-stored API key, exported credential material
+
+**Production Secret Handle**:
+An opaque, non-secret identifier resolved by the backend through the production secret provider for an authorized model, Knowledge Source, MCP, or tool operation.
+_Avoid_: Environment variable name, raw secret, client-resolved secret, exported credential value
+
+**Production Secret Provider**:
+The deployment-owned external boundary that stores and resolves production credential material and owns its creation, rotation, revocation, and deletion lifecycle.
+_Avoid_: Proof Agent secret store, Dashboard secret editor, Agent-owned credential, exported secret value
 
 **Model Connection Parameters**:
 The provider, model identifier, endpoint, credential reference, provider account scope, and default timeout values that define how Proof Agent connects to a Shared Model Connection.
@@ -313,16 +337,40 @@ The structured Agent-specific policy settings that compile into policy rules for
 _Avoid_: Natural-language policy, frontend-only guardrail, prompt instruction
 
 **Operator Identity Context**:
-The internal operator identity and permission set admitted at API command boundaries for Dashboard, operator chat, configuration, knowledge, model, and approval operations.
+The internal operator identity and permission set admitted at protected boundaries for Dashboard, Operator Chat, configuration, execution, evaluation, and audit operations.
 _Avoid_: Per-form actor field, frontend-only role flag, customer authorization context
 
 **Local Operator Identity Provider**:
 The V1 local-mode source of Operator Identity Context, granting a deterministic local operator identity and local all-access permissions without trusting actor fields supplied by frontend request bodies.
 _Avoid_: Dashboard-supplied actor, anonymous local command, production authentication substitute
 
+**External Operator Identity Provider**:
+The production identity authority outside Proof Agent that authenticates an operator and supplies trusted identity claims from which Operator Identity Context is resolved.
+_Avoid_: Proof Agent user directory, local password store, request-body actor, Local Operator Identity Provider in production
+
+**External Operator Permission Mapping**:
+The fail-closed production mapping that combines the global named permissions associated with every matched trusted external group or role claim, without local per-user grants or resource ACLs.
+_Avoid_: Local user grant store, frontend role mapping, per-resource grant, unmatched claim allow, request-body permission
+
+**Recovery OIDC Group Mapping**:
+The deployment-controlled permission mapping for one external OIDC group that preserves permission-mapping and audit recovery when ordinary Dashboard-managed mappings are invalid or self-locking.
+_Avoid_: Local break-glass account, Dashboard-deletable recovery grant, hidden superuser, unaudited bypass
+
+**Backend-Managed Operator Session**:
+The production browser session created after backend OIDC code exchange, keeping OIDC tokens and trusted claims server-side while the browser receives only an opaque session cookie.
+_Avoid_: SPA access token, browser refresh token, local-storage credential, frontend identity authority
+
+**Operator Session Lifetime**:
+The initial production lifetime for a Backend-Managed Operator Session: absolute expiry seven days after login and idle expiry after 24 hours without accepted operator activity.
+_Avoid_: Indefinite session, frontend-only timeout, sliding session without absolute expiry
+
+**Operator Identity Freshness**:
+The production authorization requirement that external identity claims were successfully refreshed or revalidated within the preceding hour before they can authorize a protected operation.
+_Avoid_: Seven-day claims snapshot, frontend identity refresh, stale-claim authorization
+
 **Operator Permission Vocabulary**:
-The named internal permissions used by Operator Identity Context, initially covering approval resolution, run viewing, Agent configuration, Knowledge Source administration, Model Connection administration, and Tool Source administration while local mode grants the full set.
-_Avoid_: Generic admin flag, frontend-only permission labels, resource operation without a named permission
+The default-deny set of global named action permissions used by Operator Identity Context across the single production tenant, covering runs, Agent and shared-asset lifecycle, evaluation, permission mapping, egress policy, secret-handle use, and audit access.
+_Avoid_: Generic admin flag, approval resolution permission in initial production, frontend-only permission label, per-resource ACL
 
 **Controlled Run Context**:
 The governed context package assembled for one Harness run from separately admitted context sources such as recent turns, clarification state, compaction summaries, memory, and retrieval facts.
@@ -407,6 +455,10 @@ _Avoid_: Transcript archiving, automatic chat learning, saving model answers as 
 **Case Memory**:
 Memory scoped to one case, task, customer issue, or conversation journey, containing admitted structured case facts or bounded trace-safe summaries rather than complete customer-visible messages.
 _Avoid_: Persistent user profile, audit log, raw conversation transcript
+
+**Initial Production Memory Boundary**:
+The first-release rule that permits only 30-day Case Memory scoped to the current Operator Chat conversation or case while persistent user, shared, operator-profile, external Mem0, and filesystem memory remain unavailable.
+_Avoid_: OIDC-sub user memory, Customer Persistent User Memory, Shared Memory, external production Mem0
 
 **Case Memory Lifecycle Controls**:
 The governed controls for inspecting, deleting, expiring, and auditing Case Memory without exposing internal memory contents to customers.

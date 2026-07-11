@@ -1,5 +1,7 @@
 # Workflow Control Decisions
 
+Compatibility decisions for `enterprise_qa`, `react_enterprise_qa` V1, and `react_enterprise_qa_v2` below are historical and superseded for active execution by ADR-0125. They remain decision history, not current support claims.
+
 ## Ambiguity Resolutions
 
 - "Workflow" could mean business flow, runtime graph mechanics, or a hard-coded orchestrator branch. Resolved: use **Workflow Template** for the governed flow shape, and keep runtime mechanics separate.

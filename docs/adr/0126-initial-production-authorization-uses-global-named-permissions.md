@@ -1,0 +1,9 @@
+# Initial Production Authorization Uses Global Named Permissions
+
+Accepted.
+
+[FRAME | HIGH] Initial production uses a default-deny Operator Permission Vocabulary whose permissions authorize actions across the one production tenant rather than granting access to individual Agents, Knowledge Sources, Tool Sources, Model Connections, runs, or artifacts. Trusted OIDC group or role claims are resolved through the active External Operator Permission Mapping; permissions from every matched claim are combined, while unmatched identities receive no permissions. Proof Agent stores neither per-user grants nor resource-level ACLs, and it does not create local accounts, passwords, a user directory, or a user-management surface.
+
+[FRAME | HIGH] The initial vocabulary includes `run.submit`, `run.view`, and `run.cancel`; existing Agent, Knowledge Source, Model Connection, and Tool Source lifecycle permissions, completed with `tool_source.validate`; `evaluation.view`, `evaluation.run`, and `evaluation_curation.review`; `permission_mapping.view` and `permission_mapping.edit`; `egress_policy.view` and `egress_policy.edit`; `secret_handle.view` and `secret_handle.use`; and `audit.view` and `audit.export`. Backend command and read boundaries are authoritative; Dashboard visibility is only a usability projection of those checks. Security-sensitive successes and authorization denials produce trace-safe security audit facts.
+
+[FRAME | HIGH] Initial production has no approval workflow. `approval.resolve` is removed from the production permission vocabulary, approval command and queue surfaces are unavailable, and production publication rejects approval-required tools. Historical completed approval facts remain readable only through the ordinary governed run and audit projections allowed by `run.view` or `audit.view`.

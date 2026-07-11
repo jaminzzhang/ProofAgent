@@ -137,12 +137,28 @@ The Agent Contract policy that sets the maximum governance detail a backend resp
 _Avoid_: Frontend-only visibility flag, unrestricted API projection
 
 **Conversation Store**:
-The local conversation timeline store that links chat turns to governed run artifacts.
+The conversation timeline store that links chat turns to governed run artifacts.
 _Avoid_: RunStore, persistent enterprise memory
 
 **Audit Retention Boundary**:
-The separation between short-lived customer conversation text and longer-lived trace-safe run audit facts.
+The separation between short-lived raw conversation text and longer-lived trace-safe run audit facts.
 _Avoid_: Raw transcript archive, unrestricted audit log
+
+**Operator Conversation Retention Policy**:
+The initial-production rule that retains Operator Chat raw conversation text for 90 days while keeping longer-lived trace-safe audit facts in a separate retention class.
+_Avoid_: Permanent operator transcript archive, audit-log deletion coupling, Customer Conversation Retention Policy
+
+**Production Audit Retention Policy**:
+The initial-production rule that retains trace-safe run, receipt, configuration, and security audit facts for 365 days while referenced immutable artifacts follow their own lifecycle.
+_Avoid_: Raw transcript retention, Sensitive Validation Capture Retention, permanent default audit archive
+
+**Recovery Copy Window**:
+The maximum seven-day period after application-visible retention expires during which an encrypted, ordinary-user-inaccessible copy may remain solely for tested disaster recovery.
+_Avoid_: Extended application retention, backup history browser, indefinite object version, ordinary operator restore access
+
+**Restore-Time Retention Reapplication**:
+The recovery boundary that removes or hides every record already expired under current retention and reference rules before a restored environment may serve application traffic.
+_Avoid_: Restore-first exposure, backup timestamp as a new retention start, expired transcript revival
 
 **Run Artifact Consistency**:
 The requirement that Trace, Governance Receipt, run metadata, and read projections describe the same governed run facts.

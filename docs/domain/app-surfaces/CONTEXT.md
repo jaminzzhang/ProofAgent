@@ -16,12 +16,20 @@ _Avoid_: Backend-only schema migration, node-labeled inspector, mixed nodes/stag
 The Dashboard configuration workspace for administering Shared Model Connections as reusable model access assets.
 _Avoid_: Provider model catalog, Agent Model module, runtime model endpoint
 
+**Egress Policy Workspace**:
+The Dashboard configuration surface through which permitted operators inspect and manage Production Egress Policy while the backend remains the enforcement authority.
+_Avoid_: Agent Configuration Module, provider endpoint field, frontend-only allowlist, secret management workspace
+
+**Egress Policy Direct Configuration**:
+The initial-release interaction where a permitted operator updates the active Production Egress Policy directly after complete backend validation, with atomic replacement and configuration audit but no approval workflow.
+_Avoid_: Approval queue, unvalidated partial save, frontend activation, unaudited origin change
+
 **Dashboard Model Configuration**:
 The Dashboard configuration workspace may directly configure Model Role Configuration values for final answers, ReAct planning, and Harness review, including named Model Providers such as DeepSeek, and may present model-adjacent Context Window and budget controls that still write Agent Context Configuration rather than Model Role Configuration.
 _Avoid_: Dashboard-only model semantics, provider credential storage, bypassing Agent Contract validation, model-owned context assembly
 
 **Dashboard DeepSeek Model Selection**:
-Dashboard DeepSeek configuration uses provider selection plus editable model names with recommended current DeepSeek model values, not a hard model-name allowlist. API keys remain environment variable references, not stored credentials.
+Dashboard DeepSeek configuration uses provider selection plus editable model names with recommended current DeepSeek model values, not a hard model-name allowlist. Production API credentials use Production Secret Handle; local development may use environment-variable references, and neither mode stores raw API keys.
 _Avoid_: Fixed DeepSeek model dropdown, frontend-only provider inventory, storing DeepSeek API keys
 
 **Dashboard Unified Model Strategy**:
@@ -29,8 +37,20 @@ A Dashboard UI shortcut that applies the same Primary Model settings to all thre
 _Avoid_: Single global Agent model, hidden model reuse
 
 **Dashboard Model Parameter Editing**:
-Dashboard Model Configuration may edit shared Model Role Configuration parameters such as API key environment variable, base URL environment variable, temperature, maximum output tokens, and timeout for final answer, planner, and reviewer roles. It must not expose raw credential fields or provider-specific reasoning controls in V1.
-_Avoid_: raw API key input, provider secret storage, DeepSeek-only reasoning parameter passthrough
+Dashboard Model Configuration may edit shared Model Role Configuration parameters such as Production Secret Handle or local-development credential reference, provider endpoint, temperature, maximum output tokens, and timeout for final answer, planner, and reviewer roles. Production mode must not accept environment-variable names, and neither mode exposes raw credential fields or provider-specific reasoning controls in V1.
+_Avoid_: raw API key input, production environment-variable reference, provider secret storage, DeepSeek-only reasoning parameter passthrough
+
+**Dashboard Secret Handle Selection**:
+The production configuration control that selects an existing Production Secret Handle and shows bounded resolvability or validation status without exposing secret values or secret lifecycle actions.
+_Avoid_: Secret creation form, secret rotation UI, environment-variable input, secret value preview
+
+**Production Permission Mapping Workspace**:
+The Dashboard security-configuration surface for permitted operators to inspect and atomically activate External Operator Permission Mapping versions while the deployment-controlled Recovery OIDC Group Mapping remains visible but immutable.
+_Avoid_: User management page, local role directory, resource permission editor, editable recovery mapping, frontend-owned authorization
+
+**Initial Production Approval Surface Exclusion**:
+The release boundary that omits approval queues and approval-resolution actions because initial-production Agents may use only read-only tools and approval-required Tool Contracts cannot be published.
+_Avoid_: Hidden but active approval command, disabled approval button, local approval fallback, state-changing tool waiting for approval
 
 **Run Detail Approval Action**:
 The first Approval Console action surface embedded in a Run Detail view. It resolves a single run's pending approval through Approval Checkpoint Resume and refreshes that run projection after approve or deny; it is not a global approval queue.
@@ -63,6 +83,10 @@ _Avoid_: Customer Service Chat Frontend, customer response UI, full admin consol
 **Dashboard Shell**:
 The shared internal web workspace that hosts both observability views and Agent configuration views while preserving separate API boundaries for observation, configuration, and execution.
 _Avoid_: Single backend API surface, customer-facing console, ungoverned execution UI
+
+**Same-Origin Operator Browser Boundary**:
+The production Gateway boundary that serves Dashboard, Operator Chat, and browser APIs from one origin through Backend-Managed Operator Session and CSRF-protected command requests.
+_Avoid_: Wildcard CORS, cross-origin production SPA, JavaScript-held OIDC token, cookie-only command protection
 
 **Agent-Centric Dashboard Shell**:
 A Dashboard Shell information architecture where each Agent detail view combines monitoring, configuration, validation, versioning, and contract inspection for that Agent.
@@ -157,7 +181,7 @@ The `local_index` Knowledge Source Detail Workspace tab for operating up to 500 
 _Avoid_: Unpaginated file dump, filename-only status, implicit publication, one-document-only upload
 
 **Remote Knowledge Source Provider Tab**:
-The layered Provider tab for a remote Knowledge Source. Its default form exposes adapter, endpoint, environment-variable credential references, index or namespace, timeout, and default `top_k`. Its advanced section exposes protocol version, Remote Retrieval Request Mapping, Remote Retrieval Response Mapping, and Structured Remote Source Reference mapping only when the selected adapter supports them. Typed remote adapters prefer descriptor-driven forms, while `http_json` exposes bounded mapping editors.
+The layered Provider tab for a remote Knowledge Source. Its default form exposes adapter, endpoint, Production Secret Handle selection or local-development credential reference, index or namespace, timeout, and default `top_k`. Its advanced section exposes protocol version, Remote Retrieval Request Mapping, Remote Retrieval Response Mapping, and Structured Remote Source Reference mapping only when the selected adapter supports them. Typed remote adapters prefer descriptor-driven forms, while `http_json` exposes bounded mapping editors.
 _Avoid_: Raw JSON-only setup, arbitrary script editor, one-size-fits-all adapter form
 
 **Remote Knowledge Source Connection Test**:
@@ -169,7 +193,7 @@ The non-publishing Provider-tab action that runs a bounded example query and sho
 _Avoid_: Raw remote response dump, Agent Validation Run, implicit Source publication
 
 **Local Index Provider Tab**:
-The layered Provider tab for a `local_index` Knowledge Source. Its default form exposes ingestion model provider, model, environment-variable credential references, inherited Knowledge Routing Model Configuration, and Knowledge Document Selection Budget defaulting to 8. Its advanced section exposes an explicit routing-model override, timeout, retry count, and worker concurrency. Documents and routing metadata remain in Knowledge Source Documents Tab.
+The layered Provider tab for a `local_index` Knowledge Source. Its default form exposes ingestion model provider, model, Production Secret Handle selection or local-development credential reference, inherited Knowledge Routing Model Configuration, and Knowledge Document Selection Budget defaulting to 8. Its advanced section exposes an explicit routing-model override, timeout, retry count, and worker concurrency. Documents and routing metadata remain in Knowledge Source Documents Tab.
 _Avoid_: File list inside provider settings, Agent answer model reuse, raw credential storage, flat advanced form
 
 **Local Index Model Configuration Test**:

@@ -1,5 +1,7 @@
 # Business Flow Skills Decisions
 
+References below to V1/V2 Workflow Template support are historical and superseded for active execution by ADR-0125; current Business Flow Skill Pack execution targets React Enterprise QA Template V3 only.
+
 ## Ambiguity Resolutions
 
 - "Intent-routed business flow" could mean dynamically loading an executable workflow topology or selecting a domain capability pack. Resolved: use **Business Flow Skill Pack** for intent-routed domain configuration and governed capability contributions while the selected **Workflow Template** remains the execution shape.

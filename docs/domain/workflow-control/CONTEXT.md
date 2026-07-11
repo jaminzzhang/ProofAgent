@@ -372,24 +372,20 @@ _Avoid_: Parallel ReAct planning, unbounded provider fan-out, implicit provider 
 One candidate query in a Retrieval Query Set, carrying query text plus audit-safe intent angle, required flag, and reason without naming Knowledge Sources, providers, filters, or execution parameters.
 _Avoid_: Provider route, source filter, scoped retrieval command, top_k override
 
-**React Enterprise QA Template**:
-The V1 Controlled ReAct Workflow Template for enterprise question answering.
-_Avoid_: Replacing Enterprise QA Template, generic autonomous agent template
-
-**React Enterprise QA Template V2**:
-The versioned Controlled ReAct Workflow Template that adds Intent Resolution before ReAct planning while preserving historical interpretation of earlier Published Agent Versions.
-_Avoid_: Runtime feature flag for v1, mutable latest template behavior
-
 **React Enterprise QA Template V3**:
 The product-baseline Controlled ReAct Workflow Template that combines Intent Resolution, Business Flow Skill Pack admission, and the real Controlled ReAct Loop. Earlier Enterprise QA and React Enterprise QA V1/V2 execution paths are retired rather than kept as compatibility paths.
 _Avoid_: Compatibility template, feature flag, parallel legacy workflow
 
+**V3-Only Template Cutover**:
+The hard product boundary that makes `react_enterprise_qa_v3` the sole executable Workflow Template while preserving older template names only as non-executable historical artifact values.
+_Avoid_: Runtime selector, compatibility alias, automatic template migration, importable legacy runtime
+
 **Deterministic ReAct Demo**:
-A no-API-key acceptance path for the React Enterprise QA Template using deterministic planner and review providers.
+A no-API-key acceptance path for React Enterprise QA Template V3 using deterministic planner and review providers.
 _Avoid_: Remote-only ReAct demo, provider-dependent MVP
 
 **Deterministic ReAct Baseline**:
-The deterministic regression baseline for Proof Agent's primary React Enterprise QA Workflow Template, using deterministic planner, reviewer, model, retrieval, and tool implementations.
+The deterministic regression baseline for React Enterprise QA Template V3, using deterministic planner, reviewer, model, retrieval, and tool implementations through Controlled ReAct Orchestrator.
 _Avoid_: Legacy linear Enterprise QA baseline, remote-model release gate, separate workflow world
 
 **Controlled ReAct Loop**:
@@ -397,7 +393,7 @@ The real Think→Act→Observe→Replan loop shape for React Enterprise QA Templ
 _Avoid_: Single-pass ReAct DAG, classification pipeline mislabeled as ReAct, plan-and-execute batch
 
 **Plan Round**:
-One invocation of the `plan` stage in the Controlled ReAct Loop. The unit counted by the `max_plan_rounds` budget. Replaces the older `max_steps` concept; `react.max_steps` is read as a backward-compatible alias for `max_plan_rounds`.
+One invocation of the `plan` stage in the Controlled ReAct Loop. The unit counted by the required `max_plan_rounds` budget; the retired `react.max_steps` field is not accepted.
 _Avoid_: Graph node, retrieval step, tool call
 
 **Observation Action**:

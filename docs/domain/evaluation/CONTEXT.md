@@ -104,6 +104,34 @@ _Avoid_: automatic blocker, subjective release failure, unreviewed safety gate, 
 The V1 publication bar for an Insurance QA Evaluation Target: complete deterministic safety and governance gate pass, sufficient artifacts, low run error rate, and high overall Governed Resolution Rate.
 _Avoid_: Accuracy-only launch bar, judge-only launch decision, unverifiable quality claim
 
+**Production Candidate Real-LLM Gate**:
+The must-pass live-model evaluation bound to an immutable production candidate and every in-scope Published Agent Evaluation Contract; an absent, skipped, stale, incomplete, or failed run blocks release.
+_Avoid_: Optional live-model diagnostic, deterministic-only release proof, unbound source-tree regression
+
+**Deployment Compatibility Gate**:
+The must-pass release gate requiring a complete Production Deployment Compatibility Manifest and current passing evidence for every concrete external dependency bound to the production candidate.
+_Avoid_: Provider-name checklist, reference-environment pass, assumed S3 or OIDC compatibility, unbound integration smoke test
+
+**Production Candidate Binding**:
+The canonical digest identity joining one source, image, Agent, evaluation contract, configuration, migration, frontend, Gate Profile, and deployment-compatibility combination to all of its release Evidence.
+_Avoid_: Git-commit-only identity, mutable image tag, source-tree test identity, manually matched report
+
+**Production Release Gate Manifest**:
+The strict machine-readable authority that verifies all required candidate-bound Gate results and Evidence before computing the production release decision.
+_Avoid_: Human checklist, HTML decision source, CI green badge, editable GO field, skipped-as-passed report
+
+**Initial Private Pilot Gate Profile**:
+The versioned, digest-bound set of mandatory Gate checks, thresholds, and Evidence freshness rules for the first internal production release.
+_Avoid_: Candidate-selected optional check, hidden threshold, mutable release criteria, producer-defined waiver
+
+**Release Evidence Freshness**:
+The candidate- and environment-sensitive validity window after which a previously passing Evidence result can no longer authorize a production release.
+_Avoid_: Perpetual integration result, timestamp-only validity, stale result after configuration change, producer self-extension
+
+**Release Bundle Index**:
+The final signed or attested digest inventory for the Production Release Gate Manifest, its downloadable HTML projection, and every referenced Evidence bundle.
+_Avoid_: Download page as manifest, unsigned file list, mutable latest bundle, circular HTML authority
+
 **Evaluation Performance Threshold**:
 The minimum performance bar for Active Agent Evaluation Readiness, covering hard operational blockers such as excessive P95 resolved-case latency, run error rate, timeout rate, or suite-declared resource budgets while leaving ordinary token, cost, retrieval, and tool counts as diagnostics.
 _Avoid_: blended quality score, fastest-answer ranking, hidden performance penalty, cost-only blocker

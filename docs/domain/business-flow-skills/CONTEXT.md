@@ -133,7 +133,7 @@ A stage-specific guidance addendum owned by one Business Flow Skill Pack and key
 _Avoid_: Intent Resolution routing summary, Stage-owned skill snippet, workflow-embedded business flow, runtime prompt plugin, Harness control prompt override, pre-admission addendum injection
 
 **Business Flow Skill Pack Addendum Slot**:
-A V1 Workflow Template Stage that may receive a Stage-Scoped Business Flow Skill Pack Addendum after Primary Business Flow Skill Pack admission. For `react_enterprise_qa_v2`, the V1 slots are `plan`, `retrieval_review`, `tool_review`, and `model_answer`.
+A React Enterprise QA Template V3 stage that may receive a Stage-Scoped Business Flow Skill Pack Addendum after Primary Business Flow Skill Pack admission. The supported slots are `plan`, `retrieval_review`, `tool_review`, and `model_answer`.
 _Avoid_: `intent_resolution`, `retrieval`, `tool`, `memory`, `clarification`, `response`, execution stage prompt injection, response projection rewrite
 
 **Append-Only Business Flow Skill Pack Addendum**:

@@ -13,11 +13,11 @@ The stable identifier derived from local index ingestion model configuration and
 _Avoid_: Routing model fingerprint, filename key, mutable cache identity
 
 **Knowledge Artifact Build Spec**:
-The immutable secret-safe artifact-build input snapshot persisted with one Knowledge Ingestion Job when a validated revision is promoted. It captures provider and engine identity, exact parser fingerprint identity, immutable original content hash, Parsed Knowledge Document Text integrity hash, and the declared ingestion-model configuration with credential environment-variable references only. Fingerprint calculation and worker execution consume this same snapshot so later Source Draft edits cannot mutate queued work.
+The immutable secret-safe artifact-build input snapshot persisted with one Knowledge Ingestion Job when a validated revision is promoted. It captures provider and engine identity, exact parser fingerprint identity, immutable original content hash, Parsed Knowledge Document Text integrity hash, and declared ingestion-model configuration containing Production Secret Handle identifiers in production or environment-variable references in local development. Fingerprint calculation and worker execution consume this same snapshot so later Source Draft edits cannot mutate queued work.
 _Avoid_: Live Source configuration reread, raw credential value, routing-model settings, mutable queued-build input
 
 **Secret-Safe Knowledge Configuration Validation**:
-The recursive configuration-persistence guard that rejects secret-bearing parameter names before Knowledge Source configuration or Knowledge Artifact Build Spec storage. Environment-variable reference keys ending in `_env` are permitted, while raw credential-bearing fields such as `api_key`, `authorization`, `bearer`, `password`, `secret`, `access_token`, or `provider_api_key` fail with `PA_SECRET_001`.
+The recursive configuration-persistence guard that rejects secret-bearing parameter names before Knowledge Source configuration or Knowledge Artifact Build Spec storage. Production accepts only bounded Production Secret Handle fields, local development may accept environment-variable reference keys ending in `_env`, and raw credential-bearing fields such as `api_key`, `authorization`, `bearer`, `password`, `secret`, `access_token`, or `provider_api_key` fail with `PA_SECRET_001`.
 _Avoid_: Top-level-only scan, raw secret persistence, error-message echo of secret values, worker-only secret rejection
 
 **Incremental Local Index Reingestion**:
@@ -109,7 +109,7 @@ The new Source Draft created from a selected historical published Knowledge Sour
 _Avoid_: Published-version mutation, active-pointer rewind, automatic Agent rollback
 
 **Knowledge Source Manifest Export**:
-The audited secret-free export available for every Knowledge Source. It includes metadata, provider type, parameters, environment-variable references, published version information, declarative mappings, and routing configuration without credential values, original documents, or index artifacts.
+The audited secret-free export available for every Knowledge Source. It includes metadata, provider type, parameters, non-secret Production Secret Handle identifiers or local-development environment-variable references, published version information, declarative mappings, and routing configuration without credential values, original documents, or index artifacts.
 _Avoid_: Secret export, full local bundle, index-cache archive
 
 **Local Knowledge Source Offline Bundle**:
@@ -365,7 +365,7 @@ The default versioned HTTP JSON request and response shape supported by the HTTP
 _Avoid_: Provider-native response passthrough, unversioned implicit shape, executable transform
 
 **Remote Retrieval Request Mapping**:
-The versioned, declarative HTTP JSON Knowledge Provider configuration that projects the bounded retrieval inputs `query`, `top_k`, and optional `upstream_revision` as whole-value placeholders into an allowed HTTP method, headers, query parameters, and JSON body. Secret-bearing headers reference environment variables only.
+The versioned, declarative HTTP JSON Knowledge Provider configuration that projects the bounded retrieval inputs `query`, `top_k`, and optional `upstream_revision` as whole-value placeholders into an allowed HTTP method, headers, query parameters, and JSON body. Secret-bearing headers resolve through Production Secret Handles in production or environment-variable references in local development.
 _Avoid_: String interpolation, dynamic URL path, arbitrary template variables, loops, conditions, functions, network callbacks, script execution, raw secret value
 
 **Remote Retrieval Response Mapping**:
@@ -397,7 +397,7 @@ A Knowledge Provider that retrieves evidence from an external knowledge service 
 _Avoid_: Remote Agentic RAG
 
 **Remote Knowledge Source Configuration Version**:
-The immutable Proof Agent-managed version of a Remote Knowledge Source's adapter selection, provider parameters, and environment-variable credential references.
+The immutable Proof Agent-managed version of a Remote Knowledge Source's adapter selection, provider parameters, and Production Secret Handle identifiers or local-development environment-variable credential references.
 _Avoid_: Upstream corpus revision, raw credential storage, mutable draft connection
 
 **Pinned Remote Knowledge Source**:
