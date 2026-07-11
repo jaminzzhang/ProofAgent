@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { ChatShell } from '../../chat-core/ChatShell'
@@ -44,6 +44,15 @@ const STARTERS: Array<{ question: string; labelKey: string; fallback: string }> 
   },
 ]
 
+interface CustomerRouteHandoff {
+  agentId: string
+  conversationId: string
+  customerId: string | null
+  fallbackTurn: CustomerTurn
+}
+
+class CustomerBindingError extends Error {}
+
 export function CustomerChatPage() {
   const { conversationId, agentId } = useParams<{ conversationId: string; agentId: string }>()
   const location = useLocation()
@@ -60,39 +69,101 @@ export function CustomerChatPage() {
   const [error, setError] = useState<string | null>(null)
   const [allowUntrustedWebSupplement, setAllowUntrustedWebSupplement] = useState(false)
   const { t } = useLocale()
+  const requestGenerationRef = useRef(0)
+  const routeHandoffRef = useRef<CustomerRouteHandoff | null>(null)
+  const translateRef = useRef(t)
+  translateRef.current = t
 
   const activeMode = useMemo(
     () => CUSTOMER_MODES.find((item) => item.id === mode) ?? CUSTOMER_MODES[0],
     [mode],
   )
 
-  useEffect(() => {
-    if (!routeConversationId) return
+  useLayoutEffect(() => {
+    requestGenerationRef.current += 1
+    const routeHandoff =
+      routeConversationId
+      && routeHandoffRef.current?.conversationId === routeConversationId
+        ? routeHandoffRef.current
+        : null
+    if (!routeHandoff) {
+      routeHandoffRef.current = null
+      setConversation(null)
+      setTurns([])
+    }
+    setInput('')
+    setSending(false)
     setError(null)
-    fetchCustomerConversation(routeConversationId)
-      .then((record) => {
-        setConversation(record)
-        setTurns(record.turns)
-      })
-      .catch(() => {
-        setError(t('customer.loadConversationError'))
-      })
-  }, [routeConversationId])
+    setMode(
+      routeConversationId
+        ? customerModeFor(routeHandoff?.customerId ?? null) ?? 'anonymous'
+        : customerModeFromRouteState(location.state) ?? 'anonymous',
+    )
+  }, [location.key, location.pathname, routeConversationId])
 
   useEffect(() => {
+    return () => {
+      requestGenerationRef.current += 1
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!routeConversationId) return
+    const generation = requestGenerationRef.current
+    const routeHandoff = routeHandoffRef.current
+    fetchCustomerConversation(routeConversationId)
+      .then((record) => {
+        if (generation !== requestGenerationRef.current) return
+        const resolvedMode = customerModeFor(record.customer_id)
+        if (record.conversation_id !== routeConversationId || resolvedMode === null) {
+          throw new Error('Customer conversation identity does not match the active route')
+        }
+        setMode(resolvedMode)
+        setConversation(record)
+        const handoffTurn =
+          routeHandoff?.conversationId === record.conversation_id
+          && routeHandoff.agentId === record.agent_id
+          && routeHandoff.customerId === record.customer_id
+            ? routeHandoff.fallbackTurn
+            : null
+        setTurns(record.turns.length > 0 ? record.turns : handoffTurn ? [handoffTurn] : [])
+        routeHandoffRef.current = null
+      })
+      .catch(() => {
+        if (generation !== requestGenerationRef.current) return
+        routeHandoffRef.current = null
+        setConversation(null)
+        setTurns([])
+        setMode('anonymous')
+        setError(translateRef.current('customer.loadConversationError'))
+      })
+  }, [location.key, routeConversationId])
+
+  useEffect(() => {
+    const generation = requestGenerationRef.current
     if (routeConversationId) {
       setAgents([])
       setAgentsLoading(false)
       setAgentsError(null)
       return
     }
+    setAgents([])
     setAgentsLoading(true)
     setAgentsError(null)
     fetchCustomerAgents()
-      .then((response) => setAgents(response.data))
-      .catch(() => setAgentsError(t('customer.loadAgentsError')))
-      .finally(() => setAgentsLoading(false))
-  }, [routeConversationId])
+      .then((response) => {
+        if (generation !== requestGenerationRef.current) return
+        setAgents(response.data)
+      })
+      .catch(() => {
+        if (generation !== requestGenerationRef.current) return
+        setAgentsError(translateRef.current('customer.loadAgentsError'))
+      })
+      .finally(() => {
+        if (generation !== requestGenerationRef.current) return
+        setAgentsLoading(false)
+      })
+  }, [location.key, routeConversationId])
 
   const selectedAgent = useMemo(() => {
     if (conversation) {
@@ -112,46 +183,115 @@ export function CustomerChatPage() {
   const turnViews = useMemo(() => turns.map(normalizeCustomerTurn), [turns])
 
   const handleModeChange = (nextMode: CustomerMode) => {
+    requestGenerationRef.current += 1
     setMode(nextMode)
     setConversation(null)
     setTurns([])
     setInput('')
+    setSending(false)
     setError(null)
-    navigate(agentId ? `/customer/agents/${agentId}` : '/customer', { replace: true })
-  }
-
-  const ensureConversation = async () => {
-    if (conversation) return conversation
-    if (!selectedAgent) {
-      throw new Error(t('customer.noAgentError'))
-    }
-    const created = await createCustomerConversation(selectedAgent.agent_id, activeMode.customerId)
-    setConversation(created)
-    navigate(`/customer/c/${created.conversation_id}`, { replace: true })
-    return created
+    navigate(agentId ? `/customer/agents/${agentId}` : '/customer', {
+      replace: true,
+      state: { customerMode: nextMode },
+    })
   }
 
   const sendQuestion = async (question: string) => {
     const trimmed = question.trim()
     if (!trimmed || sending) return
+    const generation = requestGenerationRef.current
+    const expectedMode = activeMode
+    const expectedRouteConversationId = routeConversationId
+    const expectedConversation = conversation
+    const expectedAgent = selectedAgent
     setInput('')
     setError(null)
     setSending(true)
 
     try {
-      const activeConversation = await ensureConversation()
+      let activeConversation: CustomerConversation
+      if (expectedConversation) {
+        if (
+          generation !== requestGenerationRef.current
+          || !expectedRouteConversationId
+          || expectedConversation.conversation_id !== expectedRouteConversationId
+          || expectedConversation.customer_id !== expectedMode.customerId
+        ) {
+          throw new CustomerBindingError(
+            'Customer conversation is not bound to the active route identity',
+          )
+        }
+        activeConversation = expectedConversation
+      } else {
+        if (expectedRouteConversationId || !expectedAgent) {
+          throw new Error(translateRef.current('customer.noAgentError'))
+        }
+        const created = await createCustomerConversation(
+          expectedAgent.agent_id,
+          expectedMode.customerId,
+        )
+        if (generation !== requestGenerationRef.current) return
+        if (
+          !created.conversation_id
+          || created.agent_id !== expectedAgent.agent_id
+          || created.customer_id !== expectedMode.customerId
+        ) {
+          throw new CustomerBindingError(
+            'Created customer conversation identity does not match the request',
+          )
+        }
+        activeConversation = created
+      }
+
+      if (generation !== requestGenerationRef.current) return
       const response = await createCustomerRun(activeConversation.conversation_id, trimmed, {
         allowUntrustedWebSupplement,
       })
+      if (generation !== requestGenerationRef.current) return
+      if (response.conversation_id !== activeConversation.conversation_id) {
+        throw new CustomerBindingError('Customer run response does not match its conversation')
+      }
       const updated = await fetchCustomerConversation(activeConversation.conversation_id)
+      if (generation !== requestGenerationRef.current) return
+      const updatedMode = customerModeFor(updated.customer_id)
+      if (
+        updated.conversation_id !== activeConversation.conversation_id
+        || updated.agent_id !== activeConversation.agent_id
+        || updated.customer_id !== expectedMode.customerId
+        || updatedMode === null
+      ) {
+        throw new CustomerBindingError(
+          'Refreshed customer conversation identity does not match the run',
+        )
+      }
+      const fallbackTurn = responseToTurn(trimmed, response)
+      setMode(updatedMode)
       setConversation(updated)
-      setTurns(updated.turns.length > 0 ? updated.turns : [responseToTurn(trimmed, response)])
+      setTurns(updated.turns.length > 0 ? updated.turns : [fallbackTurn])
+      if (!expectedRouteConversationId) {
+        routeHandoffRef.current = {
+          agentId: updated.agent_id,
+          conversationId: updated.conversation_id,
+          customerId: updated.customer_id,
+          fallbackTurn,
+        }
+        navigate(`/customer/c/${updated.conversation_id}`, { replace: true })
+      }
     } catch (err) {
+      if (generation !== requestGenerationRef.current) return
+      if (err instanceof CustomerBindingError) {
+        routeHandoffRef.current = null
+        setConversation(null)
+        setTurns([])
+        setMode('anonymous')
+      }
       console.error('Customer run failed', err)
       setInput(question)
-      setError(t('customer.sendError'))
+      setError(translateRef.current('customer.sendError'))
     } finally {
-      setSending(false)
+      if (generation === requestGenerationRef.current) {
+        setSending(false)
+      }
     }
   }
 
@@ -244,6 +384,18 @@ export function CustomerChatPage() {
       sendingLabel={<ProgressState state="retrieving_evidence" active />}
     />
   )
+}
+
+function customerModeFor(customerId: string | null): CustomerMode | null {
+  return CUSTOMER_MODES.find((item) => item.customerId === customerId)?.id ?? null
+}
+
+function customerModeFromRouteState(state: unknown): CustomerMode | null {
+  if (typeof state !== 'object' || state === null || !('customerMode' in state)) return null
+  const customerMode = (state as { customerMode?: unknown }).customerMode
+  return CUSTOMER_MODES.some((item) => item.id === customerMode)
+    ? customerMode as CustomerMode
+    : null
 }
 
 function responseToTurn(question: string, response: CustomerRunResponse): CustomerTurn {
