@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
 import { ArrowUp } from 'lucide-react'
 import {
@@ -65,17 +65,33 @@ export function ChatShell({
   untrustedWebSupplementToggle,
 }: ChatShellProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const latestTurnRef = useRef<HTMLElement>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const detailsId = useId()
   const { t } = useLocale()
+  const latestTurnId = turns.at(-1)?.id
 
   useEffect(() => {
     const container = scrollRef.current
     if (!container) return
-    if (typeof container.scrollTo === 'function') {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+
+    if (sending) {
+      if (typeof container.scrollTo === 'function') {
+        container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+        return
+      }
+      container.scrollTop = container.scrollHeight
       return
     }
-    container.scrollTop = container.scrollHeight
-  }, [turns.length, sending])
+
+    const latestTurn = latestTurnRef.current
+    if (!latestTurn) return
+    if (typeof latestTurn.scrollIntoView === 'function') {
+      latestTurn.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      return
+    }
+    container.scrollTop = latestTurn.offsetTop
+  }, [latestTurnId, sending])
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
@@ -102,8 +118,8 @@ export function ChatShell({
         {footer}
       </div>
 
-      <div className={sidePanel ? 'grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_280px]' : 'grid min-h-0 flex-1'}>
-        <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]">
+      <div className={sidePanel ? 'grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 lg:grid-cols-[minmax(0,1fr)_280px] lg:grid-rows-1 lg:gap-5' : 'grid min-h-0 flex-1'}>
+        <section className="flex h-full min-h-[320px] flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-[var(--shadow-sm)] lg:min-h-0">
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
             {turns.length === 0 && !sending ? (
               <div className="flex h-full min-h-[320px] flex-col justify-end gap-3">
@@ -129,8 +145,12 @@ export function ChatShell({
               </div>
             ) : (
               <div className="space-y-6">
-                {turns.map((turn) => (
-                  <article key={turn.id} className="space-y-3">
+                {turns.map((turn, index) => (
+                  <article
+                    key={turn.id}
+                    ref={index === turns.length - 1 ? latestTurnRef : undefined}
+                    className="space-y-3"
+                  >
                     {/* User message: right-aligned accent bubble */}
                     <div className="flex justify-end gap-3">
                       <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[var(--accent)] px-4 py-2.5 text-sm font-medium text-[var(--accent-fg)]">
@@ -219,7 +239,25 @@ export function ChatShell({
           </form>
         </section>
 
-        {sidePanel && <aside className="min-w-0 space-y-4">{sidePanel}</aside>}
+        {sidePanel && (
+          <div className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-3 lg:contents">
+            <button
+              type="button"
+              aria-controls={detailsId}
+              aria-expanded={detailsOpen}
+              onClick={() => setDetailsOpen((open) => !open)}
+              className="w-full text-left text-sm font-semibold text-[var(--text-primary)] lg:hidden"
+            >
+              {t('chatShell.details')}
+            </button>
+            <aside
+              id={detailsId}
+              className={`${detailsOpen ? 'block' : 'hidden'} mt-3 max-h-56 min-w-0 space-y-4 overflow-y-auto pb-1 lg:mt-0 lg:block lg:max-h-none lg:overflow-visible lg:pb-0`}
+            >
+              {sidePanel}
+            </aside>
+          </div>
+        )}
       </div>
     </div>
   )
