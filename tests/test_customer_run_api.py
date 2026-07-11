@@ -4,7 +4,7 @@ import shutil
 import pytest
 from fastapi.testclient import TestClient
 
-from proof_agent.contracts import ReceiptOutcome, RunDetail
+from proof_agent.contracts import DashboardEvidenceChunk, ReceiptOutcome, RunDetail
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
@@ -168,14 +168,15 @@ def test_customer_safe_sources_resolve_shared_knowledge_source_names(tmp_path: P
         created_at="2026-07-05T00:00:00Z",
         updated_at="2026-07-05T00:00:01Z",
         evidence_chunks=(
-            {
-                "source": "[1]",
-                "citation": (
+            DashboardEvidenceChunk(
+                index=1,
+                source="[1]",
+                citation=(
                     "knowledge://source/ks_myks2/document/doc_5750121a/"
                     "revision/rev_5750121a#node=node_1"
                 ),
-                "status": "accepted",
-            },
+                status="accepted",
+            ),
         ),
     )
 

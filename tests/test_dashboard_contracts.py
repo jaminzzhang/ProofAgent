@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from proof_agent.contracts import (
+    DashboardEvidenceChunk,
     ReceiptOutcome,
     RunDetail,
     RunIndex,
@@ -64,7 +65,13 @@ def test_run_detail_construction() -> None:
         updated_at="2026-05-10T14:32:19Z",
         trace_events=({"event_type": "run_started", "status": "ok"},),
         receipt_markdown="# Receipt\n\nOutcome: ANSWERED",
-        evidence_chunks=({"source": "policy.md", "status": "accepted"},),
+        evidence_chunks=(
+            DashboardEvidenceChunk(
+                index=1,
+                source="policy.md",
+                status="accepted",
+            ),
+        ),
         citation_refs=(
             {
                 "source": "policy.md",

@@ -102,6 +102,12 @@ def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
     first_body = first.json()
     assert first_body["context_admission"]["admitted"] is False
     assert first_body["context_admission"]["turn_count"] == 0
+    assert first_body["evidence"]
+    first_evidence = first_body["evidence"][0]
+    assert isinstance(first_evidence["index"], int)
+    assert first_evidence["source"]
+    assert first_evidence["status"] == "accepted"
+    assert "score" not in first_evidence
 
     second = client.post(
         f"/api/chat/conversations/{conversation_id}/runs",
@@ -142,6 +148,7 @@ def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
     assert len(timeline["turns"]) == 2
     assert timeline["turns"][0]["run_id"] == first_body["run_id"]
     assert timeline["turns"][1]["run_id"] == second_body["run_id"]
+    assert timeline["turns"][0]["evidence"] == first_body["evidence"]
 
 
 def test_conversation_run_context_assembly_records_dropped_turn_refs(

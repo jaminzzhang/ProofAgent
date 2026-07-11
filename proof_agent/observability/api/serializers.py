@@ -9,7 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from proof_agent.contracts.dashboard import RunDetail, RunSummary
+from proof_agent.contracts.dashboard import DashboardEvidenceChunk, RunDetail, RunSummary
+
+
+def serialize_dashboard_evidence_chunk(
+    chunk: DashboardEvidenceChunk,
+) -> dict[str, Any]:
+    """Convert a typed, content-free evidence projection to plain JSON data."""
+
+    return chunk.model_dump(mode="json")
 
 
 def serialize_run_summary(summary: RunSummary) -> dict[str, Any]:
@@ -47,7 +55,9 @@ def serialize_run_detail(detail: RunDetail) -> dict[str, Any]:
         "error_code": detail.error_code,
         "trace_events": list(detail.trace_events),
         "receipt_markdown": detail.receipt_markdown,
-        "evidence_chunks": list(detail.evidence_chunks),
+        "evidence_chunks": [
+            serialize_dashboard_evidence_chunk(chunk) for chunk in detail.evidence_chunks
+        ],
         "citation_refs": list(detail.citation_refs),
         "policy_decisions": list(detail.policy_decisions),
         "model_usage": detail.model_usage,

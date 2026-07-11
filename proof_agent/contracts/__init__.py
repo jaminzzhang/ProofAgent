@@ -221,6 +221,7 @@ from proof_agent.contracts.react_workflow import (
     ReviewDecision,
 )
 from proof_agent.contracts.dashboard import (
+    DashboardEvidenceChunk,
     RunDetail,
     RunIndex,
     RunPurpose,
@@ -329,6 +330,7 @@ __all__ = [
     "EffectiveWorkflowStageConfigurationStage",
     "EffectiveToolProposalScope",
     "EnforcementPoint",
+    "DashboardEvidenceChunk",
     "EvidenceChunk",
     "EvidenceContribution",
     "EvidenceStatus",

@@ -37,6 +37,7 @@ from proof_agent.errors import ProofAgentError
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.run_store import RunStore
+from proof_agent.observability.api.serializers import serialize_dashboard_evidence_chunk
 from proof_agent.runtime.approval_resume import LangGraphApprovalResumeRegistry
 
 
@@ -216,6 +217,9 @@ def create_conversation_run(
         manifest,
         request.include_governance_details,
     )
+    evidence_payload = tuple(
+        serialize_dashboard_evidence_chunk(chunk) for chunk in detail.evidence_chunks
+    )
     turn = ConversationTurn(
         turn_id=f"turn_{uuid4().hex[:8]}",
         run_id=detail.run_id,
@@ -225,7 +229,7 @@ def create_conversation_run(
         outcome=detail.outcome,
         created_at=_now(),
         context_admission=context_admission,
-        evidence=tuple(detail.evidence_chunks),
+        evidence=evidence_payload,
         approval_state=detail.approval_state,
         governance_details=governance_details,
     )
@@ -297,7 +301,7 @@ def _run_response(
         "run_id": detail.run_id,
         "outcome": detail.outcome.value,
         "final_output": final_output or _final_output_from_trace(detail),
-        "evidence": list(detail.evidence_chunks),
+        "evidence": [serialize_dashboard_evidence_chunk(chunk) for chunk in detail.evidence_chunks],
         "citation_refs": list(detail.citation_refs),
         "approval_state": detail.approval_state,
         "pending_approvals": list(detail.pending_approvals),

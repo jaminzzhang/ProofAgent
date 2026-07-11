@@ -8,7 +8,7 @@ without leaking framework or runtime internals.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -67,6 +67,26 @@ class WorkflowRunProjection(FrozenModel):
     stages: tuple[WorkflowRunStageProjection, ...] = Field(default_factory=tuple)
 
 
+class DashboardEvidenceChunk(FrozenModel):
+    """Content-free evidence projection with a stable browser-safe identity."""
+
+    index: int = Field(ge=0, le=9_007_199_254_740_991)
+    source: str
+    status: Literal["accepted", "rejected"]
+    evidence_id: str | None = None
+    source_id: str | None = None
+    source_version_id: str | None = None
+    binding_id: str | None = None
+    provider_name: str | None = None
+    document_id: str | None = None
+    revision_id: str | None = None
+    chunk_id: str | None = None
+    admission_score: float | None = None
+    provider_native_score: float | None = None
+    fusion_rank: float | None = None
+    citation: str | None = None
+
+
 class RunDetail(FrozenModel):
     """Full run data for the Run Detail page.
 
@@ -88,7 +108,7 @@ class RunDetail(FrozenModel):
     error_code: str | None = None
     trace_events: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
     receipt_markdown: str = ""
-    evidence_chunks: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
+    evidence_chunks: tuple[DashboardEvidenceChunk, ...] = Field(default_factory=tuple)
     citation_refs: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
     policy_decisions: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
     model_usage: dict[str, Any] = Field(default_factory=dict)

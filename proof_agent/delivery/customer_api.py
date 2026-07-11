@@ -37,7 +37,7 @@ from proof_agent.contracts import (
     RunPurpose,
     ValidationStatus,
 )
-from proof_agent.contracts.dashboard import RunDetail
+from proof_agent.contracts.dashboard import DashboardEvidenceChunk, RunDetail
 from proof_agent.control.memory.admission import admit_memory
 from proof_agent.control.memory.extractor import (
     candidate_from_customer_turn,
@@ -1203,7 +1203,7 @@ def _safe_sources(
 
 
 def _safe_source_label(
-    chunk: Mapping[str, Any],
+    chunk: DashboardEvidenceChunk,
     *,
     knowledge_source_store: object | None,
 ) -> str | None:
@@ -1212,19 +1212,17 @@ def _safe_source_label(
         source_name = _knowledge_source_name(knowledge_source_store, source_id)
         if source_name is not None:
             return source_name
-        raw_source = str(chunk.get("source") or "").strip()
+        raw_source = chunk.source.strip()
         if not raw_source or _NUMBERED_REFERENCE_LABEL_RE.match(raw_source):
             return f"Knowledge Source {source_id}"
 
-    source_value = chunk.get("source")
-    if source_value is None:
-        return None
-    label = Path(str(source_value)).name or str(source_value)
+    source_value = chunk.source
+    label = Path(source_value).name or source_value
     return label.strip() or None
 
 
-def _knowledge_source_id_from_chunk(chunk: Mapping[str, Any]) -> str | None:
-    for value in (chunk.get("source_id"), chunk.get("citation"), chunk.get("source")):
+def _knowledge_source_id_from_chunk(chunk: DashboardEvidenceChunk) -> str | None:
+    for value in (chunk.source_id, chunk.citation, chunk.source):
         if not isinstance(value, str):
             continue
         match = _KNOWLEDGE_SOURCE_URI_RE.search(value)

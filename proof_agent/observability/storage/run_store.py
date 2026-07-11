@@ -10,15 +10,18 @@ Each run gets its own directory under ``runs/history/{run_id}/`` containing:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from proof_agent.contracts import TraceEventType
 from proof_agent.contracts.dashboard import (
+    DashboardEvidenceChunk,
     RunDetail,
     RunIndex,
     RunPurpose,
@@ -57,6 +60,116 @@ _WORKFLOW_PROJECTION_FORBIDDEN_KEYS = frozenset(
         "authorization",
     }
 )
+
+_MAX_JAVASCRIPT_SAFE_INTEGER = 9_007_199_254_740_991
+_EVIDENCE_IDENTITY_TEXT_FIELDS = (
+    "evidence_id",
+    "source_id",
+    "source_version_id",
+    "binding_id",
+    "provider_name",
+    "document_id",
+    "revision_id",
+    "chunk_id",
+)
+
+
+def _optional_evidence_text(value: Any) -> str | None:
+    value = getattr(value, "value", value)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _optional_evidence_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _evidence_projection_values(chunk: Mapping[str, Any]) -> dict[str, Any]:
+    metadata_value = chunk.get("metadata")
+    metadata = metadata_value if isinstance(metadata_value, Mapping) else {}
+
+    def field_value(field: str) -> Any:
+        value = chunk.get(field)
+        return metadata.get(field) if value is None else value
+
+    citation = _optional_evidence_text(field_value("citation"))
+    source = _optional_evidence_text(field_value("source")) or citation or "Unknown source"
+    raw_status = getattr(field_value("status"), "value", field_value("status"))
+    status = "accepted" if raw_status == "accepted" else "rejected"
+    admission_score = _optional_evidence_number(field_value("admission_score"))
+    if admission_score is None:
+        admission_score = _optional_evidence_number(field_value("score"))
+    values: dict[str, Any] = {
+        "source": source,
+        "status": status,
+        "citation": citation,
+        "admission_score": admission_score,
+        "provider_native_score": _optional_evidence_number(field_value("provider_native_score")),
+        "fusion_rank": _optional_evidence_number(field_value("fusion_rank")),
+    }
+    values.update(
+        {
+            field: _optional_evidence_text(field_value(field))
+            for field in _EVIDENCE_IDENTITY_TEXT_FIELDS
+        }
+    )
+    return values
+
+
+def _canonical_evidence_identity(values: Mapping[str, Any]) -> str:
+    return json.dumps(
+        dict(values),
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _javascript_safe_evidence_index(material: str) -> int:
+    digest = hashlib.sha256(material.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big") & _MAX_JAVASCRIPT_SAFE_INTEGER
+
+
+def _stable_evidence_indexes(canonical_identities: Sequence[str]) -> list[int]:
+    duplicate_counts: dict[str, int] = {}
+    materials: list[str] = []
+    for identity in canonical_identities:
+        duplicate_ordinal = duplicate_counts.get(identity, 0)
+        duplicate_counts[identity] = duplicate_ordinal + 1
+        materials.append(f"{identity}\x00duplicate:{duplicate_ordinal}")
+
+    assigned: dict[str, int] = {}
+    used_indexes: set[int] = set()
+    for material in sorted(materials):
+        index = _javascript_safe_evidence_index(material)
+        collision_ordinal = 0
+        while index in used_indexes:
+            collision_ordinal += 1
+            index = _javascript_safe_evidence_index(f"{material}\x00collision:{collision_ordinal}")
+        assigned[material] = index
+        used_indexes.add(index)
+    return [assigned[material] for material in materials]
+
+
+def _project_evidence_chunks(
+    chunks: Sequence[Mapping[str, Any]],
+) -> list[DashboardEvidenceChunk]:
+    projection_values = [_evidence_projection_values(chunk) for chunk in chunks]
+    canonical_identities = [_canonical_evidence_identity(values) for values in projection_values]
+    indexes = _stable_evidence_indexes(canonical_identities)
+    return [
+        DashboardEvidenceChunk(index=index, **values)
+        for index, values in zip(indexes, projection_values, strict=True)
+    ]
 
 
 class RunStore:
@@ -417,7 +530,10 @@ class RunStore:
             ]
         return filtered
 
-    def _extract_evidence(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _extract_evidence(
+        self,
+        events: list[dict[str, Any]],
+    ) -> list[DashboardEvidenceChunk]:
         """Derive evidence chunk info from retrieval and evaluation events."""
         retrieval = next(
             (e for e in reversed(events) if e.get("event_type") == "retrieval_result"), None
@@ -426,30 +542,40 @@ class RunStore:
         if retrieval is None:
             return []
 
-        eval_meta = {}
+        eval_meta: Mapping[str, Any] = {}
         if evaluation:
-            eval_meta = evaluation.get("payload", {}).get("metadata", {})
+            evaluation_payload = evaluation.get("payload", {})
+            if isinstance(evaluation_payload, Mapping):
+                metadata = evaluation_payload.get("metadata", {})
+                if isinstance(metadata, Mapping):
+                    eval_meta = metadata
         evidence_summary = eval_meta.get("evidence")
         if isinstance(evidence_summary, list | tuple):
-            return [dict(chunk) for chunk in evidence_summary if isinstance(chunk, dict)]
+            return _project_evidence_chunks(
+                [chunk for chunk in evidence_summary if isinstance(chunk, Mapping)]
+            )
 
         payload = retrieval.get("payload", {})
-        sources = payload.get("sources", [])
-        chunk_count = payload.get("chunk_count", len(sources))
-        scores = eval_meta.get("admission_scores") or eval_meta.get("scores") or []
+        if not isinstance(payload, Mapping):
+            payload = {}
+        raw_sources = payload.get("sources", [])
+        sources = raw_sources if isinstance(raw_sources, list | tuple) else []
+        raw_scores = eval_meta.get("admission_scores") or eval_meta.get("scores") or []
+        scores = raw_scores if isinstance(raw_scores, list | tuple) else []
+        try:
+            accepted_count = int(eval_meta.get("accepted_count", len(sources)))
+        except (TypeError, ValueError):
+            accepted_count = len(sources)
         chunks: list[dict[str, Any]] = []
         for i, source in enumerate(sources):
             chunks.append(
                 {
-                    "index": i,
                     "source": source,
                     "admission_score": scores[i] if i < len(scores) else None,
-                    "status": "accepted"
-                    if i < eval_meta.get("accepted_count", chunk_count)
-                    else "rejected",
+                    "status": "accepted" if i < accepted_count else "rejected",
                 }
             )
-        return chunks
+        return _project_evidence_chunks(chunks)
 
     def _evidence_admission_event(
         self,
@@ -469,16 +595,16 @@ class RunStore:
 
     def _extract_citation_refs(
         self,
-        evidence_chunks: list[dict[str, Any]],
+        evidence_chunks: list[DashboardEvidenceChunk],
     ) -> list[dict[str, Any]]:
         citation_refs: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str]] = set()
         for chunk in evidence_chunks:
-            citation = chunk.get("citation")
+            citation = chunk.citation
             if not citation:
                 continue
-            source = str(chunk.get("source") or "")
-            status = str(chunk.get("status") or "")
+            source = chunk.source
+            status = chunk.status
             key = (source, str(citation), status)
             if key in seen:
                 continue

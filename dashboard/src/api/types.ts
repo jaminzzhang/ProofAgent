@@ -224,7 +224,6 @@ export interface TraceEvent {
 export interface EvidenceChunk {
   index: number
   source: string
-  score?: number | null
   admission_score?: number | null
   provider_native_score?: number | null
   fusion_rank?: number | null

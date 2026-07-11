@@ -555,7 +555,7 @@ def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
     detail = store.get_run_detail("run_evidence")
 
     assert detail is not None
-    assert detail.evidence_chunks[0]["citation"] == "travel-policy.md#meals:L10-L18"
+    assert detail.evidence_chunks[0].citation == "travel-policy.md#meals:L10-L18"
     assert detail.citation_refs == (
         {
             "source": "policy://travel#meals",
@@ -563,7 +563,7 @@ def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
             "status": "accepted",
         },
     )
-    assert "content" not in detail.evidence_chunks[0]
+    assert not hasattr(detail.evidence_chunks[0], "content")
 
 
 def test_run_store_extracts_governance_details_for_react_run(tmp_path: Path) -> None:
