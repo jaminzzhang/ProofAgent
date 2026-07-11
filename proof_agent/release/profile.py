@@ -32,6 +32,8 @@ class MetricRule:
     expected: bool | int | float | None = None
     failure: MetricFailure = "threshold_missed"
     binding_target: BindingTarget | None = None
+    minimum_allowed: int | float | None = None
+    maximum_allowed: int | float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,12 +90,33 @@ def _equal(key: str, expected: int) -> MetricRule:
     return MetricRule(key=key, kind="int", comparison="equal", expected=expected)
 
 
-def _minimum_number(key: str, expected: int | float) -> MetricRule:
-    return MetricRule(key=key, kind="number", comparison="minimum", expected=expected)
+def _minimum_number(
+    key: str,
+    expected: int | float,
+    *,
+    maximum_allowed: int | float | None = None,
+) -> MetricRule:
+    return MetricRule(
+        key=key,
+        kind="number",
+        comparison="minimum",
+        expected=expected,
+        maximum_allowed=maximum_allowed,
+    )
 
 
 def _maximum_number(key: str, expected: int | float) -> MetricRule:
-    return MetricRule(key=key, kind="number", comparison="maximum", expected=expected)
+    return MetricRule(
+        key=key,
+        kind="number",
+        comparison="maximum",
+        expected=expected,
+        minimum_allowed=0,
+    )
+
+
+def _equal_number(key: str, expected: int | float) -> MetricRule:
+    return MetricRule(key=key, kind="number", comparison="equal", expected=expected)
 
 
 def _sha256(key: str) -> MetricRule:
@@ -119,7 +142,7 @@ _GATE_RULES = (
         "backend_frontend_quality",
         (_evidence("candidate_static"),),
         (
-            _minimum_number("line_coverage_percent", 90),
+            _minimum_number("line_coverage_percent", 90, maximum_allowed=100),
             _equal("required_command_failures", 0),
             _equal("required_integration_skips", 0),
         ),
@@ -184,8 +207,8 @@ _GATE_RULES = (
         (_evidence("load", _HOURS_72, expiry_required=True),),
         (
             _minimum("online_sessions", 20),
-            _minimum("active_attempts", 5),
-            _minimum("queued_runs", 50),
+            _equal("active_attempts", 5),
+            _equal("queued_runs", 50),
             _bool("overload_request_51_passed"),
             _minimum_number("load_duration_seconds", 1800),
             _minimum("admission_sample_count", 200, failure="insufficient_sample"),
@@ -211,7 +234,7 @@ _GATE_RULES = (
         ),
         (
             _bool("fault_matrix_passed"),
-            _minimum_number("reference_digest_verification_percent", 100),
+            _equal_number("reference_digest_verification_percent", 100),
             _maximum_number("rpo_minutes", 15),
             _maximum_number("rto_minutes", 240),
             _sha256("topology_sha256"),
@@ -243,7 +266,7 @@ _GATE_RULES = (
             _minimum("pilot_operator_count", 3),
             _maximum("pilot_operator_count", 5),
             _minimum_number("support_window_seconds", 32400),
-            _minimum_number("required_scenario_coverage_percent", 100),
+            _equal_number("required_scenario_coverage_percent", 100),
         ),
     ),
 )

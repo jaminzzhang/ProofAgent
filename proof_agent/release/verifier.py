@@ -332,9 +332,13 @@ def _metric_satisfies(
             else manifest.candidate.deployment_compatibility_manifest.sha256
         )
         return value == expected
+    numeric_value = cast("int | float", value)
+    if rule.minimum_allowed is not None and numeric_value < rule.minimum_allowed:
+        return False
+    if rule.maximum_allowed is not None and numeric_value > rule.maximum_allowed:
+        return False
     if rule.comparison == "equal":
         return value == rule.expected
-    numeric_value = cast("int | float", value)
     numeric_expected = cast("int | float", rule.expected)
     if rule.comparison == "minimum":
         return numeric_value >= numeric_expected

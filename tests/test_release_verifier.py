@@ -596,6 +596,65 @@ def test_insufficient_capacity_sample_and_threshold_miss_are_distinct() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("active_attempts", 6),
+        ("queued_runs", 51),
+    ],
+)
+def test_capacity_active_attempts_and_queued_runs_are_exact(
+    key: str,
+    value: int,
+) -> None:
+    manifest, artifacts = _valid_manifest()
+    metrics = dict(VALID_METRICS["capacity_responsiveness"])
+    metrics[key] = value
+    manifest = _replace_result(manifest, "capacity_responsiveness", metrics=metrics)
+
+    decision = _verify(manifest, artifacts)
+
+    assert decision.decision == "NO-GO"
+    assert f"metric.threshold_missed:capacity_responsiveness:{key}" in decision.blocker_codes
+
+
+@pytest.mark.parametrize(
+    ("gate_id", "key", "value"),
+    [
+        ("capacity_responsiveness", "admission_p95_ms", -0.1),
+        ("capacity_responsiveness", "admission_p95_ms", -1),
+        ("capacity_responsiveness", "first_progress_p95_ms", -0.1),
+        ("capacity_responsiveness", "first_progress_p95_ms", -1),
+        ("capacity_responsiveness", "free_slot_start_p95_ms", -0.1),
+        ("capacity_responsiveness", "free_slot_start_p95_ms", -1),
+        ("capacity_responsiveness", "standard_terminal_p95_ms", -0.1),
+        ("capacity_responsiveness", "standard_terminal_p95_ms", -1),
+        ("capacity_responsiveness", "max_attempt_terminal_ms", -0.1),
+        ("capacity_responsiveness", "max_attempt_terminal_ms", -1),
+        ("resilience_recovery", "rpo_minutes", -0.1),
+        ("resilience_recovery", "rpo_minutes", -1),
+        ("resilience_recovery", "rto_minutes", -0.1),
+        ("resilience_recovery", "rto_minutes", -1),
+        ("deployment", "drain_seconds", -0.1),
+        ("deployment", "drain_seconds", -1),
+    ],
+)
+def test_maximum_time_and_latency_metrics_reject_negative_physical_values(
+    gate_id: str,
+    key: str,
+    value: int | float,
+) -> None:
+    manifest, artifacts = _valid_manifest()
+    metrics = dict(VALID_METRICS[gate_id])
+    metrics[key] = value
+    manifest = _replace_result(manifest, gate_id, metrics=metrics)
+
+    decision = _verify(manifest, artifacts)
+
+    assert decision.decision == "NO-GO"
+    assert f"metric.threshold_missed:{gate_id}:{key}" in decision.blocker_codes
+
+
 def test_coverage_threshold_miss_is_a_blocker() -> None:
     manifest, artifacts = _valid_manifest()
     metrics = dict(VALID_METRICS["backend_frontend_quality"])
@@ -608,6 +667,60 @@ def test_coverage_threshold_miss_is_a_blocker() -> None:
         "metric.threshold_missed:backend_frontend_quality:line_coverage_percent"
         in decision.blocker_codes
     )
+
+
+@pytest.mark.parametrize(
+    ("gate_id", "key", "value"),
+    [
+        ("backend_frontend_quality", "line_coverage_percent", 101),
+        ("backend_frontend_quality", "line_coverage_percent", 100.1),
+        ("resilience_recovery", "reference_digest_verification_percent", 101),
+        ("resilience_recovery", "reference_digest_verification_percent", 100.1),
+        ("browser_operations", "required_scenario_coverage_percent", 101),
+        ("browser_operations", "required_scenario_coverage_percent", 100.1),
+    ],
+)
+def test_percentage_metrics_reject_values_above_one_hundred(
+    gate_id: str,
+    key: str,
+    value: int | float,
+) -> None:
+    manifest, artifacts = _valid_manifest()
+    metrics = dict(VALID_METRICS[gate_id])
+    metrics[key] = value
+    manifest = _replace_result(manifest, gate_id, metrics=metrics)
+
+    decision = _verify(manifest, artifacts)
+
+    assert decision.decision == "NO-GO"
+    assert f"metric.threshold_missed:{gate_id}:{key}" in decision.blocker_codes
+
+
+def test_percentage_metrics_accept_numeric_one_hundred() -> None:
+    manifest, artifacts = _valid_manifest()
+    quality_metrics = dict(VALID_METRICS["backend_frontend_quality"])
+    quality_metrics["line_coverage_percent"] = 100.0
+    recovery_metrics = dict(VALID_METRICS["resilience_recovery"])
+    recovery_metrics["reference_digest_verification_percent"] = 100.0
+    browser_metrics = dict(VALID_METRICS["browser_operations"])
+    browser_metrics["required_scenario_coverage_percent"] = 100.0
+    manifest = _replace_result(
+        manifest,
+        "backend_frontend_quality",
+        metrics=quality_metrics,
+    )
+    manifest = _replace_result(
+        manifest,
+        "resilience_recovery",
+        metrics=recovery_metrics,
+    )
+    manifest = _replace_result(
+        manifest,
+        "browser_operations",
+        metrics=browser_metrics,
+    )
+
+    assert _verify(manifest, artifacts).decision == "GO"
 
 
 def test_continuous_coverage_and_latency_measurements_accept_finite_floats() -> None:
