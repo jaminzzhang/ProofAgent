@@ -10,8 +10,6 @@ import { OutcomeBadge } from '../../components/OutcomeBadge'
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
 import { useLocale } from '../../i18n/locale'
 import type {
-  ConversationRecord,
-  ConversationTurn,
   GovernanceDetails,
   PublishedAgentDirectoryEntry,
 } from '../../api/types'
@@ -20,12 +18,14 @@ import {
   createOperatorConversationRun,
   fetchOperatorAgents,
   fetchOperatorConversation,
+  type OperatorConversationRecord,
+  type OperatorConversationTurn,
 } from './operatorAdapter'
 
 /** Dashboard base URL for run/approval deep-links (env-configurable). */
 const DASHBOARD_URL = import.meta.env.VITE_DASHBOARD_URL ?? 'http://localhost:5173'
 
-function syntheticNewChat(agentId: string): ConversationRecord {
+function syntheticNewChat(agentId: string): OperatorConversationRecord {
   return {
     conversation_id: '',
     agent_id: agentId,
@@ -55,7 +55,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
   const [agents, setAgents] = useState<PublishedAgentDirectoryEntry[]>([])
   const [agentsLoading, setAgentsLoading] = useState(false)
   const [agentsError, setAgentsError] = useState<string | null>(null)
-  const [conversation, setConversation] = useState<ConversationRecord | null>(null)
+  const [conversation, setConversation] = useState<OperatorConversationRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -333,7 +333,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
   )
 }
 
-function operatorTurnToView(turn: ConversationTurn): ChatTurnView {
+function operatorTurnToView(turn: OperatorConversationTurn): ChatTurnView {
   return {
     id: turn.turn_id,
     question: turn.question,
@@ -344,11 +344,14 @@ function operatorTurnToView(turn: ConversationTurn): ChatTurnView {
   }
 }
 
-function findOperatorTurn(conversation: ConversationRecord, turnId: string): ConversationTurn | undefined {
+function findOperatorTurn(
+  conversation: OperatorConversationRecord,
+  turnId: string,
+): OperatorConversationTurn | undefined {
   return conversation.turns.find((turn) => turn.turn_id === turnId)
 }
 
-function OperatorMessageMeta({ turn }: { turn: ConversationTurn }) {
+function OperatorMessageMeta({ turn }: { turn: OperatorConversationTurn }) {
   const { t, formatNumber } = useLocale()
 
   return (
@@ -385,7 +388,7 @@ function OperatorMessageMeta({ turn }: { turn: ConversationTurn }) {
   )
 }
 
-function OperatorGovernanceDetails({ turn }: { turn: ConversationTurn }) {
+function OperatorGovernanceDetails({ turn }: { turn: OperatorConversationTurn }) {
   const { t } = useLocale()
 
   return (
@@ -394,13 +397,10 @@ function OperatorGovernanceDetails({ turn }: { turn: ConversationTurn }) {
       {turn.evidence.length > 0 && (
         <div className="space-y-1.5">
           {turn.evidence.map((ev, idx) => {
-            const sourceId = typeof ev === 'string' ? ev : ev.source_id
-            const label = typeof ev === 'string' ? ev : ev.label ?? ev.source_id
-            const excerpt = typeof ev === 'string' ? null : ev.excerpt
+            const citation = ev.citation !== ev.source ? ev.citation : null
             return (
               <div
-                key={`${sourceId}-${idx}`}
-                title={excerpt ?? undefined}
+                key={`${ev.source}-${ev.citation ?? ''}-${idx}`}
                 className="flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-2.5 py-1.5"
               >
                 <span className="mt-0.5 font-mono text-[10px] text-[var(--text-muted)]">
@@ -408,11 +408,11 @@ function OperatorGovernanceDetails({ turn }: { turn: ConversationTurn }) {
                 </span>
                 <div className="min-w-0">
                   <span className="block truncate text-xs font-medium text-[var(--text-primary)]">
-                    {label}
+                    {ev.source}
                   </span>
-                  {excerpt && (
+                  {citation && (
                     <span className="line-clamp-1 text-[11px] text-[var(--text-muted)]">
-                      {excerpt}
+                      {citation}
                     </span>
                   )}
                 </div>

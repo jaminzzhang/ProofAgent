@@ -138,7 +138,7 @@ export interface ConversationTurn {
   outcome: ReceiptOutcome
   created_at: string
   context_admission: ContextAdmission
-  evidence: any[]
+  evidence: unknown[]
   approval_state: ApprovalState | null
   governance_details?: GovernanceDetails
   links: {
@@ -178,7 +178,7 @@ export interface ChatRunResponse {
   run_id: string
   outcome: ReceiptOutcome
   final_output: string
-  evidence: any[]
+  evidence: unknown[]
   approval_state: ApprovalState | null
   governance_details?: GovernanceDetails
   links: {
