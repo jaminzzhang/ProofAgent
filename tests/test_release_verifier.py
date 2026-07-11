@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, get_type_hints
 
 import pytest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from proof_agent.delivery import cli as cli_module
@@ -1404,6 +1405,12 @@ def _release_cli_args(
     ]
 
 
+def _assert_release_cli_input_error(result: Result) -> None:
+    assert result.exit_code == 2
+    assert json.loads(result.stderr) == {"error": "release_verifier_invalid_input"}
+    assert result.stdout == ""
+
+
 def test_release_verify_cli_help() -> None:
     result = CliRunner().invoke(cli_module.app, ["release", "verify", "--help"])
 
@@ -1411,6 +1418,46 @@ def test_release_verify_cli_help() -> None:
     assert "--manifest" in result.stdout
     assert "--evidence-root" in result.stdout
     assert "--at" in result.stdout
+
+
+def test_release_verify_cli_missing_all_contract_options_is_structured_input_error() -> None:
+    result = CliRunner().invoke(cli_module.app, ["release", "verify"])
+
+    _assert_release_cli_input_error(result)
+
+
+def test_release_verify_cli_missing_manifest_path_is_structured_input_error(
+    tmp_path: Path,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    missing_manifest = tmp_path / "missing-manifest.json"
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        _release_cli_args(missing_manifest, evidence_root),
+    )
+
+    _assert_release_cli_input_error(result)
+
+
+def test_release_verify_cli_manifest_directory_is_structured_input_error(
+    tmp_path: Path,
+) -> None:
+    _manifest_path, evidence_root, _manifest = _write_cli_manifest(tmp_path)
+
+    result = CliRunner().invoke(cli_module.app, _release_cli_args(tmp_path, evidence_root))
+
+    _assert_release_cli_input_error(result)
+
+
+def test_release_verify_cli_missing_at_is_structured_input_error(tmp_path: Path) -> None:
+    manifest_path, evidence_root, _manifest = _write_cli_manifest(tmp_path)
+    args = _release_cli_args(manifest_path, evidence_root)
+
+    result = CliRunner().invoke(cli_module.app, args[:-2])
+
+    _assert_release_cli_input_error(result)
 
 
 def test_release_verify_cli_valid_manifest_is_real_no_go_with_unavailable_attestation(
@@ -1554,7 +1601,7 @@ def test_release_verify_cli_rejects_duplicate_json_keys_at_every_object_depth(
 
     result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, evidence_root))
 
-    assert result.exit_code == 2
+    _assert_release_cli_input_error(result)
 
 
 def test_duplicate_json_key_scanner_rejects_nested_duplicates_without_returning_data() -> None:
@@ -1582,7 +1629,7 @@ def test_release_verify_cli_rejects_invalid_manifest_as_input_error(
 
     result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, evidence_root))
 
-    assert result.exit_code == 2
+    _assert_release_cli_input_error(result)
 
 
 @pytest.mark.parametrize(
@@ -1597,17 +1644,27 @@ def test_release_verify_cli_rejects_naive_or_non_rfc3339_at(tmp_path: Path, at: 
         _release_cli_args(manifest_path, evidence_root, at=at),
     )
 
-    assert result.exit_code == 2
+    _assert_release_cli_input_error(result)
 
 
-def test_release_verify_cli_rejects_missing_or_nondirectory_evidence_root(tmp_path: Path) -> None:
+def test_release_verify_cli_missing_evidence_root_is_structured_input_error(
+    tmp_path: Path,
+) -> None:
     manifest_path, _evidence_root, _manifest = _write_cli_manifest(tmp_path)
     missing = tmp_path / "missing"
+
+    result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, missing))
+
+    _assert_release_cli_input_error(result)
+
+
+def test_release_verify_cli_regular_file_evidence_root_is_structured_input_error(
+    tmp_path: Path,
+) -> None:
+    manifest_path, _evidence_root, _manifest = _write_cli_manifest(tmp_path)
     regular_file = tmp_path / "regular-file"
     regular_file.write_text("x", encoding="utf-8")
 
-    missing_result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, missing))
-    file_result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, regular_file))
+    result = CliRunner().invoke(cli_module.app, _release_cli_args(manifest_path, regular_file))
 
-    assert missing_result.exit_code == 2
-    assert file_result.exit_code == 2
+    _assert_release_cli_input_error(result)

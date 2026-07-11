@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from shutil import which
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import typer
 import yaml  # type: ignore[import-untyped]
@@ -125,41 +125,45 @@ def load_environment(ctx: typer.Context) -> None:
 
 @release_app.command("verify")
 def release_verify(
-    manifest: Path = typer.Option(
-        ...,
+    manifest: Path | None = typer.Option(
+        None,
         "--manifest",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-        help="Release Gate Manifest JSON file",
+        help="Required. Release Gate Manifest JSON file",
+        show_default=False,
     ),
-    evidence_root: Path = typer.Option(
-        ...,
+    evidence_root: Path | None = typer.Option(
+        None,
         "--evidence-root",
-        exists=True,
-        file_okay=False,
-        dir_okay=True,
-        readable=True,
-        help="Directory containing content-addressed Evidence artifacts",
+        help="Required. Directory containing content-addressed Evidence artifacts",
+        show_default=False,
     ),
-    at: str = typer.Option(
-        ...,
+    at: str | None = typer.Option(
+        None,
         "--at",
-        help="Explicit RFC3339 verification time",
+        help="Required. Explicit RFC3339 verification time",
+        show_default=False,
     ),
 ) -> None:
     """Verify an Initial Private Pilot release manifest offline."""
 
     try:
+        if manifest is None or evidence_root is None or at is None:
+            raise ValueError("--manifest, --evidence-root, and --at are required")
+        if not manifest.exists() or not manifest.is_file() or not os.access(manifest, os.R_OK):
+            raise ValueError("--manifest must be a readable file")
+        if (
+            not evidence_root.exists()
+            or not evidence_root.is_dir()
+            or not os.access(evidence_root, os.R_OK)
+        ):
+            raise ValueError("--evidence-root must be a readable directory")
         checked_at = _parse_release_checked_at(at)
         raw_manifest = manifest.read_text(encoding="utf-8")
         reject_duplicate_json_keys(raw_manifest)
         release_manifest = ReleaseGateManifest.model_validate_json(raw_manifest)
         artifact_reader = EvidenceRootArtifactReader(evidence_root)
     except (OSError, UnicodeError, ValidationError, ValueError) as exc:
-        typer.echo('{"error":"release_verifier_invalid_input"}', err=True)
-        raise typer.Exit(code=2) from exc
+        _raise_release_cli_error("release_verifier_invalid_input", exc)
 
     try:
         decision = verify_release_manifest(
@@ -169,8 +173,7 @@ def release_verify(
             attestation_verifier=UnavailableAttestationVerifier(),
         )
     except VerifierInternalError as exc:
-        typer.echo('{"error":"release_verifier_internal_error"}', err=True)
-        raise typer.Exit(code=2) from exc
+        _raise_release_cli_error("release_verifier_internal_error", exc)
     typer.echo(decision.model_dump_json())
     if decision.decision == "NO-GO":
         raise typer.Exit(code=1)
@@ -805,6 +808,11 @@ def _parse_release_checked_at(value: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("--at must be timezone-aware")
     return parsed
+
+
+def _raise_release_cli_error(error: str, cause: Exception) -> NoReturn:
+    typer.echo(json.dumps({"error": error}, separators=(",", ":")), err=True)
+    raise typer.Exit(code=2) from cause
 
 
 def _load_local_dotenv() -> None:
