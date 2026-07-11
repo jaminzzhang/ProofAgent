@@ -8,8 +8,11 @@ from http.server import ThreadingHTTPServer
 from typing import Any
 from urllib.error import HTTPError
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import Request
 from urllib.request import urlopen
+
+VERIFY_REMOTE_CHAT_BASE = "/__proofagent_chat__/"
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -30,10 +33,19 @@ class GatewayConfig:
         backend_origin: str,
         dashboard_origin: str,
         chat_origin: str,
+        chat_base: str | None = None,
     ) -> None:
         self.backend_origin = backend_origin.rstrip("/")
         self.dashboard_origin = dashboard_origin.rstrip("/")
         self.chat_origin = chat_origin.rstrip("/")
+        self.chat_base = _normalize_base(chat_base) if chat_base is not None else None
+
+
+def _normalize_base(base: str) -> str:
+    normalized = base.strip("/")
+    if not normalized:
+        raise ValueError("Chat base must contain a non-slash path segment.")
+    return f"/{normalized}/"
 
 
 def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
@@ -72,6 +84,13 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
                 )
                 return
 
+            # Neither SPA declares a favicon. Browsers otherwise synthesize an
+            # ambiguous root request that the path-only gateway cannot attribute.
+            if urlsplit(self.path).path == "/favicon.ico":
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             target_url = self._target_url()
             body = self._request_body()
             request = Request(
@@ -100,17 +119,30 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
                 )
 
         def _target_url(self) -> str:
-            path = self.path if self.path.startswith("/") else f"/{self.path}"
+            request_target = self.path if self.path.startswith("/") else f"/{self.path}"
+            parsed_target = urlsplit(request_target)
+            path = parsed_target.path or "/"
+            query = f"?{parsed_target.query}" if parsed_target.query else ""
             if path == "/api" or path.startswith("/api/"):
-                return f"{config.backend_origin}{path}"
-            if (
+                return f"{config.backend_origin}{path}{query}"
+
+            is_public_chat_path = (
                 path == "/operator"
                 or path.startswith("/operator/")
                 or path == "/customer"
                 or path.startswith("/customer/")
+            )
+            chat_base = config.chat_base
+            if chat_base is not None and is_public_chat_path:
+                upstream_path = f"{chat_base}{path.lstrip('/')}"
+                return f"{config.chat_origin}{upstream_path}{query}"
+            if chat_base is not None and (
+                path == chat_base.rstrip("/") or path.startswith(chat_base)
             ):
-                return f"{config.chat_origin}{path}"
-            return f"{config.dashboard_origin}{path}"
+                return f"{config.chat_origin}{path}{query}"
+            if is_public_chat_path:
+                return f"{config.chat_origin}{path}{query}"
+            return f"{config.dashboard_origin}{path}{query}"
 
         def _request_body(self) -> bytes | None:
             raw_length = self.headers.get("Content-Length")
@@ -146,11 +178,13 @@ def main() -> None:
     parser.add_argument("--backend-origin", required=True)
     parser.add_argument("--dashboard-origin", required=True)
     parser.add_argument("--chat-origin", required=True)
+    parser.add_argument("--chat-base", default=VERIFY_REMOTE_CHAT_BASE)
     args = parser.parse_args()
     config = GatewayConfig(
         backend_origin=args.backend_origin,
         dashboard_origin=args.dashboard_origin,
         chat_origin=args.chat_origin,
+        chat_base=args.chat_base,
     )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(config))
     print(f"[verify-gateway] serving http://{args.host}:{args.port}")

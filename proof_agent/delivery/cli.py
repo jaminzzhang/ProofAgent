@@ -17,6 +17,7 @@ import yaml  # type: ignore[import-untyped]
 
 from proof_agent import __version__
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
+from proof_agent.delivery.remote_verify_gateway import VERIFY_REMOTE_CHAT_BASE
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.analyzer import analyze_evaluation
 from proof_agent.evaluation.campaigns import run_evaluation_campaign
@@ -843,6 +844,8 @@ def _verify_remote_process_specs(
                     "127.0.0.1",
                     "--port",
                     str(chat_port),
+                    "--base",
+                    VERIFY_REMOTE_CHAT_BASE,
                 ],
             ),
             (
@@ -861,6 +864,8 @@ def _verify_remote_process_specs(
                     f"http://127.0.0.1:{dashboard_port}",
                     "--chat-origin",
                     f"http://127.0.0.1:{chat_port}",
+                    "--chat-base",
+                    VERIFY_REMOTE_CHAT_BASE,
                 ],
             ),
         ]
