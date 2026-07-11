@@ -2,10 +2,12 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,16 +15,39 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v6
-      - name: Install
-        run: uv pip install --system -e ".[dev,dashboard]"
-      - name: Test
-        run: python -m pytest tests/ -v
-      - name: Lint
-        run: ruff check proof_agent tests
-      - name: Type check
-        run: mypy proof_agent
-      - name: CLI smoke
+      - name: Sync dependencies (locked)
         run: |
-          proof-agent demo
+          uv sync --frozen \
+            --extra dev --extra dashboard \
+            --extra ingestion --extra tree --extra openai
+      - name: Lint
+        run: uv run ruff check proof_agent tests
+      - name: Type check
+        run: uv run mypy proof_agent
+      - name: Test
+        run: uv run pytest tests/ -v
+      - name: CLI smoke (deterministic demo)
+        run: |
+          uv run proof-agent demo > demo.out
+          # All three documented outcomes must appear in the demo output.
+          grep -q "ANSWERED_WITH_CITATIONS" demo.out
+          grep -q "REFUSED_NO_EVIDENCE" demo.out
+          grep -q "WAITING_FOR_APPROVAL" demo.out
+          # The final run must also leave a trace and receipt on disk.
           test -f runs/latest/trace.jsonl
           test -f runs/latest/governance_receipt.md
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build (ui → dashboard → chat)
+        run: npm run build
+      - name: Test (dashboard + chat)
+        run: npm test
