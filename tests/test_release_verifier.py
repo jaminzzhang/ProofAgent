@@ -1426,6 +1426,29 @@ def test_release_verify_cli_missing_all_contract_options_is_structured_input_err
     _assert_release_cli_input_error(result)
 
 
+@pytest.mark.parametrize(
+    "parser_args",
+    [
+        ["--manifest"],
+        ["--evidence-root"],
+        ["--at"],
+        ["--bogus"],
+    ],
+    ids=[
+        "manifest-without-value",
+        "evidence-root-without-value",
+        "at-without-value",
+        "unknown-option",
+    ],
+)
+def test_release_verify_cli_parser_usage_errors_are_structured_input_errors(
+    parser_args: list[str],
+) -> None:
+    result = CliRunner().invoke(cli_module.app, ["release", "verify", *parser_args])
+
+    _assert_release_cli_input_error(result)
+
+
 def test_release_verify_cli_missing_manifest_path_is_structured_input_error(
     tmp_path: Path,
 ) -> None:

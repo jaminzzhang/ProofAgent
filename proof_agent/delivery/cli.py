@@ -14,9 +14,11 @@ from pathlib import Path
 from shutil import which
 from typing import TYPE_CHECKING, Any, NoReturn
 
+import click
 import typer
 import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
+from typer.core import TyperCommand
 
 from proof_agent import __version__
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
@@ -81,6 +83,22 @@ _STRICT_RFC3339 = re.compile(
 )
 
 
+class ReleaseVerifyCommand(TyperCommand):
+    """Scope parser-level JSON errors to the release authority command."""
+
+    def make_context(
+        self,
+        info_name: str | None,
+        args: list[str],
+        parent: click.Context | None = None,
+        **extra: Any,
+    ) -> click.Context:
+        try:
+            return super().make_context(info_name, args, parent=parent, **extra)
+        except click.UsageError as exc:
+            _raise_release_cli_error("release_verifier_invalid_input", exc)
+
+
 def agent_package_run_request(*args: Any, **kwargs: Any) -> Any:
     """Lazy wrapper so non-run CLI commands do not import runtime execution paths."""
 
@@ -123,7 +141,7 @@ def load_environment(ctx: typer.Context) -> None:
         _load_local_dotenv()
 
 
-@release_app.command("verify")
+@release_app.command("verify", cls=ReleaseVerifyCommand)
 def release_verify(
     manifest: Path | None = typer.Option(
         None,
