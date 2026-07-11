@@ -68,7 +68,7 @@ class ConversationUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = None
-    pinned: bool | None = None
+    pinned: bool = False
 
 
 class ConversationRunRequest(BaseModel):
@@ -160,11 +160,15 @@ def update_conversation(
     """Update conversation title and/or pin state."""
 
     store = _get_conversation_store(app_request)
-    updated = store.update_conversation(
-        conversation_id,
-        title=request.title,
-        pinned=request.pinned,
-    )
+    if not request.model_fields_set:
+        updated = store.get_conversation(conversation_id)
+    else:
+        update_fields: dict[str, Any] = {}
+        if "title" in request.model_fields_set:
+            update_fields["title"] = request.title
+        if "pinned" in request.model_fields_set:
+            update_fields["pinned"] = request.pinned
+        updated = store.update_conversation(conversation_id, **update_fields)
     if updated is None:
         raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
     return conversation_record_payload(updated)

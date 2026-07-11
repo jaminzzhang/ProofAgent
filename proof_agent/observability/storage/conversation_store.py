@@ -81,6 +81,8 @@ class ConversationStore:
         record = self.get_conversation(conversation_id)
         if record is None:
             return None
+        if isinstance(title, _Unchanged) and isinstance(pinned, _Unchanged):
+            return record
 
         resolved_title = record.title
         if not isinstance(title, _Unchanged):
