@@ -1,6 +1,6 @@
 # Proof Agent Initial Production Release Closure Design
 
-[KNOWN | HIGH] **Status:** User-approved design and independently approved specification; written-artifact user review and implementation planning remain pending.
+[KNOWN | HIGH] **Status:** User-approved design and written artifact; independently approved specification and S0-S8 implementation plans; implementation is pending.
 
 [KNOWN | HIGH] **Date:** 2026-07-11.
 
@@ -313,7 +313,7 @@ flowchart LR
 | [FRAME | HIGH] Identity and authorization | OIDC flow, CSRF, cookie limits, one-hour freshness, revocation, permission negatives and Recovery OIDC Group exercise |
 | [FRAME | HIGH] Secrets and egress | Handle resolution, missing/revoke/rotate, no disclosure, exact-origin allow and deny, redirect and DNS enforcement |
 | [FRAME | HIGH] Deterministic evaluation | Sole Agent, V3-only, all required governance and safety Gates, artifact sufficiency and zero required skips |
-| [FRAME | HIGH] Real-LLM evaluation | Exact candidate image and Agent, production-equivalent model, supported answer, no-evidence refusal, clarification, read-only tool, state-change denial, provider failure and hard-budget behavior |
+| [FRAME | HIGH] Real-LLM evaluation | Exact candidate image and Agent, production-equivalent model, supported answer, no-evidence refusal, clarification, state-change denial, provider failure and hard-budget behavior; successful read-only tool use when a validated remote Tool Source is bound, otherwise mandatory disabled-tool/no-selection behavior |
 | [FRAME | HIGH] Dependency compatibility | Concrete versioned PostgreSQL, S3, OIDC, Secret Provider, Gateway and model evidence from the Deployment Compatibility Manifest |
 | [FRAME | HIGH] Capacity and responsiveness | 20 online sessions, 5 active, 50 queued, next request explicit overload; 500 ms admission, 1 s first progress and free-slot start, 60 s standard P95 and 120 s hard deadline |
 | [FRAME | HIGH] Queue and progress | Idempotency, fairness, queued/running cancel, lease loss, unique terminal commit, durable coarse reconnect and allowed fine-detail loss |
@@ -332,8 +332,9 @@ flowchart LR
 
 - [FRAME | HIGH] The release produces `release-gate-manifest.json`, `release-readiness-report.html`, and `release-bundle-index.json`.
 - [FRAME | HIGH] HTML is generated only from the verified Manifest, embeds its digest, shows candidate binding, dependency versions, all Gate results, metrics, freshness, blocker codes and Evidence links, and never becomes a second decision source.
-- [FRAME | HIGH] Bundle Index is generated last and records or attests the digest of the Manifest, HTML and all Evidence bundles.
-- [FRAME | HIGH] An authenticated internal download endpoint guarded by `audit.export` streams the verified exact release-bundle objects with attachment filenames. A local `reports/` copy remains a development and review convenience, not production authority.
+- [FRAME | HIGH] A pre-bundle Release Closure Audit is computed from the verified Manifest, exact Evidence, approved requirements and frozen documentation; the HTML embeds that audit. Bundle Index is then generated last and records or attests the digest of the Manifest, Closure Audit, HTML and all Evidence bundles. A post-bundle integrity verification checks the Index and detached attestation but is not fed back into the already indexed HTML or Index.
+- [FRAME | HIGH] A finalized PostgreSQL Release Registry directly anchors the exact Bundle Index and its detached attestation. The verified Index authorizes its exact members. An authenticated internal download endpoint guarded by `audit.export` streams only those registry- or Index-authorized exact objects with attachment filenames. A local `reports/` copy remains a development and review convenience, not production authority.
+- [FRAME | HIGH] All renderer, Closure Audit, bundle, registry and download code plus active English and Chinese documentation must be frozen before Production Candidate Binding. After the verifier computes `GO`, finalization may only execute that bound code against immutable inputs and create external release artifacts; any source, runtime, frontend, test or documentation change invalidates the binding and returns the program to candidate Gate execution.
 
 ## 18. Verification Strategy
 
@@ -363,9 +364,11 @@ flowchart TD
     S2 --> S5["S5: Sole Agent and Knowledge production migration"]
     S3 --> S5
     S4 --> S5
-    S5 --> S6["S6: Production image, readiness, runbooks and Blue/Green"]
-    S6 --> S7["S7: Full candidate Gates and operational rehearsal"]
-    S7 --> S8["S8: Documentation, release bundle and final re-audit"]
+    S5 --> S6["S6: Production image, readiness, registry, runbooks and Blue/Green"]
+    S6 --> S7A["S7A: Pre-candidate Gate tooling and governance freeze"]
+    S7A --> S8A["S8A: Pre-candidate documentation and release-artifact tooling freeze"]
+    S8A --> S7B["S7B: Bound candidate Gates and operational rehearsal"]
+    S7B --> S8B["S8B: Post-GO artifact finalization and integrity verification"]
 ```
 
 | Slice | Required outcome | Exit evidence |
@@ -376,9 +379,9 @@ flowchart TD
 | [FRAME | HIGH] S3 | S3 Artifact Port, S3-first finalization, verified materialization cache, retention, orphan collection and combined recovery utilities | Exact-version/digest, failure, GC, TTL and restore tests |
 | [FRAME | HIGH] S4 | Bounded PostgreSQL queue, same-image Executor, frozen execution snapshot, cancellation, leases, fencing and durable coarse progress with best-effort detail | 5/50 capacity, fairness, idempotency, crash, cancel and reconnect tests |
 | [FRAME | HIGH] S5 | Migrate and publish only `agent_management_insurance_specialist` with V3, Case Memory, S3 Knowledge and optional validated read-only HTTPS tools | Complete deterministic and real-LLM Agent evaluation contract |
-| [FRAME | HIGH] S6 | Hardened image and production Compose, dependency-aware readiness, explicit migrations, exact Blue/Green choreography, authenticated bundle-download endpoint, support policy, and all incident, rollback, retention and restore runbooks required by operations Gates | Clean-room image, standby, drain, switch, soak, rollback, alert-delivery and runbook exercise prerequisites |
-| [FRAME | HIGH] S7 | Complete CI and candidate Gate producers for quality, security, compatibility, load, fault, recovery, browser and operations | Verified `release-gate-manifest.json` with no missing required result |
-| [FRAME | HIGH] S8 | Finalize English release documentation, perform release-time Chinese sync, generate and verify the candidate's HTML and Bundle Index, and conduct the final readiness re-audit | Signed or attested Bundle Index, downloadable HTML, final report with closure evidence |
+| [FRAME | HIGH] S6 | Hardened image and production Compose, dependency-aware readiness, explicit migrations, exact Blue/Green choreography, finalized Release Registry and authenticated bundle-download endpoint, support policy, and all incident, rollback, retention and restore runbooks required by operations Gates | Clean-room image, standby, drain, switch, soak, rollback, registry/download, alert-delivery and runbook exercise prerequisites |
+| [FRAME | HIGH] S7A/S7B | Before binding, complete CI, candidate binder and Gate producers for quality, security, compatibility, load, fault, recovery, browser and operations; after S8A freezes all remaining source/docs, bind once and execute the exact candidate without repository mutation | Candidate-bound, verified `release-gate-manifest.json` with no missing required result |
+| [FRAME | HIGH] S8A/S8B | Before binding, finalize English release documentation, perform release-time Chinese sync, and freeze Closure Audit/report/bundle/integrity tooling; after S7B `GO`, execute only that bound tooling to compute closure, render HTML, generate and attest the Bundle Index last, verify integrity, and publish downloads | Candidate-bound bilingual docs and tooling; signed or attested Bundle Index, downloadable HTML, and final closure evidence without post-binding source mutation |
 
 ## 20. Definition of Done
 
