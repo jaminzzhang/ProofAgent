@@ -180,6 +180,7 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
     captured_specs = []
     cleanup_calls = []
     captured_env = {}
+    build_env = {}
 
     def fake_which(name: str) -> str | None:
         return {
@@ -196,12 +197,21 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
         captured_env["VITE_DASHBOARD_URL"] = os.environ.get("VITE_DASHBOARD_URL")
         captured_specs.extend(specs)
 
+    def fake_build_verify_remote_frontends(*, npm_path):
+        build_env["npm_path"] = npm_path
+        build_env["VITE_CHAT_URL"] = os.environ.get("VITE_CHAT_URL")
+        build_env["VITE_DASHBOARD_URL"] = os.environ.get("VITE_DASHBOARD_URL")
+
     monkeypatch.setattr("proof_agent.delivery.cli.which", fake_which)
     monkeypatch.setattr(
         "proof_agent.delivery.cli._stop_verify_remote_processes",
         fake_stop_verify_remote_processes,
     )
     monkeypatch.setattr("proof_agent.delivery.cli._run_dev_processes", fake_run_dev_processes)
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli._build_verify_remote_frontends",
+        fake_build_verify_remote_frontends,
+    )
     monkeypatch.setenv("VITE_CHAT_URL", "http://localhost:5174")
     monkeypatch.setenv("VITE_DASHBOARD_URL", "http://localhost:5173")
 
@@ -229,6 +239,11 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
     assert "Local gateway: http://127.0.0.1:19080" in result.output
     assert "stopped port 5173 pid 123: node vite" in result.output
     assert cleanup_calls == [((9000, 9173, 9174, 19080), 19080)]
+    assert build_env == {
+        "npm_path": "/usr/bin/npm",
+        "VITE_CHAT_URL": "",
+        "VITE_DASHBOARD_URL": "",
+    }
     assert captured_env == {"VITE_CHAT_URL": "", "VITE_DASHBOARD_URL": ""}
     assert os.environ["VITE_CHAT_URL"] == "http://localhost:5174"
     assert os.environ["VITE_DASHBOARD_URL"] == "http://localhost:5173"
@@ -253,7 +268,7 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
     assert captured_specs[2][1] == [
         "/usr/bin/npm",
         "run",
-        "dev",
+        "preview",
         "-w",
         "proof-agent-dashboard",
         "--",
@@ -261,6 +276,20 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
         "127.0.0.1",
         "--port",
         "9173",
+    ]
+    assert captured_specs[3][1] == [
+        "/usr/bin/npm",
+        "run",
+        "preview",
+        "-w",
+        "proof-agent-chat",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "9174",
+        "--base",
+        "/__proofagent_chat__/",
     ]
     gateway_command = captured_specs[4][1]
     assert gateway_command[gateway_command.index("--backend-origin") + 1] == (
@@ -292,6 +321,10 @@ def test_verify_remote_local_only_skips_cloudflared_requirement(
     monkeypatch.setattr("proof_agent.delivery.cli.which", fake_which)
     monkeypatch.setattr("proof_agent.delivery.cli._stop_verify_remote_processes", lambda **_: [])
     monkeypatch.setattr("proof_agent.delivery.cli._run_dev_processes", fake_run_dev_processes)
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli._build_verify_remote_frontends",
+        lambda **_: None,
+    )
 
     result = runner.invoke(app, ["verify-remote", "--local-only", "--no-worker"])
 

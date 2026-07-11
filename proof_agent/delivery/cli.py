@@ -212,6 +212,7 @@ def verify_remote(
     os.environ["VITE_CHAT_URL"] = ""
     os.environ["VITE_DASHBOARD_URL"] = ""
     try:
+        _build_verify_remote_frontends(npm_path=npm_path)
         specs = _verify_remote_process_specs(
             npm_path=npm_path,
             cloudflared_path=cloudflared_path,
@@ -821,7 +822,7 @@ def _verify_remote_process_specs(
                 [
                     npm_path,
                     "run",
-                    "dev",
+                    "preview",
                     "-w",
                     "proof-agent-dashboard",
                     "--",
@@ -836,7 +837,7 @@ def _verify_remote_process_specs(
                 [
                     npm_path,
                     "run",
-                    "dev",
+                    "preview",
                     "-w",
                     "proof-agent-chat",
                     "--",
@@ -883,6 +884,35 @@ def _verify_remote_process_specs(
             )
         )
     return specs
+
+
+def _build_verify_remote_frontends(*, npm_path: str) -> None:
+    commands = [
+        (
+            "dashboard",
+            [npm_path, "run", "build", "-w", "proof-agent-dashboard"],
+        ),
+        (
+            "chat",
+            [
+                npm_path,
+                "run",
+                "build",
+                "-w",
+                "proof-agent-chat",
+                "--",
+                "--base",
+                VERIFY_REMOTE_CHAT_BASE,
+            ],
+        ),
+    ]
+    for name, command in commands:
+        typer.echo(f"building {name}: {' '.join(command)}")
+        try:
+            subprocess.run(command, env=os.environ.copy(), check=True)
+        except subprocess.CalledProcessError as exc:
+            typer.echo(f"{name} build exited with code {exc.returncode}", err=True)
+            raise typer.Exit(code=exc.returncode) from exc
 
 
 def _stop_verify_remote_processes(*, ports: Iterable[int], gateway_port: int) -> list[str]:
