@@ -48,7 +48,7 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
     ObservationEffect,
     ObservationIdentity,
 )
-from proof_agent.control.workflow.react_enterprise_qa import (
+from proof_agent.control.workflow.controlled_react.action_control import (
     compute_eligible_action_set,
     constrain_action,
     emit_intent_resolution,

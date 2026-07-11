@@ -16,6 +16,9 @@ from proof_agent.contracts import (
     WorkflowStageResult,
     WorkflowStageStatus,
 )
+from proof_agent.control.workflow.controlled_react.model_tracing import (
+    wrap_control_plane_model_providers,
+)
 from proof_agent.observability.audit.trace import TraceWriter
 
 
@@ -37,7 +40,6 @@ class ReActEnterpriseQAWorkflowExecution:
         self.execution_input = execution_input
         from proof_agent.control.workflow.react_enterprise_qa_stage_behavior import (
             ReActEnterpriseQAStageBehavior,
-            wrap_control_plane_model_providers,
         )
 
         wrap_control_plane_model_providers(invocation, trace)

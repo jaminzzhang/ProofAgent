@@ -20,7 +20,7 @@ from proof_agent.contracts import (
     ReActActionType,
     ReasoningSummary,
 )
-from proof_agent.control.workflow.react_enterprise_qa import (
+from proof_agent.control.workflow.controlled_react.action_control import (
     build_retrieval_observation_record,
     compute_eligible_action_set,
     constrain_action,

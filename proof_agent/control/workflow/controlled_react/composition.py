@@ -40,6 +40,11 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
     ObservationIdentity,
     ObservationSummaryBuilder,
 )
+from proof_agent.control.workflow.controlled_react.model_tracing import (
+    drain_stage_llm_interactions,
+    stage_llm_interactions,
+    wrap_control_plane_model_providers,
+)
 from proof_agent.control.workflow.controlled_react.ports import (
     AnswerSynthesisResult,
     ControlledReActPorts,
@@ -52,7 +57,7 @@ from proof_agent.control.workflow.controlled_react.tool_proposal_scope import (
     ToolProposalScopeResolver,
 )
 from proof_agent.control.workflow.harness_helpers import emit_policy_decision
-from proof_agent.control.workflow.react_enterprise_qa import review_action
+from proof_agent.control.workflow.controlled_react.review import review_action
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.knowledge.retrieval_service import (
     KnowledgeRetrievalRequest,
@@ -85,7 +90,15 @@ def build_controlled_react_orchestrator_for_invocation(
     """Assemble a run-scoped V3 orchestrator from resolved Harness capabilities."""
 
     trace_port = trace or _NoopTrace()
-    _wrap_control_plane_model_providers_for_v3(invocation, trace_port)
+    wrap_control_plane_model_providers(
+        invocation,
+        trace_port,
+        stage_id_by_role={
+            ModelCallRole.INTENT_RESOLUTION: "intent_resolution",
+            ModelCallRole.REACT_PLANNER: "plan",
+            ModelCallRole.HARNESS_REVIEW: "retrieval_review",
+        },
+    )
     return ControlledReActOrchestrator(
         ports=ControlledReActPorts(
             planner=_InvocationPlannerAdapter(invocation),
@@ -138,7 +151,7 @@ class _InvocationIntentResolutionAdapter:
             memory_recall_payloads=state.memory_recall_payloads,
             business_flow_skill_packs=self._invocation.business_flow_skill_packs,
         )
-        self.stage_llm_interactions = _intent_resolver_stage_llm_interactions(resolver)
+        self.stage_llm_interactions = stage_llm_interactions(resolver)
         return result
 
 
@@ -193,7 +206,7 @@ class _InvocationPlannerAdapter:
             ),
             effective_tool_proposal_scope=state.effective_tool_proposal_scope,
         )
-        self.stage_llm_interactions = _drain_model_provider_stage_llm_interactions(
+        self.stage_llm_interactions = drain_stage_llm_interactions(
             planner,
             stage_id="plan",
             stage_label="Plan",
@@ -483,47 +496,6 @@ class _NoopTrace:
         _ = (event_type, status, payload)
 
 
-def _wrap_control_plane_model_providers_for_v3(
-    invocation: HarnessInvocation,
-    trace: TracePort,
-) -> None:
-    from proof_agent.control.workflow.react_enterprise_qa_stage_behavior import (
-        wrap_control_plane_model_providers,
-    )
-
-    wrap_control_plane_model_providers(
-        invocation,
-        trace,
-        stage_id_by_role={
-            ModelCallRole.INTENT_RESOLUTION: "intent_resolution",
-            ModelCallRole.REACT_PLANNER: "plan",
-            ModelCallRole.HARNESS_REVIEW: "retrieval_review",
-        },
-    )
-
-
-def _drain_model_provider_stage_llm_interactions(
-    owner: object,
-    *,
-    stage_id: str,
-    stage_label: str,
-) -> tuple[WorkflowStageLlmInteraction, ...]:
-    provider = getattr(owner, "model_provider", None)
-    drain = getattr(provider, "drain_sensitive_interactions", None)
-    if not callable(drain):
-        return ()
-    raw_interactions = drain(stage_id=stage_id, stage_label=stage_label)
-    if not isinstance(raw_interactions, list | tuple):
-        return ()
-    interactions: list[WorkflowStageLlmInteraction] = []
-    for raw_interaction in raw_interactions:
-        if isinstance(raw_interaction, WorkflowStageLlmInteraction):
-            interactions.append(raw_interaction)
-        elif isinstance(raw_interaction, Mapping):
-            interactions.append(WorkflowStageLlmInteraction(**dict(raw_interaction)))
-    return tuple(interactions)
-
-
 class _StageScopedTrace:
     def __init__(self, trace: TracePort, *, stage_id: str) -> None:
         self._trace = trace
@@ -810,21 +782,6 @@ def _retrieval_query_set_from_intent_state(
             )
         )
     return tuple(items)
-
-
-def _intent_resolver_stage_llm_interactions(
-    resolver: object,
-) -> tuple[WorkflowStageLlmInteraction, ...]:
-    raw_interactions = getattr(resolver, "stage_llm_interactions", ())
-    if not isinstance(raw_interactions, list | tuple):
-        return ()
-    interactions: list[WorkflowStageLlmInteraction] = []
-    for raw_interaction in raw_interactions:
-        if isinstance(raw_interaction, WorkflowStageLlmInteraction):
-            interactions.append(raw_interaction)
-        elif isinstance(raw_interaction, Mapping):
-            interactions.append(WorkflowStageLlmInteraction(**dict(raw_interaction)))
-    return tuple(interactions)
 
 
 def _citation_refs(state: ControlledReActRunState) -> tuple[str, ...]:

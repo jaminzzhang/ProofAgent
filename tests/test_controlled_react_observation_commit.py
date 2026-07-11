@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,10 @@ from proof_agent.control.workflow.controlled_react import (
     ObservationIdentity,
     ObservationSummaryBuilder,
 )
-from proof_agent.runtime.approval_resume import FileObservationTruthStore
+from proof_agent.control.workflow.controlled_react.local_stores import (
+    FileObservationTruthStore,
+)
+from proof_agent.errors import ProofAgentError
 
 
 def test_observation_commit_persists_truth_and_appends_record() -> None:
@@ -408,6 +412,163 @@ def test_file_observation_truth_store_persists_truth_across_instances(
     reloaded = FileObservationTruthStore(tmp_path).load(truth.truth_ref)
 
     assert reloaded == truth
+
+
+@pytest.mark.parametrize(
+    "truth_ref",
+    (
+        "observation:///obs_1/truth",
+        "observation://./obs_1/truth",
+        "observation://../obs_1/truth",
+        "observation:///absolute/obs_1/truth",
+        "observation://run_001/./truth",
+        "observation://run_001/../truth",
+        "observation://run_001//truth",
+        r"observation://run_001/..\\outside/truth",
+    ),
+)
+def test_file_observation_truth_store_rejects_unsafe_path_segments(
+    tmp_path: Path,
+    truth_ref: str,
+) -> None:
+    truth = RetrievalObservationTruth(
+        truth_ref=truth_ref,
+        observation_id="obs_1",
+        action_id="act_retrieve",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileObservationTruthStore(tmp_path).save(truth)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+
+
+def test_file_observation_truth_store_rejects_conflicting_existing_ref(
+    tmp_path: Path,
+) -> None:
+    store = FileObservationTruthStore(tmp_path)
+    original = RetrievalObservationTruth(
+        truth_ref="observation://run_001/obs_1/truth",
+        observation_id="obs_1",
+        action_id="act_original",
+    )
+    conflicting = original.model_copy(update={"action_id": "act_conflicting"})
+    store.save(original)
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.save(conflicting)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+    assert store.load(original.truth_ref) == original
+
+
+def test_file_observation_truth_store_allows_identical_idempotent_save(
+    tmp_path: Path,
+) -> None:
+    store = FileObservationTruthStore(tmp_path)
+    truth = RetrievalObservationTruth(
+        truth_ref="observation://run_001/obs_1/truth",
+        observation_id="obs_1",
+        action_id="act_original",
+    )
+
+    first_ref = store.save(truth)
+    second_ref = store.save(truth)
+
+    assert second_ref == first_ref
+    assert store.load(first_ref) == truth
+
+
+def test_file_observation_truth_store_rejects_ref_observation_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    truth = RetrievalObservationTruth(
+        truth_ref="observation://run_001/obs_1/truth",
+        observation_id="obs_other",
+        action_id="act_retrieve",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileObservationTruthStore(tmp_path).save(truth)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+
+
+@pytest.mark.parametrize(
+    ("payload_truth_ref", "payload_observation_id"),
+    (
+        ("observation://run_other/obs_1/truth", "obs_1"),
+        ("observation://run_001/obs_other/truth", "obs_other"),
+        ("observation://run_001/obs_1/truth", "obs_other"),
+    ),
+)
+def test_file_observation_truth_store_rejects_payload_identity_mismatch(
+    tmp_path: Path,
+    payload_truth_ref: str,
+    payload_observation_id: str,
+) -> None:
+    path = (
+        tmp_path
+        / "run_001"
+        / "controlled_react"
+        / "observation_truth"
+        / "obs_1.json"
+    )
+    path.parent.mkdir(parents=True)
+    source = RetrievalObservationTruth(
+        truth_ref="observation://run_seed/obs_seed/truth",
+        observation_id="obs_seed",
+        action_id="act_retrieve",
+    )
+    FileObservationTruthStore(tmp_path).save(source)
+    source_path = (
+        tmp_path
+        / "run_seed"
+        / "controlled_react"
+        / "observation_truth"
+        / "obs_seed.json"
+    )
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    payload["truth_ref"] = payload_truth_ref
+    payload["observation_id"] = payload_observation_id
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileObservationTruthStore(tmp_path).load(
+            "observation://run_001/obs_1/truth"
+        )
+
+    assert exc.value.code == "PA_RUNTIME_001"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        "{not-json",
+        json.dumps(["not", "an", "object"]),
+        json.dumps({"kind": "retrieval", "truth_ref": 42}),
+    ),
+)
+def test_file_observation_truth_store_fails_closed_on_corrupt_json(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    path = (
+        tmp_path
+        / "run_001"
+        / "controlled_react"
+        / "observation_truth"
+        / "obs_1.json"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileObservationTruthStore(tmp_path).load(
+            "observation://run_001/obs_1/truth"
+        )
+
+    assert exc.value.code == "PA_RUNTIME_001"
 
 
 def test_observation_summary_builder_derives_retrieval_summary_without_payload() -> None:

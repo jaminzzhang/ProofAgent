@@ -16,14 +16,14 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
-    ControlledReActRunStateSnapshot,
-    ObservationTruthArtifact,
-    ObservationTruthKind,
-    RetrievalObservationTruth,
     ResolvedKnowledgeBindingSet,
     RunPurpose,
-    ToolObservationTruth,
     WorkflowTemplateExecutionInput,
+)
+from proof_agent.control.workflow.controlled_react.local_stores import (
+    CONTROLLED_REACT_SNAPSHOT_REF_PREFIX as CONTROLLED_REACT_SNAPSHOT_REF_PREFIX,
+    FileControlledReActSnapshotStore,
+    FileObservationTruthStore,
 )
 from proof_agent.errors import ProofAgentError
 
@@ -95,91 +95,6 @@ class ControlledReActApprovalResumeContext:
     agent_id: str | None = None
     agent_version_id: str | None = None
     draft_id: str | None = None
-
-
-CONTROLLED_REACT_SNAPSHOT_REF_PREFIX = "controlled-react://"
-
-
-class FileControlledReActSnapshotStore:
-    """Disk-backed snapshot store for Controlled ReAct approval resume."""
-
-    def __init__(self, root_dir: Path) -> None:
-        self._root_dir = root_dir
-
-    def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
-        path = self._snapshot_path(snapshot.run_id, snapshot.snapshot_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(_model_payload(snapshot), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        return f"{CONTROLLED_REACT_SNAPSHOT_REF_PREFIX}{snapshot.run_id}/{snapshot.snapshot_id}"
-
-    def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
-        run_id, snapshot_id = _parse_controlled_react_snapshot_ref(snapshot_ref)
-        path = self._snapshot_path(run_id, snapshot_id)
-        if not path.exists():
-            raise ProofAgentError(
-                "PA_RUNTIME_001",
-                f"controlled ReAct snapshot not found: {snapshot_ref}",
-                "Restart the run so approval resume can persist a fresh snapshot.",
-                artifact_path=path,
-            )
-        return ControlledReActRunStateSnapshot.model_validate(
-            json.loads(path.read_text(encoding="utf-8"))
-        )
-
-    def _snapshot_path(self, run_id: str, snapshot_id: str) -> Path:
-        return self._root_dir / run_id / "controlled_react" / f"{snapshot_id}.json"
-
-
-class FileObservationTruthStore:
-    """Disk-backed Observation Truth Store for Controlled ReAct resume."""
-
-    def __init__(self, root_dir: Path) -> None:
-        self._root_dir = root_dir
-
-    def save(self, truth: ObservationTruthArtifact) -> str:
-        run_id, observation_id = _parse_observation_truth_ref(truth.truth_ref)
-        path = self._truth_path(run_id, observation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(_model_payload(truth), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        return truth.truth_ref
-
-    def load(self, truth_ref: str) -> ObservationTruthArtifact:
-        run_id, observation_id = _parse_observation_truth_ref(truth_ref)
-        path = self._truth_path(run_id, observation_id)
-        if not path.exists():
-            raise ProofAgentError(
-                "PA_RUNTIME_001",
-                f"controlled ReAct observation truth not found: {truth_ref}",
-                "Restart the run so approval resume can persist observation truth.",
-                artifact_path=path,
-            )
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        kind = payload.get("kind")
-        if kind == ObservationTruthKind.RETRIEVAL.value:
-            return RetrievalObservationTruth.model_validate(payload)
-        if kind == ObservationTruthKind.TOOL.value:
-            return ToolObservationTruth.model_validate(payload)
-        raise ProofAgentError(
-            "PA_RUNTIME_001",
-            f"unsupported controlled ReAct observation truth kind: {kind}",
-            "Discard the stale approval checkpoint and restart the run.",
-            artifact_path=path,
-        )
-
-    def _truth_path(self, run_id: str, observation_id: str) -> Path:
-        return (
-            self._root_dir
-            / run_id
-            / "controlled_react"
-            / "observation_truth"
-            / f"{observation_id}.json"
-        )
 
 
 class ApprovalResumeClaim:
@@ -466,43 +381,6 @@ def _payload_sha256(value: Any) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _parse_controlled_react_snapshot_ref(snapshot_ref: str) -> tuple[str, str]:
-    if not snapshot_ref.startswith(CONTROLLED_REACT_SNAPSHOT_REF_PREFIX):
-        raise ProofAgentError(
-            "PA_RUNTIME_001",
-            f"invalid controlled ReAct snapshot reference: {snapshot_ref}",
-            "Use the checkpoint_ref emitted by the pending approval event.",
-        )
-    payload = snapshot_ref.removeprefix(CONTROLLED_REACT_SNAPSHOT_REF_PREFIX)
-    parts = payload.split("/")
-    if len(parts) != 2 or not all(parts):
-        raise ProofAgentError(
-            "PA_RUNTIME_001",
-            f"invalid controlled ReAct snapshot reference: {snapshot_ref}",
-            "Use the checkpoint_ref emitted by the pending approval event.",
-        )
-    return parts[0], parts[1]
-
-
-def _parse_observation_truth_ref(truth_ref: str) -> tuple[str, str]:
-    prefix = "observation://"
-    if not truth_ref.startswith(prefix):
-        raise ProofAgentError(
-            "PA_RUNTIME_001",
-            f"invalid observation truth reference: {truth_ref}",
-            "Use the truth_ref allocated by the Controlled ReAct Orchestrator.",
-        )
-    payload = truth_ref.removeprefix(prefix)
-    parts = payload.split("/")
-    if len(parts) != 3 or parts[2] != "truth" or not parts[0] or not parts[1]:
-        raise ProofAgentError(
-            "PA_RUNTIME_001",
-            f"invalid observation truth reference: {truth_ref}",
-            "Use the truth_ref allocated by the Controlled ReAct Orchestrator.",
-        )
-    return parts[0], parts[1]
 
 
 def _jsonable(value: Any) -> Any:

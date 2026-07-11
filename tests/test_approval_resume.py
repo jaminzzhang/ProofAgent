@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,9 @@ from proof_agent.contracts import (
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
     WorkflowTemplateExecutionInput,
+)
+from proof_agent.control.workflow.controlled_react.local_stores import (
+    FileControlledReActSnapshotStore,
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.approval_resume import (
@@ -167,3 +171,207 @@ def test_controlled_react_resume_registry_persists_context_and_snapshot(
     assert loaded_snapshot == snapshot
     assert loaded_context is not None
     assert loaded_context.manifest.workflow.template == "react_enterprise_qa_v3"
+
+
+@pytest.mark.parametrize(
+    ("run_id", "snapshot_id"),
+    (
+        ("", "snap_001"),
+        (".", "snap_001"),
+        ("..", "snap_001"),
+        ("/absolute", "snap_001"),
+        ("run/escape", "snap_001"),
+        (r"run\\escape", "snap_001"),
+        ("run_001", ""),
+        ("run_001", "."),
+        ("run_001", ".."),
+        ("run_001", "/absolute"),
+        ("run_001", "snap/escape"),
+        ("run_001", r"snap\\escape"),
+    ),
+)
+def test_file_controlled_react_snapshot_store_rejects_unsafe_path_segments(
+    tmp_path: Path,
+    run_id: str,
+    snapshot_id: str,
+) -> None:
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id=snapshot_id,
+        run_id=run_id,
+        state=ControlledReActRunState(
+            run_id=run_id,
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Test unsafe local snapshot references.",
+        ),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileControlledReActSnapshotStore(tmp_path).save(snapshot)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+
+
+def test_file_controlled_react_snapshot_store_rejects_conflicting_existing_ref(
+    tmp_path: Path,
+) -> None:
+    store = FileControlledReActSnapshotStore(tmp_path)
+    original = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_001",
+        run_id="run_001",
+        state=ControlledReActRunState(
+            run_id="run_001",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Original question",
+        ),
+    )
+    conflicting = original.model_copy(
+        update={
+            "state": original.state.model_copy(update={"question": "Conflicting question"})
+        }
+    )
+    snapshot_ref = store.save(original)
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.save(conflicting)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+    assert store.load(snapshot_ref) == original
+
+
+def test_file_controlled_react_snapshot_store_allows_identical_idempotent_save(
+    tmp_path: Path,
+) -> None:
+    store = FileControlledReActSnapshotStore(tmp_path)
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_001",
+        run_id="run_001",
+        state=ControlledReActRunState(
+            run_id="run_001",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Original question",
+        ),
+    )
+
+    first_ref = store.save(snapshot)
+    second_ref = store.save(snapshot)
+
+    assert second_ref == first_ref
+    assert store.load(first_ref) == snapshot
+
+
+def test_file_controlled_react_snapshot_store_rejects_state_run_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_001",
+        run_id="run_001",
+        state=ControlledReActRunState(
+            run_id="run_other",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Mismatched run identity",
+        ),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileControlledReActSnapshotStore(tmp_path).save(snapshot)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+
+
+@pytest.mark.parametrize(
+    ("payload_run_id", "payload_snapshot_id", "state_run_id"),
+    (
+        ("run_other", "snap_001", "run_other"),
+        ("run_001", "snap_other", "run_001"),
+        ("run_001", "snap_001", "run_other"),
+    ),
+)
+def test_file_controlled_react_snapshot_store_rejects_payload_identity_mismatch(
+    tmp_path: Path,
+    payload_run_id: str,
+    payload_snapshot_id: str,
+    state_run_id: str,
+) -> None:
+    path = tmp_path / "run_001" / "controlled_react" / "snap_001.json"
+    path.parent.mkdir(parents=True)
+    source = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_seed",
+        run_id="run_seed",
+        state=ControlledReActRunState(
+            run_id="run_seed",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Mismatched persisted identity",
+        ),
+    )
+    FileControlledReActSnapshotStore(tmp_path).save(source)
+    source_path = tmp_path / "run_seed" / "controlled_react" / "snap_seed.json"
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    payload["run_id"] = payload_run_id
+    payload["snapshot_id"] = payload_snapshot_id
+    payload["state"]["run_id"] = state_run_id
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileControlledReActSnapshotStore(tmp_path).load(
+            "controlled-react://run_001/snap_001"
+        )
+
+    assert exc.value.code == "PA_RUNTIME_001"
+
+
+def test_file_controlled_react_snapshot_store_publish_failure_leaves_no_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_001",
+        run_id="run_001",
+        state=ControlledReActRunState(
+            run_id="run_001",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Atomic publication failure",
+        ),
+    )
+    target = tmp_path / "run_001" / "controlled_react" / "snap_001.json"
+
+    def fail_publish(_source: os.PathLike[str], _target: os.PathLike[str]) -> None:
+        raise OSError("injected atomic publication failure")
+
+    monkeypatch.setattr(os, "link", fail_publish)
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileControlledReActSnapshotStore(tmp_path).save(snapshot)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+    assert not target.exists()
+    assert not tuple(target.parent.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        "{not-json",
+        json.dumps(["not", "an", "object"]),
+        json.dumps({"snapshot_id": 42}),
+    ),
+)
+def test_file_controlled_react_snapshot_store_fails_closed_on_corrupt_json(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    path = tmp_path / "run_001" / "controlled_react" / "snap_001.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ProofAgentError) as exc:
+        FileControlledReActSnapshotStore(tmp_path).load(
+            "controlled-react://run_001/snap_001"
+        )
+
+    assert exc.value.code == "PA_RUNTIME_001"

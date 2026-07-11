@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import Any
 
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
-from proof_agent.capabilities.models.protocol import ModelProvider
 from proof_agent.capabilities.tools.gateway import ToolGatewayResult
 from proof_agent.contracts import (
     ApprovalStatus,
@@ -19,8 +17,6 @@ from proof_agent.contracts import (
     IntentResolutionResult,
     MemoryRecallWorkingPayload,
     ModelCallRole,
-    ModelRequest,
-    ModelResponse,
     PolicyDecisionType,
     ReActActionProposal,
     ReActActionType,
@@ -33,6 +29,10 @@ from proof_agent.contracts import (
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
 from proof_agent.control.workflow.business_flow_skill_packs import (
     admit_business_flow_skill_pack,
+)
+from proof_agent.control.workflow.controlled_react.model_tracing import (
+    build_llm_interaction_capture as _llm_interaction_capture,
+    drain_sensitive_interactions as _drain_stage_llm_interactions,
 )
 from proof_agent.control.workflow.harness_helpers import (
     build_model_request,
@@ -58,7 +58,7 @@ from proof_agent.control.workflow.react_enterprise_qa import (
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.demo.scenarios import UNSUPPORTED_QUESTION
-from proof_agent.observability.audit.trace import TraceEmitter, TraceWriter
+from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.runtime.graph import (
     _format_untrusted_web_supplement,
     _maybe_untrusted_web_supplement,
@@ -940,84 +940,6 @@ def _model_output_failure_diagnostic(
     return {key: value for key, value in diagnostic.items() if value not in (None, [], 0)}
 
 
-def _drain_stage_llm_interactions(
-    owner: object | None,
-    *,
-    stage_id: str,
-    stage_label: str,
-) -> list[dict[str, Any]]:
-    provider = getattr(owner, "model_provider", None)
-    if not isinstance(provider, _TracingModelProvider):
-        return []
-    return provider.drain_sensitive_interactions(
-        stage_id=stage_id,
-        stage_label=stage_label,
-    )
-
-
-def _llm_interaction_capture(
-    *,
-    stage_id: str,
-    stage_label: str,
-    role: str,
-    request: ModelRequest,
-    response: ModelResponse,
-) -> dict[str, Any]:
-    response_json, parse_error = (
-        _model_content_json(response.content) if request.response_format == "json" else (None, None)
-    )
-    capture = {
-        "stage_id": stage_id,
-        "stage_label": stage_label,
-        "role": role,
-        "provider": response.provider_name,
-        "model": response.model_name,
-        "request_json": _model_request_json(request),
-        "response_json": response_json,
-        "response_content_length": len(response.content),
-        "response_json_parse_error_code": parse_error,
-    }
-    return {key: value for key, value in capture.items() if value is not None}
-
-
-def _model_request_json(request: ModelRequest) -> dict[str, Any]:
-    return {
-        "provider": request.provider,
-        "model": request.model,
-        "response_format": request.response_format,
-        "function_schema": (
-            request.function_schema.model_dump(mode="json")
-            if request.function_schema is not None
-            else None
-        ),
-        "stream": request.stream,
-        "temperature": request.temperature,
-        "max_output_tokens": request.max_output_tokens,
-        "timeout_seconds": request.timeout_seconds,
-        "metadata": dict(request.metadata),
-        "evidence_sources": list(request.evidence_sources),
-        "messages": [
-            {
-                "role": message.role.value,
-                "content": message.content,
-                "name": message.name,
-                "metadata": dict(message.metadata),
-            }
-            for message in request.messages
-        ],
-    }
-
-
-def _model_content_json(content: str) -> tuple[Any | None, str | None]:
-    stripped = content.strip()
-    if not stripped:
-        return None, "empty_model_output"
-    try:
-        return json.loads(stripped), None
-    except json.JSONDecodeError:
-        return None, "model_output_json_parse_failed"
-
-
 def _tool_capability_disabled_delta() -> dict[str, Any]:
     message = "The tools capability is disabled for this Agent Contract."
     return {
@@ -1025,210 +947,6 @@ def _tool_capability_disabled_delta() -> dict[str, Any]:
         "governance_message": message,
         "final_output": message,
     }
-
-
-class _TracingModelProvider:
-    def __init__(
-        self,
-        *,
-        provider: ModelProvider,
-        trace: TraceEmitter,
-        role: ModelCallRole,
-        stage_id: str | None = None,
-    ) -> None:
-        self._provider = provider
-        self._trace = trace
-        self._role = role
-        self._stage_id = stage_id
-        self._sensitive_interactions: list[dict[str, Any]] = []
-
-    @property
-    def inner_provider(self) -> ModelProvider:
-        return self._provider
-
-    @property
-    def role(self) -> ModelCallRole:
-        return self._role
-
-    def bind_trace(self, trace: TraceEmitter, *, stage_id: str | None = None) -> None:
-        self._trace = trace
-        self._stage_id = stage_id
-
-    @property
-    def provider_name(self) -> str:
-        return self._provider.provider_name
-
-    @property
-    def model_name(self) -> str:
-        return self._provider.model_name
-
-    def estimate_tokens(self, request: ModelRequest) -> int | None:
-        return self._provider.estimate_tokens(request)
-
-    def generate(self, request: ModelRequest) -> ModelResponse:
-        estimated_tokens = self._provider.estimate_tokens(request)
-        request_payload = {
-            "provider": self.provider_name,
-            "model": self.model_name,
-            "role": self._role.value,
-            "response_format": request.response_format,
-            "message_count": len(request.messages),
-            "prompt_length": sum(len(message.content) for message in request.messages),
-            "system_prompt_length": system_prompt_length(request),
-            "estimated_tokens": estimated_tokens,
-            "stream": request.stream,
-            "cost_class": cost_class(self.provider_name),
-        }
-        if self._stage_id is not None:
-            request_payload["stage_id"] = self._stage_id
-        self._trace.emit(
-            "model_request",
-            status="ok",
-            payload=request_payload,
-        )
-        try:
-            response = self._provider.generate(request)
-        except Exception as exc:
-            _emit_control_plane_model_error(
-                self._trace,
-                role=self._role,
-                provider=self.provider_name,
-                model=self.model_name,
-                exc=exc,
-                stage_id=self._stage_id,
-            )
-            raise
-        payload = model_response_payload(response)
-        payload["role"] = self._role.value
-        if self._stage_id is not None:
-            payload["stage_id"] = self._stage_id
-        self._trace.emit("model_response", status="ok", payload=payload)
-        self._sensitive_interactions.append(
-            _llm_interaction_capture(
-                stage_id="",
-                stage_label="",
-                role=self._role.value,
-                request=request,
-                response=response,
-            )
-        )
-        return response
-
-    def drain_sensitive_interactions(
-        self,
-        *,
-        stage_id: str,
-        stage_label: str,
-    ) -> list[dict[str, Any]]:
-        interactions = self._sensitive_interactions
-        self._sensitive_interactions = []
-        return [
-            {
-                **interaction,
-                "stage_id": stage_id,
-                "stage_label": stage_label,
-            }
-            for interaction in interactions
-        ]
-
-
-def wrap_control_plane_model_providers(
-    invocation: HarnessInvocation,
-    trace: TraceEmitter,
-    *,
-    stage_id_by_role: Mapping[ModelCallRole, str] | None = None,
-) -> None:
-    _wrap_model_provider_attribute(
-        invocation.intent_resolver,
-        trace=trace,
-        role=ModelCallRole.INTENT_RESOLUTION,
-        stage_id=_stage_id_for_control_plane_role(
-            ModelCallRole.INTENT_RESOLUTION,
-            stage_id_by_role,
-        ),
-    )
-    _wrap_model_provider_attribute(
-        invocation.react_planner,
-        trace=trace,
-        role=ModelCallRole.REACT_PLANNER,
-        stage_id=_stage_id_for_control_plane_role(
-            ModelCallRole.REACT_PLANNER,
-            stage_id_by_role,
-        ),
-    )
-    _wrap_model_provider_attribute(
-        invocation.review_subagent,
-        trace=trace,
-        role=ModelCallRole.HARNESS_REVIEW,
-        stage_id=_stage_id_for_control_plane_role(
-            ModelCallRole.HARNESS_REVIEW,
-            stage_id_by_role,
-        ),
-    )
-
-
-def _wrap_model_provider_attribute(
-    owner: object | None,
-    *,
-    trace: TraceEmitter,
-    role: ModelCallRole,
-    stage_id: str | None = None,
-) -> None:
-    if owner is None or not hasattr(owner, "model_provider"):
-        return
-    provider = getattr(owner, "model_provider")
-    if provider is None:
-        return
-    if isinstance(provider, _TracingModelProvider):
-        if provider.role == role:
-            provider.bind_trace(trace, stage_id=stage_id)
-            return
-        provider = provider.inner_provider
-    setattr(
-        owner,
-        "model_provider",
-        _TracingModelProvider(
-            provider=provider,
-            trace=trace,
-            role=role,
-            stage_id=stage_id,
-        ),
-    )
-
-
-def _stage_id_for_control_plane_role(
-    role: ModelCallRole,
-    stage_id_by_role: Mapping[ModelCallRole, str] | None,
-) -> str | None:
-    if stage_id_by_role is None:
-        return None
-    return stage_id_by_role.get(role)
-
-
-def _emit_control_plane_model_error(
-    trace: TraceEmitter,
-    *,
-    role: ModelCallRole,
-    provider: str,
-    model: str,
-    exc: BaseException,
-    stage_id: str | None = None,
-) -> None:
-    payload = {
-        "role": role.value,
-        "provider": provider,
-        "model": model,
-        "error_code": getattr(exc, "code", "PA_MODEL_002"),
-        "error_class": exc.__class__.__name__,
-        "retryable": bool(getattr(exc, "retryable", False)),
-    }
-    if stage_id is not None:
-        payload["stage_id"] = stage_id
-    trace.emit(
-        "model_error",
-        status="error",
-        payload=payload,
-    )
 
 
 def _model_action_proposal(question: str) -> ReActActionProposal:

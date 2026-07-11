@@ -35,6 +35,10 @@ from proof_agent.control.workflow.controlled_react import (
     ControlledReActStartRequest,
     build_controlled_react_orchestrator_for_invocation,
 )
+from proof_agent.control.workflow.controlled_react.execution_input import (
+    build_workflow_template_execution_input,
+    resolve_workflow_stage_runtime_configuration,
+)
 from proof_agent.control.workflow.controlled_react.ports import SnapshotStorePort
 from proof_agent.control.workflow.controlled_react.ports import ObservationTruthStorePort
 from proof_agent.control.workflow.harness_helpers import (
@@ -43,11 +47,7 @@ from proof_agent.control.workflow.harness_helpers import (
 from proof_agent.control.workflow.templates import resolve_workflow_template
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.langgraph_runner import (
-    _resolve_workflow_stage_runtime_configuration,
-    _workflow_template_execution_input,
-    run_with_langgraph,
-)
+from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 class ControlledReActOrchestratorDependency(Protocol):
@@ -147,14 +147,14 @@ def _execute_controlled_react_v3_agent_package_run(
         question=request.question,
     )
     _emit_run_start_context_trace(trace, run_start_context)
-    stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
+    stage_runtime_configuration = resolve_workflow_stage_runtime_configuration(
         agent_yaml=request.agent_yaml,
         manifest=manifest,
         agent_id=request.agent_id,
         agent_version_id=request.agent_version_id,
         published_agent_runtime_facts=request.published_agent_runtime_facts,
     )
-    execution_input = _workflow_template_execution_input(
+    execution_input = build_workflow_template_execution_input(
         run_id=run_id,
         question=request.question,
         agent_id=request.agent_id,
