@@ -9,8 +9,8 @@
     "chat"
   ],
   "scripts": {
-    "typecheck": "npm run typecheck -ws --if-present",
-    "build:ui": "npm run typecheck -w @proofagent/ui",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build:ui": "npm run build -w @proofagent/ui",
     "build:dashboard": "npm run build -w proof-agent-dashboard",
     "build:chat": "npm run build -w proof-agent-chat",
     "build": "npm run build:ui && npm run build:dashboard && npm run build:chat",
