@@ -3,12 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
-from types import ModuleType
 from typing import Any, cast
-from uuid import NAMESPACE_URL, uuid5
 
 import yaml  # type: ignore[import-untyped]
 
@@ -28,17 +25,10 @@ ToolCallable = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
 @dataclass(frozen=True)
-class LocalToolHandler:
-    path: Path
-    function_name: str
-
-
-@dataclass(frozen=True)
 class ToolConfig:
     """Static allowlist entry loaded from tools.yaml."""
 
     name: str
-    handler: LocalToolHandler | None
     built_in_handler: ToolCallable | None
     tool_source_id: str | None
     risk_level: str
@@ -95,11 +85,11 @@ class ToolGateway:
         raw = yaml.safe_load(tools_path.read_text(encoding="utf-8")) or {}
         configs = {}
         for tool in raw.get("tools", []):
+            _reject_local_handler(tool, artifact_path=tools_path)
             tool_source_id = _optional_tool_source_id(tool)
             source = str(tool.get("source", "local"))
             config = ToolConfig(
                 name=tool["name"],
-                handler=_handler_from_mapping(tool.get("handler"), base_dir=tools_path.parent),
                 built_in_handler=_built_in_handler_from_tool_source(
                     tool_name=tool["name"],
                     configured_source=source,
@@ -206,8 +196,7 @@ class ToolGateway:
             if missing:
                 raise ProofAgentError(
                     "PA_TOOL_001",
-                    f"tool request is missing required parameter(s): "
-                    f"{', '.join(sorted(missing))}",
+                    f"tool request is missing required parameter(s): {', '.join(sorted(missing))}",
                     "Provide all parameters required by the MCP Tool Contract input_schema.",
                 )
 
@@ -281,40 +270,25 @@ def _approval_reason(config: ToolConfig) -> str:
     return "Tool allowed."
 
 
-def _handler_from_mapping(raw: Any, *, base_dir: Path) -> LocalToolHandler | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, str):
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            "tool handler must be a string.",
-            "Use handler: ./module.py:function_name in tools.yaml.",
-            artifact_path=base_dir,
-        )
-    if ":" not in raw:
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            f"tool handler is missing a function name: {raw}",
-            "Use handler: ./module.py:function_name in tools.yaml.",
-            artifact_path=base_dir,
-        )
-    raw_path, function_name = raw.rsplit(":", 1)
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = base_dir / path
-    return LocalToolHandler(path=path.resolve(), function_name=function_name)
+def _reject_local_handler(raw: Mapping[str, Any], *, artifact_path: Path) -> None:
+    if "handler" not in raw:
+        return
+    raise ProofAgentError(
+        "PA_TOOL_001",
+        "local Python tool handlers are not supported.",
+        "Bind a Dashboard-managed read-only Tool Source instead.",
+        artifact_path=artifact_path,
+    )
 
 
 def _load_tool_callable(config: ToolConfig) -> ToolCallable:
     if config.built_in_handler is not None:
         return config.built_in_handler
-    if config.handler is None:
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            f"tool has no local handler: {config.name}",
-            "Add handler: ./module.py:function_name or tool_source_id to tools.yaml.",
-        )
-    return _load_callable_from_file(config.handler.path, config.handler.function_name)
+    raise ProofAgentError(
+        "PA_TOOL_001",
+        f"tool has no managed Tool Source: {config.name}",
+        "Bind a Dashboard-managed read-only Tool Source to the Tool Contract.",
+    )
 
 
 def _optional_tool_source_id(raw: Mapping[str, Any]) -> str | None:
@@ -402,6 +376,18 @@ def _validate_tool_contract(config: ToolConfig) -> None:
             "MCP tools require summary_fields.",
             "Declare the planner-visible result projection in the Tool Contract.",
         )
+    if not config.read_only:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "only read-only MCP tools are supported in the initial release.",
+            "Set read_only: true or defer the tool until sandboxed actions are available.",
+        )
+    if config.requires_approval:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "read-only MCP tools must not require workflow approval.",
+            "Set requires_approval: false and control access through configured permissions.",
+        )
     if config.read_only:
         if config.result_authority is None:
             raise ProofAgentError(
@@ -410,24 +396,6 @@ def _validate_tool_contract(config: ToolConfig) -> None:
                 "Declare whether the read result is authoritative or advisory.",
             )
         return
-    if not config.requires_approval:
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            "MCP action tools require approval.",
-            "Set requires_approval: true for state-changing MCP tools.",
-        )
-    if "idempotency_key" not in config.allowed_parameters:
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            "MCP action tools require idempotency_key in allowed_parameters.",
-            "Add idempotency_key to the Tool Contract parameter schema and allowlist.",
-        )
-    if not config.side_effect_class:
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            "MCP action tools require side_effect_class.",
-            "Declare the action side effect class for audit and retry governance.",
-        )
 
 
 def _validate_mcp_result_schema(
@@ -435,9 +403,7 @@ def _validate_mcp_result_schema(
     result: Mapping[str, Any],
 ) -> None:
     missing = [
-        field
-        for field in _required_schema_fields(config.result_schema)
-        if field not in result
+        field for field in _required_schema_fields(config.result_schema) if field not in result
     ]
     if missing:
         raise ProofAgentError(
@@ -539,7 +505,7 @@ def _built_in_handler_from_tool_source(
         raise ProofAgentError(
             "PA_TOOL_001",
             f"tool_source_id requires a configuration store: {tool_source_id}",
-            "Run with a LocalAgentConfigurationStore or use a local handler.",
+            "Run with a LocalAgentConfigurationStore containing the Tool Source.",
         )
     source = configuration_store.get_tool_source(tool_source_id)
     if source is None:
@@ -590,37 +556,3 @@ def _prepare_parameters_for_execution(
         "sanitization_applied": context.sanitization_applied,
         "sanitization_categories": context.sanitization_categories,
     }
-
-
-def _load_callable_from_file(path: Path, function_name: str) -> ToolCallable:
-    if not path.exists():
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            f"tool handler file does not exist: {path}",
-            "Create the handler file or update tools.yaml.",
-            artifact_path=path,
-        )
-    module_name = f"_proof_agent_tool_handler_{uuid5(NAMESPACE_URL, str(path)).hex}"
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            f"tool handler file cannot be loaded: {path}",
-            "Use a Python file that exports the configured tool function.",
-            artifact_path=path,
-        )
-    module = importlib.util.module_from_spec(spec)
-    _exec_module(spec.loader, module)
-    handler = getattr(module, function_name, None)
-    if not callable(handler):
-        raise ProofAgentError(
-            "PA_TOOL_001",
-            f"tool handler function not found: {function_name}",
-            "Export the configured tool function or update tools.yaml.",
-            artifact_path=path,
-        )
-    return cast(ToolCallable, handler)
-
-
-def _exec_module(loader: Any, module: ModuleType) -> None:
-    loader.exec_module(module)

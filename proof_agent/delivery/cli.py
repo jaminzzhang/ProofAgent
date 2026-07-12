@@ -83,7 +83,6 @@ VERIFY_REMOTE_STOP_MARKERS = (
     "node",
     "npm",
     "vite",
-    "cloudflared",
 )
 _STRICT_RFC3339 = re.compile(
     r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
@@ -271,36 +270,22 @@ def verify_remote(
         "--no-worker",
         help="Start only the API server for targeted backend debugging.",
     ),
-    local_only: bool = typer.Option(
-        False,
-        "--local-only",
-        help="Skip the public cloudflared tunnel and expose only the local gateway.",
-    ),
     cleanup: bool = typer.Option(
         True,
         "--cleanup/--no-cleanup",
-        help="Stop Python/Node/Vite/cloudflared processes on verification ports before starting.",
+        help="Stop Proof Agent development processes on verification ports before starting.",
     ),
 ) -> None:
-    """Start a restartable local and public remote verification session."""
+    """Start a restartable local verification session."""
 
     npm_path = which("npm")
     if npm_path is None:
         typer.echo("npm not found. Install Node.js/npm before starting frontends.", err=True)
         raise typer.Exit(code=1)
 
-    cloudflared_path = None if local_only else which("cloudflared")
-    if not local_only and cloudflared_path is None:
-        typer.echo(
-            "cloudflared not found. Install cloudflared or pass --local-only.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
     if cleanup:
         messages = _stop_verify_remote_processes(
             ports=(backend_port, dashboard_port, chat_port, gateway_port),
-            gateway_port=gateway_port,
         )
         for message in messages:
             typer.echo(message)
@@ -313,7 +298,6 @@ def verify_remote(
         _build_verify_remote_frontends(npm_path=npm_path)
         specs = _verify_remote_process_specs(
             npm_path=npm_path,
-            cloudflared_path=cloudflared_path,
             backend_port=backend_port,
             dashboard_port=dashboard_port,
             chat_port=chat_port,
@@ -329,8 +313,6 @@ def verify_remote(
         typer.echo(f"Local gateway: http://127.0.0.1:{gateway_port}")
         typer.echo(f"Dashboard: http://127.0.0.1:{gateway_port}/")
         typer.echo(f"Operator chat: http://127.0.0.1:{gateway_port}/operator")
-        if cloudflared_path is not None:
-            typer.echo("Public tunnel: waiting for cloudflared to print the quick tunnel URL")
         _run_dev_processes(specs)
     finally:
         _restore_optional_env("VITE_CHAT_URL", previous_chat_url)
@@ -910,7 +892,6 @@ def _dev_process_specs(
 def _verify_remote_process_specs(
     *,
     npm_path: str,
-    cloudflared_path: str | None,
     backend_port: int,
     dashboard_port: int,
     chat_port: int,
@@ -986,18 +967,6 @@ def _verify_remote_process_specs(
             ),
         ]
     )
-    if cloudflared_path is not None:
-        specs.append(
-            (
-                "cloudflared",
-                [
-                    cloudflared_path,
-                    "tunnel",
-                    "--url",
-                    f"http://127.0.0.1:{gateway_port}",
-                ],
-            )
-        )
     return specs
 
 
@@ -1030,13 +999,10 @@ def _build_verify_remote_frontends(*, npm_path: str) -> None:
             raise typer.Exit(code=exc.returncode) from exc
 
 
-def _stop_verify_remote_processes(*, ports: Iterable[int], gateway_port: int) -> list[str]:
+def _stop_verify_remote_processes(*, ports: Iterable[int]) -> list[str]:
     messages: list[str] = []
     seen_pids: set[int] = set()
-    candidates = [
-        *_find_verify_remote_port_listeners(ports),
-        *_find_verify_remote_cloudflared_processes(gateway_port),
-    ]
+    candidates = _find_verify_remote_port_listeners(ports)
     for pid, label, command in candidates:
         if pid in seen_pids:
             continue
@@ -1075,37 +1041,6 @@ def _find_verify_remote_port_listeners(ports: Iterable[int]) -> list[tuple[int, 
         for pid in sorted(pids):
             listeners.append((pid, f"port {port}", _process_command(pid)))
     return listeners
-
-
-def _find_verify_remote_cloudflared_processes(gateway_port: int) -> list[tuple[int, str, str]]:
-    try:
-        result = subprocess.run(
-            ["ps", "-axo", "pid=,command="],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return []
-    if result.returncode != 0:
-        return []
-
-    gateway_target = f":{gateway_port}"
-    processes: list[tuple[int, str, str]] = []
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        pid_text, separator, command = stripped.partition(" ")
-        if not separator or not pid_text.isdigit():
-            continue
-        lowered = command.lower()
-        if (
-            "cloudflared" in lowered
-            and "tunnel" in lowered
-            and "--url" in lowered
-            and gateway_target in lowered
-        ):
-            processes.append((int(pid_text), "cloudflared tunnel", command))
-    return processes
 
 
 def _process_command(pid: int) -> str:

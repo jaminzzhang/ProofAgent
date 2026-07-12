@@ -131,7 +131,9 @@ def test_configuration_store_resolver_maps_published_local_index_snapshot(
         created_by="operator",
     )
     store._write_knowledge_source_snapshot(snapshot)
-    store._write_knowledge_source(source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id}))
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id})
+    )
     manifest = load_agent_manifest(
         _write_agent_manifest(
             tmp_path,
@@ -148,11 +150,7 @@ def test_configuration_store_resolver_maps_published_local_index_snapshot(
     assert binding.source_version_id == snapshot.snapshot_id
     assert binding.provider == "local_index"
     assert binding.provider_params["snapshot_path"] == (
-        store.root_dir
-        / "knowledge_sources"
-        / "ks_local"
-        / "snapshots"
-        / snapshot.snapshot_id
+        store.root_dir / "knowledge_sources" / "ks_local" / "snapshots" / snapshot.snapshot_id
     )
     assert binding.provider_params["artifact_root"] == store.root_dir
     assert binding.provider_params["routing_model"] == {
@@ -317,8 +315,9 @@ package_knowledge_sources:
 name: resolver_test
 purpose: "Resolve Knowledge bindings."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 {package_sources_yaml}
 knowledge_bindings:
   - binding_id: kb_local
@@ -331,6 +330,11 @@ knowledge_bindings:
     top_k: 2
 retrieval:
   strategy: single_step
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
 model:
   provider: deterministic
   name: demo

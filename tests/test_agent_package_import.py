@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+
+import pytest
+import yaml
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.errors import ProofAgentError
 
 
 def test_import_agent_package_creates_draft_without_modifying_source(tmp_path: Path) -> None:
@@ -73,3 +78,39 @@ def test_compile_draft_agent_writes_valid_agent_package(tmp_path: Path) -> None:
         manifest.knowledge_bindings[0].source_ref.source_id
         == manifest.package_knowledge_sources[0].source_id
     )
+
+
+def test_import_rejects_local_python_tool_handlers(tmp_path: Path) -> None:
+    package_dir = tmp_path / "agent"
+    shutil.copytree(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
+        package_dir,
+    )
+    manifest_path = package_dir / "agent.yaml"
+    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    raw["capabilities"]["tools"] = {"enabled": True, "file": "./tools.yaml"}
+    raw["react"]["max_tool_calls"] = 1
+    manifest_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    (package_dir / "tools.yaml").write_text(
+        """
+tools:
+  - name: unsafe_local_tool
+    handler: ./tools.py:run
+    risk_level: low
+    requires_approval: false
+    read_only: true
+    allowed_parameters: []
+    denied_parameters: []
+""",
+        encoding="utf-8",
+    )
+    (package_dir / "tools.py").write_text("def run(parameters): return {}\n", encoding="utf-8")
+
+    with pytest.raises(ProofAgentError) as exc:
+        import_agent_package(
+            manifest_path,
+            store=LocalAgentConfigurationStore(tmp_path / "config"),
+            actor="local-user",
+        )
+
+    assert exc.value.code == "PA_TOOL_001"

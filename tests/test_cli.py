@@ -210,7 +210,7 @@ def test_dev_command_can_enable_api_reload(
     assert captured_specs[0][1][-1] == "--reload"
 
 
-def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
+def test_verify_remote_starts_backend_frontends_and_local_gateway(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -220,13 +220,10 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
     build_env = {}
 
     def fake_which(name: str) -> str | None:
-        return {
-            "npm": "/usr/bin/npm",
-            "cloudflared": "/usr/local/bin/cloudflared",
-        }.get(name)
+        return "/usr/bin/npm" if name == "npm" else None
 
-    def fake_stop_verify_remote_processes(*, ports, gateway_port):
-        cleanup_calls.append((tuple(ports), gateway_port))
+    def fake_stop_verify_remote_processes(*, ports):
+        cleanup_calls.append(tuple(ports))
         return ["stopped port 5173 pid 123: node vite"]
 
     def fake_run_dev_processes(specs):
@@ -275,7 +272,7 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
     assert "Starting Proof Agent remote verification session" in result.output
     assert "Local gateway: http://127.0.0.1:19080" in result.output
     assert "stopped port 5173 pid 123: node vite" in result.output
-    assert cleanup_calls == [((9000, 9173, 9174, 19080), 19080)]
+    assert cleanup_calls == [(9000, 9173, 9174, 19080)]
     assert build_env == {
         "npm_path": "/usr/bin/npm",
         "VITE_CHAT_URL": "",
@@ -290,7 +287,6 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
         "dashboard",
         "chat",
         "verify-gateway",
-        "cloudflared",
     ]
     assert captured_specs[0][1][-8:] == [
         "--host",
@@ -336,68 +332,6 @@ def test_verify_remote_starts_backend_frontends_gateway_and_tunnel(
         "http://127.0.0.1:9173"
     )
     assert gateway_command[gateway_command.index("--chat-origin") + 1] == ("http://127.0.0.1:9174")
-    assert captured_specs[5][1] == [
-        "/usr/local/bin/cloudflared",
-        "tunnel",
-        "--url",
-        "http://127.0.0.1:19080",
-    ]
-
-
-def test_verify_remote_local_only_skips_cloudflared_requirement(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured_specs = []
-
-    def fake_which(name: str) -> str | None:
-        return "/usr/bin/npm" if name == "npm" else None
-
-    def fake_run_dev_processes(specs):
-        captured_specs.extend(specs)
-
-    monkeypatch.setattr("proof_agent.delivery.cli.which", fake_which)
-    monkeypatch.setattr("proof_agent.delivery.cli._stop_verify_remote_processes", lambda **_: [])
-    monkeypatch.setattr("proof_agent.delivery.cli._run_dev_processes", fake_run_dev_processes)
-    monkeypatch.setattr(
-        "proof_agent.delivery.cli._build_verify_remote_frontends",
-        lambda **_: None,
-    )
-
-    result = runner.invoke(app, ["verify-remote", "--local-only", "--no-worker"])
-
-    assert result.exit_code == 0
-    assert [name for name, _command in captured_specs] == [
-        "api",
-        "dashboard",
-        "chat",
-        "verify-gateway",
-    ]
-
-
-def test_verify_remote_requires_cloudflared_by_default_before_cleanup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cleanup_called = False
-
-    def fake_which(name: str) -> str | None:
-        return "/usr/bin/npm" if name == "npm" else None
-
-    def fake_stop_verify_remote_processes(**_):
-        nonlocal cleanup_called
-        cleanup_called = True
-        return []
-
-    monkeypatch.setattr("proof_agent.delivery.cli.which", fake_which)
-    monkeypatch.setattr(
-        "proof_agent.delivery.cli._stop_verify_remote_processes",
-        fake_stop_verify_remote_processes,
-    )
-
-    result = runner.invoke(app, ["verify-remote"])
-
-    assert result.exit_code == 1
-    assert "cloudflared not found" in result.output
-    assert cleanup_called is False
 
 
 def test_verify_remote_stop_filter_is_limited_to_development_processes() -> None:
@@ -405,7 +339,9 @@ def test_verify_remote_stop_filter_is_limited_to_development_processes() -> None
         "python -m proof_agent.delivery.cli server --port 8000"
     )
     assert _verify_remote_process_is_safe_to_stop("node ./node_modules/vite/bin/vite.js")
-    assert _verify_remote_process_is_safe_to_stop("cloudflared tunnel --url http://127.0.0.1:18080")
+    assert not _verify_remote_process_is_safe_to_stop(
+        "cloudflared tunnel --url http://127.0.0.1:18080"
+    )
     assert not _verify_remote_process_is_safe_to_stop("postgres -D /usr/local/var/postgres")
 
 

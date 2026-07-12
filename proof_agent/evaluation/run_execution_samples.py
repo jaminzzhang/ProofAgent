@@ -40,7 +40,10 @@ class RunExecutionApiEvaluationSampleRunner:
                 store=store,
                 runs_dir=cast(Path, self._app.state.runs_dir),
                 configuration_store=self._app.state.agent_configuration_store,
-                approval_resume_registry=self._app.state.approval_resume_registry,
+                controlled_react_snapshot_store=(self._app.state.controlled_react_snapshot_store),
+                controlled_react_observation_truth_store=(
+                    self._app.state.controlled_react_observation_truth_store
+                ),
             ),
             published_agent=published_agent,
             question=request.question,

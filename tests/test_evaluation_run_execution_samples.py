@@ -20,7 +20,7 @@ def test_campaign_uses_run_execution_api_adapter_for_evaluation_samples(
 ) -> None:
     app = _app_with_published_agent(
         tmp_path,
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
     )
     campaign_path = _write_campaign_fixture(tmp_path)
 
@@ -38,7 +38,7 @@ def test_campaign_uses_run_execution_api_adapter_for_evaluation_samples(
     detail = app.state.store.get_run_detail(run_id)
 
     assert detail.run_purpose == RunPurpose.EVALUATION_SAMPLE
-    assert detail.agent_id == "enterprise_qa"
+    assert detail.agent_id == "react_enterprise_qa_v3"
     assert detail.question == "What is the reimbursement rule for travel meals?"
     assert subject_manifest["subjects"][0]["execution_surface"] == "run_execution_api"
     assert subject_manifest["subjects"][0]["projections"]["evaluated_response"]["ref"].endswith(
@@ -54,7 +54,7 @@ def test_run_execution_sample_runner_rejects_target_version_mismatch(
 ) -> None:
     app = _app_with_published_agent(
         tmp_path,
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
     )
     runner = RunExecutionApiEvaluationSampleRunner(app)
 
@@ -66,7 +66,7 @@ def test_run_execution_sample_runner_rejects_target_version_mismatch(
             EvaluationSampleRequest(
                 case_ref=EvaluationCaseRef(case_id="supported"),
                 question="What is the reimbursement rule for travel meals?",
-                target_agent_id="enterprise_qa",
+                target_agent_id="react_enterprise_qa_v3",
                 target_agent_version_id="wrong_version",
             )
         )
@@ -116,7 +116,7 @@ cases:
 campaign_id: run_execution_adapter_probe
 version: "2026-06-22"
 target:
-  agent_id: enterprise_qa
+  agent_id: react_enterprise_qa_v3
 suites:
   formal:
     - source: core_regression

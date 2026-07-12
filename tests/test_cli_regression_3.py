@@ -65,7 +65,7 @@ def test_verify_remote_builds_before_supervising_preview_servers(
 
     result = runner.invoke(
         app,
-        ["verify-remote", "--local-only", "--no-worker", "--no-cleanup"],
+        ["verify-remote", "--no-worker", "--no-cleanup"],
     )
 
     assert result.exit_code == 0, result.exception
@@ -153,7 +153,7 @@ def test_verify_remote_build_failure_never_starts_supervisor_and_restores_env(
 
     result = runner.invoke(
         app,
-        ["verify-remote", "--local-only", "--no-worker", "--no-cleanup"],
+        ["verify-remote", "--no-worker", "--no-cleanup"],
     )
 
     assert result.exit_code == 7
