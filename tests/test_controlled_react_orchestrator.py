@@ -742,6 +742,9 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
     action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
         update={"target_tool_name": "customer_lookup"}
     )
+    authorization = InstitutionAuthorizationContext(
+        institutions=("branch-1",), roles=("reviewer",)
+    )
     snapshot = ControlledReActRunStateSnapshot(
         snapshot_id="snap_run_004",
         run_id="run_004",
@@ -750,10 +753,11 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
             template_name="react_enterprise_qa_v3",
             template_descriptor_version="react_enterprise_qa.v3",
             question="Look up this customer's claim status.",
+            institution_authorization=authorization,
             action_history=(action,),
         ),
     )
-    orchestrator = ControlledReActOrchestrator(
+    orchestrator = _CapturingResumeStartOrchestrator(
         ports=ControlledReActPorts(
             planner=_ToolObservationThenAnswerPlanner(),
             snapshot_store=_ResumeSnapshotStore(snapshot),
@@ -768,6 +772,7 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
             approval_id="appr_act_tool",
             approved=True,
             actor="ops",
+            institution_authorization=authorization,
         )
     )
 
@@ -784,6 +789,7 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
         "model_answer",
         "response",
     ]
+    assert orchestrator.resume_start_requests[0].institution_authorization == authorization
 
 
 def test_resume_rejects_validly_signed_snapshot_when_authorization_context_differs(
@@ -1017,6 +1023,9 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
     action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
         update={"target_tool_name": "customer_lookup"}
     )
+    authorization = InstitutionAuthorizationContext(
+        institutions=("branch-1",), roles=("reviewer",)
+    )
     snapshot = ControlledReActRunStateSnapshot(
         snapshot_id="snap_run_005",
         run_id="run_005",
@@ -1025,10 +1034,11 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
             template_name="react_enterprise_qa_v3",
             template_descriptor_version="react_enterprise_qa.v3",
             question="Look up this customer's claim status.",
+            institution_authorization=authorization,
             action_history=(action,),
         ),
     )
-    orchestrator = ControlledReActOrchestrator(
+    orchestrator = _CapturingResumeStartOrchestrator(
         ports=ControlledReActPorts(
             planner=_ToolObservationThenAnswerPlanner(),
             snapshot_store=_ResumeSnapshotStore(snapshot),
@@ -1043,6 +1053,7 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
             approval_id="appr_act_tool",
             approved=False,
             actor="ops",
+            institution_authorization=authorization,
         )
     )
 
@@ -1060,6 +1071,7 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
     ]
     tool_stage = next(stage for stage in result.stage_results if stage.stage_id == "tool")
     assert tool_stage.summary["approval_state"] == "denied"
+    assert orchestrator.resume_start_requests[0].institution_authorization == authorization
 
 
 def test_resume_denied_tool_snapshot_can_replan_to_alternate_retrieval_answer() -> None:
@@ -1806,6 +1818,28 @@ class _ResumeSnapshotStore:
     def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
         assert snapshot_ref == "snapshot://run_004/snap_001"
         return self._snapshot
+
+
+class _CapturingResumeStartOrchestrator(ControlledReActOrchestrator):
+    def __init__(self, *, ports: ControlledReActPorts) -> None:
+        super().__init__(ports=ports)
+        self.resume_start_requests: list[ControlledReActStartRequest] = []
+
+    def _run_loop(
+        self,
+        request: ControlledReActStartRequest,
+        *,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        max_plan_rounds: int,
+    ) -> WorkflowTemplateExecutionResult:
+        self.resume_start_requests.append(request)
+        return super()._run_loop(
+            request,
+            state=state,
+            action=action,
+            max_plan_rounds=max_plan_rounds,
+        )
 
 
 class _ToolObservation:

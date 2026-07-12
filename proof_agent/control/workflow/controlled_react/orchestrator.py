@@ -464,6 +464,7 @@ class ControlledReActOrchestrator:
                 template_name=planning_state.template_name,
                 template_descriptor_version=planning_state.template_descriptor_version,
                 question=planning_state.question,
+                institution_authorization=planning_state.institution_authorization,
                 max_plan_rounds=request.max_plan_rounds,
             ),
             state=planning_state,
