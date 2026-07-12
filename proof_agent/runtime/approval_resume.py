@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver, PersistentDict
+from pydantic import ValidationError
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
@@ -116,8 +117,10 @@ class FileControlledReActSnapshotStore:
     def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
         path = self._snapshot_path(snapshot.run_id, snapshot.snapshot_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        payload = _model_payload(snapshot)
+        payload["integrity_sha256"] = _controlled_react_snapshot_sha256(payload)
         path.write_text(
-            json.dumps(_model_payload(snapshot), indent=2, sort_keys=True),
+            json.dumps(payload, indent=2, sort_keys=True),
             encoding="utf-8",
         )
         return f"{CONTROLLED_REACT_SNAPSHOT_REF_PREFIX}{snapshot.run_id}/{snapshot.snapshot_id}"
@@ -132,9 +135,39 @@ class FileControlledReActSnapshotStore:
                 "Restart the run so approval resume can persist a fresh snapshot.",
                 artifact_path=path,
             )
-        return ControlledReActRunStateSnapshot.model_validate(
-            json.loads(path.read_text(encoding="utf-8"))
-        )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("snapshot payload must be an object")
+            integrity_sha256 = payload.get("integrity_sha256")
+            if integrity_sha256 is not None:
+                if integrity_sha256 != _controlled_react_snapshot_sha256(payload):
+                    raise ProofAgentError(
+                        "PA_RUNTIME_001",
+                        "controlled ReAct snapshot failed integrity validation",
+                        "Discard the stale approval checkpoint and restart the run.",
+                        artifact_path=path,
+                    )
+            snapshot = ControlledReActRunStateSnapshot.model_validate(payload)
+        except ProofAgentError:
+            raise
+        except (OSError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct snapshot failed integrity validation",
+                "Discard the stale approval checkpoint and restart the run.",
+                artifact_path=path,
+            ) from exc
+        if snapshot.integrity_sha256 is None and (
+            snapshot.state.institution_authorization != InstitutionAuthorizationContext()
+        ):
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "unsigned controlled ReAct snapshot contains non-public authorization",
+                "Discard the stale approval checkpoint and restart the run.",
+                artifact_path=path,
+            )
+        return snapshot
 
     def _snapshot_path(self, run_id: str, snapshot_id: str) -> Path:
         return self._root_dir / run_id / "controlled_react" / f"{snapshot_id}.json"
@@ -524,6 +557,15 @@ def _payload_sha256(value: Any) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _controlled_react_snapshot_sha256(value: Any) -> str:
+    payload = _model_payload(value)
+    if not isinstance(payload, dict):
+        raise ValueError("controlled ReAct snapshot payload must be an object")
+    unsigned_payload = dict(payload)
+    unsigned_payload.pop("integrity_sha256", None)
+    return _payload_sha256(unsigned_payload)
 
 
 def _parse_controlled_react_snapshot_ref(snapshot_ref: str) -> tuple[str, str]:

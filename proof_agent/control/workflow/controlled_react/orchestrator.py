@@ -55,6 +55,7 @@ from proof_agent.control.workflow.react_enterprise_qa import (
     emit_intent_resolution,
     should_block_duplicate_observation_action,
 )
+from proof_agent.errors import ProofAgentError
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,9 @@ class ControlledReActResumeRequest:
     approved: bool
     actor: str
     max_plan_rounds: int = 4
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
 
 
 class ControlledReActOrchestrator:
@@ -404,6 +408,12 @@ class ControlledReActOrchestrator:
             raise ValueError("snapshot store port is required for approval resume")
         snapshot = self._ports.snapshot_store.load(request.snapshot_ref)
         state = snapshot.state
+        if state.institution_authorization != request.institution_authorization:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct resume institution authorization does not match snapshot",
+                "Discard the stale approval checkpoint and restart the run.",
+            )
         if not state.action_history:
             raise ValueError("approval resume snapshot is missing pending action")
         action = state.action_history[-1]
@@ -419,6 +429,7 @@ class ControlledReActOrchestrator:
                     template_name=planning_state.template_name,
                     template_descriptor_version=planning_state.template_descriptor_version,
                     question=planning_state.question,
+                    institution_authorization=planning_state.institution_authorization,
                     max_plan_rounds=request.max_plan_rounds,
                 ),
                 state=planning_state,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from proof_agent.contracts import (
@@ -12,6 +14,7 @@ from proof_agent.contracts import (
     EffectiveToolProposalScope,
     EvidenceChunk,
     EvidenceStatus,
+    InstitutionAuthorizationContext,
     EnforcementPoint,
     ObservationRecord,
     PolicyDecision,
@@ -47,6 +50,7 @@ from proof_agent.control.workflow.controlled_react.composition import (
     _tool_summary_projection,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.runtime.approval_resume import FileControlledReActSnapshotStore
 
 
 def test_start_returns_workflow_template_execution_result_for_terminal_answer() -> None:
@@ -780,6 +784,53 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
         "model_answer",
         "response",
     ]
+
+
+def test_resume_rejects_validly_signed_snapshot_when_authorization_context_differs(
+    tmp_path: Path,
+) -> None:
+    action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    original_authorization = InstitutionAuthorizationContext(roles=("reviewer",))
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_scope_mismatch",
+        run_id="run_scope_mismatch",
+        state=ControlledReActRunState(
+            run_id="run_scope_mismatch",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up this customer's claim status.",
+            institution_authorization=original_authorization,
+            action_history=(action,),
+        ),
+    )
+    snapshot_store = FileControlledReActSnapshotStore(tmp_path)
+    snapshot_ref = snapshot_store.save(snapshot)
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolObservationThenAnswerPlanner(),
+            snapshot_store=snapshot_store,
+            tool_observation=_ToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        orchestrator.resume(
+            ControlledReActResumeRequest(
+                snapshot_ref=snapshot_ref,
+                approval_id="appr_act_tool",
+                approved=True,
+                actor="ops",
+                institution_authorization=InstitutionAuthorizationContext(
+                    roles=("administrator",)
+                ),
+            )
+        )
+
+    assert exc.value.code == "PA_RUNTIME_001"
+    assert "does not match snapshot" in exc.value.message
 
 
 def test_resume_fails_closed_when_approved_tool_snapshot_integrity_mismatches() -> None:

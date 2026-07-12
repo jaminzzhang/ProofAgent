@@ -176,11 +176,97 @@ def test_controlled_react_resume_registry_persists_context_and_snapshot(
     loaded_context = LangGraphApprovalResumeRegistry(tmp_path).get_controlled_react(
         "run_controlled"
     )
-    assert loaded_snapshot == snapshot
+    assert loaded_snapshot.model_copy(update={"integrity_sha256": None}) == snapshot
+    assert loaded_snapshot.integrity_sha256 is not None
+    assert len(loaded_snapshot.integrity_sha256) == 64
     assert loaded_context is not None
     assert loaded_context.manifest.workflow.template == "react_enterprise_qa_v3"
     assert loaded_context.institution_authorization == authorization
     assert loaded_snapshot.state.institution_authorization == authorization
+
+
+@pytest.mark.parametrize("tamper", ["authorization", "question", "digest"])
+def test_controlled_react_snapshot_rejects_tampering(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    registry = LangGraphApprovalResumeRegistry(tmp_path)
+    authorization = InstitutionAuthorizationContext(roles=("reviewer",))
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_tamper",
+        run_id="run_tamper",
+        state=ControlledReActRunState(
+            run_id="run_tamper",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Original question",
+            institution_authorization=authorization,
+        ),
+    )
+    store = registry.controlled_react_snapshot_store()
+    snapshot_ref = store.save(snapshot)
+    path = tmp_path / "run_tamper" / "controlled_react" / "snap_tamper.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if tamper == "authorization":
+        payload["state"]["institution_authorization"]["roles"] = ["administrator"]
+    elif tamper == "question":
+        payload["state"]["question"] = "Tampered question"
+    else:
+        payload["integrity_sha256"] = "0" * 64
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.load(snapshot_ref)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+    assert "failed integrity validation" in exc.value.message
+
+
+def test_controlled_react_legacy_unsigned_snapshot_allows_only_public_authorization(
+    tmp_path: Path,
+) -> None:
+    registry = LangGraphApprovalResumeRegistry(tmp_path)
+    store = registry.controlled_react_snapshot_store()
+    public_snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_public",
+        run_id="run_public",
+        state=ControlledReActRunState(
+            run_id="run_public",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Public question",
+        ),
+    )
+    scoped_snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_scoped",
+        run_id="run_scoped",
+        state=ControlledReActRunState(
+            run_id="run_scoped",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Scoped question",
+            institution_authorization=InstitutionAuthorizationContext(roles=("reviewer",)),
+        ),
+    )
+    for snapshot in (public_snapshot, scoped_snapshot):
+        store.save(snapshot)
+        path = (
+            tmp_path
+            / snapshot.run_id
+            / "controlled_react"
+            / f"{snapshot.snapshot_id}.json"
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("integrity_sha256")
+        if snapshot.run_id == "run_public":
+            payload["state"].pop("institution_authorization")
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = store.load("controlled-react://run_public/snap_public")
+    assert loaded.state.institution_authorization == InstitutionAuthorizationContext()
+
+    with pytest.raises(ProofAgentError, match="unsigned controlled ReAct snapshot"):
+        store.load("controlled-react://run_scoped/snap_scoped")
 
 
 def test_controlled_react_resume_registry_rejects_tampered_authorization(
