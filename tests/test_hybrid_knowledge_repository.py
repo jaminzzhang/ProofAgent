@@ -6,6 +6,7 @@ import pytest
 
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridClock,
+    HybridKnowledgeJobKind,
     HybridKnowledgeJobRequest,
     HybridKnowledgeWorkScheduler,
     KnowledgeArtifactStore,
@@ -25,14 +26,16 @@ def job(
     *,
     idempotency_key: str | None = None,
     request_sha256: str = "a" * 64,
+    request_identity: str | None = None,
+    kind: HybridKnowledgeJobKind = "parse",
     ready_at: datetime | None = None,
 ) -> HybridKnowledgeJobRequest:
     return HybridKnowledgeJobRequest(
         job_id=job_id,
         idempotency_key=idempotency_key or f"idempotency_{job_id}",
-        request_identity=f"request_{job_id}",
+        request_identity=request_identity or f"request_{job_id}",
         request_sha256=request_sha256,
-        kind="parse",
+        kind=kind,
         ready_at=ready_at,
     )
 
@@ -172,6 +175,44 @@ def test_enqueue_is_idempotent_and_conflicts_fail_closed() -> None:
         repo.enqueue(job("job_1", idempotency_key="different"))
 
 
+def test_request_identity_rejects_cross_job_digest_and_kind_conflicts() -> None:
+    repo = InMemoryHybridKnowledgeRepository()
+    repo.enqueue(job("job_1", idempotency_key="key_1", request_identity="immutable_request"))
+
+    with pytest.raises(HybridKnowledgeIdempotencyConflict):
+        repo.enqueue(
+            job(
+                "job_2",
+                idempotency_key="key_2",
+                request_identity="immutable_request",
+                request_sha256="b" * 64,
+            )
+        )
+    with pytest.raises(HybridKnowledgeIdempotencyConflict):
+        repo.enqueue(
+            job(
+                "job_3",
+                idempotency_key="key_3",
+                request_identity="immutable_request",
+                kind="embed",
+            )
+        )
+
+
+def test_request_identity_allows_same_digest_and_kind_with_distinct_keys() -> None:
+    repo = InMemoryHybridKnowledgeRepository()
+    first = repo.enqueue(
+        job("job_1", idempotency_key="key_1", request_identity="immutable_request")
+    )
+    second = repo.enqueue(
+        job("job_2", idempotency_key="key_2", request_identity="immutable_request")
+    )
+
+    assert first.request.job_id == "job_1"
+    assert second.request.job_id == "job_2"
+    assert len(repo.list()) == 2
+
+
 def test_job_contract_is_frozen_round_trips_and_rejects_coercion() -> None:
     request = job("job_1")
     assert HybridKnowledgeJobRequest.model_validate_json(request.model_dump_json()) == request
@@ -245,6 +286,71 @@ def test_artifact_store_rejects_symlink_escape(tmp_path: Path) -> None:
     with pytest.raises(ImmutableArtifactError):
         store.put_immutable(key="linked/escape.bin", content=b"x", media_type="text/plain")
     assert list(outside.iterdir()) == []
+
+
+def test_artifact_put_rejects_parent_swapped_to_symlink_during_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / "source").mkdir()
+    store = FileSystemKnowledgeArtifactStore(root)
+    swapped = False
+
+    def swap_parent(*, key: str, component: str, parent_fd: int) -> None:
+        nonlocal swapped
+        del key, parent_fd
+        if component == "source" and not swapped:
+            (root / "source").rename(root / "detached")
+            (root / "source").symlink_to(outside, target_is_directory=True)
+            swapped = True
+
+    monkeypatch.setattr(store, "_before_open_parent_component", swap_parent)
+
+    with pytest.raises(ImmutableArtifactError):
+        store.put_immutable(key="source/artifact.bin", content=b"inside", media_type="text/plain")
+    assert list(outside.iterdir()) == []
+
+
+def test_artifact_get_uses_verified_parent_fd_after_path_is_swapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    store = FileSystemKnowledgeArtifactStore(root)
+    ref = store.put_immutable(key="source/artifact.bin", content=b"inside", media_type="text/plain")
+    (outside / "artifact.bin").write_bytes(b"outside")
+    swapped = False
+
+    def swap_after_open(*, key: str, parent_fd: int) -> None:
+        nonlocal swapped
+        del parent_fd
+        if key == "source/artifact.bin" and not swapped:
+            (root / "source").rename(root / "detached")
+            (root / "source").symlink_to(outside, target_is_directory=True)
+            swapped = True
+
+    monkeypatch.setattr(store, "_after_open_parent", swap_after_open)
+
+    assert store.get_exact(ref) == b"inside"
+    assert (outside / "artifact.bin").read_bytes() == b"outside"
+
+
+def test_artifact_put_rejects_final_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    outside = tmp_path / "outside.bin"
+    root.mkdir()
+    outside.write_bytes(b"outside")
+    (root / "artifact.bin").symlink_to(outside)
+    store = FileSystemKnowledgeArtifactStore(root)
+
+    with pytest.raises(ImmutableArtifactError):
+        store.put_immutable(key="artifact.bin", content=b"inside", media_type="text/plain")
+    assert outside.read_bytes() == b"outside"
 
 
 def test_artifact_read_rejects_tamper_digest_length_and_version(tmp_path: Path) -> None:

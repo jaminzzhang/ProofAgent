@@ -7,6 +7,7 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 from threading import RLock
 from urllib.parse import unquote, urlsplit
 
@@ -68,12 +69,19 @@ class InMemoryHybridKnowledgeRepository:
         self._jobs: dict[str, HybridKnowledgeJob] = {}
         self._claims: dict[str, HybridKnowledgeJobClaim] = {}
         self._idempotency: dict[str, str] = {}
+        self._request_identities: dict[str, tuple[str, str]] = {}
         self._sequence: dict[str, int] = {}
         self._next_sequence = 0
         self._lock = RLock()
 
     def enqueue(self, request: HybridKnowledgeJobRequest) -> HybridKnowledgeJob:
         with self._lock:
+            request_binding = (request.request_sha256, request.kind)
+            existing_binding = self._request_identities.get(request.request_identity)
+            if existing_binding is not None and existing_binding != request_binding:
+                raise HybridKnowledgeIdempotencyConflict(
+                    "request identity is bound to a different digest or job kind"
+                )
             existing_id = self._idempotency.get(request.idempotency_key)
             if existing_id is not None:
                 existing = self._jobs[existing_id]
@@ -97,6 +105,7 @@ class InMemoryHybridKnowledgeRepository:
             self._sequence[request.job_id] = self._next_sequence
             self._jobs[request.job_id] = job
             self._idempotency[request.idempotency_key] = request.job_id
+            self._request_identities[request.request_identity] = request_binding
             return job
 
     def claim_next(self, *, worker_id: str, lease_seconds: int) -> HybridKnowledgeJobClaim | None:
@@ -246,6 +255,15 @@ class FileSystemKnowledgeArtifactStore:
     """Immutable exact artifact store confined to one injected filesystem root."""
 
     def __init__(self, root: Path) -> None:
+        required_dir_fd_operations = (os.open, os.mkdir, os.unlink)
+        if (
+            not hasattr(os, "O_DIRECTORY")
+            or not hasattr(os, "O_NOFOLLOW")
+            or any(operation not in os.supports_dir_fd for operation in required_dir_fd_operations)
+        ):
+            raise ImmutableArtifactError(
+                "filesystem store requires directory-relative no-follow operations"
+            )
         root.mkdir(parents=True, exist_ok=True)
         if root.is_symlink():
             raise ImmutableArtifactError("artifact root must not be a symlink")
@@ -255,49 +273,67 @@ class FileSystemKnowledgeArtifactStore:
     def put_immutable(self, *, key: str, content: bytes, media_type: str) -> ExactArtifactRef:
         if type(content) is not bytes:
             raise TypeError("content must be exact bytes")
+        safe_key = self._safe_key(key)
         digest = hashlib.sha256(content).hexdigest()
         version_id = f"sha256:{digest}"
+        artifact_path = self._root.joinpath(*safe_key.parts)
+        expected = ExactArtifactRef(
+            artifact_uri=artifact_path.as_uri(),
+            version_id=version_id,
+            sha256=digest,
+            size_bytes=len(content),
+            media_type=media_type,
+        )
         with self._lock:
-            path = self._path_for_key(key, create_parents=True)
-            expected = ExactArtifactRef(
-                artifact_uri=path.as_uri(),
-                version_id=version_id,
-                sha256=digest,
-                size_bytes=len(content),
-                media_type=media_type,
-            )
-            metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
-            if path.exists() or metadata_path.exists():
-                existing = self._read_existing(path, metadata_path)
-                if existing != expected or self.get_exact(existing) != content:
-                    raise ImmutableArtifactError("immutable artifact key already has other content")
-                return existing
-            self._atomic_create(path, content)
+            parent_fd, filename = self._open_parent(safe_key, create=True)
             try:
-                metadata = expected.model_dump_json().encode("utf-8")
-                self._atomic_create(metadata_path, metadata)
-            except Exception:
-                path.unlink(missing_ok=True)
-                raise
-            return expected
+                metadata_name = filename + _METADATA_SUFFIX
+                content_exists = self._entry_exists(parent_fd, filename)
+                metadata_exists = self._entry_exists(parent_fd, metadata_name)
+                if content_exists or metadata_exists:
+                    existing = self._read_existing(parent_fd, filename)
+                    existing_content = self._read_regular_file(parent_fd, filename)
+                    if existing != expected or existing_content != content:
+                        raise ImmutableArtifactError(
+                            "immutable artifact key already has other content"
+                        )
+                    return existing
+                self._atomic_create(parent_fd, filename, content)
+                try:
+                    metadata = expected.model_dump_json().encode("utf-8")
+                    self._atomic_create(parent_fd, metadata_name, metadata)
+                except Exception:
+                    self._unlink_if_present(parent_fd, filename)
+                    raise
+                return expected
+            finally:
+                os.close(parent_fd)
 
     def get_exact(self, ref: ExactArtifactRef) -> bytes:
-        path = self._path_from_ref(ref)
-        metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
+        safe_key = self._key_from_ref(ref)
         with self._lock:
-            stored = self._read_existing(path, metadata_path)
-            if stored != ref:
-                raise ImmutableArtifactError("artifact reference does not match stored identity")
-            content = self._read_regular_file(path)
-            if len(content) != ref.size_bytes or hashlib.sha256(content).hexdigest() != ref.sha256:
-                raise ImmutableArtifactError(
-                    "artifact bytes failed exact length or digest validation"
-                )
-            if ref.version_id != f"sha256:{ref.sha256}":
-                raise ImmutableArtifactError("artifact version does not match its digest")
-            return content
+            parent_fd, filename = self._open_parent(safe_key, create=False)
+            try:
+                stored = self._read_existing(parent_fd, filename)
+                if stored != ref:
+                    raise ImmutableArtifactError(
+                        "artifact reference does not match stored identity"
+                    )
+                content = self._read_regular_file(parent_fd, filename)
+                if (
+                    len(content) != ref.size_bytes
+                    or hashlib.sha256(content).hexdigest() != ref.sha256
+                ):
+                    raise ImmutableArtifactError(
+                        "artifact bytes failed exact length or digest validation"
+                    )
+                if ref.version_id != f"sha256:{ref.sha256}":
+                    raise ImmutableArtifactError("artifact version does not match its digest")
+                return content
+            finally:
+                os.close(parent_fd)
 
-    def _path_for_key(self, key: str, *, create_parents: bool) -> Path:
+    def _safe_key(self, key: str) -> PurePosixPath:
         if not key or "\\" in key or "//" in key or key.endswith(_METADATA_SUFFIX):
             raise ImmutableArtifactError("artifact key is invalid or reserved")
         pure = PurePosixPath(key)
@@ -306,64 +342,118 @@ class FileSystemKnowledgeArtifactStore:
             for segment in pure.parts
         ):
             raise ImmutableArtifactError("artifact key must use safe relative path segments")
-        current = self._root
-        for segment in pure.parts[:-1]:
-            current = current / segment
-            if current.exists() and (current.is_symlink() or not current.is_dir()):
-                raise ImmutableArtifactError("artifact key parent is not a safe directory")
-            if create_parents:
-                current.mkdir(exist_ok=True)
-        path = current / pure.name
-        self._require_contained(path)
-        if path.is_symlink():
-            raise ImmutableArtifactError("artifact path must not be a symlink")
-        return path
+        return pure
 
-    def _path_from_ref(self, ref: ExactArtifactRef) -> Path:
+    def _key_from_ref(self, ref: ExactArtifactRef) -> PurePosixPath:
         parsed = urlsplit(ref.artifact_uri)
         if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
             raise ImmutableArtifactError("filesystem store accepts only file artifact references")
         path = Path(unquote(parsed.path, errors="strict"))
-        self._require_contained(path)
-        relative = path.relative_to(self._root)
-        return self._path_for_key(relative.as_posix(), create_parents=False)
-
-    def _require_contained(self, path: Path) -> None:
         try:
-            path.resolve(strict=False).relative_to(self._root)
-        except (OSError, RuntimeError, ValueError) as exc:
+            relative = path.relative_to(self._root)
+        except ValueError as exc:
             raise ImmutableArtifactError("artifact path escapes configured root") from exc
+        return self._safe_key(relative.as_posix())
 
-    def _read_existing(self, path: Path, metadata_path: Path) -> ExactArtifactRef:
-        if not path.is_file() or not metadata_path.is_file():
+    def _open_parent(self, key: PurePosixPath, *, create: bool) -> tuple[int, str]:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            current_fd = os.open(self._root, flags)
+        except OSError as exc:
+            raise ImmutableArtifactError("artifact root is unavailable or unsafe") from exc
+        try:
+            for component in key.parts[:-1]:
+                if create:
+                    try:
+                        os.mkdir(component, mode=0o700, dir_fd=current_fd)
+                    except FileExistsError:
+                        pass
+                self._before_open_parent_component(
+                    key=key.as_posix(), component=component, parent_fd=current_fd
+                )
+                try:
+                    next_fd = os.open(component, flags, dir_fd=current_fd)
+                except OSError as exc:
+                    raise ImmutableArtifactError(
+                        "artifact parent is unavailable, non-directory, or a symlink"
+                    ) from exc
+                os.close(current_fd)
+                current_fd = next_fd
+            self._after_open_parent(key=key.as_posix(), parent_fd=current_fd)
+            return current_fd, key.name
+        except Exception:
+            os.close(current_fd)
+            raise
+
+    def _before_open_parent_component(self, *, key: str, component: str, parent_fd: int) -> None:
+        """Private deterministic race hook; production behavior is intentionally empty."""
+
+    def _after_open_parent(self, *, key: str, parent_fd: int) -> None:
+        """Private deterministic race hook; production behavior is intentionally empty."""
+
+    def _read_existing(self, parent_fd: int, filename: str) -> ExactArtifactRef:
+        if not self._entry_exists(parent_fd, filename) or not self._entry_exists(
+            parent_fd, filename + _METADATA_SUFFIX
+        ):
             raise ImmutableArtifactError("immutable artifact is incomplete")
         try:
-            return ExactArtifactRef.model_validate_json(self._read_regular_file(metadata_path))
+            return ExactArtifactRef.model_validate_json(
+                self._read_regular_file(parent_fd, filename + _METADATA_SUFFIX)
+            )
         except Exception as exc:
             raise ImmutableArtifactError("immutable artifact metadata is invalid") from exc
 
     @staticmethod
-    def _atomic_create(path: Path, content: bytes) -> None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(path, flags, 0o600)
+    def _entry_exists(parent_fd: int, filename: str) -> bool:
+        try:
+            descriptor = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise ImmutableArtifactError("artifact entry is unsafe") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ImmutableArtifactError("artifact entry must be a regular file")
+            return True
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _atomic_create(parent_fd: int, filename: str, content: bytes) -> None:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        descriptor = os.open(filename, flags, 0o600, dir_fd=parent_fd)
         try:
             with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
         except Exception:
-            path.unlink(missing_ok=True)
+            FileSystemKnowledgeArtifactStore._unlink_if_present(parent_fd, filename)
             raise
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
 
     @staticmethod
-    def _read_regular_file(path: Path) -> bytes:
-        if path.is_symlink() or not path.is_file():
-            raise ImmutableArtifactError("artifact must be a regular non-symlink file")
-        flags = os.O_RDONLY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb") as stream:
-            return stream.read()
+    def _read_regular_file(parent_fd: int, filename: str) -> bytes:
+        try:
+            descriptor = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        except OSError as exc:
+            raise ImmutableArtifactError("artifact entry is unavailable or unsafe") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ImmutableArtifactError("artifact entry must be a regular file")
+            with os.fdopen(descriptor, "rb") as stream:
+                descriptor = -1
+                return stream.read()
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    @staticmethod
+    def _unlink_if_present(parent_fd: int, filename: str) -> None:
+        try:
+            os.unlink(filename, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
