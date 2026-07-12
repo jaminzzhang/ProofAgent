@@ -239,17 +239,37 @@ class FileControlledReActSnapshotStore:
 class FileObservationTruthStore:
     """Disk-backed Observation Truth Store for Controlled ReAct resume."""
 
-    def __init__(self, root_dir: Path) -> None:
-        self._root_dir = root_dir
+    def __init__(
+        self,
+        root_dir: Path,
+        *,
+        signer: ApprovalResumeIntegritySigner | None = None,
+        integrity_key: bytes | None = None,
+    ) -> None:
+        if signer is not None and integrity_key is not None:
+            raise ValueError("provide either signer or integrity_key, not both")
+        self._root_dir = root_dir.resolve()
+        self._signer = signer or ApprovalResumeIntegritySigner(
+            integrity_key if integrity_key is not None else _PROCESS_INTEGRITY_KEY
+        )
 
     def save(self, truth: ObservationTruthArtifact) -> str:
         run_id, observation_id = _parse_observation_truth_ref(truth.truth_ref)
-        path = self._truth_path(run_id, observation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(_model_payload(truth), indent=2, sort_keys=True),
-            encoding="utf-8",
+        _validate_observation_truth_identity(
+            truth,
+            run_id=run_id,
+            observation_id=observation_id,
         )
+        path = self._truth_path(run_id, observation_id)
+        envelope = {
+            "integrity_version": _INTEGRITY_VERSION,
+            "payload": _model_payload(truth),
+        }
+        envelope["integrity_hmac_sha256"] = self._signer.sign(
+            envelope,
+            purpose="controlled-react-observation-truth",
+        )
+        _atomic_write_json(path, envelope)
         return truth.truth_ref
 
     def load(self, truth_ref: str) -> ObservationTruthArtifact:
@@ -262,27 +282,53 @@ class FileObservationTruthStore:
                 "Restart the run so approval resume can persist observation truth.",
                 artifact_path=path,
             )
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(envelope, dict) or not self._signer.verify(
+                envelope,
+                purpose="controlled-react-observation-truth",
+            ):
+                raise _resume_integrity_error(
+                    "controlled ReAct observation truth failed HMAC integrity validation",
+                    path=path,
+                )
+            payload = envelope.get("payload")
+            if not isinstance(payload, dict):
+                raise ValueError("observation truth payload must be an object")
+        except ProofAgentError:
+            raise
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise _resume_integrity_error(
+                "controlled ReAct observation truth failed HMAC integrity validation",
+                path=path,
+            ) from exc
         kind = payload.get("kind")
+        truth: ObservationTruthArtifact
         if kind == ObservationTruthKind.RETRIEVAL.value:
-            return RetrievalObservationTruth.model_validate(payload)
-        if kind == ObservationTruthKind.TOOL.value:
-            return ToolObservationTruth.model_validate(payload)
-        raise ProofAgentError(
-            "PA_RUNTIME_001",
-            f"unsupported controlled ReAct observation truth kind: {kind}",
-            "Discard the stale approval checkpoint and restart the run.",
-            artifact_path=path,
+            truth = RetrievalObservationTruth.model_validate(payload)
+        elif kind == ObservationTruthKind.TOOL.value:
+            truth = ToolObservationTruth.model_validate(payload)
+        else:
+            raise _resume_integrity_error(
+                "unsupported controlled ReAct observation truth kind",
+                path=path,
+            )
+        _validate_observation_truth_identity(
+            truth,
+            run_id=run_id,
+            observation_id=observation_id,
+            path=path,
         )
+        return truth
 
     def _truth_path(self, run_id: str, observation_id: str) -> Path:
-        return (
-            self._root_dir
-            / run_id
-            / "controlled_react"
-            / "observation_truth"
-            / f"{observation_id}.json"
-        )
+        _validate_opaque_id(run_id, label="run_id")
+        _validate_opaque_id(observation_id, label="observation_id")
+        truth_root = (self._root_dir / run_id / "controlled_react" / "observation_truth").resolve()
+        candidate = (truth_root / f"{observation_id}.json").resolve()
+        if not candidate.is_relative_to(truth_root):
+            raise _resume_integrity_error("observation truth path escaped storage root")
+        return candidate
 
 
 class ApprovalResumeClaim:
@@ -380,6 +426,14 @@ class LangGraphApprovalResumeRegistry:
                 "approval resume context requires Workflow Template Execution Input",
                 "Start the run through a Workflow Template Execution-aware runtime.",
             )
+        _validate_langgraph_resume_binding(
+            run_id=context.run_id,
+            question=context.question,
+            agent_id=context.agent_id,
+            agent_version_id=context.agent_version_id,
+            draft_id=context.draft_id,
+            execution_input=context.workflow_template_execution_input,
+        )
         if (
             context.workflow_template_execution_input.institution_authorization
             != context.institution_authorization
@@ -435,7 +489,7 @@ class LangGraphApprovalResumeRegistry:
         )
 
     def controlled_react_observation_truth_store(self) -> FileObservationTruthStore:
-        return FileObservationTruthStore(self._root_dir)
+        return FileObservationTruthStore(self._root_dir, signer=self._signer)
 
     def _write_metadata(self, context: LangGraphApprovalResumeContext) -> None:
         execution_input_payload = _model_payload(context.workflow_template_execution_input)
@@ -516,6 +570,15 @@ class LangGraphApprovalResumeRegistry:
         )
         execution_input = _load_execution_input(data, path=path)
         institution_authorization = _load_institution_authorization(data, path=path)
+        _validate_langgraph_resume_binding(
+            run_id=str(data["run_id"]),
+            question=str(data["question"]),
+            agent_id=data.get("agent_id"),
+            agent_version_id=data.get("agent_version_id"),
+            draft_id=data.get("draft_id"),
+            execution_input=execution_input,
+            path=path,
+        )
         if execution_input.institution_authorization != institution_authorization:
             raise ProofAgentError(
                 "PA_RUNTIME_001",
@@ -722,6 +785,61 @@ def _integrity_message(payload: Mapping[str, Any], *, purpose: str) -> bytes:
 def _validate_opaque_id(value: str, *, label: str) -> None:
     if not isinstance(value, str) or _OPAQUE_ID_PATTERN.fullmatch(value) is None:
         raise _resume_integrity_error(f"invalid approval resume {label}")
+
+
+def _validate_observation_truth_identity(
+    truth: ObservationTruthArtifact,
+    *,
+    run_id: str,
+    observation_id: str,
+    path: Path | None = None,
+) -> None:
+    truth_run_id, truth_observation_id = _parse_observation_truth_ref(truth.truth_ref)
+    _validate_opaque_id(truth.action_id, label="action_id")
+    _validate_opaque_id(truth.observation_id, label="observation_id")
+    if (
+        truth_run_id != run_id
+        or truth_observation_id != observation_id
+        or truth.observation_id != observation_id
+    ):
+        raise _resume_integrity_error("observation truth identity mismatch", path=path)
+    if isinstance(truth, ToolObservationTruth) and truth.approval_ref is not None:
+        _validate_opaque_id(truth.approval_ref, label="approval_id")
+        if truth.approval_ref != f"appr_{truth.action_id}":
+            raise _resume_integrity_error("observation truth approval identity mismatch", path=path)
+
+
+def _validate_langgraph_resume_binding(
+    *,
+    run_id: str,
+    question: str,
+    agent_id: str | None,
+    agent_version_id: str | None,
+    draft_id: str | None,
+    execution_input: WorkflowTemplateExecutionInput,
+    path: Path | None = None,
+) -> None:
+    mismatched = (
+        execution_input.run_id != run_id
+        or execution_input.question != question
+        or (
+            agent_id is not None
+            and execution_input.agent_id is not None
+            and execution_input.agent_id != agent_id
+        )
+        or (
+            agent_version_id is not None
+            and execution_input.agent_version_id is not None
+            and execution_input.agent_version_id != agent_version_id
+        )
+        or (
+            draft_id is not None
+            and execution_input.draft_id is not None
+            and execution_input.draft_id != draft_id
+        )
+    )
+    if mismatched:
+        raise _resume_integrity_error("LangGraph resume context binding mismatch", path=path)
 
 
 def _resume_integrity_error(message: str, *, path: Path | None = None) -> ProofAgentError:

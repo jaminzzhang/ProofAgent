@@ -18,6 +18,8 @@ from proof_agent.contracts import (
     ReActActionProposal,
     ReActActionType,
     ReasoningSummary,
+    RetrievalObservationTruth,
+    ToolObservationTruth,
     WorkflowStageAvailability,
     WorkflowStageAvailabilityReason,
     WorkflowStageAvailabilitySet,
@@ -347,6 +349,75 @@ def test_approval_resume_integrity_key_requires_32_bytes(tmp_path: Path) -> None
         LangGraphApprovalResumeRegistry(tmp_path, integrity_key=b"short")
 
 
+@pytest.mark.parametrize(
+    ("context_update", "input_update"),
+    [
+        ({"run_id": "run_other"}, {}),
+        ({"question": "Different question"}, {}),
+        ({"agent_id": "agent_other"}, {"agent_id": "agent_expected"}),
+        (
+            {"agent_version_id": "version_other"},
+            {"agent_version_id": "version_expected"},
+        ),
+        ({"draft_id": "draft_other"}, {"draft_id": "draft_expected"}),
+    ],
+)
+def test_langgraph_resume_put_rejects_inconsistent_pinned_input(
+    tmp_path: Path,
+    context_update: dict[str, str],
+    input_update: dict[str, str],
+) -> None:
+    execution_input = _execution_input().model_copy(update=input_update)
+    context_kwargs = {
+        "agent_yaml": REACT_AGENT,
+        "runs_dir": tmp_path / "runs",
+        "run_id": execution_input.run_id,
+        "question": execution_input.question,
+        "checkpointer": MemorySaver(),
+        "manifest": load_agent_manifest(REACT_AGENT),
+        "workflow_template_execution_input": execution_input,
+        **context_update,
+    }
+
+    with pytest.raises(ProofAgentError, match="context binding mismatch"):
+        LangGraphApprovalResumeRegistry(tmp_path).put(
+            LangGraphApprovalResumeContext(**context_kwargs)
+        )
+
+
+def test_langgraph_resume_load_rejects_validly_signed_binding_mismatch(
+    tmp_path: Path,
+) -> None:
+    key = b"l" * 32
+    signer = ApprovalResumeIntegritySigner(key)
+    execution_input = _execution_input()
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=key)
+    registry.put(
+        LangGraphApprovalResumeContext(
+            agent_yaml=REACT_AGENT,
+            runs_dir=tmp_path / "runs",
+            run_id=execution_input.run_id,
+            question=execution_input.question,
+            checkpointer=MemorySaver(),
+            manifest=load_agent_manifest(REACT_AGENT),
+            workflow_template_execution_input=execution_input,
+        )
+    )
+    path = tmp_path / execution_input.run_id / "resume_context.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata["question"] = "Different signed question"
+    metadata["integrity_hmac_sha256"] = signer.sign(
+        metadata,
+        purpose="langgraph-resume-metadata",
+    )
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError, match="context binding mismatch"):
+        LangGraphApprovalResumeRegistry(tmp_path, integrity_key=key).get(
+            execution_input.run_id
+        )
+
+
 @pytest.mark.parametrize("tamper", ["question", "action", "tool_args"])
 def test_controlled_react_snapshot_rejects_wrong_key_and_plain_sha_recompute(
     tmp_path: Path,
@@ -538,3 +609,129 @@ def test_controlled_resume_metadata_rejects_cross_run_transplant(tmp_path: Path)
 
     with pytest.raises(ProofAgentError, match="run identity mismatch"):
         registry.get_controlled_react("run_target")
+
+
+@pytest.mark.parametrize("kind", ["retrieval", "tool"])
+def test_observation_truth_hmac_round_trip_and_rejects_tampering(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    key = b"o" * 32
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=key)
+    store = registry.controlled_react_observation_truth_store()
+    truth_ref = "observation://run_truth/obs_001/truth"
+    truth = (
+        RetrievalObservationTruth(
+            truth_ref=truth_ref,
+            observation_id="obs_001",
+            action_id="act_retrieve",
+            citation_refs=("claims.md#rule",),
+            admission_metadata={"status": "accepted"},
+        )
+        if kind == "retrieval"
+        else ToolObservationTruth(
+            truth_ref=truth_ref,
+            observation_id="obs_001",
+            action_id="act_tool",
+            tool_name="customer_lookup",
+            authorized_result={"status": "active"},
+            approval_ref="appr_act_tool",
+        )
+    )
+
+    assert store.save(truth) == truth_ref
+    assert store.load(truth_ref) == truth
+    path = tmp_path / "run_truth" / "controlled_react" / "observation_truth" / "obs_001.json"
+    assert path.stat().st_mode & 0o777 == 0o600
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    if kind == "retrieval":
+        envelope["payload"]["citation_refs"] = ["tampered.md#rule"]
+    else:
+        envelope["payload"]["authorized_result"] = {"status": "admin"}
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
+        store.load(truth_ref)
+
+
+def test_observation_truth_rejects_wrong_key_stripped_hmac_and_plain_hash(
+    tmp_path: Path,
+) -> None:
+    key = b"o" * 32
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=key)
+    store = registry.controlled_react_observation_truth_store()
+    truth_ref = "observation://run_truth/obs_002/truth"
+    truth = ToolObservationTruth(
+        truth_ref=truth_ref,
+        observation_id="obs_002",
+        action_id="act_tool",
+        tool_name="customer_lookup",
+        authorized_result={"status": "active"},
+    )
+    store.save(truth)
+
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
+        LangGraphApprovalResumeRegistry(
+            tmp_path,
+            integrity_key=b"x" * 32,
+        ).controlled_react_observation_truth_store().load(truth_ref)
+
+    path = tmp_path / "run_truth" / "controlled_react" / "observation_truth" / "obs_002.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope.pop("integrity_hmac_sha256")
+    envelope["payload"]["authorized_result"] = {"status": "tampered"}
+    canonical = json.dumps(envelope["payload"], sort_keys=True, separators=(",", ":"))
+    envelope["integrity_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
+        store.load(truth_ref)
+
+
+def test_observation_truth_rejects_transplant_internal_mismatch_and_path_controls(
+    tmp_path: Path,
+) -> None:
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=b"o" * 32)
+    store = registry.controlled_react_observation_truth_store()
+    source_ref = "observation://run_source/obs_source/truth"
+    truth = RetrievalObservationTruth(
+        truth_ref=source_ref,
+        observation_id="obs_source",
+        action_id="act_retrieve",
+    )
+    store.save(truth)
+    source = (
+        tmp_path
+        / "run_source"
+        / "controlled_react"
+        / "observation_truth"
+        / "obs_source.json"
+    )
+    target = (
+        tmp_path
+        / "run_target"
+        / "controlled_react"
+        / "observation_truth"
+        / "obs_target.json"
+    )
+    target.parent.mkdir(parents=True)
+    shutil.copyfile(source, target)
+
+    with pytest.raises(ProofAgentError, match="identity mismatch"):
+        store.load("observation://run_target/obs_target/truth")
+    with pytest.raises(ProofAgentError, match="identity mismatch"):
+        store.save(
+            RetrievalObservationTruth(
+                truth_ref="observation://run_source/obs_source/truth",
+                observation_id="obs_other",
+                action_id="act_retrieve",
+            )
+        )
+    for invalid_ref in (
+        "observation://../obs/truth",
+        "observation://run/../truth",
+        "observation://run%2Fother/obs/truth",
+        "observation://run/obs/extra/truth",
+    ):
+        with pytest.raises(ProofAgentError):
+            store.load(invalid_ref)
