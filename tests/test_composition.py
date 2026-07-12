@@ -110,7 +110,6 @@ admission:
 name: skill_pack_composition
 purpose: "Compose Business Flow Skill Packs."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources:
@@ -145,7 +144,6 @@ capabilities:
         definition: ./skill_packs/claims.yaml
         default: true
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -221,11 +219,9 @@ admission: {}
 name: skill_pack_unknown_ref
 purpose: "Reject unknown Business Flow Skill Pack refs."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -325,11 +321,9 @@ admission: {}
 name: skill_pack_unknown_policy_ref
 purpose: "Reject unknown Business Flow Skill Pack policy refs."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -430,11 +424,9 @@ admission: {}
 name: skill_pack_disabled_tool_ref
 purpose: "Reject tool refs when tools are disabled."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -534,11 +526,9 @@ admission: {}
 name: skill_pack_unknown_validator_ref
 purpose: "Reject unknown Business Flow Skill Pack validator refs."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -605,11 +595,9 @@ def test_compose_harness_invocation_blends_multiple_knowledge_bindings(tmp_path:
 name: blended_qa
 purpose: "Blend two knowledge sources."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -683,11 +671,9 @@ def test_compose_harness_invocation_accepts_precomputed_resolved_bindings(
 name: precomputed_qa
 purpose: "Use precomputed resolved Knowledge bindings."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -758,11 +744,9 @@ def test_compose_harness_invocation_resolves_retrieval_model_connections(
 name: retrieval_model_connection_qa
 purpose: "Resolve retrieval control-plane models."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo

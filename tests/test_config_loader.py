@@ -38,7 +38,6 @@ def test_load_valid_controlled_react_v3_manifest() -> None:
     )
 
     assert manifest.name == "react_enterprise_qa_v3"
-    assert manifest.workflow.runtime == "controlled_react"
     assert manifest.workflow.template == "react_enterprise_qa_v3"
     assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v3"
 
@@ -73,11 +72,9 @@ admission: {}
 name: skill_pack_manifest
 purpose: "Load package-local business flow skill pack bindings."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -155,11 +152,9 @@ admission: {}
 name: invalid_skill_admission_manifest
 purpose: "Reject misplaced Skill Pack admission fields."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -235,11 +230,9 @@ admission: {}
 name: disabled_skill_pack_manifest
 purpose: "Reject configured Skill Packs when skills are disabled."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -299,11 +292,9 @@ def test_rejects_missing_business_flow_skill_pack_definition(
 name: missing_skill_pack_manifest
 purpose: "Reject missing Skill Pack definitions."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -364,11 +355,9 @@ def test_loads_source_owned_knowledge_bindings(tmp_path: Path) -> None:
 name: source_owned
 purpose: "Source-owned knowledge config."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -437,8 +426,7 @@ def test_legacy_knowledge_sources_field_is_rejected(tmp_path: Path) -> None:
 name: legacy_source_field
 purpose: "Legacy source field should be rejected."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  template: react_enterprise_qa_v3
 knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -488,11 +476,9 @@ def test_legacy_knowledge_providers_are_rejected(tmp_path: Path, legacy_provider
 name: legacy_provider
 purpose: "Legacy provider should be rejected."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -552,11 +538,9 @@ def test_http_json_knowledge_source_loads_with_safe_remote_params(tmp_path: Path
 name: http_json_manifest
 purpose: "Load remote HTTP JSON knowledge."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -720,11 +704,9 @@ def _write_local_index_manifest(tmp_path: Path, *, params: str) -> Path:
 name: local_index_manifest
 purpose: "Local index source config."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -773,8 +755,7 @@ def test_inline_knowledge_provider_is_rejected_after_direct_migration(tmp_path: 
 name: broken
 purpose: "Legacy inline knowledge config."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  template: react_enterprise_qa_v3
 knowledge:
 package_knowledge_sources:
   - source_id: ks_local
@@ -823,11 +804,9 @@ def test_missing_policy_file_fails_fast(tmp_path: Path) -> None:
 name: broken
 purpose: "Broken manifest."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 react:
-  max_steps: 5
   max_plan_rounds: 5
   max_tool_calls: 0
   planner:
@@ -878,8 +857,7 @@ def test_legacy_knowledge_path_is_rejected(tmp_path: Path) -> None:
 name: broken
 purpose: "Broken manifest."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  template: react_enterprise_qa_v3
 knowledge:
   provider: local
   path: ./knowledge
@@ -916,8 +894,6 @@ def test_loads_controlled_react_v3_contract(tmp_path: Path) -> None:
 
     assert manifest.workflow.template == "react_enterprise_qa_v3"
     assert manifest.react is not None
-    assert manifest.react.max_steps == 5
-    # max_plan_rounds defaults to max_steps when not declared (ADR-0032 alias).
     assert manifest.react.max_plan_rounds == 5
     assert manifest.react.max_tool_calls == 1
     assert manifest.react.planner.provider == "deterministic"
@@ -1307,7 +1283,7 @@ capabilities:
     assert "capabilities.memory.scopes.shared.enabled is not supported yet" in exc.value.message
 
 
-def test_unsupported_workflow_checkpointer_provider_is_rejected(tmp_path: Path) -> None:
+def test_retired_workflow_checkpointer_is_rejected(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(tmp_path)
     agent_yaml.write_text(
         agent_yaml.read_text(encoding="utf-8").replace(
@@ -1320,8 +1296,8 @@ def test_unsupported_workflow_checkpointer_provider_is_rejected(tmp_path: Path) 
     with pytest.raises(ProofAgentError) as exc:
         load_agent_manifest(agent_yaml)
 
-    assert exc.value.code == "PA_CONFIG_002"
-    assert "unsupported workflow checkpointer provider" in exc.value.message
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "retired workflow field" in exc.value.message
 
 
 def test_react_template_requires_react_config(tmp_path: Path) -> None:
@@ -1334,14 +1310,13 @@ def test_react_template_requires_react_config(tmp_path: Path) -> None:
     assert "react config is required" in exc.value.message
 
 
-def test_react_max_plan_rounds_explicit_value_overrides_max_steps_alias(
+def test_react_max_plan_rounds_uses_explicit_value(
     tmp_path: Path,
 ) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
         react_section="""
 react:
-  max_steps: 5
   max_plan_rounds: 8
   max_tool_calls: 1
   planner:
@@ -1353,9 +1328,24 @@ react:
     manifest = load_agent_manifest(agent_yaml)
 
     assert manifest.react is not None
-    # Explicit max_plan_rounds wins over the max_steps alias.
     assert manifest.react.max_plan_rounds == 8
-    assert manifest.react.max_steps == 5
+
+
+def test_retired_react_max_steps_is_rejected(tmp_path: Path) -> None:
+    agent_yaml = _write_react_manifest(tmp_path)
+    agent_yaml.write_text(
+        agent_yaml.read_text(encoding="utf-8").replace(
+            "react:\n  max_plan_rounds: 5\n",
+            "react:\n  max_steps: 5\n  max_plan_rounds: 5\n",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert "retired react field: max_steps" in exc.value.message
 
 
 def test_react_max_plan_rounds_must_be_positive(tmp_path: Path) -> None:
@@ -1363,7 +1353,6 @@ def test_react_max_plan_rounds_must_be_positive(tmp_path: Path) -> None:
         tmp_path,
         react_section="""
 react:
-  max_steps: 5
   max_plan_rounds: 0
   max_tool_calls: 1
   planner:
@@ -1400,7 +1389,7 @@ def test_react_planner_params_reject_raw_secrets(tmp_path: Path) -> None:
         tmp_path,
         react_section="""
 react:
-  max_steps: 5
+  max_plan_rounds: 5
   max_tool_calls: 1
   planner:
     provider: deterministic
@@ -1509,7 +1498,7 @@ capabilities:
     memory_section: str = "",
     react_section: str = """
 react:
-  max_steps: 5
+  max_plan_rounds: 5
   max_tool_calls: 1
   planner:
     provider: deterministic
@@ -1538,7 +1527,6 @@ response:
 name: react_enterprise_qa_v3
 purpose: "Controlled ReAct V3 enterprise QA."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 {workflow_extra}

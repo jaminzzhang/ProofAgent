@@ -147,12 +147,10 @@ name: react_enterprise_qa_v3
 purpose: "Answer enterprise knowledge questions only when evidence supports the answer."
 
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo

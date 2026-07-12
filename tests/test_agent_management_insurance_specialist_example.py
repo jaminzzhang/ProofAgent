@@ -30,13 +30,11 @@ def test_agent_package_is_offline_controlled_react_v3_without_tools() -> None:
 
     assert manifest.name == "agent_management_insurance_specialist"
     assert manifest.customer is None
-    assert manifest.workflow.runtime == "controlled_react"
     assert manifest.workflow.template == "react_enterprise_qa_v3"
     assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v3"
-    assert manifest.workflow.checkpointer is None
     assert manifest.workflow.stages == ()
     assert raw["react"]["max_plan_rounds"] == 4
-    assert manifest.react.max_steps == manifest.react.max_plan_rounds
+    assert manifest.react.max_plan_rounds == 4
     assert manifest.react.max_tool_calls == 0
     assert manifest.react.planner.provider == "deterministic"
     assert manifest.review.subagent is not None
@@ -46,7 +44,9 @@ def test_agent_package_is_offline_controlled_react_v3_without_tools() -> None:
     assert manifest.capabilities.tools.file is None
     assert manifest.capabilities.memory.provider == "session"
 
+    assert "runtime" not in raw["workflow"]
     assert "checkpointer" not in raw["workflow"]
+    assert "max_steps" not in raw["react"]
     assert "stages" not in raw["workflow"]
     assert "file" not in raw["capabilities"]["tools"]
     assert not (AGENT_PATH.parent / "tools.py").exists()

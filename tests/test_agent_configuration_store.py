@@ -222,7 +222,6 @@ def test_publish_version_freezes_effective_workflow_stage_configuration(
 name: react_enterprise_qa_v3
 purpose: "Answer governed questions."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
   stages:
@@ -313,7 +312,6 @@ def test_publish_version_rejects_unavailable_workflow_stage_configuration(
 name: react_enterprise_qa_v3
 purpose: "Answer governed questions."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
   stages:

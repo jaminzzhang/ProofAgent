@@ -46,7 +46,7 @@ def test_import_preserves_advanced_sections_for_contract_view(tmp_path: Path) ->
     )
 
     assert draft.agent_id == "react_enterprise_qa_v3"
-    assert draft.contract_bundle.advanced_fields["react"]["max_steps"] == 5
+    assert draft.contract_bundle.advanced_fields["react"]["max_plan_rounds"] == 4
     assert draft.contract_bundle.advanced_fields["review"]["mode"] == "auto"
     assert draft.contract_bundle.advanced_fields["response"]["include_review_results"] is False
 

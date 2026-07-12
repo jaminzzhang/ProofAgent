@@ -2,7 +2,6 @@ name: react_enterprise_qa_v3
 purpose: "Answer enterprise knowledge questions through the governed Controlled ReAct Loop (ADR-0032): observation actions return to plan under a dual-axis budget and deterministic Convergence Check."
 
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 
@@ -25,7 +24,6 @@ retrieval:
   min_score: 0.2
 
 react:
-  max_steps: 5
   max_plan_rounds: 4
   max_tool_calls: 0
   record_reasoning_summary: true

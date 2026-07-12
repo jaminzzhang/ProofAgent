@@ -861,7 +861,6 @@ def test_validation_warns_and_publish_rejects_archived_shared_model_connection(
 name: enterprise_qa
 purpose: "Answer questions."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources:
@@ -889,7 +888,6 @@ capabilities:
     enabled: true
     provider: session
 react:
-  max_steps: 2
   max_plan_rounds: 2
   max_tool_calls: 0
   planner:
@@ -962,7 +960,6 @@ def test_fetch_config_draft_skills_projects_runtime_ordered_pack(
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
   stages:
@@ -1003,7 +1000,6 @@ capabilities:
         definition: ./skills/claims.yaml
         default: true
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -1184,7 +1180,6 @@ def test_create_config_draft_skill_pack_writes_package_local_definition(
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources: []
@@ -1204,7 +1199,6 @@ capabilities:
     enabled: true
     provider: session
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -1267,7 +1261,6 @@ def test_update_config_draft_skill_pack_rewrites_definition(
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources: []
@@ -1292,7 +1285,6 @@ capabilities:
       - id: claims_qa
         definition: ./skills/claims.yaml
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -1379,7 +1371,6 @@ def test_delete_config_draft_skill_pack_removes_binding_and_definition(
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources: []
@@ -1404,7 +1395,6 @@ capabilities:
       - id: claims_qa
         definition: ./skills/claims.yaml
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo

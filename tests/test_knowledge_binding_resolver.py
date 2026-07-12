@@ -315,7 +315,6 @@ package_knowledge_sources:
 name: resolver_test
 purpose: "Resolve Knowledge bindings."
 workflow:
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 {package_sources_yaml}
@@ -331,7 +330,6 @@ knowledge_bindings:
 retrieval:
   strategy: single_step
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo

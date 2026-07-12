@@ -107,7 +107,6 @@ admission: {}
         name="skill_pack_stage_test",
         purpose="Reject unknown Skill Pack stages.",
         workflow=WorkflowConfig(
-            runtime="controlled_react",
             template="react_enterprise_qa_v3",
         ),
         package_knowledge_sources=(),
@@ -174,7 +173,6 @@ admission: {}
         name="skill_pack_stage_test",
         purpose="Reject pre-admission Skill Pack addenda.",
         workflow=WorkflowConfig(
-            runtime="controlled_react",
             template="react_enterprise_qa_v3",
         ),
         package_knowledge_sources=(),

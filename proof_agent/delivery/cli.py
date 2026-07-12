@@ -1238,13 +1238,10 @@ def _active_dev_seed_is_current(
     )
     return bool(
         manifest.name == agent_id
-        and manifest.workflow.runtime == "controlled_react"
         and manifest.workflow.template == "react_enterprise_qa_v3"
         and manifest.workflow.template_descriptor_version == "react_enterprise_qa.v3"
-        and manifest.workflow.checkpointer is None
         and manifest.workflow.stages == ()
         and manifest.react is not None
-        and manifest.react.max_plan_rounds == manifest.react.max_steps
         and manifest.react.max_tool_calls == 0
         and manifest.react.planner.provider == "deterministic"
         and review_provider == "deterministic"

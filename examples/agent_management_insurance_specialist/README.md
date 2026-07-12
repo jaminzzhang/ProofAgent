@@ -12,10 +12,10 @@ read current policy, claim, customer, agent, performance, or activity records.
 It supports internal operator suggestions only; it is not a Customer Chat
 product identity and does not reply directly to customers.
 
-`workflow.runtime: controlled_react` and `react.max_steps` remain only as
-temporary public-schema compatibility fields. V3 execution authority is the
-Workflow Template identity, with `react.max_plan_rounds` as the explicit loop
-budget. `react.max_tool_calls: 0` is a transitional declaration; the enforced
+V3 execution authority is the Workflow Template identity, with
+`react.max_plan_rounds` as the explicit loop budget. Legacy runtime,
+checkpointer, and `react.max_steps` fields are rejected. `react.max_tool_calls: 0`
+is a transitional declaration; the enforced
 no-tool boundary is `capabilities.tools.enabled: false`, which composes an empty
 Tool Gateway and an Effective Tool Proposal Scope with proposal disabled.
 

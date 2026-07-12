@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 from uuid import uuid4
 
 from proof_agent.bootstrap.composition import compose_harness_invocation
@@ -71,7 +71,6 @@ class AgentPackageRunRequest:
     memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = ()
     run_id: str | None = None
     store: RunStore | None = None
-    checkpointer: Any | None = None
     manifest: AgentManifest | None = None
     knowledge_binding_resolver: KnowledgeBindingResolver | None = None
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
@@ -93,13 +92,6 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
 
     manifest = request.manifest or load_agent_manifest(request.agent_yaml)
     template = resolve_workflow_template(manifest.workflow.template)
-    if manifest.workflow.runtime != "controlled_react":
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            f"unsupported workflow runtime: {manifest.workflow.runtime}",
-            "Use workflow.runtime: controlled_react for react_enterprise_qa_v3.",
-            artifact_path=request.agent_yaml,
-        )
     run_id = request.run_id or f"run_{uuid4().hex[:8]}"
     run_start_context = _run_start_context_assembly(
         run_id=run_id,

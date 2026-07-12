@@ -2,9 +2,6 @@ name: agent_management_insurance_specialist
 purpose: "为保险公司内勤专员提供受控的业务咨询、条款解释、核保问题支持、理赔问题支持，以及客户或代理人问题答复建议。"
 
 workflow:
-  # Transitional compatibility fields. Task 6B removes runtime and react.max_steps
-  # from the public schema after every active package is V3-only.
-  runtime: controlled_react
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 
@@ -178,7 +175,6 @@ retrieval:
   query_timeout_seconds: 20.0
 
 react:
-  max_steps: 4
   max_plan_rounds: 4
   max_tool_calls: 0
   record_reasoning_summary: true
