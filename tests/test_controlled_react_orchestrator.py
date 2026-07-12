@@ -48,6 +48,10 @@ from proof_agent.control.workflow.controlled_react.composition import (
     _EvidenceAnswerSynthesisAdapter,
     _tool_summary_projection,
 )
+from proof_agent.control.workflow.controlled_react.artifact_binding import (
+    bind_controlled_react_snapshot,
+    bind_observation_truth,
+)
 from proof_agent.control.workflow.controlled_react.local_stores import (
     FileControlledReActSnapshotStore,
     FileObservationTruthStore,
@@ -607,8 +611,11 @@ def test_start_suspends_tool_action_with_approval_pause_and_snapshot_ref() -> No
     assert result.outcome is ReceiptOutcome.WAITING_FOR_APPROVAL
     assert result.approval_pause is not None
     assert result.approval_pause.tool_name == "customer_lookup"
-    assert result.approval_pause.checkpoint_ref == "snapshot://run_003/snap_001"
     assert snapshot_store.saved_snapshot is not None
+    assert (
+        result.approval_pause.checkpoint_ref
+        == bind_controlled_react_snapshot(snapshot_store.saved_snapshot).reference
+    )
     assert snapshot_store.saved_snapshot.state.action_history[0].action_type is (
         ReActActionType.PROPOSE_TOOL_CALL
     )
@@ -652,6 +659,48 @@ def test_approval_pause_freezes_bound_tool_proposal_snapshot() -> None:
     assert approved_snapshot.parameters["idempotency_key"] == (
         "run_bound_approval:act_create_ticket:create_service_ticket"
     )
+
+
+def test_approval_pause_rejects_forged_snapshot_store_readback() -> None:
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolApprovalPlanner(),
+            policy=_RequireApprovalToolPolicy(),
+            snapshot_store=_ForgedPauseSnapshotStore(),
+            answer_synthesis=_AnswerSynthesis(),
+        )
+    )
+
+    with pytest.raises(ProofAgentError):
+        orchestrator.start(
+            ControlledReActStartRequest(
+                run_id="run_forged_pause",
+                template_name="react_enterprise_qa_v3",
+                template_descriptor_version="react_enterprise_qa.v3",
+                question="Look up this customer's claim status.",
+            )
+        )
+
+
+def test_approval_pause_rejects_self_consistent_substituted_snapshot() -> None:
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolApprovalPlanner(),
+            policy=_RequireApprovalToolPolicy(),
+            snapshot_store=_SubstitutingSnapshotStore(),
+            answer_synthesis=_AnswerSynthesis(),
+        )
+    )
+
+    with pytest.raises(ValueError, match="mismatched snapshot"):
+        orchestrator.start(
+            ControlledReActStartRequest(
+                run_id="run_substituted_pause",
+                template_name="react_enterprise_qa_v3",
+                template_descriptor_version="react_enterprise_qa.v3",
+                question="Look up this customer's claim status.",
+            )
+        )
 
 
 def test_same_run_can_resume_through_two_distinct_approval_pauses(
@@ -817,7 +866,7 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
 
     result = orchestrator.resume(
         ControlledReActResumeRequest(
-            snapshot_ref="snapshot://run_004/snap_001",
+            snapshot_ref=bind_controlled_react_snapshot(snapshot).reference,
             approval_id="appr_act_tool",
             approved=True,
             actor="ops",
@@ -837,6 +886,89 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
         "model_answer",
         "response",
     ]
+
+
+def test_resume_rejects_snapshot_payload_forged_behind_bound_ref() -> None:
+    action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_forged_resume",
+        run_id="run_forged_resume",
+        state=ControlledReActRunState(
+            run_id="run_forged_resume",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Original governed question.",
+            action_history=(action,),
+        ),
+    )
+    snapshot_ref = bind_controlled_react_snapshot(snapshot).reference
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolObservationThenAnswerPlanner(),
+            snapshot_store=_ForgedResumeSnapshotStore(snapshot),
+            tool_observation=_ToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    with pytest.raises(ProofAgentError):
+        orchestrator.resume(
+            ControlledReActResumeRequest(
+                snapshot_ref=snapshot_ref,
+                approval_id="appr_act_tool",
+                approved=True,
+                actor="ops",
+            )
+        )
+
+
+def test_answer_context_rejects_forged_evidence_behind_bound_truth_ref() -> None:
+    action = _proposal("act_retrieve", ReActActionType.PLAN_RETRIEVAL)
+    original_truth = RetrievalObservationTruth(
+        truth_ref="observation://run_forged_answer/obs_1/truth",
+        observation_id="obs_1",
+        action_id=action.action_id,
+        accepted_evidence=(
+            EvidenceChunk(
+                source="Claims Guide",
+                content="Original governed evidence.",
+                status=EvidenceStatus.ACCEPTED,
+                citation="claims.md#L1",
+            ),
+        ),
+        citation_refs=("claims.md#L1",),
+    )
+    binding = bind_observation_truth(original_truth)
+    record = ObservationRecord(
+        observation_id="obs_1",
+        action_id=action.action_id,
+        action_type=action.action_type,
+        round=1,
+        truth_ref=binding.reference,
+        accepted_evidence_count=1,
+        new_evidence_count=1,
+        source_refs=("Claims Guide",),
+        citation_refs=original_truth.citation_refs,
+    )
+    state = ControlledReActRunState(
+        run_id="run_forged_answer",
+        template_name="react_enterprise_qa_v3",
+        template_descriptor_version="react_enterprise_qa.v3",
+        question="What documents are required?",
+        observation_records=(record,),
+    )
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_TerminalAnswerPlanner(),
+            observation_truth_store=_ForgedAnswerTruthStore(binding.truth),
+            answer_synthesis=_AnswerSynthesis(),
+        )
+    )
+
+    with pytest.raises(ProofAgentError):
+        orchestrator._answer_evidence_context(state)
 
 
 def test_resume_fails_closed_when_approved_tool_snapshot_integrity_mismatches() -> None:
@@ -886,7 +1018,7 @@ def test_resume_fails_closed_when_approved_tool_snapshot_integrity_mismatches() 
 
     result = orchestrator.resume(
         ControlledReActResumeRequest(
-            snapshot_ref="snapshot://run_004/snap_001",
+            snapshot_ref=bind_controlled_react_snapshot(snapshot).reference,
             approval_id="appr_act_tool",
             approved=True,
             actor="ops",
@@ -932,7 +1064,7 @@ def test_resume_can_observe_tool_then_retrieval_before_answering() -> None:
 
     result = orchestrator.resume(
         ControlledReActResumeRequest(
-            snapshot_ref="snapshot://run_004/snap_001",
+            snapshot_ref=bind_controlled_react_snapshot(snapshot).reference,
             approval_id="appr_act_tool",
             approved=True,
             actor="ops",
@@ -1045,7 +1177,7 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
 
     result = orchestrator.resume(
         ControlledReActResumeRequest(
-            snapshot_ref="snapshot://run_004/snap_001",
+            snapshot_ref=bind_controlled_react_snapshot(snapshot).reference,
             approval_id="appr_act_tool",
             approved=False,
             actor="ops",
@@ -1098,7 +1230,7 @@ def test_resume_denied_tool_snapshot_can_replan_to_alternate_retrieval_answer() 
 
     result = orchestrator.resume(
         ControlledReActResumeRequest(
-            snapshot_ref="snapshot://run_004/snap_001",
+            snapshot_ref=bind_controlled_react_snapshot(snapshot).reference,
             approval_id="appr_act_tool",
             approved=False,
             actor="ops",
@@ -1729,7 +1861,53 @@ class _SnapshotStore:
 
     def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
         self.saved_snapshot = snapshot
-        return "snapshot://run_003/snap_001"
+        return bind_controlled_react_snapshot(snapshot).reference
+
+    def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
+        assert self.saved_snapshot is not None
+        assert snapshot_ref == bind_controlled_react_snapshot(self.saved_snapshot).reference
+        return self.saved_snapshot
+
+
+class _ForgedPauseSnapshotStore:
+    def __init__(self) -> None:
+        self._snapshot: ControlledReActRunStateSnapshot | None = None
+
+    def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
+        self._snapshot = snapshot
+        return bind_controlled_react_snapshot(snapshot).reference
+
+    def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
+        assert self._snapshot is not None
+        assert snapshot_ref == bind_controlled_react_snapshot(self._snapshot).reference
+        return self._snapshot.model_copy(
+            update={
+                "state": self._snapshot.state.model_copy(
+                    update={"question": "Forged question after save."}
+                )
+            }
+        )
+
+
+class _SubstitutingSnapshotStore:
+    def __init__(self) -> None:
+        self._substitute: ControlledReActRunStateSnapshot | None = None
+
+    def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
+        self._substitute = snapshot.model_copy(
+            update={
+                "snapshot_id": f"{snapshot.snapshot_id}_substitute",
+                "state": snapshot.state.model_copy(
+                    update={"question": "Self-consistent substituted snapshot."}
+                ),
+            }
+        )
+        return bind_controlled_react_snapshot(self._substitute).reference
+
+    def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
+        assert self._substitute is not None
+        assert snapshot_ref == bind_controlled_react_snapshot(self._substitute).reference
+        return self._substitute
 
 
 class _FailingSnapshotStore:
@@ -1829,8 +2007,45 @@ class _ResumeSnapshotStore:
         raise AssertionError("resume should not save a snapshot in this slice")
 
     def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
-        assert snapshot_ref == "snapshot://run_004/snap_001"
+        assert snapshot_ref == bind_controlled_react_snapshot(self._snapshot).reference
         return self._snapshot
+
+
+class _ForgedResumeSnapshotStore:
+    def __init__(self, snapshot: ControlledReActRunStateSnapshot) -> None:
+        self._snapshot = snapshot
+
+    def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
+        _ = snapshot
+        raise AssertionError("resume must not save a snapshot")
+
+    def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
+        assert snapshot_ref == bind_controlled_react_snapshot(self._snapshot).reference
+        return self._snapshot.model_copy(
+            update={
+                "state": self._snapshot.state.model_copy(
+                    update={"question": "Forged resume question."}
+                )
+            }
+        )
+
+
+class _ForgedAnswerTruthStore:
+    def __init__(self, truth: RetrievalObservationTruth) -> None:
+        self._truth = truth
+
+    def save(self, truth: object) -> str:
+        _ = truth
+        raise AssertionError("answer resolution must not save truth")
+
+    def load(self, truth_ref: str) -> RetrievalObservationTruth:
+        assert truth_ref == self._truth.truth_ref
+        evidence = self._truth.accepted_evidence[0]
+        return self._truth.model_copy(
+            update={
+                "accepted_evidence": (evidence.model_copy(update={"content": "Forged evidence."}),)
+            }
+        )
 
 
 class _ToolObservation:

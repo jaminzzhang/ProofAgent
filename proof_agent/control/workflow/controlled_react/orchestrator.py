@@ -55,7 +55,10 @@ from proof_agent.control.workflow.controlled_react.action_control import (
     should_block_duplicate_observation_action,
 )
 from proof_agent.control.workflow.controlled_react.artifact_binding import (
+    bind_controlled_react_snapshot,
     canonical_json_bytes,
+    require_bound_observation_truth,
+    verify_controlled_react_snapshot_binding,
 )
 
 
@@ -401,6 +404,7 @@ class ControlledReActOrchestrator:
         if self._ports.snapshot_store is None:
             raise ValueError("snapshot store port is required for approval resume")
         snapshot = self._ports.snapshot_store.load(request.snapshot_ref)
+        verify_controlled_react_snapshot_binding(snapshot, request.snapshot_ref)
         state = snapshot.state
         if not state.action_history:
             raise ValueError("approval resume snapshot is missing pending action")
@@ -534,7 +538,19 @@ class ControlledReActOrchestrator:
             run_id=request.run_id,
             state=waiting_state,
         )
+        expected_binding = bind_controlled_react_snapshot(snapshot)
         snapshot_ref = self._ports.snapshot_store.save(snapshot)
+        if snapshot_ref != expected_binding.reference:
+            raise ValueError("snapshot store returned a mismatched snapshot_ref")
+        stored_snapshot = self._ports.snapshot_store.load(snapshot_ref)
+        stored_binding = verify_controlled_react_snapshot_binding(
+            stored_snapshot,
+            snapshot_ref,
+        )
+        if canonical_json_bytes(stored_binding.payload) != canonical_json_bytes(
+            expected_binding.payload
+        ):
+            raise ValueError("snapshot store loaded a mismatched snapshot payload")
         tool_name = action.target_tool_name or "unknown_tool"
         expires_at = (
             (datetime.now(UTC) + timedelta(seconds=60))
@@ -915,11 +931,15 @@ class ControlledReActOrchestrator:
         self,
         state: ControlledReActRunState,
     ) -> AnswerEvidenceContext:
-        truths = tuple(
-            self._observation_truth_store.load(record.truth_ref)
-            for record in state.observation_records
-        )
-        _validate_answer_truth_context(state.observation_records, truths)
+        truths: list[ObservationTruthArtifact] = []
+        for record in state.observation_records:
+            loaded_truth = self._observation_truth_store.load(record.truth_ref)
+            binding = require_bound_observation_truth(loaded_truth)
+            if binding.reference != record.truth_ref:
+                raise ValueError("truth store loaded a mismatched truth_ref")
+            truths.append(binding.truth)
+        bound_truths = tuple(truths)
+        _validate_answer_truth_context(state.observation_records, bound_truths)
         citation_refs = tuple(
             ref for record in state.observation_records for ref in record.citation_refs
         )
@@ -928,7 +948,7 @@ class ControlledReActOrchestrator:
         )
         return AnswerEvidenceContext(
             run_id=state.run_id,
-            observation_truth=truths,
+            observation_truth=bound_truths,
             citation_refs=citation_refs,
             source_refs=source_refs,
             validation_precheck={

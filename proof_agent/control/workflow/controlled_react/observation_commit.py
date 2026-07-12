@@ -22,6 +22,8 @@ from proof_agent.control.workflow.controlled_react.state_machine import (
 )
 from proof_agent.control.workflow.controlled_react.artifact_binding import (
     bind_observation_truth,
+    canonical_json_bytes,
+    model_payload,
     require_bound_observation_truth,
 )
 
@@ -173,6 +175,10 @@ class ObservationCommitter:
                 raise ValueError(
                     "conflicting observation payload for committed observation identity"
                 )
+            self._verify_stored_truth(
+                truth_binding.truth,
+                expected_reference=truth_binding.reference,
+            )
             return ObservationCommitResult(
                 state=state,
                 trace_projection=_trace_projection(existing_record, effect),
@@ -182,10 +188,29 @@ class ObservationCommitter:
         saved_truth_ref = self._truth_store.save(truth_binding.truth)
         if saved_truth_ref != truth_binding.reference:
             raise ValueError("truth store returned a mismatched truth_ref")
+        self._verify_stored_truth(
+            truth_binding.truth,
+            expected_reference=truth_binding.reference,
+        )
         return ObservationCommitResult(
             state=result.state,
             trace_projection=trace_projection,
         )
+
+    def _verify_stored_truth(
+        self,
+        expected_truth: ObservationTruthArtifact,
+        *,
+        expected_reference: str,
+    ) -> None:
+        stored_truth = self._truth_store.load(expected_reference)
+        stored_binding = require_bound_observation_truth(stored_truth)
+        if stored_binding.reference != expected_reference:
+            raise ValueError("truth store loaded a mismatched truth_ref")
+        if canonical_json_bytes(model_payload(stored_binding.truth)) != canonical_json_bytes(
+            model_payload(expected_truth)
+        ):
+            raise ValueError("truth store loaded a mismatched observation payload")
 
     def _record_with_authoritative_summary(
         self,

@@ -40,6 +40,10 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
     ObservationIdentity,
     ObservationSummaryBuilder,
 )
+from proof_agent.control.workflow.controlled_react.artifact_binding import (
+    bind_controlled_react_snapshot,
+    verify_controlled_react_snapshot_binding,
+)
 from proof_agent.control.workflow.controlled_react.model_tracing import (
     drain_stage_llm_interactions,
     stage_llm_interactions,
@@ -707,9 +711,7 @@ class _DeterministicAnswerSynthesisAdapter:
     ) -> AnswerSynthesisResult:
         _ = state
         _ = answer_context
-        message = (
-            "Travel meals are reimbursed when supported by governed policy evidence."
-        )
+        message = "Travel meals are reimbursed when supported by governed policy evidence."
         return AnswerSynthesisResult(
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             final_output=message,
@@ -721,14 +723,26 @@ class _DeterministicAnswerSynthesisAdapter:
 class _InMemorySnapshotStoreAdapter:
     def __init__(self) -> None:
         self._snapshots: dict[str, ControlledReActRunStateSnapshot] = {}
+        self._ref_by_identity: dict[tuple[str, str], str] = {}
 
     def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
-        snapshot_ref = f"snapshot://{snapshot.run_id}/{snapshot.snapshot_id}"
-        self._snapshots[snapshot_ref] = snapshot
-        return snapshot_ref
+        binding = bind_controlled_react_snapshot(snapshot)
+        identity = (binding.run_id, binding.snapshot_id)
+        existing_ref = self._ref_by_identity.get(identity)
+        if existing_ref is not None and existing_ref != binding.reference:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "conflicting controlled ReAct snapshot already exists",
+                "Use a new immutable snapshot identity.",
+            )
+        self._snapshots[binding.reference] = snapshot
+        self._ref_by_identity[identity] = binding.reference
+        return binding.reference
 
     def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
-        return self._snapshots[snapshot_ref]
+        snapshot = self._snapshots[snapshot_ref]
+        verify_controlled_react_snapshot_binding(snapshot, snapshot_ref)
+        return snapshot
 
 
 def _context_summary(state: ControlledReActRunState) -> str:

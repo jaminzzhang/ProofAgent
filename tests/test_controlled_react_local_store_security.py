@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -166,6 +167,65 @@ def test_snapshot_canonical_json_preserves_utf8_and_rejects_nan(tmp_path: Path) 
     assert exc.value.code == "PA_RUNTIME_001"
 
 
+@pytest.mark.parametrize(
+    ("original_value", "conflicting_value"),
+    ((1, 1.0), (True, 1)),
+)
+def test_snapshot_store_rejects_json_distinct_python_equal_payloads(
+    tmp_path: Path,
+    original_value: object,
+    conflicting_value: object,
+) -> None:
+    store = FileControlledReActSnapshotStore(tmp_path)
+    baseline = _snapshot()
+    original = baseline.model_copy(
+        update={
+            "state": baseline.state.model_copy(update={"memory_context": {"value": original_value}})
+        }
+    )
+    conflicting = baseline.model_copy(
+        update={
+            "state": baseline.state.model_copy(
+                update={"memory_context": {"value": conflicting_value}}
+            )
+        }
+    )
+
+    original_ref = store.save(original)
+    assert store.load(original_ref) == original
+
+    with pytest.raises(ProofAgentError, match="conflicting"):
+        store.save(conflicting)
+
+
+@pytest.mark.parametrize(
+    ("original_value", "conflicting_value"),
+    ((1, 1.0), (True, 1)),
+)
+def test_observation_store_rejects_json_distinct_python_equal_payloads(
+    tmp_path: Path,
+    original_value: object,
+    conflicting_value: object,
+) -> None:
+    store = FileObservationTruthStore(tmp_path)
+    original = ToolObservationTruth(
+        truth_ref="observation://run_001/obs_tool/truth",
+        observation_id="obs_tool",
+        action_id="act_tool",
+        tool_name="customer_lookup",
+        authorized_result={"value": original_value},
+    )
+    conflicting = original.model_copy(update={"authorized_result": {"value": conflicting_value}})
+    original_binding = bind_observation_truth(original)
+    conflicting_binding = bind_observation_truth(conflicting)
+
+    original_ref = store.save(original_binding.truth)
+    assert store.load(original_ref) == original_binding.truth
+
+    with pytest.raises(ProofAgentError, match="conflicting"):
+        store.save(conflicting_binding.truth)
+
+
 def test_snapshot_load_rejects_nested_duplicate_json_key(tmp_path: Path) -> None:
     store = FileControlledReActSnapshotStore(tmp_path)
     snapshot_ref = store.save(_snapshot())
@@ -254,6 +314,68 @@ def test_observation_digest_rejects_tool_authorized_result_tamper(
     assert exc.value.code == "PA_RUNTIME_001"
 
 
+def test_snapshot_store_rejects_symlink_root(tmp_path: Path) -> None:
+    actual_root = tmp_path / "actual-store"
+    actual_root.mkdir(mode=0o700)
+    symlink_root = tmp_path / "store-link"
+    symlink_root.symlink_to(actual_root, target_is_directory=True)
+
+    with pytest.raises(ProofAgentError):
+        FileControlledReActSnapshotStore(symlink_root)
+
+    assert not tuple(actual_root.iterdir())
+
+
+def test_snapshot_store_rejects_symlink_in_existing_root_path(tmp_path: Path) -> None:
+    actual_parent = tmp_path / "actual-parent"
+    actual_parent.mkdir(mode=0o700)
+    symlink_parent = tmp_path / "parent-link"
+    symlink_parent.symlink_to(actual_parent, target_is_directory=True)
+
+    with pytest.raises(ProofAgentError):
+        FileControlledReActSnapshotStore(symlink_parent / "store")
+
+
+def test_snapshot_store_creates_private_root(tmp_path: Path) -> None:
+    root = tmp_path / "new-store"
+
+    FileControlledReActSnapshotStore(root)
+
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+
+
+def test_snapshot_store_rejects_group_or_world_writable_root(tmp_path: Path) -> None:
+    root = tmp_path / "writable-store"
+    root.mkdir(mode=0o700)
+    root.chmod(0o770)
+
+    with pytest.raises(ProofAgentError):
+        FileControlledReActSnapshotStore(root)
+
+
+def test_snapshot_store_rejects_root_not_owned_by_effective_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "foreign-store"
+    root.mkdir(mode=0o700)
+    monkeypatch.setattr(os, "geteuid", lambda: root.stat().st_uid + 1)
+
+    with pytest.raises(ProofAgentError):
+        FileControlledReActSnapshotStore(root)
+
+
+def test_snapshot_store_revalidates_root_permissions_on_every_operation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    store = FileControlledReActSnapshotStore(root)
+    root.chmod(0o770)
+
+    with pytest.raises(ProofAgentError):
+        store.save(_snapshot())
+
+
 def test_snapshot_store_rejects_parent_directory_symlink(tmp_path: Path) -> None:
     root = tmp_path / "store"
     outside = tmp_path / "outside"
@@ -324,6 +446,91 @@ def test_snapshot_store_detects_directory_replacement_race(
     assert swapped is True
     assert not tuple(outside.rglob("*.json"))
     assert not tuple(detached.rglob("*.json"))
+
+
+def test_snapshot_store_never_exposes_sensitive_temp_when_run_dir_moves_on_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "store"
+    outside = tmp_path / "outside-run"
+    store = FileControlledReActSnapshotStore(root)
+    baseline = _snapshot()
+    snapshot = baseline.model_copy(
+        update={
+            "state": baseline.state.model_copy(
+                update={"question": "SENSITIVE-CONTROLLED-REACT-PAYLOAD"}
+            )
+        }
+    )
+    real_fsync = os.fsync
+    moved = False
+    sensitive_visible_during_fsync = False
+
+    def race_fsync(file_descriptor: int) -> None:
+        nonlocal moved, sensitive_visible_during_fsync
+        real_fsync(file_descriptor)
+        if moved:
+            return
+        run_dir = root / "run_001"
+        run_dir.rename(outside)
+        moved = True
+        sensitive_visible_during_fsync = any(
+            path.is_file() and b"SENSITIVE-CONTROLLED-REACT-PAYLOAD" in path.read_bytes()
+            for path in outside.rglob("*")
+        )
+
+    monkeypatch.setattr(os, "fsync", race_fsync)
+
+    with pytest.raises(ProofAgentError):
+        store.save(snapshot)
+
+    assert moved is True
+    assert sensitive_visible_during_fsync is False
+    assert not any(
+        path.is_file() and b"SENSITIVE-CONTROLLED-REACT-PAYLOAD" in path.read_bytes()
+        for path in outside.rglob("*")
+    )
+
+
+def test_snapshot_store_fails_if_published_name_moves_during_directory_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "store"
+    store = FileControlledReActSnapshotStore(root)
+    real_fsync = os.fsync
+    moved = False
+
+    def race_fsync(file_descriptor: int) -> None:
+        nonlocal moved
+        descriptor_stat = os.fstat(file_descriptor)
+        if stat.S_ISDIR(descriptor_stat.st_mode) and not moved:
+            try:
+                os.stat(
+                    "snap_001.json",
+                    dir_fd=file_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                os.rename(
+                    "snap_001.json",
+                    "leaked.json",
+                    src_dir_fd=file_descriptor,
+                    dst_dir_fd=file_descriptor,
+                )
+                moved = True
+        real_fsync(file_descriptor)
+
+    monkeypatch.setattr(os, "fsync", race_fsync)
+
+    with pytest.raises(ProofAgentError):
+        store.save(_snapshot())
+
+    assert moved is True
+    assert not tuple(root.rglob("leaked.json"))
 
 
 def test_observation_committer_records_file_store_authoritative_ref(
@@ -478,6 +685,32 @@ def test_concurrent_same_observation_payload_is_idempotent(tmp_path: Path) -> No
 
     assert refs[0] == refs[1]
     assert "/sha256/" in refs[0]
+
+
+def test_concurrent_python_equal_snapshot_payloads_have_one_loadable_winner(
+    tmp_path: Path,
+) -> None:
+    store = FileControlledReActSnapshotStore(tmp_path)
+    baseline = _snapshot()
+    integer_snapshot = baseline.model_copy(
+        update={"state": baseline.state.model_copy(update={"memory_context": {"value": 1}})}
+    )
+    float_snapshot = baseline.model_copy(
+        update={"state": baseline.state.model_copy(update={"memory_context": {"value": 1.0}})}
+    )
+
+    def save_outcome(snapshot: ControlledReActRunStateSnapshot) -> str:
+        try:
+            snapshot_ref = store.save(snapshot)
+        except ProofAgentError:
+            return "conflict"
+        store.load(snapshot_ref)
+        return "saved"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(save_outcome, (integer_snapshot, float_snapshot)))
+
+    assert sorted(outcomes) == ["conflict", "saved"]
 
 
 def test_concurrent_different_observation_payload_has_one_winner(

@@ -60,7 +60,9 @@ class AnswerSynthesisResult:
     model_usage_summary: Mapping[str, Any] = field(default_factory=dict)
     evidence: tuple[EvidenceChunk, ...] = field(default_factory=tuple)
     stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = field(default_factory=tuple)
-    stage_failure_diagnostics: tuple[WorkflowStageFailureDiagnostic, ...] = field(default_factory=tuple)
+    stage_failure_diagnostics: tuple[WorkflowStageFailureDiagnostic, ...] = field(
+        default_factory=tuple
+    )
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,12 @@ class ToolObservationPort(Protocol):
 
 
 class ObservationTruthStorePort(Protocol):
+    """Immutable truth storage with exact digest-bearing save/load round trips.
+
+    ``save`` must return the canonical bound reference for its exact input, and
+    ``load`` must return that complete bound payload for read-back verification.
+    """
+
     def save(self, truth: ObservationTruthArtifact) -> str: ...
 
     def load(self, truth_ref: str) -> ObservationTruthArtifact: ...
@@ -137,6 +145,12 @@ class TracePort(TraceEmitter, Protocol):
 
 
 class SnapshotStorePort(Protocol):
+    """Immutable snapshot storage with exact digest-bearing save/load round trips.
+
+    ``save`` must return the canonical bound reference for its exact input, and
+    ``load`` must return that complete snapshot for read-back verification.
+    """
+
     def save(self, snapshot: ControlledReActRunStateSnapshot) -> str: ...
 
     def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot: ...

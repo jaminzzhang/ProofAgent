@@ -394,6 +394,82 @@ def test_observation_commit_rejects_truth_store_ref_mismatch() -> None:
         )
 
 
+def test_observation_commit_rejects_forged_truth_loaded_after_save() -> None:
+    action = _proposal("act_retrieve", ReActActionType.PLAN_RETRIEVAL)
+    state = ControlledReActRunState(
+        run_id="run_001",
+        template_name="react_enterprise_qa_v3",
+        template_descriptor_version="react_enterprise_qa.v3",
+        question="What documents are required?",
+        phase=ControlledReActRunPhase.OBSERVING,
+        plan_round=1,
+        action_history=(action,),
+    )
+    truth = RetrievalObservationTruth(
+        truth_ref="observation://run_001/obs_001/truth",
+        observation_id="obs_001",
+        action_id=action.action_id,
+        citation_refs=("claims-guide.md#documents",),
+    )
+    record = ObservationRecord(
+        observation_id="obs_001",
+        action_id=action.action_id,
+        action_type=action.action_type,
+        round=1,
+        truth_ref=truth.truth_ref,
+        citation_refs=truth.citation_refs,
+    )
+
+    with pytest.raises(ProofAgentError):
+        ObservationCommitter(truth_store=_ForgingTruthStore()).commit(
+            state,
+            action,
+            ObservationEffect(observation_record=record, truth_artifact=truth),
+        )
+
+
+def test_observation_commit_duplicate_branch_rejects_forged_stored_truth() -> None:
+    action = _proposal("act_retrieve", ReActActionType.PLAN_RETRIEVAL)
+    base_truth = RetrievalObservationTruth(
+        truth_ref="observation://run_001/obs_001/truth",
+        observation_id="obs_001",
+        action_id=action.action_id,
+        citation_refs=("claims-guide.md#documents",),
+    )
+    binding = bind_observation_truth(base_truth)
+    existing_record = ObservationRecord(
+        observation_id="obs_001",
+        action_id=action.action_id,
+        action_type=action.action_type,
+        round=1,
+        truth_ref=binding.reference,
+        citation_refs=base_truth.citation_refs,
+    )
+    state = ControlledReActRunState(
+        run_id="run_001",
+        template_name="react_enterprise_qa_v3",
+        template_descriptor_version="react_enterprise_qa.v3",
+        question="What documents are required?",
+        phase=ControlledReActRunPhase.PLANNING,
+        plan_round=1,
+        action_history=(action,),
+        observation_records=(existing_record,),
+    )
+    incoming_record = existing_record.model_copy(update={"truth_ref": base_truth.truth_ref})
+
+    with pytest.raises(ProofAgentError):
+        ObservationCommitter(
+            truth_store=_ForgingTruthStore(binding.truth, reject_save=True)
+        ).commit(
+            state,
+            action,
+            ObservationEffect(
+                observation_record=incoming_record,
+                truth_artifact=base_truth,
+            ),
+        )
+
+
 def test_observation_identity_is_allocated_from_run_round_and_action() -> None:
     identity = ObservationIdentity.allocate(
         run_id="run_001",
@@ -676,3 +752,26 @@ class _MismatchingTruthStore:
     def load(self, truth_ref: str) -> object:
         _ = truth_ref
         raise AssertionError("ref mismatch test should not load truth")
+
+
+class _ForgingTruthStore:
+    def __init__(
+        self,
+        truth: RetrievalObservationTruth | ToolObservationTruth | None = None,
+        *,
+        reject_save: bool = False,
+    ) -> None:
+        self._truth = truth
+        self._reject_save = reject_save
+
+    def save(self, truth: object) -> str:
+        if self._reject_save:
+            raise AssertionError("duplicate commit must not save truth again")
+        assert isinstance(truth, RetrievalObservationTruth | ToolObservationTruth)
+        self._truth = truth
+        return truth.truth_ref
+
+    def load(self, truth_ref: str) -> object:
+        assert self._truth is not None
+        assert truth_ref == self._truth.truth_ref
+        return self._truth.model_copy(update={"citation_refs": ("forged.md#payload",)})

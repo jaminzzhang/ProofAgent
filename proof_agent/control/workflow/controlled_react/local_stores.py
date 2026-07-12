@@ -33,7 +33,11 @@ from proof_agent.errors import ProofAgentError
 
 
 class FileControlledReActSnapshotStore:
-    """Immutable, content-bound local snapshot store."""
+    """Dev/test snapshot store for one private app-owned POSIX root.
+
+    This adapter is not a sandbox boundary against another process running as
+    the same effective user. Production uses an isolated artifact-store port.
+    """
 
     def __init__(self, root_dir: Path) -> None:
         self._storage = _AnchoredLocalStorage(root_dir)
@@ -82,7 +86,11 @@ class FileControlledReActSnapshotStore:
 
 
 class FileObservationTruthStore:
-    """Immutable, content-bound local Observation Truth Store."""
+    """Dev/test truth store for one private app-owned POSIX root.
+
+    This adapter is not a sandbox boundary against another process running as
+    the same effective user. Production uses an isolated artifact-store port.
+    """
 
     def __init__(self, root_dir: Path) -> None:
         self._storage = _AnchoredLocalStorage(root_dir)
@@ -129,7 +137,7 @@ class FileObservationTruthStore:
 
 
 class _AnchoredLocalStorage:
-    """Filesystem boundary anchored to one canonical trusted root."""
+    """Filesystem boundary anchored to one private application-owned root."""
 
     def __init__(self, root_dir: Path) -> None:
         if not _supports_posix_dir_fd():
@@ -142,10 +150,14 @@ class _AnchoredLocalStorage:
                 ),
                 artifact_path=root_dir,
             )
+        root = Path(os.path.abspath(os.fspath(root_dir)))
         try:
-            root_dir.mkdir(parents=True, exist_ok=True)
-            canonical_root = root_dir.resolve(strict=True)
-            root_stat = canonical_root.stat(follow_symlinks=False)
+            root_fd = _open_directory_path_nofollow(root, create=True)
+            try:
+                root_stat = os.fstat(root_fd)
+                _require_private_directory(root_stat, label="local-store root")
+            finally:
+                os.close(root_fd)
         except OSError as exc:
             raise ProofAgentError(
                 "PA_RUNTIME_001",
@@ -153,14 +165,7 @@ class _AnchoredLocalStorage:
                 "Use an accessible trusted local artifact directory.",
                 artifact_path=root_dir,
             ) from exc
-        if not stat.S_ISDIR(root_stat.st_mode):
-            raise ProofAgentError(
-                "PA_RUNTIME_001",
-                "controlled ReAct local-store root is not a directory",
-                "Use a trusted local artifact directory.",
-                artifact_path=canonical_root,
-            )
-        self._root = canonical_root
+        self._root = root
         self._root_identity = (root_stat.st_dev, root_stat.st_ino)
 
     def artifact_path(self, directories: tuple[str, ...], filename: str) -> Path:
@@ -236,6 +241,7 @@ class _AnchoredLocalStorage:
         filename: str,
     ) -> bytes:
         with self._open_leaf_dir_posix(directories, create=False) as (
+            _root_fd,
             leaf_fd,
             leaf_identity,
         ):
@@ -255,6 +261,7 @@ class _AnchoredLocalStorage:
         path: Path,
     ) -> None:
         with self._open_leaf_dir_posix(directories, create=True) as (
+            root_fd,
             leaf_fd,
             leaf_identity,
         ):
@@ -276,8 +283,9 @@ class _AnchoredLocalStorage:
                 self._verify_leaf_identity_posix(directories, leaf_identity)
                 return
 
-            temporary_name = f".{filename}.{secrets.token_hex(16)}.tmp"
+            temporary_name = f".proofagent.{secrets.token_hex(16)}.tmp"
             temporary_fd: int | None = None
+            temporary_identity: tuple[int, int] | None = None
             published = False
             try:
                 self._verify_leaf_identity_posix(directories, leaf_identity)
@@ -285,11 +293,20 @@ class _AnchoredLocalStorage:
                     temporary_name,
                     _write_create_flags(),
                     0o600,
-                    dir_fd=leaf_fd,
+                    dir_fd=root_fd,
+                )
+                os.fchmod(temporary_fd, 0o600)
+                temporary_stat = os.fstat(temporary_fd)
+                _require_private_regular_file(
+                    temporary_stat,
+                    label="temporary artifact",
+                )
+                temporary_identity = (
+                    temporary_stat.st_dev,
+                    temporary_stat.st_ino,
                 )
                 self._verify_leaf_identity_posix(directories, leaf_identity)
-                with os.fdopen(temporary_fd, "wb") as handle:
-                    temporary_fd = None
+                with os.fdopen(temporary_fd, "wb", closefd=False) as handle:
                     handle.write(content)
                     handle.flush()
                     os.fsync(handle.fileno())
@@ -298,12 +315,22 @@ class _AnchoredLocalStorage:
                     os.link(
                         temporary_name,
                         filename,
-                        src_dir_fd=leaf_fd,
+                        src_dir_fd=root_fd,
                         dst_dir_fd=leaf_fd,
                         follow_symlinks=False,
                     )
                     published = True
+                    _require_regular_file_identity_at(
+                        leaf_fd,
+                        filename,
+                        temporary_identity,
+                    )
                     _fsync_directory(leaf_fd)
+                    _require_regular_file_identity_at(
+                        leaf_fd,
+                        filename,
+                        temporary_identity,
+                    )
                 except FileExistsError:
                     raced = _try_read_regular_file_at(leaf_fd, filename)
                     if raced is None:
@@ -321,21 +348,52 @@ class _AnchoredLocalStorage:
                         path=path,
                     )
                 self._verify_leaf_identity_posix(directories, leaf_identity)
-            except BaseException:
+                _unlink_name_if_identity_at(
+                    root_fd,
+                    temporary_name,
+                    temporary_identity,
+                )
+                _fsync_directory(root_fd)
                 if published:
+                    _require_regular_file_identity_at(
+                        leaf_fd,
+                        filename,
+                        temporary_identity,
+                    )
+                    self._verify_leaf_identity_posix(directories, leaf_identity)
+            except BaseException:
+                if published and temporary_identity is not None:
                     try:
-                        os.unlink(filename, dir_fd=leaf_fd)
+                        _unlink_all_names_for_identity_at(
+                            leaf_fd,
+                            temporary_identity,
+                        )
                         _fsync_directory(leaf_fd)
-                    except FileNotFoundError:
+                    except OSError:
+                        pass
+                if temporary_identity is not None:
+                    try:
+                        _unlink_name_if_identity_at(
+                            root_fd,
+                            temporary_name,
+                            temporary_identity,
+                        )
+                        _fsync_directory(root_fd)
+                    except OSError:
                         pass
                 raise
             finally:
                 if temporary_fd is not None:
                     os.close(temporary_fd)
-                try:
-                    os.unlink(temporary_name, dir_fd=leaf_fd)
-                except FileNotFoundError:
-                    pass
+                if temporary_identity is not None:
+                    try:
+                        _unlink_name_if_identity_at(
+                            root_fd,
+                            temporary_name,
+                            temporary_identity,
+                        )
+                    except OSError:
+                        pass
 
     @contextmanager
     def _open_leaf_dir_posix(
@@ -343,26 +401,36 @@ class _AnchoredLocalStorage:
         directories: tuple[str, ...],
         *,
         create: bool,
-    ) -> Iterator[tuple[int, tuple[int, int]]]:
+    ) -> Iterator[tuple[int, int, tuple[int, int]]]:
         root_fd = self._open_root_fd_posix()
         opened = [root_fd]
         current_fd = root_fd
         try:
             for segment in directories:
+                created = False
                 if create:
                     try:
                         os.mkdir(segment, mode=0o700, dir_fd=current_fd)
+                        created = True
                     except FileExistsError:
                         pass
                 child_fd = os.open(segment, _directory_open_flags(), dir_fd=current_fd)
-                child_stat = os.fstat(child_fd)
-                if not stat.S_ISDIR(child_stat.st_mode):
+                try:
+                    if created:
+                        os.fchmod(child_fd, 0o700)
+                        _fsync_directory(current_fd)
+                    child_stat = os.fstat(child_fd)
+                    _require_private_directory(
+                        child_stat,
+                        label="artifact path component",
+                    )
+                except BaseException:
                     os.close(child_fd)
-                    raise OSError(errno.ENOTDIR, "artifact path component is not a directory")
+                    raise
                 opened.append(child_fd)
                 current_fd = child_fd
             leaf_stat = os.fstat(current_fd)
-            yield current_fd, (leaf_stat.st_dev, leaf_stat.st_ino)
+            yield root_fd, current_fd, (leaf_stat.st_dev, leaf_stat.st_ino)
         finally:
             for file_descriptor in reversed(opened):
                 try:
@@ -371,8 +439,13 @@ class _AnchoredLocalStorage:
                     pass
 
     def _open_root_fd_posix(self) -> int:
-        root_fd = os.open(self._root, _directory_open_flags())
+        root_fd = _open_directory_path_nofollow(self._root, create=False)
         root_stat = os.fstat(root_fd)
+        try:
+            _require_private_directory(root_stat, label="local-store root")
+        except OSError:
+            os.close(root_fd)
+            raise
         if (root_stat.st_dev, root_stat.st_ino) != self._root_identity:
             os.close(root_fd)
             raise OSError(errno.ESTALE, "trusted artifact root identity changed")
@@ -384,6 +457,7 @@ class _AnchoredLocalStorage:
         expected_identity: tuple[int, int],
     ) -> None:
         with self._open_leaf_dir_posix(directories, create=False) as (
+            _root_fd,
             _leaf_fd,
             actual_identity,
         ):
@@ -410,6 +484,8 @@ def _supports_posix_dir_fd() -> bool:
     return (
         os.name == "posix"
         and hasattr(os, "O_NOFOLLOW")
+        and hasattr(os, "geteuid")
+        and hasattr(os, "fchmod")
         and os.open in os.supports_dir_fd
         and os.mkdir in os.supports_dir_fd
         and os.stat in os.supports_dir_fd
@@ -417,6 +493,7 @@ def _supports_posix_dir_fd() -> bool:
         and os.link in os.supports_dir_fd
         and os.stat in os.supports_follow_symlinks
         and os.link in os.supports_follow_symlinks
+        and os.listdir in os.supports_fd
     )
 
 
@@ -443,16 +520,77 @@ def _write_create_flags() -> int:
     )
 
 
+def _open_directory_path_nofollow(path: Path, *, create: bool) -> int:
+    if not path.is_absolute():
+        raise OSError(errno.EINVAL, "artifact root must be absolute")
+    current_fd = os.open(os.sep, _directory_open_flags())
+    try:
+        for segment in path.parts[1:]:
+            created = False
+            if create:
+                try:
+                    os.mkdir(segment, mode=0o700, dir_fd=current_fd)
+                    created = True
+                except FileExistsError:
+                    pass
+            child_fd = os.open(segment, _directory_open_flags(), dir_fd=current_fd)
+            try:
+                child_stat = os.fstat(child_fd)
+                if not stat.S_ISDIR(child_stat.st_mode):
+                    raise OSError(
+                        errno.ENOTDIR,
+                        "artifact root path component is not a directory",
+                    )
+                if created:
+                    os.fchmod(child_fd, 0o700)
+                    _fsync_directory(current_fd)
+            except BaseException:
+                os.close(child_fd)
+                raise
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _require_private_directory(
+    directory_stat: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    if not stat.S_ISDIR(directory_stat.st_mode):
+        raise OSError(errno.ENOTDIR, f"{label} is not a directory")
+    if directory_stat.st_uid != os.geteuid():
+        raise OSError(errno.EPERM, f"{label} is not owned by the effective user")
+    if directory_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise OSError(errno.EPERM, f"{label} is group/world writable")
+
+
+def _require_private_regular_file(
+    file_stat: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise OSError(errno.EINVAL, f"{label} is not a regular file")
+    if file_stat.st_uid != os.geteuid():
+        raise OSError(errno.EPERM, f"{label} is not owned by the effective user")
+    if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        raise OSError(errno.EPERM, f"{label} is accessible by group/other users")
+
+
 def _read_regular_file_at(directory_fd: int, filename: str) -> bytes:
     file_descriptor = os.open(filename, _read_open_flags(), dir_fd=directory_fd)
     try:
         opened_stat = os.fstat(file_descriptor)
-        if not stat.S_ISREG(opened_stat.st_mode):
-            raise OSError(errno.EINVAL, "artifact is not a regular file")
+        _require_private_regular_file(opened_stat, label="artifact")
         with os.fdopen(file_descriptor, "rb", closefd=False) as handle:
             content = handle.read()
         named_stat = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
-        if not stat.S_ISREG(named_stat.st_mode) or (named_stat.st_dev, named_stat.st_ino) != (
+        _require_private_regular_file(named_stat, label="artifact")
+        if (named_stat.st_dev, named_stat.st_ino) != (
             opened_stat.st_dev,
             opened_stat.st_ino,
         ):
@@ -469,11 +607,53 @@ def _try_read_regular_file_at(directory_fd: int, filename: str) -> bytes | None:
         return None
 
 
-def _fsync_directory(directory_fd: int) -> None:
+def _require_regular_file_identity_at(
+    directory_fd: int,
+    filename: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    named_stat = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
+    _require_private_regular_file(named_stat, label="published artifact")
+    if (named_stat.st_dev, named_stat.st_ino) != expected_identity:
+        raise OSError(errno.ESTALE, "published artifact identity changed")
+
+
+def _unlink_name_if_identity_at(
+    directory_fd: int,
+    filename: str,
+    expected_identity: tuple[int, int],
+) -> None:
     try:
-        os.fsync(directory_fd)
-    except OSError:
-        pass
+        named_stat = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if (named_stat.st_dev, named_stat.st_ino) == expected_identity:
+        os.unlink(filename, dir_fd=directory_fd)
+
+
+def _unlink_all_names_for_identity_at(
+    directory_fd: int,
+    expected_identity: tuple[int, int],
+) -> None:
+    for filename in os.listdir(directory_fd):
+        try:
+            named_stat = os.stat(
+                filename,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            continue
+        if (named_stat.st_dev, named_stat.st_ino) != expected_identity:
+            continue
+        try:
+            os.unlink(filename, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _fsync_directory(directory_fd: int) -> None:
+    os.fsync(directory_fd)
 
 
 class _DuplicateJsonKeyError(ValueError):
@@ -521,7 +701,7 @@ def _require_identical_payload(
     reference: str,
     path: Path,
 ) -> None:
-    if existing == candidate:
+    if canonical_json_bytes(existing) == canonical_json_bytes(candidate):
         return
     raise ProofAgentError(
         "PA_RUNTIME_001",
