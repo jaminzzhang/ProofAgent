@@ -160,7 +160,9 @@ from proof_agent.contracts.insurance_rules import (
     TaxonomyCondition,
 )
 from proof_agent.contracts.knowledge_resolution import (
+    ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBinding,
+    ResolvedKnowledgeBindingItem,
     ResolvedKnowledgeBindingSet,
 )
 from proof_agent.contracts.knowledge_index import (
@@ -520,7 +522,9 @@ __all__ = [
     "RuleUnitManifestRoot",
     "RuleUnitManifestShard",
     "RuleUnitManifestShardRef",
+    "ResolvedHybridKnowledgeBinding",
     "ResolvedKnowledgeBinding",
+    "ResolvedKnowledgeBindingItem",
     "ResolvedKnowledgeBindingSet",
     "ResolvedWorkflowStageRuntimeConfiguration",
     "RetrievalObservationTruth",

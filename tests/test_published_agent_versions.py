@@ -2,18 +2,115 @@
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     ContractBundle,
+    ExactArtifactRef,
+    KnowledgeSourcePublicationRecord,
     KnowledgeSourceSnapshotManifest,
+    ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
 )
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.app import create_app
+
+
+def _resolved_hybrid_binding(
+    *, source_publication_id: str = "publication_001"
+) -> ResolvedHybridKnowledgeBinding:
+    return ResolvedHybridKnowledgeBinding(
+        binding_id="kb_hybrid",
+        source_id="ks_hybrid",
+        source_publication_id=source_publication_id,
+        source_snapshot_id="snapshot_001",
+        index_generation_id="generation_001",
+        source_publication_seq=1,
+        retrieval_profile_revision_id="profile_001",
+        manifest_ref=ExactArtifactRef(
+            artifact_uri="s3://knowledge/manifests/root.json",
+            version_id="manifest_001",
+            sha256="1" * 64,
+            size_bytes=42,
+            media_type="application/json",
+        ),
+        publication_attestation_id="attestation_001",
+    )
+
+
+@pytest.mark.parametrize(
+    ("published_resource_id", "binding_publication_id"),
+    [
+        ("publication_current", "publication_stale"),
+        ("publication_001", "publication_001"),
+    ],
+)
+def test_hybrid_shared_source_publication_guard_fails_closed_for_invalid_identity(
+    tmp_path: Path,
+    published_resource_id: str,
+    binding_publication_id: str,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    source = store.create_knowledge_source(
+        source_id="ks_hybrid",
+        name="Hybrid Knowledge",
+        provider="hybrid_index",
+        params={},
+        actor="test-user",
+    )
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": published_resource_id})
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        store._require_resolved_shared_knowledge_sources_active_unlocked(
+            ResolvedKnowledgeBindingSet(
+                bindings=(_resolved_hybrid_binding(source_publication_id=binding_publication_id),)
+            )
+        )
+
+    assert exc.value.code == "PA_CONFIG_002"
+
+
+def test_hybrid_shared_source_publication_guard_accepts_exact_generic_publication(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    source = store.create_knowledge_source(
+        source_id="ks_hybrid",
+        name="Hybrid Knowledge",
+        provider="hybrid_index",
+        params={},
+        actor="test-user",
+    )
+    assert source.source_draft_version_id is not None
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": "publication_001"})
+    )
+    store._write_knowledge_source_publication(
+        KnowledgeSourcePublicationRecord(
+            publication_id="record_001",
+            source_id=source.source_id,
+            resource_kind="hybrid_publication",
+            resource_id="publication_001",
+            source_draft_version_id=source.source_draft_version_id,
+            validation_id="validation_001",
+            change_note="Publish governed Hybrid index.",
+            published_at="2026-07-12T00:00:00Z",
+            published_by="test-user",
+            document_count=1,
+            smoke_query="policy",
+        )
+    )
+
+    store._require_resolved_shared_knowledge_sources_active_unlocked(
+        ResolvedKnowledgeBindingSet(bindings=(_resolved_hybrid_binding(),))
+    )
 
 
 def _publish_package(

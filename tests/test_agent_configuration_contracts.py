@@ -14,6 +14,7 @@ from proof_agent.contracts import (
     ContractBundle,
     DraftAgent,
     EffectiveWorkflowStageConfigurationStage,
+    ExactArtifactRef,
     FoundationKnowledgeSourceValidation,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
@@ -27,6 +28,9 @@ from proof_agent.contracts import (
     PublishedWorkflowStageConfigurationSnapshot,
     QuarantinedKnowledgeUpload,
     PublishedAgentVersion,
+    ResolvedHybridKnowledgeBinding,
+    ResolvedKnowledgeBinding,
+    ResolvedKnowledgeBindingSet,
     ToolSource,
     WorkflowStageAvailability,
     WorkflowStageAvailabilityReason,
@@ -100,6 +104,55 @@ def test_published_agent_version_requires_validation_run_id() -> None:
             published_at="2026-05-27T00:06:00Z",
             published_by="local-user",
         )
+
+
+def test_published_agent_version_round_trips_mixed_resolved_knowledge_bindings() -> None:
+    version = PublishedAgentVersion(
+        agent_id="enterprise_qa",
+        version_id="version_001",
+        source_draft_id="draft_001",
+        validation_run_id="run_validation_001",
+        contract_bundle=_contract_bundle(),
+        published_at="2026-07-12T00:00:00Z",
+        published_by="local-user",
+        resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
+            bindings=(
+                ResolvedKnowledgeBinding(
+                    binding_id="kb_legacy",
+                    source_scope="shared",
+                    source_id="ks_legacy",
+                    source_version_id="snapshot_legacy",
+                    provider="local_index",
+                ),
+                ResolvedHybridKnowledgeBinding(
+                    binding_id="kb_hybrid",
+                    source_id="ks_hybrid",
+                    source_publication_id="publication_001",
+                    source_snapshot_id="snapshot_001",
+                    index_generation_id="generation_001",
+                    source_publication_seq=1,
+                    retrieval_profile_revision_id="profile_001",
+                    manifest_ref=ExactArtifactRef(
+                        artifact_uri="s3://knowledge/manifests/root.json",
+                        version_id="manifest_001",
+                        sha256="1" * 64,
+                        size_bytes=42,
+                        media_type="application/json",
+                    ),
+                    publication_attestation_id="attestation_001",
+                ),
+            )
+        ),
+    )
+
+    restored = PublishedAgentVersion.model_validate_json(version.model_dump_json())
+
+    assert restored.resolved_knowledge_bindings is not None
+    assert isinstance(restored.resolved_knowledge_bindings.bindings[0], ResolvedKnowledgeBinding)
+    assert isinstance(
+        restored.resolved_knowledge_bindings.bindings[1],
+        ResolvedHybridKnowledgeBinding,
+    )
 
 
 def test_published_agent_version_includes_effective_workflow_stage_configuration() -> None:

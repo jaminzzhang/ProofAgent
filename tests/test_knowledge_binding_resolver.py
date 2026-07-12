@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import proof_agent.capabilities.knowledge.http_json as http_json_module
 from proof_agent.bootstrap.knowledge_resolution import (
@@ -11,8 +12,148 @@ from proof_agent.bootstrap.knowledge_resolution import (
 )
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import KnowledgeSourceSnapshotManifest
+from proof_agent.contracts import (
+    ExactArtifactRef,
+    KnowledgeSourceSnapshotManifest,
+    ResolvedHybridKnowledgeBinding,
+    ResolvedKnowledgeBinding,
+    ResolvedKnowledgeBindingSet,
+)
 from proof_agent.errors import ProofAgentError
+
+
+def test_resolved_knowledge_binding_set_round_trips_mixed_binding_types() -> None:
+    bindings = ResolvedKnowledgeBindingSet(
+        bindings=(
+            ResolvedKnowledgeBinding(
+                binding_id="kb_legacy",
+                source_scope="shared",
+                source_id="ks_legacy",
+                source_version_id="snapshot_legacy",
+                provider="local_index",
+            ),
+            ResolvedHybridKnowledgeBinding(
+                binding_id="kb_hybrid",
+                source_id="ks_hybrid",
+                source_publication_id="publication_001",
+                source_snapshot_id="snapshot_001",
+                index_generation_id="generation_001",
+                source_publication_seq=1,
+                retrieval_profile_revision_id="profile_001",
+                manifest_ref=ExactArtifactRef(
+                    artifact_uri="s3://knowledge/manifests/root.json",
+                    version_id="manifest_001",
+                    sha256="1" * 64,
+                    size_bytes=42,
+                    media_type="application/json",
+                ),
+                publication_attestation_id="attestation_001",
+            ),
+        )
+    )
+
+    restored = ResolvedKnowledgeBindingSet.model_validate_json(bindings.model_dump_json())
+
+    assert [binding.binding_id for binding in restored.bindings] == [
+        "kb_legacy",
+        "kb_hybrid",
+    ]
+    assert isinstance(restored.bindings[0], ResolvedKnowledgeBinding)
+    assert isinstance(restored.bindings[1], ResolvedHybridKnowledgeBinding)
+
+
+def test_resolved_knowledge_binding_set_loads_legacy_payload_without_discriminator() -> None:
+    legacy_payload = {
+        "bindings": [
+            {
+                "binding_id": "kb_legacy",
+                "source_scope": "shared",
+                "source_id": "ks_legacy",
+                "source_version_id": "snapshot_legacy",
+                "provider": "local_index",
+                "provider_params": {},
+            }
+        ]
+    }
+
+    restored = ResolvedKnowledgeBindingSet.model_validate(legacy_payload)
+
+    assert isinstance(restored.bindings[0], ResolvedKnowledgeBinding)
+    assert restored.model_dump(mode="json")["bindings"][0]["binding_kind"] == "legacy"
+
+
+@pytest.mark.parametrize(
+    "binding_kind,provider",
+    [
+        ("unknown", "hybrid_index"),
+        ("hybrid", "local_index"),
+        ("legacy", "hybrid_index"),
+    ],
+)
+def test_resolved_knowledge_binding_set_rejects_unknown_or_mismatched_discriminator(
+    binding_kind: str,
+    provider: str,
+) -> None:
+    payload = _hybrid_binding_payload()
+    payload.update(binding_kind=binding_kind, provider=provider)
+    if binding_kind == "legacy":
+        payload["source_version_id"] = "snapshot_001"
+
+    with pytest.raises(ValidationError):
+        ResolvedKnowledgeBindingSet.model_validate({"bindings": [payload]})
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("binding_id", "   "),
+        ("source_id", ""),
+        ("source_publication_id", "\t"),
+        ("source_snapshot_id", ""),
+        ("index_generation_id", " "),
+        ("retrieval_profile_revision_id", ""),
+        ("publication_attestation_id", "  "),
+        ("source_publication_seq", 0),
+        ("source_publication_seq", True),
+        ("fusion_weight", 0.0),
+        ("fusion_weight", float("inf")),
+        ("failure_mode", "fallback"),
+    ],
+)
+def test_resolved_hybrid_knowledge_binding_rejects_invalid_governance_facts(
+    field_name: str,
+    invalid_value: object,
+) -> None:
+    payload = _hybrid_binding_payload()
+    payload[field_name] = invalid_value
+
+    with pytest.raises(ValidationError):
+        ResolvedHybridKnowledgeBinding.model_validate(payload)
+
+
+def _hybrid_binding_payload() -> dict[str, object]:
+    return {
+        "binding_kind": "hybrid",
+        "binding_id": "kb_hybrid",
+        "source_scope": "shared",
+        "source_id": "ks_hybrid",
+        "provider": "hybrid_index",
+        "source_publication_id": "publication_001",
+        "source_snapshot_id": "snapshot_001",
+        "index_generation_id": "generation_001",
+        "source_publication_seq": 1,
+        "retrieval_profile_revision_id": "profile_001",
+        "manifest_ref": {
+            "artifact_uri": "s3://knowledge/manifests/root.json",
+            "version_id": "manifest_001",
+            "sha256": "1" * 64,
+            "size_bytes": 42,
+            "media_type": "application/json",
+        },
+        "publication_attestation_id": "attestation_001",
+        "failure_mode": "required",
+        "fusion_weight": 1.0,
+    }
 
 
 def test_package_resolver_resolves_package_source(tmp_path: Path) -> None:

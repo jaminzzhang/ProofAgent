@@ -1,12 +1,21 @@
 import json
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
+import proof_agent.capabilities.knowledge.blended as blended_module
 from proof_agent.capabilities.knowledge import resolve_knowledge_provider
+from proof_agent.capabilities.knowledge.blended import resolve_blended_knowledge_provider
 from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider, HttpJsonRequest
 from proof_agent.capabilities.knowledge.local_provider import LocalMarkdownProvider
-from proof_agent.contracts import EvidenceStatus, KnowledgeConfig
+from proof_agent.contracts import (
+    EvidenceStatus,
+    ExactArtifactRef,
+    KnowledgeConfig,
+    ResolvedHybridKnowledgeBinding,
+    ResolvedKnowledgeBindingSet,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -218,3 +227,52 @@ def test_unknown_knowledge_provider_fails() -> None:
         resolve_knowledge_provider(KnowledgeConfig(provider="unknown", params={}))
 
     assert exc.value.code == "PA_KNOWLEDGE_001"
+
+
+def test_hybrid_binding_cannot_execute_through_legacy_blended_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_calls: list[KnowledgeConfig] = []
+
+    def unexpected_registry_call(config: KnowledgeConfig, **_: object) -> None:
+        registry_calls.append(config)
+        raise AssertionError("legacy provider registry must not receive Hybrid bindings")
+
+    monkeypatch.setattr(
+        blended_module,
+        "resolve_knowledge_provider",
+        unexpected_registry_call,
+    )
+    bindings = ResolvedKnowledgeBindingSet(
+        bindings=(_resolved_hybrid_binding(failure_mode="advisory"),)
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        resolve_blended_knowledge_provider(bindings)
+
+    assert exc.value.code == "PA_KNOWLEDGE_001"
+    assert "Hybrid execution is unavailable" in exc.value.message
+    assert registry_calls == []
+
+
+def _resolved_hybrid_binding(
+    *, failure_mode: Literal["required", "advisory"] = "required"
+) -> ResolvedHybridKnowledgeBinding:
+    return ResolvedHybridKnowledgeBinding(
+        binding_id="kb_hybrid",
+        source_id="ks_hybrid",
+        source_publication_id="publication_001",
+        source_snapshot_id="snapshot_001",
+        index_generation_id="generation_001",
+        source_publication_seq=1,
+        retrieval_profile_revision_id="profile_001",
+        manifest_ref=ExactArtifactRef(
+            artifact_uri="s3://knowledge/manifests/root.json",
+            version_id="manifest_001",
+            sha256="1" * 64,
+            size_bytes=42,
+            media_type="application/json",
+        ),
+        publication_attestation_id="attestation_001",
+        failure_mode=failure_mode,
+    )

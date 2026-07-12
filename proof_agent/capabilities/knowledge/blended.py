@@ -8,6 +8,7 @@ from proof_agent.capabilities.knowledge.registry import resolve_knowledge_provid
 from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.contracts import EvidenceChunk, EvidenceContribution
 from proof_agent.contracts.knowledge_resolution import (
+    ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
 )
@@ -91,6 +92,12 @@ def resolve_blended_knowledge_provider(
 ) -> BlendedKnowledgeProvider:
     bound_providers: list[BoundKnowledgeProvider] = []
     for resolved in resolved_bindings.bindings:
+        if isinstance(resolved, ResolvedHybridKnowledgeBinding):
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "Hybrid execution is unavailable until the governed Hybrid provider path is composed.",
+                "Use a legacy Knowledge binding until the governed Hybrid provider path is available.",
+            )
         provider = resolve_knowledge_provider(
             KnowledgeConfig(provider=resolved.provider, params=resolved.provider_params),
             configuration_store=configuration_store,

@@ -57,6 +57,7 @@ from proof_agent.contracts import (
     PublishedAgentVersion,
     PublishedWorkflowStageConfigurationSnapshot,
     QuarantinedKnowledgeUpload,
+    ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
     ResolvedWorkflowStageRuntimeConfiguration,
     ModelConnectionSmokeTestRecord,
@@ -2501,6 +2502,22 @@ class LocalAgentConfigurationStore:
                     "Published Agent Version requires resolved shared Knowledge Source bindings. "
                     "Revalidate the Draft Agent before publishing."
                 )
+            if isinstance(binding, ResolvedHybridKnowledgeBinding):
+                if binding.source_publication_id != published_resource_id:
+                    raise _knowledge_source_lifecycle_conflict(
+                        "Published Agent Version requires resolved shared Knowledge Source bindings. "
+                        "Revalidate the Draft Agent before publishing."
+                    )
+                has_publication = any(
+                    publication.resource_kind == "hybrid_publication"
+                    and publication.resource_id == binding.source_publication_id
+                    for publication in self.list_knowledge_source_publications(source.source_id)
+                )
+                if not has_publication:
+                    raise _knowledge_source_lifecycle_conflict(
+                        f"published Hybrid Knowledge Source publication is missing: {source.source_id}"
+                    )
+                continue
             if binding.source_version_id != published_resource_id:
                 raise _knowledge_source_lifecycle_conflict(
                     "Published Agent Version requires resolved shared Knowledge Source bindings. "
