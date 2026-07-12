@@ -3,14 +3,36 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Literal, Self, TypeAlias
 
-from pydantic import ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    StringConstraints,
+    model_validator,
+)
 
 from proof_agent.contracts._base import FrozenModel
 
 
 NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-TaxonomyValue: TypeAlias = str | int | float | bool
+FiniteStrictFloat = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+TaxonomyValue: TypeAlias = StrictStr | StrictInt | StrictBool | FiniteStrictFloat
+BusinessDate = Annotated[date, Field(strict=True)]
+
+
+def _canonicalize_identifier_set(values: tuple[str, ...]) -> tuple[str, ...]:
+    if len(values) != len(set(values)):
+        raise ValueError("identifier collection values must be unique")
+    return tuple(sorted(values))
+
+
+CanonicalIdentifierSet = Annotated[
+    tuple[NonBlankStr, ...], AfterValidator(_canonicalize_identifier_set)
+]
 
 
 class _InsuranceRuleModel(FrozenModel):
@@ -19,7 +41,7 @@ class _InsuranceRuleModel(FrozenModel):
 
 class ScopeDimension(_InsuranceRuleModel):
     mode: Literal["ALL", "ALLOWLIST"]
-    values: tuple[NonBlankStr, ...] = ()
+    values: CanonicalIdentifierSet = ()
 
     @model_validator(mode="after")
     def validate_values(self) -> Self:
@@ -71,6 +93,12 @@ class TaxonomyCondition(_InsuranceRuleModel):
     def validate_cardinality(self) -> Self:
         if self.operator in {"EQ", "NOT_EQ"} and len(self.values) != 1:
             raise ValueError(f"{self.operator} requires exactly one value")
+        value_types = {type(value) for value in self.values}
+        if len(value_types) != 1:
+            raise ValueError("taxonomy condition values must use one exact scalar type")
+        typed_values = {(type(value), value) for value in self.values}
+        if len(typed_values) != len(self.values):
+            raise ValueError("taxonomy condition values must be unique")
         return self
 
 
@@ -90,16 +118,16 @@ class InsuranceRuleApplicability(_InsuranceRuleModel):
 class InsuranceRulePrecedence(_InsuranceRuleModel):
     policy_revision_id: NonBlankStr
     authority_tier: NonBlankStr
-    order: int = Field(ge=0)
+    order: Annotated[StrictInt, Field(ge=0)]
 
 
 class _InsuranceRuleMetadata(_InsuranceRuleModel):
     applicability: InsuranceRuleApplicability
-    effective_from: date | None = None
-    effective_to: date | None = None
+    effective_from: BusinessDate | None = None
+    effective_to: BusinessDate | None = None
     authority: NonBlankStr
     precedence: InsuranceRulePrecedence
-    supersedes_rule_unit_revision_ids: tuple[NonBlankStr, ...] = ()
+    supersedes_rule_unit_revision_ids: CanonicalIdentifierSet = ()
 
     @model_validator(mode="after")
     def validate_effective_period(self) -> Self:
@@ -118,11 +146,11 @@ class InsuranceRuleMetadataDraft(_InsuranceRuleModel):
     revision_id: NonBlankStr
     authoritative: Literal[False] = False
     applicability: InsuranceRuleApplicability | None = None
-    effective_from: date | None = None
-    effective_to: date | None = None
+    effective_from: BusinessDate | None = None
+    effective_to: BusinessDate | None = None
     authority: NonBlankStr | None = None
     precedence: InsuranceRulePrecedence | None = None
-    supersedes_rule_unit_revision_ids: tuple[NonBlankStr, ...] = ()
+    supersedes_rule_unit_revision_ids: CanonicalIdentifierSet = ()
     proposed_visibility: ProposedInsuranceKnowledgeVisibilityScope | None = None
 
     @model_validator(mode="after")
@@ -171,7 +199,7 @@ class InsuranceEvidenceSlotRequirement(_InsuranceRuleModel):
     requirement_kind: EvidenceRequirementKind
     subject_id: NonBlankStr
     scope: InsuranceRuleApplicability | None = None
-    required_rule_unit_revision_ids: tuple[NonBlankStr, ...] = ()
+    required_rule_unit_revision_ids: CanonicalIdentifierSet = ()
 
 
 AuthorityGateCheckName: TypeAlias = Literal[

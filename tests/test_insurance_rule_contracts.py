@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -84,6 +84,16 @@ def test_allowlist_requires_values_and_all_rejects_values() -> None:
         ScopeDimension(mode="ALL", values=("unexpected",))
 
 
+def test_allowlist_values_are_unique_trimmed_and_canonicalized() -> None:
+    first = ScopeDimension(mode="ALLOWLIST", values=(" REGION-B ", "REGION-A"))
+    second = ScopeDimension(mode="ALLOWLIST", values=("REGION-A", "REGION-B"))
+
+    assert first.values == ("REGION-A", "REGION-B")
+    assert first.model_dump_json() == second.model_dump_json()
+    with pytest.raises(ValidationError):
+        ScopeDimension(mode="ALLOWLIST", values=("REGION-A", " REGION-A "))
+
+
 def test_public_visibility_forbids_dimension_scopes() -> None:
     with pytest.raises(ValidationError):
         ApprovedInsuranceKnowledgeVisibilityScope(
@@ -164,12 +174,83 @@ def test_approved_metadata_revision_preserves_business_authority_distinctions() 
         )
 
 
+def test_business_dates_reject_datetimes_and_round_trip_iso_dates() -> None:
+    metadata = ApprovedInsuranceRuleMetadataRevision(
+        metadata_revision_id="metadata-v4",
+        applicability=applicability(),
+        effective_from=date(2026, 1, 1),
+        effective_to=date(2026, 12, 31),
+        authority="institution-underwriting-manual",
+        precedence=precedence(),
+    )
+
+    restored = ApprovedInsuranceRuleMetadataRevision.model_validate_json(metadata.model_dump_json())
+    assert restored.effective_from == date(2026, 1, 1)
+    assert json.loads(metadata.model_dump_json())["effective_from"] == "2026-01-01"
+
+    for field in ("effective_from", "effective_to"):
+        values = metadata.model_dump()
+        values[field] = datetime(2026, 1, 1, 0, 0, 0)
+        with pytest.raises(ValidationError):
+            ApprovedInsuranceRuleMetadataRevision(**values)
+
+        json_values = metadata.model_dump(mode="json")
+        json_values[field] = "2026-01-01T00:00:00"
+        with pytest.raises(ValidationError):
+            ApprovedInsuranceRuleMetadataRevision.model_validate_json(json.dumps(json_values))
+
+
+@pytest.mark.parametrize("value", ["text", 7, True, 2.5])
+def test_taxonomy_scalar_types_round_trip_without_coercion(value: object) -> None:
+    condition = TaxonomyCondition(key="typed", operator="EQ", values=(value,))
+    restored = TaxonomyCondition.model_validate_json(condition.model_dump_json())
+
+    assert restored.values == (value,)
+    assert type(restored.values[0]) is type(value)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        (float("nan"),),
+        (float("inf"),),
+        (float("-inf"),),
+        (True, 1),
+        (1, 1.0),
+        ("duplicate", "duplicate"),
+        (2, 2),
+    ],
+)
+def test_taxonomy_values_reject_non_finite_mixed_or_duplicate_values(
+    values: tuple[object, ...],
+) -> None:
+    with pytest.raises(ValidationError):
+        TaxonomyCondition(key="typed", operator="IN", values=values)
+
+
 def test_applicability_conditions_are_taxonomy_bound_and_deterministic() -> None:
     assert applicability().conditions[0].values == ("P-1",)
     with pytest.raises(ValidationError):
         TaxonomyCondition(key="product_code", operator="EQ", values=("P-1", "P-2"))
     with pytest.raises(ValidationError):
         TaxonomyCondition(key="product_code", operator="IN", values=())
+
+
+@pytest.mark.parametrize("invalid_order", [True, "10", 10.0, 1.5])
+def test_precedence_order_is_a_strict_non_negative_integer(invalid_order: object) -> None:
+    with pytest.raises(ValidationError):
+        InsuranceRulePrecedence(
+            policy_revision_id="precedence-v2",
+            authority_tier="institution-exception",
+            order=invalid_order,
+        )
+
+    with pytest.raises(ValidationError):
+        InsuranceRulePrecedence(
+            policy_revision_id="precedence-v2",
+            authority_tier="institution-exception",
+            order=-1,
+        )
 
 
 def test_evidence_slot_supports_pre_retrieval_and_exact_rule_constraints() -> None:
@@ -188,6 +269,53 @@ def test_evidence_slot_supports_pre_retrieval_and_exact_rule_constraints() -> No
 
     assert planned.required_rule_unit_revision_ids == ()
     assert exact.required_rule_unit_revision_ids == ("rule-rev-1",)
+
+
+def test_identity_collections_are_unique_trimmed_and_canonicalized() -> None:
+    metadata_a = InsuranceRuleMetadataDraft(
+        metadata_draft_id="draft-1",
+        document_id="doc-1",
+        revision_id="doc-rev-2",
+        supersedes_rule_unit_revision_ids=(" rule-rev-2 ", "rule-rev-1"),
+    )
+    metadata_b = InsuranceRuleMetadataDraft(
+        metadata_draft_id="draft-1",
+        document_id="doc-1",
+        revision_id="doc-rev-2",
+        supersedes_rule_unit_revision_ids=("rule-rev-1", "rule-rev-2"),
+    )
+    evidence_a = InsuranceEvidenceSlotRequirement(
+        slot_id="slot-clause",
+        requirement_kind="requested_clause",
+        subject_id="clause-4.2",
+        required_rule_unit_revision_ids=(" rule-rev-2 ", "rule-rev-1"),
+    )
+    evidence_b = InsuranceEvidenceSlotRequirement(
+        slot_id="slot-clause",
+        requirement_kind="requested_clause",
+        subject_id="clause-4.2",
+        required_rule_unit_revision_ids=("rule-rev-1", "rule-rev-2"),
+    )
+
+    assert metadata_a.supersedes_rule_unit_revision_ids == ("rule-rev-1", "rule-rev-2")
+    assert metadata_a.model_dump_json() == metadata_b.model_dump_json()
+    assert evidence_a.required_rule_unit_revision_ids == ("rule-rev-1", "rule-rev-2")
+    assert evidence_a.model_dump_json() == evidence_b.model_dump_json()
+
+    with pytest.raises(ValidationError):
+        InsuranceRuleMetadataDraft(
+            metadata_draft_id="draft-1",
+            document_id="doc-1",
+            revision_id="doc-rev-2",
+            supersedes_rule_unit_revision_ids=("rule-rev-1", " rule-rev-1 "),
+        )
+    with pytest.raises(ValidationError):
+        InsuranceEvidenceSlotRequirement(
+            slot_id="slot-clause",
+            requirement_kind="requested_clause",
+            subject_id="clause-4.2",
+            required_rule_unit_revision_ids=("rule-rev-1", " rule-rev-1 "),
+        )
 
 
 def passing_checks() -> tuple[AuthorityGateCheck, ...]:
