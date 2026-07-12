@@ -45,6 +45,7 @@ from proof_agent.control.workflow.controlled_react.stage_contexts import (
 from proof_agent.control.workflow.controlled_react.ports import SnapshotStorePort
 from proof_agent.control.workflow.controlled_react.ports import ObservationTruthStorePort
 from proof_agent.control.workflow.harness_helpers import (
+    emit_model_error,
     finalize_run,
 )
 from proof_agent.control.workflow.templates import resolve_workflow_template
@@ -156,14 +157,19 @@ def _execute_controlled_react_v3_agent_package_run(
         conversation_context=request.conversation_context,
         run_start_context=run_start_context,
     )
-    invocation = compose_harness_invocation(
-        request.agent_yaml,
-        manifest=manifest,
-        knowledge_binding_resolver=request.knowledge_binding_resolver,
-        resolved_knowledge_bindings=request.resolved_knowledge_bindings,
-        configuration_store=request.configuration_store,
-        context_budget_calibration_store=request.context_budget_calibration_store,
-    )
+    try:
+        invocation = compose_harness_invocation(
+            request.agent_yaml,
+            manifest=manifest,
+            knowledge_binding_resolver=request.knowledge_binding_resolver,
+            resolved_knowledge_bindings=request.resolved_knowledge_bindings,
+            configuration_store=request.configuration_store,
+            context_budget_calibration_store=request.context_budget_calibration_store,
+        )
+    except ProofAgentError as exc:
+        if exc.code.startswith("PA_MODEL_"):
+            emit_model_error(trace, manifest.model.provider, manifest.model.name, exc)
+        raise
     stage_contexts, initial_stage_context_applications = build_controlled_react_stage_contexts(
         invocation=invocation,
         execution_input=execution_input,

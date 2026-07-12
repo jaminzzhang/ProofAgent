@@ -11,8 +11,11 @@ from proof_agent.contracts import (
     ReceiptOutcome,
 )
 from proof_agent.control.workflow.harness_helpers import validate_model_output
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
 from proof_agent.bootstrap import composition
+from proof_agent.delivery.agent_package_execution import (
+    AgentPackageRunRequest,
+    execute_agent_package_run,
+)
 
 
 class _UnsafeProvider:
@@ -38,13 +41,15 @@ def test_model_output_must_pass_safety_and_citation_validators(
     provider: ModelProvider = _UnsafeProvider()
     monkeypatch.setattr(composition, "resolve_provider", lambda _config: provider)
 
-    result = run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path,
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path("examples/agent_management_insurance_specialist/agent.yaml"),
+            question="住院理赔需要哪些材料？",
+            runs_dir=tmp_path,
+        )
     )
 
-    assert result.outcome == "REFUSED_NO_EVIDENCE"
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
     assert "model output failed validation" in result.final_output
 
 

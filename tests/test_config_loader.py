@@ -1,20 +1,29 @@
 from pathlib import Path
+import shutil
 
 import pytest
+import yaml
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.errors import ProofAgentError
 
 
 @pytest.mark.parametrize(
-    "manifest_path",
-    (
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml"),
-    ),
+    "removed_template",
+    ("enterprise_qa", "react_enterprise_qa", "react_enterprise_qa_v2"),
 )
-def test_load_rejects_removed_workflow_template(manifest_path: Path) -> None:
+def test_load_rejects_removed_workflow_template(
+    tmp_path: Path,
+    removed_template: str,
+) -> None:
+    fixture_dir = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3")
+    agent_dir = tmp_path / removed_template
+    shutil.copytree(fixture_dir, agent_dir)
+    manifest_path = agent_dir / "agent.yaml"
+    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    raw["workflow"]["template"] = removed_template
+    manifest_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
     with pytest.raises(ProofAgentError) as exc:
         load_agent_manifest(manifest_path)
 

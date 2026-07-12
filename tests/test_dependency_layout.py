@@ -32,21 +32,11 @@ def test_v3_delivery_has_no_legacy_runtime_entrypoint() -> None:
     )
 
 
-def test_react_graph_builder_does_not_own_workflow_node_implementations() -> None:
-    tree = ast.parse(Path("proof_agent/runtime/react_graph.py").read_text(encoding="utf-8"))
-    builder = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "build_react_enterprise_qa_graph"
-    )
-
-    nested_node_functions = [
-        node.name
-        for node in ast.walk(builder)
-        if isinstance(node, ast.FunctionDef) and node.name.endswith("_node")
-    ]
-
-    assert nested_node_functions == []
+def test_legacy_runtime_package_is_absent() -> None:
+    assert not Path("proof_agent/runtime").exists()
+    assert not Path("proof_agent/control/workflow/react_enterprise_qa.py").exists()
+    assert not Path("proof_agent/control/workflow/react_enterprise_qa_execution.py").exists()
+    assert not Path("proof_agent/control/workflow/react_enterprise_qa_stage_behavior.py").exists()
 
 
 def test_controlled_react_leaf_modules_do_not_import_legacy_or_runtime_frameworks() -> None:
@@ -89,20 +79,6 @@ def test_v3_delivery_imports_execution_input_from_controlled_react() -> None:
         "_resolve_workflow_stage_runtime_configuration",
         "_workflow_template_execution_input",
     } & imports_by_module.get("proof_agent.runtime.langgraph_runner", set())
-
-
-def test_runtime_adapters_delegate_v3_authorities_to_controlled_react() -> None:
-    langgraph_imports = _imports_by_module(Path("proof_agent/runtime/langgraph_runner.py"))
-    approval_imports = _imports_by_module(Path("proof_agent/runtime/approval_resume.py"))
-
-    assert {
-        "build_workflow_template_execution_input",
-        "resolve_workflow_stage_runtime_configuration",
-    } <= langgraph_imports["proof_agent.control.workflow.controlled_react.execution_input"]
-    assert {
-        "FileControlledReActSnapshotStore",
-        "FileObservationTruthStore",
-    } <= approval_imports["proof_agent.control.workflow.controlled_react.local_stores"]
 
 
 def test_controlled_react_consumers_use_focused_leaf_authorities() -> None:

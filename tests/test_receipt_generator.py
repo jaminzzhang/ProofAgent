@@ -5,7 +5,23 @@ import shutil
 import yaml
 
 from proof_agent.observability.audit.receipt import generate_receipt
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
+from proof_agent.delivery.agent_package_execution import (
+    AgentPackageRunRequest,
+    execute_agent_package_run,
+)
+
+
+V3_AGENT = Path("examples/agent_management_insurance_specialist/agent.yaml")
+
+
+def _run_v3(agent_yaml: Path, *, question: str, runs_dir: Path):
+    return execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=agent_yaml,
+            question=question,
+            runs_dir=runs_dir,
+        )
+    )
 
 
 def test_receipt_contains_required_sections(tmp_path: Path) -> None:
@@ -114,9 +130,9 @@ def test_receipt_renders_mcp_tool_result_summary_without_raw_payload(
 
 
 def test_receipt_renders_react_review_sections(tmp_path: Path) -> None:
-    result = run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
-        question="What is the reimbursement rule for travel meals?",
+    result = _run_v3(
+        V3_AGENT,
+        question="住院理赔需要哪些材料？",
         runs_dir=tmp_path,
     )
 
@@ -127,10 +143,10 @@ def test_receipt_renders_react_review_sections(tmp_path: Path) -> None:
     assert "raw chain-of-thought" not in receipt.lower()
 
 
-def test_receipt_renders_react_v2_intent_resolution(tmp_path: Path) -> None:
-    result = run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml"),
-        question="What is the reimbursement rule for travel meals?",
+def test_receipt_renders_v3_intent_resolution(tmp_path: Path) -> None:
+    result = _run_v3(
+        V3_AGENT,
+        question="住院理赔需要哪些材料？",
         runs_dir=tmp_path / "run",
     )
 
@@ -144,8 +160,8 @@ def test_receipt_renders_react_v2_intent_resolution(tmp_path: Path) -> None:
 def test_receipt_renders_business_flow_skill_pack_summary_without_raw_pack_content(
     tmp_path: Path,
 ) -> None:
-    example_dir = tmp_path / "react_enterprise_qa_v2"
-    fixture_dir = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2")
+    example_dir = tmp_path / "agent_management_insurance_specialist"
+    fixture_dir = V3_AGENT.parent
     shutil.copytree(fixture_dir, example_dir)
     skill_pack_dir = example_dir / "skill_packs"
     skill_pack_dir.mkdir()
@@ -164,10 +180,10 @@ stage_prompt_addenda:
     task_instructions:
       - "Prioritize the bound policy knowledge source before planning."
 knowledge_binding_refs:
-  - react_enterprise_qa_v2_knowledge_binding
+  - claims_sop_docs
 tool_contract_refs: []
 policy_rule_refs:
-  - answering.require_retrieval
+  - answering.require_evidence
 validator_refs: []
 admission:
   min_confidence: 0.5
@@ -187,9 +203,9 @@ admission:
     }
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
-    result = run_with_langgraph(
+    result = _run_v3(
         manifest_path,
-        question="What is the reimbursement rule for travel meals?",
+        question="住院理赔需要哪些材料？",
         runs_dir=tmp_path / "run",
     )
 
@@ -214,8 +230,8 @@ admission:
 def test_receipt_renders_business_flow_admission_failure_without_stage_application(
     tmp_path: Path,
 ) -> None:
-    example_dir = tmp_path / "react_enterprise_qa_v2"
-    fixture_dir = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2")
+    example_dir = tmp_path / "agent_management_insurance_specialist"
+    fixture_dir = V3_AGENT.parent
     shutil.copytree(fixture_dir, example_dir)
     skill_pack_dir = example_dir / "skill_packs"
     skill_pack_dir.mkdir()
@@ -232,10 +248,10 @@ stage_prompt_addenda:
   plan:
     business_context: "{blocked_context}"
 knowledge_binding_refs:
-  - react_enterprise_qa_v2_knowledge_binding
+  - claims_sop_docs
 tool_contract_refs: []
 policy_rule_refs:
-  - answering.require_retrieval
+  - answering.require_evidence
 validator_refs: []
 admission:
   min_confidence: 0.5
@@ -256,9 +272,9 @@ admission:
     }
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
-    result = run_with_langgraph(
+    result = _run_v3(
         manifest_path,
-        question="What is the reimbursement rule for travel meals?",
+        question="住院理赔需要哪些材料？",
         runs_dir=tmp_path / "run",
     )
 
@@ -277,8 +293,8 @@ admission:
 
 
 def test_receipt_renders_actionable_react_clarification(tmp_path: Path) -> None:
-    result = run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+    result = _run_v3(
+        V3_AGENT,
         question="Can this customer claim it?",
         runs_dir=tmp_path,
     )
