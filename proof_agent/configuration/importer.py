@@ -35,6 +35,27 @@ def import_agent_package(
 
     resolved_manifest_path = manifest_path.resolve()
     manifest = load_agent_manifest(resolved_manifest_path)
+    bundle = _build_agent_package_contract_bundle(resolved_manifest_path)
+    return store.create_draft(
+        agent_id=manifest.name,
+        display_name=manifest.name,
+        purpose=manifest.purpose,
+        contract_bundle=bundle,
+        actor=actor,
+    )
+
+
+def build_agent_package_contract_bundle(manifest_path: Path) -> ContractBundle:
+    """Return the validated, canonical import bundle for one Agent Package."""
+
+    resolved_manifest_path = manifest_path.resolve()
+    load_agent_manifest(resolved_manifest_path)
+    return _build_agent_package_contract_bundle(resolved_manifest_path)
+
+
+def _build_agent_package_contract_bundle(
+    resolved_manifest_path: Path,
+) -> ContractBundle:
     raw = _read_yaml_mapping(resolved_manifest_path)
     package_dir = resolved_manifest_path.parent
     policy_path = _resolve_package_path(package_dir, raw["policy"]["file"])
@@ -48,7 +69,7 @@ def import_agent_package(
         excluded_paths = {resolved_manifest_path, policy_path, tools_path}
     extra_files = _collect_extra_files(package_dir, excluded_paths)
     extra_files.update(external_tool_files)
-    bundle = ContractBundle(
+    return ContractBundle(
         agent_yaml=resolved_manifest_path.read_text(encoding="utf-8"),
         policy_yaml=policy_path.read_text(encoding="utf-8"),
         tools_yaml=tools_yaml,
@@ -56,13 +77,6 @@ def import_agent_package(
         advanced_fields={
             key: value for key, value in raw.items() if key not in BASIC_UI_TOP_LEVEL_FIELDS
         },
-    )
-    return store.create_draft(
-        agent_id=manifest.name,
-        display_name=manifest.name,
-        purpose=manifest.purpose,
-        contract_bundle=bundle,
-        actor=actor,
     )
 
 

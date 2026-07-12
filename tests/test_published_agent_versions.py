@@ -31,14 +31,12 @@ def _publish_package(
     return store, draft.agent_id, version.version_id
 
 
-def test_registry_defaults_to_customer_facing_insurance_example_agent() -> None:
+def test_registry_has_no_static_default_agents() -> None:
     registry = PublishedAgentRegistry()
 
-    resolved = registry.resolve_customer_facing("insurance_customer_service")
-
-    assert resolved is not None
-    assert resolved.customer_facing
-    assert registry.list_agent_ids() == ("insurance_customer_service",)
+    assert registry.resolve("agent_management_insurance_specialist") is None
+    assert registry.resolve_customer_facing("insurance_customer_service") is None
+    assert registry.list_agent_ids() == ()
 
 
 def test_registry_can_be_explicitly_configured_empty() -> None:

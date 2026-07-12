@@ -21,6 +21,8 @@ from pydantic import ValidationError
 from typer.core import TyperCommand
 
 from proof_agent import __version__
+from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.configuration.importer import build_agent_package_contract_bundle
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
 from proof_agent.delivery.remote_verify_gateway import VERIFY_REMOTE_CHAT_BASE
 from proof_agent.errors import ProofAgentError
@@ -62,7 +64,12 @@ app.add_typer(release_app, name="release")
 
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
-PUBLIC_EXAMPLE_PATH = Path("examples/insurance_customer_service/agent.yaml")
+PUBLIC_EXAMPLE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "examples"
+    / "agent_management_insurance_specialist"
+    / "agent.yaml"
+)
 DEV_PROCESS_POLL_SECONDS = 0.5
 SERVER_HISTORY_DIR_ENV = "PROOF_AGENT_SERVER_HISTORY_DIR"
 SERVER_CONFIG_DIR_ENV = "PROOF_AGENT_SERVER_CONFIG_DIR"
@@ -393,11 +400,11 @@ def doctor() -> None:
         ("Proof Agent", __version__),
         ("runs writable", _writable_status(Path("runs"))),
         (
-            "agent.yaml",
+            "canonical specialist agent.yaml",
             "ok" if PUBLIC_EXAMPLE_PATH.exists() else "missing",
         ),
         (
-            "sample knowledge",
+            "specialist sample knowledge",
             "ok" if (PUBLIC_EXAMPLE_PATH.parent / "knowledge").exists() else "missing",
         ),
         ("Docker", "available" if which("docker") else "not found"),
@@ -693,7 +700,10 @@ def server(
     seed_example_agent: bool = typer.Option(
         True,
         "--seed-example-agent/--no-seed-example-agent",
-        help="Import and publish the canonical Insurance Customer Service Agent when absent.",
+        help=(
+            "Import and publish the canonical Agent Management Insurance Specialist "
+            "when absent; reject a stale local version."
+        ),
     ),
 ) -> None:
     """Start the Proof Agent API server."""
@@ -711,7 +721,7 @@ def server(
 
     configuration_store = LocalAgentConfigurationStore(Path(config_dir))
     if seed_example_agent and _seed_default_dev_agent(configuration_store):
-        typer.echo("Seeded local configuration with insurance_customer_service.")
+        typer.echo("Seeded local configuration with agent_management_insurance_specialist.")
 
     typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
     typer.echo("To start the frontends in development mode, run:")
@@ -1182,13 +1192,31 @@ def _run_dev_processes(specs: list[tuple[str, list[str]]]) -> None:
 
 
 def _seed_default_dev_agent(store: Any) -> bool:
-    """Publish the canonical customer-facing example into an empty local workspace."""
+    """Publish the canonical V3 operator Agent or reject stale local state."""
 
-    agent_id = "insurance_customer_service"
-    if store.get_active_version(agent_id) is not None:
-        return False
+    agent_id = "agent_management_insurance_specialist"
     if not PUBLIC_EXAMPLE_PATH.exists():
-        return False
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"canonical development Agent package is missing: {PUBLIC_EXAMPLE_PATH}",
+            "Install a distribution containing the canonical Agent package or restore it.",
+            artifact_path=PUBLIC_EXAMPLE_PATH,
+        )
+    active = store.get_active_version(agent_id)
+    if active is not None:
+        if _active_dev_seed_is_current(store, agent_id=agent_id):
+            return False
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            (
+                "active local Agent version is not the canonical Controlled ReAct V3 "
+                "development seed"
+            ),
+            (
+                "Run `proof-agent config-reset --scope local-store --yes`, then restart "
+                "the local development server so the canonical Agent can be seeded."
+            ),
+        )
 
     from proof_agent.configuration.importer import import_agent_package
 
@@ -1200,6 +1228,46 @@ def _seed_default_dev_agent(store: Any) -> bool:
         actor="proof-agent-dev",
     )
     return True
+
+
+def _active_dev_seed_is_current(store: Any, *, agent_id: str) -> bool:
+    active = store.get_active_version(agent_id)
+    if active is None:
+        return False
+    manifest_path = (
+        store.root_dir / "agents" / agent_id / "versions" / active.version_id / "agent.yaml"
+    )
+    try:
+        manifest = load_agent_manifest(manifest_path)
+    except ProofAgentError:
+        return False
+    version = store.get_version(agent_id, active.version_id)
+    if version is None:
+        return False
+    canonical_bundle = build_agent_package_contract_bundle(PUBLIC_EXAMPLE_PATH)
+    review_provider = (
+        manifest.review.subagent.provider
+        if manifest.review is not None and manifest.review.subagent is not None
+        else None
+    )
+    return bool(
+        manifest.name == agent_id
+        and manifest.workflow.runtime == "controlled_react"
+        and manifest.workflow.template == "react_enterprise_qa_v3"
+        and manifest.workflow.template_descriptor_version == "react_enterprise_qa.v3"
+        and manifest.workflow.checkpointer is None
+        and manifest.workflow.stages == ()
+        and manifest.react is not None
+        and manifest.react.max_plan_rounds == manifest.react.max_steps
+        and manifest.react.max_tool_calls == 0
+        and manifest.react.planner.provider == "deterministic"
+        and review_provider == "deterministic"
+        and manifest.model.provider == "deterministic"
+        and not manifest.capabilities.tools.enabled
+        and manifest.capabilities.tools.file is None
+        and manifest.customer is None
+        and version.contract_bundle == canonical_bundle
+    )
 
 
 def _safe_path_segment(value: str) -> str:

@@ -1,17 +1,23 @@
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
+import yaml
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.capabilities.knowledge.ingestion.contracts import KnowledgeWorkerDiagnostic
 from proof_agent.capabilities.knowledge.ingestion.worker import (
     KnowledgeWorkerResult,
     KnowledgeWorkerTaskOutcome,
 )
+from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.delivery.cli import app
+from proof_agent.delivery.cli import _create_server_app_from_env
 from proof_agent.delivery.cli import _seed_default_dev_agent
 from proof_agent.delivery.cli import _verify_remote_process_is_safe_to_stop
 from proof_agent.errors import ProofAgentError
@@ -372,17 +378,34 @@ def test_verify_remote_stop_filter_is_limited_to_development_processes() -> None
     assert not _verify_remote_process_is_safe_to_stop("postgres -D /usr/local/var/postgres")
 
 
-def test_seed_default_dev_agent_publishes_insurance_customer_service(tmp_path: Path) -> None:
+def test_seed_default_dev_agent_publishes_v3_specialist_from_any_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
     store = LocalAgentConfigurationStore(tmp_path / "config")
 
     seeded = _seed_default_dev_agent(store)
 
     assert seeded is True
-    active = store.get_active_version("insurance_customer_service")
+    active = store.get_active_version("agent_management_insurance_specialist")
     assert active is not None
-    version = store.get_version("insurance_customer_service", active.version_id)
+    version = store.get_version(
+        "agent_management_insurance_specialist",
+        active.version_id,
+    )
     assert version is not None
     assert version.validation_run_id == "local_dev_seed"
+    manifest = load_agent_manifest(
+        store.root_dir
+        / "agents"
+        / "agent_management_insurance_specialist"
+        / "versions"
+        / active.version_id
+        / "agent.yaml"
+    )
+    assert manifest.workflow.template == "react_enterprise_qa_v3"
+    assert manifest.capabilities.tools.enabled is False
 
 
 def test_seed_default_dev_agent_is_idempotent(tmp_path: Path) -> None:
@@ -392,7 +415,114 @@ def test_seed_default_dev_agent_is_idempotent(tmp_path: Path) -> None:
     seeded_again = _seed_default_dev_agent(store)
 
     assert seeded_again is False
-    assert len(store.list_versions("insurance_customer_service")) == 1
+    assert len(store.list_versions("agent_management_insurance_specialist")) == 1
+
+
+def test_seed_default_dev_agent_rejects_stale_active_v2_package(tmp_path: Path) -> None:
+    stale_dir = tmp_path / "stale_agent"
+    shutil.copytree(
+        REPO_ROOT / "examples/agent_management_insurance_specialist",
+        stale_dir,
+    )
+    stale_manifest_path = stale_dir / "agent.yaml"
+    raw = yaml.safe_load(stale_manifest_path.read_text(encoding="utf-8"))
+    raw["workflow"]["runtime"] = "langgraph"
+    raw["workflow"]["template"] = "react_enterprise_qa_v2"
+    raw["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v2"
+    stale_manifest_path.write_text(
+        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    draft = import_agent_package(stale_manifest_path, store=store, actor="test-user")
+    stale_version = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="stale_v2",
+        actor="test-user",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        _seed_default_dev_agent(store)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "config-reset --scope local-store --yes" in exc.value.fix
+    active = store.get_active_version("agent_management_insurance_specialist")
+    assert active is not None
+    assert active.version_id == stale_version.version_id
+    assert len(store.list_versions("agent_management_insurance_specialist")) == 1
+
+
+def test_seed_default_dev_agent_rejects_stale_v3_package_content(tmp_path: Path) -> None:
+    stale_dir = tmp_path / "stale_v3_agent"
+    shutil.copytree(
+        REPO_ROOT / "examples/agent_management_insurance_specialist",
+        stale_dir,
+    )
+    skill_path = stale_dir / "skills/claims_consultation.yaml"
+    skill_path.write_text(
+        skill_path.read_text(encoding="utf-8") + "\n# stale local seed\n",
+        encoding="utf-8",
+    )
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    draft = import_agent_package(stale_dir / "agent.yaml", store=store, actor="test-user")
+    stale_version = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="stale_v3",
+        actor="test-user",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        _seed_default_dev_agent(store)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    active = store.get_active_version("agent_management_insurance_specialist")
+    assert active is not None
+    assert active.version_id == stale_version.version_id
+
+
+def test_seed_default_dev_agent_fails_when_packaged_asset_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_path = tmp_path / "missing" / "agent.yaml"
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli.PUBLIC_EXAMPLE_PATH",
+        missing_path,
+    )
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+
+    with pytest.raises(ProofAgentError) as exc:
+        _seed_default_dev_agent(store)
+
+    assert exc.value.code == "PA_CONFIG_001"
+    assert exc.value.artifact_path == missing_path
+
+
+def test_server_factory_seeds_only_v3_specialist_from_non_repo_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROOF_AGENT_SERVER_HISTORY_DIR", str(tmp_path / "history"))
+    monkeypatch.setenv("PROOF_AGENT_SERVER_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("PROOF_AGENT_SERVER_SEED_EXAMPLE_AGENT", "1")
+
+    application = _create_server_app_from_env()
+    response = TestClient(application).get("/api/chat/agents")
+
+    assert response.status_code == 200
+    assert [item["agent_id"] for item in response.json()["data"]] == [
+        "agent_management_insurance_specialist"
+    ]
+    store = application.state.agent_configuration_store
+    active = store.get_active_version("agent_management_insurance_specialist")
+    assert active is not None
+    version = store.get_version("agent_management_insurance_specialist", active.version_id)
+    assert version is not None
+    assert version.workflow_stage_availability is not None
+    assert version.workflow_stage_availability.is_available("tool_review") is False
 
 
 def test_compare_command_runs_supplied_manifest(monkeypatch) -> None:

@@ -10,8 +10,13 @@ interface Template {
 }
 
 const TEMPLATES: readonly Template[] = [
-  { id: 'insurance_customer_service', name: 'Insurance Customer Service', purpose: 'Provide read-only customer service for insurance policy and claim questions.', manifestPath: 'examples/insurance_customer_service/agent.yaml', description: 'Customer-facing ReAct V2 insurance Q&A with account-scoped evidence.' },
-  { id: 'institution_insurance_specialist', name: 'Institution Insurance Specialist', purpose: 'Assist internal insurance institution specialists with governed business consultation and read-only business-system lookup.', manifestPath: 'examples/institution_insurance_specialist/agent.yaml', description: 'Staff-facing ReAct V2 specialist workflow with scoped knowledge and read-only institution tools.' },
+  {
+    id: 'agent_management_insurance_specialist',
+    name: 'Agent Management Insurance Specialist',
+    purpose: 'Assist internal insurance staff with governed, evidence-backed insurance knowledge consultation.',
+    manifestPath: 'examples/agent_management_insurance_specialist/agent.yaml',
+    description: 'Operator-facing Controlled ReAct V3 consultation with deterministic offline validation and tools disabled.',
+  },
 ]
 
 type Step = 'template' | 'details'
@@ -88,7 +93,7 @@ export function CreateAgentWizard({ open, onClose, onCreated, onCreate }: Create
           )}
 
           {state.step === 'template' && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3">
               {TEMPLATES.map((t) => (
                 <button key={t.id} type="button" onClick={() => selectTemplate(t)}
                   className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4 text-left transition-colors hover:border-[var(--accent)] hover:bg-[var(--bg-hover)]">

@@ -22,7 +22,7 @@ admission:
 knowledge_binding_refs:
   - product_clause_docs
 policy_rule_refs:
-  - answering.require_evidence_or_authorized_read
+  - answering.require_evidence
   - response.no_coverage_or_payment_guarantee
 stage_prompt_addenda:
   plan:

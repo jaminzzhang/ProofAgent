@@ -8,9 +8,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import PublishedAgentRuntimeFacts, ResolvedKnowledgeBindingSet
 
 
-DEFAULT_PUBLISHED_AGENTS: dict[str, Path] = {
-    "insurance_customer_service": Path("examples/insurance_customer_service/agent.yaml"),
-}
+DEFAULT_PUBLISHED_AGENTS: dict[str, Path] = {}
 
 
 @dataclass(frozen=True)

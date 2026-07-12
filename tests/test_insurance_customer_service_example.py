@@ -38,8 +38,14 @@ def test_insurance_customer_service_manifest_loads() -> None:
     assert response_stage.context.options["include_response_disclosure_policy"] is True
 
 
-def test_insurance_customer_service_is_customer_facing_by_default() -> None:
-    registry = PublishedAgentRegistry()
+def test_insurance_customer_service_is_customer_facing_when_explicitly_configured() -> None:
+    registry = PublishedAgentRegistry(
+        {
+            "insurance_customer_service": Path(
+                "examples/insurance_customer_service/agent.yaml"
+            )
+        }
+    )
 
     agent = registry.resolve_customer_facing("insurance_customer_service")
 
