@@ -141,6 +141,7 @@ from proof_agent.contracts.hybrid_documents import (
     StructuredBlock,
     StructuredKnowledgeDocumentArtifact,
     StructuredPage,
+    StructuredQualitySignal,
     StructuredTable,
     StructuredTableCell,
 )
@@ -488,6 +489,7 @@ __all__ = [
     "StructuredBlock",
     "StructuredKnowledgeDocumentArtifact",
     "StructuredPage",
+    "StructuredQualitySignal",
     "StructuredTable",
     "StructuredTableCell",
     "ToolSource",
