@@ -1565,14 +1565,22 @@ def _route_bound_providers(
     binding_candidates = _binding_candidate_summaries(query, bound_providers)
     preferred_id_set = frozenset(preferred_binding_ids)
     if preferred_id_set:
-        preferred = tuple(
-            bound
+        bound_by_id = {
+            bound.resolved.binding_id: bound
             for bound in bound_providers
             if bound.resolved.binding_id in preferred_id_set
+        }
+        preferred = tuple(
+            bound_by_id[binding_id]
+            for binding_id in preferred_binding_ids
+            if binding_id in bound_by_id
         )
         if preferred:
+            matched_preferred = tuple(
+                bound for bound in preferred if _routing_metadata_matches(query, bound)
+            )
             return _RoutingDecision(
-                selected=preferred[:selection_budget],
+                selected=(matched_preferred or preferred)[:selection_budget],
                 binding_candidates=binding_candidates,
                 selection_reason="business_flow_skill_pack_refs",
             )

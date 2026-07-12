@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+import json
 from typing import Any, Literal
 
 from proof_agent.capabilities.react.planner import DeterministicReActPlanner
@@ -8,6 +9,7 @@ from proof_agent.capabilities.react.intent import DeterministicIntentResolver
 from proof_agent.bootstrap.composition import HarnessInvocation
 from proof_agent.contracts import (
     AnswerEvidenceContext,
+    BusinessFlowSkillPackAdmissionDecision,
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     EffectiveToolProposalScope,
@@ -31,6 +33,9 @@ from proof_agent.contracts import (
 )
 from proof_agent.control.workflow.controlled_react.orchestrator import (
     ControlledReActOrchestrator,
+)
+from proof_agent.control.workflow.business_flow_skill_packs import (
+    admit_business_flow_skill_pack,
 )
 from proof_agent.control.workflow.controlled_react.final_answer_attempt import (
     FinalAnswerAttemptRunner,
@@ -90,6 +95,8 @@ def build_controlled_react_orchestrator_for_invocation(
     snapshot_store: SnapshotStorePort | None = None,
     observation_truth_store: ObservationTruthStorePort | None = None,
     trace: TracePort | None = None,
+    stage_contexts: Mapping[str, Mapping[str, Any]] | None = None,
+    business_flow_admission_callback: Callable[[str], None] | None = None,
 ) -> ControlledReActOrchestrator:
     """Assemble a run-scoped V3 orchestrator from resolved Harness capabilities."""
 
@@ -103,14 +110,30 @@ def build_controlled_react_orchestrator_for_invocation(
             ModelCallRole.HARNESS_REVIEW: "retrieval_review",
         },
     )
+    business_flow_selection: dict[str, str | None] = {"selected_pack_id": None}
+
+    def record_business_flow_selection(selected_pack_id: str) -> None:
+        business_flow_selection["selected_pack_id"] = selected_pack_id
+        if business_flow_admission_callback is not None:
+            business_flow_admission_callback(selected_pack_id)
+
     return ControlledReActOrchestrator(
         ports=ControlledReActPorts(
-            planner=_InvocationPlannerAdapter(invocation),
-            intent_resolution=_InvocationIntentResolutionAdapter(invocation),
+            planner=_InvocationPlannerAdapter(invocation, stage_contexts=stage_contexts),
+            intent_resolution=_InvocationIntentResolutionAdapter(
+                invocation,
+                stage_contexts=stage_contexts,
+                trace=trace_port,
+                business_flow_admission_callback=record_business_flow_selection,
+            ),
             memory=_InvocationMemoryAdapter(invocation),
             knowledge_observation=_InvocationKnowledgeObservationAdapter(
                 invocation,
                 trace=trace_port,
+                preferred_binding_ids_provider=lambda: _business_flow_knowledge_binding_refs(
+                    invocation,
+                    selected_pack_id=business_flow_selection["selected_pack_id"],
+                ),
             ),
             tool_observation=_InvocationToolObservationAdapter(invocation),
             policy=_InvocationPolicyAdapter(invocation, trace=trace_port),
@@ -119,7 +142,11 @@ def build_controlled_react_orchestrator_for_invocation(
             tool_proposal_scope=_InvocationToolProposalScopeAdapter(invocation),
             snapshot_store=snapshot_store or _InMemorySnapshotStoreAdapter(),
             observation_truth_store=observation_truth_store,
-            answer_synthesis=_ModelAnswerSynthesisAdapter(invocation, trace=trace_port),
+            answer_synthesis=_ModelAnswerSynthesisAdapter(
+                invocation,
+                trace=trace_port,
+                stage_contexts=stage_contexts,
+            ),
         )
     )
 
@@ -139,8 +166,18 @@ class _DeterministicPlannerAdapter:
 
 
 class _InvocationIntentResolutionAdapter:
-    def __init__(self, invocation: HarnessInvocation) -> None:
+    def __init__(
+        self,
+        invocation: HarnessInvocation,
+        *,
+        stage_contexts: Mapping[str, Mapping[str, Any]] | None = None,
+        trace: TracePort | None = None,
+        business_flow_admission_callback: Callable[[str], None] | None = None,
+    ) -> None:
         self._invocation = invocation
+        self._stage_contexts = stage_contexts if stage_contexts is not None else {}
+        self._trace = trace
+        self._business_flow_admission_callback = business_flow_admission_callback
         self._fallback = DeterministicIntentResolver()
         self.stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
 
@@ -150,12 +187,71 @@ class _InvocationIntentResolutionAdapter:
             question=state.question,
             system_prompt="Resolve user intent before Controlled ReAct planning.",
             context_summary="pre_loop=true",
-            workflow_stage_context=None,
+            workflow_stage_context=self._stage_contexts.get("intent_resolution"),
             conversation_context=state.conversation_context,
             memory_recall_payloads=state.memory_recall_payloads,
             business_flow_skill_packs=self._invocation.business_flow_skill_packs,
         )
         self.stage_llm_interactions = stage_llm_interactions(resolver)
+        return self._admit_business_flow(result)
+
+    def _admit_business_flow(self, result: IntentResolutionResult) -> IntentResolutionResult:
+        recommendation = result.business_flow_skill_pack_recommendation
+        if recommendation is None or not self._invocation.business_flow_skill_packs:
+            return result
+        admission_result = admit_business_flow_skill_pack(
+            recommendation,
+            self._invocation.business_flow_skill_packs,
+            route_min_confidence=(
+                self._invocation.manifest.capabilities.skills.admission.route_min_confidence
+            ),
+            authorization_context_present=False,
+        )
+        if self._trace is not None:
+            self._trace.emit(
+                "business_flow_skill_pack_recommendation",
+                status="ok",
+                payload=recommendation.model_dump(mode="json"),
+            )
+            self._trace.emit(
+                "business_flow_skill_pack_admission",
+                status=(
+                    "ok"
+                    if admission_result.admission.decision
+                    in {
+                        BusinessFlowSkillPackAdmissionDecision.ADMITTED,
+                        BusinessFlowSkillPackAdmissionDecision.NO_PACK,
+                    }
+                    else "blocked"
+                ),
+                payload={
+                    **dict(admission_result.admission.trace_summary),
+                    "recommendation_id": recommendation.recommendation_id,
+                    "intent_resolution_id": recommendation.intent_resolution_id,
+                },
+            )
+        selected_pack_id = admission_result.admission.selected_pack_id
+        if selected_pack_id is not None and self._business_flow_admission_callback is not None:
+            self._business_flow_admission_callback(selected_pack_id)
+        if (
+            admission_result.admission.decision
+            is BusinessFlowSkillPackAdmissionDecision.NEEDS_CLARIFICATION
+        ):
+            resolution = result.intent_resolution.model_copy(
+                update={
+                    "missing_fields": ("business_flow_skill_pack",),
+                    "recommended_next_action": ReActActionType.ASK_CLARIFICATION,
+                }
+            )
+            return result.model_copy(update={"intent_resolution": resolution})
+        if admission_result.admission.decision in {
+            BusinessFlowSkillPackAdmissionDecision.REFUSED,
+            BusinessFlowSkillPackAdmissionDecision.FAILED_CLOSED,
+        }:
+            resolution = result.intent_resolution.model_copy(
+                update={"recommended_next_action": ReActActionType.REFUSE}
+            )
+            return result.model_copy(update={"intent_resolution": resolution})
         return result
 
 
@@ -187,20 +283,32 @@ class _InvocationMemoryAdapter:
 
 
 class _InvocationPlannerAdapter:
-    def __init__(self, invocation: HarnessInvocation) -> None:
+    def __init__(
+        self,
+        invocation: HarnessInvocation,
+        *,
+        stage_contexts: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
         self._invocation = invocation
+        self._stage_contexts = stage_contexts if stage_contexts is not None else {}
         self._fallback = DeterministicReActPlanner()
         self.stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
 
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
         self.stage_llm_interactions = ()
+        intent_action = _intent_terminal_action(state)
+        if intent_action is not None:
+            return intent_action
         if _has_tool_observation(state):
             return _final_answer_action("act_generate_after_tool")
         planner = self._invocation.react_planner or self._fallback
         action = planner.plan(
             question=state.question,
             system_prompt="Controlled ReAct Orchestrator V3",
-            context_summary=_context_summary(state),
+            context_summary=_context_summary(
+                state,
+                workflow_stage_context=self._stage_contexts.get("plan"),
+            ),
             conversation_context=state.conversation_context,
             memory_recall_payloads=state.memory_recall_payloads,
             eligible_actions=(
@@ -276,10 +384,17 @@ class _DeterministicKnowledgeObservationAdapter:
 
 
 class _InvocationKnowledgeObservationAdapter:
-    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
+    def __init__(
+        self,
+        invocation: HarnessInvocation,
+        *,
+        trace: TracePort,
+        preferred_binding_ids_provider: Callable[[], tuple[str, ...]] | None = None,
+    ) -> None:
         self._invocation = invocation
         self._summary_builder = ObservationSummaryBuilder()
         self._trace = trace
+        self._preferred_binding_ids_provider = preferred_binding_ids_provider
 
     def observe(
         self,
@@ -309,6 +424,11 @@ class _InvocationKnowledgeObservationAdapter:
                 max_queries=retrieval.max_queries,
                 query_concurrency=retrieval.query_concurrency,
                 query_timeout_seconds=retrieval.query_timeout_seconds,
+                preferred_binding_ids=(
+                    self._preferred_binding_ids_provider()
+                    if self._preferred_binding_ids_provider is not None
+                    else ()
+                ),
             )
         )
         evidence, accepted_evidence, evaluation_metadata = _admit_evidence(
@@ -630,10 +750,16 @@ class _InvocationReviewAdapter:
 
 
 class _ModelAnswerSynthesisAdapter:
-    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
+    def __init__(
+        self,
+        invocation: HarnessInvocation,
+        *,
+        trace: TracePort,
+        stage_contexts: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
         self._invocation = invocation
         self._trace = trace
-        self._runner = FinalAnswerAttemptRunner(invocation, trace=trace)
+        self._stage_contexts = stage_contexts if stage_contexts is not None else {}
 
     def synthesize(
         self,
@@ -658,7 +784,11 @@ class _ModelAnswerSynthesisAdapter:
                 message=message,
                 reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
             )
-        return self._runner.run(
+        return FinalAnswerAttemptRunner(
+            self._invocation,
+            trace=self._trace,
+            workflow_stage_context=self._stage_contexts.get("model_answer"),
+        ).run(
             state,
             action,
             answer_context,
@@ -745,7 +875,11 @@ class _InMemorySnapshotStoreAdapter:
         return snapshot
 
 
-def _context_summary(state: ControlledReActRunState) -> str:
+def _context_summary(
+    state: ControlledReActRunState,
+    *,
+    workflow_stage_context: Mapping[str, Any] | None = None,
+) -> str:
     accepted_count = sum(
         observation.accepted_evidence_count for observation in state.observation_records
     )
@@ -756,17 +890,28 @@ def _context_summary(state: ControlledReActRunState) -> str:
             if observation.action_type is ReActActionType.PROPOSE_TOOL_CALL
         )
         if tool_observation_count > 0:
-            return (
+            summary = (
                 "next_action=generate_final_answer; "
                 f"tool_observation_count={tool_observation_count}; "
                 f"observation_count={len(state.observation_records)}"
             )
-        return "observation_count=0"
-    return (
+            return _append_stage_context(summary, workflow_stage_context)
+        return _append_stage_context("observation_count=0", workflow_stage_context)
+    summary = (
         "next_action=generate_final_answer; "
         f"accepted_evidence_count={accepted_count}; "
         f"observation_count={len(state.observation_records)}"
     )
+    return _append_stage_context(summary, workflow_stage_context)
+
+
+def _append_stage_context(
+    summary: str,
+    workflow_stage_context: Mapping[str, Any] | None,
+) -> str:
+    if not workflow_stage_context:
+        return summary
+    return f"{summary}; workflow_stage_context={json.dumps(workflow_stage_context, sort_keys=True)}"
 
 
 def _retrieval_query_set_from_intent_state(
@@ -922,6 +1067,68 @@ def _has_tool_observation(state: ControlledReActRunState) -> bool:
         observation.action_type is ReActActionType.PROPOSE_TOOL_CALL
         for observation in state.observation_records
     )
+
+
+def _intent_terminal_action(state: ControlledReActRunState) -> ReActActionProposal | None:
+    intent_resolution = state.intent_resolution
+    if not isinstance(intent_resolution, Mapping):
+        return None
+    recommended_action = intent_resolution.get("recommended_next_action")
+    if recommended_action == ReActActionType.ASK_CLARIFICATION.value:
+        raw_missing_fields = intent_resolution.get("missing_fields", ())
+        missing_field_items = (
+            (raw_missing_fields,)
+            if isinstance(raw_missing_fields, str)
+            else tuple(raw_missing_fields)
+        )
+        missing_fields = tuple(
+            str(item).strip() for item in missing_field_items if str(item).strip()
+        )
+        return ReActActionProposal(
+            action_id="act_business_flow_clarification",
+            action_type=ReActActionType.ASK_CLARIFICATION,
+            reasoning_summary=ReasoningSummary(
+                goal="Clarify the intended governed business flow.",
+                observations=("Business Flow Skill Pack routing is ambiguous.",),
+                candidate_actions=(ReActActionType.ASK_CLARIFICATION,),
+                selected_action=ReActActionType.ASK_CLARIFICATION,
+                rationale_summary="A single business flow must be selected before execution.",
+                risk_flags=("ambiguous_business_flow",),
+                required_evidence=(),
+            ),
+            parameters={"missing_fields": missing_fields or ("business_flow_skill_pack",)},
+            risk_level="low",
+        )
+    if recommended_action == ReActActionType.REFUSE.value:
+        return ReActActionProposal(
+            action_id="act_business_flow_refusal",
+            action_type=ReActActionType.REFUSE,
+            reasoning_summary=ReasoningSummary(
+                goal="Fail closed on an inadmissible Business Flow Skill Pack route.",
+                observations=("The recommended Business Flow Skill Pack was not admitted.",),
+                candidate_actions=(ReActActionType.REFUSE,),
+                selected_action=ReActActionType.REFUSE,
+                rationale_summary="Execution cannot safely continue without an admitted route.",
+                risk_flags=("business_flow_admission_failed",),
+                required_evidence=(),
+            ),
+            parameters={"refusal_reason": "business_flow_admission_failed"},
+            risk_level="high",
+        )
+    return None
+
+
+def _business_flow_knowledge_binding_refs(
+    invocation: HarnessInvocation,
+    *,
+    selected_pack_id: str | None,
+) -> tuple[str, ...]:
+    if selected_pack_id is None:
+        return ()
+    for pack in invocation.business_flow_skill_packs:
+        if pack.id == selected_pack_id:
+            return pack.knowledge_binding_refs
+    return ()
 
 
 def _final_answer_action(action_id: str) -> ReActActionProposal:

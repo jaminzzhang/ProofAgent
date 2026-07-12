@@ -196,6 +196,10 @@ class ControlledReActOrchestrator:
     ) -> WorkflowTemplateExecutionResult:
         if action.parameters.get("refusal_reason") == "observation_no_progress":
             message = "Unable to answer because no governed evidence met admission requirements."
+        elif action.parameters.get("refusal_reason") == "business_flow_admission_failed":
+            message = (
+                "Unable to continue because the Business Flow Skill Pack route was not admitted."
+            )
         else:
             message = "Unable to continue gathering evidence within the plan budget."
         answer = AnswerSynthesisResult(

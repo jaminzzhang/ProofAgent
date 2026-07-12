@@ -106,6 +106,23 @@ def test_agent_runs_offline_through_controlled_react_v3(
         and event["payload"]["runtime"] == "controlled_react_orchestrator"
         for event in events
     )
+    admission = next(
+        event for event in events if event["event_type"] == "business_flow_skill_pack_admission"
+    )
+    assert admission["payload"]["decision"] == "admitted"
+    assert admission["payload"]["selected_pack_id"] == "claims_consultation"
+    execution = result.workflow_template_execution_result
+    assert execution is not None
+    business_flow_contexts = {
+        application["stage_id"]: application
+        for application in execution.stage_context_applications
+        if application.get("context_source") == "business_flow_skill_pack"
+    }
+    assert set(business_flow_contexts) == {"plan", "retrieval_review", "model_answer"}
+    assert all(
+        application["business_flow_skill_pack_id"] == "claims_consultation"
+        for application in business_flow_contexts.values()
+    )
 
 
 def test_agent_refuses_tool_inducement_without_tool_or_approval_actions(
@@ -132,6 +149,30 @@ def test_agent_refuses_tool_inducement_without_tool_or_approval_actions(
             "approval_resolved",
         }
     )
+
+
+def test_agent_fails_closed_for_ambiguous_business_flow_route(tmp_path: Path) -> None:
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=AGENT_PATH,
+            question="代理人问理赔",
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION
+    execution = result.workflow_template_execution_result
+    assert execution is not None
+    assert execution.clarification_need is not None
+    assert execution.clarification_need.missing_fields == ("business_flow_skill_pack",)
+    events = [
+        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    admission = next(
+        event for event in events if event["event_type"] == "business_flow_skill_pack_admission"
+    )
+    assert admission["status"] == "blocked"
+    assert admission["payload"]["decision"] == "needs_clarification"
 
 
 @pytest.mark.parametrize(

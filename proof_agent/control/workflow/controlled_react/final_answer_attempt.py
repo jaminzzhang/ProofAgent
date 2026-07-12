@@ -87,9 +87,16 @@ class NormalizedFinalAnswerAttempt:
 
 
 class FinalAnswerAttemptRunner:
-    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
+    def __init__(
+        self,
+        invocation: HarnessInvocation,
+        *,
+        trace: TracePort,
+        workflow_stage_context: Mapping[str, Any] | None = None,
+    ) -> None:
         self._invocation = invocation
         self._trace = trace
+        self._workflow_stage_context = workflow_stage_context
 
     def run(
         self,
@@ -124,6 +131,7 @@ class FinalAnswerAttemptRunner:
             model=self._invocation.model_provider.model_name,
             conversation_context=state.conversation_context,
             memory_recall_payloads=state.memory_recall_payloads,
+            workflow_stage_context=self._workflow_stage_context,
         )
         estimated_tokens = self._invocation.model_provider.estimate_tokens(request)
         return PreparedFinalAnswerAttempt(

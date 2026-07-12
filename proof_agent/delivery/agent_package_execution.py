@@ -39,6 +39,9 @@ from proof_agent.control.workflow.controlled_react.execution_input import (
     build_workflow_template_execution_input,
     resolve_workflow_stage_runtime_configuration,
 )
+from proof_agent.control.workflow.controlled_react.stage_contexts import (
+    build_controlled_react_stage_contexts,
+)
 from proof_agent.control.workflow.controlled_react.ports import SnapshotStorePort
 from proof_agent.control.workflow.controlled_react.ports import ObservationTruthStorePort
 from proof_agent.control.workflow.harness_helpers import (
@@ -161,6 +164,25 @@ def _execute_controlled_react_v3_agent_package_run(
         configuration_store=request.configuration_store,
         context_budget_calibration_store=request.context_budget_calibration_store,
     )
+    stage_contexts, initial_stage_context_applications = build_controlled_react_stage_contexts(
+        invocation=invocation,
+        execution_input=execution_input,
+        conversation_context=request.conversation_context,
+    )
+    configured_stage_context_applications = list(initial_stage_context_applications)
+
+    def apply_business_flow_stage_contexts(selected_pack_id: str) -> None:
+        admitted_contexts, admitted_applications = build_controlled_react_stage_contexts(
+            invocation=invocation,
+            execution_input=execution_input,
+            conversation_context=request.conversation_context,
+            selected_business_flow_skill_pack_id=selected_pack_id,
+        )
+        stage_contexts.clear()
+        stage_contexts.update(admitted_contexts)
+        configured_stage_context_applications.clear()
+        configured_stage_context_applications.extend(admitted_applications)
+
     for record in invocation.model_resolution_records:
         trace.emit(
             TraceEventType.MODEL_CONNECTION_RESOLUTION,
@@ -174,6 +196,8 @@ def _execute_controlled_react_v3_agent_package_run(
             snapshot_store=request.controlled_react_snapshot_store,
             observation_truth_store=request.controlled_react_observation_truth_store,
             trace=trace,
+            stage_contexts=stage_contexts,
+            business_flow_admission_callback=apply_business_flow_stage_contexts,
         )
     execution_result = orchestrator.start(
         ControlledReActStartRequest(
@@ -188,7 +212,14 @@ def _execute_controlled_react_v3_agent_package_run(
             max_plan_rounds=manifest.react.max_plan_rounds,
             retrieval_max_queries=manifest.retrieval.max_queries,
         )
-    ).model_copy(
+    )
+    visited_stage_ids = {stage.stage_id for stage in execution_result.stage_results}
+    stage_context_applications = tuple(
+        application
+        for application in configured_stage_context_applications
+        if application.get("stage_id") in visited_stage_ids
+    )
+    execution_result = execution_result.model_copy(
         update={
             "agent_id": request.agent_id,
             "agent_version_id": request.agent_version_id,
@@ -201,6 +232,7 @@ def _execute_controlled_react_v3_agent_package_run(
                 if execution_input.stage_configuration_source.reference
                 else ()
             ),
+            "stage_context_applications": stage_context_applications,
         }
     )
     emit_controlled_react_trace_projection(
@@ -341,6 +373,12 @@ def emit_controlled_react_trace_projection(
             ],
         },
     )
+    for application in execution_result.stage_context_applications:
+        trace.emit(
+            "workflow_stage_context_applied",
+            status="ok",
+            payload=dict(application),
+        )
     for stage_result in execution_result.stage_results:
         _emit_controlled_react_stage_result(trace, stage_result)
     if execution_result.approval_pause is not None:

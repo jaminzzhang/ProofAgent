@@ -3255,7 +3255,11 @@ def test_validation_run_full_capture_records_gated_v3_artifact(tmp_path: Path) -
     assert payload["stage_prompt_values"]
     assert payload["stage_prompt_values"][0]["stage_label"]
     assert payload["context_configuration"]
-    assert isinstance(payload["context_applications"], list)
+    assert payload["context_applications"]
+    plan_context = next(
+        item for item in payload["context_applications"] if item["summary"]["stage_id"] == "plan"
+    )
+    assert plan_context["summary"]["business_context_length"] == len("Insurance servicing context.")
     assert payload["stage_results"]
     assert payload["failure_diagnostics"] == []
     assert payload["llm_interactions"]
