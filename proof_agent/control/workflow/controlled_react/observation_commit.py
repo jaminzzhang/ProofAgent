@@ -20,6 +20,10 @@ from proof_agent.control.workflow.controlled_react.state_machine import (
     TransitionCommandType,
     TransitionResult,
 )
+from proof_agent.control.workflow.controlled_react.artifact_binding import (
+    bind_observation_truth,
+    require_bound_observation_truth,
+)
 
 
 class _ObservationTruthStore(Protocol):
@@ -69,10 +73,16 @@ class ObservationCommitResult:
 class InMemoryObservationTruthStore:
     def __init__(self) -> None:
         self._truth: dict[str, ObservationTruthArtifact] = {}
+        self._ref_by_base: dict[str, str] = {}
 
     def save(self, truth: ObservationTruthArtifact) -> str:
-        self._truth[truth.truth_ref] = truth
-        return truth.truth_ref
+        binding = require_bound_observation_truth(truth)
+        existing_ref = self._ref_by_base.get(binding.base_reference)
+        if existing_ref is not None and existing_ref != binding.reference:
+            raise ValueError("conflicting observation truth already exists")
+        self._truth[binding.reference] = binding.truth
+        self._ref_by_base[binding.base_reference] = binding.reference
+        return binding.reference
 
     def load(self, truth_ref: str) -> ObservationTruthArtifact:
         return self._truth[truth_ref]
@@ -155,18 +165,26 @@ class ObservationCommitter:
     ) -> ObservationCommitResult:
         self._validate_effect(state, action, effect, expected_identity=expected_identity)
         record = self._record_with_authoritative_summary(effect)
-        if _has_observation(state, record):
+        truth_binding = bind_observation_truth(effect.truth_artifact)
+        bound_record = record.model_copy(update={"truth_ref": truth_binding.reference})
+        existing_record = _matching_observation(state, bound_record)
+        if existing_record is not None:
+            if existing_record.truth_ref != truth_binding.reference:
+                raise ValueError(
+                    "conflicting observation payload for committed observation identity"
+                )
             return ObservationCommitResult(
                 state=state,
-                trace_projection=effect.trace_projection,
+                trace_projection=_trace_projection(existing_record, effect),
             )
-        result = self._commit_record(state, action, record)
-        saved_truth_ref = self._truth_store.save(effect.truth_artifact)
-        if saved_truth_ref != record.truth_ref:
+        result = self._commit_record(state, action, bound_record)
+        trace_projection = _trace_projection(bound_record, effect)
+        saved_truth_ref = self._truth_store.save(truth_binding.truth)
+        if saved_truth_ref != truth_binding.reference:
             raise ValueError("truth store returned a mismatched truth_ref")
         return ObservationCommitResult(
             state=result.state,
-            trace_projection=_trace_projection(record, effect),
+            trace_projection=trace_projection,
         )
 
     def _record_with_authoritative_summary(
@@ -230,13 +248,18 @@ class ObservationCommitter:
             raise ValueError("truth_ref does not match allocated observation identity")
 
 
-def _has_observation(
+def _matching_observation(
     state: ControlledReActRunState,
     record: ObservationRecord,
-) -> bool:
-    return any(
-        existing.observation_id == record.observation_id and existing.action_id == record.action_id
-        for existing in state.observation_records
+) -> ObservationRecord | None:
+    return next(
+        (
+            existing
+            for existing in state.observation_records
+            if existing.observation_id == record.observation_id
+            and existing.action_id == record.action_id
+        ),
+        None,
     )
 
 

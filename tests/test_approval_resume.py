@@ -23,6 +23,9 @@ from proof_agent.contracts import (
 from proof_agent.control.workflow.controlled_react.local_stores import (
     FileControlledReActSnapshotStore,
 )
+from proof_agent.control.workflow.controlled_react.artifact_binding import (
+    bind_controlled_react_snapshot,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.approval_resume import (
     CONTROLLED_REACT_SNAPSHOT_REF_PREFIX,
@@ -96,9 +99,7 @@ def test_approval_resume_registry_persists_execution_input_with_integrity(
     metadata_path = tmp_path / execution_input.run_id / "resume_context.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["workflow_template_execution_input_sha256"]
-    assert metadata["workflow_template_execution_input"]["template_name"] == (
-        "react_enterprise_qa"
-    )
+    assert metadata["workflow_template_execution_input"]["template_name"] == ("react_enterprise_qa")
 
     loaded = LangGraphApprovalResumeRegistry(tmp_path).get(execution_input.run_id)
 
@@ -162,9 +163,11 @@ def test_controlled_react_resume_registry_persists_context_and_snapshot(
     )
 
     assert snapshot_ref.startswith(CONTROLLED_REACT_SNAPSHOT_REF_PREFIX)
-    loaded_snapshot = LangGraphApprovalResumeRegistry(
-        tmp_path
-    ).controlled_react_snapshot_store().load(snapshot_ref)
+    loaded_snapshot = (
+        LangGraphApprovalResumeRegistry(tmp_path)
+        .controlled_react_snapshot_store()
+        .load(snapshot_ref)
+    )
     loaded_context = LangGraphApprovalResumeRegistry(tmp_path).get_controlled_react(
         "run_controlled"
     )
@@ -227,9 +230,7 @@ def test_file_controlled_react_snapshot_store_rejects_conflicting_existing_ref(
         ),
     )
     conflicting = original.model_copy(
-        update={
-            "state": original.state.model_copy(update={"question": "Conflicting question"})
-        }
+        update={"state": original.state.model_copy(update={"question": "Conflicting question"})}
     )
     snapshot_ref = store.save(original)
 
@@ -315,10 +316,20 @@ def test_file_controlled_react_snapshot_store_rejects_payload_identity_mismatch(
     payload["snapshot_id"] = payload_snapshot_id
     payload["state"]["run_id"] = state_run_id
     path.write_text(json.dumps(payload), encoding="utf-8")
+    expected_snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_001",
+        run_id="run_001",
+        state=ControlledReActRunState(
+            run_id="run_001",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Mismatched persisted identity",
+        ),
+    )
 
     with pytest.raises(ProofAgentError) as exc:
         FileControlledReActSnapshotStore(tmp_path).load(
-            "controlled-react://run_001/snap_001"
+            bind_controlled_react_snapshot(expected_snapshot).reference
         )
 
     assert exc.value.code == "PA_RUNTIME_001"
@@ -339,14 +350,19 @@ def test_file_controlled_react_snapshot_store_publish_failure_leaves_no_artifact
         ),
     )
     target = tmp_path / "run_001" / "controlled_react" / "snap_001.json"
+    store = FileControlledReActSnapshotStore(tmp_path)
 
-    def fail_publish(_source: os.PathLike[str], _target: os.PathLike[str]) -> None:
+    def fail_publish(
+        _source: os.PathLike[str],
+        _target: os.PathLike[str],
+        **_kwargs: object,
+    ) -> None:
         raise OSError("injected atomic publication failure")
 
     monkeypatch.setattr(os, "link", fail_publish)
 
     with pytest.raises(ProofAgentError) as exc:
-        FileControlledReActSnapshotStore(tmp_path).save(snapshot)
+        store.save(snapshot)
 
     assert exc.value.code == "PA_RUNTIME_001"
     assert not target.exists()
@@ -368,10 +384,20 @@ def test_file_controlled_react_snapshot_store_fails_closed_on_corrupt_json(
     path = tmp_path / "run_001" / "controlled_react" / "snap_001.json"
     path.parent.mkdir(parents=True)
     path.write_text(payload, encoding="utf-8")
+    expected_snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_001",
+        run_id="run_001",
+        state=ControlledReActRunState(
+            run_id="run_001",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Corrupt persisted snapshot",
+        ),
+    )
 
     with pytest.raises(ProofAgentError) as exc:
         FileControlledReActSnapshotStore(tmp_path).load(
-            "controlled-react://run_001/snap_001"
+            bind_controlled_react_snapshot(expected_snapshot).reference
         )
 
     assert exc.value.code == "PA_RUNTIME_001"

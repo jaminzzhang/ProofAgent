@@ -265,8 +265,8 @@ The protected resumable capture of Controlled ReAct Run State written when the C
 _Avoid_: LangGraph checkpoint as authority, trace replay, mutable latest Agent Contract reload, ad hoc resume payload
 
 **Controlled ReAct Run State Snapshot Store**:
-The execution-state port that persists and loads Controlled ReAct Run State Snapshots for approval resume. The Controlled ReAct Orchestrator owns writes and reads; Trace, Governance Receipt, RunStore, and Dashboard may carry only trace-safe snapshot references or approval projections and must not deserialize snapshots or drive resume semantics from them.
-_Avoid_: RunStore detail field, trace event payload as state, Dashboard resume source, LangGraph checkpoint store
+The execution-state port that persists and loads Controlled ReAct Run State Snapshots for approval resume. The Controlled ReAct Orchestrator owns writes and reads; Trace, Governance Receipt, RunStore, and Dashboard may carry only trace-safe snapshot references or approval projections and must not deserialize snapshots or drive resume semantics from them. The bundled local file adapter requires anchored POSIX filesystem capabilities and fails closed when they are unavailable; other platforms require an adapter with equivalent containment and immutable-publication guarantees.
+_Avoid_: RunStore detail field, trace event payload as state, Dashboard resume source, LangGraph checkpoint store, path-based fallback without race-safe anchoring
 
 **Controlled ReAct Approval Resume Loopback**:
 The V3 rule that approval resume writes an Observation Record and returns to plan whether the operator approved or denied the pending tool action. `WAITING_FOR_APPROVAL` is a governed waiting state, not a terminal outcome, and approval denial must not bypass replan.
@@ -405,8 +405,8 @@ The internal effect result returned by a Knowledge Observation Port or Tool Obse
 _Avoid_: Committed Observation Record, adapter-owned state append, trace event as effect
 
 **Observation Identity Allocation**:
-The Orchestrator-owned deterministic assignment of `observation_id`, `truth_ref`, and commit key before an Observation Action executes. Observation adapters must use the allocated identity in their Observation Effect and must not mint observation ids or truth refs.
-_Avoid_: Adapter-generated observation id, random truth ref, retry-dependent identity, provider-owned commit key
+The Orchestrator-owned deterministic assignment of `observation_id`, stable base `truth_ref`, and commit key before an Observation Action executes. Observation Commit derives the digest-bearing committed `truth_ref` from the complete truth payload; adapters only echo the base identity, and retries reuse the same committed reference while changed payloads conflict.
+_Avoid_: Adapter-generated observation id, adapter-generated committed ref, random truth ref, retry-dependent identity, provider-owned commit key
 
 **Observation Summary Builder**:
 The deterministic Control Plane builder that derives the planner-visible Observation Record `summary` from Observation Truth Artifact metadata, evidence admission facts, Tool Contract `summary_fields`, and redaction policy. Observation adapters do not author free-form planner-visible summaries.
@@ -433,8 +433,8 @@ The Observation Truth Artifact variant for governed tool execution, carrying the
 _Avoid_: Tool summary as truth, raw tool payload, approval trace as result
 
 **Observation Truth Store**:
-The Control Plane storage boundary for Observation Truth Artifacts, written atomically with Observation Record commit and resolved by `truth_ref` for final-answer synthesis, audit replay, and receipt basis. Controlled ReAct Run State and snapshots store only `truth_ref`, never the full truth payload.
-_Avoid_: Snapshot payload store, trace store, RunStore projection, summary-backed truth
+The Control Plane storage boundary for Observation Truth Artifacts, written atomically with Observation Record commit and resolved by `truth_ref` for final-answer synthesis, audit replay, and receipt basis. Controlled ReAct Run State and snapshots store only `truth_ref`, never the full truth payload. The bundled local file adapter is POSIX-only and fails closed without anchored `dir_fd`, `O_NOFOLLOW`, and immutable hard-link publication support.
+_Avoid_: Snapshot payload store, trace store, RunStore projection, summary-backed truth, unsafe non-POSIX path fallback
 
 **Observation Truth Projection**:
 The trace-safe observability projection emitted from Observation Commit for Trace, Governance Receipt, RunStore, and Dashboard. It carries ids, counts, status, source/citation references, redaction facts, and bounded summaries only; it does not expose full Observation Truth Artifact payloads.

@@ -54,6 +54,9 @@ from proof_agent.control.workflow.controlled_react.action_control import (
     emit_intent_resolution,
     should_block_duplicate_observation_action,
 )
+from proof_agent.control.workflow.controlled_react.artifact_binding import (
+    canonical_json_bytes,
+)
 
 
 @dataclass(frozen=True)
@@ -527,7 +530,7 @@ class ControlledReActOrchestrator:
             }
         )
         snapshot = ControlledReActRunStateSnapshot(
-            snapshot_id=f"snap_{request.run_id}",
+            snapshot_id=_approval_pause_snapshot_id(state, action),
             run_id=request.run_id,
             state=waiting_state,
         )
@@ -1206,6 +1209,22 @@ def _approved_tool_summary(
         "parameter_digest": snapshot.parameter_digest,
         "scope_digest": snapshot.scope_digest,
     }
+
+
+def _approval_pause_snapshot_id(
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+) -> str:
+    digest = hashlib.sha256(
+        canonical_json_bytes(
+            {
+                "schema_version": "proofagent.controlled-react.pause-identity.v1",
+                "plan_round": state.plan_round,
+                "action_id": action.action_id,
+            }
+        )
+    ).hexdigest()
+    return f"snap_{state.plan_round}_{digest}"
 
 
 def _stage_results_from_state(

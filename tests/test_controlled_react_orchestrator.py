@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from proof_agent.contracts import (
@@ -45,6 +47,10 @@ from proof_agent.control.workflow.controlled_react import (
 from proof_agent.control.workflow.controlled_react.composition import (
     _EvidenceAnswerSynthesisAdapter,
     _tool_summary_projection,
+)
+from proof_agent.control.workflow.controlled_react.local_stores import (
+    FileControlledReActSnapshotStore,
+    FileObservationTruthStore,
 )
 from proof_agent.errors import ProofAgentError
 
@@ -648,6 +654,57 @@ def test_approval_pause_freezes_bound_tool_proposal_snapshot() -> None:
     )
 
 
+def test_same_run_can_resume_through_two_distinct_approval_pauses(
+    tmp_path: Path,
+) -> None:
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_TwoApprovalThenAnswerPlanner(),
+            policy=_RequireApprovalToolPolicy(),
+            snapshot_store=FileControlledReActSnapshotStore(tmp_path),
+            observation_truth_store=FileObservationTruthStore(tmp_path),
+            tool_observation=_ToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    first_pause = orchestrator.start(
+        ControlledReActStartRequest(
+            run_id="run_two_approvals",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Run two governed lookups before answering.",
+            max_plan_rounds=8,
+        )
+    )
+    assert first_pause.approval_pause is not None
+
+    second_pause = orchestrator.resume(
+        ControlledReActResumeRequest(
+            snapshot_ref=first_pause.approval_pause.checkpoint_ref,
+            approval_id=first_pause.approval_pause.approval_id,
+            approved=True,
+            actor="ops",
+            max_plan_rounds=8,
+        )
+    )
+    assert second_pause.outcome is ReceiptOutcome.WAITING_FOR_APPROVAL
+    assert second_pause.approval_pause is not None
+    assert second_pause.approval_pause.checkpoint_ref != first_pause.approval_pause.checkpoint_ref
+
+    completed = orchestrator.resume(
+        ControlledReActResumeRequest(
+            snapshot_ref=second_pause.approval_pause.checkpoint_ref,
+            approval_id=second_pause.approval_pause.approval_id,
+            approved=True,
+            actor="ops",
+            max_plan_rounds=8,
+        )
+    )
+
+    assert completed.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+
+
 def test_start_policy_denies_tool_action_without_snapshot_or_tool_execution() -> None:
     snapshot_store = _FailingSnapshotStore()
     orchestrator = ControlledReActOrchestrator(
@@ -997,7 +1054,10 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
 
     assert result.run_id == "run_005"
     assert result.outcome is ReceiptOutcome.TOOL_APPROVAL_DENIED
-    assert result.final_output == "The customer_lookup tool is still required after approval was denied."
+    assert (
+        result.final_output
+        == "The customer_lookup tool is still required after approval was denied."
+    )
     assert result.approval_pause is None
     assert [stage.stage_id for stage in result.stage_results] == [
         "plan",
@@ -1634,6 +1694,22 @@ class _ToolThenRetrievalThenAnswerPlanner:
             )
         if len(state.observation_records) == 1:
             return _proposal("act_retrieve", ReActActionType.PLAN_RETRIEVAL)
+        return _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER)
+
+
+class _TwoApprovalThenAnswerPlanner:
+    def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
+        observation_count = len(state.observation_records)
+        if observation_count < 2:
+            return _proposal(
+                f"act_tool_{observation_count + 1}",
+                ReActActionType.PROPOSE_TOOL_CALL,
+            ).model_copy(
+                update={
+                    "target_tool_name": f"customer_lookup_{observation_count + 1}",
+                    "parameters": {"lookup_index": observation_count + 1},
+                }
+            )
         return _proposal("act_answer", ReActActionType.GENERATE_FINAL_ANSWER)
 
 

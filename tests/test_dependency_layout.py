@@ -22,8 +22,7 @@ def test_react_graph_builder_does_not_own_workflow_node_implementations() -> Non
     builder = next(
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "build_react_enterprise_qa_graph"
+        if isinstance(node, ast.FunctionDef) and node.name == "build_react_enterprise_qa_graph"
     )
 
     nested_node_functions = [
@@ -51,18 +50,14 @@ def test_controlled_react_leaf_modules_do_not_import_legacy_or_runtime_framework
             imported_modules = _resolved_import_modules(module_path, node)
             for imported_module in imported_modules:
                 if imported_module.startswith(banned_prefixes):
-                    violations.append(
-                        f"{module_path}:{node.lineno}: {imported_module}"
-                    )
+                    violations.append(f"{module_path}:{node.lineno}: {imported_module}")
 
     assert violations == []
 
 
 def test_v3_delivery_imports_execution_input_from_controlled_react() -> None:
     tree = ast.parse(
-        Path("proof_agent/delivery/agent_package_execution.py").read_text(
-            encoding="utf-8"
-        )
+        Path("proof_agent/delivery/agent_package_execution.py").read_text(encoding="utf-8")
     )
     imports_by_module = {
         node.module: {alias.name for alias in node.names}
@@ -70,16 +65,11 @@ def test_v3_delivery_imports_execution_input_from_controlled_react() -> None:
         if isinstance(node, ast.ImportFrom) and node.module is not None
     }
 
-    assert (
-        "proof_agent.control.workflow.controlled_react.execution_input"
-        in imports_by_module
-    )
+    assert "proof_agent.control.workflow.controlled_react.execution_input" in imports_by_module
     assert {
         "resolve_workflow_stage_runtime_configuration",
         "build_workflow_template_execution_input",
-    } <= imports_by_module[
-        "proof_agent.control.workflow.controlled_react.execution_input"
-    ]
+    } <= imports_by_module["proof_agent.control.workflow.controlled_react.execution_input"]
     assert not {
         "_resolve_workflow_stage_runtime_configuration",
         "_workflow_template_execution_input",
@@ -93,15 +83,11 @@ def test_runtime_adapters_delegate_v3_authorities_to_controlled_react() -> None:
     assert {
         "build_workflow_template_execution_input",
         "resolve_workflow_stage_runtime_configuration",
-    } <= langgraph_imports[
-        "proof_agent.control.workflow.controlled_react.execution_input"
-    ]
+    } <= langgraph_imports["proof_agent.control.workflow.controlled_react.execution_input"]
     assert {
         "FileControlledReActSnapshotStore",
         "FileObservationTruthStore",
-    } <= approval_imports[
-        "proof_agent.control.workflow.controlled_react.local_stores"
-    ]
+    } <= approval_imports["proof_agent.control.workflow.controlled_react.local_stores"]
 
 
 def test_controlled_react_consumers_use_focused_leaf_authorities() -> None:
@@ -115,17 +101,26 @@ def test_controlled_react_consumers_use_focused_leaf_authorities() -> None:
         Path("proof_agent/control/workflow/controlled_react/final_answer_attempt.py")
     )
 
-    assert "proof_agent.control.workflow.controlled_react.action_control" in (
-        orchestrator_imports
-    )
+    assert "proof_agent.control.workflow.controlled_react.action_control" in (orchestrator_imports)
     assert "proof_agent.control.workflow.controlled_react.review" in composition_imports
-    assert (
-        "proof_agent.control.workflow.controlled_react.model_tracing"
-        in composition_imports
+    assert "proof_agent.control.workflow.controlled_react.model_tracing" in composition_imports
+    assert "proof_agent.control.workflow.controlled_react.model_tracing" in final_answer_imports
+
+
+def test_import_from_candidates_include_parent_and_qualified_aliases() -> None:
+    path = Path("proof_agent/control/workflow/controlled_react/example.py")
+    runtime_import = ast.parse("from proof_agent import runtime").body[0]
+    legacy_import = ast.parse("from proof_agent.control.workflow import react_enterprise_qa").body[
+        0
+    ]
+
+    assert _resolved_import_modules(path, runtime_import) == (
+        "proof_agent",
+        "proof_agent.runtime",
     )
-    assert (
-        "proof_agent.control.workflow.controlled_react.model_tracing"
-        in final_answer_imports
+    assert _resolved_import_modules(path, legacy_import) == (
+        "proof_agent.control.workflow",
+        "proof_agent.control.workflow.react_enterprise_qa",
     )
 
 
@@ -145,7 +140,9 @@ def _resolved_import_modules(path: Path, node: ast.AST) -> tuple[str, ...]:
     if not isinstance(node, ast.ImportFrom):
         return ()
     if node.level == 0:
-        return (node.module,) if node.module is not None else ()
+        if node.module is None:
+            return ()
+        return _import_from_candidates(node.module, node)
 
     package_parts = list(path.with_suffix("").parts[:-1])
     parent_count = node.level - 1
@@ -153,5 +150,13 @@ def _resolved_import_modules(path: Path, node: ast.AST) -> tuple[str, ...]:
         return ("<invalid-relative-import>",)
     resolved_parent = package_parts[: len(package_parts) - parent_count]
     if node.module is not None:
-        return (".".join((*resolved_parent, *node.module.split("."))),)
-    return tuple(".".join((*resolved_parent, alias.name)) for alias in node.names)
+        module = ".".join((*resolved_parent, *node.module.split(".")))
+        return _import_from_candidates(module, node)
+    module = ".".join(resolved_parent)
+    return _import_from_candidates(module, node)
+
+
+def _import_from_candidates(module: str, node: ast.ImportFrom) -> tuple[str, ...]:
+    candidates = [module]
+    candidates.extend(f"{module}.{alias.name}" for alias in node.names if alias.name != "*")
+    return tuple(dict.fromkeys(candidates))
