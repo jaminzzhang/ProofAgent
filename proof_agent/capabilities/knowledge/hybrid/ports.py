@@ -80,9 +80,17 @@ class ProjectionBulkRequest(_PortModel):
 
 
 class ProjectionBulkResult(_PortModel):
-    identity: SearchIndexIdentity
+    """Request-bound result; partial acceptance remains explicit for later validation."""
+
+    request: ProjectionBulkRequest
     accepted_count: NonNegativeInt
     refresh_checkpoint: NonBlankStr
+
+    @model_validator(mode="after")
+    def validate_accepted_count(self) -> Self:
+        if self.accepted_count > len(self.request.documents):
+            raise ValueError("accepted_count must not exceed submitted document count")
+        return self
 
 
 class HybridSearchRequest(_PortModel):
@@ -234,6 +242,8 @@ class HybridKnowledgeJobClaim(_PortModel):
     def validate_lease(self) -> Self:
         if self.job_id != self.request.job_id:
             raise ValueError("claim job_id must match request job_id")
+        if self.request.ready_at is not None and self.claimed_at < self.request.ready_at:
+            raise ValueError("claim cannot precede request ready_at")
         if self.lease_expires_at <= self.claimed_at:
             raise ValueError("lease_expires_at must follow claimed_at")
         return self

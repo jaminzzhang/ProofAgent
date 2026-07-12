@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-import fcntl
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
@@ -14,6 +13,11 @@ from threading import RLock
 from types import TracebackType
 from typing import Iterator, Self
 from urllib.parse import unquote, urlsplit
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised by capability probe at construction
+    fcntl = None  # type: ignore[assignment]
 
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridKnowledgeJob,
@@ -297,24 +301,23 @@ class FileSystemKnowledgeArtifactStore:
     def __init__(self, root: Path) -> None:
         self._root_fd = -1
         self._closed = True
-        required_dir_fd_operations = (os.open, os.mkdir, os.unlink)
+        self._lock = RLock()
+        required_dir_fd_operations = (os.open, os.mkdir, os.stat, os.unlink)
         if (
-            not hasattr(os, "O_DIRECTORY")
+            fcntl is None
+            or not hasattr(os, "O_DIRECTORY")
             or not hasattr(os, "O_NOFOLLOW")
             or any(operation not in os.supports_dir_fd for operation in required_dir_fd_operations)
+            or os.stat not in os.supports_follow_symlinks
         ):
             raise ImmutableArtifactError(
-                "filesystem store requires directory-relative no-follow operations"
+                "filesystem store requires POSIX locking and directory-relative no-follow operations"
             )
-        root.mkdir(parents=True, exist_ok=True)
-        if root.is_symlink():
-            raise ImmutableArtifactError("artifact root must not be a symlink")
-        self._root = root.resolve(strict=True)
-        self._lock = RLock()
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         try:
-            self._root_fd = os.open(self._root, flags)
+            self._root, self._root_fd = self._acquire_root(root)
             root_stat = os.fstat(self._root_fd)
+        except ImmutableArtifactError:
+            raise
         except OSError as exc:
             if self._root_fd >= 0:
                 os.close(self._root_fd)
@@ -331,6 +334,75 @@ class FileSystemKnowledgeArtifactStore:
         except Exception:
             self.close()
             raise
+
+    def _acquire_root(self, root: Path) -> tuple[Path, int]:
+        configured = Path(os.fspath(root))
+        if ".." in configured.parts:
+            raise ImmutableArtifactError("artifact root must not contain parent traversal")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        if configured.is_absolute():
+            lexical_root = Path(os.path.normpath(os.fspath(configured)))
+            anchor_fd = os.open("/", flags)
+            components = lexical_root.parts[1:]
+        else:
+            anchor_fd = os.open(".", flags)
+            lexical_root = Path(os.getcwd()).joinpath(configured)
+            components = configured.parts
+        return lexical_root, self._walk_or_create_root(anchor_fd, components)
+
+    def _walk_or_create_root(self, anchor_fd: int, components: tuple[str, ...]) -> int:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        current_fd = anchor_fd
+        try:
+            for component in components:
+                try:
+                    component_stat = os.stat(component, dir_fd=current_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    try:
+                        os.mkdir(component, mode=0o700, dir_fd=current_fd)
+                        self._fsync_directory(current_fd)
+                    except FileExistsError:
+                        pass
+                    component_stat = os.stat(component, dir_fd=current_fd, follow_symlinks=False)
+                if not stat.S_ISDIR(component_stat.st_mode):
+                    raise ImmutableArtifactError(
+                        "artifact root component must be a non-symlink directory"
+                    )
+                self._before_open_root_component(
+                    component=component,
+                    parent_fd=current_fd,
+                    component_identity=(component_stat.st_dev, component_stat.st_ino),
+                )
+                try:
+                    next_fd = os.open(component, flags, dir_fd=current_fd)
+                except OSError as exc:
+                    raise ImmutableArtifactError(
+                        "artifact root component changed or became unsafe before open"
+                    ) from exc
+                opened_stat = os.fstat(next_fd)
+                if (opened_stat.st_dev, opened_stat.st_ino) != (
+                    component_stat.st_dev,
+                    component_stat.st_ino,
+                ):
+                    os.close(next_fd)
+                    raise ImmutableArtifactError(
+                        "artifact root component identity changed before open"
+                    )
+                os.close(current_fd)
+                current_fd = next_fd
+            return current_fd
+        except Exception:
+            os.close(current_fd)
+            raise
+
+    def _before_open_root_component(
+        self,
+        *,
+        component: str,
+        parent_fd: int,
+        component_identity: tuple[int, int],
+    ) -> None:
+        """Private deterministic constructor-race hook; production behavior is empty."""
 
     def close(self) -> None:
         with self._lock:
@@ -554,13 +626,16 @@ class FileSystemKnowledgeArtifactStore:
 
     @contextmanager
     def _key_lock(self, parent_fd: int, filename: str) -> Iterator[None]:
+        locking = fcntl
+        if locking is None:
+            raise ImmutableArtifactError("POSIX artifact key locking is unavailable")
         lock_name = filename + _LOCK_SUFFIX
         descriptor = -1
         try:
             descriptor = self._open_lock_file(parent_fd, lock_name)
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
                 raise ImmutableArtifactError("artifact lock must be a regular file")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            locking.flock(descriptor, locking.LOCK_EX)
         except Exception as exc:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -571,7 +646,7 @@ class FileSystemKnowledgeArtifactStore:
             yield
         finally:
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                locking.flock(descriptor, locking.LOCK_UN)
             finally:
                 os.close(descriptor)
 

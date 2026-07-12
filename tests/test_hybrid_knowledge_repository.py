@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 import hashlib
+import json
 import os
 from pathlib import Path
 from threading import Barrier
@@ -21,6 +22,7 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridSearchRequest,
     KnowledgeArtifactStore,
     ProjectionBulkRequest,
+    ProjectionBulkResult,
     ProjectionDocument,
     RerankCandidate,
     RerankRequest,
@@ -28,6 +30,7 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     RerankScore,
     SearchIndexIdentity,
 )
+import proof_agent.configuration.hybrid_knowledge_repository as hybrid_repository
 from proof_agent.configuration.hybrid_knowledge_repository import (
     FileSystemKnowledgeArtifactStore,
     HybridKnowledgeIdempotencyConflict,
@@ -354,6 +357,43 @@ def test_projection_bulk_requires_unique_projection_and_rule_unit_identities() -
         )
 
 
+def test_projection_bulk_result_binds_request_and_bounds_partial_acceptance() -> None:
+    request = ProjectionBulkRequest(
+        identity=index_identity(),
+        publication_attempt_id="attempt_1",
+        documents=(
+            ProjectionDocument(
+                projection_id="projection_1",
+                rule_unit=rule_unit(),
+                embedding=(0.1, 0.2),
+            ),
+        ),
+    )
+    partial = ProjectionBulkResult(
+        request=request,
+        accepted_count=0,
+        refresh_checkpoint="refresh_1",
+    )
+    assert ProjectionBulkResult.model_validate_json(partial.model_dump_json()) == partial
+    with pytest.raises(ValidationError):
+        partial.accepted_count = 1  # type: ignore[misc]
+    for invalid_count in (-1, 2):
+        with pytest.raises(ValidationError):
+            ProjectionBulkResult(
+                request=request,
+                accepted_count=invalid_count,
+                refresh_checkpoint="refresh_1",
+            )
+    with pytest.raises(ValidationError):
+        ProjectionBulkResult.model_validate(
+            {
+                "request": request,
+                "accepted_count": True,
+                "refresh_checkpoint": "refresh_1",
+            }
+        )
+
+
 @pytest.mark.parametrize("vector", [(), (0.1,), (0.1, float("nan")), (0.1, float("inf"))])
 def test_hybrid_search_requires_exact_finite_query_dimension(
     vector: tuple[float, ...],
@@ -455,6 +495,15 @@ def test_runtime_checkable_reference_adapter_conformance(tmp_path: Path) -> None
     assert isinstance(FileSystemKnowledgeArtifactStore(tmp_path), KnowledgeArtifactStore)
 
 
+def test_artifact_store_construction_fails_closed_without_posix_locking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hybrid_repository, "fcntl", None)
+    assert isinstance(InMemoryHybridKnowledgeRepository(), HybridKnowledgeWorkScheduler)
+    with pytest.raises(ImmutableArtifactError, match="POSIX locking"):
+        FileSystemKnowledgeArtifactStore(tmp_path)
+
+
 @pytest.mark.parametrize(
     "updates",
     [
@@ -512,6 +561,35 @@ def test_claim_contract_rejects_mismatched_identity_and_incoherent_times() -> No
             claimed_at=NOW,
             lease_expires_at=NOW,
         )
+
+
+def test_claim_contract_rejects_claim_before_ready_time_in_python_and_json() -> None:
+    request = job("job_1", ready_at=NOW + timedelta(seconds=10))
+    values = {
+        "job_id": "job_1",
+        "request": request,
+        "worker_id": "worker_1",
+        "fencing_token": 1,
+        "claimed_at": NOW,
+        "lease_expires_at": NOW + timedelta(seconds=30),
+    }
+    with pytest.raises(ValidationError, match="ready_at"):
+        HybridKnowledgeJobClaim.model_validate(values)
+    json_values = {
+        **values,
+        "request": request.model_dump(mode="json"),
+        "claimed_at": NOW.isoformat(),
+        "lease_expires_at": (NOW + timedelta(seconds=30)).isoformat(),
+    }
+    with pytest.raises(ValidationError, match="ready_at"):
+        HybridKnowledgeJobClaim.model_validate_json(json.dumps(json_values))
+
+    clock = ManualHybridClock(NOW)
+    repo = InMemoryHybridKnowledgeRepository(clock=clock)
+    repo.enqueue(request)
+    assert repo.claim_next(worker_id="worker_1", lease_seconds=30) is None
+    clock.advance(seconds=10)
+    assert repo.claim_next(worker_id="worker_1", lease_seconds=30) is not None
 
 
 class MutableClock:
@@ -572,6 +650,74 @@ def test_invalid_terminal_and_renewal_inputs_do_not_mutate_leased_job() -> None:
     with pytest.raises(ValueError):
         repo.complete(job_id="", worker_id="worker_1", fencing_token=claim.fencing_token)
     assert repo.get("job_1") == leased
+
+
+def test_artifact_root_rejects_existing_symlink_and_parent_traversal(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ImmutableArtifactError, match="non-symlink"):
+        FileSystemKnowledgeArtifactStore(linked)
+    with pytest.raises(ImmutableArtifactError, match="parent traversal"):
+        FileSystemKnowledgeArtifactStore(tmp_path / "safe" / ".." / "unsafe")
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
+def test_artifact_root_constructor_rejects_component_replacement_race(
+    replacement: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "parent"
+    target = parent / "race-target"
+    target.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    swapped = False
+
+    def replace_component(
+        self: FileSystemKnowledgeArtifactStore,
+        *,
+        component: str,
+        parent_fd: int,
+        component_identity: tuple[int, int],
+    ) -> None:
+        nonlocal swapped
+        del self, parent_fd, component_identity
+        if component == "race-target" and not swapped:
+            target.rename(parent / "detached")
+            if replacement == "symlink":
+                target.symlink_to(outside, target_is_directory=True)
+            else:
+                target.mkdir()
+            swapped = True
+
+    monkeypatch.setattr(
+        FileSystemKnowledgeArtifactStore,
+        "_before_open_root_component",
+        replace_component,
+    )
+    with pytest.raises(ImmutableArtifactError, match="changed|identity"):
+        FileSystemKnowledgeArtifactStore(target)
+    assert list(outside.iterdir()) == []
+
+
+def test_artifact_root_concurrent_creation_is_safe(tmp_path: Path) -> None:
+    root = tmp_path / "new" / "nested" / "artifacts"
+    barrier = Barrier(2)
+
+    def construct() -> FileSystemKnowledgeArtifactStore:
+        barrier.wait()
+        return FileSystemKnowledgeArtifactStore(root)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        stores = tuple(executor.map(lambda _: construct(), range(2)))
+    try:
+        identities = {store._root_identity for store in stores}
+        assert len(identities) == 1
+        assert all(os.fstat(store._root_fd).st_ino for store in stores)
+    finally:
+        for store in stores:
+            store.close()
 
 
 def test_immutable_artifact_repeat_conflict_and_exact_read(tmp_path: Path) -> None:
