@@ -14,6 +14,7 @@ from proof_agent.contracts import (
     ExactArtifactRef,
     KnowledgeConfig,
     ResolvedHybridKnowledgeBinding,
+    ResolvedKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
 )
 from proof_agent.errors import ProofAgentError
@@ -229,22 +230,38 @@ def test_unknown_knowledge_provider_fails() -> None:
     assert exc.value.code == "PA_KNOWLEDGE_001"
 
 
-def test_hybrid_binding_cannot_execute_through_legacy_blended_composition(
+@pytest.mark.parametrize(
+    "binding_kinds",
+    [
+        ("hybrid",),
+        ("legacy", "hybrid"),
+        ("hybrid", "legacy"),
+    ],
+)
+def test_hybrid_binding_preflight_prevents_all_legacy_registry_calls(
     monkeypatch: pytest.MonkeyPatch,
+    binding_kinds: tuple[str, ...],
 ) -> None:
     registry_calls: list[KnowledgeConfig] = []
 
-    def unexpected_registry_call(config: KnowledgeConfig, **_: object) -> None:
+    def recording_registry_call(config: KnowledgeConfig, **_: object) -> LocalMarkdownProvider:
         registry_calls.append(config)
-        raise AssertionError("legacy provider registry must not receive Hybrid bindings")
+        return LocalMarkdownProvider(
+            Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/knowledge")
+        )
 
     monkeypatch.setattr(
         blended_module,
         "resolve_knowledge_provider",
-        unexpected_registry_call,
+        recording_registry_call,
     )
     bindings = ResolvedKnowledgeBindingSet(
-        bindings=(_resolved_hybrid_binding(failure_mode="advisory"),)
+        bindings=tuple(
+            _resolved_hybrid_binding(failure_mode="advisory")
+            if binding_kind == "hybrid"
+            else _resolved_legacy_binding(binding_id=f"kb_legacy_{index}")
+            for index, binding_kind in enumerate(binding_kinds)
+        )
     )
 
     with pytest.raises(ProofAgentError) as exc:
@@ -253,6 +270,55 @@ def test_hybrid_binding_cannot_execute_through_legacy_blended_composition(
     assert exc.value.code == "PA_KNOWLEDGE_001"
     assert "Hybrid execution is unavailable" in exc.value.message
     assert registry_calls == []
+
+
+def test_all_legacy_blended_composition_preserves_resolution_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_calls: list[KnowledgeConfig] = []
+
+    def recording_registry_call(config: KnowledgeConfig, **_: object) -> LocalMarkdownProvider:
+        registry_calls.append(config)
+        return LocalMarkdownProvider(
+            Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/knowledge")
+        )
+
+    monkeypatch.setattr(
+        blended_module,
+        "resolve_knowledge_provider",
+        recording_registry_call,
+    )
+    bindings = ResolvedKnowledgeBindingSet(
+        bindings=(
+            _resolved_legacy_binding(binding_id="kb_first"),
+            _resolved_legacy_binding(binding_id="kb_second"),
+        )
+    )
+
+    provider = resolve_blended_knowledge_provider(bindings)
+
+    assert [config.params["binding_id"] for config in registry_calls] == [
+        "kb_first",
+        "kb_second",
+    ]
+    assert [bound.resolved.binding_id for bound in provider.bound_providers] == [
+        "kb_first",
+        "kb_second",
+    ]
+
+
+def _resolved_legacy_binding(*, binding_id: str) -> ResolvedKnowledgeBinding:
+    return ResolvedKnowledgeBinding(
+        binding_id=binding_id,
+        source_scope="package",
+        source_id=f"source_{binding_id}",
+        source_version_id="package",
+        provider="local_markdown",
+        provider_params={
+            "path": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/knowledge"),
+            "binding_id": binding_id,
+        },
+    )
 
 
 def _resolved_hybrid_binding(

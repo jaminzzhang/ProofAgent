@@ -90,14 +90,19 @@ def resolve_blended_knowledge_provider(
     *,
     configuration_store: LocalAgentConfigurationStore | None = None,
 ) -> BlendedKnowledgeProvider:
+    if any(
+        isinstance(resolved, ResolvedHybridKnowledgeBinding)
+        for resolved in resolved_bindings.bindings
+    ):
+        raise ProofAgentError(
+            "PA_KNOWLEDGE_001",
+            "Hybrid execution is unavailable until the governed Hybrid provider path is composed.",
+            "Use a legacy Knowledge binding until the governed Hybrid provider path is available.",
+        )
+
     bound_providers: list[BoundKnowledgeProvider] = []
     for resolved in resolved_bindings.bindings:
-        if isinstance(resolved, ResolvedHybridKnowledgeBinding):
-            raise ProofAgentError(
-                "PA_KNOWLEDGE_001",
-                "Hybrid execution is unavailable until the governed Hybrid provider path is composed.",
-                "Use a legacy Knowledge binding until the governed Hybrid provider path is available.",
-            )
+        assert isinstance(resolved, ResolvedKnowledgeBinding)
         provider = resolve_knowledge_provider(
             KnowledgeConfig(provider=resolved.provider, params=resolved.provider_params),
             configuration_store=configuration_store,
