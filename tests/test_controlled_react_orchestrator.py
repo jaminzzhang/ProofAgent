@@ -213,6 +213,53 @@ def test_answer_synthesis_receives_answer_evidence_context() -> None:
     assert answer_synthesis.context.citation_refs == ("claims-guide.md#documents",)
 
 
+def test_answer_truth_context_rejects_record_action_identity_mismatch() -> None:
+    truth_ref = "observation://run_answer_context/obs_1/truth"
+    truth = RetrievalObservationTruth(
+        truth_ref=truth_ref,
+        observation_id="obs_1",
+        action_id="act_other",
+    )
+
+    class MismatchedActionTruthStore:
+        def save(self, artifact: object) -> str:
+            _ = artifact
+            raise AssertionError("answer validation must not save truth")
+
+        def load(self, requested_ref: str) -> RetrievalObservationTruth:
+            assert requested_ref == truth_ref
+            return truth
+
+    answer_synthesis = _ContextCapturingAnswerSynthesis()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_TerminalAnswerPlanner(),
+            answer_synthesis=answer_synthesis,
+            observation_truth_store=MismatchedActionTruthStore(),
+        )
+    )
+    state = ControlledReActRunState(
+        run_id="run_answer_context",
+        template_name="react_enterprise_qa_v3",
+        template_descriptor_version="react_enterprise_qa.v3",
+        question="Question",
+        observation_records=(
+            ObservationRecord(
+                observation_id="obs_1",
+                action_id="act_expected",
+                action_type=ReActActionType.PLAN_RETRIEVAL,
+                round=1,
+                truth_ref=truth_ref,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="action_id does not match"):
+        orchestrator._answer_evidence_context(state)
+
+    assert answer_synthesis.context is None
+
+
 def test_start_carries_conversation_context_into_run_state() -> None:
     conversation_context = ContextAdmission(
         admitted=True,

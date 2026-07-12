@@ -822,21 +822,9 @@ def _validate_langgraph_resume_binding(
     mismatched = (
         execution_input.run_id != run_id
         or execution_input.question != question
-        or (
-            agent_id is not None
-            and execution_input.agent_id is not None
-            and execution_input.agent_id != agent_id
-        )
-        or (
-            agent_version_id is not None
-            and execution_input.agent_version_id is not None
-            and execution_input.agent_version_id != agent_version_id
-        )
-        or (
-            draft_id is not None
-            and execution_input.draft_id is not None
-            and execution_input.draft_id != draft_id
-        )
+        or execution_input.agent_id != agent_id
+        or execution_input.agent_version_id != agent_version_id
+        or execution_input.draft_id != draft_id
     )
     if mismatched:
         raise _resume_integrity_error("LangGraph resume context binding mismatch", path=path)

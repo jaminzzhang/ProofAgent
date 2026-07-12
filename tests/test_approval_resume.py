@@ -355,11 +355,17 @@ def test_approval_resume_integrity_key_requires_32_bytes(tmp_path: Path) -> None
         ({"run_id": "run_other"}, {}),
         ({"question": "Different question"}, {}),
         ({"agent_id": "agent_other"}, {"agent_id": "agent_expected"}),
+        ({"agent_id": "agent_expected"}, {}),
+        ({}, {"agent_id": "agent_expected"}),
         (
             {"agent_version_id": "version_other"},
             {"agent_version_id": "version_expected"},
         ),
+        ({"agent_version_id": "version_expected"}, {}),
+        ({}, {"agent_version_id": "version_expected"}),
         ({"draft_id": "draft_other"}, {"draft_id": "draft_expected"}),
+        ({"draft_id": "draft_expected"}, {}),
+        ({}, {"draft_id": "draft_expected"}),
     ],
 )
 def test_langgraph_resume_put_rejects_inconsistent_pinned_input(
@@ -406,6 +412,66 @@ def test_langgraph_resume_load_rejects_validly_signed_binding_mismatch(
     path = tmp_path / execution_input.run_id / "resume_context.json"
     metadata = json.loads(path.read_text(encoding="utf-8"))
     metadata["question"] = "Different signed question"
+    metadata["integrity_hmac_sha256"] = signer.sign(
+        metadata,
+        purpose="langgraph-resume-metadata",
+    )
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError, match="context binding mismatch"):
+        LangGraphApprovalResumeRegistry(tmp_path, integrity_key=key).get(
+            execution_input.run_id
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "tamper_context_side"),
+    [
+        ("agent_id", True),
+        ("agent_id", False),
+        ("agent_version_id", True),
+        ("agent_version_id", False),
+        ("draft_id", True),
+        ("draft_id", False),
+    ],
+)
+def test_langgraph_resume_load_rejects_one_sided_none_binding_mismatch(
+    tmp_path: Path,
+    field: str,
+    tamper_context_side: bool,
+) -> None:
+    key = b"n" * 32
+    signer = ApprovalResumeIntegritySigner(key)
+    execution_input = _execution_input()
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=key)
+    registry.put(
+        LangGraphApprovalResumeContext(
+            agent_yaml=REACT_AGENT,
+            runs_dir=tmp_path / "runs",
+            run_id=execution_input.run_id,
+            question=execution_input.question,
+            checkpointer=MemorySaver(),
+            manifest=load_agent_manifest(REACT_AGENT),
+            workflow_template_execution_input=execution_input,
+        )
+    )
+    path = tmp_path / execution_input.run_id / "resume_context.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    value = f"signed_{field}"
+    if tamper_context_side:
+        metadata[field] = value
+    else:
+        pinned_input = metadata["workflow_template_execution_input"]
+        pinned_input[field] = value
+        canonical = json.dumps(
+            pinned_input,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        metadata["workflow_template_execution_input_sha256"] = hashlib.sha256(
+            canonical.encode("utf-8")
+        ).hexdigest()
     metadata["integrity_hmac_sha256"] = signer.sign(
         metadata,
         purpose="langgraph-resume-metadata",

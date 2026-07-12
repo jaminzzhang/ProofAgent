@@ -1135,6 +1135,8 @@ def _validate_answer_truth_context(
             raise ValueError("observation record truth_ref does not match truth artifact")
         if record.observation_id != truth.observation_id:
             raise ValueError("observation record id does not match truth artifact")
+        if record.action_id != truth.action_id:
+            raise ValueError("observation record action_id does not match truth artifact")
         if isinstance(truth, RetrievalObservationTruth):
             missing = tuple(ref for ref in record.citation_refs if ref not in truth.citation_refs)
             if missing:
