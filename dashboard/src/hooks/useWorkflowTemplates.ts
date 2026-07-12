@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchWorkflowTemplates } from '../api/client'
 import type { WorkflowTemplateDescriptor } from '../api/types'
+import { productionWorkflowTemplates } from '../workflowTemplates'
 
 interface UseWorkflowTemplatesResult {
   /** Template descriptors from the Dynamic Workflow Template Catalog. */
@@ -29,7 +30,10 @@ function loadCatalog(): Promise<CachedCatalog> {
   if (inflight) return inflight
   inflight = fetchWorkflowTemplates()
     .then((response) => {
-      const catalog: CachedCatalog = { templates: response.data, error: null }
+      const catalog: CachedCatalog = {
+        templates: productionWorkflowTemplates(response.data),
+        error: null,
+      }
       catalogCache = catalog
       inflight = null
       return catalog

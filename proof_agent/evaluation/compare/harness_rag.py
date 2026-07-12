@@ -9,7 +9,7 @@ from proof_agent.delivery.agent_package_execution import (
 from proof_agent.evaluation.compare.result import RagResult
 
 
-DEFAULT_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+DEFAULT_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
 
 
 def run_harness_rag(question: str, *, agent_yaml: Path = DEFAULT_AGENT_PATH) -> RagResult:

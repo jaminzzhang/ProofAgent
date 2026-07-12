@@ -13,18 +13,18 @@ from proof_agent.control.workflow.templates import resolve_workflow_template
 from proof_agent.errors import ProofAgentError
 
 
-def test_compose_harness_invocation_resolves_enterprise_qa_dependencies() -> None:
+def test_compose_harness_invocation_resolves_v3_dependencies() -> None:
     invocation = compose_harness_invocation(
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
     )
 
-    assert invocation.manifest.name == "enterprise_qa"
-    assert invocation.template.name == "enterprise_qa"
+    assert invocation.manifest.name == "react_enterprise_qa_v3"
+    assert invocation.template.name == "react_enterprise_qa_v3"
     assert invocation.model_provider.provider_name == "deterministic"
     assert invocation.knowledge_provider.provider_name == "local_markdown"
-    assert "customer_lookup" in invocation.tool_gateway.tools
-    assert invocation.react_planner is None
-    assert invocation.review_subagent is None
+    assert invocation.tool_gateway.tools == {}
+    assert invocation.react_planner is not None
+    assert invocation.review_subagent is not None
 
     memory = invocation.create_memory()
     memory_result = memory.write({"summary": "Question: sample"})
@@ -39,17 +39,17 @@ def test_unknown_workflow_template_fails_from_registry() -> None:
 
 
 def test_react_workflow_template_resolves_from_registry() -> None:
-    template = resolve_workflow_template("react_enterprise_qa")
+    template = resolve_workflow_template("react_enterprise_qa_v3")
 
-    assert template.name == "react_enterprise_qa"
+    assert template.name == "react_enterprise_qa_v3"
 
 
 def test_compose_harness_invocation_resolves_react_dependencies() -> None:
     invocation = compose_harness_invocation(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
     )
 
-    assert invocation.template.name == "react_enterprise_qa"
+    assert invocation.template.name == "react_enterprise_qa_v3"
     assert invocation.react_planner is not None
     assert invocation.review_subagent is not None
 
@@ -110,8 +110,9 @@ admission:
 name: skill_pack_composition
 purpose: "Compose Business Flow Skill Packs."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v2
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -220,8 +221,14 @@ admission: {}
 name: skill_pack_unknown_ref
 purpose: "Reject unknown Business Flow Skill Pack refs."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -318,8 +325,14 @@ admission: {}
 name: skill_pack_unknown_policy_ref
 purpose: "Reject unknown Business Flow Skill Pack policy refs."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -417,8 +430,14 @@ admission: {}
 name: skill_pack_disabled_tool_ref
 purpose: "Reject tool refs when tools are disabled."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -515,8 +534,14 @@ admission: {}
 name: skill_pack_unknown_validator_ref
 purpose: "Reject unknown Business Flow Skill Pack validator refs."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -580,8 +605,14 @@ def test_compose_harness_invocation_blends_multiple_knowledge_bindings(tmp_path:
 name: blended_qa
 purpose: "Blend two knowledge sources."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
 package_knowledge_sources:
   - source_id: ks_alpha
     name: Alpha Knowledge
@@ -652,8 +683,14 @@ def test_compose_harness_invocation_accepts_precomputed_resolved_bindings(
 name: precomputed_qa
 purpose: "Use precomputed resolved Knowledge bindings."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
 package_knowledge_sources: []
 knowledge_bindings:
   - binding_id: kb_alpha
@@ -721,8 +758,14 @@ def test_compose_harness_invocation_resolves_retrieval_model_connections(
 name: retrieval_model_connection_qa
 purpose: "Resolve retrieval control-plane models."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 2
+  planner:
+    provider: deterministic
+    name: demo
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge

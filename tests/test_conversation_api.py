@@ -15,7 +15,9 @@ def _client(tmp_path: Path, *, published_agents: dict[str, Path] | None = None) 
     store = LocalAgentConfigurationStore(tmp_path / "config")
     if published_agents is None:
         published_agents = {
-            "enterprise_qa": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+            "react_enterprise_qa_v3": Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
         }
     for manifest_path in published_agents.values():
         draft = import_agent_package(manifest_path, store=store, actor="test-user")
@@ -36,8 +38,8 @@ def _client(tmp_path: Path, *, published_agents: dict[str, Path] | None = None) 
 
 
 def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
-    agent_dir = tmp_path / "react_enterprise_qa"
-    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa"), agent_dir)
+    agent_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"), agent_dir)
     manifest_path = agent_dir / "agent.yaml"
     manifest_text = manifest_path.read_text(encoding="utf-8")
     manifest_path.write_text(
@@ -51,8 +53,8 @@ def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
 
 
 def _client_with_shared_model_published_agent(tmp_path: Path) -> TestClient:
-    agent_dir = tmp_path / "enterprise_qa_shared_model"
-    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), agent_dir)
+    agent_dir = tmp_path / "react_enterprise_qa_v3_shared_model"
+    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"), agent_dir)
     manifest_path = agent_dir / "agent.yaml"
     raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     raw["model"] = {
@@ -90,7 +92,7 @@ def _client_with_shared_model_published_agent(tmp_path: Path) -> TestClient:
 
 def test_conversation_run_admits_prior_turn_context(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 
@@ -155,7 +157,7 @@ def test_conversation_run_context_assembly_records_dropped_turn_refs(
     tmp_path: Path,
 ) -> None:
     client = _client(tmp_path)
-    created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     conversation_id = created.json()["conversation_id"]
 
     first = client.post(
@@ -196,12 +198,12 @@ def test_conversation_run_context_assembly_marks_clarification_continuation(
     client = _client(
         tmp_path,
         published_agents={
-            "react_enterprise_qa": Path(
-                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"
+            "react_enterprise_qa_v3": Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
             ),
         },
     )
-    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa"})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     conversation_id = created.json()["conversation_id"]
 
     first = client.post(
@@ -234,7 +236,7 @@ def test_conversation_run_resolves_shared_model_connection_from_configuration_st
 ) -> None:
     monkeypatch.setenv("DEMO_MODEL_KEY", "test-key")
     client = _client_with_shared_model_published_agent(tmp_path)
-    created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 
@@ -245,14 +247,14 @@ def test_conversation_run_resolves_shared_model_connection_from_configuration_st
 
     assert response.status_code == 200
     body = response.json()
-    assert body["agent_id"] == "enterprise_qa"
+    assert body["agent_id"] == "react_enterprise_qa_v3"
     assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
 
 
 def test_conversation_run_omits_governance_details_by_default(tmp_path: Path) -> None:
     manifest_path = _copy_react_agent_with_response_details(tmp_path)
-    client = _client(tmp_path, published_agents={"react_enterprise_qa": manifest_path})
-    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa"})
+    client = _client(tmp_path, published_agents={"react_enterprise_qa_v3": manifest_path})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 
@@ -272,8 +274,8 @@ def test_conversation_run_returns_and_stores_governance_details_when_policy_allo
     tmp_path: Path,
 ) -> None:
     manifest_path = _copy_react_agent_with_response_details(tmp_path)
-    client = _client(tmp_path, published_agents={"react_enterprise_qa": manifest_path})
-    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa"})
+    client = _client(tmp_path, published_agents={"react_enterprise_qa_v3": manifest_path})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 
@@ -315,11 +317,11 @@ def test_list_conversations_empty_when_none_exist(tmp_path: Path) -> None:
 def test_list_conversations_returns_sorted_by_updated_at(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
-    a = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    a = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert a.status_code == 200
     a_id = a.json()["conversation_id"]
 
-    b = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    b = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert b.status_code == 200
     b_id = b.json()["conversation_id"]
 
@@ -345,7 +347,7 @@ def test_list_conversations_returns_sorted_by_updated_at(tmp_path: Path) -> None
 
 def test_rename_conversation(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 
@@ -359,7 +361,7 @@ def test_rename_conversation(tmp_path: Path) -> None:
 
 def test_rename_conversation_empty_string_clears_title(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 
@@ -379,11 +381,11 @@ def test_rename_conversation_empty_string_clears_title(tmp_path: Path) -> None:
 
 def test_pin_conversation(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    a = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    a = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert a.status_code == 200
     a_id = a.json()["conversation_id"]
 
-    b = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    b = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert b.status_code == 200
     b_id = b.json()["conversation_id"]
 
@@ -404,11 +406,11 @@ def test_pin_conversation(tmp_path: Path) -> None:
 
 def test_unpin_conversation(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    a = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    a = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert a.status_code == 200
     a_id = a.json()["conversation_id"]
 
-    b = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    b = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert b.status_code == 200
     b_id = b.json()["conversation_id"]
 
@@ -433,7 +435,7 @@ def test_unpin_conversation(tmp_path: Path) -> None:
 
 def test_delete_conversation(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    created = client.post("/api/chat/conversations", json={"agent_id": "enterprise_qa"})
+    created = client.post("/api/chat/conversations", json={"agent_id": "react_enterprise_qa_v3"})
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
 

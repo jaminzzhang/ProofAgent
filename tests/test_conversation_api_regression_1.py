@@ -11,7 +11,7 @@ from proof_agent.observability.api.app import create_app
 def _client(tmp_path: Path) -> TestClient:
     configuration_store = LocalAgentConfigurationStore(tmp_path / "config")
     draft = import_agent_package(
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
         store=configuration_store,
         actor="test-user",
     )
@@ -34,7 +34,7 @@ def _client(tmp_path: Path) -> TestClient:
 def _create_conversation(client: TestClient) -> str:
     response = client.post(
         "/api/chat/conversations",
-        json={"agent_id": "enterprise_qa"},
+        json={"agent_id": "react_enterprise_qa_v3"},
     )
     assert response.status_code == 200
     return str(response.json()["conversation_id"])

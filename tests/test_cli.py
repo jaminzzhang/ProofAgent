@@ -31,6 +31,31 @@ from proof_agent.evaluation.compare.result import RagResult
 
 runner = CliRunner()
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_AGENT_ID = "agent_management_insurance_specialist"
+
+
+def _copy_canonical_agent_variant(
+    tmp_path: Path,
+    directory_name: str,
+    *,
+    agent_id: str = CANONICAL_AGENT_ID,
+    purpose_suffix: str = "",
+) -> Path:
+    agent_dir = tmp_path / directory_name
+    shutil.copytree(
+        REPO_ROOT / "examples/agent_management_insurance_specialist",
+        agent_dir,
+    )
+    manifest_path = agent_dir / "agent.yaml"
+    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    raw["name"] = agent_id
+    if purpose_suffix:
+        raw["purpose"] = f"{raw['purpose']} {purpose_suffix}"
+    manifest_path.write_text(
+        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return manifest_path
 
 
 def test_demo_command_exists() -> None:
@@ -47,7 +72,8 @@ def test_react_demo_command_runs_no_key_scenarios() -> None:
     assert "supported: ANSWERED_WITH_CITATIONS" in result.output
     assert "unsupported: REFUSED_NO_EVIDENCE" in result.output
     assert "clarify: WAITING_FOR_USER_CLARIFICATION" in result.output
-    assert "tool_required: WAITING_FOR_APPROVAL" in result.output
+    assert "tool_required" not in result.output
+    assert "WAITING_FOR_APPROVAL" not in result.output
 
 
 def test_doctor_command_exists() -> None:
@@ -432,8 +458,13 @@ def test_existing_canonical_seed_backfills_sole_agent_authority(tmp_path: Path) 
     assert _seed_default_dev_agent(store) is False
 
     assert authority_path.is_file()
+    other_agent_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "other_agent",
+        agent_id="insurance_customer_service",
+    )
     legacy_draft = import_agent_package(
-        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        other_agent_path,
         store=store,
         actor="test-user",
     )
@@ -449,8 +480,13 @@ def test_existing_canonical_seed_backfills_sole_agent_authority(tmp_path: Path) 
 
 def test_canonical_seed_authority_blocks_legacy_version_rollback(tmp_path: Path) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
+    other_agent_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "other_agent",
+        agent_id="insurance_customer_service",
+    )
     legacy_draft = import_agent_package(
-        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        other_agent_path,
         store=store,
         actor="test-user",
     )
@@ -511,19 +547,10 @@ def test_seed_cas_never_overwrites_concurrent_manual_publish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stale_dir = tmp_path / "manual_stale_agent"
-    shutil.copytree(
-        REPO_ROOT / "examples/agent_management_insurance_specialist",
-        stale_dir,
-    )
-    stale_manifest_path = stale_dir / "agent.yaml"
-    raw = yaml.safe_load(stale_manifest_path.read_text(encoding="utf-8"))
-    raw["workflow"]["runtime"] = "langgraph"
-    raw["workflow"]["template"] = "react_enterprise_qa_v2"
-    raw["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v2"
-    stale_manifest_path.write_text(
-        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
+    stale_manifest_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "manual_stale_agent",
+        purpose_suffix="Manual concurrent variant.",
     )
     store = LocalAgentConfigurationStore(tmp_path / "config")
     manual_draft = import_agent_package(
@@ -626,19 +653,10 @@ def test_seed_authority_never_blesses_version_swapped_after_validation(
         validation_run_id="manual_canonical_publish",
         actor="manual-user",
     )
-    stale_dir = tmp_path / "stale_agent"
-    shutil.copytree(
-        REPO_ROOT / "examples/agent_management_insurance_specialist",
-        stale_dir,
-    )
-    stale_manifest_path = stale_dir / "agent.yaml"
-    raw = yaml.safe_load(stale_manifest_path.read_text(encoding="utf-8"))
-    raw["workflow"]["runtime"] = "langgraph"
-    raw["workflow"]["template"] = "react_enterprise_qa_v2"
-    raw["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v2"
-    stale_manifest_path.write_text(
-        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
+    stale_manifest_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "stale_agent",
+        purpose_suffix="Version swap variant.",
     )
     stale_draft = import_agent_package(
         stale_manifest_path,
@@ -685,8 +703,13 @@ def test_seed_cas_never_creates_second_identity_during_legacy_publish(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
+    other_agent_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "other_agent",
+        agent_id="insurance_customer_service",
+    )
     legacy_draft = import_agent_package(
-        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        other_agent_path,
         store=store,
         actor="manual-user",
     )
@@ -730,8 +753,13 @@ def test_seed_reserves_authority_before_publication_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
+    other_agent_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "other_agent",
+        agent_id="insurance_customer_service",
+    )
     legacy_draft = import_agent_package(
-        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        other_agent_path,
         store=store,
         actor="manual-user",
     )
@@ -760,27 +788,18 @@ def test_seed_reserves_authority_before_publication_write(
     assert exc.value.code == "PA_CONFIG_002"
 
 
-def test_seed_default_dev_agent_rejects_stale_active_v2_package(tmp_path: Path) -> None:
-    stale_dir = tmp_path / "stale_agent"
-    shutil.copytree(
-        REPO_ROOT / "examples/agent_management_insurance_specialist",
-        stale_dir,
-    )
-    stale_manifest_path = stale_dir / "agent.yaml"
-    raw = yaml.safe_load(stale_manifest_path.read_text(encoding="utf-8"))
-    raw["workflow"]["runtime"] = "langgraph"
-    raw["workflow"]["template"] = "react_enterprise_qa_v2"
-    raw["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v2"
-    stale_manifest_path.write_text(
-        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
+def test_seed_default_dev_agent_rejects_stale_active_v3_contract(tmp_path: Path) -> None:
+    stale_manifest_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "stale_agent",
+        purpose_suffix="Stale local contract.",
     )
     store = LocalAgentConfigurationStore(tmp_path / "config")
     draft = import_agent_package(stale_manifest_path, store=store, actor="test-user")
     stale_version = store.publish_version(
         agent_id=draft.agent_id,
         draft_id=draft.draft_id,
-        validation_run_id="stale_v2",
+        validation_run_id="stale_v3_contract",
         actor="test-user",
     )
 
@@ -826,8 +845,13 @@ def test_seed_default_dev_agent_rejects_stale_v3_package_content(tmp_path: Path)
 
 def test_seed_default_dev_agent_rejects_any_other_active_agent(tmp_path: Path) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
+    other_agent_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "other_agent",
+        agent_id="insurance_customer_service",
+    )
     legacy_draft = import_agent_package(
-        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        other_agent_path,
         store=store,
         actor="test-user",
     )
@@ -899,8 +923,13 @@ def test_server_command_reports_structured_seed_error(
 ) -> None:
     config_dir = tmp_path / "config"
     store = LocalAgentConfigurationStore(config_dir)
+    other_agent_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "other_agent",
+        agent_id="insurance_customer_service",
+    )
     legacy_draft = import_agent_package(
-        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        other_agent_path,
         store=store,
         actor="test-user",
     )
@@ -939,8 +968,13 @@ def test_server_reload_factory_reports_structured_seed_error(
 ) -> None:
     config_dir = tmp_path / "config"
     store = LocalAgentConfigurationStore(config_dir)
+    other_agent_path = _copy_canonical_agent_variant(
+        tmp_path,
+        "other_agent",
+        agent_id="insurance_customer_service",
+    )
     legacy_draft = import_agent_package(
-        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        other_agent_path,
         store=store,
         actor="test-user",
     )

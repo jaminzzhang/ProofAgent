@@ -45,9 +45,10 @@ from proof_agent.control.workflow.harness_helpers import (
     finalize_run,
 )
 from proof_agent.control.workflow.templates import resolve_workflow_template
+from proof_agent.control.workflow.templates import WorkflowTemplate
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
 
 
 class ControlledReActOrchestratorDependency(Protocol):
@@ -87,6 +88,14 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
     """Execute one governed Agent Package run through the correct runtime."""
 
     manifest = request.manifest or load_agent_manifest(request.agent_yaml)
+    template = resolve_workflow_template(manifest.workflow.template)
+    if manifest.workflow.runtime != "controlled_react":
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"unsupported workflow runtime: {manifest.workflow.runtime}",
+            "Use workflow.runtime: controlled_react for react_enterprise_qa_v3.",
+            artifact_path=request.agent_yaml,
+        )
     run_id = request.run_id or f"run_{uuid4().hex[:8]}"
     run_start_context = _run_start_context_assembly(
         run_id=run_id,
@@ -95,31 +104,10 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
         context_config=manifest.context,
         context_budget_calibration_store=request.context_budget_calibration_store,
     )
-    if manifest.workflow.template != "react_enterprise_qa_v3":
-        return run_with_langgraph(
-            request.agent_yaml,
-            question=request.question,
-            runs_dir=request.runs_dir,
-            conversation_context=request.conversation_context,
-            run_id=run_id,
-            store=request.store,
-            checkpointer=request.checkpointer,
-            manifest=manifest,
-            knowledge_binding_resolver=request.knowledge_binding_resolver,
-            resolved_knowledge_bindings=request.resolved_knowledge_bindings,
-            configuration_store=request.configuration_store,
-            run_purpose=request.run_purpose,
-            agent_id=request.agent_id,
-            agent_version_id=request.agent_version_id,
-            draft_id=request.draft_id,
-            allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
-            published_agent_runtime_facts=request.published_agent_runtime_facts,
-            run_start_context=run_start_context,
-            context_budget_calibration_store=request.context_budget_calibration_store,
-        )
     return _execute_controlled_react_v3_agent_package_run(
         request,
         manifest=manifest,
+        template=template,
         run_id=run_id,
         run_start_context=run_start_context,
     )
@@ -129,6 +117,7 @@ def _execute_controlled_react_v3_agent_package_run(
     request: AgentPackageRunRequest,
     *,
     manifest: AgentManifest,
+    template: WorkflowTemplate,
     run_id: str,
     run_start_context: RunStartContextAssembly | None,
 ) -> RunResult:
@@ -172,6 +161,12 @@ def _execute_controlled_react_v3_agent_package_run(
         configuration_store=request.configuration_store,
         context_budget_calibration_store=request.context_budget_calibration_store,
     )
+    for record in invocation.model_resolution_records:
+        trace.emit(
+            TraceEventType.MODEL_CONNECTION_RESOLUTION,
+            status="ok",
+            payload=record.model_dump(mode="json"),
+        )
     orchestrator = request.controlled_react_orchestrator
     if orchestrator is None:
         orchestrator = build_controlled_react_orchestrator_for_invocation(
@@ -180,7 +175,6 @@ def _execute_controlled_react_v3_agent_package_run(
             observation_truth_store=request.controlled_react_observation_truth_store,
             trace=trace,
         )
-    template = resolve_workflow_template(manifest.workflow.template)
     execution_result = orchestrator.start(
         ControlledReActStartRequest(
             run_id=run_id,

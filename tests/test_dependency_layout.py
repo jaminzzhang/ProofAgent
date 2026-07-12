@@ -13,8 +13,23 @@ def test_local_index_stack_is_optional_not_core_dependency() -> None:
     assert any(dependency.startswith("llama-index-core") for dependency in optional["tree"])
 
 
-def test_langgraph_runtime_is_the_only_workflow_execution_entrypoint() -> None:
-    assert not Path("proof_agent/control/workflow/orchestrator.py").exists()
+def test_v3_delivery_has_no_legacy_runtime_entrypoint() -> None:
+    package_execution = Path("proof_agent/delivery/agent_package_execution.py")
+    imported_modules = {
+        imported_module
+        for node in ast.walk(ast.parse(package_execution.read_text(encoding="utf-8")))
+        for imported_module in _resolved_import_modules(package_execution, node)
+    }
+    assert not {
+        imported_module
+        for imported_module in imported_modules
+        if imported_module.startswith(("proof_agent.runtime", "langgraph", "langchain"))
+    }
+
+    run_service_imports = _imports_by_module(Path("proof_agent/delivery/run_execution_service.py"))
+    assert "LangGraphApprovalResumeContext" not in run_service_imports.get(
+        "proof_agent.runtime.approval_resume", set()
+    )
 
 
 def test_react_graph_builder_does_not_own_workflow_node_implementations() -> None:

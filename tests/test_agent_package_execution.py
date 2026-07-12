@@ -26,6 +26,7 @@ from proof_agent.contracts import (
 from proof_agent.control.workflow.controlled_react import ControlledReActStartRequest
 from proof_agent.capabilities.react.planner import LLMReActPlanner
 from proof_agent.bootstrap import composition
+from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.control.context_budget import (
     ContextBudgetKey,
     InMemoryContextBudgetCalibrationStore,
@@ -182,43 +183,7 @@ def test_execute_agent_package_run_applies_manifest_context_budget_to_run_start_
     assert budget["convergence_level"] == "level1"
 
 
-def test_execute_agent_package_run_records_shared_run_start_context_summary_for_langgraph(
-    tmp_path: Path,
-) -> None:
-    conversation_context = ContextAdmission(
-        admitted=True,
-        turn_count=1,
-        included_turn_ids=("turn_1",),
-        summary="Previous answer compared Product A and Product B.",
-        char_count=48,
-        max_turns=3,
-    )
-
-    result = execute_agent_package_run(
-        AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
-            question="What are their pros and cons?",
-            runs_dir=tmp_path / "run",
-            conversation_context=conversation_context,
-        )
-    )
-
-    assert result.workflow_template_execution_input is not None
-    summary = result.workflow_template_execution_input.model_dump(mode="json")[
-        "controlled_run_context_summary"
-    ]
-    assert summary["source_refs"] == [{"source_type": "conversation_turn", "source_id": "turn_1"}]
-    events = [
-        json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assembly_events = [
-        event for event in events if event["event_type"] == "context_assembly_summary"
-    ]
-    assert len(assembly_events) == 1
-    assert assembly_events[0]["payload"] == summary
-
-
-def test_execute_agent_package_run_passes_memory_recall_to_langgraph_model_answer(
+def test_execute_agent_package_run_passes_memory_recall_to_v3_model_answer(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -232,7 +197,9 @@ def test_execute_agent_package_run_passes_memory_recall_to_langgraph_model_answe
 
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             question="What is the reimbursement rule for travel meals?",
             runs_dir=tmp_path / "run",
             memory_recall_admissions=(memory_recall,),
@@ -1148,9 +1115,7 @@ def test_execute_agent_package_run_repairs_visible_citation_artifacts_in_answer(
     assert "[1]" not in result.final_output
 
     repair_payload = json.loads(provider.requests[1].messages[1].content)
-    assert "visible_citation_artifact" in repair_payload["validation_error"][
-        "violation_codes"
-    ]
+    assert "visible_citation_artifact" in repair_payload["validation_error"]["violation_codes"]
     assert (
         repair_payload["required_output_contract"]["field_types"]["message"]
         == "customer-visible prose only; no citation refs, source labels, or reference blocks"
@@ -1380,45 +1345,35 @@ def test_execute_agent_package_run_stage_scopes_all_v3_runtime_events(
     assert unscoped == []
 
 
-def test_execute_agent_package_run_projects_v3_tool_approval_payload(
+def test_v3_fixture_has_no_tool_or_approval_execution_surface(
     tmp_path: Path,
 ) -> None:
+    agent_yaml = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
+    manifest = load_agent_manifest(agent_yaml)
+
+    assert manifest.capabilities.tools.enabled is False
+    assert manifest.capabilities.tools.file is None
+    assert manifest.react is not None
+    assert manifest.react.max_tool_calls == 0
+
     result = execute_agent_package_run(
         AgentPackageRunRequest(
-            agent_yaml=Path(
-                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
-            ),
+            agent_yaml=agent_yaml,
             question="Look up customer policy status before answering.",
             runs_dir=tmp_path / "run",
         )
     )
 
-    assert result.outcome is ReceiptOutcome.WAITING_FOR_APPROVAL
-    assert result.workflow_template_execution_result is not None
-    assert [
-        stage.stage_id for stage in result.workflow_template_execution_result.stage_results
-    ] == ["intent_resolution", "memory_read", "tool_proposal_scope", "plan", "tool_review"]
+    assert result.outcome is not ReceiptOutcome.WAITING_FOR_APPROVAL
     events = [
         json.loads(line) for line in result.trace_path.read_text(encoding="utf-8").splitlines()
     ]
-    scope_event = next(event for event in events if event["event_type"] == "tool_proposal_scope")
-    scope_payload = scope_event["payload"]
-    assert "customer_lookup" in scope_payload["tool_contract_ids"]
-    assert "input_schema" not in json.dumps(scope_payload)
-    assert "tool_source_id" not in json.dumps(scope_payload)
-    pending = next(event for event in events if event["event_type"] == "pending_approval_created")
-    payload = pending["payload"]
-    assert payload["run_id"] == pending["run_id"]
-    assert payload["thread_id"] == pending["run_id"]
-    assert payload["action_id"] == "act_tool_1"
-    assert payload["tool_name"] == "customer_lookup"
-    assert payload["parameters"] == {
-        "customer_id": "CUST-001",
-        "policy_id": "POL-001",
+    assert not {
+        event["event_type"]
+        for event in events
+        if event["event_type"]
+        in {"tool_call_requested", "pending_approval_created", "approval_requested"}
     }
-    assert payload["policy_decision"] == "require_approval"
-    assert payload["checkpoint_ref"]
-    assert payload["checkpoint_id"] == payload["checkpoint_ref"]
 
 
 class _RawEvidenceAnswerProvider:
@@ -1554,8 +1509,7 @@ class _CitationArtifactRepairingAnswerProvider:
     def generate(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
         message = (
-            "Travel meals are reimbursed up to 50 USD per day when the employee "
-            "provides receipts."
+            "Travel meals are reimbursed up to 50 USD per day when the employee provides receipts."
         )
         if len(self.requests) == 1:
             message = f"{message}\n\n    [1]"

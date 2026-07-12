@@ -87,15 +87,7 @@ def test_agent_composes_with_strict_runtime_reference_validation() -> None:
 
 def test_agent_runs_offline_through_controlled_react_v3(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_if_langgraph_is_called(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("V3 Agent must not call the LangGraph runner")
-
-    monkeypatch.setattr(
-        "proof_agent.delivery.agent_package_execution.run_with_langgraph",
-        fail_if_langgraph_is_called,
-    )
     result = execute_agent_package_run(
         AgentPackageRunRequest(
             agent_yaml=AGENT_PATH,

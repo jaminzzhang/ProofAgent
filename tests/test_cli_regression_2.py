@@ -14,9 +14,10 @@ from proof_agent.observability.api.app import create_app
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEMO_AGENT = REPO_ROOT / "proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"
-PUBLIC_AGENT = REPO_ROOT / "examples/insurance_customer_service/agent.yaml"
-SUPPORTED_QUESTION = "What documents are required for inpatient claim reimbursement?"
+DEMO_AGENT = REPO_ROOT / "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+PUBLIC_AGENT = REPO_ROOT / "examples/agent_management_insurance_specialist/agent.yaml"
+PUBLIC_AGENT_ID = "agent_management_insurance_specialist"
+SUPPORTED_QUESTION = "住院理赔需要哪些材料？"
 
 
 @dataclass(frozen=True)
@@ -40,13 +41,13 @@ def test_api_run_then_demo_react_demo_and_run_keep_latest_resolvable(
         history_dir=Path("runs/history"),
         runs_dir=Path("runs/latest"),
         conversations_dir=Path("runs/conversations"),
-        published_agents={"insurance_customer_service": PUBLIC_AGENT},
+        published_agents={PUBLIC_AGENT_ID: PUBLIC_AGENT},
         agent_configuration_dir=Path("runs/config"),
     )
     response = TestClient(application).post(
         "/api/chat/runs",
         json={
-            "agent_id": "insurance_customer_service",
+            "agent_id": PUBLIC_AGENT_ID,
             "question": SUPPORTED_QUESTION,
         },
     )
@@ -88,9 +89,7 @@ def test_api_run_then_demo_react_demo_and_run_keep_latest_resolvable(
             )
         )
 
-    failures = "\n".join(
-        f"{step.name}: exit={step.exit_code}\n{step.output}" for step in steps
-    )
+    failures = "\n".join(f"{step.name}: exit={step.exit_code}\n{step.output}" for step in steps)
     assert all(step.exit_code == 0 for step in steps), failures
     assert api_latest_exists
     assert api_latest_resolved == expected_api_run.resolve()

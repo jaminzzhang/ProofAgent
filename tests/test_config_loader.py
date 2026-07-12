@@ -6,35 +6,21 @@ from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.errors import ProofAgentError
 
 
-def test_load_valid_enterprise_qa_manifest() -> None:
-    manifest = load_agent_manifest(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"))
-    assert manifest.name == "enterprise_qa"
-    assert manifest.workflow.runtime == "langgraph"
-    assert manifest.workflow.checkpointer is not None
-    assert manifest.workflow.checkpointer.provider == "sqlite"
-    assert manifest.workflow.checkpointer.uri == "memory"
-    assert manifest.package_knowledge_sources[0].provider == "local_markdown"
-    assert manifest.package_knowledge_sources[0].params["path"].name == "knowledge"
-    assert manifest.knowledge_bindings[0].source_ref.scope == "package"
-    assert (
-        manifest.knowledge_bindings[0].source_ref.source_id
-        == manifest.package_knowledge_sources[0].source_id
-    )
-    assert manifest.retrieval.strategy == "single_step"
-    assert manifest.retrieval.top_k == 2
-    assert manifest.retrieval.min_score == 0.2
+@pytest.mark.parametrize(
+    "manifest_path",
+    (
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml"),
+    ),
+)
+def test_load_rejects_removed_workflow_template(manifest_path: Path) -> None:
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(manifest_path)
 
-
-def test_load_valid_react_enterprise_qa_v2_manifest() -> None:
-    manifest = load_agent_manifest(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml")
-    )
-
-    assert manifest.name == "react_enterprise_qa_v2"
-    assert manifest.workflow.template == "react_enterprise_qa_v2"
-    assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v2"
-    assert manifest.react is not None
-    assert manifest.react.planner.provider == "deterministic"
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "unsupported workflow template" in exc.value.message
+    assert "react_enterprise_qa_v3" in exc.value.fix
 
 
 def test_load_valid_controlled_react_v3_manifest() -> None:
@@ -78,8 +64,16 @@ admission: {}
 name: skill_pack_manifest
 purpose: "Load package-local business flow skill pack bindings."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -152,8 +146,16 @@ admission: {}
 name: invalid_skill_admission_manifest
 purpose: "Reject misplaced Skill Pack admission fields."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -224,8 +226,16 @@ admission: {}
 name: disabled_skill_pack_manifest
 purpose: "Reject configured Skill Packs when skills are disabled."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -280,8 +290,16 @@ def test_rejects_missing_business_flow_skill_pack_definition(
 name: missing_skill_pack_manifest
 purpose: "Reject missing Skill Pack definitions."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -337,8 +355,16 @@ def test_loads_source_owned_knowledge_bindings(tmp_path: Path) -> None:
 name: source_owned
 purpose: "Source-owned knowledge config."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -380,7 +406,9 @@ audit:
 
     assert manifest.package_knowledge_sources[0].source_id == "ks_local"
     assert manifest.package_knowledge_sources[0].provider == "local_markdown"
-    assert manifest.package_knowledge_sources[0].params["path"] == (tmp_path / "knowledge").resolve()
+    assert (
+        manifest.package_knowledge_sources[0].params["path"] == (tmp_path / "knowledge").resolve()
+    )
     assert manifest.knowledge_bindings[0].binding_id == "kb_local"
     assert manifest.knowledge_bindings[0].source_ref.scope == "package"
     assert manifest.knowledge_bindings[0].source_ref.source_id == "ks_local"
@@ -451,8 +479,16 @@ def test_legacy_knowledge_providers_are_rejected(tmp_path: Path, legacy_provider
 name: legacy_provider
 purpose: "Legacy provider should be rejected."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_legacy
     name: Legacy Knowledge
@@ -507,8 +543,16 @@ def test_http_json_knowledge_source_loads_with_safe_remote_params(tmp_path: Path
 name: http_json_manifest
 purpose: "Load remote HTTP JSON knowledge."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_remote
     name: Remote Policies
@@ -573,10 +617,16 @@ def test_local_index_knowledge_source_loads_with_v2_paths(tmp_path: Path) -> Non
     manifest = load_agent_manifest(agent_yaml)
 
     assert manifest.package_knowledge_sources[0].provider == "local_index"
-    assert manifest.package_knowledge_sources[0].params["snapshot_path"] == (
-        tmp_path / "config" / "knowledge_sources" / "ks_policy" / "snapshots" / "kssnapshot_001"
-    ).resolve()
-    assert manifest.package_knowledge_sources[0].params["artifact_root"] == (tmp_path / "config").resolve()
+    assert (
+        manifest.package_knowledge_sources[0].params["snapshot_path"]
+        == (
+            tmp_path / "config" / "knowledge_sources" / "ks_policy" / "snapshots" / "kssnapshot_001"
+        ).resolve()
+    )
+    assert (
+        manifest.package_knowledge_sources[0].params["artifact_root"]
+        == (tmp_path / "config").resolve()
+    )
     assert manifest.package_knowledge_sources[0].params["document_selection_budget"] == 12
 
 
@@ -661,8 +711,16 @@ def _write_local_index_manifest(tmp_path: Path, *, params: str) -> Path:
 name: local_index_manifest
 purpose: "Local index source config."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_local_index
     name: Local Index Knowledge
@@ -756,8 +814,16 @@ def test_missing_policy_file_fails_fast(tmp_path: Path) -> None:
 name: broken
 purpose: "Broken manifest."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+react:
+  max_steps: 5
+  max_plan_rounds: 5
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: react-planner
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -834,12 +900,12 @@ audit:
     assert exc.value.code == "PA_CONFIG_001"
 
 
-def test_loads_react_enterprise_qa_contract(tmp_path: Path) -> None:
+def test_loads_controlled_react_v3_contract(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(tmp_path)
 
     manifest = load_agent_manifest(agent_yaml)
 
-    assert manifest.workflow.template == "react_enterprise_qa"
+    assert manifest.workflow.template == "react_enterprise_qa_v3"
     assert manifest.react is not None
     assert manifest.react.max_steps == 5
     # max_plan_rounds defaults to max_steps when not declared (ADR-0032 alias).
@@ -876,7 +942,7 @@ def test_loads_workflow_stage_prompt_config(tmp_path: Path) -> None:
     agent_yaml = _write_react_stage_manifest(
         tmp_path,
         workflow_extra="""
-  template_descriptor_version: react_enterprise_qa.v1
+  template_descriptor_version: react_enterprise_qa.v3
   stages:
     - id: plan
       prompt:
@@ -892,20 +958,17 @@ def test_loads_workflow_stage_prompt_config(tmp_path: Path) -> None:
 
     manifest = load_agent_manifest(agent_yaml)
 
-    assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v1"
+    assert manifest.workflow.template_descriptor_version == "react_enterprise_qa.v3"
     assert manifest.workflow.stages[0].id == "plan"
     assert manifest.capabilities.tools.enabled is False
     assert manifest.capabilities.memory.enabled is False
     assert (
-        manifest.workflow.stages[0].prompt.business_context
-        == "Insurance claim servicing context."
+        manifest.workflow.stages[0].prompt.business_context == "Insurance claim servicing context."
     )
     assert manifest.workflow.stages[0].prompt.task_instructions == (
         "Prefer retrieval before final answers.",
     )
-    assert manifest.workflow.stages[0].prompt.output_preferences == (
-        "Keep summaries concise.",
-    )
+    assert manifest.workflow.stages[0].prompt.output_preferences == ("Keep summaries concise.",)
     assert manifest.workflow.stages[0].context.options["include_agent_purpose"] is True
 
 
@@ -1121,42 +1184,6 @@ capabilities:
     assert "capabilities.memory.scopes requires at least one enabled scope" in exc.value.message
 
 
-def test_loads_react_enterprise_qa_example_manifest() -> None:
-    manifest = load_agent_manifest(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"))
-
-    assert manifest.workflow.template == "react_enterprise_qa"
-    assert manifest.workflow.checkpointer is not None
-    assert manifest.workflow.checkpointer.provider == "sqlite"
-    assert manifest.workflow.checkpointer.uri == "memory"
-    assert manifest.react is not None
-    assert manifest.react.max_steps == 5
-    # max_plan_rounds defaults to max_steps when not declared (ADR-0032 alias).
-    assert manifest.react.max_plan_rounds == 5
-    assert manifest.react.max_tool_calls == 1
-    assert manifest.react.planner.provider == "deterministic"
-    assert manifest.review is not None
-    assert manifest.review.mode == "auto"
-    assert manifest.review.low_risk_fast_path is True
-    assert manifest.review.subagent is not None
-    assert manifest.review.subagent.provider == "deterministic"
-    assert manifest.response is not None
-    assert manifest.response.include_reasoning_summary is False
-    assert manifest.response.include_review_results is False
-
-
-def test_loads_react_enterprise_qa_deepseek_example_manifest() -> None:
-    manifest = load_agent_manifest(Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.deepseek.yaml"))
-
-    assert manifest.model.provider == "deepseek"
-    assert manifest.model.name == "deepseek-v4-flash"
-    assert manifest.model.params["api_key_env"] == "DEEPSEEK_API_KEY"
-    assert manifest.react is not None
-    assert manifest.react.planner.provider == "deepseek"
-    assert manifest.review is not None
-    assert manifest.review.subagent is not None
-    assert manifest.review.subagent.provider == "deepseek"
-
-
 def test_loads_local_case_memory_contract(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
@@ -1275,8 +1302,8 @@ def test_unsupported_workflow_checkpointer_provider_is_rejected(tmp_path: Path) 
     agent_yaml = _write_react_manifest(tmp_path)
     agent_yaml.write_text(
         agent_yaml.read_text(encoding="utf-8").replace(
-            "  template: react_enterprise_qa\n",
-            "  template: react_enterprise_qa\n  checkpointer:\n    provider: sqltie\n    uri: memory\n",
+            "  template: react_enterprise_qa_v3\n",
+            "  template: react_enterprise_qa_v3\n  checkpointer:\n    provider: sqltie\n    uri: memory\n",
         ),
         encoding="utf-8",
     )
@@ -1380,24 +1407,6 @@ react:
     assert exc.value.code == "PA_SECRET_001"
 
 
-def test_enterprise_template_rejects_workflow_stages(tmp_path: Path) -> None:
-    agent_yaml = _write_enterprise_manifest(
-        tmp_path,
-        workflow_extra="""
-  stages:
-    - id: plan
-      prompt:
-        business_context: "Should not be configurable on enterprise_qa."
-""",
-    )
-
-    with pytest.raises(ProofAgentError) as exc:
-        load_agent_manifest(agent_yaml)
-
-    assert exc.value.code == "PA_CONFIG_002"
-    assert "workflow.stages is only supported for ReAct workflow templates" in exc.value.message
-
-
 def test_unknown_workflow_stage_is_rejected(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(
         tmp_path,
@@ -1449,7 +1458,10 @@ def test_workflow_stage_context_options_reject_string_booleans(tmp_path: Path) -
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "workflow stage plan context option include_agent_purpose must be a boolean" in exc.value.message
+    assert (
+        "workflow stage plan context option include_agent_purpose must be a boolean"
+        in exc.value.message
+    )
 
 
 def test_workflow_stage_prompt_rejects_policy_bypass(tmp_path: Path) -> None:
@@ -1467,60 +1479,9 @@ def test_workflow_stage_prompt_rejects_policy_bypass(tmp_path: Path) -> None:
         load_agent_manifest(agent_yaml)
 
     assert exc.value.code == "PA_CONFIG_002"
-    assert "workflow stage prompt contains forbidden governance override language" in exc.value.message
-
-
-def _write_enterprise_manifest(
-    tmp_path: Path,
-    *,
-    workflow_extra: str = "",
-) -> Path:
-    agent_yaml = tmp_path / "agent.yaml"
-    (tmp_path / "knowledge").mkdir()
-    (tmp_path / "runs").mkdir()
-    (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
-    (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
-    agent_yaml.write_text(
-        f"""
-name: enterprise_qa
-purpose: "Enterprise QA."
-workflow:
-  runtime: langgraph
-  template: enterprise_qa
-{workflow_extra}
-package_knowledge_sources:
-  - source_id: ks_local
-    name: Local Knowledge
-    provider: local_markdown
-    params:
-      path: ./knowledge
-knowledge_bindings:
-  - binding_id: kb_local
-    source_ref:
-      scope: package
-      source_id: ks_local
-retrieval:
-  strategy: single_step
-  top_k: 2
-  min_score: 0.2
-model:
-  provider: deterministic
-  name: demo
-policy:
-  file: ./policy.yaml
-capabilities:
-  tools:
-    enabled: false
-  memory:
-    enabled: true
-    provider: session
-audit:
-  trace_path: ./runs/trace.jsonl
-  receipt_path: ./runs/governance_receipt.md
-""",
-        encoding="utf-8",
+    assert (
+        "workflow stage prompt contains forbidden governance override language" in exc.value.message
     )
-    return agent_yaml
 
 
 def _write_react_manifest(
@@ -1565,11 +1526,12 @@ response:
     (tmp_path / "tools.yaml").write_text("tools: []\n", encoding="utf-8")
     agent_yaml.write_text(
         f"""
-name: react_enterprise_qa
-purpose: "Controlled ReAct enterprise QA."
+name: react_enterprise_qa_v3
+purpose: "Controlled ReAct V3 enterprise QA."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 {workflow_extra}
 package_knowledge_sources:
   - source_id: ks_local

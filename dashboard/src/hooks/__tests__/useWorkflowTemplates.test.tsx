@@ -44,9 +44,9 @@ describe('useWorkflowTemplates', () => {
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
     expect(result.current.error).toBeNull()
-    expect(result.current.names).toEqual(['enterprise_qa', 'react_enterprise_qa_v3'])
-    expect(result.current.templates).toHaveLength(2)
-    expect(result.current.templates[1].name).toBe('react_enterprise_qa_v3')
+    expect(result.current.names).toEqual(['react_enterprise_qa_v3'])
+    expect(result.current.templates).toHaveLength(1)
+    expect(result.current.templates[0].name).toBe('react_enterprise_qa_v3')
   })
 
   it('reports an error and keeps an empty catalog when the fetch fails', async () => {

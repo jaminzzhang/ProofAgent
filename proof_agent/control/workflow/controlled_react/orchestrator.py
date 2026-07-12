@@ -52,6 +52,7 @@ from proof_agent.control.workflow.controlled_react.action_control import (
     compute_eligible_action_set,
     constrain_action,
     emit_intent_resolution,
+    emit_reasoning_summary,
     should_block_duplicate_observation_action,
 )
 from proof_agent.control.workflow.controlled_react.artifact_binding import (
@@ -729,6 +730,8 @@ class ControlledReActOrchestrator:
             action,
             max_plan_rounds=max_plan_rounds,
         )
+        if self._ports.trace is not None:
+            emit_reasoning_summary(self._ports.trace, action)
         return planning_state, action
 
     def _prepare_plan_state(

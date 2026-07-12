@@ -25,5 +25,4 @@ REACT_DEMO_SCENARIOS = (
     DemoScenario("supported", SUPPORTED_QUESTION),
     DemoScenario("unsupported", UNSUPPORTED_QUESTION),
     DemoScenario("clarify", CLARIFY_QUESTION),
-    DemoScenario("tool_required", TOOL_REQUIRED_QUESTION),
 )

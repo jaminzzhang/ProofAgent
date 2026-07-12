@@ -106,7 +106,10 @@ admission: {}
     manifest = AgentManifest(
         name="skill_pack_stage_test",
         purpose="Reject unknown Skill Pack stages.",
-        workflow=WorkflowConfig(runtime="langgraph", template="enterprise_qa"),
+        workflow=WorkflowConfig(
+            runtime="controlled_react",
+            template="react_enterprise_qa_v3",
+        ),
         package_knowledge_sources=(),
         knowledge_bindings=(),
         retrieval=RetrievalConfig(strategy="single_step"),
@@ -134,7 +137,7 @@ admission: {}
     with pytest.raises(ProofAgentError) as exc:
         load_business_flow_skill_pack_set(
             manifest,
-            template=resolve_workflow_template("enterprise_qa"),
+            template=resolve_workflow_template("react_enterprise_qa_v3"),
             manifest_path=manifest_path,
         )
 
@@ -170,7 +173,10 @@ admission: {}
     manifest = AgentManifest(
         name="skill_pack_stage_test",
         purpose="Reject pre-admission Skill Pack addenda.",
-        workflow=WorkflowConfig(runtime="langgraph", template="react_enterprise_qa_v2"),
+        workflow=WorkflowConfig(
+            runtime="controlled_react",
+            template="react_enterprise_qa_v3",
+        ),
         package_knowledge_sources=(),
         knowledge_bindings=(),
         retrieval=RetrievalConfig(strategy="agentic", max_steps=2),
@@ -198,7 +204,7 @@ admission: {}
     with pytest.raises(ProofAgentError) as exc:
         load_business_flow_skill_pack_set(
             manifest,
-            template=resolve_workflow_template("react_enterprise_qa_v2"),
+            template=resolve_workflow_template("react_enterprise_qa_v3"),
             manifest_path=manifest_path,
         )
 

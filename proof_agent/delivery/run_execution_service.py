@@ -22,7 +22,6 @@ from proof_agent.delivery.published_agents import PublishedAgent
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime.approval_resume import (
     ControlledReActApprovalResumeContext,
-    LangGraphApprovalResumeContext,
     LangGraphApprovalResumeRegistry,
 )
 
@@ -58,12 +57,6 @@ def execute_published_agent_run(
     run_id = f"run_{uuid4().hex[:8]}"
     run_artifact_dir = dependencies.store.create_run_dir(run_id)
     manifest = load_agent_manifest(published_agent.manifest_path)
-    is_controlled_react_v3 = manifest.workflow.template == "react_enterprise_qa_v3"
-    checkpointer = (
-        None
-        if is_controlled_react_v3
-        else dependencies.approval_resume_registry.checkpointer_for(run_id)
-    )
     result = execute_agent_package_run(
         AgentPackageRunRequest(
             agent_yaml=published_agent.manifest_path,
@@ -73,7 +66,6 @@ def execute_published_agent_run(
             memory_recall_admissions=memory_recall_admissions,
             run_id=run_id,
             store=dependencies.store,
-            checkpointer=checkpointer,
             manifest=manifest,
             resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
             configuration_store=dependencies.configuration_store,
@@ -86,13 +78,9 @@ def execute_published_agent_run(
             controlled_react_orchestrator=dependencies.controlled_react_orchestrator,
             controlled_react_snapshot_store=(
                 dependencies.approval_resume_registry.controlled_react_snapshot_store()
-                if is_controlled_react_v3
-                else None
             ),
             controlled_react_observation_truth_store=(
                 dependencies.approval_resume_registry.controlled_react_observation_truth_store()
-                if is_controlled_react_v3
-                else None
             ),
         )
     )
@@ -101,46 +89,18 @@ def execute_published_agent_run(
     if detail is None:
         raise RuntimeError("Run artifacts were not persisted.")
     if detail.pending_approvals:
-        if is_controlled_react_v3:
-            dependencies.approval_resume_registry.put_controlled_react(
-                ControlledReActApprovalResumeContext(
-                    agent_yaml=published_agent.manifest_path,
-                    run_id=run_id,
-                    question=question,
-                    manifest=manifest,
-                    resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
-                    configuration_store=dependencies.configuration_store,
-                    run_purpose=detail.run_purpose,
-                    agent_id=published_agent.agent_id,
-                    agent_version_id=published_agent.agent_version_id,
-                    draft_id=published_agent.source_draft_id,
-                )
-            )
-            return PublishedAgentRunExecution(result=result, detail=detail, manifest=manifest)
-        execution_input = result.workflow_template_execution_input
-        if execution_input is None:
-            raise RuntimeError(
-                "Run is waiting for approval without Workflow Template Execution Input."
-            )
-        if checkpointer is None:
-            raise RuntimeError("LangGraph approval run is missing checkpointer.")
-        dependencies.approval_resume_registry.put(
-            LangGraphApprovalResumeContext(
+        dependencies.approval_resume_registry.put_controlled_react(
+            ControlledReActApprovalResumeContext(
                 agent_yaml=published_agent.manifest_path,
-                runs_dir=dependencies.store.history_dir / run_id,
                 run_id=run_id,
                 question=question,
-                checkpointer=checkpointer,
                 manifest=manifest,
-                conversation_context=conversation_context,
                 resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
                 configuration_store=dependencies.configuration_store,
                 run_purpose=detail.run_purpose,
                 agent_id=published_agent.agent_id,
                 agent_version_id=published_agent.agent_version_id,
                 draft_id=published_agent.source_draft_id,
-                allow_untrusted_web_supplement=allow_untrusted_web_supplement,
-                workflow_template_execution_input=execution_input,
             )
         )
     return PublishedAgentRunExecution(result=result, detail=detail, manifest=manifest)

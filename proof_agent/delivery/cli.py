@@ -62,8 +62,8 @@ app.add_typer(evaluate_app, name="evaluate")
 evaluate_app.add_typer(campaign_app, name="campaign")
 app.add_typer(release_app, name="release")
 
-DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
-REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
+DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
+REACT_DEMO_AGENT_PATH = DEMO_AGENT_PATH
 PUBLIC_EXAMPLE_PATH = (
     Path(__file__).resolve().parents[2]
     / "examples"

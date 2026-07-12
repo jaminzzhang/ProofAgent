@@ -9,7 +9,10 @@ from uuid import uuid4
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts import AgentManifest, WorkflowStagePromptConfig
-from proof_agent.control.workflow.templates import WorkflowStageDescriptor, resolve_workflow_template
+from proof_agent.control.workflow.templates import (
+    WorkflowStageDescriptor,
+    resolve_workflow_template,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -79,13 +82,8 @@ FORBIDDEN_MODEL_PARAM_PARTS = (
     "access_token",
     "provider_api_key",
 )
-SUPPORTED_WORKFLOW_TEMPLATES = {
-    "enterprise_qa",
-    "react_enterprise_qa",
-    "react_enterprise_qa_v2",
-    "react_enterprise_qa_v3",
-}
-REACT_WORKFLOW_TEMPLATES = {"react_enterprise_qa", "react_enterprise_qa_v2", "react_enterprise_qa_v3"}
+SUPPORTED_WORKFLOW_TEMPLATES = {"react_enterprise_qa_v3"}
+REACT_WORKFLOW_TEMPLATES = SUPPORTED_WORKFLOW_TEMPLATES
 
 
 def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> None:
@@ -361,23 +359,19 @@ def _require_model_source_shape(
 def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     """Validate the supported v1 runtime envelope and local file dependencies."""
 
-    expected_runtime = (
-        "controlled_react"
-        if manifest.workflow.template == "react_enterprise_qa_v3"
-        else "langgraph"
-    )
-    if manifest.workflow.runtime != expected_runtime:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            f"unsupported workflow runtime: {manifest.workflow.runtime}",
-            f"Use workflow.runtime: {expected_runtime} for {manifest.workflow.template}.",
-            artifact_path=manifest_path,
-        )
     if manifest.workflow.template not in SUPPORTED_WORKFLOW_TEMPLATES:
         raise ProofAgentError(
             "PA_CONFIG_002",
             f"unsupported workflow template: {manifest.workflow.template}",
             f"Supported workflow templates: {', '.join(sorted(SUPPORTED_WORKFLOW_TEMPLATES))}.",
+            artifact_path=manifest_path,
+        )
+    expected_runtime = "controlled_react"
+    if manifest.workflow.runtime != expected_runtime:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            f"unsupported workflow runtime: {manifest.workflow.runtime}",
+            f"Use workflow.runtime: {expected_runtime} for {manifest.workflow.template}.",
             artifact_path=manifest_path,
         )
     _validate_checkpointer_config(manifest, manifest_path=manifest_path)

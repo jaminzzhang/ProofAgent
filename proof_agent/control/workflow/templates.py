@@ -53,7 +53,7 @@ class WorkflowTemplate:
         )
 
 
-TEMPLATES: dict[str, WorkflowTemplate] = {
+_LEGACY_TEMPLATE_DEFINITIONS: dict[str, WorkflowTemplate] = {
     "enterprise_qa": WorkflowTemplate(
         name="enterprise_qa",
         description="Evidence-backed enterprise question answering.",
@@ -257,7 +257,7 @@ TEMPLATES: dict[str, WorkflowTemplate] = {
 
 
 def _react_enterprise_qa_v2_stages() -> tuple[WorkflowStageDescriptor, ...]:
-    v1_stages = TEMPLATES["react_enterprise_qa"].stages
+    v1_stages = _LEGACY_TEMPLATE_DEFINITIONS["react_enterprise_qa"].stages
     return (
         WorkflowStageDescriptor(
             id="intent_resolution",
@@ -277,23 +277,13 @@ def _react_enterprise_qa_v2_stages() -> tuple[WorkflowStageDescriptor, ...]:
             model_bearing=True,
         ),
         *(
-            replace(stage, predecessors=("intent_resolution",))
-            if stage.id == "plan"
-            else stage
+            replace(stage, predecessors=("intent_resolution",)) if stage.id == "plan" else stage
             for stage in v1_stages
         ),
     )
 
 
-TEMPLATES["react_enterprise_qa_v2"] = WorkflowTemplate(
-    name="react_enterprise_qa_v2",
-    description="Controlled ReAct enterprise question answering with Intent Resolution.",
-    descriptor_version="react_enterprise_qa.v2",
-    stages=_react_enterprise_qa_v2_stages(),
-)
-
-
-TEMPLATES["react_enterprise_qa_v3"] = WorkflowTemplate(
+_CONTROLLED_REACT_V3_TEMPLATE = WorkflowTemplate(
     name="react_enterprise_qa_v3",
     description=(
         "Controlled ReAct Loop enterprise question answering: observation "
@@ -303,6 +293,11 @@ TEMPLATES["react_enterprise_qa_v3"] = WorkflowTemplate(
     descriptor_version="react_enterprise_qa.v3",
     stages=_react_enterprise_qa_v2_stages(),
 )
+
+
+TEMPLATES: dict[str, WorkflowTemplate] = {
+    _CONTROLLED_REACT_V3_TEMPLATE.name: _CONTROLLED_REACT_V3_TEMPLATE,
+}
 
 
 LOOP_DESCRIPTOR_VERSION = "react_enterprise_qa.v3"

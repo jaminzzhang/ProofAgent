@@ -35,8 +35,8 @@ from proof_agent.runtime.approval_resume import (
 )
 
 
-REACT_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_V3_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
+REACT_AGENT = REACT_V3_AGENT
 
 
 def _execution_input() -> WorkflowTemplateExecutionInput:

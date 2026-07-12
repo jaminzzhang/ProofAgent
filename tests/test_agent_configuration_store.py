@@ -109,8 +109,7 @@ def _publish_source_fixture(
 def _configuration_audit_payloads(root: Path) -> list[dict[str, object]]:
     audit_root = root / "configuration_audit"
     return [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(audit_root.glob("*.json"))
+        json.loads(path.read_text(encoding="utf-8")) for path in sorted(audit_root.glob("*.json"))
     ]
 
 
@@ -202,9 +201,12 @@ def test_publish_creates_immutable_version_and_active_pointer(tmp_path: Path) ->
     assert (version_dir / "agent.yaml").read_text(encoding="utf-8") == "name: enterprise_qa\n"
     assert (version_dir / "policy.yaml").read_text(encoding="utf-8") == "rules: []\n"
     assert (version_dir / "tools.yaml").read_text(encoding="utf-8") == "tools: {}\n"
-    assert json.loads((version_dir / "publication.json").read_text(encoding="utf-8"))[
-        "validation_run_id"
-    ] == "run_validation_001"
+    assert (
+        json.loads((version_dir / "publication.json").read_text(encoding="utf-8"))[
+            "validation_run_id"
+        ]
+        == "run_validation_001"
+    )
 
 
 def test_publish_version_freezes_effective_workflow_stage_configuration(
@@ -212,16 +214,17 @@ def test_publish_version_freezes_effective_workflow_stage_configuration(
 ) -> None:
     store = LocalAgentConfigurationStore(tmp_path)
     draft = store.create_draft(
-        agent_id="react_enterprise_qa",
-        display_name="ReAct Enterprise QA",
+        agent_id="react_enterprise_qa_v3",
+        display_name="ReAct Enterprise QA V3",
         purpose="Answer governed questions.",
         contract_bundle=ContractBundle(
             agent_yaml="""
-name: react_enterprise_qa
+name: react_enterprise_qa_v3
 purpose: "Answer governed questions."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
   stages:
     - id: plan
       prompt:
@@ -253,12 +256,12 @@ capabilities:
 
     snapshot = version.effective_workflow_stage_configuration
     assert snapshot is not None
-    assert snapshot.template_name == "react_enterprise_qa"
-    assert snapshot.template_descriptor_version == "react_enterprise_qa.v1"
+    assert snapshot.template_name == "react_enterprise_qa_v3"
+    assert snapshot.template_descriptor_version == "react_enterprise_qa.v3"
     availability = version.workflow_stage_availability
     assert availability is not None
-    assert availability.template_name == "react_enterprise_qa"
-    assert availability.template_descriptor_version == "react_enterprise_qa.v1"
+    assert availability.template_name == "react_enterprise_qa_v3"
+    assert availability.template_descriptor_version == "react_enterprise_qa.v3"
     assert availability.is_available("plan") is True
     assert availability.is_available("tool_review") is False
     assert availability.is_available("tool") is False
@@ -283,14 +286,18 @@ capabilities:
         (
             tmp_path
             / "agents"
-            / "react_enterprise_qa"
+            / "react_enterprise_qa_v3"
             / "versions"
             / version.version_id
             / "publication.json"
         ).read_text(encoding="utf-8")
     )
-    assert publication["workflow_stage_availability"]["stages"][0]["stage_id"] == "plan"
-    assert publication["effective_workflow_stage_configuration"]["stages"][0]["id"] == "plan"
+    assert "plan" in {
+        stage["stage_id"] for stage in publication["workflow_stage_availability"]["stages"]
+    }
+    assert "plan" in {
+        stage["id"] for stage in publication["effective_workflow_stage_configuration"]["stages"]
+    }
 
 
 def test_publish_version_rejects_unavailable_workflow_stage_configuration(
@@ -298,16 +305,17 @@ def test_publish_version_rejects_unavailable_workflow_stage_configuration(
 ) -> None:
     store = LocalAgentConfigurationStore(tmp_path)
     draft = store.create_draft(
-        agent_id="react_enterprise_qa",
-        display_name="ReAct Enterprise QA",
+        agent_id="react_enterprise_qa_v3",
+        display_name="ReAct Enterprise QA V3",
         purpose="Answer governed questions.",
         contract_bundle=ContractBundle(
             agent_yaml="""
-name: react_enterprise_qa
+name: react_enterprise_qa_v3
 purpose: "Answer governed questions."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
   stages:
     - id: tool_review
       prompt:
@@ -646,9 +654,9 @@ def test_mcp_tool_source_publication_validation_allows_agent_publish(
     assert validation.contract_snapshot_digests == (
         tool_contract["mcp_contract_snapshot"]["digest"],
     )
-    assert store.list_mcp_tool_source_publication_validations(
-        "tool_mcp_claims_http"
-    ) == [validation]
+    assert store.list_mcp_tool_source_publication_validations("tool_mcp_claims_http") == [
+        validation
+    ]
     assert version.validation_run_id == "run_validation_001"
     active = store.get_active_version("enterprise_qa")
     assert active is not None
@@ -1403,12 +1411,7 @@ def test_rollback_changes_active_pointer_without_mutating_versions(tmp_path: Pat
     assert store.get_version("enterprise_qa", version_one.version_id) == version_one
     assert store.get_version("enterprise_qa", version_two.version_id) == version_two
     assert (
-        tmp_path
-        / "agents"
-        / "enterprise_qa"
-        / "versions"
-        / version_two.version_id
-        / "agent.yaml"
+        tmp_path / "agents" / "enterprise_qa" / "versions" / version_two.version_id / "agent.yaml"
     ).read_text(encoding="utf-8") == "name: enterprise_qa_v2\n"
 
 
@@ -1585,9 +1588,10 @@ def test_reading_legacy_source_without_lifecycle_state_defaults_active_and_persi
 
     assert source is not None
     assert source.lifecycle_state is KnowledgeSourceLifecycleState.ACTIVE
-    assert json.loads((source_dir / "source.json").read_text(encoding="utf-8"))[
-        "lifecycle_state"
-    ] == "ACTIVE"
+    assert (
+        json.loads((source_dir / "source.json").read_text(encoding="utf-8"))["lifecycle_state"]
+        == "ACTIVE"
+    )
 
 
 def test_get_knowledge_source_reference_summary_counts_persisted_references(
@@ -1880,7 +1884,8 @@ def test_archive_source_requires_reason_and_does_not_change_draft_version(
     audit_payloads = _configuration_audit_payloads(tmp_path)
     assert any(
         payload["operation"] == ConfigurationOperation.ARCHIVED.value
-        and payload["metadata"] == {
+        and payload["metadata"]
+        == {
             "source_id": source.source_id,
             "reason": "No longer maintained.",
         }
@@ -1915,7 +1920,8 @@ def test_restore_source_keeps_draft_version_and_requires_archived_state(
     audit_payloads = _configuration_audit_payloads(tmp_path)
     assert any(
         payload["operation"] == ConfigurationOperation.RESTORED.value
-        and payload["metadata"] == {
+        and payload["metadata"]
+        == {
             "source_id": source.source_id,
             "reason": "Needed again.",
         }
@@ -2036,9 +2042,7 @@ def test_archived_source_worker_tasks_are_not_claimed(tmp_path: Path) -> None:
         reason="No longer maintained.",
     )
 
-    upload_claim = store.claim_next_quarantined_knowledge_upload(
-        source_id=upload_source.source_id
-    )
+    upload_claim = store.claim_next_quarantined_knowledge_upload(source_id=upload_source.source_id)
     job_claim = store.claim_next_knowledge_ingestion_job(source_id=job.source_id)
     unified_claim = store.claim_next_knowledge_worker_task()
 
