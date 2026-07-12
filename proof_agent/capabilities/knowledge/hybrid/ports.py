@@ -9,7 +9,6 @@ from pydantic import (
     AfterValidator,
     ConfigDict,
     Field,
-    StrictFloat,
     StrictInt,
     StrictStr,
     StringConstraints,
@@ -30,6 +29,7 @@ NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_
 Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
+FiniteStrictFloat = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 
 
 def _require_aware_timestamp(value: datetime) -> datetime:
@@ -57,13 +57,26 @@ class SearchIndexIdentity(_PortModel):
 class ProjectionDocument(_PortModel):
     projection_id: NonBlankStr
     rule_unit: InsuranceRuleUnitRevision
-    embedding: tuple[StrictFloat, ...] = Field(min_length=1)
+    embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
 
 
 class ProjectionBulkRequest(_PortModel):
     identity: SearchIndexIdentity
     publication_attempt_id: NonBlankStr
-    documents: tuple[ProjectionDocument, ...] = ()
+    documents: tuple[ProjectionDocument, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_documents(self) -> Self:
+        projection_ids = [document.projection_id for document in self.documents]
+        rule_unit_ids = [document.rule_unit.rule_unit_revision_id for document in self.documents]
+        if len(projection_ids) != len(set(projection_ids)):
+            raise ValueError("projection document identities must be unique")
+        if len(rule_unit_ids) != len(set(rule_unit_ids)):
+            raise ValueError("projected Rule Unit identities must be unique")
+        dimension = self.identity.generation.embedding_dimension
+        if any(len(document.embedding) != dimension for document in self.documents):
+            raise ValueError("every projection embedding must match generation dimension")
+        return self
 
 
 class ProjectionBulkResult(_PortModel):
@@ -75,16 +88,22 @@ class ProjectionBulkResult(_PortModel):
 class HybridSearchRequest(_PortModel):
     identity: SearchIndexIdentity
     query_text: NonBlankStr
-    query_embedding: tuple[StrictFloat, ...]
+    query_embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
     source_publication_seq: PositiveInt
     limit: PositiveInt
+
+    @model_validator(mode="after")
+    def validate_query_dimension(self) -> Self:
+        if len(self.query_embedding) != self.identity.generation.embedding_dimension:
+            raise ValueError("query embedding must match generation dimension")
+        return self
 
 
 class HybridSearchHit(_PortModel):
     rule_unit_revision_id: NonBlankStr
-    lexical_score: StrictFloat | None = None
-    vector_score: StrictFloat | None = None
-    fused_score: StrictFloat
+    lexical_score: FiniteStrictFloat | None = None
+    vector_score: FiniteStrictFloat | None = None
+    fused_score: FiniteStrictFloat
 
 
 class StructuredParseRequest(_PortModel):
@@ -99,13 +118,23 @@ class StructuredParseResult(_PortModel):
 
 
 class EmbeddingRequest(_PortModel):
+    request_id: NonBlankStr
     model_revision: NonBlankStr
+    dimension: PositiveInt
     texts: tuple[NonBlankStr, ...] = Field(min_length=1)
 
 
 class EmbeddingResult(_PortModel):
-    model_revision: NonBlankStr
-    vectors: tuple[tuple[StrictFloat, ...], ...] = Field(min_length=1)
+    request: EmbeddingRequest
+    vectors: tuple[tuple[FiniteStrictFloat, ...], ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_vectors(self) -> Self:
+        if len(self.vectors) != len(self.request.texts):
+            raise ValueError("embedding result requires exactly one vector per input")
+        if any(len(vector) != self.request.dimension for vector in self.vectors):
+            raise ValueError("embedding vectors must match the requested dimension")
+        return self
 
 
 class RerankCandidate(_PortModel):
@@ -114,19 +143,37 @@ class RerankCandidate(_PortModel):
 
 
 class RerankRequest(_PortModel):
+    request_id: NonBlankStr
     model_revision: NonBlankStr
     query_text: NonBlankStr
     candidates: tuple[RerankCandidate, ...] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def validate_candidate_identities(self) -> Self:
+        candidate_ids = [candidate.candidate_id for candidate in self.candidates]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("rerank candidate identities must be unique")
+        return self
+
 
 class RerankScore(_PortModel):
     candidate_id: NonBlankStr
-    score: StrictFloat
+    score: FiniteStrictFloat
 
 
 class RerankResult(_PortModel):
-    model_revision: NonBlankStr
-    scores: tuple[RerankScore, ...]
+    request: RerankRequest
+    scores: tuple[RerankScore, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_score_coverage(self) -> Self:
+        expected = {candidate.candidate_id for candidate in self.request.candidates}
+        actual = [score.candidate_id for score in self.scores]
+        if len(actual) != len(set(actual)):
+            raise ValueError("rerank score identities must be unique")
+        if set(actual) != expected:
+            raise ValueError("rerank scores must cover exactly the requested candidates")
+        return self
 
 
 HybridKnowledgeJobKind = Literal["parse", "embed", "project", "publish", "reconcile", "rebuild"]
@@ -155,6 +202,10 @@ class HybridKnowledgeJob(_PortModel):
     def validate_lifecycle(self) -> Self:
         if self.updated_at < self.created_at:
             raise ValueError("updated_at must not precede created_at")
+        if self.state == "READY" and self.fencing_token != 0:
+            raise ValueError("READY jobs require fencing_token zero")
+        if self.state != "READY" and self.fencing_token <= 0:
+            raise ValueError("leased and terminal jobs require a positive fencing_token")
         if self.state in {"COMPLETED", "FAILED"} and self.completed_at is None:
             raise ValueError("terminal jobs require completed_at")
         if self.state not in {"COMPLETED", "FAILED"} and self.completed_at is not None:
@@ -163,6 +214,11 @@ class HybridKnowledgeJob(_PortModel):
             raise ValueError("FAILED jobs require failure_code")
         if self.state != "FAILED" and self.failure_code is not None:
             raise ValueError("only FAILED jobs accept failure_code")
+        if self.completed_at is not None:
+            if self.completed_at < self.created_at:
+                raise ValueError("completed_at must not precede created_at")
+            if self.updated_at != self.completed_at:
+                raise ValueError("terminal updated_at must equal completed_at")
         return self
 
 
@@ -176,6 +232,8 @@ class HybridKnowledgeJobClaim(_PortModel):
 
     @model_validator(mode="after")
     def validate_lease(self) -> Self:
+        if self.job_id != self.request.job_id:
+            raise ValueError("claim job_id must match request job_id")
         if self.lease_expires_at <= self.claimed_at:
             raise ValueError("lease_expires_at must follow claimed_at")
         return self

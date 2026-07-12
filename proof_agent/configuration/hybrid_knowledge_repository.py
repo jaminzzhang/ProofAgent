@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+import fcntl
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
 from threading import RLock
+from types import TracebackType
+from typing import Iterator, Self
 from urllib.parse import unquote, urlsplit
 
 from proof_agent.capabilities.knowledge.hybrid.ports import (
@@ -37,9 +41,27 @@ class ImmutableArtifactError(HybridKnowledgeRepositoryError):
 
 
 def _require_aware(value: datetime) -> datetime:
+    if not isinstance(value, datetime):
+        raise ValueError("clock must return a datetime")
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("clock timestamps must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _normalized_identifier(value: str, *, field_name: str) -> str:
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def _positive_int(value: int, *, field_name: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
+
+
+def _validated_job_update(job: HybridKnowledgeJob, **updates: object) -> HybridKnowledgeJob:
+    return HybridKnowledgeJob.model_validate({**job.model_dump(), **updates})
 
 
 class ManualHybridClock:
@@ -72,6 +94,7 @@ class InMemoryHybridKnowledgeRepository:
         self._request_identities: dict[str, tuple[str, str]] = {}
         self._sequence: dict[str, int] = {}
         self._next_sequence = 0
+        self._last_observed_time: datetime | None = None
         self._lock = RLock()
 
     def enqueue(self, request: HybridKnowledgeJobRequest) -> HybridKnowledgeJob:
@@ -94,7 +117,7 @@ class InMemoryHybridKnowledgeRepository:
                 raise HybridKnowledgeIdempotencyConflict(
                     "job identity is already bound to a different request"
                 )
-            now = self._clock.now()
+            now = self._observe_now()
             job = HybridKnowledgeJob(
                 request=request,
                 state="READY",
@@ -109,10 +132,10 @@ class InMemoryHybridKnowledgeRepository:
             return job
 
     def claim_next(self, *, worker_id: str, lease_seconds: int) -> HybridKnowledgeJobClaim | None:
-        if not worker_id.strip() or lease_seconds <= 0:
-            raise ValueError("worker_id and a positive lease_seconds are required")
+        worker_id = _normalized_identifier(worker_id, field_name="worker_id")
+        lease_seconds = _positive_int(lease_seconds, field_name="lease_seconds")
         with self._lock:
-            now = self._clock.now()
+            now = self._observe_now()
             candidates = [job for job in self._jobs.values() if self._ready(job, now)]
             if not candidates:
                 return None
@@ -134,8 +157,11 @@ class InMemoryHybridKnowledgeRepository:
                 lease_expires_at=now + timedelta(seconds=lease_seconds),
             )
             self._claims[job.request.job_id] = claim
-            self._jobs[job.request.job_id] = job.model_copy(
-                update={"state": "LEASED", "fencing_token": token, "updated_at": now}
+            self._jobs[job.request.job_id] = _validated_job_update(
+                job,
+                state="LEASED",
+                fencing_token=token,
+                updated_at=now,
             )
             return claim
 
@@ -147,16 +173,21 @@ class InMemoryHybridKnowledgeRepository:
         fencing_token: int,
         lease_seconds: int,
     ) -> HybridKnowledgeJobClaim:
-        if lease_seconds <= 0:
-            raise ValueError("lease_seconds must be positive")
+        job_id = _normalized_identifier(job_id, field_name="job_id")
+        worker_id = _normalized_identifier(worker_id, field_name="worker_id")
+        fencing_token = _positive_int(fencing_token, field_name="fencing_token")
+        lease_seconds = _positive_int(lease_seconds, field_name="lease_seconds")
         with self._lock:
-            claim = self._require_active_claim(job_id, worker_id, fencing_token)
-            now = self._clock.now()
-            renewed = claim.model_copy(
-                update={"lease_expires_at": now + timedelta(seconds=lease_seconds)}
+            now = self._observe_now()
+            claim = self._require_active_claim(job_id, worker_id, fencing_token, now=now)
+            renewed = HybridKnowledgeJobClaim.model_validate(
+                {
+                    **claim.model_dump(),
+                    "lease_expires_at": now + timedelta(seconds=lease_seconds),
+                }
             )
             self._claims[job_id] = renewed
-            self._jobs[job_id] = self._jobs[job_id].model_copy(update={"updated_at": now})
+            self._jobs[job_id] = _validated_job_update(self._jobs[job_id], updated_at=now)
             return renewed
 
     def complete(self, *, job_id: str, worker_id: str, fencing_token: int) -> HybridKnowledgeJob:
@@ -176,8 +207,7 @@ class InMemoryHybridKnowledgeRepository:
         fencing_token: int,
         failure_code: str,
     ) -> HybridKnowledgeJob:
-        if not failure_code.strip():
-            raise ValueError("failure_code must be non-empty")
+        failure_code = _normalized_identifier(failure_code, field_name="failure_code")
         return self._finish(
             job_id=job_id,
             worker_id=worker_id,
@@ -187,6 +217,7 @@ class InMemoryHybridKnowledgeRepository:
         )
 
     def get(self, job_id: str) -> HybridKnowledgeJob | None:
+        job_id = _normalized_identifier(job_id, field_name="job_id")
         with self._lock:
             return self._jobs.get(job_id)
 
@@ -205,27 +236,28 @@ class InMemoryHybridKnowledgeRepository:
         state: str,
         failure_code: str | None,
     ) -> HybridKnowledgeJob:
+        job_id = _normalized_identifier(job_id, field_name="job_id")
+        worker_id = _normalized_identifier(worker_id, field_name="worker_id")
+        fencing_token = _positive_int(fencing_token, field_name="fencing_token")
         with self._lock:
-            self._require_active_claim(job_id, worker_id, fencing_token)
-            now = self._clock.now()
-            job = self._jobs[job_id].model_copy(
-                update={
-                    "state": state,
-                    "updated_at": now,
-                    "completed_at": now,
-                    "failure_code": failure_code,
-                }
+            now = self._observe_now()
+            self._require_active_claim(job_id, worker_id, fencing_token, now=now)
+            job = _validated_job_update(
+                self._jobs[job_id],
+                state=state,
+                updated_at=now,
+                completed_at=now,
+                failure_code=failure_code,
             )
             self._jobs[job_id] = job
             del self._claims[job_id]
             return job
 
     def _require_active_claim(
-        self, job_id: str, worker_id: str, fencing_token: int
+        self, job_id: str, worker_id: str, fencing_token: int, *, now: datetime
     ) -> HybridKnowledgeJobClaim:
         job = self._jobs.get(job_id)
         claim = self._claims.get(job_id)
-        now = self._clock.now()
         if (
             job is None
             or job.state != "LEASED"
@@ -236,6 +268,13 @@ class InMemoryHybridKnowledgeRepository:
         ):
             raise HybridKnowledgeLeaseError("operation requires the current active worker lease")
         return claim
+
+    def _observe_now(self) -> datetime:
+        now = _require_aware(self._clock.now())
+        if self._last_observed_time is not None and now < self._last_observed_time:
+            raise ValueError("hybrid clock must not move backwards")
+        self._last_observed_time = now
+        return now
 
     def _ready(self, job: HybridKnowledgeJob, now: datetime) -> bool:
         ready_at = job.request.ready_at or job.created_at
@@ -249,12 +288,15 @@ class InMemoryHybridKnowledgeRepository:
 
 _KEY_SEGMENT = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
 _METADATA_SUFFIX = ".proofagent-artifact.json"
+_LOCK_SUFFIX = ".proofagent-artifact.lock"
 
 
 class FileSystemKnowledgeArtifactStore:
     """Immutable exact artifact store confined to one injected filesystem root."""
 
     def __init__(self, root: Path) -> None:
+        self._root_fd = -1
+        self._closed = True
         required_dir_fd_operations = (os.open, os.mkdir, os.unlink)
         if (
             not hasattr(os, "O_DIRECTORY")
@@ -269,6 +311,54 @@ class FileSystemKnowledgeArtifactStore:
             raise ImmutableArtifactError("artifact root must not be a symlink")
         self._root = root.resolve(strict=True)
         self._lock = RLock()
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            self._root_fd = os.open(self._root, flags)
+            root_stat = os.fstat(self._root_fd)
+        except OSError as exc:
+            if self._root_fd >= 0:
+                os.close(self._root_fd)
+                self._root_fd = -1
+            raise ImmutableArtifactError("artifact root is unavailable or unsafe") from exc
+        if not stat.S_ISDIR(root_stat.st_mode):
+            os.close(self._root_fd)
+            self._root_fd = -1
+            raise ImmutableArtifactError("artifact root must be a directory")
+        self._root_identity = (root_stat.st_dev, root_stat.st_ino)
+        self._closed = False
+        try:
+            self._assert_root_path_identity()
+        except Exception:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            os.close(self._root_fd)
+            self._root_fd = -1
+            self._closed = True
+
+    def __enter__(self) -> Self:
+        with self._lock:
+            self._require_open()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc_value, traceback
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def put_immutable(self, *, key: str, content: bytes, media_type: str) -> ExactArtifactRef:
         if type(content) is not bytes:
@@ -285,56 +375,76 @@ class FileSystemKnowledgeArtifactStore:
             media_type=media_type,
         )
         with self._lock:
+            self._require_open()
             parent_fd, filename = self._open_parent(safe_key, create=True)
             try:
-                metadata_name = filename + _METADATA_SUFFIX
-                content_exists = self._entry_exists(parent_fd, filename)
-                metadata_exists = self._entry_exists(parent_fd, metadata_name)
-                if content_exists or metadata_exists:
-                    existing = self._read_existing(parent_fd, filename)
-                    existing_content = self._read_regular_file(parent_fd, filename)
-                    if existing != expected or existing_content != content:
-                        raise ImmutableArtifactError(
-                            "immutable artifact key already has other content"
-                        )
-                    return existing
-                self._atomic_create(parent_fd, filename, content)
-                try:
-                    metadata = expected.model_dump_json().encode("utf-8")
-                    self._atomic_create(parent_fd, metadata_name, metadata)
-                except Exception:
-                    self._unlink_if_present(parent_fd, filename)
-                    raise
-                return expected
+                with self._key_lock(parent_fd, filename):
+                    metadata_name = filename + _METADATA_SUFFIX
+                    content_exists = self._entry_exists(parent_fd, filename)
+                    metadata_exists = self._entry_exists(parent_fd, metadata_name)
+                    if content_exists and metadata_exists:
+                        existing = self._read_existing(parent_fd, filename)
+                        existing_content = self._read_regular_file(parent_fd, filename)
+                        if existing != expected or existing_content != content:
+                            raise ImmutableArtifactError(
+                                "immutable artifact key already has other content"
+                            )
+                        self._fsync_directory(parent_fd)
+                        self._assert_artifact_parent_identity(safe_key, parent_fd)
+                        return existing
+                    if content_exists:
+                        existing_content = self._read_regular_file(parent_fd, filename)
+                        if existing_content != content:
+                            raise ImmutableArtifactError(
+                                "incomplete artifact content conflicts with requested bytes"
+                            )
+                        self._commit_metadata(parent_fd, filename, expected)
+                        self._assert_artifact_parent_identity(safe_key, parent_fd)
+                        return expected
+                    if metadata_exists:
+                        existing = self._read_metadata(parent_fd, metadata_name)
+                        if existing != expected:
+                            raise ImmutableArtifactError(
+                                "incomplete artifact metadata conflicts with requested identity"
+                            )
+                        self._unlink_if_present(parent_fd, metadata_name)
+                        self._fsync_directory(parent_fd)
+                    self._commit_content(parent_fd, filename, content)
+                    self._commit_metadata(parent_fd, filename, expected)
+                    self._assert_artifact_parent_identity(safe_key, parent_fd)
+                    return expected
             finally:
                 os.close(parent_fd)
 
     def get_exact(self, ref: ExactArtifactRef) -> bytes:
         safe_key = self._key_from_ref(ref)
         with self._lock:
+            self._require_open()
             parent_fd, filename = self._open_parent(safe_key, create=False)
             try:
-                stored = self._read_existing(parent_fd, filename)
-                if stored != ref:
-                    raise ImmutableArtifactError(
-                        "artifact reference does not match stored identity"
-                    )
-                content = self._read_regular_file(parent_fd, filename)
-                if (
-                    len(content) != ref.size_bytes
-                    or hashlib.sha256(content).hexdigest() != ref.sha256
-                ):
-                    raise ImmutableArtifactError(
-                        "artifact bytes failed exact length or digest validation"
-                    )
-                if ref.version_id != f"sha256:{ref.sha256}":
-                    raise ImmutableArtifactError("artifact version does not match its digest")
-                return content
+                with self._key_lock(parent_fd, filename):
+                    stored = self._read_existing(parent_fd, filename)
+                    if stored != ref:
+                        raise ImmutableArtifactError(
+                            "artifact reference does not match stored identity"
+                        )
+                    content = self._read_regular_file(parent_fd, filename)
+                    if (
+                        len(content) != ref.size_bytes
+                        or hashlib.sha256(content).hexdigest() != ref.sha256
+                    ):
+                        raise ImmutableArtifactError(
+                            "artifact bytes failed exact length or digest validation"
+                        )
+                    if ref.version_id != f"sha256:{ref.sha256}":
+                        raise ImmutableArtifactError("artifact version does not match its digest")
+                    self._assert_artifact_parent_identity(safe_key, parent_fd)
+                    return content
             finally:
                 os.close(parent_fd)
 
     def _safe_key(self, key: str) -> PurePosixPath:
-        if not key or "\\" in key or "//" in key or key.endswith(_METADATA_SUFFIX):
+        if not key or "\\" in key or "//" in key or key.endswith((_METADATA_SUFFIX, _LOCK_SUFFIX)):
             raise ImmutableArtifactError("artifact key is invalid or reserved")
         pure = PurePosixPath(key)
         if pure.is_absolute() or any(
@@ -358,7 +468,8 @@ class FileSystemKnowledgeArtifactStore:
     def _open_parent(self, key: PurePosixPath, *, create: bool) -> tuple[int, str]:
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         try:
-            current_fd = os.open(self._root, flags)
+            self._assert_root_path_identity()
+            current_fd = os.dup(self._root_fd)
         except OSError as exc:
             raise ImmutableArtifactError("artifact root is unavailable or unsafe") from exc
         try:
@@ -391,14 +502,125 @@ class FileSystemKnowledgeArtifactStore:
     def _after_open_parent(self, *, key: str, parent_fd: int) -> None:
         """Private deterministic race hook; production behavior is intentionally empty."""
 
+    def _after_content_fsync(self, *, key: str, parent_fd: int) -> None:
+        """Private deterministic crash hook after durable content creation."""
+
+    def _before_metadata_commit(self, *, key: str, parent_fd: int) -> None:
+        """Private deterministic crash hook before metadata visibility commit."""
+
+    def _after_metadata_fsync(self, *, key: str, parent_fd: int) -> None:
+        """Private deterministic crash hook after metadata file fsync."""
+
+    def _require_open(self) -> None:
+        if self._closed or self._root_fd < 0:
+            raise ImmutableArtifactError("artifact store is closed")
+
+    def _assert_root_path_identity(self) -> None:
+        self._require_open()
+        try:
+            root_stat = os.stat(self._root, follow_symlinks=False)
+        except OSError as exc:
+            raise ImmutableArtifactError("configured artifact root path is unavailable") from exc
+        if (
+            not stat.S_ISDIR(root_stat.st_mode)
+            or (root_stat.st_dev, root_stat.st_ino) != self._root_identity
+        ):
+            raise ImmutableArtifactError(
+                "configured artifact root path no longer names the retained directory"
+            )
+
+    def _assert_artifact_parent_identity(self, key: PurePosixPath, retained_parent_fd: int) -> None:
+        self._assert_root_path_identity()
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        current_fd = os.dup(self._root_fd)
+        try:
+            for component in key.parts[:-1]:
+                try:
+                    next_fd = os.open(component, flags, dir_fd=current_fd)
+                except OSError as exc:
+                    raise ImmutableArtifactError(
+                        "artifact parent path no longer names the retained directory"
+                    ) from exc
+                os.close(current_fd)
+                current_fd = next_fd
+            current = os.fstat(current_fd)
+            retained = os.fstat(retained_parent_fd)
+            if (current.st_dev, current.st_ino) != (retained.st_dev, retained.st_ino):
+                raise ImmutableArtifactError(
+                    "artifact parent path no longer names the retained directory"
+                )
+        finally:
+            os.close(current_fd)
+
+    @contextmanager
+    def _key_lock(self, parent_fd: int, filename: str) -> Iterator[None]:
+        lock_name = filename + _LOCK_SUFFIX
+        descriptor = -1
+        try:
+            descriptor = self._open_lock_file(parent_fd, lock_name)
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ImmutableArtifactError("artifact lock must be a regular file")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except Exception as exc:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if isinstance(exc, ImmutableArtifactError):
+                raise
+            raise ImmutableArtifactError("artifact key lock is unavailable") from exc
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+    @staticmethod
+    def _open_lock_file(parent_fd: int, lock_name: str) -> int:
+        open_flags = os.O_RDWR | os.O_NOFOLLOW
+        create_flags = open_flags | os.O_CREAT | os.O_EXCL
+        for _ in range(4):
+            try:
+                return os.open(lock_name, open_flags, dir_fd=parent_fd)
+            except FileNotFoundError:
+                try:
+                    return os.open(lock_name, create_flags, 0o600, dir_fd=parent_fd)
+                except FileExistsError:
+                    continue
+        raise ImmutableArtifactError("artifact key lock creation did not converge")
+
+    def _commit_content(self, parent_fd: int, filename: str, content: bytes) -> None:
+        self._atomic_create(parent_fd, filename, content)
+        self._fsync_directory(parent_fd)
+        self._after_content_fsync(key=filename, parent_fd=parent_fd)
+
+    def _commit_metadata(self, parent_fd: int, filename: str, ref: ExactArtifactRef) -> None:
+        self._before_metadata_commit(key=filename, parent_fd=parent_fd)
+        self._atomic_create(
+            parent_fd,
+            filename + _METADATA_SUFFIX,
+            ref.model_dump_json().encode("utf-8"),
+        )
+        self._after_metadata_fsync(key=filename, parent_fd=parent_fd)
+        self._fsync_directory(parent_fd)
+
+    def _fsync_directory(self, parent_fd: int) -> None:
+        try:
+            os.fsync(parent_fd)
+        except OSError as exc:
+            raise ImmutableArtifactError("artifact directory fsync failed") from exc
+
     def _read_existing(self, parent_fd: int, filename: str) -> ExactArtifactRef:
         if not self._entry_exists(parent_fd, filename) or not self._entry_exists(
             parent_fd, filename + _METADATA_SUFFIX
         ):
             raise ImmutableArtifactError("immutable artifact is incomplete")
+        return self._read_metadata(parent_fd, filename + _METADATA_SUFFIX)
+
+    def _read_metadata(self, parent_fd: int, metadata_name: str) -> ExactArtifactRef:
         try:
             return ExactArtifactRef.model_validate_json(
-                self._read_regular_file(parent_fd, filename + _METADATA_SUFFIX)
+                self._read_regular_file(parent_fd, metadata_name)
             )
         except Exception as exc:
             raise ImmutableArtifactError("immutable artifact metadata is invalid") from exc
