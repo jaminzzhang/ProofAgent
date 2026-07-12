@@ -5,6 +5,7 @@ from importlib import import_module
 from importlib.util import find_spec
 import math
 from io import BytesIO
+import os
 from pathlib import Path
 from types import ModuleType
 import zipfile
@@ -12,6 +13,7 @@ import zipfile
 import pytest
 from pydantic import ValidationError
 
+import proof_agent.capabilities.knowledge.hybrid.intake as hybrid_intake_module
 from proof_agent.capabilities.knowledge.hybrid import (
     HybridIntakeLimits,
     preflight_hybrid_pdf,
@@ -267,10 +269,33 @@ def test_preflight_rejects_pdf_zip_polyglot_with_executable_payload(tmp_path: Pa
 def test_preflight_rejects_non_archive_payload_after_pdf_eof(tmp_path: Path) -> None:
     path = _write_pdf(tmp_path / "appended.pdf")
     with path.open("ab") as handle:
-        handle.write(b"MZ\x90\x00executable")
+        handle.write(b"MZpayload-executable%%EOF")
     with pytest.raises(ProofAgentError) as exc:
         preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
     assert exc.value.code == "PA_HYBRID_INTAKE_009"
+
+
+def test_preflight_digest_and_profiles_use_same_immutable_opened_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_pdf(tmp_path / "source.pdf", ("Meaningful native policy text",))
+    original_bytes = path.read_bytes()
+    replacement = _write_pdf(tmp_path / "replacement.pdf")
+    original_is_zipfile = hybrid_intake_module.zipfile.is_zipfile
+
+    def replace_path_after_snapshot(source: object) -> bool:
+        os.replace(replacement, path)
+        return original_is_zipfile(source)
+
+    monkeypatch.setattr(hybrid_intake_module.zipfile, "is_zipfile", replace_path_after_snapshot)
+
+    result = preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+
+    assert result.source_sha256 == hashlib.sha256(original_bytes).hexdigest()
+    assert result.source_size_bytes == len(original_bytes)
+    assert result.page_profiles[0].requires_ocr is False
+    assert path.read_bytes() != original_bytes
 
 
 @pytest.mark.parametrize(

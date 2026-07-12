@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 from pathlib import Path
+import re
 import stat
+import tempfile
 import unicodedata
-from typing import Any
+from typing import Any, IO
 import zipfile
 
 from proof_agent.capabilities.knowledge.ingestion.contracts import (
@@ -46,8 +49,13 @@ _ACTION_TYPES = {
 }
 _EMBEDDED_KEYS = {"/EmbeddedFiles", "/EF", "/AF"}
 _MAX_VISITED_PDF_OBJECTS = 100_000
-_PDF_EOF_MARKER = b"%%EOF"
-_PDF_TRAILING_WHITESPACE = frozenset(b"\x00\x09\x0a\x0c\x0d\x20")
+_PDF_TERMINAL_REGION = re.compile(
+    rb"startxref[\x00\x09\x0a\x0c\x0d\x20]+"
+    rb"(?P<offset>[0-9]+)[\x00\x09\x0a\x0c\x0d\x20]+"
+    rb"%%EOF[\x00\x09\x0a\x0c\x0d\x20]*\Z"
+)
+_PDF_TERMINAL_SCAN_BYTES = 64 * 1024
+_SNAPSHOT_MEMORY_BYTES = 1024 * 1024
 _FIX = "Upload a safe, unencrypted PDF within the configured Hybrid intake limits."
 
 
@@ -59,15 +67,18 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
     meaningful characters or a quality ratio below 0.5. Extracted text is never returned.
     """
 
-    source_sha256, source_size = _hash_safe_source(path, limits.max_file_bytes)
-    _reject_polyglot_payload(path)
+    snapshot, source_sha256, source_size = _snapshot_safe_source(path, limits.max_file_bytes)
     try:
         from pypdf import PdfReader
     except ImportError as exc:
+        snapshot.close()
         raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF support is not installed.") from exc
 
     try:
-        reader = PdfReader(path, strict=True)
+        _reject_polyglot_payload(snapshot)
+        _validate_terminal_pdf_region(snapshot)
+        snapshot.seek(0)
+        reader = PdfReader(snapshot, strict=True)
         if reader.is_encrypted:
             raise _hybrid_error(
                 "PA_HYBRID_INTAKE_003", "Encrypted Hybrid PDF uploads are not supported."
@@ -88,6 +99,8 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
         raise _hybrid_error(
             "PA_HYBRID_INTAKE_006", "Hybrid PDF upload is malformed or could not be parsed."
         ) from exc
+    finally:
+        snapshot.close()
 
     return HybridPdfPreflight(
         source_sha256=source_sha256,
@@ -97,11 +110,23 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
     )
 
 
-def _hash_safe_source(path: Path, max_file_bytes: int) -> tuple[str, int]:
+def _snapshot_safe_source(path: Path, max_file_bytes: int) -> tuple[IO[bytes], str, int]:
+    snapshot: IO[bytes] | None = None
+    descriptor: int | None = None
     try:
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        path_metadata = path.lstat()
+        if stat.S_ISLNK(path_metadata.st_mode):
             raise _hybrid_error("PA_HYBRID_INTAKE_001", "Hybrid PDF upload must be a regular file.")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        no_follow = getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags | no_follow)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise _hybrid_error("PA_HYBRID_INTAKE_001", "Hybrid PDF upload must be a regular file.")
+        if _file_identity(path_metadata) != _file_identity(metadata):
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_001", "Hybrid PDF upload changed during validation."
+            )
         if metadata.st_size <= 0:
             raise _hybrid_error("PA_HYBRID_INTAKE_001", "Hybrid PDF upload is empty.")
         if metadata.st_size > max_file_bytes:
@@ -111,13 +136,16 @@ def _hash_safe_source(path: Path, max_file_bytes: int) -> tuple[str, int]:
             )
         digest = hashlib.sha256()
         total = 0
-        with path.open("rb") as handle:
+        snapshot = tempfile.SpooledTemporaryFile(max_size=_SNAPSHOT_MEMORY_BYTES, mode="w+b")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
             signature = handle.read(len(_PDF_SIGNATURE))
             if signature != _PDF_SIGNATURE:
                 raise _hybrid_error(
                     "PA_HYBRID_INTAKE_001", "Hybrid PDF upload is missing a PDF content signature."
                 )
             digest.update(signature)
+            snapshot.write(signature)
             total += len(signature)
             while chunk := handle.read(_HASH_CHUNK_BYTES):
                 total += len(chunk)
@@ -127,15 +155,28 @@ def _hash_safe_source(path: Path, max_file_bytes: int) -> tuple[str, int]:
                         f"Hybrid PDF upload exceeds {max_file_bytes} bytes.",
                     )
                 digest.update(chunk)
+                snapshot.write(chunk)
         if total != metadata.st_size:
             raise _hybrid_error(
                 "PA_HYBRID_INTAKE_001", "Hybrid PDF upload changed during validation."
             )
-        return digest.hexdigest(), total
+        snapshot.seek(0)
+        return snapshot, digest.hexdigest(), total
     except ProofAgentError:
+        if snapshot is not None:
+            snapshot.close()
         raise
     except OSError as exc:
+        if snapshot is not None:
+            snapshot.close()
         raise _hybrid_error("PA_HYBRID_INTAKE_001", "Hybrid PDF upload could not be read.") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
 
 
 def _profile_page(page: Any, page_number: int) -> HybridPdfPageProfile:
@@ -164,11 +205,12 @@ def _profile_page(page: Any, page_number: int) -> HybridPdfPageProfile:
     )
 
 
-def _reject_polyglot_payload(path: Path) -> None:
-    """Reject a PDF that is also an archive or carries bytes after its final EOF marker."""
+def _reject_polyglot_payload(source: IO[bytes]) -> None:
+    """Reject source bytes that are simultaneously a structurally valid ZIP archive."""
 
     try:
-        if zipfile.is_zipfile(path) or _has_non_whitespace_after_final_pdf_eof(path):
+        source.seek(0)
+        if zipfile.is_zipfile(source):
             raise _hybrid_error(
                 "PA_HYBRID_INTAKE_009",
                 "Hybrid PDF upload contains an appended archive or executable payload.",
@@ -179,28 +221,46 @@ def _reject_polyglot_payload(path: Path) -> None:
         raise _hybrid_error("PA_HYBRID_INTAKE_001", "Hybrid PDF upload could not be read.") from exc
 
 
-def _has_non_whitespace_after_final_pdf_eof(path: Path) -> bool:
-    last_eof_end: int | None = None
+def _validate_terminal_pdf_region(source: IO[bytes]) -> None:
+    startxref_offset = _last_marker_offset(source, b"startxref")
+    if startxref_offset is None:
+        return
+    source.seek(0, os.SEEK_END)
+    size = source.tell()
+    terminal_region_size = size - startxref_offset
+    if terminal_region_size > _PDF_TERMINAL_SCAN_BYTES:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_009",
+            "Hybrid PDF upload contains an appended archive or executable payload.",
+        )
+    source.seek(startxref_offset)
+    terminal_region = source.read(terminal_region_size)
+    match = _PDF_TERMINAL_REGION.fullmatch(terminal_region)
+    if match is None:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_009",
+            "Hybrid PDF upload contains an appended archive or executable payload.",
+        )
+    xref_offset = int(match.group("offset"))
+    if xref_offset >= size:
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF startxref is invalid.")
+
+
+def _last_marker_offset(source: IO[bytes], marker: bytes) -> int | None:
+    source.seek(0)
+    last_offset: int | None = None
     offset = 0
     overlap = b""
-    with path.open("rb") as handle:
-        while chunk := handle.read(_HASH_CHUNK_BYTES):
-            searchable = overlap + chunk
-            searchable_offset = offset - len(overlap)
-            marker_index = searchable.find(_PDF_EOF_MARKER)
-            while marker_index >= 0:
-                last_eof_end = searchable_offset + marker_index + len(_PDF_EOF_MARKER)
-                marker_index = searchable.find(_PDF_EOF_MARKER, marker_index + 1)
-            offset += len(chunk)
-            overlap = searchable[-(len(_PDF_EOF_MARKER) - 1) :]
-
-        if last_eof_end is None:
-            return False
-        handle.seek(last_eof_end)
-        while trailing := handle.read(_HASH_CHUNK_BYTES):
-            if any(byte not in _PDF_TRAILING_WHITESPACE for byte in trailing):
-                return True
-    return False
+    while chunk := source.read(_HASH_CHUNK_BYTES):
+        searchable = overlap + chunk
+        searchable_offset = offset - len(overlap)
+        marker_index = searchable.find(marker)
+        while marker_index >= 0:
+            last_offset = searchable_offset + marker_index
+            marker_index = searchable.find(marker, marker_index + 1)
+        offset += len(chunk)
+        overlap = searchable[-(len(marker) - 1) :]
+    return last_offset
 
 
 def _reject_unsafe_pdf_objects(reader: Any) -> None:
