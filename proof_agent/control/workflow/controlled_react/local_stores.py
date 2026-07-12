@@ -5,6 +5,8 @@ import json
 import os
 import secrets
 import stat
+import threading
+from _thread import LockType
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,6 +32,11 @@ from proof_agent.control.workflow.controlled_react.artifact_binding import (
     verify_controlled_react_snapshot_binding,
 )
 from proof_agent.errors import ProofAgentError
+
+
+_PUBLISH_LOCK_FILENAME = ".proofagent.publish.lock"
+_ROOT_THREAD_LOCKS_GUARD = threading.Lock()
+_ROOT_THREAD_LOCKS: dict[tuple[int, int], LockType] = {}
 
 
 class FileControlledReActSnapshotStore:
@@ -145,8 +152,8 @@ class _AnchoredLocalStorage:
                 "PA_RUNTIME_001",
                 "controlled ReAct local stores require anchored POSIX filesystem capabilities",
                 (
-                    "Use a POSIX runtime with dir_fd and O_NOFOLLOW support, or "
-                    "configure a production artifact-store adapter."
+                    "Use a POSIX runtime with dir_fd, O_NOFOLLOW, and flock support, "
+                    "or configure a production artifact-store adapter."
                 ),
                 artifact_path=root_dir,
             )
@@ -156,6 +163,12 @@ class _AnchoredLocalStorage:
             try:
                 root_stat = os.fstat(root_fd)
                 _require_private_directory(root_stat, label="local-store root")
+                lock_fd, lock_stat, lock_created = _open_publish_lock_at(root_fd)
+                try:
+                    if lock_created:
+                        _fsync_directory(root_fd)
+                finally:
+                    os.close(lock_fd)
             finally:
                 os.close(root_fd)
         except OSError as exc:
@@ -167,6 +180,8 @@ class _AnchoredLocalStorage:
             ) from exc
         self._root = root
         self._root_identity = (root_stat.st_dev, root_stat.st_ino)
+        self._publish_lock_identity = (lock_stat.st_dev, lock_stat.st_ino)
+        self._thread_lock = _thread_lock_for_root(self._root_identity)
 
     def artifact_path(self, directories: tuple[str, ...], filename: str) -> Path:
         return self._root.joinpath(*directories, filename)
@@ -182,7 +197,8 @@ class _AnchoredLocalStorage:
     ) -> dict[str, Any]:
         path = self.artifact_path(directories, filename)
         try:
-            content = self._read_bytes_posix(directories, filename)
+            with self._locked_root_publication():
+                content = self._read_bytes_posix(directories, filename)
         except FileNotFoundError as exc:
             raise ProofAgentError(
                 "PA_RUNTIME_001",
@@ -217,15 +233,16 @@ class _AnchoredLocalStorage:
         path = self.artifact_path(directories, filename)
         content = canonical_json_bytes(payload)
         try:
-            self._publish_posix(
-                directories,
-                filename,
-                content,
-                payload,
-                artifact_name=artifact_name,
-                reference=reference,
-                path=path,
-            )
+            with self._locked_root_publication():
+                self._publish_posix(
+                    directories,
+                    filename,
+                    content,
+                    payload,
+                    artifact_name=artifact_name,
+                    reference=reference,
+                    path=path,
+                )
         except ProofAgentError:
             raise
         except OSError as exc:
@@ -234,6 +251,29 @@ class _AnchoredLocalStorage:
                 reference=reference,
                 path=path,
             ) from exc
+
+    @contextmanager
+    def _locked_root_publication(self) -> Iterator[None]:
+        with self._thread_lock:
+            root_fd = self._open_root_fd_posix()
+            lock_fd: int | None = None
+            lock_acquired = False
+            try:
+                lock_fd, _, _ = _open_publish_lock_at(
+                    root_fd,
+                    expected_identity=self._publish_lock_identity,
+                )
+                _flock(lock_fd, exclusive=True)
+                lock_acquired = True
+                yield
+            finally:
+                if lock_fd is not None:
+                    try:
+                        if lock_acquired:
+                            _flock(lock_fd, exclusive=False)
+                    finally:
+                        os.close(lock_fd)
+                os.close(root_fd)
 
     def _read_bytes_posix(
         self,
@@ -494,6 +534,7 @@ def _supports_posix_dir_fd() -> bool:
         and os.stat in os.supports_follow_symlinks
         and os.link in os.supports_follow_symlinks
         and os.listdir in os.supports_fd
+        and _supports_flock()
     )
 
 
@@ -520,11 +561,78 @@ def _write_create_flags() -> int:
     )
 
 
+def _lock_open_flags() -> int:
+    return os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+def _thread_lock_for_root(root_identity: tuple[int, int]) -> LockType:
+    with _ROOT_THREAD_LOCKS_GUARD:
+        lock = _ROOT_THREAD_LOCKS.get(root_identity)
+        if lock is None:
+            lock = threading.Lock()
+            _ROOT_THREAD_LOCKS[root_identity] = lock
+        return lock
+
+
+def _open_publish_lock_at(
+    root_fd: int,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> tuple[int, os.stat_result, bool]:
+    created = False
+    try:
+        lock_fd = os.open(
+            _PUBLISH_LOCK_FILENAME,
+            _lock_open_flags() | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=root_fd,
+        )
+        created = True
+    except FileExistsError:
+        lock_fd = os.open(
+            _PUBLISH_LOCK_FILENAME,
+            _lock_open_flags(),
+            dir_fd=root_fd,
+        )
+    try:
+        if created:
+            os.fchmod(lock_fd, 0o600)
+        lock_stat = os.fstat(lock_fd)
+        _require_private_regular_file(lock_stat, label="publication lock")
+        if stat.S_IMODE(lock_stat.st_mode) != 0o600:
+            raise OSError(errno.EPERM, "publication lock mode is not 0600")
+        identity = (lock_stat.st_dev, lock_stat.st_ino)
+        if expected_identity is not None and identity != expected_identity:
+            raise OSError(errno.ESTALE, "publication lock identity changed")
+        return lock_fd, lock_stat, created
+    except BaseException:
+        os.close(lock_fd)
+        raise
+
+
+def _supports_flock() -> bool:
+    try:
+        import fcntl
+    except ImportError:
+        return False
+    return hasattr(fcntl, "flock") and hasattr(fcntl, "LOCK_EX")
+
+
+def _flock(file_descriptor: int, *, exclusive: bool) -> None:
+    try:
+        import fcntl
+    except ImportError as exc:  # pragma: no cover - guarded by capability check
+        raise OSError(errno.ENOSYS, "fcntl.flock is unavailable") from exc
+    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_UN
+    fcntl.flock(file_descriptor, operation)
+
+
 def _open_directory_path_nofollow(path: Path, *, create: bool) -> int:
     if not path.is_absolute():
         raise OSError(errno.EINVAL, "artifact root must be absolute")
     current_fd = os.open(os.sep, _directory_open_flags())
     try:
+        _require_trusted_ancestor(os.fstat(current_fd), label="artifact root ancestor")
         for segment in path.parts[1:]:
             created = False
             if create:
@@ -544,6 +652,11 @@ def _open_directory_path_nofollow(path: Path, *, create: bool) -> int:
                 if created:
                     os.fchmod(child_fd, 0o700)
                     _fsync_directory(current_fd)
+                    child_stat = os.fstat(child_fd)
+                _require_trusted_ancestor(
+                    child_stat,
+                    label="artifact root ancestor",
+                )
             except BaseException:
                 os.close(child_fd)
                 raise
@@ -566,6 +679,22 @@ def _require_private_directory(
         raise OSError(errno.EPERM, f"{label} is not owned by the effective user")
     if directory_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         raise OSError(errno.EPERM, f"{label} is group/world writable")
+
+
+def _require_trusted_ancestor(
+    directory_stat: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    if not stat.S_ISDIR(directory_stat.st_mode):
+        raise OSError(errno.ENOTDIR, f"{label} is not a directory")
+    trusted_owner = directory_stat.st_uid in {0, os.geteuid()}
+    group_or_world_writable = bool(directory_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+    sticky = bool(directory_stat.st_mode & stat.S_ISVTX)
+    if not trusted_owner:
+        raise OSError(errno.EPERM, f"{label} has an untrusted owner")
+    if group_or_world_writable and not sticky:
+        raise OSError(errno.EPERM, f"{label} is renamable by untrusted users")
 
 
 def _require_private_regular_file(
