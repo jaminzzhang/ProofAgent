@@ -160,7 +160,12 @@ def _execute_controlled_react_v3_agent_package_run(
         )
     except ProofAgentError as exc:
         if exc.code.startswith("PA_MODEL_"):
-            emit_model_error(trace, manifest.model.provider, manifest.model.name, exc)
+            emit_model_error(
+                trace,
+                manifest.model.provider or manifest.model.model_source,
+                manifest.model.name or manifest.model.connection_id or "unresolved",
+                exc,
+            )
         raise
     stage_contexts, initial_stage_context_applications = build_controlled_react_stage_contexts(
         invocation=invocation,

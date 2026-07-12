@@ -31,7 +31,7 @@ def build_controlled_react_stage_contexts(
         conversation_context=conversation_context,
     )
     for config in execution_input.effective_stage_configuration.stages:
-        prompt = config.prompt
+        prompt = _stage_prompt_config(config.prompt)
         business_flow_addendum_applied = False
         if selected_business_flow_skill_pack_id is not None:
             prompt, business_flow_addendum_applied = _prompt_with_business_flow_addendum(

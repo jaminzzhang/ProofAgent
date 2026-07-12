@@ -7,16 +7,16 @@ During the migration, [CONTEXT.md](./CONTEXT.md) keeps product-wide terms only. 
 ## Contexts
 
 - [Product Core](./CONTEXT.md) - product category, cross-cutting Harness language, and terms shared by every other context.
-- [Workflow Control](./docs/domain/workflow-control/CONTEXT.md) - Workflow Templates, Controlled ReAct execution, approval, clarification, observations, and finalization.
+- [Workflow Control](./docs/domain/workflow-control/CONTEXT.md) - Workflow Templates, Controlled ReAct execution, clarification, observations, and finalization; approval entries are historical/deferred.
 - [Agent Configuration](./docs/domain/agent-configuration/CONTEXT.md) - Agent Contract authoring, Draft and Published Agents, publication, validation, and effective configuration.
 - [Business Flow Skills](./docs/domain/business-flow-skills/CONTEXT.md) - Business Flow Skill Pack bindings, routing, admission, addenda, and no-pack behavior.
 - [Knowledge And Evidence](./docs/domain/knowledge-evidence/CONTEXT.md) - Knowledge Sources, bindings, retrieval, ingestion, evidence, citations, and Local Index language.
 - [Tools Models And Memory](./docs/domain/tools-models-memory/CONTEXT.md) - Tool and MCP capability language, model connection language, model-call roles, and memory scopes.
-- [Tool Proposal Governance](./docs/domain/tool-proposal-governance/CONTEXT.md) - planner-visible tool proposal eligibility, proposal-safe parameters, binding, approval snapshots, and scope violations.
+- [Tool Proposal Governance](./docs/domain/tool-proposal-governance/CONTEXT.md) - planner-visible tool proposal eligibility, proposal-safe parameters, binding and scope violations; approval snapshot vocabulary is historical/deferred.
 - [Observability](./docs/domain/observability/CONTEXT.md) - Trace, Governance Receipt, RunStore, Dashboard projections, validation capture, and audit-safe summaries.
 - [Evaluation](./docs/domain/evaluation/CONTEXT.md) - evaluation cases, suites, campaigns, metrics, gates, diagnostics, and release thresholds.
-- [Application Surfaces](./docs/domain/app-surfaces/CONTEXT.md) - Dashboard, Unified Chat, Knowledge Hub UI, list pagination, approval queue filters, and navigation terminology.
-- [Insurance Reference](./docs/domain/insurance-reference/CONTEXT.md) - public example Agents and insurance-specific customer/institution service language.
+- [Application Surfaces](./docs/domain/app-surfaces/CONTEXT.md) - Dashboard, Operator Chat, Knowledge Hub UI, list pagination and navigation terminology; customer/approval entries are historical.
+- [Insurance Reference](./docs/domain/insurance-reference/CONTEXT.md) - the sole Agent Management Insurance Specialist example; older customer/institution entries are historical.
 
 ## Relationships
 

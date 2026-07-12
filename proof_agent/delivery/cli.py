@@ -321,7 +321,7 @@ def verify_remote(
 
 @app.command()
 def demo() -> None:
-    """Run the deterministic supported, unsupported, and approval-wait scenarios."""
+    """Run the deterministic supported and unsupported scenarios."""
 
     typer.echo("Proof Agent demo")
     store = RunStore(Path("runs/history"))

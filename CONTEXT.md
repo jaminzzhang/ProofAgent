@@ -1,6 +1,6 @@
 # Proof Agent
 
-Proof Agent is a Controlled Agent Harness Framework for enterprise Agent delivery. Its domain language centers on governed execution, evidence-backed answers, tool approval, and auditability.
+Proof Agent is a Controlled Agent Harness Framework for enterprise Agent delivery. Its active initial-release language centers on governed execution, evidence-backed answers, server-side permissions, read-only capabilities, and auditability. Approval concepts in historical records are not an active product workflow.
 
 > **Domain split migration**: Routed domain contexts start at [CONTEXT-MAP.md](CONTEXT-MAP.md). This file keeps product-wide terms only. Add new terms to the relevant `docs/domain/*/CONTEXT.md` file, and put resolved ambiguity or relationship history in the matching `docs/domain/*/decisions.md` file when it is worth preserving.
 
@@ -57,7 +57,7 @@ The Control Plane authority that evaluates policy rules and returns governed dec
 _Avoid_: Prompt instruction, UI-only policy
 
 **Tool Gateway**:
-The governed boundary through which tool proposals are authorized, approved when needed, executed, summarized, and audited.
+The governed boundary through which production-admissible read-only tool proposals are authorized, executed, summarized, and audited. The initial release has no approval workflow.
 _Avoid_: Direct tool executor, plugin shortcut
 
 **Trace & Audit**:
@@ -65,11 +65,11 @@ The audit side channel that records trace-safe facts about execution without bec
 _Avoid_: Debug dump, hidden execution state
 
 **Governance Receipt**:
-The human-readable audit artifact summarizing the governed outcome, evidence, policy, tool approval, model use, and relevant run facts.
+The human-readable audit artifact summarizing the governed outcome, evidence, policy, read-only tool use, model use, and relevant run facts. Historical receipts may retain inert approval facts.
 _Avoid_: Raw trace, model transcript
 
 **Production Transactional State Store**:
-The authoritative production boundary for mutable structured configuration, run, conversation, approval, evaluation, audit-metadata, and coordination state across Proof Agent.
+The authoritative production boundary for mutable structured configuration, OIDC session, permission mapping, run, conversation, evaluation, audit-metadata, queue, and coordination state across Proof Agent.
 _Avoid_: Local JSON authority, filesystem lock, read projection as execution state, transient cache as source of truth
 
 **Production Artifact Store**:
