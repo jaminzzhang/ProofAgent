@@ -269,11 +269,7 @@ audit:
     persisted_binding = persisted.resolved_knowledge_bindings.bindings[0]
     assert persisted_binding.source_version_id == "kssnapshot_001"
     assert Path(persisted_binding.provider_params["snapshot_path"]) == (
-        store.root_dir
-        / "knowledge_sources"
-        / "ks_policy"
-        / "snapshots"
-        / "kssnapshot_001"
+        store.root_dir / "knowledge_sources" / "ks_policy" / "snapshots" / "kssnapshot_001"
     )
     assert resolved_agent is not None
     assert resolved_agent.resolved_knowledge_bindings == persisted.resolved_knowledge_bindings
@@ -371,7 +367,9 @@ def test_execution_api_still_rejects_arbitrary_manifest_paths(tmp_path: Path) ->
     app = create_app(
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
-        published_agents={"enterprise_qa": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")},
+        published_agents={
+            "enterprise_qa": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+        },
     )
     client = TestClient(app)
 

@@ -25,26 +25,15 @@ def test_insurance_customer_service_manifest_loads() -> None:
         "tool_review",
         "response",
     }
-    assert (
-        "customer service intent"
-        in stage_prompts["intent_resolution"].business_context.lower()
-    )
-    assert "Customer-Safe Response Projection" in (
-        stage_prompts["model_answer"].business_context
-    )
-    response_stage = next(
-        stage for stage in manifest.workflow.stages if stage.id == "response"
-    )
+    assert "customer service intent" in stage_prompts["intent_resolution"].business_context.lower()
+    assert "Customer-Safe Response Projection" in (stage_prompts["model_answer"].business_context)
+    response_stage = next(stage for stage in manifest.workflow.stages if stage.id == "response")
     assert response_stage.context.options["include_response_disclosure_policy"] is True
 
 
 def test_insurance_customer_service_is_customer_facing_when_explicitly_configured() -> None:
     registry = PublishedAgentRegistry(
-        {
-            "insurance_customer_service": Path(
-                "examples/insurance_customer_service/agent.yaml"
-            )
-        }
+        {"insurance_customer_service": Path("examples/insurance_customer_service/agent.yaml")}
     )
 
     agent = registry.resolve_customer_facing("insurance_customer_service")

@@ -720,7 +720,7 @@ def server(
     from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
     configuration_store = LocalAgentConfigurationStore(Path(config_dir))
-    if seed_example_agent and _seed_default_dev_agent(configuration_store):
+    if seed_example_agent and _seed_default_dev_agent_or_exit(configuration_store):
         typer.echo("Seeded local configuration with agent_management_insurance_specialist.")
 
     typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
@@ -761,7 +761,7 @@ def _create_server_app_from_env() -> Any:
     seed_example_agent = os.environ.get(SERVER_SEED_EXAMPLE_AGENT_ENV, "1") != "0"
     configuration_store = LocalAgentConfigurationStore(config_dir)
     if seed_example_agent:
-        _seed_default_dev_agent(configuration_store)
+        _seed_default_dev_agent_or_exit(configuration_store)
 
     return create_app(
         history_dir=history_dir,
@@ -1202,37 +1202,89 @@ def _seed_default_dev_agent(store: Any) -> bool:
             "Install a distribution containing the canonical Agent package or restore it.",
             artifact_path=PUBLIC_EXAMPLE_PATH,
         )
-    active = store.get_active_version(agent_id)
-    if active is not None:
-        if _active_dev_seed_is_current(store, agent_id=agent_id):
-            return False
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            (
-                "active local Agent version is not the canonical Controlled ReAct V3 "
-                "development seed"
-            ),
-            (
-                "Run `proof-agent config-reset --scope local-store --yes`, then restart "
-                "the local development server so the canonical Agent can be seeded."
-            ),
-        )
+    active_agent_ids = store.list_active_agent_ids()
+    if active_agent_ids:
+        active = store.get_active_version(agent_id)
+        if (
+            active_agent_ids == (agent_id,)
+            and active is not None
+            and _active_dev_seed_is_current(
+                store,
+                agent_id=agent_id,
+                expected_active_version_id=active.version_id,
+            )
+        ):
+            if store.ensure_canonical_seed_authority(
+                agent_id=agent_id,
+                expected_active_version_id=active.version_id,
+            ):
+                return False
+        _raise_noncanonical_dev_seed_state()
 
     from proof_agent.configuration.importer import import_agent_package
 
     draft = import_agent_package(PUBLIC_EXAMPLE_PATH, store=store, actor="proof-agent-dev")
-    store.publish_version(
+    version = store.publish_canonical_seed_version_if_store_empty(
         agent_id=draft.agent_id,
         draft_id=draft.draft_id,
         validation_run_id="local_dev_seed",
         actor="proof-agent-dev",
     )
-    return True
-
-
-def _active_dev_seed_is_current(store: Any, *, agent_id: str) -> bool:
+    if version is not None:
+        return True
+    active_agent_ids = store.list_active_agent_ids()
     active = store.get_active_version(agent_id)
-    if active is None:
+    if (
+        active_agent_ids == (agent_id,)
+        and active is not None
+        and _active_dev_seed_is_current(
+            store,
+            agent_id=agent_id,
+            expected_active_version_id=active.version_id,
+        )
+    ):
+        if store.ensure_canonical_seed_authority(
+            agent_id=agent_id,
+            expected_active_version_id=active.version_id,
+        ):
+            return False
+    _raise_noncanonical_dev_seed_state()
+
+
+def _seed_default_dev_agent_or_exit(store: Any) -> bool:
+    """Render canonical seed failures at a Typer/Uvicorn CLI boundary."""
+
+    try:
+        return _seed_default_dev_agent(store)
+    except ProofAgentError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+
+
+def _raise_noncanonical_dev_seed_state() -> NoReturn:
+    raise ProofAgentError(
+        "PA_CONFIG_002",
+        (
+            "local Agent Configuration Store contains active state outside the "
+            "canonical Controlled ReAct V3 development seed"
+        ),
+        (
+            "Run `proof-agent config-reset --scope local-store --yes`, then restart "
+            "the local development server so the canonical Agent can be seeded."
+        ),
+    )
+
+
+def _active_dev_seed_is_current(
+    store: Any,
+    *,
+    agent_id: str,
+    expected_active_version_id: str | None = None,
+) -> bool:
+    active = store.get_active_version(agent_id)
+    if active is None or (
+        expected_active_version_id is not None and active.version_id != expected_active_version_id
+    ):
         return False
     manifest_path = (
         store.root_dir / "agents" / agent_id / "versions" / active.version_id / "agent.yaml"

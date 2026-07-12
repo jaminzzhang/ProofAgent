@@ -14,6 +14,14 @@ from proof_agent.delivery.agent_package_execution import (
 
 
 AGENT_PATH = Path("examples/agent_management_insurance_specialist/agent.yaml")
+EXPECTED_BINDING_BY_SOURCE = {
+    "general-insurance-specialist.md": "general_insurance_knowledge",
+    "agent-basic-law.md": "agent_basic_law_docs",
+    "product-clauses.md": "product_clause_docs",
+    "underwriting-rules.md": "underwriting_rule_docs",
+    "claims-sop.md": "claims_sop_docs",
+    "external-wording.md": "customer_agent_wording_docs",
+}
 
 
 def test_agent_package_is_offline_controlled_react_v3_without_tools() -> None:
@@ -132,3 +140,82 @@ def test_agent_refuses_tool_inducement_without_tool_or_approval_actions(
             "approval_resolved",
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_source", "forbidden_terms"),
+    (
+        pytest.param(
+            "内勤专员可以使用这个Agent获得哪些通用保险帮助？",
+            "general-insurance-specialist.md",
+            ("住院理赔", "核保规则", "等待期"),
+            id="general-consultation",
+        ),
+        pytest.param(
+            "代理人基本法中的职级维持要求如何解释？",
+            "agent-basic-law.md",
+            ("住院理赔", "核保材料"),
+            id="agent-basic-law",
+        ),
+        pytest.param(
+            "产品条款中的等待期是什么意思？",
+            "product-clauses.md",
+            ("代理人基本法", "核保材料"),
+            id="product-clause",
+        ),
+        pytest.param(
+            "住院医疗险里的免赔额和等待期是什么意思？",
+            "product-clauses.md",
+            ("代理人基本法", "核保材料"),
+            id="product-clause-translated-query",
+        ),
+        pytest.param(
+            "核保需要准备哪些材料？",
+            "underwriting-rules.md",
+            ("住院理赔", "代理人基本法"),
+            id="underwriting",
+        ),
+        pytest.param(
+            "住院理赔需要哪些材料？",
+            "claims-sop.md",
+            ("核保规则", "佣金规则"),
+            id="claims-materials",
+        ),
+        pytest.param(
+            "内勤专员应该如何起草给客户或代理人的外部话术？",
+            "external-wording.md",
+            ("业绩与活动量", "核保规则"),
+            id="external-wording",
+        ),
+        pytest.param(
+            "理赔处理中需要向代理人说明哪些材料要求？",
+            "claims-sop.md",
+            ("核保规则", "佣金规则"),
+            id="claims-agent-wording-regression",
+        ),
+    ),
+)
+def test_agent_routes_each_business_question_to_isolated_domain_evidence(
+    tmp_path: Path,
+    question: str,
+    expected_source: str,
+    forbidden_terms: tuple[str, ...],
+) -> None:
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=AGENT_PATH,
+            question=question,
+            runs_dir=tmp_path / "run",
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    execution = result.workflow_template_execution_result
+    assert execution is not None
+    assert {chunk.source for chunk in execution.evidence} == {expected_source}
+    assert {chunk.binding_id for chunk in execution.evidence} == {
+        EXPECTED_BINDING_BY_SOURCE[expected_source]
+    }
+    assert all(chunk.citation.startswith(f"{expected_source}#") for chunk in execution.evidence)
+    assert len(result.final_output) <= 600
+    assert all(term not in result.final_output for term in forbidden_terms)

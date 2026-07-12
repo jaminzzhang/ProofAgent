@@ -1,9 +1,13 @@
 import json
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, Event, Lock
+from typing import Any
 
 import pytest
+import typer
 import yaml
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -17,6 +21,7 @@ from proof_agent.capabilities.knowledge.ingestion.worker import (
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.delivery.cli import app
+from proof_agent.delivery.cli import _active_dev_seed_is_current
 from proof_agent.delivery.cli import _create_server_app_from_env
 from proof_agent.delivery.cli import _seed_default_dev_agent
 from proof_agent.delivery.cli import _verify_remote_process_is_safe_to_stop
@@ -418,6 +423,343 @@ def test_seed_default_dev_agent_is_idempotent(tmp_path: Path) -> None:
     assert len(store.list_versions("agent_management_insurance_specialist")) == 1
 
 
+def test_existing_canonical_seed_backfills_sole_agent_authority(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    assert _seed_default_dev_agent(store) is True
+    authority_path = store.root_dir / "canonical_seed_authority.json"
+    authority_path.unlink()
+
+    assert _seed_default_dev_agent(store) is False
+
+    assert authority_path.is_file()
+    legacy_draft = import_agent_package(
+        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        store=store,
+        actor="test-user",
+    )
+    with pytest.raises(ProofAgentError) as exc:
+        store.publish_version(
+            agent_id=legacy_draft.agent_id,
+            draft_id=legacy_draft.draft_id,
+            validation_run_id="legacy_after_seed",
+            actor="test-user",
+        )
+    assert exc.value.code == "PA_CONFIG_002"
+
+
+def test_canonical_seed_authority_blocks_legacy_version_rollback(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    legacy_draft = import_agent_package(
+        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        store=store,
+        actor="test-user",
+    )
+    legacy_version = store.publish_version(
+        agent_id=legacy_draft.agent_id,
+        draft_id=legacy_draft.draft_id,
+        validation_run_id="legacy_history",
+        actor="test-user",
+    )
+    (store.root_dir / "agents" / legacy_draft.agent_id / "active_version.json").unlink()
+    assert _seed_default_dev_agent(store) is True
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.rollback_active_version(
+            agent_id=legacy_draft.agent_id,
+            version_id=legacy_version.version_id,
+            actor="test-user",
+        )
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert store.list_active_agent_ids() == ("agent_management_insurance_specialist",)
+
+
+def test_concurrent_default_seeds_publish_exactly_one_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    initial_read_barrier = Barrier(2)
+    read_count_lock = Lock()
+    read_count = 0
+    original_list_active_agent_ids = store.list_active_agent_ids
+
+    def synchronized_list_active_agent_ids() -> tuple[str, ...]:
+        nonlocal read_count
+        result = original_list_active_agent_ids()
+        with read_count_lock:
+            read_count += 1
+            should_wait = read_count <= 2
+        if should_wait:
+            initial_read_barrier.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(
+        store,
+        "list_active_agent_ids",
+        synchronized_list_active_agent_ids,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: _seed_default_dev_agent(store), range(2)))
+
+    assert sorted(results) == [False, True]
+    assert len(store.list_versions("agent_management_insurance_specialist")) == 1
+
+
+def test_seed_cas_never_overwrites_concurrent_manual_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_dir = tmp_path / "manual_stale_agent"
+    shutil.copytree(
+        REPO_ROOT / "examples/agent_management_insurance_specialist",
+        stale_dir,
+    )
+    stale_manifest_path = stale_dir / "agent.yaml"
+    raw = yaml.safe_load(stale_manifest_path.read_text(encoding="utf-8"))
+    raw["workflow"]["runtime"] = "langgraph"
+    raw["workflow"]["template"] = "react_enterprise_qa_v2"
+    raw["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v2"
+    stale_manifest_path.write_text(
+        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    manual_draft = import_agent_package(
+        stale_manifest_path,
+        store=store,
+        actor="manual-user",
+    )
+    seed_reached_cas = Event()
+    allow_seed_cas = Event()
+    original_seed_publish = store.publish_canonical_seed_version_if_store_empty
+
+    def delayed_seed_publish(**kwargs: Any):
+        seed_reached_cas.set()
+        assert allow_seed_cas.wait(timeout=5)
+        return original_seed_publish(**kwargs)
+
+    monkeypatch.setattr(
+        store,
+        "publish_canonical_seed_version_if_store_empty",
+        delayed_seed_publish,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        seed_future = executor.submit(_seed_default_dev_agent, store)
+        assert seed_reached_cas.wait(timeout=5)
+        manual_version = store.publish_version(
+            agent_id=manual_draft.agent_id,
+            draft_id=manual_draft.draft_id,
+            validation_run_id="manual_publish",
+            actor="manual-user",
+        )
+        allow_seed_cas.set()
+        with pytest.raises(ProofAgentError):
+            seed_future.result(timeout=5)
+
+    active = store.get_active_version("agent_management_insurance_specialist")
+    assert active is not None
+    assert active.version_id == manual_version.version_id
+    assert [version.version_id for version in store.list_versions(manual_draft.agent_id)] == [
+        manual_version.version_id
+    ]
+
+
+def test_seed_cas_reserves_matching_concurrent_manual_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    manual_draft = import_agent_package(
+        REPO_ROOT / "examples/agent_management_insurance_specialist/agent.yaml",
+        store=store,
+        actor="manual-user",
+    )
+    seed_reached_cas = Event()
+    allow_seed_cas = Event()
+    original_seed_publish = store.publish_canonical_seed_version_if_store_empty
+
+    def delayed_seed_publish(**kwargs: Any):
+        seed_reached_cas.set()
+        assert allow_seed_cas.wait(timeout=5)
+        return original_seed_publish(**kwargs)
+
+    monkeypatch.setattr(
+        store,
+        "publish_canonical_seed_version_if_store_empty",
+        delayed_seed_publish,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        seed_future = executor.submit(_seed_default_dev_agent, store)
+        assert seed_reached_cas.wait(timeout=5)
+        manual_version = store.publish_version(
+            agent_id=manual_draft.agent_id,
+            draft_id=manual_draft.draft_id,
+            validation_run_id="manual_canonical_publish",
+            actor="manual-user",
+        )
+        allow_seed_cas.set()
+        assert seed_future.result(timeout=5) is False
+
+    authority_path = store.root_dir / "canonical_seed_authority.json"
+    authority = json.loads(authority_path.read_text(encoding="utf-8"))
+    assert authority["agent_id"] == "agent_management_insurance_specialist"
+    assert authority["initial_version_id"] == manual_version.version_id
+
+
+def test_seed_authority_never_blesses_version_swapped_after_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    canonical_draft = import_agent_package(
+        REPO_ROOT / "examples/agent_management_insurance_specialist/agent.yaml",
+        store=store,
+        actor="manual-user",
+    )
+    store.publish_version(
+        agent_id=canonical_draft.agent_id,
+        draft_id=canonical_draft.draft_id,
+        validation_run_id="manual_canonical_publish",
+        actor="manual-user",
+    )
+    stale_dir = tmp_path / "stale_agent"
+    shutil.copytree(
+        REPO_ROOT / "examples/agent_management_insurance_specialist",
+        stale_dir,
+    )
+    stale_manifest_path = stale_dir / "agent.yaml"
+    raw = yaml.safe_load(stale_manifest_path.read_text(encoding="utf-8"))
+    raw["workflow"]["runtime"] = "langgraph"
+    raw["workflow"]["template"] = "react_enterprise_qa_v2"
+    raw["workflow"]["template_descriptor_version"] = "react_enterprise_qa.v2"
+    stale_manifest_path.write_text(
+        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    stale_draft = import_agent_package(
+        stale_manifest_path,
+        store=store,
+        actor="manual-user",
+    )
+    canonical_version_validated = Event()
+    allow_validation_to_return = Event()
+
+    def delayed_current_check(*args: Any, **kwargs: Any) -> bool:
+        result = _active_dev_seed_is_current(*args, **kwargs)
+        assert result is True
+        canonical_version_validated.set()
+        assert allow_validation_to_return.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli._active_dev_seed_is_current",
+        delayed_current_check,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        seed_future = executor.submit(_seed_default_dev_agent, store)
+        assert canonical_version_validated.wait(timeout=5)
+        stale_version = store.publish_version(
+            agent_id=stale_draft.agent_id,
+            draft_id=stale_draft.draft_id,
+            validation_run_id="stale_version_swap",
+            actor="manual-user",
+        )
+        allow_validation_to_return.set()
+        with pytest.raises(ProofAgentError) as exc:
+            seed_future.result(timeout=5)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    active = store.get_active_version("agent_management_insurance_specialist")
+    assert active is not None
+    assert active.version_id == stale_version.version_id
+    assert not (store.root_dir / "canonical_seed_authority.json").exists()
+
+
+def test_seed_cas_never_creates_second_identity_during_legacy_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    legacy_draft = import_agent_package(
+        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        store=store,
+        actor="manual-user",
+    )
+    seed_reached_cas = Event()
+    allow_seed_cas = Event()
+    original_seed_publish = store.publish_canonical_seed_version_if_store_empty
+
+    def delayed_seed_publish(**kwargs: Any):
+        seed_reached_cas.set()
+        assert allow_seed_cas.wait(timeout=5)
+        return original_seed_publish(**kwargs)
+
+    monkeypatch.setattr(
+        store,
+        "publish_canonical_seed_version_if_store_empty",
+        delayed_seed_publish,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        seed_future = executor.submit(_seed_default_dev_agent, store)
+        assert seed_reached_cas.wait(timeout=5)
+        legacy_version = store.publish_version(
+            agent_id=legacy_draft.agent_id,
+            draft_id=legacy_draft.draft_id,
+            validation_run_id="legacy_publish",
+            actor="manual-user",
+        )
+        allow_seed_cas.set()
+        with pytest.raises(ProofAgentError):
+            seed_future.result(timeout=5)
+
+    assert store.list_active_agent_ids() == ("insurance_customer_service",)
+    legacy_active = store.get_active_version("insurance_customer_service")
+    assert legacy_active is not None
+    assert legacy_active.version_id == legacy_version.version_id
+    assert store.list_versions("agent_management_insurance_specialist") == []
+
+
+def test_seed_reserves_authority_before_publication_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    legacy_draft = import_agent_package(
+        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        store=store,
+        actor="manual-user",
+    )
+
+    def fail_publication_write(**_kwargs: Any):
+        raise RuntimeError("injected publication failure")
+
+    monkeypatch.setattr(store, "_publish_version_unlocked", fail_publication_write)
+
+    with pytest.raises(RuntimeError, match="injected publication failure"):
+        _seed_default_dev_agent(store)
+
+    authority_path = store.root_dir / "canonical_seed_authority.json"
+    assert json.loads(authority_path.read_text(encoding="utf-8")) == {
+        "agent_id": "agent_management_insurance_specialist",
+        "state": "reserved",
+    }
+    assert store.list_active_agent_ids() == ()
+    with pytest.raises(ProofAgentError) as exc:
+        store.publish_version(
+            agent_id=legacy_draft.agent_id,
+            draft_id=legacy_draft.draft_id,
+            validation_run_id="legacy_after_failed_seed",
+            actor="manual-user",
+        )
+    assert exc.value.code == "PA_CONFIG_002"
+
+
 def test_seed_default_dev_agent_rejects_stale_active_v2_package(tmp_path: Path) -> None:
     stale_dir = tmp_path / "stale_agent"
     shutil.copytree(
@@ -482,6 +824,32 @@ def test_seed_default_dev_agent_rejects_stale_v3_package_content(tmp_path: Path)
     assert active.version_id == stale_version.version_id
 
 
+def test_seed_default_dev_agent_rejects_any_other_active_agent(tmp_path: Path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    legacy_draft = import_agent_package(
+        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        store=store,
+        actor="test-user",
+    )
+    legacy_version = store.publish_version(
+        agent_id=legacy_draft.agent_id,
+        draft_id=legacy_draft.draft_id,
+        validation_run_id="legacy_active",
+        actor="test-user",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        _seed_default_dev_agent(store)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "config-reset --scope local-store --yes" in exc.value.fix
+    legacy_active = store.get_active_version("insurance_customer_service")
+    assert legacy_active is not None
+    assert legacy_active.version_id == legacy_version.version_id
+    assert store.get_active_version("agent_management_insurance_specialist") is None
+    assert store.list_versions("agent_management_insurance_specialist") == []
+
+
 def test_seed_default_dev_agent_fails_when_packaged_asset_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -523,6 +891,77 @@ def test_server_factory_seeds_only_v3_specialist_from_non_repo_cwd(
     assert version is not None
     assert version.workflow_stage_availability is not None
     assert version.workflow_stage_availability.is_available("tool_review") is False
+
+
+def test_server_command_reports_structured_seed_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / "config"
+    store = LocalAgentConfigurationStore(config_dir)
+    legacy_draft = import_agent_package(
+        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        store=store,
+        actor="test-user",
+    )
+    store.publish_version(
+        agent_id=legacy_draft.agent_id,
+        draft_id=legacy_draft.draft_id,
+        validation_run_id="legacy_active",
+        actor="test-user",
+    )
+
+    def fail_if_server_starts(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("server must not start after a seed failure")
+
+    monkeypatch.setattr("uvicorn.run", fail_if_server_starts)
+    result = runner.invoke(
+        app,
+        [
+            "server",
+            "--config-dir",
+            str(config_dir),
+            "--history-dir",
+            str(tmp_path / "history"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "PA_CONFIG_002:" in result.output
+    assert "Fix:" in result.output
+    assert "config-reset --scope local-store --yes" in result.output
+
+
+def test_server_reload_factory_reports_structured_seed_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_dir = tmp_path / "config"
+    store = LocalAgentConfigurationStore(config_dir)
+    legacy_draft = import_agent_package(
+        REPO_ROOT / "examples/insurance_customer_service/agent.yaml",
+        store=store,
+        actor="test-user",
+    )
+    store.publish_version(
+        agent_id=legacy_draft.agent_id,
+        draft_id=legacy_draft.draft_id,
+        validation_run_id="legacy_active",
+        actor="test-user",
+    )
+    monkeypatch.setenv("PROOF_AGENT_SERVER_HISTORY_DIR", str(tmp_path / "history"))
+    monkeypatch.setenv("PROOF_AGENT_SERVER_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("PROOF_AGENT_SERVER_SEED_EXAMPLE_AGENT", "1")
+
+    with pytest.raises(typer.Exit) as exc:
+        _create_server_app_from_env()
+
+    assert exc.value.exit_code == 1
+    captured = capsys.readouterr()
+    assert "PA_CONFIG_002:" in captured.err
+    assert "Fix:" in captured.err
+    assert "config-reset --scope local-store --yes" in captured.err
 
 
 def test_compare_command_runs_supplied_manifest(monkeypatch) -> None:

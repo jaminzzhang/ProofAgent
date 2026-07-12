@@ -9,96 +9,170 @@ workflow:
   template_descriptor_version: react_enterprise_qa.v3
 
 package_knowledge_sources:
-  - source_id: agent_management_insurance_knowledge
-    name: Agent Management Insurance Knowledge
+  - source_id: general_insurance_knowledge
+    name: General Insurance Knowledge
     provider: local_markdown
     params:
-      path: ./knowledge
+      path: ./knowledge/general
+  - source_id: agent_basic_law_knowledge
+    name: Agent Basic Law Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/agent-basic-law
+  - source_id: product_clause_knowledge
+    name: Product Clause Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/product
+  - source_id: underwriting_knowledge
+    name: Underwriting Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/underwriting
+  - source_id: claims_knowledge
+    name: Claims Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/claims
+  - source_id: external_wording_knowledge
+    name: External Wording Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/external-wording
+  - source_id: metric_definition_knowledge
+    name: Metric Definition Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/metrics
 
 knowledge_bindings:
   - binding_id: general_insurance_knowledge
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
-    alias: general
+      source_id: general_insurance_knowledge
+    alias: general_insurance
     failure_mode: advisory
     fusion_weight: 0.6
-    top_k: 3
+    top_k: 1
+    routing_metadata:
+      query_terms:
+        - 通用保险
+        - 一般保险
+        - 保险帮助
+        - general insurance
+        - insurance help
   - binding_id: agent_basic_law_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: agent_basic_law_knowledge
     alias: agent_basic_law
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 5
+    top_k: 1
     routing_metadata:
       document_family: agent_basic_law
       authority: formal_rule
+      query_terms:
+        - 代理人基本法
+        - 职级维持
+        - 晋升条件
+        - 佣金规则
+        - agent basic law
+        - rank maintenance
   - binding_id: product_clause_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: product_clause_knowledge
     alias: product_clause
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 5
+    top_k: 1
     routing_metadata:
       document_family: product_clause
       authority: policy_wording
+      query_terms:
+        - 产品条款
+        - 等待期
+        - 保障责任
+        - 除外责任
+        - product clause
+        - waiting period
+        - deductible
   - binding_id: underwriting_rule_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: underwriting_knowledge
     alias: underwriting_rules
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 5
+    top_k: 1
     routing_metadata:
       document_family: underwriting_rule
       authority: underwriting_sop
+      query_terms:
+        - 核保
+        - 健康告知
+        - 职业类别
+        - 承保材料
+        - underwriting
+        - health declaration
   - binding_id: claims_sop_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: claims_knowledge
     alias: claims_sop
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 5
+    top_k: 1
     routing_metadata:
       document_family: claims_sop
       authority: claims_sop
       query_terms:
         - claim reimbursement
         - required documents
+        - inpatient claim
         - 理赔
-        - 材料
+        - 住院理赔
+        - 理赔材料
   - binding_id: customer_agent_wording_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: external_wording_knowledge
     alias: external_wording
     failure_mode: advisory
     fusion_weight: 0.8
-    top_k: 3
+    top_k: 1
     routing_metadata:
       document_family: external_wording
       authority: approved_wording
+      query_terms:
+        - 外部话术
+        - 如何回复客户
+        - 怎么回复代理人
+        - 客户或代理人
+        - external wording
+        - reply to customer
   - binding_id: metric_definition_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: metric_definition_knowledge
     alias: metric_definitions
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 3
+    top_k: 1
     routing_metadata:
       document_family: metric_definition
       authority: report_basis
+      query_terms:
+        - 业绩指标
+        - 活动量
+        - 指标口径
+        - report period
+        - performance metric
 
 retrieval:
   strategy: single_step
-  top_k: 5
+  top_k: 1
   min_score: 0.25
   max_queries: 3
   query_timeout_seconds: 20.0
