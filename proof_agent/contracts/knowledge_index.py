@@ -31,6 +31,10 @@ def _validate_artifact_uri(value: str) -> str:
         raise ValueError("artifact_uri must not contain whitespace")
     if re.search(r"%(?![0-9A-Fa-f]{2})", value):
         raise ValueError("artifact_uri contains a malformed percent escape")
+    if "?" in value:
+        raise ValueError("artifact_uri must not contain a query delimiter")
+    if "#" in value:
+        raise ValueError("artifact_uri must not contain a fragment delimiter")
     try:
         parsed = urlsplit(value)
         username = parsed.username

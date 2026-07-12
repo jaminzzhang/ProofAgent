@@ -173,6 +173,7 @@ def test_exact_artifact_ref_is_strict_immutable_and_round_trips() -> None:
         "https://host/path",
         "file:///absolute/path",
         "proofagent://artifact/id",
+        "https://host/path%3Fpart%23anchor",
     ],
 )
 def test_exact_artifact_ref_accepts_absolute_provider_neutral_uris(
@@ -191,7 +192,9 @@ def test_exact_artifact_ref_accepts_absolute_provider_neutral_uris(
         "s3://bucket/key%2",
         "https://user@host/path",
         "https://host/path?signature=secret",
+        "https://host/path?",
         "https://host/path#fragment",
+        "https://host/path#",
         "https://[broken/path",
     ],
 )
