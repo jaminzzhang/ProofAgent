@@ -18,7 +18,10 @@ from uuid import uuid4
 from pydantic import ValidationError
 import yaml  # type: ignore[import-untyped]
 
-from proof_agent.bootstrap.validation import validate_secret_safe_params
+from proof_agent.bootstrap.validation import (
+    validate_hybrid_index_params,
+    validate_secret_safe_params,
+)
 from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider
 from proof_agent.capabilities.knowledge.ingestion import (
     KnowledgeWorkerClaimSelection,
@@ -1073,6 +1076,11 @@ class LocalAgentConfigurationStore:
             params,
             field_prefix=f"knowledge_sources[{source_id}].params",
         )
+        if provider == "hybrid_index":
+            validate_hybrid_index_params(
+                params,
+                field_prefix=f"knowledge_sources[{source_id}].params",
+            )
         _knowledge_source_worker_concurrency(params)
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             if self.get_knowledge_source(source_id) is not None:
@@ -1831,6 +1839,8 @@ class LocalAgentConfigurationStore:
         content_type: str,
         content: bytes,
         actor: str,
+        max_batch_files: int | None = None,
+        max_source_documents: int | None = None,
         lock_timeout_seconds: float = STORE_LOCK_TIMEOUT_SECONDS,
     ) -> QuarantinedKnowledgeUpload:
         """Persist one operator upload for asynchronous validation."""
@@ -1845,6 +1855,8 @@ class LocalAgentConfigurationStore:
                 ),
             ),
             actor=actor,
+            max_batch_files=max_batch_files,
+            max_source_documents=max_source_documents,
             lock_timeout_seconds=lock_timeout_seconds,
         )
         return uploads[0]
@@ -1855,24 +1867,40 @@ class LocalAgentConfigurationStore:
         source_id: str,
         uploads: tuple[KnowledgeUploadStagingInput, ...],
         actor: str,
+        max_batch_files: int | None = None,
+        max_source_documents: int | None = None,
         lock_timeout_seconds: float = STORE_LOCK_TIMEOUT_SECONDS,
     ) -> list[QuarantinedKnowledgeUpload]:
         """Persist one operator upload batch for asynchronous validation."""
 
         if not uploads:
             raise _knowledge_upload_batch_invalid("Knowledge upload batch must include a file.")
-        if len(uploads) > MAX_QUARANTINED_UPLOAD_BATCH_FILES:
+        resolved_max_batch_files = (
+            MAX_QUARANTINED_UPLOAD_BATCH_FILES if max_batch_files is None else max_batch_files
+        )
+        resolved_max_source_documents = (
+            KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY
+            if max_source_documents is None
+            else max_source_documents
+        )
+        _require_positive_staging_limit(resolved_max_batch_files, "max_batch_files")
+        _require_positive_staging_limit(resolved_max_source_documents, "max_source_documents")
+        if len(uploads) > resolved_max_batch_files:
             raise _knowledge_upload_batch_invalid(
-                f"Knowledge upload batch exceeds {MAX_QUARANTINED_UPLOAD_BATCH_FILES} files."
+                f"Knowledge upload batch exceeds {resolved_max_batch_files} files.",
+                max_batch_files=resolved_max_batch_files,
             )
 
         with locked(self._store_lock_path(), timeout_seconds=lock_timeout_seconds):
             self._require_active_knowledge_source_unlocked(source_id)
             if (
                 self._count_reserved_knowledge_document_slots_unlocked(source_id) + len(uploads)
-                > KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY
+                > resolved_max_source_documents
             ):
-                raise _knowledge_document_capacity_exceeded(source_id)
+                raise _knowledge_document_capacity_exceeded(
+                    source_id,
+                    max_source_documents=resolved_max_source_documents,
+                )
 
             batch_started_at = datetime.now(UTC)
             staged_uploads = tuple(
@@ -4091,20 +4119,42 @@ def _knowledge_source_worker_concurrency(params: Mapping[str, Any]) -> int:
     return value
 
 
-def _knowledge_document_capacity_exceeded(source_id: str) -> ProofAgentError:
+def _knowledge_document_capacity_exceeded(
+    source_id: str,
+    *,
+    max_source_documents: int = KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY,
+) -> ProofAgentError:
+    message = f"Knowledge Source {source_id} has reached its document capacity."
+    if max_source_documents != KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY:
+        message = (
+            f"Knowledge Source {source_id} has reached its configured "
+            f"{max_source_documents}-document capacity."
+        )
     return ProofAgentError(
         "PA_INGESTION_004",
-        f"Knowledge Source {source_id} has reached its document capacity.",
+        message,
         "Archive an existing document or wait for a pending upload validation to finish.",
     )
 
 
-def _knowledge_upload_batch_invalid(message: str) -> ProofAgentError:
+def _knowledge_upload_batch_invalid(
+    message: str,
+    *,
+    max_batch_files: int = MAX_QUARANTINED_UPLOAD_BATCH_FILES,
+) -> ProofAgentError:
+    fix = "Upload one through 50 documents in a single batch."
+    if max_batch_files != MAX_QUARANTINED_UPLOAD_BATCH_FILES:
+        fix = f"Upload one through {max_batch_files} documents in a single batch."
     return ProofAgentError(
         "PA_INGESTION_002",
         message,
-        "Upload one through 50 documents in a single batch.",
+        fix,
     )
+
+
+def _require_positive_staging_limit(value: int, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
 
 
 def _invalid_routing_metadata(message: str) -> ProofAgentError:

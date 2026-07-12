@@ -251,6 +251,14 @@ def test_parse_pdf_rejects_blank_pdf(tmp_path: Path) -> None:
 
 
 @requires_pypdf
+def test_blank_pdf_remains_rejected_by_local_index_parser(tmp_path: Path) -> None:
+    path = tmp_path / "scan.pdf"
+    _write_pdf(path)
+    with pytest.raises(ProofAgentError):
+        parse_quarantined_upload(path, filename="scan.pdf", content_type="application/pdf")
+
+
+@requires_pypdf
 def test_parse_pdf_rejects_more_than_500_pages(tmp_path: Path) -> None:
     path = tmp_path / "policy.pdf"
     _write_pdf(path, page_count=501)

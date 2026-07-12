@@ -436,6 +436,24 @@ def _create_local_index_source(
     return response.json()
 
 
+def _create_hybrid_index_source(
+    client: TestClient,
+    *,
+    params: dict[str, object] | None = None,
+) -> dict:
+    response = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_hybrid_index",
+            "name": "Hybrid Index Policies",
+            "provider": "hybrid_index",
+            "params": params or {},
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def test_create_http_json_knowledge_source_accepts_safe_remote_params(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -1705,6 +1723,177 @@ def test_upload_stages_format_failures_for_asynchronous_rejection(
     assert uploaded.status_code == 200
     assert uploaded.json()["state"] == "queued"
     assert _configuration_store(client).list_knowledge_documents("ks_local_index") == []
+
+
+def test_hybrid_upload_accepts_single_and_batch_pdf_only(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    source = _create_hybrid_index_source(client)
+    pdf = b"%PDF-1.7\nrequest-envelope-only"
+
+    single = _upload(
+        client,
+        source_id="ks_hybrid_index",
+        filename="scan.pdf",
+        content_type="application/pdf",
+        content=pdf,
+    )
+    batch = _batch_upload(
+        client,
+        source_id="ks_hybrid_index",
+        documents=[
+            {
+                "filename": "mixed.pdf",
+                "content_type": "application/pdf",
+                "content_base64": base64.b64encode(pdf).decode("ascii"),
+            }
+        ],
+    )
+
+    assert source["provider"] == "hybrid_index"
+    assert single.status_code == 200
+    assert batch.status_code == 200
+    uploads = _configuration_store(client).list_quarantined_knowledge_uploads("ks_hybrid_index")
+    assert [upload.filename for upload in uploads] == ["scan.pdf", "mixed.pdf"]
+    assert all(upload.storage_path.startswith("knowledge_sources/") for upload in uploads)
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "content"),
+    [
+        ("policy.md", "text/markdown", b"# Markdown"),
+        ("archive.zip", "application/zip", b"PK\x03\x04"),
+        ("program.exe", "application/octet-stream", b"MZ"),
+        ("policy.pdf", "text/markdown", b"%PDF-1.7\n"),
+        ("policy.pdf", "application/pdf", b"not-a-pdf"),
+    ],
+)
+def test_hybrid_upload_rejects_non_pdf_and_mismatched_envelopes_synchronously(
+    tmp_path: Path,
+    filename: str,
+    content_type: str,
+    content: bytes,
+) -> None:
+    client = _client(tmp_path)
+    _create_hybrid_index_source(client)
+
+    response = _upload(
+        client,
+        source_id="ks_hybrid_index",
+        filename=filename,
+        content_type=content_type,
+        content=content,
+    )
+
+    assert response.status_code == 400
+    assert _configuration_store(client).list_quarantined_knowledge_uploads("ks_hybrid_index") == []
+
+
+def test_hybrid_upload_applies_provider_specific_file_batch_and_capacity_limits_atomically(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    _create_hybrid_index_source(
+        client,
+        params={
+            "max_file_bytes": 24,
+            "max_pdf_pages": 20,
+            "max_batch_files": 2,
+            "max_source_documents": 1,
+        },
+    )
+    encoded = base64.b64encode(b"%PDF-1.7\nsmall").decode("ascii")
+
+    over_capacity = _batch_upload(
+        client,
+        source_id="ks_hybrid_index",
+        documents=[
+            {
+                "filename": "first.pdf",
+                "content_type": "application/pdf",
+                "content_base64": encoded,
+            },
+            {
+                "filename": "second.pdf",
+                "content_type": "application/pdf",
+                "content_base64": encoded,
+            },
+        ],
+    )
+    over_bytes = _upload(
+        client,
+        source_id="ks_hybrid_index",
+        filename="large.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.7\n" + b"x" * 30,
+    )
+
+    assert over_capacity.status_code == 503
+    assert over_capacity.json()["detail"]["code"] == "PA_INGESTION_004"
+    assert over_bytes.status_code == 400
+    assert "encoded upload envelope exceeds 32 characters" in over_bytes.json()["detail"]
+    assert _configuration_store(client).list_quarantined_knowledge_uploads("ks_hybrid_index") == []
+
+
+def test_hybrid_batch_limit_rejects_whole_batch_before_reservation(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_hybrid_index_source(
+        client,
+        params={"max_batch_files": 1, "max_source_documents": 10},
+    )
+    encoded = base64.b64encode(b"%PDF-1.7\nsmall").decode("ascii")
+    response = _batch_upload(
+        client,
+        source_id="ks_hybrid_index",
+        documents=[
+            {
+                "filename": name,
+                "content_type": "application/pdf",
+                "content_base64": encoded,
+            }
+            for name in ("first.pdf", "second.pdf")
+        ],
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "PA_INGESTION_002"
+    assert _configuration_store(client).list_quarantined_knowledge_uploads("ks_hybrid_index") == []
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"max_batch_files": True},
+        {"max_batch_files": "5"},
+        {"index_path": "/tmp/index"},
+        {"snapshot_path": "/tmp/snapshot"},
+        {"endpoint": "https://example.invalid"},
+        {"api_key": "secret"},
+    ],
+)
+def test_hybrid_source_rejects_invalid_unknown_local_and_secret_params(
+    tmp_path: Path,
+    params: dict[str, object],
+) -> None:
+    client = _client(tmp_path)
+    response = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_hybrid_index",
+            "name": "Hybrid",
+            "provider": "hybrid_index",
+            "params": params,
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_hybrid_intake_is_not_exposed_as_a_customer_upload_route(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    response = client.post(
+        "/api/customer/knowledge-sources/ks_hybrid_index/documents",
+        json={},
+    )
+    assert response.status_code == 404
 
 
 @pytest.mark.parametrize(

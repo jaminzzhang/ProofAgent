@@ -22,7 +22,10 @@ from proof_agent.bootstrap.skills import (
     SUPPORTED_BUSINESS_FLOW_ADDENDUM_STAGE_IDS,
     load_business_flow_skill_pack_set,
 )
-from proof_agent.bootstrap.validation import validate_workflow_stage_prompt_config
+from proof_agent.bootstrap.validation import (
+    validate_hybrid_index_params,
+    validate_workflow_stage_prompt_config,
+)
 from proof_agent.bootstrap.knowledge_resolution import (
     ConfigurationStoreKnowledgeBindingResolver,
     PackageKnowledgeBindingResolver,
@@ -31,6 +34,7 @@ from proof_agent.capabilities.tools.source_descriptors import (
     get_tool_source_descriptor,
     list_tool_source_descriptors,
 )
+from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import (
@@ -97,6 +101,7 @@ router = APIRouter(tags=["configuration"])
 
 SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS = {
     "http_json",
+    "hybrid_index",
     "local_markdown",
     "local_index",
     "remote_search",
@@ -914,6 +919,11 @@ def create_knowledge_source(
     source_id = _source_id(request.source_id or request.name)
     params = dict(request.params)
     try:
+        if request.provider == "hybrid_index":
+            validate_hybrid_index_params(
+                params,
+                field_prefix=f"knowledge_sources[{source_id}].params",
+            )
         source = store.create_knowledge_source(
             source_id=source_id,
             name=request.name,
@@ -1054,26 +1064,46 @@ def upload_knowledge_source_document(
     app_request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """Stage one upload for asynchronous validation and Local Index ingestion."""
+    """Stage one provider-specific upload for asynchronous validation."""
 
     actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
-    if source.provider != "local_index":
+    if source.provider not in {"local_index", "hybrid_index"}:
         raise HTTPException(
             status_code=400,
-            detail="Dashboard document upload currently supports local_index Knowledge Sources.",
+            detail=(
+                "Dashboard document upload currently supports local_index or hybrid_index "
+                "Knowledge Sources."
+            ),
         )
-    content = _decode_upload_content(request.content_base64)
+    limits = _hybrid_source_upload_limits(source) if source.provider == "hybrid_index" else None
+    content = _decode_upload_content(
+        request.content_base64,
+        max_upload_bytes=limits.max_file_bytes if limits is not None else MAX_UPLOAD_BYTES,
+    )
+    if source.provider == "hybrid_index":
+        _validate_hybrid_upload_envelope(request.filename, request.content_type, content)
 
     try:
-        upload = store.stage_quarantined_knowledge_upload(
-            source_id=source.source_id,
-            filename=request.filename,
-            content_type=request.content_type,
-            content=content,
-            actor=actor,
-        )
+        if limits is None:
+            upload = store.stage_quarantined_knowledge_upload(
+                source_id=source.source_id,
+                filename=request.filename,
+                content_type=request.content_type,
+                content=content,
+                actor=actor,
+            )
+        else:
+            upload = store.stage_quarantined_knowledge_upload(
+                source_id=source.source_id,
+                filename=request.filename,
+                content_type=request.content_type,
+                content=content,
+                actor=actor,
+                max_batch_files=limits.max_batch_files,
+                max_source_documents=limits.max_source_documents,
+            )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return _quarantined_upload_payload(upload)
@@ -1116,31 +1146,54 @@ def upload_knowledge_source_document_batch(
     app_request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """Stage one upload batch for asynchronous validation and Local Index ingestion."""
+    """Stage one provider-specific upload batch for asynchronous validation."""
 
     actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
-    if source.provider != "local_index":
+    if source.provider not in {"local_index", "hybrid_index"}:
         raise HTTPException(
             status_code=400,
-            detail="Dashboard document upload currently supports local_index Knowledge Sources.",
+            detail=(
+                "Dashboard document upload currently supports local_index or hybrid_index "
+                "Knowledge Sources."
+            ),
         )
+    limits = _hybrid_source_upload_limits(source) if source.provider == "hybrid_index" else None
     staging_inputs = tuple(
         KnowledgeUploadStagingInput(
             filename=document.filename,
             content_type=document.content_type,
-            content=_decode_upload_content(document.content_base64),
+            content=_decode_upload_content(
+                document.content_base64,
+                max_upload_bytes=limits.max_file_bytes if limits is not None else MAX_UPLOAD_BYTES,
+            ),
         )
         for document in request.documents
     )
+    if source.provider == "hybrid_index":
+        for document, staging_input in zip(request.documents, staging_inputs, strict=True):
+            _validate_hybrid_upload_envelope(
+                document.filename,
+                document.content_type,
+                staging_input.content,
+            )
 
     try:
-        uploads = store.stage_quarantined_knowledge_upload_batch(
-            source_id=source.source_id,
-            uploads=staging_inputs,
-            actor=actor,
-        )
+        if limits is None:
+            uploads = store.stage_quarantined_knowledge_upload_batch(
+                source_id=source.source_id,
+                uploads=staging_inputs,
+                actor=actor,
+            )
+        else:
+            uploads = store.stage_quarantined_knowledge_upload_batch(
+                source_id=source.source_id,
+                uploads=staging_inputs,
+                actor=actor,
+                max_batch_files=limits.max_batch_files,
+                max_source_documents=limits.max_source_documents,
+            )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return {
@@ -3432,8 +3485,12 @@ def _missing_model_connection_env_vars(connection: SharedModelConnection) -> tup
     )
 
 
-def _decode_upload_content(content_base64: str) -> bytes:
-    maximum_encoded_chars = ((MAX_UPLOAD_BYTES + 2) // 3) * 4
+def _decode_upload_content(
+    content_base64: str,
+    *,
+    max_upload_bytes: int = MAX_UPLOAD_BYTES,
+) -> bytes:
+    maximum_encoded_chars = ((max_upload_bytes + 2) // 3) * 4
     if len(content_base64) > maximum_encoded_chars:
         raise HTTPException(
             status_code=400,
@@ -3445,12 +3502,36 @@ def _decode_upload_content(content_base64: str) -> bytes:
         raise HTTPException(status_code=400, detail="content_base64 is not valid base64") from exc
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded document is empty.")
-    if len(content) > MAX_UPLOAD_BYTES:
+    if len(content) > max_upload_bytes:
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded document exceeds {MAX_UPLOAD_BYTES} bytes.",
+            detail=f"Uploaded document exceeds {max_upload_bytes} bytes.",
         )
     return content
+
+
+def _hybrid_source_upload_limits(source: KnowledgeSource) -> HybridIntakeLimits:
+    return HybridIntakeLimits.model_validate(dict(source.params), strict=True)
+
+
+def _validate_hybrid_upload_envelope(
+    filename: str,
+    content_type: str,
+    content: bytes,
+) -> None:
+    if Path(filename).suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Hybrid Index uploads require a .pdf filename.")
+    normalized_content_type = content_type.partition(";")[0].strip().lower()
+    if normalized_content_type != "application/pdf":
+        raise HTTPException(
+            status_code=400,
+            detail="Hybrid Index uploads require the application/pdf content type.",
+        )
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(
+            status_code=400,
+            detail="Hybrid Index upload is missing a PDF content signature.",
+        )
 
 
 def _proof_agent_http_exception(exc: ProofAgentError) -> HTTPException:
