@@ -26,13 +26,18 @@ from proof_agent.contracts import (
 NOW = datetime(2026, 7, 12, 8, 0, tzinfo=UTC)
 
 
-def artifact_ref(sha256: str = "1" * 64) -> ExactArtifactRef:
+def artifact_ref(
+    sha256: str = "1" * 64,
+    *,
+    artifact_uri: str = "s3://knowledge/manifests/root.json",
+    media_type: str = "application/json",
+) -> ExactArtifactRef:
     return ExactArtifactRef(
-        artifact_uri="s3://knowledge/manifests/root.json",
+        artifact_uri=artifact_uri,
         version_id="version-1",
         sha256=sha256,
         size_bytes=42,
-        media_type="application/json",
+        media_type=media_type,
     )
 
 
@@ -147,9 +152,10 @@ def test_retrieval_profile_is_not_part_of_index_generation() -> None:
 
 
 def test_exact_artifact_ref_is_strict_immutable_and_round_trips() -> None:
-    ref = artifact_ref()
+    ref = artifact_ref(media_type="Application/Vnd.ProofAgent+JSON")
     restored = ExactArtifactRef.model_validate_json(ref.model_dump_json())
     assert restored == ref
+    assert ref.media_type == "application/vnd.proofagent+json"
     with pytest.raises(ValidationError):
         ExactArtifactRef.model_validate({**ref.model_dump(), "size_bytes": "42"})
     with pytest.raises(ValidationError):
@@ -158,6 +164,57 @@ def test_exact_artifact_ref_is_strict_immutable_and_round_trips() -> None:
         ExactArtifactRef.model_validate({**ref.model_dump(), "bucket": "private"})
     with pytest.raises(ValidationError):
         ref.version_id = "latest"
+
+
+@pytest.mark.parametrize(
+    "artifact_uri",
+    [
+        "s3://bucket/key",
+        "https://host/path",
+        "file:///absolute/path",
+        "proofagent://artifact/id",
+    ],
+)
+def test_exact_artifact_ref_accepts_absolute_provider_neutral_uris(
+    artifact_uri: str,
+) -> None:
+    ref = artifact_ref(artifact_uri=artifact_uri)
+    assert ExactArtifactRef.model_validate_json(ref.model_dump_json()) == ref
+
+
+@pytest.mark.parametrize(
+    "artifact_uri",
+    [
+        "relative/path",
+        " s3://bucket/key",
+        "s3://bucket/key with space",
+        "s3://bucket/key%2",
+        "https://user@host/path",
+        "https://host/path?signature=secret",
+        "https://host/path#fragment",
+        "https://[broken/path",
+    ],
+)
+def test_exact_artifact_ref_rejects_unsafe_or_malformed_uris(
+    artifact_uri: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        artifact_ref(artifact_uri=artifact_uri)
+
+
+@pytest.mark.parametrize(
+    "media_type",
+    [
+        "application/json; charset=utf-8",
+        " application/json",
+        "application /json",
+        "application",
+        "/json",
+    ],
+)
+def test_exact_artifact_ref_rejects_noncanonical_media_types(media_type: str) -> None:
+    with pytest.raises(ValidationError):
+        artifact_ref(media_type=media_type)
 
 
 def test_manifest_contracts_canonicalize_and_validate_counts() -> None:
@@ -267,6 +324,10 @@ def test_review_state_is_separate_from_ingestion_and_strict() -> None:
         HybridKnowledgeRevisionReviewRecord.model_validate(
             {**review.model_dump(), "reason_codes": ()}
         )
+    with pytest.raises(ValidationError):
+        HybridKnowledgeRevisionReviewRecord.model_validate(
+            {**review.model_dump(), "reviewed_by": "reviewer_1", "reviewed_at": NOW}
+        )
     approved = HybridKnowledgeRevisionReviewRecord(
         **{
             **review.model_dump(),
@@ -280,6 +341,27 @@ def test_review_state_is_separate_from_ingestion_and_strict() -> None:
         HybridKnowledgeRevisionReviewRecord.model_validate_json(approved.model_dump_json())
         == approved
     )
+    rejected = HybridKnowledgeRevisionReviewRecord(
+        **{
+            **review.model_dump(),
+            "state": "REJECTED",
+            "reviewed_by": "reviewer_1",
+            "reviewed_at": NOW,
+        }
+    )
+    assert rejected.reason_codes == ("TABLE_AMBIGUITY",)
+    with pytest.raises(ValidationError):
+        HybridKnowledgeRevisionReviewRecord.model_validate(
+            {**rejected.model_dump(), "reason_codes": ()}
+        )
+    not_required = HybridKnowledgeRevisionReviewRecord(
+        **{
+            **review.model_dump(),
+            "state": "NOT_REQUIRED",
+            "reason_codes": (),
+        }
+    )
+    assert not_required.reviewed_by is None
 
 
 def test_readiness_requires_every_check_and_status_consistency() -> None:

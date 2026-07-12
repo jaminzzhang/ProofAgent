@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Annotated, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -18,9 +20,43 @@ from proof_agent.contracts._base import FrozenModel
 
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
+UnmodifiedNonBlankStr = Annotated[StrictStr, StringConstraints(min_length=1)]
 Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
+
+
+def _validate_artifact_uri(value: str) -> str:
+    if any(character.isspace() for character in value):
+        raise ValueError("artifact_uri must not contain whitespace")
+    if re.search(r"%(?![0-9A-Fa-f]{2})", value):
+        raise ValueError("artifact_uri contains a malformed percent escape")
+    try:
+        parsed = urlsplit(value)
+        username = parsed.username
+        password = parsed.password
+    except ValueError as exc:
+        raise ValueError("artifact_uri is malformed") from exc
+    if not parsed.scheme:
+        raise ValueError("artifact_uri requires a URI scheme")
+    if not parsed.netloc and not parsed.path.startswith("/"):
+        raise ValueError("artifact_uri requires an authority or absolute path")
+    if username is not None or password is not None or "@" in parsed.netloc:
+        raise ValueError("artifact_uri must not contain userinfo")
+    if parsed.query:
+        raise ValueError("artifact_uri must not contain a query")
+    if parsed.fragment:
+        raise ValueError("artifact_uri must not contain a fragment")
+    return value
+
+
+_MEDIA_TYPE_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+
+def _normalize_media_type(value: str) -> str:
+    if _MEDIA_TYPE_PATTERN.fullmatch(value) is None:
+        raise ValueError("media_type must be a type/subtype token without parameters")
+    return value.lower()
 
 
 def _require_aware(value: datetime) -> datetime:
@@ -41,11 +77,11 @@ class _KnowledgeIndexModel(FrozenModel):
 
 
 class ExactArtifactRef(_KnowledgeIndexModel):
-    artifact_uri: NonBlankStr
+    artifact_uri: Annotated[UnmodifiedNonBlankStr, AfterValidator(_validate_artifact_uri)]
     version_id: NonBlankStr
     sha256: Sha256
     size_bytes: NonNegativeInt
-    media_type: NonBlankStr
+    media_type: Annotated[UnmodifiedNonBlankStr, AfterValidator(_normalize_media_type)]
 
 
 class RuleUnitManifestEntry(_KnowledgeIndexModel):
@@ -264,6 +300,10 @@ class HybridKnowledgeRevisionReviewRecord(_KnowledgeIndexModel):
             raise ValueError("completed reviews require reviewer identity and timestamp")
         if self.state == "REVIEW_REQUIRED" and not self.reason_codes:
             raise ValueError("REVIEW_REQUIRED requires at least one reason code")
+        if self.state == "REVIEW_REQUIRED" and has_reviewer:
+            raise ValueError("REVIEW_REQUIRED does not accept completed review details")
+        if self.state == "REJECTED" and not self.reason_codes:
+            raise ValueError("REJECTED requires at least one reason code")
         if self.state == "NOT_REQUIRED" and (
             self.reason_codes or self.reviewed_by is not None or self.reviewed_at is not None
         ):
