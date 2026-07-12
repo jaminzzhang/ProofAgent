@@ -273,9 +273,10 @@ def test_exact_artifact_ref_is_strict_immutable_and_round_trips() -> None:
         "https://host:8443/path",
         "file:///absolute/path",
         "file://localhost/absolute/path",
-        "file://LOCALHOST/absolute/path",
         "proofagent://artifact/id",
+        "proofagent://[::1]:8443/id",
         "https://host/path%3Fpart%23anchor",
+        "https://host/%E4%B8%AD",
     ],
 )
 def test_exact_artifact_ref_accepts_absolute_provider_neutral_uris(
@@ -286,8 +287,19 @@ def test_exact_artifact_ref_accepts_absolute_provider_neutral_uris(
 
 
 def test_exact_artifact_ref_canonicalizes_supported_scheme_to_lowercase() -> None:
-    ref = artifact_ref(artifact_uri="S3://bucket/object")
-    assert ref.artifact_uri == "s3://bucket/object"
+    equivalent_pairs = (
+        ("S3://BUCKET/object", "s3://bucket/object"),
+        ("HTTPS://EXAMPLE.COM:8443/path", "https://example.com:8443/path"),
+        ("file://LOCALHOST/absolute/path", "file://localhost/absolute/path"),
+        ("PROOFAGENT://ARTIFACT/id", "proofagent://artifact/id"),
+    )
+    for variant, canonical in equivalent_pairs:
+        first = artifact_ref(artifact_uri=variant)
+        second = artifact_ref(artifact_uri=canonical)
+        assert first.artifact_uri == canonical
+        assert first == second
+        assert hash(first) == hash(second)
+        assert ExactArtifactRef.model_validate_json(first.model_dump_json()) == second
 
 
 @pytest.mark.parametrize(
@@ -315,6 +327,10 @@ def test_exact_artifact_ref_canonicalizes_supported_scheme_to_lowercase() -> Non
         "s3://bucket/key%3f",
         "s3://bucket/key%41",
         "s3://bucket/key%7E",
+        "s3://bucket/a%2Fb",
+        "s3://bucket/a%2fb",
+        "s3://bucket/a%252Fb",
+        "s3://bucket/a%252E%252E/b",
         "s3://bucket/a/../b",
         "s3://bucket/a/%2E%2E/b",
         "s3://bucket/a\\b",
@@ -326,6 +342,18 @@ def test_exact_artifact_ref_canonicalizes_supported_scheme_to_lowercase() -> Non
         "https://host/path#fragment",
         "https://host/path#",
         "https://[broken/path",
+        "https://host/a%2Fb",
+        "https://host/a/../b",
+        "https://host/a%252Fb",
+        "file:///a%5Cb",
+        "file:///a/../b",
+        "file:///a%2Fb",
+        "file:///a%252Fb",
+        "proofagent://artifact/a%25b",
+        "proofagent://artifact/a/../b",
+        "proofagent://artifact/a%2Fb",
+        "proofagent://artifact/a%252Fb",
+        "https://host./path",
     ],
 )
 def test_exact_artifact_ref_rejects_unsafe_or_malformed_uris(
@@ -376,9 +404,19 @@ def test_manifest_entry_accepts_canonical_internal_citations() -> None:
     entry = manifest_entry()
     assert RuleUnitManifestEntry.model_validate_json(entry.model_dump_json()) == entry
     proofagent = RuleUnitManifestEntry.model_validate(
-        {**entry.model_dump(), "citation_uri": "PROOFAGENT://source/path%3Fpart#page=1"}
+        {
+            **entry.model_dump(),
+            "citation_uri": "PROOFAGENT://SOURCE/%E4%B8%AD%3Fpart#page=1",
+        }
     )
-    assert proofagent.citation_uri.startswith("proofagent://")
+    canonical = RuleUnitManifestEntry.model_validate(
+        {
+            **entry.model_dump(),
+            "citation_uri": "proofagent://source/%E4%B8%AD%3Fpart#page=1",
+        }
+    )
+    assert proofagent == canonical
+    assert hash(proofagent) == hash(canonical)
 
 
 @pytest.mark.parametrize(
@@ -393,8 +431,16 @@ def test_manifest_entry_accepts_canonical_internal_citations() -> None:
         "knowledge://source/path#page=1#duplicate",
         "knowledge://source/a/../b#page=1",
         "knowledge://source/a%2fb#page=1",
+        "knowledge://source/a%2Fb#page=1",
+        "knowledge://source/a%5Cb#page=1",
+        "knowledge://source/a%25b#page=1",
+        "knowledge://source/a%252Fb#page=1",
+        "knowledge://source/a%252E%252E/b#page=1",
         "knowledge://source/a%0Ab#page=1",
         "knowledge://source/a\\b#page=1",
+        "knowledge://source./path#page=1",
+        "proofagent://source/a%2Fb#page=1",
+        "proofagent://source/a%252Fb#page=1",
     ],
 )
 def test_manifest_entry_rejects_noncanonical_internal_citations(
@@ -585,10 +631,27 @@ def test_readiness_requires_every_check_and_status_consistency() -> None:
             reviewed_by="reviewer_1" if state == "REJECTED" else None,
             reviewed_at=NOW if state == "REJECTED" else None,
         )
+        blocked = HybridKnowledgeRevisionReadinessRecord.model_validate(
+            {
+                **ready.model_dump(),
+                "status": "BLOCKED",
+                "checks": readiness_checks(failed="review"),
+                "review_record": pending_or_rejected,
+            }
+        )
+        assert blocked.status == "BLOCKED"
         with pytest.raises(ValidationError):
             HybridKnowledgeRevisionReadinessRecord.model_validate(
                 {**ready.model_dump(), "review_record": pending_or_rejected}
             )
+    approved_but_blocked_elsewhere = HybridKnowledgeRevisionReadinessRecord.model_validate(
+        {
+            **ready.model_dump(),
+            "status": "BLOCKED",
+            "checks": readiness_checks(failed="integrity"),
+        }
+    )
+    assert approved_but_blocked_elsewhere.status == "BLOCKED"
     not_required = HybridKnowledgeRevisionReadinessRecord.model_validate(
         {**ready.model_dump(), "review_record": approved_review(state="NOT_REQUIRED")}
     )
@@ -750,31 +813,96 @@ def test_hybrid_publication_authority_chain_round_trips() -> None:
 
 def test_hybrid_publication_authority_chain_rejects_one_field_mismatches() -> None:
     wrong_attempt_attestation = attestation(publication_attempt_id="attempt_other")
-    wrong_count_attestation = attestation(validated_document_count=2)
+    wrong_document_count = attestation(validated_document_count=2)
+    wrong_rule_count = attestation(validated_rule_unit_count=2)
     alternate_publication_attestation = attestation(attestation_id="attestation_other")
-    mismatches: tuple[dict[str, object], ...] = (
-        {"attempt": published_attempt(state="BUILDING")},
-        {"generation": generation(source_id="ks_other")},
-        {
-            "attestation": wrong_attempt_attestation,
-            "publication": hybrid_publication(record_attestation=wrong_attempt_attestation),
-        },
-        {"publication": hybrid_publication(source_draft_version_id="draft_other")},
-        {"publication": hybrid_publication(validation_id="validation_other")},
-        {"publication": hybrid_publication(candidate_digest="9" * 64)},
-        {"attempt": published_attempt(reserved_publication_seq=2)},
-        {"publication": hybrid_publication(source_snapshot_id="snapshot_other")},
-        {"generation": generation(mapping_sha256="b" * 64)},
-        {"manifest_root": manifest_root().model_copy(update={"root_sha256": "9" * 64})},
-        {
-            "attestation": wrong_count_attestation,
-            "publication": hybrid_publication(record_attestation=wrong_count_attestation),
-        },
-        {"publication": hybrid_publication(record_attestation=alternate_publication_attestation)},
+    lost_coverage = attestation(covered_publication_sequences=(2,))
+    mismatches: tuple[tuple[str, dict[str, object]], ...] = (
+        ("attempt state", {"attempt": published_attempt(state="BUILDING")}),
+        ("attempt source", {"attempt": published_attempt(source_id="ks_other")}),
+        (
+            "manifest source",
+            {"manifest_root": manifest_root().model_copy(update={"source_id": "ks_other"})},
+        ),
+        (
+            "attempt id",
+            {
+                "attestation": wrong_attempt_attestation,
+                "publication": hybrid_publication(record_attestation=wrong_attempt_attestation),
+            },
+        ),
+        (
+            "source draft",
+            {"publication": hybrid_publication(source_draft_version_id="draft_other")},
+        ),
+        ("validation id", {"publication": hybrid_publication(validation_id="other")}),
+        ("candidate digest", {"publication": hybrid_publication(candidate_digest="9" * 64)}),
+        (
+            "reserved sequence",
+            {"attempt": published_attempt(reserved_publication_seq=2)},
+        ),
+        (
+            "root sequence",
+            {"manifest_root": manifest_root().model_copy(update={"source_publication_seq": 2})},
+        ),
+        (
+            "publication sequence",
+            {"publication": hybrid_publication().model_copy(update={"source_publication_seq": 2})},
+        ),
+        ("source snapshot", {"publication": hybrid_publication(source_snapshot_id="other")}),
+        (
+            "generation id",
+            {"attempt": published_attempt(generation_id="generation_other")},
+        ),
+        ("current mapping", {"generation": generation(mapping_sha256="b" * 64)}),
+        (
+            "manifest root digest",
+            {"manifest_root": manifest_root().model_copy(update={"root_sha256": "9" * 64})},
+        ),
+        (
+            "publication manifest reference",
+            {
+                "publication": hybrid_publication().model_copy(
+                    update={"manifest_ref": artifact_ref("9" * 64)}
+                )
+            },
+        ),
+        (
+            "document count",
+            {
+                "attestation": wrong_document_count,
+                "publication": hybrid_publication(record_attestation=wrong_document_count),
+            },
+        ),
+        (
+            "rule-unit count",
+            {
+                "attestation": wrong_rule_count,
+                "publication": hybrid_publication(record_attestation=wrong_rule_count),
+            },
+        ),
+        (
+            "embedded attestation",
+            {
+                "publication": hybrid_publication(
+                    record_attestation=alternate_publication_attestation
+                )
+            },
+        ),
+        (
+            "current coverage",
+            {
+                "attestation": lost_coverage,
+                "publication": hybrid_publication().model_copy(
+                    update={"attestation": lost_coverage}
+                ),
+            },
+        ),
     )
-    for mismatch in mismatches:
-        with pytest.raises(ValidationError):
+    for name, mismatch in mismatches:
+        with pytest.raises(ValidationError) as error:
             authority_chain(**mismatch)
+        assert error.value.errors(), name
 
 
 def test_hybrid_publication_authority_chain_validates_parent_closure() -> None:
@@ -798,13 +926,42 @@ def test_hybrid_publication_authority_chain_validates_parent_closure() -> None:
         publication=publication,
     )
     assert chain.parent_attestation == parent
-    with pytest.raises(ValidationError):
-        HybridPublicationAuthorityChain.model_validate(
+    parent_mismatches = (
+        (
+            "parent digest",
             {
-                **chain.model_dump(),
-                "parent_attestation": parent.model_copy(update={"source_id": "ks_other"}),
-            }
-        )
+                "attestation": current.model_copy(update={"parent_attestation_sha256": "9" * 64}),
+                "publication": publication.model_copy(
+                    update={
+                        "attestation": current.model_copy(
+                            update={"parent_attestation_sha256": "9" * 64}
+                        )
+                    }
+                ),
+            },
+        ),
+        ("parent source", {"parent_attestation": parent.model_copy(update={"source_id": "other"})}),
+        (
+            "parent generation",
+            {"parent_attestation": parent.model_copy(update={"generation_id": "other"})},
+        ),
+        (
+            "parent mapping",
+            {"parent_attestation": parent.model_copy(update={"mapping_sha256": "b" * 64})},
+        ),
+        (
+            "lost retained coverage",
+            {
+                "parent_attestation": parent.model_copy(
+                    update={"covered_publication_sequences": (1, 3)}
+                )
+            },
+        ),
+    )
+    for name, updates in parent_mismatches:
+        with pytest.raises(ValidationError) as error:
+            HybridPublicationAuthorityChain.model_validate({**chain.model_dump(), **updates})
+        assert error.value.errors(), name
     with pytest.raises(ValidationError):
         authority_chain(attestation=current, publication=publication)
 

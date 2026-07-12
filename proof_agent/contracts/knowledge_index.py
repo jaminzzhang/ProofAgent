@@ -62,6 +62,8 @@ def _validate_percent_encoding(value: str, *, field_name: str) -> None:
         if _PERCENT_ESCAPE.match(value, index) is None:
             raise ValueError(f"{field_name} contains a malformed or noncanonical percent escape")
         decoded_character = chr(int(value[index + 1 : index + 3], 16))
+        if decoded_character in {"/", "\\", "%"}:
+            raise ValueError(f"{field_name} must not percent-encode separators or percent signs")
         if decoded_character.isascii() and (
             decoded_character.isalnum() or decoded_character in "-._~"
         ):
@@ -87,13 +89,15 @@ def _validate_uri_characters(value: str, *, field_name: str) -> None:
 def _validate_hostname(hostname: str | None, *, field_name: str) -> None:
     if not hostname:
         raise ValueError(f"{field_name} requires a hostname")
+    if hostname.endswith("."):
+        raise ValueError(f"{field_name} must not contain a trailing-dot hostname")
     try:
         ip_address(hostname)
         return
     except ValueError:
         pass
     if len(hostname) > 253 or any(
-        _HOST_LABEL.fullmatch(label) is None for label in hostname.rstrip(".").split(".")
+        _HOST_LABEL.fullmatch(label) is None for label in hostname.split(".")
     ):
         raise ValueError(f"{field_name} contains an invalid hostname")
 
@@ -130,24 +134,41 @@ def _validate_artifact_uri(value: str) -> str:
     if username is not None or password is not None or "@" in parsed.netloc:
         raise ValueError("artifact_uri must not contain userinfo")
     _validate_canonical_path(parsed.path, field_name="artifact_uri")
+    canonical_authority = parsed.netloc.lower()
     if scheme == "https":
-        _validate_hostname(parsed.hostname, field_name="artifact_uri")
+        hostname_value = parsed.hostname
+        _validate_hostname(hostname_value, field_name="artifact_uri")
+        assert hostname_value is not None
         if parsed.netloc.endswith(":"):
             raise ValueError("artifact_uri contains an empty port")
         if port is not None and not 1 <= port <= 65535:
             raise ValueError("artifact_uri contains an invalid port")
+        hostname = hostname_value.lower()
+        if ":" in hostname:
+            hostname = f"[{hostname}]"
+        canonical_authority = hostname + (f":{port}" if port is not None else "")
     elif scheme == "s3":
         if not parsed.netloc:
             raise ValueError("s3 artifact_uri requires a bucket authority")
-        if parsed.hostname != parsed.netloc:
+        if parsed.hostname != parsed.netloc.lower():
             raise ValueError("s3 artifact_uri authority must be a bucket without a port")
         _validate_hostname(parsed.hostname, field_name="artifact_uri")
+        canonical_authority = parsed.hostname.lower()
     elif scheme == "proofagent":
         if not parsed.netloc:
             raise ValueError("proofagent artifact_uri requires an authority")
+        hostname_value = parsed.hostname
+        _validate_hostname(hostname_value, field_name="artifact_uri")
+        assert hostname_value is not None
+        hostname = hostname_value.lower()
+        if ":" in hostname:
+            hostname = f"[{hostname}]"
+        canonical_authority = hostname + (f":{port}" if port is not None else "")
     elif parsed.netloc and (parsed.hostname != "localhost" or parsed.port is not None):
         raise ValueError("file artifact_uri authority must be empty or localhost")
-    return canonical
+    elif parsed.netloc:
+        canonical_authority = "localhost"
+    return f"{scheme}://{canonical_authority}{parsed.path}"
 
 
 def _validate_citation_uri(value: str) -> str:
@@ -166,6 +187,8 @@ def _validate_citation_uri(value: str) -> str:
         raise ValueError("citation_uri must not contain userinfo")
     if not parsed.netloc:
         raise ValueError("citation_uri requires an authority")
+    if parsed.hostname is not None and parsed.hostname.endswith("."):
+        raise ValueError("citation_uri must not contain a trailing-dot authority")
     if "?" in canonical:
         raise ValueError("citation_uri must not contain a query")
     _validate_canonical_path(parsed.path, field_name="citation_uri")
@@ -173,7 +196,8 @@ def _validate_citation_uri(value: str) -> str:
         raise ValueError("citation_uri must contain at most one fragment delimiter")
     if "#" in canonical and _CITATION_FRAGMENT.fullmatch(parsed.fragment) is None:
         raise ValueError("citation_uri fragment is not a canonical page or anchor identity")
-    return canonical
+    fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+    return f"{raw_scheme.lower()}://{parsed.netloc.lower()}{parsed.path}{fragment}"
 
 
 _MEDIA_TYPE_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
@@ -561,11 +585,10 @@ class HybridKnowledgeRevisionReadinessRecord(_KnowledgeIndexModel):
         )
         if review_identity != identity:
             raise ValueError("review_record identity must match readiness identity")
-        if review.state not in {"APPROVED", "NOT_REQUIRED"}:
-            raise ValueError("readiness requires an APPROVED or NOT_REQUIRED review record")
         review_check = next(check for check in self.checks if check.check == "review")
-        if not review_check.passed:
-            raise ValueError("review check must pass for an acceptable review record")
+        review_is_acceptable = review.state in {"APPROVED", "NOT_REQUIRED"}
+        if review_is_acceptable != review_check.passed:
+            raise ValueError("review check outcome must match the exact review record state")
         all_passed = all(check.passed for check in self.checks)
         if (self.status == "READY") != all_passed:
             raise ValueError("READY requires every check to pass; BLOCKED requires a failure")
@@ -684,6 +707,8 @@ class HybridPublicationAuthorityChain(_KnowledgeIndexModel):
                 raise ValueError("parent attestation source must match")
             if parent.generation_id != attestation.generation_id:
                 raise ValueError("parent attestation generation must match")
+            if parent.mapping_sha256 != generation.mapping_sha256:
+                raise ValueError("parent attestation mapping digest must match generation")
             if not set(parent.covered_publication_sequences).issubset(
                 attestation.covered_publication_sequences
             ):
