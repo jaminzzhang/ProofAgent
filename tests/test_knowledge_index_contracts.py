@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -8,6 +9,7 @@ from proof_agent.contracts import (
     HybridKnowledgePublicationRecord,
     HybridKnowledgeRevisionReadinessRecord,
     HybridKnowledgeRevisionReviewRecord,
+    HybridPublicationAuthorityChain,
     HybridReadinessCheck,
     KnowledgeIndexGeneration,
     KnowledgeProjectionAttestation,
@@ -117,9 +119,106 @@ def readiness_checks(*, failed: str | None = None) -> tuple[HybridReadinessCheck
             check=name,
             passed=name != failed,
             blocker_codes=("NOT_READY",) if name == failed else (),
+            evidence_ref=(artifact_ref() if name != "review" and name != failed else None),
         )
         for name in names
     )  # type: ignore[arg-type]
+
+
+def approved_review(
+    *, state: Literal["APPROVED", "NOT_REQUIRED"] = "APPROVED", source_id: str = "ks_1"
+) -> HybridKnowledgeRevisionReviewRecord:
+    if state == "NOT_REQUIRED":
+        return HybridKnowledgeRevisionReviewRecord(
+            review_id="review_1",
+            source_id=source_id,
+            document_id="doc_1",
+            revision_id="rev_1",
+            structured_build_id="build_1",
+            state="NOT_REQUIRED",
+        )
+    return HybridKnowledgeRevisionReviewRecord(
+        review_id="review_1",
+        source_id=source_id,
+        document_id="doc_1",
+        revision_id="rev_1",
+        structured_build_id="build_1",
+        state="APPROVED",
+        reviewed_by="reviewer_1",
+        reviewed_at=NOW,
+    )
+
+
+def generation(**updates: object) -> KnowledgeIndexGeneration:
+    values: dict[str, object] = {
+        "generation_id": "kig_1",
+        "source_id": "ks_1",
+        "canonical_schema_version": "structured-knowledge.v1",
+        "search_projection_version": "rule-unit-search.v1",
+        "mapping_sha256": "a" * 64,
+        "analyzer_sha256": "b" * 64,
+        "embedding_model_revision": "embedding@sha256:model",
+        "embedding_instruction_sha256": "c" * 64,
+        "embedding_dimension": 1024,
+        "normalized": True,
+    }
+    values.update(updates)
+    return KnowledgeIndexGeneration(**values)  # type: ignore[arg-type]
+
+
+def published_attempt(**updates: object) -> KnowledgePublicationAttempt:
+    values: dict[str, object] = {
+        "attempt_id": "attempt_1",
+        "source_id": "ks_1",
+        "source_draft_version_id": "draft_1",
+        "candidate_digest": "8" * 64,
+        "reserved_publication_seq": 1,
+        "fencing_token": 1,
+        "generation_id": "kig_1",
+        "validation_id": "validation_1",
+        "state": "PUBLISHED",
+        "started_at": NOW,
+        "updated_at": NOW,
+    }
+    values.update(updates)
+    return KnowledgePublicationAttempt(**values)  # type: ignore[arg-type]
+
+
+def hybrid_publication(
+    *,
+    record_attestation: KnowledgeProjectionAttestation | None = None,
+    **updates: object,
+) -> HybridKnowledgePublicationRecord:
+    bound_attestation = record_attestation or attestation()
+    values: dict[str, object] = {
+        "publication_id": "publication_1",
+        "source_id": "ks_1",
+        "source_draft_version_id": "draft_1",
+        "source_snapshot_id": "snapshot_1",
+        "source_publication_seq": 1,
+        "candidate_digest": "8" * 64,
+        "generation_id": "kig_1",
+        "manifest_ref": artifact_ref("5" * 64),
+        "attestation": bound_attestation,
+        "validation_id": "validation_1",
+        "published_at": NOW,
+        "published_by": "publisher_1",
+    }
+    values.update(updates)
+    return HybridKnowledgePublicationRecord(**values)  # type: ignore[arg-type]
+
+
+def authority_chain(**updates: object) -> HybridPublicationAuthorityChain:
+    current_attestation = attestation()
+    values: dict[str, object] = {
+        "attempt": published_attempt(),
+        "generation": generation(),
+        "manifest_root": manifest_root(),
+        "attestation": current_attestation,
+        "publication": hybrid_publication(record_attestation=current_attestation),
+    }
+    values.update(updates)
+    return HybridPublicationAuthorityChain(**values)  # type: ignore[arg-type]
 
 
 def test_retrieval_profile_is_not_part_of_index_generation() -> None:
@@ -171,7 +270,10 @@ def test_exact_artifact_ref_is_strict_immutable_and_round_trips() -> None:
     [
         "s3://bucket/key",
         "https://host/path",
+        "https://host:8443/path",
         "file:///absolute/path",
+        "file://localhost/absolute/path",
+        "file://LOCALHOST/absolute/path",
         "proofagent://artifact/id",
         "https://host/path%3Fpart%23anchor",
     ],
@@ -183,13 +285,41 @@ def test_exact_artifact_ref_accepts_absolute_provider_neutral_uris(
     assert ExactArtifactRef.model_validate_json(ref.model_dump_json()) == ref
 
 
+def test_exact_artifact_ref_canonicalizes_supported_scheme_to_lowercase() -> None:
+    ref = artifact_ref(artifact_uri="S3://bucket/object")
+    assert ref.artifact_uri == "s3://bucket/object"
+
+
 @pytest.mark.parametrize(
     "artifact_uri",
     [
         "relative/path",
+        "http://host/path",
+        "ftp://host/path",
         " s3://bucket/key",
+        "s3:/bucket/key",
+        "s3:///key",
+        "s3://bucket/",
+        "s3://bucket:443/key",
+        "proofagent:///artifact",
+        "proofagent://artifact/",
+        "file://remote/absolute/path",
+        "file:/absolute/path",
+        "https://host/",
+        "https:///path",
+        "https://bad_host/path",
+        "https://host:not-a-port/path",
+        "https://host:/path",
         "s3://bucket/key with space",
         "s3://bucket/key%2",
+        "s3://bucket/key%3f",
+        "s3://bucket/key%41",
+        "s3://bucket/key%7E",
+        "s3://bucket/a/../b",
+        "s3://bucket/a/%2E%2E/b",
+        "s3://bucket/a\\b",
+        "s3://bucket/a%5Cb",
+        "s3://bucket/a%0Ab",
         "https://user@host/path",
         "https://host/path?signature=secret",
         "https://host/path?",
@@ -240,6 +370,40 @@ def test_manifest_contracts_canonicalize_and_validate_counts() -> None:
         RuleUnitManifestEntry.model_validate({**first.model_dump(), "publication_seq_to": 0})
     with pytest.raises(ValidationError):
         RuleUnitManifestRoot.model_validate({**manifest_root().model_dump(), "rule_unit_count": 2})
+
+
+def test_manifest_entry_accepts_canonical_internal_citations() -> None:
+    entry = manifest_entry()
+    assert RuleUnitManifestEntry.model_validate_json(entry.model_dump_json()) == entry
+    proofagent = RuleUnitManifestEntry.model_validate(
+        {**entry.model_dump(), "citation_uri": "PROOFAGENT://source/path%3Fpart#page=1"}
+    )
+    assert proofagent.citation_uri.startswith("proofagent://")
+
+
+@pytest.mark.parametrize(
+    "citation_uri",
+    [
+        "https://source/path#page=1",
+        "knowledge:/source/path#page=1",
+        "knowledge:///path#page=1",
+        "knowledge://user@source/path#page=1",
+        "knowledge://source/path?latest=true",
+        "knowledge://source/path#",
+        "knowledge://source/path#page=1#duplicate",
+        "knowledge://source/a/../b#page=1",
+        "knowledge://source/a%2fb#page=1",
+        "knowledge://source/a%0Ab#page=1",
+        "knowledge://source/a\\b#page=1",
+    ],
+)
+def test_manifest_entry_rejects_noncanonical_internal_citations(
+    citation_uri: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        RuleUnitManifestEntry.model_validate(
+            {**manifest_entry().model_dump(), "citation_uri": citation_uri}
+        )
 
 
 def test_publication_attempt_state_and_timestamp_validation() -> None:
@@ -295,6 +459,14 @@ def test_retrieval_profile_validates_budgets_and_degradation_identity() -> None:
         KnowledgeRetrievalProfileRevision.model_validate(
             {**profile.model_dump(), "enabled_degradations": (degradation, degradation)}
         )
+    semantically_duplicate = degradation.model_copy(update={"degradation_id": "degradation_2"})
+    with pytest.raises(ValidationError):
+        KnowledgeRetrievalProfileRevision.model_validate(
+            {
+                **profile.model_dump(),
+                "enabled_degradations": (degradation, semantically_duplicate),
+            }
+        )
 
 
 @pytest.mark.parametrize("sequences", [(1, 1), (0,), (-1,)])
@@ -310,6 +482,10 @@ def test_attestation_canonicalizes_coverage_and_rejects_self_reference() -> None
     assert record.covered_publication_sequences == (1, 2)
     with pytest.raises(ValidationError):
         attestation(parent_attestation_sha256="6" * 64)
+    with pytest.raises(ValidationError):
+        attestation(validated_document_count=0)
+    with pytest.raises(ValidationError):
+        attestation(validated_rule_unit_count=0)
 
 
 def test_review_state_is_separate_from_ingestion_and_strict() -> None:
@@ -376,6 +552,7 @@ def test_readiness_requires_every_check_and_status_consistency() -> None:
         structured_build_id="build_1",
         status="READY",
         checks=readiness_checks(),
+        review_record=approved_review(),
         evaluated_at=NOW,
     )
     assert (
@@ -389,6 +566,155 @@ def test_readiness_requires_every_check_and_status_consistency() -> None:
         HybridKnowledgeRevisionReadinessRecord.model_validate(
             {**ready.model_dump(), "checks": readiness_checks(failed="review")}
         )
+    without_evidence = ready.checks[0].model_copy(update={"evidence_ref": None})
+    with pytest.raises(ValidationError):
+        HybridReadinessCheck.model_validate(without_evidence.model_dump())
+    with pytest.raises(ValidationError):
+        HybridKnowledgeRevisionReadinessRecord.model_validate(
+            {**ready.model_dump(), "review_record": approved_review(source_id="ks_other")}
+        )
+    for state in ("REVIEW_REQUIRED", "REJECTED"):
+        pending_or_rejected = HybridKnowledgeRevisionReviewRecord(
+            review_id="review_bad",
+            source_id="ks_1",
+            document_id="doc_1",
+            revision_id="rev_1",
+            structured_build_id="build_1",
+            state=state,
+            reason_codes=("BLOCKED",),
+            reviewed_by="reviewer_1" if state == "REJECTED" else None,
+            reviewed_at=NOW if state == "REJECTED" else None,
+        )
+        with pytest.raises(ValidationError):
+            HybridKnowledgeRevisionReadinessRecord.model_validate(
+                {**ready.model_dump(), "review_record": pending_or_rejected}
+            )
+    not_required = HybridKnowledgeRevisionReadinessRecord.model_validate(
+        {**ready.model_dump(), "review_record": approved_review(state="NOT_REQUIRED")}
+    )
+    assert not_required.status == "READY"
+
+
+def test_canonical_frozen_models_have_stable_hashes_and_permutation_identity() -> None:
+    entry_1 = manifest_entry("ru_1")
+    entry_2 = manifest_entry("ru_2")
+    shard_values = {
+        "schema_version": "rule-unit-manifest-shard.v1",
+        "shard_id": "shard_1",
+        "source_id": "ks_1",
+        "generation_id": "kig_1",
+        "document_id": "doc_1",
+        "sha256": "4" * 64,
+    }
+    shard_a = RuleUnitManifestShard(**shard_values, entries=(entry_2, entry_1))
+    shard_b = RuleUnitManifestShard(**shard_values, entries=(entry_1, entry_2))
+
+    shard_ref_1 = RuleUnitManifestShardRef(
+        shard_id="shard_1",
+        document_id="doc_1",
+        artifact_ref=artifact_ref("4" * 64),
+        rule_unit_count=1,
+    )
+    shard_ref_2 = RuleUnitManifestShardRef(
+        shard_id="shard_2",
+        document_id="doc_2",
+        artifact_ref=artifact_ref("9" * 64, artifact_uri="s3://knowledge/manifests/shard-2.json"),
+        rule_unit_count=1,
+    )
+    root_values = {
+        "schema_version": "rule-unit-manifest-root.v1",
+        "manifest_id": "manifest_2",
+        "source_id": "ks_1",
+        "source_snapshot_id": "snapshot_1",
+        "source_publication_seq": 1,
+        "generation_id": "kig_1",
+        "document_count": 2,
+        "rule_unit_count": 2,
+        "root_sha256": "5" * 64,
+        "created_at": NOW,
+    }
+    root_a = RuleUnitManifestRoot(**root_values, shards=(shard_ref_2, shard_ref_1))
+    root_b = RuleUnitManifestRoot(**root_values, shards=(shard_ref_1, shard_ref_2))
+
+    degradation_1 = PrevalidatedRetrievalDegradation(
+        degradation_id="d_1",
+        mode="BM25_ONLY",
+        source_id="ks_1",
+        query_type="clause_lookup",
+        sealed_evaluation_ref=artifact_ref(),
+    )
+    degradation_2 = PrevalidatedRetrievalDegradation(
+        degradation_id="d_2",
+        mode="RRF_WITHOUT_RERANKER",
+        source_id="ks_1",
+        query_type="comparison",
+        sealed_evaluation_ref=artifact_ref(),
+    )
+    profile_values = {
+        "profile_revision_id": "profile_1",
+        "lexical_budget": 100,
+        "dense_budget": 100,
+        "rrf_window": 50,
+        "reranker_revision": "reranker_1",
+        "rerank_budget": 40,
+        "final_budget": 16,
+    }
+    profile_a = KnowledgeRetrievalProfileRevision(
+        **profile_values, enabled_degradations=(degradation_2, degradation_1)
+    )
+    profile_b = KnowledgeRetrievalProfileRevision(
+        **profile_values, enabled_degradations=(degradation_1, degradation_2)
+    )
+    coverage_a = attestation(covered_publication_sequences=(2, 1))
+    coverage_b = attestation(covered_publication_sequences=(1, 2))
+    review_a = HybridKnowledgeRevisionReviewRecord(
+        review_id="review_2",
+        source_id="ks_1",
+        document_id="doc_1",
+        revision_id="rev_1",
+        structured_build_id="build_1",
+        state="REJECTED",
+        reason_codes=("Z_REASON", "A_REASON"),
+        reviewed_by="reviewer_1",
+        reviewed_at=NOW,
+    )
+    review_b = review_a.model_copy(update={"reason_codes": ("A_REASON", "Z_REASON")})
+    review_b = HybridKnowledgeRevisionReviewRecord.model_validate(review_b.model_dump())
+    blocker_a = HybridReadinessCheck(
+        check="integrity", passed=False, blocker_codes=("Z_BLOCK", "A_BLOCK")
+    )
+    blocker_b = HybridReadinessCheck(
+        check="integrity", passed=False, blocker_codes=("A_BLOCK", "Z_BLOCK")
+    )
+    ready_a = HybridKnowledgeRevisionReadinessRecord(
+        readiness_id="ready_1",
+        source_id="ks_1",
+        document_id="doc_1",
+        revision_id="rev_1",
+        structured_build_id="build_1",
+        status="READY",
+        checks=tuple(reversed(readiness_checks())),
+        review_record=approved_review(),
+        evaluated_at=NOW,
+    )
+    ready_b = HybridKnowledgeRevisionReadinessRecord(
+        **{**ready_a.model_dump(), "checks": readiness_checks()}
+    )
+
+    for first, second in (
+        (shard_a, shard_b),
+        (root_a, root_b),
+        (profile_a, profile_b),
+        (coverage_a, coverage_b),
+        (review_a, review_b),
+        (blocker_a, blocker_b),
+        (ready_a, ready_b),
+    ):
+        original_hash = hash(first)
+        assert type(first).model_validate(first) is first
+        assert hash(first) == original_hash
+        assert first == second
+        assert hash(first) == hash(second)
 
 
 def test_hybrid_publication_binds_exact_manifest_and_attestation() -> None:
@@ -417,6 +743,72 @@ def test_hybrid_publication_binds_exact_manifest_and_attestation() -> None:
         )
 
 
+def test_hybrid_publication_authority_chain_round_trips() -> None:
+    chain = authority_chain()
+    assert HybridPublicationAuthorityChain.model_validate_json(chain.model_dump_json()) == chain
+
+
+def test_hybrid_publication_authority_chain_rejects_one_field_mismatches() -> None:
+    wrong_attempt_attestation = attestation(publication_attempt_id="attempt_other")
+    wrong_count_attestation = attestation(validated_document_count=2)
+    alternate_publication_attestation = attestation(attestation_id="attestation_other")
+    mismatches: tuple[dict[str, object], ...] = (
+        {"attempt": published_attempt(state="BUILDING")},
+        {"generation": generation(source_id="ks_other")},
+        {
+            "attestation": wrong_attempt_attestation,
+            "publication": hybrid_publication(record_attestation=wrong_attempt_attestation),
+        },
+        {"publication": hybrid_publication(source_draft_version_id="draft_other")},
+        {"publication": hybrid_publication(validation_id="validation_other")},
+        {"publication": hybrid_publication(candidate_digest="9" * 64)},
+        {"attempt": published_attempt(reserved_publication_seq=2)},
+        {"publication": hybrid_publication(source_snapshot_id="snapshot_other")},
+        {"generation": generation(mapping_sha256="b" * 64)},
+        {"manifest_root": manifest_root().model_copy(update={"root_sha256": "9" * 64})},
+        {
+            "attestation": wrong_count_attestation,
+            "publication": hybrid_publication(record_attestation=wrong_count_attestation),
+        },
+        {"publication": hybrid_publication(record_attestation=alternate_publication_attestation)},
+    )
+    for mismatch in mismatches:
+        with pytest.raises(ValidationError):
+            authority_chain(**mismatch)
+
+
+def test_hybrid_publication_authority_chain_validates_parent_closure() -> None:
+    parent = attestation()
+    current = attestation(
+        attestation_id="attestation_2",
+        attestation_sha256="d" * 64,
+        parent_attestation_sha256=parent.attestation_sha256,
+        covered_publication_sequences=(1, 2),
+    )
+    root = manifest_root().model_copy(update={"source_publication_seq": 2})
+    publication = hybrid_publication(
+        record_attestation=current,
+        source_publication_seq=2,
+    )
+    chain = authority_chain(
+        attempt=published_attempt(reserved_publication_seq=2),
+        manifest_root=root,
+        parent_attestation=parent,
+        attestation=current,
+        publication=publication,
+    )
+    assert chain.parent_attestation == parent
+    with pytest.raises(ValidationError):
+        HybridPublicationAuthorityChain.model_validate(
+            {
+                **chain.model_dump(),
+                "parent_attestation": parent.model_copy(update={"source_id": "ks_other"}),
+            }
+        )
+    with pytest.raises(ValidationError):
+        authority_chain(attestation=current, publication=publication)
+
+
 def test_hybrid_resource_kind_preserves_existing_defaults_and_remote_behavior() -> None:
     validation_fields = {
         "validation_id": "validation_1",
@@ -442,10 +834,62 @@ def test_hybrid_resource_kind_preserves_existing_defaults_and_remote_behavior() 
     )
     assert (
         KnowledgeSourcePublicationValidation(
-            **validation_fields, resource_kind="hybrid_publication"
+            **validation_fields,
+            resource_kind="hybrid_publication",
+            resource_id="publication_1",
         ).resource_kind
         == "hybrid_publication"
     )
     assert "hybrid_publication" in str(
         KnowledgeSourcePublicationRecord.model_fields["resource_kind"].annotation
     )
+    with pytest.raises(ValidationError):
+        KnowledgeSourcePublicationValidation(
+            **validation_fields, resource_kind="hybrid_publication"
+        )
+    with pytest.raises(ValidationError):
+        KnowledgeSourcePublicationValidation(
+            **validation_fields,
+            resource_kind="hybrid_publication",
+            resource_id="publication_1",
+            snapshot_id="snapshot_1",
+        )
+
+    record_fields = {
+        "publication_id": "source_publication_1",
+        "source_id": "ks_1",
+        "source_draft_version_id": "draft_1",
+        "validation_id": "validation_1",
+        "change_note": "publish",
+        "published_at": "2026-07-12T08:00:00Z",
+        "published_by": "operator_1",
+        "document_count": 1,
+        "smoke_query": "query",
+    }
+    assert KnowledgeSourcePublicationRecord(**record_fields).resource_kind == "local_index_snapshot"
+    assert (
+        KnowledgeSourcePublicationRecord(
+            **record_fields,
+            resource_kind="remote_config",
+            resource_id=None,
+            snapshot_id="legacy-remote-shape",
+        ).resource_kind
+        == "remote_config"
+    )
+    assert (
+        KnowledgeSourcePublicationRecord(
+            **record_fields,
+            resource_kind="hybrid_publication",
+            resource_id="publication_1",
+        ).resource_id
+        == "publication_1"
+    )
+    with pytest.raises(ValidationError):
+        KnowledgeSourcePublicationRecord(**record_fields, resource_kind="hybrid_publication")
+    with pytest.raises(ValidationError):
+        KnowledgeSourcePublicationRecord(
+            **record_fields,
+            resource_kind="hybrid_publication",
+            resource_id="publication_1",
+            snapshot_id="snapshot_1",
+        )

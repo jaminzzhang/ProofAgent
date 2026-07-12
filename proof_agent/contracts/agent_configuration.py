@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Literal, cast
 
-from pydantic import Field, field_serializer, field_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
@@ -402,6 +402,15 @@ class KnowledgeSourcePublicationValidation(FrozenModel):
     created_at: str
     created_by: str
 
+    @model_validator(mode="after")
+    def validate_resource_reference(self) -> KnowledgeSourcePublicationValidation:
+        if self.resource_kind == "hybrid_publication":
+            if self.resource_id is None or not self.resource_id.strip():
+                raise ValueError("hybrid_publication requires resource_id")
+            if self.snapshot_id is not None:
+                raise ValueError("hybrid_publication does not accept snapshot_id")
+        return self
+
 
 class KnowledgeSourcePublicationRecord(FrozenModel):
     """Immutable record for one published Knowledge Source resource."""
@@ -421,6 +430,15 @@ class KnowledgeSourcePublicationRecord(FrozenModel):
     document_count: int
     smoke_query: str
     smoke_result_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @model_validator(mode="after")
+    def validate_resource_reference(self) -> KnowledgeSourcePublicationRecord:
+        if self.resource_kind == "hybrid_publication":
+            if self.resource_id is None or not self.resource_id.strip():
+                raise ValueError("hybrid_publication requires resource_id")
+            if self.snapshot_id is not None:
+                raise ValueError("hybrid_publication does not accept snapshot_id")
+        return self
 
     @field_validator("smoke_result_summary", mode="after")
     @classmethod
