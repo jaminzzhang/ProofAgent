@@ -14,6 +14,7 @@ from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     ExactArtifactRef,
+    FrozenDict,
     KnowledgeSourceSnapshotManifest,
     ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBinding,
@@ -80,6 +81,78 @@ def test_resolved_knowledge_binding_set_loads_legacy_payload_without_discriminat
 
     assert isinstance(restored.bindings[0], ResolvedKnowledgeBinding)
     assert restored.model_dump(mode="json")["bindings"][0]["binding_kind"] == "legacy"
+
+
+@pytest.mark.parametrize("binding_kind", [None, "legacy"])
+def test_resolved_knowledge_binding_set_rejects_legacy_payload_with_hybrid_reserved_keys(
+    binding_kind: str | None,
+) -> None:
+    binding = _legacy_binding_payload(source_publication_id="publication_001")
+    if binding_kind is not None:
+        binding["binding_kind"] = binding_kind
+
+    with pytest.raises(ValidationError):
+        ResolvedKnowledgeBindingSet.model_validate({"bindings": [binding]})
+
+
+def test_resolved_legacy_binding_direct_construction_rejects_hybrid_reserved_keys() -> None:
+    with pytest.raises(ValidationError):
+        ResolvedKnowledgeBinding.model_validate(
+            _legacy_binding_payload(source_snapshot_id="snapshot_001")
+        )
+
+
+def test_resolved_knowledge_binding_set_rejects_omitted_kind_for_hybrid_provider() -> None:
+    binding = _legacy_binding_payload(provider="hybrid_index")
+
+    with pytest.raises(ValidationError):
+        ResolvedKnowledgeBindingSet.model_validate({"bindings": [binding]})
+
+
+def test_resolved_knowledge_binding_set_preserves_unknown_legacy_extension_compatibility() -> None:
+    binding = _legacy_binding_payload(future_legacy_extension={"revision": "future_001"})
+
+    restored = ResolvedKnowledgeBindingSet.model_validate({"bindings": [binding]})
+
+    assert isinstance(restored.bindings[0], ResolvedKnowledgeBinding)
+    assert restored.bindings[0].binding_kind == "legacy"
+
+
+def test_legacy_discriminator_migration_does_not_mutate_caller_dict_list_or_tuple() -> None:
+    for bindings in (
+        [_legacy_binding_payload()],
+        (_legacy_binding_payload(),),
+    ):
+        original_binding = dict(bindings[0])
+        payload = {"bindings": bindings}
+
+        restored = ResolvedKnowledgeBindingSet.model_validate(payload)
+
+        assert isinstance(restored.bindings[0], ResolvedKnowledgeBinding)
+        assert payload["bindings"] is bindings
+        assert bindings[0] == original_binding
+        assert "binding_kind" not in bindings[0]
+
+
+def test_legacy_discriminator_migration_accepts_frozen_mapping_and_tuple_input() -> None:
+    frozen_binding = FrozenDict(_legacy_binding_payload())
+    frozen_bindings = (frozen_binding,)
+    frozen_payload = FrozenDict({"bindings": frozen_bindings})
+
+    restored = ResolvedKnowledgeBindingSet.model_validate(frozen_payload)
+
+    assert isinstance(restored.bindings[0], ResolvedKnowledgeBinding)
+    assert restored.bindings[0].binding_kind == "legacy"
+    assert frozen_payload["bindings"] is frozen_bindings
+    assert "binding_kind" not in frozen_binding
+
+
+def test_resolved_knowledge_binding_set_schema_declares_binding_kind_discriminator() -> None:
+    schema = ResolvedKnowledgeBindingSet.model_json_schema()
+    discriminator = schema["properties"]["bindings"]["items"]["discriminator"]
+
+    assert discriminator["propertyName"] == "binding_kind"
+    assert set(discriminator["mapping"]) == {"legacy", "hybrid"}
 
 
 @pytest.mark.parametrize(
@@ -154,6 +227,19 @@ def _hybrid_binding_payload() -> dict[str, object]:
         "failure_mode": "required",
         "fusion_weight": 1.0,
     }
+
+
+def _legacy_binding_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "binding_id": "kb_legacy",
+        "source_scope": "shared",
+        "source_id": "ks_legacy",
+        "source_version_id": "snapshot_legacy",
+        "provider": "local_index",
+        "provider_params": {},
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_package_resolver_resolves_package_source(tmp_path: Path) -> None:

@@ -26,6 +26,31 @@ StrictNonBlankStr = Annotated[
 StrictPositiveInt = Annotated[StrictInt, Field(gt=0)]
 FinitePositiveFloat = Annotated[StrictFloat, Field(gt=0, allow_inf_nan=False)]
 
+_HYBRID_ONLY_BINDING_KEYS = frozenset(
+    {
+        "source_publication_id",
+        "source_snapshot_id",
+        "index_generation_id",
+        "source_publication_seq",
+        "retrieval_profile_revision_id",
+        "manifest_ref",
+        "publication_attestation_id",
+    }
+)
+
+
+def _hybrid_only_binding_keys(value: Mapping[Any, Any]) -> frozenset[str]:
+    return frozenset(key for key in _HYBRID_ONLY_BINDING_KEYS if key in value)
+
+
+def _reject_hybrid_only_binding_keys(value: Mapping[Any, Any]) -> None:
+    reserved_keys = _hybrid_only_binding_keys(value)
+    if reserved_keys:
+        raise ValueError(
+            "legacy Knowledge binding must not contain Hybrid-only fields: "
+            f"{', '.join(sorted(reserved_keys))}"
+        )
+
 
 def _jsonable(value: Any) -> Any:
     if isinstance(value, Mapping):
@@ -48,6 +73,13 @@ class ResolvedKnowledgeBinding(FrozenModel):
     fusion_weight: float = 1.0
     top_k: int | None = None
     routing_metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_hybrid_only_fields(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            _reject_hybrid_only_binding_keys(value)
+        return value
 
     @field_validator("provider_params", "routing_metadata", mode="after")
     @classmethod
@@ -99,11 +131,18 @@ class ResolvedKnowledgeBindingSet(FrozenModel):
         migrated_bindings: list[Any] = []
         changed = False
         for binding in bindings:
-            if isinstance(binding, Mapping) and "binding_kind" not in binding:
-                migrated_bindings.append({**binding, "binding_kind": "legacy"})
-                changed = True
-            else:
-                migrated_bindings.append(binding)
+            if isinstance(binding, Mapping):
+                binding_kind_present = "binding_kind" in binding
+                binding_kind = binding.get("binding_kind")
+                if (not binding_kind_present or binding_kind == "legacy") and (
+                    _hybrid_only_binding_keys(binding)
+                ):
+                    _reject_hybrid_only_binding_keys(binding)
+                if not binding_kind_present:
+                    migrated_bindings.append({**binding, "binding_kind": "legacy"})
+                    changed = True
+                    continue
+            migrated_bindings.append(binding)
 
         if not changed:
             return value
