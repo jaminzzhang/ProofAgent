@@ -113,9 +113,7 @@ class SensitiveValidationCaptureArtifact(FrozenModel):
     created_at: str
     expires_at: str
     created_by: str
-    retention_class: Literal["sensitive_validation_capture"] = (
-        "sensitive_validation_capture"
-    )
+    retention_class: Literal["sensitive_validation_capture"] = "sensitive_validation_capture"
     artifact_path: str
     retain_for_audit: bool = False
     redaction_metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
@@ -187,9 +185,9 @@ class PublishedAgentVersion(FrozenModel):
     operation_audit: tuple[ConfigurationOperationAudit, ...] = Field(default_factory=tuple)
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
     workflow_stage_availability: WorkflowStageAvailabilitySet | None = None
-    effective_workflow_stage_configuration: (
-        PublishedWorkflowStageConfigurationSnapshot | None
-    ) = None
+    effective_workflow_stage_configuration: PublishedWorkflowStageConfigurationSnapshot | None = (
+        None
+    )
 
     @field_validator("validation_run_id")
     @classmethod
@@ -390,7 +388,9 @@ class KnowledgeSourcePublicationValidation(FrozenModel):
 
     validation_id: str
     source_id: str
-    resource_kind: Literal["local_index_snapshot", "remote_config"] = "local_index_snapshot"
+    resource_kind: Literal["local_index_snapshot", "remote_config", "hybrid_publication"] = (
+        "local_index_snapshot"
+    )
     resource_id: str | None = None
     snapshot_id: str | None = None
     source_draft_version_id: str
@@ -408,7 +408,9 @@ class KnowledgeSourcePublicationRecord(FrozenModel):
 
     publication_id: str
     source_id: str
-    resource_kind: Literal["local_index_snapshot", "remote_config"] = "local_index_snapshot"
+    resource_kind: Literal["local_index_snapshot", "remote_config", "hybrid_publication"] = (
+        "local_index_snapshot"
+    )
     resource_id: str | None = None
     snapshot_id: str | None = None
     source_draft_version_id: str
