@@ -108,8 +108,6 @@ def read_text(url: str) -> str:
     [
         "/operator",
         "/operator/c/conversation-1",
-        "/customer",
-        "/customer/c/conversation-1",
     ],
 )
 def test_chat_entry_and_emitted_vite_assets_stay_on_chat_upstream(

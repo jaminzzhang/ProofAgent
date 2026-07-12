@@ -17,8 +17,8 @@ def _write_manifest(tmp_path: Path, model_yaml: str) -> Path:
 name: model_test
 purpose: "Test model config."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -36,6 +36,10 @@ retrieval:
   min_score: 0.2
 model:
 {model_yaml}
+react:
+  planner:
+    provider: deterministic
+    name: planner-demo
 policy:
   file: ./policy.yaml
 capabilities:
@@ -136,11 +140,8 @@ def test_deepseek_model_provider_loads_for_all_model_roles(tmp_path: Path) -> No
 name: deepseek_model_test
 purpose: "Test DeepSeek model role config."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
-  checkpointer:
-    provider: sqlite
-    uri: memory
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -164,7 +165,6 @@ model:
     temperature: 0
     max_output_tokens: 800
 react:
-  max_steps: 2
   max_tool_calls: 0
   record_reasoning_summary: true
   planner:
@@ -221,8 +221,8 @@ def test_reviewer_top_level_model_usage_fields_are_rejected(tmp_path: Path) -> N
 name: reviewer_cleanup_test
 purpose: "Test reviewer model usage cleanup."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -240,7 +240,6 @@ model:
   provider: deterministic
   name: answer-demo
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: planner-demo

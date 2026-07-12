@@ -10,7 +10,7 @@ import type { WorkflowTemplateDescriptor } from '../../../api/types'
 vi.mock('../../../hooks/useWorkflowTemplates', () => ({
   useWorkflowTemplates: vi.fn(() => ({
     templates: [],
-    names: ['react_enterprise_qa_v3', 'react_enterprise_qa_v2', 'react_enterprise_qa', 'enterprise_qa'],
+    names: ['react_enterprise_qa_v3'],
     loaded: true,
     error: null,
   })),
@@ -20,9 +20,9 @@ import { WorkflowModuleEditor } from '../../agent/WorkflowModuleEditor'
 import { useWorkflowTemplates } from '../../../hooks/useWorkflowTemplates'
 
 const DESCRIPTOR: WorkflowTemplateDescriptor = {
-  name: 'react_enterprise_qa',
-  description: 'Controlled ReAct enterprise question answering.',
-  descriptor_version: 'react_enterprise_qa.v1',
+  name: 'react_enterprise_qa_v3',
+  description: 'Controlled ReAct V3 enterprise question answering.',
+  descriptor_version: 'react_enterprise_qa.v3',
   stages: [
     {
       id: 'plan',
@@ -59,10 +59,9 @@ const DESCRIPTOR: WorkflowTemplateDescriptor = {
 
 const AGENT_YAML = `name: insurance
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
-  checkpointer:
-    type: memory
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 `
 
 describe('WorkflowModuleEditor', () => {
@@ -82,9 +81,11 @@ describe('WorkflowModuleEditor', () => {
 
     const summary = screen.getByLabelText('Workflow Template Summary')
     expect(within(summary).getByText('Workflow Template')).toBeInTheDocument()
-    expect(within(summary).getByText('react_enterprise_qa')).toBeInTheDocument()
-    expect(within(summary).getByText('react_enterprise_qa.v1')).toBeInTheDocument()
+    expect(within(summary).getByText('react_enterprise_qa_v3')).toBeInTheDocument()
+    expect(within(summary).getByText('react_enterprise_qa.v3')).toBeInTheDocument()
     expect(within(summary).getByText('2 stages')).toBeInTheDocument()
+    expect(within(summary).queryByText('Checkpointer')).not.toBeInTheDocument()
+    expect(within(summary).queryByText('Compatibility Template')).not.toBeInTheDocument()
     expect(screen.getByText('Relationship Map')).toBeInTheDocument()
     expect(screen.getByText('Stage Inspector')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Advanced YAML' })).toBeInTheDocument()
@@ -112,7 +113,7 @@ describe('WorkflowModuleEditor', () => {
     expect(container).not.toHaveTextContent(['workflow', 'node'].join(' '))
   })
 
-  it('explains that V2 is the recommended workflow template for new Agents', () => {
+  it('explains that Controlled ReAct V3 is the sole production template', () => {
     render(
       <WorkflowModuleEditor
         agentYaml={AGENT_YAML}
@@ -130,35 +131,10 @@ describe('WorkflowModuleEditor', () => {
     // Portal as role="tooltip"), replacing the old hand-rolled role="note".
     fireEvent.focus(screen.getByRole('button', { name: 'Explain Template' }))
 
-    expect(screen.getByRole('tooltip')).toHaveTextContent('Use react_enterprise_qa_v3 (Controlled ReAct Loop) for new Agents')
-    expect(screen.getByRole('tooltip')).toHaveTextContent('enterprise_qa remains a compatibility path')
-  })
-
-  it('shows a compatibility notice when the selected template is enterprise_qa', () => {
-    render(
-      <WorkflowModuleEditor
-        agentYaml={`name: legacy
-workflow:
-  runtime: langgraph
-  template: enterprise_qa
-`}
-        descriptor={{
-          ...DESCRIPTOR,
-          name: 'enterprise_qa',
-          descriptor_version: 'enterprise_qa.v1',
-          description: 'Compatibility Enterprise QA workflow.',
-        }}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'react_enterprise_qa_v3 is the only production workflow template',
     )
-
-    expect(screen.getByText('Compatibility Template')).toBeInTheDocument()
-    expect(screen.getByText(/Use react_enterprise_qa_v3/)).toBeInTheDocument()
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent('compatibility')
   })
 
   it('shows governed handoff points in the read-only relationship map', () => {
@@ -263,7 +239,7 @@ workflow:
 
     await waitFor(() => {
       expect(saveStages).toHaveBeenCalledWith({
-        template_descriptor_version: 'react_enterprise_qa.v1',
+        template_descriptor_version: 'react_enterprise_qa.v3',
         stages: expect.arrayContaining([
           {
             id: 'plan',
@@ -286,8 +262,9 @@ workflow:
       <WorkflowModuleEditor
         agentYaml={`name: insurance
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
+  runtime: controlled_react
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
   stages:
     - id: response
       prompt:
@@ -318,7 +295,7 @@ workflow:
 
     await waitFor(() => {
       expect(saveStages).toHaveBeenCalledWith({
-        template_descriptor_version: 'react_enterprise_qa.v1',
+        template_descriptor_version: 'react_enterprise_qa.v3',
         stages: expect.arrayContaining([
           {
             id: 'response',
@@ -337,7 +314,7 @@ workflow:
   it('renders the dynamic catalog as the Template selector options', () => {
     vi.mocked(useWorkflowTemplates).mockReturnValue({
       templates: [],
-      names: ['react_enterprise_qa_v3', 'react_enterprise_qa_v2'],
+      names: ['react_enterprise_qa_v3'],
       loaded: true,
       error: null,
     })
@@ -357,7 +334,7 @@ workflow:
 
     const select = screen.getByLabelText('Template') as HTMLSelectElement
     const optionValues = Array.from(select.options).map((option) => option.value)
-    expect(optionValues).toEqual(['react_enterprise_qa_v3', 'react_enterprise_qa_v2'])
+    expect(optionValues).toEqual(['react_enterprise_qa_v3'])
   })
 
   it('keeps workflow runtime aligned when the Template selector changes', () => {
@@ -385,42 +362,6 @@ workflow:
     expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'runtime'], 'controlled_react')
   })
 
-  it('keeps legacy workflow templates on langgraph runtime', () => {
-    const onFieldChange = vi.fn()
-
-    render(
-      <WorkflowModuleEditor
-        agentYaml={`name: insurance
-workflow:
-  runtime: controlled_react
-  template: react_enterprise_qa_v3
-  template_descriptor_version: react_enterprise_qa.v3
-  checkpointer:
-    type: memory
-`}
-        descriptor={{
-          ...DESCRIPTOR,
-          name: 'react_enterprise_qa_v3',
-          descriptor_version: 'react_enterprise_qa.v3',
-        }}
-        onFieldChange={onFieldChange}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    fireEvent.change(screen.getByLabelText('Template'), {
-      target: { value: 'react_enterprise_qa_v2' },
-    })
-
-    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template'], 'react_enterprise_qa_v2')
-    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template_descriptor_version'], 'react_enterprise_qa.v2')
-    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'runtime'], 'langgraph')
-  })
-
   it('falls back to the static template list when the catalog fails to load', () => {
     vi.mocked(useWorkflowTemplates).mockReturnValue({
       templates: [],
@@ -444,11 +385,7 @@ workflow:
 
     const select = screen.getByLabelText('Template') as HTMLSelectElement
     const optionValues = Array.from(select.options).map((option) => option.value)
-    // Fallback static list is shown so the selector is never empty.
-    expect(optionValues).toContain('react_enterprise_qa_v3')
-    expect(optionValues).toContain('react_enterprise_qa_v2')
-    expect(optionValues).toContain('react_enterprise_qa')
-    expect(optionValues).toContain('enterprise_qa')
+    expect(optionValues).toEqual(['react_enterprise_qa_v3'])
   })
 
   it('saves the descriptor_version for the persisted template even when catalog and descriptor are stale', async () => {
@@ -461,7 +398,7 @@ workflow:
     // never from the stale descriptor.
     vi.mocked(useWorkflowTemplates).mockReturnValue({
       templates: [],
-      names: ['react_enterprise_qa_v3', 'react_enterprise_qa_v2', 'react_enterprise_qa', 'enterprise_qa'],
+      names: ['react_enterprise_qa_v3'],
       loaded: true,
       error: null,
     })
@@ -472,13 +409,15 @@ workflow:
       <WorkflowModuleEditor
         agentYaml={`name: institution_insurance_specialist
 workflow:
-  runtime: langgraph
+  runtime: controlled_react
   template: react_enterprise_qa_v3
-  checkpointer:
-    type: memory
+  template_descriptor_version: react_enterprise_qa.v3
 `}
-        // Stale descriptor still describing the previously-loaded v1 template.
-        descriptor={DESCRIPTOR}
+        descriptor={{
+          ...DESCRIPTOR,
+          name: 'react_enterprise_qa_v2',
+          descriptor_version: 'react_enterprise_qa.v2',
+        }}
         onFieldChange={vi.fn()}
         onSaveCore={vi.fn()}
         onSaveStages={saveStages}

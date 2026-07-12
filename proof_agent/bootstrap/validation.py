@@ -9,7 +9,10 @@ from uuid import uuid4
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts import AgentManifest, WorkflowStagePromptConfig
-from proof_agent.control.workflow.templates import WorkflowStageDescriptor, resolve_workflow_template
+from proof_agent.control.workflow.templates import (
+    WorkflowStageDescriptor,
+    resolve_workflow_template,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -36,7 +39,6 @@ SUPPORTED_MODEL_PROVIDERS = {
     "azure_openai",
     "anthropic",
 }
-SUPPORTED_CHECKPOINTER_PROVIDERS = {"sqlite"}
 MAX_WORKFLOW_NODE_BUSINESS_CONTEXT_CHARS = 2000
 MAX_WORKFLOW_NODE_INSTRUCTION_COUNT = 10
 MAX_WORKFLOW_NODE_INSTRUCTION_CHARS = 500
@@ -79,13 +81,8 @@ FORBIDDEN_MODEL_PARAM_PARTS = (
     "access_token",
     "provider_api_key",
 )
-SUPPORTED_WORKFLOW_TEMPLATES = {
-    "enterprise_qa",
-    "react_enterprise_qa",
-    "react_enterprise_qa_v2",
-    "react_enterprise_qa_v3",
-}
-REACT_WORKFLOW_TEMPLATES = {"react_enterprise_qa", "react_enterprise_qa_v2", "react_enterprise_qa_v3"}
+SUPPORTED_WORKFLOW_TEMPLATES = {"react_enterprise_qa_v3"}
+REACT_WORKFLOW_TEMPLATES = SUPPORTED_WORKFLOW_TEMPLATES
 
 
 def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> None:
@@ -130,7 +127,7 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
         )
 
     required_nested = {
-        "workflow": {"runtime", "template"},
+        "workflow": {"template"},
         "retrieval": {"strategy"},
         "policy": {"file"},
         "capabilities": {"tools", "memory"},
@@ -155,6 +152,17 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
             )
 
     workflow = raw["workflow"]
+    if isinstance(workflow, Mapping):
+        retired_workflow_fields = sorted(
+            field for field in ("runtime", "checkpointer") if field in workflow
+        )
+        if retired_workflow_fields:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                f"retired workflow field(s): {', '.join(retired_workflow_fields)}",
+                "Remove workflow.runtime and workflow.checkpointer; Controlled ReAct V3 is the only runtime.",
+                artifact_path=manifest_path,
+            )
     if isinstance(workflow, Mapping) and "nodes" in workflow:
         raise ProofAgentError(
             "PA_CONFIG_001",
@@ -165,6 +173,14 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
 
     _require_model_source_shape(raw.get("model"), "model", manifest_path=manifest_path)
     react = raw.get("react")
+    if isinstance(react, Mapping):
+        if "max_steps" in react:
+            raise ProofAgentError(
+                "PA_CONFIG_001",
+                "retired react field: max_steps",
+                "Remove react.max_steps and configure react.max_plan_rounds.",
+                artifact_path=manifest_path,
+            )
     if isinstance(react, Mapping) and "planner" in react:
         _require_model_source_shape(
             react.get("planner"), "react.planner", manifest_path=manifest_path
@@ -361,18 +377,6 @@ def _require_model_source_shape(
 def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     """Validate the supported v1 runtime envelope and local file dependencies."""
 
-    expected_runtime = (
-        "controlled_react"
-        if manifest.workflow.template == "react_enterprise_qa_v3"
-        else "langgraph"
-    )
-    if manifest.workflow.runtime != expected_runtime:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            f"unsupported workflow runtime: {manifest.workflow.runtime}",
-            f"Use workflow.runtime: {expected_runtime} for {manifest.workflow.template}.",
-            artifact_path=manifest_path,
-        )
     if manifest.workflow.template not in SUPPORTED_WORKFLOW_TEMPLATES:
         raise ProofAgentError(
             "PA_CONFIG_002",
@@ -380,7 +384,6 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
             f"Supported workflow templates: {', '.join(sorted(SUPPORTED_WORKFLOW_TEMPLATES))}.",
             artifact_path=manifest_path,
         )
-    _validate_checkpointer_config(manifest, manifest_path=manifest_path)
     _validate_capabilities_config(manifest, manifest_path=manifest_path)
     _validate_workflow_stage_config(manifest, manifest_path=manifest_path)
     _validate_react_config(manifest, manifest_path=manifest_path)
@@ -482,19 +485,6 @@ def require_writable_parent(path: Path, field_name: str, manifest_path: Path) ->
             f"Grant write access to {parent} or change {field_name}.",
             artifact_path=manifest_path,
         ) from exc
-
-
-def _validate_checkpointer_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    checkpointer = manifest.workflow.checkpointer
-    if checkpointer is None:
-        return
-    if checkpointer.provider not in SUPPORTED_CHECKPOINTER_PROVIDERS:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            f"unsupported workflow checkpointer provider: {checkpointer.provider}",
-            f"Supported workflow checkpointer providers: {', '.join(sorted(SUPPORTED_CHECKPOINTER_PROVIDERS))}.",
-            artifact_path=manifest_path,
-        )
 
 
 def _validate_capabilities_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
@@ -887,18 +877,11 @@ def _validate_react_config(manifest: AgentManifest, *, manifest_path: Path) -> N
             "Add a top-level react section to agent.yaml.",
             artifact_path=manifest_path,
         )
-    if react.max_steps <= 0:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "react.max_steps must be greater than 0",
-            "Set react.max_steps to a positive integer.",
-            artifact_path=manifest_path,
-        )
     if react.max_plan_rounds <= 0:
         raise ProofAgentError(
             "PA_CONFIG_002",
             "react.max_plan_rounds must be greater than 0",
-            "Set react.max_plan_rounds (or react.max_steps as its alias) to a positive integer.",
+            "Set react.max_plan_rounds to a positive integer.",
             artifact_path=manifest_path,
         )
     if react.max_tool_calls not in {0, 1}:

@@ -117,13 +117,7 @@ export function WorkflowModuleEditor({
   const canConfigureContext = Boolean(selectedDescriptor?.context_options.length)
   const canPreviewSelected = canEditPrompt || canConfigureContext
   const workflowTemplate = readAgentYamlField(agentYaml, ['workflow', 'template']) || descriptor?.name || t('workflow.notConfigured')
-  const usesCompatibilityTemplate = workflowTemplate === 'enterprise_qa'
   const workflowRuntime = readAgentYamlField(agentYaml, ['workflow', 'runtime']) || t('workflow.notConfigured')
-  const checkpointerProvider = (
-    readAgentYamlField(agentYaml, ['workflow', 'checkpointer', 'provider'])
-    || readAgentYamlField(agentYaml, ['workflow', 'checkpointer', 'type'])
-    || t('workflow.notConfigured')
-  )
   const stageCount = descriptor?.stages.length ?? 0
   const modelBearingStageCount = descriptor?.stages.filter((stage) => stage.model_bearing).length ?? 0
   const editableStageCount = descriptor?.stages.filter((stage) => stage.editable_prompt_fields.length > 0).length ?? 0
@@ -244,7 +238,6 @@ export function WorkflowModuleEditor({
             variant="inline"
             items={[
               { label: 'Runtime', value: workflowRuntime, kind: 'text' },
-              { label: t('workflow.checkpointer'), value: checkpointerProvider, kind: 'text' },
               {
                 label: t('workflow.stages'),
                 value: t('workflow.stagesCount').replace('{count}', String(stageCount)),
@@ -254,14 +247,6 @@ export function WorkflowModuleEditor({
               { label: t('workflow.editable'), value: String(editableStageCount), kind: 'number' },
             ]}
           />
-          {usesCompatibilityTemplate && (
-            <div className="mt-4 rounded-md border border-[var(--warning-border)] bg-[var(--warning-bg)] p-3 text-sm text-[var(--warning-fg)]">
-              <div className="text-xs font-semibold uppercase tracking-wider">
-                {t('workflow.compatibilityTemplate')}
-              </div>
-              <p className="mt-1">{t('workflow.compatibilityDescription')}</p>
-            </div>
-          )}
 
           {descriptorError && (
             <div
@@ -800,7 +785,7 @@ function workflowFieldHelp(path: string): string {
     case 'workflow.runtime':
       return 'Selects the workflow runtime that executes this Agent flow. This should match a backend-supported orchestrator.'
     case 'workflow.template':
-      return 'Selects the backend-owned workflow template. Use react_enterprise_qa_v3 (Controlled ReAct Loop) for new Agents. react_enterprise_qa_v2 is the single-pass baseline; enterprise_qa remains a compatibility path for older fixtures.'
+      return 'Selects the backend-owned workflow template. react_enterprise_qa_v3 is the only production workflow template.'
     case 'workflow.checkpointer.provider':
       return 'Chooses where workflow state is checkpointed so multi-step runs can resume or inspect state consistently.'
     case 'workflow.checkpointer.uri':

@@ -57,7 +57,7 @@ No MCP tool was called.
 - It must be generated for answered, refused, escalated, and failed runs.
 - It must include policy decisions and reasons.
 - It must include evidence status.
-- It must include tool approval status when tools are involved.
+- It must include governed read-only tool authorization and result status when tools are involved. Historical receipts may preserve inert approval facts, but the initial release exposes no approval workflow.
 - It must include model usage or model error summary when model calls occur.
 - It must include trace artifact path.
 - It must not print secrets, API keys, raw credentials, or unnecessary personal data.

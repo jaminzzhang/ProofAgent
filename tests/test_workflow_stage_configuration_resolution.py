@@ -12,11 +12,10 @@ from proof_agent.control.workflow.stage_configuration import (
 def test_resolver_excludes_unavailable_tool_stages_from_effective_configuration() -> None:
     resolved = resolve_workflow_stage_runtime_configuration(
         """
-name: react_enterprise_qa
+name: react_enterprise_qa_v3
 purpose: "Answer governed questions."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
+  template: react_enterprise_qa_v3
   stages:
     - id: plan
       prompt:
@@ -32,7 +31,7 @@ capabilities:
 """,
         source=WorkflowStageConfigurationRuntimeSource(
             source_type=WorkflowStageConfigurationRuntimeSourceType.PACKAGE_LOCAL_LATEST,
-            reference="package:react_enterprise_qa",
+            reference="package:react_enterprise_qa_v3",
         ),
     )
 
@@ -41,7 +40,7 @@ capabilities:
     assert resolved.workflow_stage_availability.is_available("tool") is False
     assert "tool_review" not in resolved.effective_stage_configuration.stage_ids
     assert "tool" not in resolved.effective_stage_configuration.stage_ids
-    assert resolved.trace_summary.source.reference == "package:react_enterprise_qa"
+    assert resolved.trace_summary.source.reference == "package:react_enterprise_qa_v3"
     plan_summary = next(
         stage for stage in resolved.trace_summary.stages if stage.stage_id == "plan"
     )
@@ -52,11 +51,10 @@ capabilities:
 def test_resolver_excludes_unavailable_memory_stage_from_effective_configuration() -> None:
     resolved = resolve_workflow_stage_runtime_configuration(
         """
-name: react_enterprise_qa
+name: react_enterprise_qa_v3
 purpose: "Answer governed questions."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
+  template: react_enterprise_qa_v3
 capabilities:
   tools:
     enabled: true
@@ -66,13 +64,11 @@ capabilities:
 """,
         source=WorkflowStageConfigurationRuntimeSource(
             source_type=WorkflowStageConfigurationRuntimeSourceType.PACKAGE_LOCAL_LATEST,
-            reference="package:react_enterprise_qa",
+            reference="package:react_enterprise_qa_v3",
         ),
     )
 
     assert resolved is not None
     assert resolved.workflow_stage_availability.is_available("memory") is False
     assert "memory" not in resolved.effective_stage_configuration.stage_ids
-    assert "memory" not in {
-        stage.stage_id for stage in resolved.trace_summary.stages
-    }
+    assert "memory" not in {stage.stage_id for stage in resolved.trace_summary.stages}

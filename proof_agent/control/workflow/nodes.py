@@ -1,8 +1,0 @@
-RUN_STARTED = "run_started"
-MANIFEST_LOADED = "manifest_loaded"
-RETRIEVE = "retrieve"
-EVALUATE_EVIDENCE = "evaluate_evidence"
-ANSWER = "answer"
-TOOL_APPROVAL = "tool_approval"
-MEMORY_WRITE = "memory_write"
-FINAL = "final"

@@ -133,25 +133,21 @@ def compose_harness_invocation(
                 params=resolved_planner_model.model_config.params,
             )
         )
-        if template.descriptor_version in {
-            "react_enterprise_qa.v2",
-            "react_enterprise_qa.v3",
-        }:
-            resolved_intent_model = resolve_model_role_config(
-                resolved_manifest.react.planner,
-                role=ModelCallRole.INTENT_RESOLUTION,
-                configuration_store=configuration_store,
-                require_runtime_credentials=require_runtime_credentials,
-            )
-            model_resolution_records.append(resolved_intent_model.resolution_record)
-            intent_resolver = resolve_intent_resolver(
-                ReActPlannerConfig(
-                    provider=resolved_intent_model.model_config.provider,
-                    name=resolved_intent_model.model_config.name,
-                    params=resolved_intent_model.model_config.params,
-                ),
-                max_queries=resolved_manifest.retrieval.max_queries,
-            )
+        resolved_intent_model = resolve_model_role_config(
+            resolved_manifest.react.planner,
+            role=ModelCallRole.INTENT_RESOLUTION,
+            configuration_store=configuration_store,
+            require_runtime_credentials=require_runtime_credentials,
+        )
+        model_resolution_records.append(resolved_intent_model.resolution_record)
+        intent_resolver = resolve_intent_resolver(
+            ReActPlannerConfig(
+                provider=resolved_intent_model.model_config.provider,
+                name=resolved_intent_model.model_config.name,
+                params=resolved_intent_model.model_config.params,
+            ),
+            max_queries=resolved_manifest.retrieval.max_queries,
+        )
     review_subagent = None
     if resolved_manifest.review is not None and resolved_manifest.review.subagent is not None:
         resolved_review_model = resolve_model_role_config(

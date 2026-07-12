@@ -32,7 +32,6 @@ def test_effective_tool_proposal_scope_exposes_proposal_interface_only() -> None
         tools={
             "claim_status_lookup": ToolConfig(
                 name="claim_status_lookup",
-                handler=None,
                 built_in_handler=None,
                 tool_source_id="tool_mcp_claims",
                 risk_level="medium",

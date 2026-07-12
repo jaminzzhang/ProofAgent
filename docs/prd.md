@@ -1,114 +1,54 @@
 # Proof Agent PRD
 
-## 1. Product Positioning
+## Product
 
-Proof Agent is a **Controlled Agent Harness Framework**: using Harness Engineering to manage the Agent lifecycle, placing LLMs, tools, knowledge, memory, and runtime into an orchestratable, approvable, verifiable, and auditable Control Envelope.
+Proof Agent is a Controlled Agent Harness Framework. It keeps model output, evidence, tools, memory, policy and audit inside a provider-neutral Control Envelope.
 
-Core product judgments:
-- **Harness is the main product**: Workflow, PolicyEngine, Tool Gateway, Validators, Memory Boundary, Trace, and Governance Receipt are first-class capabilities.
-- **Models and runtimes are adapters**: Remote models, LangChain/LangGraph, vector stores, real MCPs, and Dashboards plug into the Harness, rather than replacing it.
-- **Deterministic demo is a regression baseline, not the product boundary**: The project is no longer defined as local-first; the local deterministic path is used to prove the governance chain and guarantee testing.
-- **CLI and Docker are the current deployment entry points**: The project is no longer defined as CLI-first; CLI, Docker, and Dashboard APIs are all entry points or observation planes for the controlled Harness.
+The initial private pilot is an internal operator product, not a customer-service product. Its sole Agent is `agent_management_insurance_specialist`, executed only by Controlled ReAct V3.
 
-The long-term vision is an enterprise-grade **Agent Control Platform**. In the current phase, the goal is to solidify the framework's control semantics, contracts, adapter boundaries, and runnable insurance reference Agents.
+## Users
 
-V1 also introduces an **Autonomous Customer Service Mode** private pilot. This mode keeps Proof Agent positioned as the reusable Controlled Agent Harness Framework while delivering a concrete Insurance Customer Service Agent for direct end-customer automatic replies. The V1 product has two deliverables:
+- internal insurance operations specialists using Operator Chat;
+- Agent owners configuring and publishing the sole Agent through Dashboard;
+- security, compliance and operations staff reviewing permissions, traces, receipts and release evidence.
 
-- **Agent Framework Deliverable:** customer contracts, Customer Run API, Customer-Safe Response Projection, read-only authorization boundaries, internal handoff events, and handoff monitor projections.
-- **Insurance Customer Service Agent:** `examples/insurance_customer_service/`, customer Web Chat, deterministic journey suite, and local Markdown knowledge.
-- **Institution Insurance Specialist Agent:** `examples/institution_insurance_specialist/`, staff-facing Assisted Service Mode, Workflow Stage Prompt Configuration, short-term insurance-scoped knowledge, and read-only institution business tools.
+## Initial-release scope
 
-## 2. Target Audience
-
-- Enterprise AI platform teams: Need unified governance over remote models, tools, knowledge bases, and approvals.
-- Agent application owners: Need readable receipts and machine-processable traces.
-- Security, compliance, and architecture review teams: Need structured traces and readable receipts.
-- AI consulting and delivery teams: Need reusable, controlled Agent delivery skeletons.
-
-## 3. Core Capabilities
-
-| Capability | Product Requirement |
+| Area | Requirement |
 | --- | --- |
-| Agent Contract | Use `agent.yaml` to declare workflow, knowledge, model, policy, tools, memory, audit |
-| Workflow | Harness controls workflow state transitions; the model only generates content within controlled nodes |
-| PolicyEngine | Outputs typed decisions at enforcement points like retrieval, answer, tool, memory, model call |
-| Model Provider | Supports deterministic baselines and remote providers; remote output must pass validators |
-| Knowledge Provider | Supports local documents, vector stores, and remote enterprise knowledge source adapters; uniformly returns `EvidenceChunk` |
-| Tool Gateway / MCP | All tool calls go through an allowlist, parameter validation, risk grading, approval, and trace |
-| Memory Boundary | Memory read/write has policy, redaction, retention, and tenant boundary designs |
-| Validators | Admission control for schema, evidence, citation, safety, tool result, etc. |
-| Trace & Receipt | JSONL Trace is the source of truth; Governance Receipt is the human-readable proof |
-| Run Execution API | Application surfaces start governed runs through Published Agent ids, not arbitrary manifest paths |
-| Customer Run API | Customer-facing conversations return only customer-safe response projections |
-| Customer Handoff Monitor | Internal handoff events are visible to operators without exposing escalation state to customers |
-| Controlled Conversation Context | Assisted chat can use prior turns through bounded, trace-safe context admission while preserving per-turn evidence retrieval |
-| Dashboard | Dashboard API queries runs, traces, receipts, stats; UI/Approval Console for future platform evolution |
-| Deployment | Both CLI and Docker can run the deterministic demo; remote capabilities are enabled via environment variables and optional extras |
+| Identity | OIDC-only; no local accounts or passwords; seven-day login session |
+| Authorization | server-resolved permissions; Dashboard configuration; no approval workflow |
+| Agent | only `agent_management_insurance_specialist` |
+| Workflow | only `react_enterprise_qa_v3`; no legacy runtime selector/checkpointer |
+| Surfaces | Dashboard and `/operator`; customer and approval routes absent |
+| Knowledge | governed published snapshots; production artifacts backed by S3-compatible storage |
+| Tools | optional validated read-only HTTPS/MCP tools; no local handler, stdio or state-changing tool |
+| Execution | persistent bounded queue inside Proof Agent; same product image runs the Run Executor role |
+| Progress | immediate admission response and coarse SSE progress; reconnect restores durable current state |
+| State | PostgreSQL is production transactional authority |
+| Artifacts | S3-first write/verify, then one PostgreSQL visibility transaction; partial progress may be discarded |
+| Audit | trace, Governance Receipt, immutable artifact manifest and release evidence |
+| Deployment | hardened single-host production Compose with stable gateway and Blue/Green slots |
 
-## 4. Current MVP Scope
+## Explicit non-goals
 
-The current runnable MVP exposes separate insurance public examples for customer-facing service and staff-facing institution specialist assistance while keeping deterministic Enterprise QA regression fixtures to prove the complete Harness lifecycle:
-1. Load `agent.yaml`.
-2. Execute policy gates.
-3. Retrieve knowledge and evaluate evidence.
-4. Call deterministic or remote model provider.
-5. Process tool approval.
-6. Control memory write.
-7. Run validators.
-8. Write trace, receipt, and run history.
-9. Observe results via CLI, Docker, or Dashboard API.
+- local username/password, user directory or user-management page;
+- customer Chat, customer identity, handoff monitoring or customer memory;
+- approval queues, approve/deny commands or an approval workflow;
+- Kubernetes, multi-host HA or a separate Run Worker microservice;
+- arbitrary scripts or shell commands in the Agent process;
+- state-changing tools in the initial release;
+- a public quick tunnel;
+- multi-Agent catalog or legacy workflow compatibility.
 
-Acceptance outcomes for the current deterministic demo:
-```text
-supported: ANSWERED_WITH_CITATIONS
-unsupported: REFUSED_NO_EVIDENCE
-tool_required: WAITING_FOR_APPROVAL
-```
-> Note: Enumeration values in code should be considered authoritative; examples in documentation must be checked synchronously during validation.
+A future sandbox may safely execute scripts and commands, but it requires a separate threat model, isolation boundary, resource limits, filesystem/network policy, artifact exchange contract and audit design before implementation.
 
-Customer service V1 acceptance adds:
+## Release success criteria
 
-- anonymous customers may ask generic policy/claim questions but must sign in for customer-specific status
-- authenticated mock customer sessions may read only their own policy and claim status
-- customer responses must not expose trace links, receipt links, policy decisions, review results, approval state, tool parameters, or internal handoff state
-- account-changing requests and cross-customer access attempts create internal handoff events for monitoring
+Release is GO only when the immutable `initial-private-pilot-v1` profile has all 13 required Gates passed and bound to the same candidate. At minimum this includes code quality, distribution, supply chain, identity/authorization, secrets/egress, deterministic and real-LLM evaluation, dependency compatibility, capacity/latency, queue/progress, resilience/recovery, deployment and browser/operations evidence.
 
-## 5. Non-Goals
+The target operating envelope is 20 online operators, five active runs and 50 queued requests. Admission is subsecond, first progress and free-slot dispatch target one second, ordinary governed answers target 60-second P95, and the hard attempt deadline is 120 seconds.
 
-For the current phase, we do not commit to:
-- A fully hosted multi-tenant console.
-- Production-grade RBAC / IAM / OAuth / DLP.
-- Production OAuth/OIDC/IAM for customer sessions.
-- Customer-visible human escalation states.
-- Transactional insurance actions such as canceling policies, submitting claims, or approving payments.
-- Compatibility with all MCP servers or all MCP protocol capabilities. V1 MCP
-  integration is tools-only and governed through Tool Gateway.
-- Complete immunity against arbitrary prompt injections.
-- LLM-as-judge replacing deterministic validators.
-- Multi-Agent platforms, template marketplaces, or hosted control planes.
+## Delivery sequence
 
-These are directions for platform evolution but must be added gradually after the Control Envelope semantics are stable.
-
-## 6. Success Criteria
-
-- Enterprise reviewers can run the CLI or Docker demo successfully within 30 minutes.
-- The deterministic demo requires no API keys and covers answer, refusal, and approval-wait scenarios.
-- Remote model paths cannot bypass policies, evidence, validators, traces, and receipts.
-- The Tool Gateway can prove that tool governance semantics remain consistent
-  before and after real MCP tools are integrated.
-- The Dashboard API can query execution history based on run artifacts, rather than spawning a separate execution semantic.
-- The evaluation system measures Governed Resolution Rate through deterministic gates, while LLM or human judges remain diagnostic and cannot replace governance validators.
-- Documentation system is clear: AI reads `docs/README.md` first; architecture reads `docs/technical-design.md` first.
-
-## 7. Evolution Roadmap
-
-| Phase | Goal | Key Deliverables |
-| --- | --- | --- |
-| 0 | Contracts and positioning | PRD, technical design, concept docs, Agent Contract |
-| 1 | Deterministic Harness MVP | CLI, Docker, Enterprise QA Template, Trace, Receipt |
-| 2 | Model Provider Governance | remote model provider, model trace, model validators |
-| 3 | Observability & Dashboard API | RunStore, runs/history, health/runs/stats API |
-| 4 | Production Adapters | LangChain/LangGraph, real MCP, vector store, Azure/Anthropic, streaming |
-| 5 | Customer Service V1 | Customer Run API, Customer Web Chat, internal handoff monitor, Insurance Customer Service Agent |
-| 6 | Controlled Agent Memory | Local Case Memory, Memory Admission, Mem0 adapter, User Memory, Shared Memory |
-| 7 | Agent Control Platform | Dashboard UI, Approval Console, RBAC, multi-template, multi-Agent, external observability export |
+S0 V3-only baseline → S1 PostgreSQL → S2 OIDC/permissions/secrets/egress and S3 S3 artifacts → S4 queue/Executor/SSE → S5 sole production Agent → S6 deployment, recovery and pilot Gate.

@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.configuration_api import router as configuration_router
-from proof_agent.delivery.customer_api import router as customer_router
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
@@ -19,18 +18,18 @@ from proof_agent.evaluation.campaign_store import EvaluationCampaignStore
 from proof_agent.evaluation.production_sample_store import ProductionSampleCurationStore
 from proof_agent.evaluation.store import EvaluationStore
 from proof_agent.observability.api.routers import (
-    approvals,
     evaluation,
-    handoffs,
     health,
     runs,
     stats,
 )
 from proof_agent.observability.api.operator_identity import LocalOperatorIdentityProvider
 from proof_agent.observability.storage.conversation_store import ConversationStore
-from proof_agent.observability.storage.customer_store import CustomerStore
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.approval_resume import LangGraphApprovalResumeRegistry
+from proof_agent.control.workflow.controlled_react.local_stores import (
+    FileControlledReActSnapshotStore,
+    FileObservationTruthStore,
+)
 
 
 def create_app(
@@ -106,9 +105,6 @@ def create_app(
     )
     application.state.runs_dir = runs_dir
     application.state.conversation_store = ConversationStore(conversations_dir)
-    application.state.customer_store = CustomerStore(
-        conversations_dir.with_name(f"{conversations_dir.name}_customer")
-    )
     application.state.memory_store = LocalMemoryStore(
         conversations_dir.with_name(f"{conversations_dir.name}_memory")
     )
@@ -117,9 +113,12 @@ def create_app(
         agent_configuration_dir
     )
     application.state.agent_configuration_store = configuration_store
-    application.state.approval_resume_registry = LangGraphApprovalResumeRegistry(
-        history_dir.parent / "approval_resume",
-        configuration_store=configuration_store,
+    controlled_react_store_root = history_dir.parent / "controlled_react"
+    application.state.controlled_react_snapshot_store = FileControlledReActSnapshotStore(
+        controlled_react_store_root
+    )
+    application.state.controlled_react_observation_truth_store = FileObservationTruthStore(
+        controlled_react_store_root
     )
     application.state.operator_identity_provider = LocalOperatorIdentityProvider()
     application.state.published_agents = PublishedAgentRegistry(
@@ -129,12 +128,9 @@ def create_app(
 
     application.include_router(execution_router, prefix="/api")
     application.include_router(configuration_router, prefix="/api")
-    application.include_router(customer_router, prefix="/api")
     application.include_router(runs.router, prefix="/api")
-    application.include_router(approvals.router, prefix="/api")
     application.include_router(evaluation.router, prefix="/api")
     application.include_router(stats.router, prefix="/api")
-    application.include_router(handoffs.router, prefix="/api")
     application.include_router(health.router, prefix="/api")
 
     # Mount the built frontend SPA as a catch-all fallback.

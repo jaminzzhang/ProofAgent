@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 from uuid import uuid4
 
 from proof_agent.bootstrap.composition import compose_harness_invocation
@@ -35,19 +35,24 @@ from proof_agent.control.workflow.controlled_react import (
     ControlledReActStartRequest,
     build_controlled_react_orchestrator_for_invocation,
 )
+from proof_agent.control.workflow.controlled_react.execution_input import (
+    build_workflow_template_execution_input,
+    resolve_workflow_stage_runtime_configuration,
+)
+from proof_agent.control.workflow.controlled_react.stage_contexts import (
+    build_controlled_react_stage_contexts,
+)
 from proof_agent.control.workflow.controlled_react.ports import SnapshotStorePort
 from proof_agent.control.workflow.controlled_react.ports import ObservationTruthStorePort
 from proof_agent.control.workflow.harness_helpers import (
+    emit_model_error,
     finalize_run,
 )
 from proof_agent.control.workflow.templates import resolve_workflow_template
+from proof_agent.control.workflow.templates import WorkflowTemplate
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.langgraph_runner import (
-    _resolve_workflow_stage_runtime_configuration,
-    _workflow_template_execution_input,
-    run_with_langgraph,
-)
 
 
 class ControlledReActOrchestratorDependency(Protocol):
@@ -66,7 +71,6 @@ class AgentPackageRunRequest:
     memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = ()
     run_id: str | None = None
     store: RunStore | None = None
-    checkpointer: Any | None = None
     manifest: AgentManifest | None = None
     knowledge_binding_resolver: KnowledgeBindingResolver | None = None
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
@@ -87,6 +91,7 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
     """Execute one governed Agent Package run through the correct runtime."""
 
     manifest = request.manifest or load_agent_manifest(request.agent_yaml)
+    template = resolve_workflow_template(manifest.workflow.template)
     run_id = request.run_id or f"run_{uuid4().hex[:8]}"
     run_start_context = _run_start_context_assembly(
         run_id=run_id,
@@ -95,31 +100,10 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
         context_config=manifest.context,
         context_budget_calibration_store=request.context_budget_calibration_store,
     )
-    if manifest.workflow.template != "react_enterprise_qa_v3":
-        return run_with_langgraph(
-            request.agent_yaml,
-            question=request.question,
-            runs_dir=request.runs_dir,
-            conversation_context=request.conversation_context,
-            run_id=run_id,
-            store=request.store,
-            checkpointer=request.checkpointer,
-            manifest=manifest,
-            knowledge_binding_resolver=request.knowledge_binding_resolver,
-            resolved_knowledge_bindings=request.resolved_knowledge_bindings,
-            configuration_store=request.configuration_store,
-            run_purpose=request.run_purpose,
-            agent_id=request.agent_id,
-            agent_version_id=request.agent_version_id,
-            draft_id=request.draft_id,
-            allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
-            published_agent_runtime_facts=request.published_agent_runtime_facts,
-            run_start_context=run_start_context,
-            context_budget_calibration_store=request.context_budget_calibration_store,
-        )
     return _execute_controlled_react_v3_agent_package_run(
         request,
         manifest=manifest,
+        template=template,
         run_id=run_id,
         run_start_context=run_start_context,
     )
@@ -129,6 +113,7 @@ def _execute_controlled_react_v3_agent_package_run(
     request: AgentPackageRunRequest,
     *,
     manifest: AgentManifest,
+    template: WorkflowTemplate,
     run_id: str,
     run_start_context: RunStartContextAssembly | None,
 ) -> RunResult:
@@ -147,14 +132,14 @@ def _execute_controlled_react_v3_agent_package_run(
         question=request.question,
     )
     _emit_run_start_context_trace(trace, run_start_context)
-    stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
+    stage_runtime_configuration = resolve_workflow_stage_runtime_configuration(
         agent_yaml=request.agent_yaml,
         manifest=manifest,
         agent_id=request.agent_id,
         agent_version_id=request.agent_version_id,
         published_agent_runtime_facts=request.published_agent_runtime_facts,
     )
-    execution_input = _workflow_template_execution_input(
+    execution_input = build_workflow_template_execution_input(
         run_id=run_id,
         question=request.question,
         agent_id=request.agent_id,
@@ -164,14 +149,49 @@ def _execute_controlled_react_v3_agent_package_run(
         conversation_context=request.conversation_context,
         run_start_context=run_start_context,
     )
-    invocation = compose_harness_invocation(
-        request.agent_yaml,
-        manifest=manifest,
-        knowledge_binding_resolver=request.knowledge_binding_resolver,
-        resolved_knowledge_bindings=request.resolved_knowledge_bindings,
-        configuration_store=request.configuration_store,
-        context_budget_calibration_store=request.context_budget_calibration_store,
+    try:
+        invocation = compose_harness_invocation(
+            request.agent_yaml,
+            manifest=manifest,
+            knowledge_binding_resolver=request.knowledge_binding_resolver,
+            resolved_knowledge_bindings=request.resolved_knowledge_bindings,
+            configuration_store=request.configuration_store,
+            context_budget_calibration_store=request.context_budget_calibration_store,
+        )
+    except ProofAgentError as exc:
+        if exc.code.startswith("PA_MODEL_"):
+            emit_model_error(
+                trace,
+                manifest.model.provider or manifest.model.model_source,
+                manifest.model.name or manifest.model.connection_id or "unresolved",
+                exc,
+            )
+        raise
+    stage_contexts, initial_stage_context_applications = build_controlled_react_stage_contexts(
+        invocation=invocation,
+        execution_input=execution_input,
+        conversation_context=request.conversation_context,
     )
+    configured_stage_context_applications = list(initial_stage_context_applications)
+
+    def apply_business_flow_stage_contexts(selected_pack_id: str) -> None:
+        admitted_contexts, admitted_applications = build_controlled_react_stage_contexts(
+            invocation=invocation,
+            execution_input=execution_input,
+            conversation_context=request.conversation_context,
+            selected_business_flow_skill_pack_id=selected_pack_id,
+        )
+        stage_contexts.clear()
+        stage_contexts.update(admitted_contexts)
+        configured_stage_context_applications.clear()
+        configured_stage_context_applications.extend(admitted_applications)
+
+    for record in invocation.model_resolution_records:
+        trace.emit(
+            TraceEventType.MODEL_CONNECTION_RESOLUTION,
+            status="ok",
+            payload=record.model_dump(mode="json"),
+        )
     orchestrator = request.controlled_react_orchestrator
     if orchestrator is None:
         orchestrator = build_controlled_react_orchestrator_for_invocation(
@@ -179,8 +199,9 @@ def _execute_controlled_react_v3_agent_package_run(
             snapshot_store=request.controlled_react_snapshot_store,
             observation_truth_store=request.controlled_react_observation_truth_store,
             trace=trace,
+            stage_contexts=stage_contexts,
+            business_flow_admission_callback=apply_business_flow_stage_contexts,
         )
-    template = resolve_workflow_template(manifest.workflow.template)
     execution_result = orchestrator.start(
         ControlledReActStartRequest(
             run_id=run_id,
@@ -194,7 +215,14 @@ def _execute_controlled_react_v3_agent_package_run(
             max_plan_rounds=manifest.react.max_plan_rounds,
             retrieval_max_queries=manifest.retrieval.max_queries,
         )
-    ).model_copy(
+    )
+    visited_stage_ids = {stage.stage_id for stage in execution_result.stage_results}
+    stage_context_applications = tuple(
+        application
+        for application in configured_stage_context_applications
+        if application.get("stage_id") in visited_stage_ids
+    )
+    execution_result = execution_result.model_copy(
         update={
             "agent_id": request.agent_id,
             "agent_version_id": request.agent_version_id,
@@ -207,6 +235,7 @@ def _execute_controlled_react_v3_agent_package_run(
                 if execution_input.stage_configuration_source.reference
                 else ()
             ),
+            "stage_context_applications": stage_context_applications,
         }
     )
     emit_controlled_react_trace_projection(
@@ -347,6 +376,12 @@ def emit_controlled_react_trace_projection(
             ],
         },
     )
+    for application in execution_result.stage_context_applications:
+        trace.emit(
+            "workflow_stage_context_applied",
+            status="ok",
+            payload=dict(application),
+        )
     for stage_result in execution_result.stage_results:
         _emit_controlled_react_stage_result(trace, stage_result)
     if execution_result.approval_pause is not None:

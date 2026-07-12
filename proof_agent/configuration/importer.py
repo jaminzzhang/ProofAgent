@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +8,7 @@ import yaml  # type: ignore[import-untyped]
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts import ContractBundle, DraftAgent
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.errors import ProofAgentError
 
 
 BASIC_UI_TOP_LEVEL_FIELDS = {
@@ -35,6 +35,27 @@ def import_agent_package(
 
     resolved_manifest_path = manifest_path.resolve()
     manifest = load_agent_manifest(resolved_manifest_path)
+    bundle = _build_agent_package_contract_bundle(resolved_manifest_path)
+    return store.create_draft(
+        agent_id=manifest.name,
+        display_name=manifest.name,
+        purpose=manifest.purpose,
+        contract_bundle=bundle,
+        actor=actor,
+    )
+
+
+def build_agent_package_contract_bundle(manifest_path: Path) -> ContractBundle:
+    """Return the validated, canonical import bundle for one Agent Package."""
+
+    resolved_manifest_path = manifest_path.resolve()
+    load_agent_manifest(resolved_manifest_path)
+    return _build_agent_package_contract_bundle(resolved_manifest_path)
+
+
+def _build_agent_package_contract_bundle(
+    resolved_manifest_path: Path,
+) -> ContractBundle:
     raw = _read_yaml_mapping(resolved_manifest_path)
     package_dir = resolved_manifest_path.parent
     policy_path = _resolve_package_path(package_dir, raw["policy"]["file"])
@@ -48,7 +69,7 @@ def import_agent_package(
         excluded_paths = {resolved_manifest_path, policy_path, tools_path}
     extra_files = _collect_extra_files(package_dir, excluded_paths)
     extra_files.update(external_tool_files)
-    bundle = ContractBundle(
+    return ContractBundle(
         agent_yaml=resolved_manifest_path.read_text(encoding="utf-8"),
         policy_yaml=policy_path.read_text(encoding="utf-8"),
         tools_yaml=tools_yaml,
@@ -56,13 +77,6 @@ def import_agent_package(
         advanced_fields={
             key: value for key, value in raw.items() if key not in BASIC_UI_TOP_LEVEL_FIELDS
         },
-    )
-    return store.create_draft(
-        agent_id=manifest.name,
-        display_name=manifest.name,
-        purpose=manifest.purpose,
-        contract_bundle=bundle,
-        actor=actor,
     )
 
 
@@ -108,30 +122,19 @@ def _collect_extra_files(package_dir: Path, excluded: set[Path]) -> dict[str, st
 
 
 def _bundle_tools_yaml(package_dir: Path, tools_path: Path) -> tuple[str, dict[str, str]]:
+    _ = package_dir
     raw = _read_yaml_mapping(tools_path)
-    external_files: dict[str, str] = {}
     tools = raw.get("tools")
-    if not isinstance(tools, list):
-        return tools_path.read_text(encoding="utf-8"), external_files
-
-    for index, tool in enumerate(tools):
-        if not isinstance(tool, dict):
-            continue
-        handler = tool.get("handler")
-        if not isinstance(handler, str) or ":" not in handler:
-            continue
-        handler_path_text, function_name = handler.split(":", 1)
-        handler_path = _resolve_package_path(package_dir, handler_path_text)
-        if _is_within(handler_path, package_dir) or not handler_path.is_file():
-            continue
-        digest = hashlib.sha256(str(handler_path).encode("utf-8")).hexdigest()[:10]
-        bundled_name = f"external_tools/{handler_path.stem}_{index}_{digest}{handler_path.suffix}"
-        external_files[bundled_name] = handler_path.read_text(encoding="utf-8")
-        tool["handler"] = f"./{bundled_name}:{function_name}"
-
-    if not external_files:
-        return tools_path.read_text(encoding="utf-8"), external_files
-    return yaml.safe_dump(raw, sort_keys=False), external_files
+    if isinstance(tools, list) and any(
+        isinstance(tool, dict) and "handler" in tool for tool in tools
+    ):
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "local Python tool handlers are not supported.",
+            "Bind a Dashboard-managed read-only Tool Source instead.",
+            artifact_path=tools_path,
+        )
+    return tools_path.read_text(encoding="utf-8"), {}
 
 
 def _is_within(path: Path, parent: Path) -> bool:

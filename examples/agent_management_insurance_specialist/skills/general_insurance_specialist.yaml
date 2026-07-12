@@ -13,13 +13,12 @@ admission:
 knowledge_binding_refs:
   - general_insurance_knowledge
 policy_rule_refs:
-  - answering.require_evidence_or_authorized_read
+  - answering.require_evidence
 stage_prompt_addenda:
   plan:
     business_context: "该业务流是安全默认流，只能处理通用咨询和流程解释，不能扩大查数、客户记录或代理人记录权限。"
     task_instructions:
-      - "如果问题实际需要具体业务记录或报表数据，转为澄清或拒绝权限外查询。"
+      - "如果问题需要具体业务记录或报表数据，说明当前Agent不提供该查询并给出知识范围内的安全边界。"
   model_answer:
     output_preferences:
       - "默认给内勤专员简短结论和依据；没有证据时明确说明无法支持。"
-

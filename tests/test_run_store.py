@@ -8,7 +8,13 @@ import pytest
 from proof_agent.contracts.dashboard import RunIndex
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
+from proof_agent.delivery.agent_package_execution import (
+    AgentPackageRunRequest,
+    execute_agent_package_run,
+)
+
+
+V3_AGENT = Path("examples/agent_management_insurance_specialist/agent.yaml")
 
 
 @pytest.fixture
@@ -568,11 +574,13 @@ def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
 
 def test_run_store_extracts_governance_details_for_react_run(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
-    run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "latest",
-        store=store,
+    execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=V3_AGENT,
+            question="住院理赔需要哪些材料？",
+            runs_dir=tmp_path / "latest",
+            store=store,
+        )
     )
 
     runs, total = store.list_runs()
@@ -584,13 +592,15 @@ def test_run_store_extracts_governance_details_for_react_run(tmp_path: Path) -> 
     assert detail.governance_details["review_results"]
 
 
-def test_run_store_extracts_intent_resolution_for_react_v2_run(tmp_path: Path) -> None:
+def test_run_store_extracts_intent_resolution_for_v3_run(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
-    run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v2/agent.yaml"),
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path / "latest",
-        store=store,
+    execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=V3_AGENT,
+            question="住院理赔需要哪些材料？",
+            runs_dir=tmp_path / "latest",
+            store=store,
+        )
     )
 
     runs, total = store.list_runs()
@@ -721,31 +731,3 @@ def test_run_store_extracts_business_flow_skill_pack_trace_summary(
         "candidate_count": 1,
     }
     assert "stage_prompt_addenda" not in summary
-
-
-def test_run_store_projects_pending_approval_from_trace(tmp_path: Path) -> None:
-    store = RunStore(tmp_path / "history")
-    run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
-        question="Look up customer policy status before answering.",
-        runs_dir=tmp_path / "latest",
-        store=store,
-    )
-
-    runs, total = store.list_runs()
-    assert total == 1
-    detail = store.get_run_detail(runs[0].run_id)
-
-    assert detail is not None
-    assert len(detail.pending_approvals) == 1
-    pending = detail.pending_approvals[0]
-    assert pending["approval_id"] == "appr_customer_lookup"
-    assert pending["action_id"] == "act_tool_1"
-    assert pending["tool_name"] == "customer_lookup"
-    assert pending["parameters"] == {
-        "customer_id": "CUST-001",
-        "policy_id": "POL-001",
-    }
-    assert pending["policy_decision"] == "require_approval"
-    assert pending["checkpoint_id"] == f"thread:{runs[0].run_id}"
-    assert pending["expires_at"].endswith("Z")

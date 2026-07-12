@@ -6,7 +6,7 @@ from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.errors import ProofAgentError
 
 
-def test_persistent_memory_is_rejected_for_v1(tmp_path: Path) -> None:
+def test_persistent_memory_is_rejected_for_v3(tmp_path: Path) -> None:
     agent_yaml = tmp_path / "agent.yaml"
     (tmp_path / "knowledge").mkdir()
     (tmp_path / "policy.yaml").write_text("rules: []\n", encoding="utf-8")
@@ -16,8 +16,8 @@ def test_persistent_memory_is_rejected_for_v1(tmp_path: Path) -> None:
 name: broken
 purpose: "Broken manifest."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -47,6 +47,11 @@ capabilities:
 audit:
   trace_path: ../../runs/latest/trace.jsonl
   receipt_path: ../../runs/latest/governance_receipt.md
+react:
+  max_plan_rounds: 4
+  planner:
+    provider: deterministic
+    name: react-planner
 """,
         encoding="utf-8",
     )

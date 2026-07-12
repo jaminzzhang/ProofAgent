@@ -2,8 +2,8 @@ manifest_id: insurance_qa_smoke_fixture_subjects
 version: "2026-06-07"
 suite_id: insurance_qa_smoke
 agent:
-  agent_id: react_enterprise_qa
-  agent_version_id: local_fixture
+  agent_id: agent_management_insurance_specialist
+  agent_version_id: controlled_react_v3_fixture
 subjects:
   - case_ref:
       case_id: react_supported_travel_meal
@@ -11,8 +11,8 @@ subjects:
       run_id: run_example
       source: fixture
     artifacts:
-      trace_ref: ../../demo/fixtures/enterprise_qa/expected/trace.jsonl
-      receipt_ref: ../../demo/fixtures/enterprise_qa/expected/governance_receipt.md
+      trace_ref: release_sufficient/run_supported/trace.jsonl
+      receipt_ref: release_sufficient/run_supported/governance_receipt.md
     projections:
       evaluated_response:
         audience: operator

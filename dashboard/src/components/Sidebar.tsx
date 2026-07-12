@@ -2,7 +2,6 @@ import {
   Activity,
   Bot,
   BookOpen,
-  Boxes,
   Cpu,
   LayoutDashboard,
   Settings,
@@ -24,8 +23,6 @@ interface NavEntry {
 const MONITORING_ITEMS: NavEntry[] = [
   { to: '/', labelKey: 'nav.overview', icon: LayoutDashboard },
   { to: '/runs', labelKey: 'nav.runs', icon: Activity },
-  { to: '/handoffs', labelKey: 'nav.handoffs', icon: Boxes },
-  { to: '/approvals', labelKey: 'nav.approvals', icon: ShieldCheck },
 ]
 
 const CONFIGURATION_ITEMS: NavEntry[] = [
@@ -120,4 +117,3 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
     </>
   )
 }
-

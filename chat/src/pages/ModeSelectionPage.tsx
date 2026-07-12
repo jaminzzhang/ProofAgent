@@ -23,7 +23,7 @@ export function ModeSelectionPage() {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3">
           <Link
             to="/operator"
             className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 transition hover:border-[var(--accent)] hover:shadow-sm"
@@ -31,15 +31,6 @@ export function ModeSelectionPage() {
             <span className="text-base font-semibold text-[var(--text-primary)]">Operator Chat</span>
             <span className="mt-2 block text-sm leading-6 text-[var(--text-secondary)]">
               {t('modeSelection.operatorDescription')}
-            </span>
-          </Link>
-          <Link
-            to="/customer"
-            className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5 transition hover:border-[var(--accent)] hover:shadow-sm"
-          >
-            <span className="text-base font-semibold text-[var(--text-primary)]">Customer Chat</span>
-            <span className="mt-2 block text-sm leading-6 text-[var(--text-secondary)]">
-              {t('modeSelection.customerDescription')}
             </span>
           </Link>
         </div>

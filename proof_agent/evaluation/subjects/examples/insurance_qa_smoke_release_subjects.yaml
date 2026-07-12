@@ -2,8 +2,8 @@ manifest_id: insurance_qa_smoke_release_subjects
 version: "2026-06-09"
 suite_id: insurance_qa_smoke
 agent:
-  agent_id: react_enterprise_qa
-  agent_version_id: release_fixture
+  agent_id: agent_management_insurance_specialist
+  agent_version_id: controlled_react_v3_release_fixture
 subjects:
   - case_ref:
       case_id: react_supported_travel_meal

@@ -9,7 +9,7 @@ from proof_agent.errors import ProofAgentError
 
 
 def test_preview_redacts_secret_like_prompt_text() -> None:
-    descriptor = resolve_workflow_template("react_enterprise_qa")
+    descriptor = resolve_workflow_template("react_enterprise_qa_v3")
 
     preview = build_workflow_stage_context_preview(
         descriptor=descriptor,
@@ -30,7 +30,7 @@ def test_preview_redacts_secret_like_prompt_text() -> None:
 
 
 def test_preview_rejects_unknown_context_option() -> None:
-    descriptor = resolve_workflow_template("react_enterprise_qa")
+    descriptor = resolve_workflow_template("react_enterprise_qa_v3")
 
     with pytest.raises(ProofAgentError) as exc:
         build_workflow_stage_context_preview(
@@ -46,7 +46,7 @@ def test_preview_rejects_unknown_context_option() -> None:
 
 
 def test_summary_is_trace_safe_and_excludes_prompt_text() -> None:
-    descriptor = resolve_workflow_template("react_enterprise_qa")
+    descriptor = resolve_workflow_template("react_enterprise_qa_v3")
     preview = build_workflow_stage_context_preview(
         descriptor=descriptor,
         stage_id="plan",

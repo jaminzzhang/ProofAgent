@@ -10,7 +10,6 @@ CHAT_BASE = "/__proofagent_chat__/"
 def test_verify_remote_chat_and_gateway_use_exact_same_base() -> None:
     specs = _verify_remote_process_specs(
         npm_path="/usr/bin/npm",
-        cloudflared_path=None,
         backend_port=8000,
         dashboard_port=5173,
         chat_port=5174,

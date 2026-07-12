@@ -1,7 +1,5 @@
 import type {
   ActiveAgentVersion,
-  ApprovalStatusFilter,
-  ApprovalsResponse,
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
@@ -20,7 +18,6 @@ import type {
   EvaluationProductionSamplePromotionRequest,
   EvaluationProductionSamplePromotionsResponse,
   FoundationKnowledgeSourceValidation,
-  HandoffsResponse,
   HealthResponse,
   KnowledgeDocument,
   KnowledgeDocumentsResponse,
@@ -124,10 +121,6 @@ export function fetchHealth(): Promise<HealthResponse> {
   return fetchJson<HealthResponse>(`${BASE}/health`)
 }
 
-export function fetchHandoffs(): Promise<HandoffsResponse> {
-  return fetchJson<HandoffsResponse>(`${BASE}/handoffs`)
-}
-
 export function fetchEvaluationCampaigns(): Promise<EvaluationCampaignsResponse> {
   return fetchJson<EvaluationCampaignsResponse>(`${BASE}/evaluation/campaigns`)
 }
@@ -175,19 +168,6 @@ export function promoteEvaluationProductionSample(
       body: JSON.stringify(request),
     },
   )
-}
-
-export function fetchApprovals(params?: {
-  limit?: number
-  offset?: number
-  status?: ApprovalStatusFilter
-}): Promise<ApprovalsResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.limit) searchParams.set('limit', String(params.limit))
-  if (params?.offset) searchParams.set('offset', String(params.offset))
-  if (params?.status) searchParams.set('status', params.status)
-  const query = searchParams.toString()
-  return fetchJson<ApprovalsResponse>(`${BASE}/approvals${query ? `?${query}` : ''}`)
 }
 
 export function fetchConfigAgents(): Promise<ConfigAgentsResponse> {
@@ -768,22 +748,4 @@ export function rollbackConfigVersion(
       body: JSON.stringify({}),
     },
   )
-}
-
-export function approveRun(
-  runId: string,
-  approvalId: string,
-): Promise<RunDetail> {
-  return fetchJson<RunDetail>(`${BASE}/runs/${runId}/approvals/${approvalId}/approve`, {
-    method: 'POST'
-  })
-}
-
-export function denyRun(
-  runId: string,
-  approvalId: string,
-): Promise<RunDetail> {
-  return fetchJson<RunDetail>(`${BASE}/runs/${runId}/approvals/${approvalId}/deny`, {
-    method: 'POST'
-  })
 }

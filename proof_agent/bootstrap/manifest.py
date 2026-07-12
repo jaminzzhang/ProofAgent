@@ -36,8 +36,6 @@ from proof_agent.contracts import (
     WorkflowStageContextConfig,
     WorkflowStagePromptConfig,
 )
-from proof_agent.contracts.manifest import CheckpointerConfig
-
 
 PATH_PARAM_KEYS = {
     "path",
@@ -63,13 +61,10 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         name=raw["name"],
         purpose=raw["purpose"],
         workflow=WorkflowConfig(
-            runtime=workflow["runtime"],
             template=workflow["template"],
-            checkpointer=_checkpointer_config_from_mapping(workflow.get("checkpointer")),
             template_descriptor_version=workflow.get("template_descriptor_version"),
             stages=tuple(
-                _workflow_stage_config_from_mapping(item)
-                for item in workflow.get("stages", ())
+                _workflow_stage_config_from_mapping(item) for item in workflow.get("stages", ())
             ),
         ),
         package_knowledge_sources=tuple(
@@ -233,17 +228,6 @@ def _memory_scope_config_from_mapping(raw: Any) -> MemoryScopeConfig:
     )
 
 
-def _checkpointer_config_from_mapping(raw: Any) -> CheckpointerConfig | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, dict):
-        raise TypeError("workflow.checkpointer must be a mapping")
-    return CheckpointerConfig(
-        provider=raw["provider"],
-        uri=raw.get("uri"),
-    )
-
-
 def _agent_context_config_from_mapping(raw: Any) -> AgentContextConfiguration | None:
     if raw is None:
         return None
@@ -383,9 +367,7 @@ def _workflow_stage_context_options_from_mapping(
     options: dict[str, bool] = {}
     for key, value in context.items():
         if not isinstance(value, bool):
-            raise TypeError(
-                f"workflow stage {stage_id} context option {key} must be a boolean"
-            )
+            raise TypeError(f"workflow stage {stage_id} context option {key} must be a boolean")
         options[str(key)] = value
     return options
 
@@ -399,17 +381,8 @@ def _react_config_from_mapping(raw: Any) -> ReActConfig | None:
     if not isinstance(planner, dict):
         raise TypeError("react.planner must be a mapping")
     planner_config = _required_model_config_from_mapping(planner, field_name="react.planner")
-    # max_plan_rounds is the authoritative loop budget (ADR-0032). max_steps is a
-    # backward-compatible alias: an Agent Contract that only declares max_steps
-    # is read as max_plan_rounds so existing YAML keeps working.
-    max_steps = raw["max_steps"]
-    raw_max_plan_rounds = raw.get("max_plan_rounds")
-    max_plan_rounds = (
-        int(raw_max_plan_rounds) if raw_max_plan_rounds is not None else max_steps
-    )
     return ReActConfig(
-        max_steps=max_steps,
-        max_plan_rounds=max_plan_rounds,
+        max_plan_rounds=int(raw.get("max_plan_rounds", 4)),
         max_tool_calls=raw.get("max_tool_calls", 1),
         record_reasoning_summary=raw.get("record_reasoning_summary", True),
         planner=ReActPlannerConfig(

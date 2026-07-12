@@ -41,6 +41,10 @@ from proof_agent.control.workflow.harness_helpers import (
 )
 from proof_agent.control.workflow.controlled_react.ports import TracePort
 from proof_agent.control.workflow.controlled_react.ports import AnswerSynthesisResult
+from proof_agent.control.workflow.controlled_react.model_tracing import (
+    build_llm_interaction_capture,
+    parse_model_content_json,
+)
 
 
 FINAL_ANSWER_OUTPUT_CONTRACT = "FinalAnswerOutput"
@@ -83,9 +87,16 @@ class NormalizedFinalAnswerAttempt:
 
 
 class FinalAnswerAttemptRunner:
-    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
+    def __init__(
+        self,
+        invocation: HarnessInvocation,
+        *,
+        trace: TracePort,
+        workflow_stage_context: Mapping[str, Any] | None = None,
+    ) -> None:
         self._invocation = invocation
         self._trace = trace
+        self._workflow_stage_context = workflow_stage_context
 
     def run(
         self,
@@ -120,6 +131,7 @@ class FinalAnswerAttemptRunner:
             model=self._invocation.model_provider.model_name,
             conversation_context=state.conversation_context,
             memory_recall_payloads=state.memory_recall_payloads,
+            workflow_stage_context=self._workflow_stage_context,
         )
         estimated_tokens = self._invocation.model_provider.estimate_tokens(request)
         return PreparedFinalAnswerAttempt(
@@ -218,12 +230,14 @@ class FinalAnswerAttemptRunner:
             repair_attempt=_request_repair_attempt(prepared.request),
             stage_id="model_answer",
         )
-        interaction = _llm_interaction_capture(
-            stage_id="model_answer",
-            stage_label="Model Answer",
-            role=ModelCallRole.FINAL_ANSWER.value,
-            request=prepared.request,
-            response=response,
+        interaction = WorkflowStageLlmInteraction.model_validate(
+            build_llm_interaction_capture(
+                stage_id="model_answer",
+                stage_label="Model Answer",
+                role=ModelCallRole.FINAL_ANSWER.value,
+                request=prepared.request,
+                response=response,
+            )
         )
         return GeneratedFinalAnswerAttempt(
             prepared=prepared,
@@ -469,7 +483,9 @@ def _final_answer_repair_request(
 ) -> ModelRequest:
     generated = normalized.generated
     request = generated.prepared.request
-    previous_json, previous_parse_error = _model_content_json(generated.response.content)
+    previous_json, previous_parse_error = parse_model_content_json(
+        generated.response.content
+    )
     validation_error = {
         "error_code": normalized.status.value,
         "contract_name": FINAL_ANSWER_OUTPUT_CONTRACT,
@@ -832,65 +848,3 @@ def _emit_model_error_trace(
             "stage_id": stage_id,
         },
     )
-
-
-def _llm_interaction_capture(
-    *,
-    stage_id: str,
-    stage_label: str,
-    role: str,
-    request: ModelRequest,
-    response: ModelResponse,
-) -> WorkflowStageLlmInteraction:
-    response_json, parse_error = (
-        _model_content_json(response.content) if request.response_format == "json" else (None, None)
-    )
-    return WorkflowStageLlmInteraction(
-        stage_id=stage_id,
-        stage_label=stage_label,
-        role=role,
-        provider=response.provider_name,
-        model=response.model_name,
-        request_json=_model_request_json(request),
-        response_json=response_json,
-        response_content_length=len(response.content),
-        response_json_parse_error_code=parse_error,
-    )
-
-
-def _model_request_json(request: ModelRequest) -> dict[str, Any]:
-    return {
-        "provider": request.provider,
-        "model": request.model,
-        "response_format": request.response_format,
-        "function_schema": (
-            request.function_schema.model_dump(mode="json")
-            if request.function_schema is not None
-            else None
-        ),
-        "stream": request.stream,
-        "temperature": request.temperature,
-        "max_output_tokens": request.max_output_tokens,
-        "timeout_seconds": request.timeout_seconds,
-        "metadata": dict(request.metadata),
-        "evidence_sources": list(request.evidence_sources),
-        "messages": [
-            {
-                "role": message.role.value,
-                "content": message.content,
-                "name": message.name,
-                "metadata": dict(message.metadata),
-            }
-            for message in request.messages
-        ],
-    }
-
-
-def _model_content_json(content: str) -> tuple[Any | None, str | None]:
-    stripped = content.strip()
-    if not stripped:
-        return None, "empty_model_output"
-    try:
-        return json.loads(stripped), None
-    except json.JSONDecodeError:
-        return None, "model_output_json_parse_failed"

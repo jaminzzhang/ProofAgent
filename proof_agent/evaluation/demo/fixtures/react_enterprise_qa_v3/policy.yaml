@@ -10,15 +10,6 @@ rules:
       on_fail: deny
     reason_template: "Answers require accepted evidence and citations."
 
-  - rule_id: tools.customer_lookup.approval
-    enforcement_point: before_tool_call
-    condition:
-      tool_name: customer_lookup
-      risk_level: medium
-    decision:
-      on_match: require_approval
-    reason_template: "Customer policy lookup requires explicit approval."
-
   - rule_id: memory.deny_sensitive_fields
     enforcement_point: before_memory_write
     condition:

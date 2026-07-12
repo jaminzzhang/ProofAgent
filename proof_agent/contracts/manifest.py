@@ -9,11 +9,6 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 
 
-class CheckpointerConfig(FrozenModel):
-    provider: str
-    uri: str | None = None
-
-
 class WorkflowStagePromptConfig(FrozenModel):
     business_context: str = ""
     task_instructions: tuple[str, ...] = Field(default_factory=tuple)
@@ -36,9 +31,7 @@ class WorkflowStageConfig(FrozenModel):
 
 
 class WorkflowConfig(FrozenModel):
-    runtime: str
     template: str
-    checkpointer: CheckpointerConfig | None = None
     template_descriptor_version: str | None = None
     stages: tuple[WorkflowStageConfig, ...] = Field(default_factory=tuple)
 
@@ -226,7 +219,6 @@ class ReActPlannerConfig(FrozenModel):
 
 
 class ReActConfig(FrozenModel):
-    max_steps: int
     max_plan_rounds: int = 4
     max_tool_calls: int = 1
     record_reasoning_summary: bool = True

@@ -22,7 +22,9 @@ import { TableSkeleton } from '../components/TableSkeleton'
 
 export function AgentsPage() {
   const { agents, loading, error, refresh } = useConfigAgents()
-  const [manifestPath, setManifestPath] = useState('examples/insurance_customer_service/agent.yaml')
+  const [manifestPath, setManifestPath] = useState(
+    'examples/agent_management_insurance_specialist/agent.yaml',
+  )
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)

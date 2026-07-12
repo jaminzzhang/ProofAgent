@@ -14,6 +14,7 @@
     "./styles/*": "./src/styles/*"
   },
   "scripts": {
+    "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,280 +1,214 @@
 name: agent_management_insurance_specialist
-purpose: "为保险公司内勤专员提供受控的业务咨询、条款解释、核保问题支持、理赔问题支持、客户或代理人问题答复建议，以及授权范围内的代理人业绩和活动量只读查询。"
+purpose: "为保险公司内勤专员提供受控的业务咨询、条款解释、核保问题支持、理赔问题支持，以及客户或代理人问题答复建议。"
 
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v2
-  template_descriptor_version: react_enterprise_qa.v2
-  checkpointer:
-    provider: sqlite
-    uri: memory
-  stages:
-    - id: intent_resolution
-      prompt:
-        business_context: "你正在为保险公司内勤专员理解请求意图。请求可能涉及代理人基本法、产品条款、核保、理赔、客户或代理人问题答复、代理人业绩或活动量查询。请只做审计安全的意图识别，不生成最终答案。"
-        task_instructions:
-          - "识别用户目标、业务领域、已知事实、缺失字段、歧义和风险信号。"
-          - "区分知识咨询、授权查数、客户或代理人回复话术、事务性操作请求和权限范围不足。"
-          - "只推荐后续动作类别和候选业务流，不产生可执行工具参数或最终答复。"
-        output_preferences:
-          - "输出审计安全的意图摘要，不暴露原始思维链。"
-          - "缺失字段用字段名表达，例如 report_period、agent_id、metric。"
-      context:
-        include_agent_purpose: true
-        include_recent_conversation_summary: true
-        include_bound_knowledge_sources: true
-        include_bound_tools: true
-        include_policy_outline: true
-    - id: plan
-      prompt:
-        business_context: "你正在为内勤专员制定受控业务子计划。计划可以覆盖咨询、查数、核保、理赔、客户或代理人问题，但执行必须经过固定的受控 ReAct Workflow。"
-        task_instructions:
-          - "先判断是否需要公共知识、制度条款、授权业务系统记录、报表指标或外部话术草稿。"
-          - "查数请求必须明确统计周期、指标、汇总粒度和可管理代理人范围；不能假设权限或默认扩大范围。"
-          - "若缺少继续执行所需的最小字段，规划澄清；若请求变更业务状态，规划安全拒答或流程性说明。"
-          - "混合问题要拆分为咨询依据、查数依据和话术需求，但不能合并多个业务流的权限。"
-        output_preferences:
-          - "用简短中文概括业务子计划。"
-          - "列出下一步需要的证据或只读工具类型，不写原始思维链。"
-      context:
-        include_agent_purpose: true
-        include_recent_conversation_summary: true
-        include_bound_knowledge_sources: true
-        include_bound_tools: true
-        include_policy_outline: true
-    - id: clarification
-      context:
-        include_agent_purpose: true
-        include_recent_conversation_summary: true
-        include_missing_field_schema: true
-    - id: retrieval_review
-      prompt:
-        business_context: "你正在审查是否应使用受控知识检索。知识来源适用于制度、条款、SOP、口径定义和通用业务解释；不能替代实时业务系统记录或报表结果。"
-        task_instructions:
-          - "代理人基本法、产品条款、核保规则、理赔流程和指标口径优先走知识检索。"
-          - "保单状态、理赔状态、代理人职级、业绩数值和活动量属于当前状态或报表事实，不能只靠文档回答。"
-          - "当来源可能冲突时，标记来源权威顺序和需要复核的冲突点。"
-        output_preferences:
-          - "说明允许或拒绝检索的业务理由。"
-          - "优先返回应检索的知识绑定或业务线范围。"
-      context:
-        include_agent_purpose: true
-        include_retrieval_intent: true
-        include_bound_knowledge_sources: true
-        include_policy_outline: true
-    - id: retrieval
-      context:
-        include_retrieval_intent: true
-        include_bound_knowledge_sources: true
-        include_source_routing_metadata: true
-    - id: model_answer
-      prompt:
-        business_context: "你正在为保险公司内勤专员生成候选回答。回答必须基于已采信证据、授权只读结果或报表结果，不能做承诺、审批、赔付保证或权限外判断。"
-        task_instructions:
-          - "先给结论或建议，再给依据，再给边界或缺失信息；只有触发对外回复时才生成外部话术草稿。"
-          - "咨询类回答要说明制度、条款、SOP 或业务记录依据，以及适用条件。"
-          - "查数类回答要说明统计周期、范围、指标口径、筛选条件和汇总粒度。"
-          - "来源冲突时明确列出冲突，不自行调和成一个新结论。"
-          - "不得承诺承保、赔付、保全、佣金调整、客户通知或任何状态变更。"
-        output_preferences:
-          - "中文、简洁、面向内勤专员。"
-          - "必要时使用小标题：结论/建议、依据、边界/缺失信息、对外话术草稿。"
-          - "引用来源使用安全标签，不暴露内部工具名、参数、规则编号或审核细节。"
-      context:
-        include_agent_purpose: true
-        include_recent_conversation_summary: true
-        include_evidence_summary: true
-        include_citation_requirements: true
-        include_response_disclosure_policy: true
-    - id: tool_review
-      prompt:
-        business_context: "你正在审查只读工具提议。工具只能查询当前专员可管理代理人范围内的业务记录或报表数据，不能执行任何业务状态变更。"
-        task_instructions:
-          - "查数工具必须具备权限上下文、统计周期、指标和汇总粒度；用户筛选条件只能缩小范围。"
-          - "保单、理赔、客户或代理人记录查询必须具备稳定标识或受控筛选条件。"
-          - "拒绝或澄清承保审批、理赔结案、保全变更、佣金调整、外呼发送、工单创建等事务性操作。"
-          - "工具参数只能使用 Tool Contract 允许的字段；不得生成令牌、密码、手机号等敏感参数。"
-        output_preferences:
-          - "权限和风险判断保持审计安全。"
-          - "清楚说明允许、拒绝或需要澄清的原因。"
-      context:
-        include_agent_purpose: true
-        include_tool_proposal: true
-        include_tool_contract_summary: true
-        include_policy_outline: true
-        include_approval_requirements: true
-    - id: tool
-      context:
-        include_tool_contract_summary: true
-        include_approval_state: true
-        include_parameter_bounds: true
-    - id: memory
-      context:
-        include_agent_purpose: true
-        include_memory_scope: true
-        include_memory_denylist_summary: true
-        include_recent_conversation_summary: true
-    - id: response
-      context:
-        include_agent_purpose: true
-        include_outcome: true
-        include_governance_summary: true
-        include_response_disclosure_policy: true
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 
 package_knowledge_sources:
-  - source_id: agent_management_insurance_knowledge
-    name: Agent Management Insurance Knowledge
+  - source_id: general_insurance_knowledge
+    name: General Insurance Knowledge
     provider: local_markdown
     params:
-      path: ./knowledge
+      path: ./knowledge/general
+  - source_id: agent_basic_law_knowledge
+    name: Agent Basic Law Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/agent-basic-law
+  - source_id: product_clause_knowledge
+    name: Product Clause Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/product
+  - source_id: underwriting_knowledge
+    name: Underwriting Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/underwriting
+  - source_id: claims_knowledge
+    name: Claims Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/claims
+  - source_id: external_wording_knowledge
+    name: External Wording Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/external-wording
+  - source_id: metric_definition_knowledge
+    name: Metric Definition Knowledge
+    provider: local_markdown
+    params:
+      path: ./knowledge/metrics
 
 knowledge_bindings:
   - binding_id: general_insurance_knowledge
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
-    alias: general
+      source_id: general_insurance_knowledge
+    alias: general_insurance
     failure_mode: advisory
     fusion_weight: 0.6
-    top_k: 3
+    top_k: 1
     routing_metadata:
-      audience: institution_specialist
+      query_terms:
+        - 通用保险
+        - 一般保险
+        - 保险帮助
+        - general insurance
+        - insurance help
   - binding_id: agent_basic_law_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: agent_basic_law_knowledge
     alias: agent_basic_law
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 5
+    top_k: 1
     routing_metadata:
       document_family: agent_basic_law
       authority: formal_rule
+      query_terms:
+        - 代理人基本法
+        - 职级维持
+        - 晋升条件
+        - 佣金规则
+        - agent basic law
+        - rank maintenance
   - binding_id: product_clause_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: product_clause_knowledge
     alias: product_clause
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 5
+    top_k: 1
     routing_metadata:
       document_family: product_clause
       authority: policy_wording
+      query_terms:
+        - 产品条款
+        - 等待期
+        - 保障责任
+        - 除外责任
+        - product clause
+        - waiting period
+        - deductible
   - binding_id: underwriting_rule_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: underwriting_knowledge
     alias: underwriting_rules
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 5
+    top_k: 1
     routing_metadata:
       document_family: underwriting_rule
       authority: underwriting_sop
+      query_terms:
+        - 核保
+        - 健康告知
+        - 职业类别
+        - 承保材料
+        - underwriting
+        - health declaration
   - binding_id: claims_sop_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: claims_knowledge
     alias: claims_sop
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 5
+    top_k: 1
     routing_metadata:
       document_family: claims_sop
       authority: claims_sop
+      query_terms:
+        - claim reimbursement
+        - required documents
+        - inpatient claim
+        - 理赔
+        - 住院理赔
+        - 理赔材料
   - binding_id: customer_agent_wording_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: external_wording_knowledge
     alias: external_wording
     failure_mode: advisory
     fusion_weight: 0.8
-    top_k: 3
+    top_k: 1
     routing_metadata:
       document_family: external_wording
       authority: approved_wording
+      query_terms:
+        - 外部话术
+        - 如何回复客户
+        - 怎么回复代理人
+        - 客户或代理人
+        - external wording
+        - reply to customer
   - binding_id: metric_definition_docs
     source_ref:
       scope: package
-      source_id: agent_management_insurance_knowledge
+      source_id: metric_definition_knowledge
     alias: metric_definitions
     failure_mode: required
     fusion_weight: 1.0
-    top_k: 3
+    top_k: 1
     routing_metadata:
       document_family: metric_definition
       authority: report_basis
+      query_terms:
+        - 业绩指标
+        - 活动量
+        - 指标口径
+        - report period
+        - performance metric
 
 retrieval:
   strategy: single_step
-  top_k: 5
+  top_k: 1
   min_score: 0.25
   max_queries: 3
   query_timeout_seconds: 20.0
 
 react:
-  max_steps: 6
-  max_tool_calls: 1
+  max_plan_rounds: 4
+  max_tool_calls: 0
   record_reasoning_summary: true
   planner:
-    provider: openai_compatible
-    name: qwen-plus
-    params:
-      api_key_env: OPENAI_COMPATIBLE_API_KEY
-      base_url_env: OPENAI_COMPATIBLE_BASE_URL
-      temperature: 0
-      max_output_tokens: 800
-      timeout_seconds: 20
+    provider: deterministic
+    name: agent-management-insurance-planner
 
 review:
   mode: auto
   low_risk_fast_path: true
   subagent:
-    provider: openai_compatible
-    name: qwen-plus
+    provider: deterministic
+    name: agent-management-insurance-reviewer
     fail_closed: true
     params:
-      api_key_env: OPENAI_COMPATIBLE_API_KEY
-      base_url_env: OPENAI_COMPATIBLE_BASE_URL
-      temperature: 0
       timeout_seconds: 10
-      max_output_tokens: 500
 
 response:
   include_reasoning_summary: true
   include_review_results: true
 
 model:
-  provider: openai_compatible
-  name: qwen-plus
-  params:
-    api_key_env: OPENAI_COMPATIBLE_API_KEY
-    base_url_env: OPENAI_COMPATIBLE_BASE_URL
-    temperature: 0
-    max_output_tokens: 800
-    timeout_seconds: 20
+  provider: deterministic
+  name: agent-management-insurance-answer
 
 policy:
   file: ./policy.yaml
 
 capabilities:
   tools:
-    enabled: true
-    file: ./tools.yaml
+    enabled: false
   memory:
     enabled: true
-    provider: local
-    scopes:
-      case:
-        enabled: true
-        retention_days: 30
-        max_records: 8
-        allow_restricted: false
-      user:
-        enabled: false
-      shared:
-        enabled: false
+    provider: session
   skills:
     enabled: true
     business_flows:
@@ -291,8 +225,6 @@ capabilities:
         definition: ./skills/claims_consultation.yaml
       - id: customer_agent_question_support
         definition: ./skills/customer_agent_question_support.yaml
-      - id: agent_performance_activity_lookup
-        definition: ./skills/agent_performance_activity_lookup.yaml
 
 audit:
   trace_path: ../../runs/latest/trace.jsonl

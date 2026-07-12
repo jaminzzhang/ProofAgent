@@ -17,7 +17,7 @@ knowledge_binding_refs:
   - product_clause_docs
   - claims_sop_docs
 policy_rule_refs:
-  - answering.require_evidence_or_authorized_read
+  - answering.require_evidence
   - response.external_wording_safety
 stage_prompt_addenda:
   plan:
@@ -31,4 +31,3 @@ stage_prompt_addenda:
     output_preferences:
       - "先输出内勤处理建议，再在需要时输出“对外话术草稿”。"
       - "外部话术应自然、克制、可人工审核，不包含内部系统名、参数、权限或审核细节。"
-

@@ -233,60 +233,141 @@ class LocalAgentConfigurationStore:
         resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
     ) -> PublishedAgentVersion:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
-            draft = self._require_draft(agent_id, draft_id)
-            self._require_shared_model_connections_active_unlocked(draft.contract_bundle.agent_yaml)
-            _require_no_unavailable_workflow_stage_configuration(draft.contract_bundle.agent_yaml)
-            if resolved_knowledge_bindings is not None:
-                _require_resolved_shared_bindings_cover_draft(
-                    draft.contract_bundle.agent_yaml,
-                    resolved_knowledge_bindings,
-                )
-                self._require_resolved_shared_knowledge_sources_active_unlocked(
-                    resolved_knowledge_bindings
-                )
-            elif _has_shared_knowledge_source_bindings(draft.contract_bundle.agent_yaml):
-                raise _knowledge_source_lifecycle_conflict(
-                    "Published Agent Version requires resolved shared Knowledge Source bindings. "
-                    "Revalidate the Draft Agent before publishing."
-                )
-            self._require_mcp_tool_sources_publishable_unlocked(
-                draft.contract_bundle.tools_yaml
-            )
-            version = PublishedAgentVersion(
+            self._require_canonical_seed_authority_allows_agent_unlocked(agent_id)
+            return self._publish_version_unlocked(
                 agent_id=agent_id,
-                version_id=f"version_{uuid4().hex[:8]}",
-                source_draft_id=draft_id,
+                draft_id=draft_id,
                 validation_run_id=validation_run_id,
-                display_name=draft.display_name,
-                purpose=draft.purpose,
-                contract_bundle=draft.contract_bundle,
-                published_at=_now(),
-                published_by=actor,
+                actor=actor,
                 resolved_knowledge_bindings=resolved_knowledge_bindings,
-                workflow_stage_availability=_build_workflow_stage_availability(
-                    draft.contract_bundle.agent_yaml
-                ),
-                effective_workflow_stage_configuration=(
-                    _build_effective_workflow_stage_configuration(draft.contract_bundle.agent_yaml)
-                ),
-                operation_audit=(
-                    _audit(
-                        ConfigurationOperation.PUBLISHED,
-                        actor=actor,
-                        summary=f"Published draft {draft_id}.",
-                        metadata={"validation_run_id": validation_run_id},
-                    ),
-                ),
             )
-            self._write_version(version)
-            active = ActiveAgentVersion(
+
+    def publish_canonical_seed_version_if_store_empty(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        validation_run_id: str,
+        actor: str,
+    ) -> PublishedAgentVersion | None:
+        """Atomically publish the first local seed and reserve its sole identity."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            authority_path = self._canonical_seed_authority_path()
+            if self._active_agent_ids_unlocked() or authority_path.exists():
+                return None
+            _write_json_atomic(
+                authority_path,
+                {
+                    "agent_id": agent_id,
+                    "state": "reserved",
+                },
+            )
+            version = self._publish_version_unlocked(
                 agent_id=agent_id,
-                version_id=version.version_id,
-                activated_at=version.published_at,
-                activated_by=actor,
+                draft_id=draft_id,
+                validation_run_id=validation_run_id,
+                actor=actor,
+                resolved_knowledge_bindings=None,
             )
-            self._write_active_version(active)
+            _write_json_atomic(
+                authority_path,
+                {
+                    "agent_id": agent_id,
+                    "initial_version_id": version.version_id,
+                    "state": "active",
+                },
+            )
             return version
+
+    def ensure_canonical_seed_authority(
+        self,
+        *,
+        agent_id: str,
+        expected_active_version_id: str,
+    ) -> bool:
+        """Atomically reserve a previously seeded canonical-only local store."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            if self._active_agent_ids_unlocked() != (agent_id,):
+                return False
+            active = self.get_active_version(agent_id)
+            if active is None or active.version_id != expected_active_version_id:
+                return False
+            authority_path = self._canonical_seed_authority_path()
+            if authority_path.exists():
+                return _read_json(authority_path).get("agent_id") == agent_id
+            _write_json_atomic(
+                authority_path,
+                {
+                    "agent_id": agent_id,
+                    "initial_version_id": active.version_id,
+                    "state": "active",
+                },
+            )
+            return True
+
+    def _publish_version_unlocked(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        validation_run_id: str,
+        actor: str,
+        resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None,
+    ) -> PublishedAgentVersion:
+        draft = self._require_draft(agent_id, draft_id)
+        self._require_shared_model_connections_active_unlocked(draft.contract_bundle.agent_yaml)
+        _require_no_unavailable_workflow_stage_configuration(draft.contract_bundle.agent_yaml)
+        if resolved_knowledge_bindings is not None:
+            _require_resolved_shared_bindings_cover_draft(
+                draft.contract_bundle.agent_yaml,
+                resolved_knowledge_bindings,
+            )
+            self._require_resolved_shared_knowledge_sources_active_unlocked(
+                resolved_knowledge_bindings
+            )
+        elif _has_shared_knowledge_source_bindings(draft.contract_bundle.agent_yaml):
+            raise _knowledge_source_lifecycle_conflict(
+                "Published Agent Version requires resolved shared Knowledge Source bindings. "
+                "Revalidate the Draft Agent before publishing."
+            )
+        self._require_mcp_tool_sources_publishable_unlocked(draft.contract_bundle.tools_yaml)
+        version = PublishedAgentVersion(
+            agent_id=agent_id,
+            version_id=f"version_{uuid4().hex[:8]}",
+            source_draft_id=draft_id,
+            validation_run_id=validation_run_id,
+            display_name=draft.display_name,
+            purpose=draft.purpose,
+            contract_bundle=draft.contract_bundle,
+            published_at=_now(),
+            published_by=actor,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
+            workflow_stage_availability=_build_workflow_stage_availability(
+                draft.contract_bundle.agent_yaml
+            ),
+            effective_workflow_stage_configuration=(
+                _build_effective_workflow_stage_configuration(draft.contract_bundle.agent_yaml)
+            ),
+            operation_audit=(
+                _audit(
+                    ConfigurationOperation.PUBLISHED,
+                    actor=actor,
+                    summary=f"Published draft {draft_id}.",
+                    metadata={"validation_run_id": validation_run_id},
+                ),
+            ),
+        )
+        self._write_version(version)
+        active = ActiveAgentVersion(
+            agent_id=agent_id,
+            version_id=version.version_id,
+            activated_at=version.published_at,
+            activated_by=actor,
+        )
+        self._write_active_version(active)
+        return version
 
     def record_validation(
         self,
@@ -436,6 +517,48 @@ class LocalAgentConfigurationStore:
             return None
         return ActiveAgentVersion.model_validate(_read_json(path))
 
+    def list_active_agent_ids(self) -> tuple[str, ...]:
+        """List every Agent identity with an active Published Version."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            return self._active_agent_ids_unlocked()
+
+    def _active_agent_ids_unlocked(self) -> tuple[str, ...]:
+        agents_root = self._root_dir / "agents"
+        if not agents_root.exists():
+            return ()
+        return tuple(
+            sorted(
+                agent_dir.name
+                for agent_dir in agents_root.iterdir()
+                if agent_dir.is_dir() and self._active_version_path(agent_dir.name).is_file()
+            )
+        )
+
+    def _require_canonical_seed_authority_allows_agent_unlocked(
+        self,
+        agent_id: str,
+    ) -> None:
+        authority_path = self._canonical_seed_authority_path()
+        if not authority_path.exists():
+            return
+        authority = _read_json(authority_path)
+        canonical_agent_id = authority.get("agent_id")
+        if canonical_agent_id == agent_id:
+            return
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            (
+                "local Agent Configuration Store is reserved for canonical Agent "
+                f"{canonical_agent_id}"
+            ),
+            (
+                "Run `proof-agent config-reset --scope local-store --yes` before "
+                "publishing a different local Agent identity."
+            ),
+            artifact_path=authority_path,
+        )
+
     def rollback_active_version(
         self,
         *,
@@ -443,18 +566,20 @@ class LocalAgentConfigurationStore:
         version_id: str,
         actor: str,
     ) -> ActiveAgentVersion:
-        if self.get_version(agent_id, version_id) is None:
-            raise KeyError(f"Published Agent Version not found: {agent_id}/{version_id}")
-        current = self.get_active_version(agent_id)
-        active = ActiveAgentVersion(
-            agent_id=agent_id,
-            version_id=version_id,
-            activated_at=_now(),
-            activated_by=actor,
-            rollback_from_version_id=current.version_id if current else None,
-        )
-        self._write_active_version(active)
-        return active
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._require_canonical_seed_authority_allows_agent_unlocked(agent_id)
+            if self.get_version(agent_id, version_id) is None:
+                raise KeyError(f"Published Agent Version not found: {agent_id}/{version_id}")
+            current = self.get_active_version(agent_id)
+            active = ActiveAgentVersion(
+                agent_id=agent_id,
+                version_id=version_id,
+                activated_at=_now(),
+                activated_by=actor,
+                rollback_from_version_id=current.version_id if current else None,
+            )
+            self._write_active_version(active)
+            return active
 
     def create_model_connection(
         self,
@@ -3182,6 +3307,9 @@ class LocalAgentConfigurationStore:
     def _active_version_path(self, agent_id: str) -> Path:
         return self._root_dir / "agents" / agent_id / "active_version.json"
 
+    def _canonical_seed_authority_path(self) -> Path:
+        return self._root_dir / "canonical_seed_authority.json"
+
     def _validation_captures_root(self) -> Path:
         return self._root_dir / "validation_captures"
 
@@ -3961,9 +4089,7 @@ def _mcp_tool_contracts(tools_yaml: str) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(tools, list | tuple):
         return ()
     return tuple(
-        tool
-        for tool in tools
-        if isinstance(tool, Mapping) and tool.get("source") == "mcp"
+        tool for tool in tools if isinstance(tool, Mapping) and tool.get("source") == "mcp"
     )
 
 

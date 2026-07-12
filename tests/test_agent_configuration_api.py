@@ -83,7 +83,7 @@ def _import_enterprise_qa(client: TestClient) -> dict:
     response = client.post(
         "/api/config/agents/import",
         json={
-            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
         },
     )
     assert response.status_code == 200
@@ -94,7 +94,7 @@ def _import_react_enterprise_qa(client: TestClient) -> dict:
     response = client.post(
         "/api/config/agents/import",
         json={
-            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml",
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
         },
     )
     assert response.status_code == 200
@@ -163,7 +163,7 @@ def test_agent_config_import_rejects_request_body_actor(tmp_path: Path) -> None:
     response = client.post(
         "/api/config/agents/import",
         json={
-            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
             "actor": "spoofed-operator",
         },
     )
@@ -180,7 +180,7 @@ def test_agent_config_import_requires_agent_edit_permission(tmp_path: Path) -> N
     response = client.post(
         "/api/config/agents/import",
         json={
-            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
         },
     )
 
@@ -197,7 +197,7 @@ def test_agent_config_import_uses_operator_identity_for_audit(tmp_path: Path) ->
     draft = client.post(
         "/api/config/agents/import",
         json={
-            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
         },
     )
 
@@ -213,7 +213,7 @@ def test_agent_config_validation_requires_agent_validate_permission(tmp_path: Pa
     draft = client.post(
         "/api/config/agents/import",
         json={
-            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
         },
     ).json()
 
@@ -234,7 +234,7 @@ def test_agent_config_publish_requires_agent_publish_permission(tmp_path: Path) 
     draft = client.post(
         "/api/config/agents/import",
         json={
-            "manifest_path": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+            "manifest_path": "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml",
         },
     ).json()
 
@@ -861,8 +861,8 @@ def test_validation_warns_and_publish_rejects_archived_shared_model_connection(
 name: enterprise_qa
 purpose: "Answer questions."
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources:
   - source_id: ks_local
     name: Local Knowledge
@@ -887,6 +887,12 @@ capabilities:
   memory:
     enabled: true
     provider: session
+react:
+  max_plan_rounds: 2
+  max_tool_calls: 0
+  planner:
+    provider: deterministic
+    name: demo
 audit:
   trace_path: {tmp_path / "runs" / "trace.jsonl"}
   receipt_path: {tmp_path / "runs" / "governance_receipt.md"}
@@ -954,8 +960,8 @@ def test_fetch_config_draft_skills_projects_runtime_ordered_pack(
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v2
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
   stages:
     - id: plan
       prompt:
@@ -994,7 +1000,6 @@ capabilities:
         definition: ./skills/claims.yaml
         default: true
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -1139,7 +1144,7 @@ def test_fetch_config_draft_skills_reports_missing_refs_without_blocking_list(
     assert repaired.json()["configuration_issues"] == []
 
 
-def test_fetch_config_draft_skills_handles_template_without_addendum_slots(
+def test_fetch_config_draft_skills_projects_v3_addendum_slots_when_disabled(
     tmp_path: Path,
 ) -> None:
     client = _client(tmp_path)
@@ -1152,7 +1157,12 @@ def test_fetch_config_draft_skills_handles_template_without_addendum_slots(
     assert response.status_code == 200
     payload = response.json()
     assert payload["enabled"] is False
-    assert payload["addendum_slots"] == []
+    assert [slot["stage_id"] for slot in payload["addendum_slots"]] == [
+        "plan",
+        "retrieval_review",
+        "tool_review",
+        "model_answer",
+    ]
     assert payload["packs"] == []
 
 
@@ -1170,8 +1180,8 @@ def test_create_config_draft_skill_pack_writes_package_local_definition(
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v2
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources: []
 knowledge_bindings: []
 retrieval:
@@ -1189,7 +1199,6 @@ capabilities:
     enabled: true
     provider: session
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -1252,8 +1261,8 @@ def test_update_config_draft_skill_pack_rewrites_definition(
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v2
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources: []
 knowledge_bindings: []
 retrieval:
@@ -1276,7 +1285,6 @@ capabilities:
       - id: claims_qa
         definition: ./skills/claims.yaml
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -1363,8 +1371,8 @@ def test_delete_config_draft_skill_pack_removes_binding_and_definition(
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v2
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
 package_knowledge_sources: []
 knowledge_bindings: []
 retrieval:
@@ -1387,7 +1395,6 @@ capabilities:
       - id: claims_qa
         definition: ./skills/claims.yaml
 react:
-  max_steps: 2
   planner:
     provider: deterministic
     name: demo
@@ -2675,11 +2682,11 @@ def test_import_agent_package_creates_draft_and_list_entry(tmp_path: Path) -> No
     draft = _import_enterprise_qa(client)
     listed = client.get("/api/config/agents")
 
-    assert draft["agent_id"] == "enterprise_qa"
+    assert draft["agent_id"] == "react_enterprise_qa_v3"
     assert draft["draft_id"].startswith("draft_")
-    assert draft["display_name"] == "enterprise_qa"
+    assert draft["display_name"] == "react_enterprise_qa_v3"
     assert listed.status_code == 200
-    assert listed.json()["data"][0]["agent_id"] == "enterprise_qa"
+    assert listed.json()["data"][0]["agent_id"] == "react_enterprise_qa_v3"
     assert listed.json()["data"][0]["draft_count"] == 1
     assert listed.json()["data"][0]["active_version_id"] is None
 
@@ -2705,7 +2712,7 @@ def test_read_update_draft_and_contract_view(tmp_path: Path) -> None:
     assert loaded.status_code == 200
     assert loaded.json()["purpose"] == "Answer support policy questions with governed evidence."
     assert contract.status_code == 200
-    assert contract.json()["agent_yaml"].startswith("name: enterprise_qa")
+    assert contract.json()["agent_yaml"].startswith("name: react_enterprise_qa_v3")
     assert contract.json()["policy_yaml"].startswith("rules:")
     assert "knowledge/customer-support-policy.md" in contract.json()["extra_files"]
 
@@ -2789,18 +2796,33 @@ def test_update_react_contract_view_preserves_reviewer_usage_params(
 def test_workflow_template_descriptor_lists_stages(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
-    response = client.get("/api/config/workflow-templates/react_enterprise_qa")
+    response = client.get("/api/config/workflow-templates/react_enterprise_qa_v3")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["descriptor_version"] == "react_enterprise_qa.v1"
-    assert body["stages"][0]["id"] == "plan"
-    assert body["stages"][0]["successors"] == [
+    assert body["descriptor_version"] == "react_enterprise_qa.v3"
+    assert body["stages"][0]["id"] == "intent_resolution"
+    assert body["stages"][1]["successors"] == [
         "clarification",
         "retrieval_review",
         "tool_review",
         "response",
     ]
+
+
+@pytest.mark.parametrize(
+    "removed_template",
+    ("enterprise_qa", "react_enterprise_qa", "react_enterprise_qa_v2"),
+)
+def test_removed_workflow_template_descriptor_fails_closed(
+    tmp_path: Path,
+    removed_template: str,
+) -> None:
+    response = _client(tmp_path).get(f"/api/config/workflow-templates/{removed_template}")
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "PA_CONFIG_002"
+    assert "react_enterprise_qa_v3" in response.json()["detail"]["fix"]
 
 
 def test_update_workflow_stages_persists_valid_stage_config(tmp_path: Path) -> None:
@@ -2810,7 +2832,7 @@ def test_update_workflow_stages_persists_valid_stage_config(tmp_path: Path) -> N
     response = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-stages",
         json={
-            "template_descriptor_version": "react_enterprise_qa.v1",
+            "template_descriptor_version": "react_enterprise_qa.v3",
             "stages": [
                 {
                     "id": "plan",
@@ -2823,7 +2845,7 @@ def test_update_workflow_stages_persists_valid_stage_config(tmp_path: Path) -> N
 
     assert response.status_code == 200
     raw = yaml.safe_load(response.json()["agent_yaml"])
-    assert raw["workflow"]["template_descriptor_version"] == "react_enterprise_qa.v1"
+    assert raw["workflow"]["template_descriptor_version"] == "react_enterprise_qa.v3"
     assert raw["workflow"]["stages"][0]["id"] == "plan"
     assert raw["workflow"]["stages"][0]["prompt"]["business_context"] == (
         "Insurance servicing context."
@@ -2837,7 +2859,7 @@ def test_update_workflow_stages_preserves_unicode_prompt_text(tmp_path: Path) ->
     response = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-stages",
         json={
-            "template_descriptor_version": "react_enterprise_qa.v1",
+            "template_descriptor_version": "react_enterprise_qa.v3",
             "stages": [
                 {
                     "id": "plan",
@@ -2874,7 +2896,11 @@ def test_preview_workflow_stage_context(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["stage_id"] == "plan"
     assert response.json()["structured_control_context"] == {
-        "include_agent_purpose": "Answer enterprise knowledge questions through a governed ReAct workflow."
+        "include_agent_purpose": (
+            "Answer enterprise knowledge questions through the governed Controlled "
+            "ReAct Loop (ADR-0032): observation actions return to plan under a "
+            "dual-axis budget and deterministic Convergence Check."
+        )
     }
     assert client.get("/api/runs").json()["meta"]["total"] == 0
 
@@ -3150,13 +3176,13 @@ def test_validation_run_defaults_to_summary_only_trace_capture(tmp_path: Path) -
     assert detail.json()["validation_capture_id"] is None
 
 
-def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -> None:
+def test_validation_run_full_capture_records_gated_v3_artifact(tmp_path: Path) -> None:
     client = _client(tmp_path)
     draft = _import_react_enterprise_qa(client)
     update = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-stages",
         json={
-            "template_descriptor_version": "react_enterprise_qa.v1",
+            "template_descriptor_version": "react_enterprise_qa.v3",
             "stages": [
                 {
                     "id": "plan",
@@ -3215,11 +3241,15 @@ def test_validation_run_full_capture_records_gated_v2_artifact(tmp_path: Path) -
     }
     assert payload["source"]["run_id"] == body["run_id"]
     assert payload["source"]["draft_id"] == draft["draft_id"]
-    assert payload["source"]["template_name"] == "react_enterprise_qa"
+    assert payload["source"]["template_name"] == "react_enterprise_qa_v3"
     assert payload["stage_prompt_values"]
     assert payload["stage_prompt_values"][0]["stage_label"]
     assert payload["context_configuration"]
     assert payload["context_applications"]
+    plan_context = next(
+        item for item in payload["context_applications"] if item["summary"]["stage_id"] == "plan"
+    )
+    assert plan_context["summary"]["business_context_length"] == len("Insurance servicing context.")
     assert payload["stage_results"]
     assert payload["failure_diagnostics"] == []
     assert payload["llm_interactions"]
@@ -3309,32 +3339,20 @@ def test_publish_requires_validation_and_activates_version(tmp_path: Path) -> No
     assert published.status_code == 200
     assert published.json()["version_id"].startswith("version_")
     assert published.json()["validation_run_id"] == validation.json()["run_id"]
-    assert published.json()["effective_workflow_stage_configuration"] == {
-        "template_name": "enterprise_qa",
-        "template_descriptor_version": "enterprise_qa.v1",
-        "stages": [
-            {
-                "id": "enterprise_qa",
-                "label": "Enterprise QA",
-                "description": "Evidence-backed deterministic Enterprise QA workflow summary.",
-                "required": True,
-                "model_bearing": False,
-                "editable_prompt_fields": [],
-                "available_context_options": [],
-                "prompt": {
-                    "business_context": "",
-                    "task_instructions": [],
-                    "output_preferences": [],
-                },
-                "context": {},
-                "source_override": {"configured": False},
-            }
-        ],
-        "capabilities": {
-            "tools": {"enabled": True, "file": "./tools.yaml"},
-            "memory": {"enabled": True, "provider": "session", "scopes": {}},
-        },
-    }
+    effective = published.json()["effective_workflow_stage_configuration"]
+    assert effective["template_name"] == "react_enterprise_qa_v3"
+    assert effective["template_descriptor_version"] == "react_enterprise_qa.v3"
+    assert [stage["id"] for stage in effective["stages"]] == [
+        "intent_resolution",
+        "plan",
+        "clarification",
+        "retrieval_review",
+        "retrieval",
+        "model_answer",
+        "memory",
+        "response",
+    ]
+    assert effective["capabilities"]["tools"] == {"enabled": False, "file": None}
 
     listed = client.get("/api/config/agents")
     assert listed.json()["data"][0]["active_version_id"] == published.json()["version_id"]

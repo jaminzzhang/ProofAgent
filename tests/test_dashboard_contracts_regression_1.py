@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from proof_agent.contracts import ReceiptOutcome, RunDetail
 from proof_agent.delivery.api import _run_response
-from proof_agent.delivery.customer_api import _safe_sources
 from proof_agent.observability.api.serializers import serialize_run_detail
 
 
@@ -84,7 +83,7 @@ def test_chat_run_response_preserves_typed_evidence_fields_as_plain_payload() ->
     detail = _detail(_chunk())
 
     response = _run_response(
-        agent_id="enterprise_qa",
+        agent_id="react_enterprise_qa_v3",
         detail=detail,
         manifest=SimpleNamespace(response=None),
         final_output="Meals are reimbursed.",
@@ -96,16 +95,3 @@ def test_chat_run_response_preserves_typed_evidence_fields_as_plain_payload() ->
     assert response["evidence"][0]["provider_native_score"] == 0.91
     assert "content" not in response["evidence"][0]
     json.dumps(response)
-
-
-def test_customer_safe_source_projection_accepts_typed_evidence() -> None:
-    detail = _detail(
-        _chunk(
-            source="travel-policy.md",
-            source_id=None,
-            binding_id=None,
-            citation="travel-policy.md#meals:L10-L18",
-        )
-    )
-
-    assert _safe_sources(detail) == ("travel-policy.md",)

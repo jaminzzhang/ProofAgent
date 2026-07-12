@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowUpRight, ExternalLink } from 'lucide-react'
-import { Badge, Button, Card } from '@proofagent/ui'
+import { ExternalLink } from 'lucide-react'
+import { Badge, Button } from '@proofagent/ui'
 
 import { ChatShell } from '../../chat-core/ChatShell'
 import type { ChatTurnView } from '../../chat-core/types'
@@ -22,7 +22,7 @@ import {
   type OperatorConversationTurn,
 } from './operatorAdapter'
 
-/** Dashboard base URL for run/approval deep-links (env-configurable). */
+/** Dashboard base URL for read-only run deep-links (env-configurable). */
 const DASHBOARD_URL = import.meta.env.VITE_DASHBOARD_URL ?? 'http://localhost:5173'
 
 function syntheticNewChat(agentId: string): OperatorConversationRecord {
@@ -420,29 +420,6 @@ function OperatorGovernanceDetails({ turn }: { turn: OperatorConversationTurn })
             )
           })}
         </div>
-      )}
-
-      {/* Inline approval action — links to Dashboard approval console */}
-      {turn.outcome === 'WAITING_FOR_APPROVAL' && (
-        <Card className="flex items-center justify-between gap-3 border-[var(--warning-border)] bg-[var(--warning-bg)] p-3">
-          <span className="text-xs font-medium text-[var(--warning-fg)]">
-            {t('operator.reviewApproval')}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            asChild
-          >
-            <a
-              href={`${DASHBOARD_URL}/runs/${turn.run_id}#approval`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t('operator.reviewApproval')}
-              <ArrowUpRight size={13} />
-            </a>
-          </Button>
-        </Card>
       )}
 
       {/* Structured governance disclosure */}

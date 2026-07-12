@@ -16,18 +16,16 @@ admission:
 knowledge_binding_refs:
   - underwriting_rule_docs
 policy_rule_refs:
-  - answering.require_evidence_or_authorized_read
-  - tools.transactional_insurance_operation.deny
+  - answering.require_evidence
 stage_prompt_addenda:
   plan:
     business_context: "该业务流处理承保前核保咨询。重点是核保规则解释、材料要求和不能替代核保结论。"
     task_instructions:
       - "区分核保规则咨询、材料准备建议和具体承保决定。"
-      - "涉及具体投保件时，如需要保单或投保记录，应要求稳定标识和授权范围。"
+      - "涉及具体投保件并需要实时记录时，应说明当前Agent不读取业务系统记录。"
   retrieval_review:
     business_context: "核保咨询应检索核保规则、职业分类、健康告知和材料清单。"
   model_answer:
     output_preferences:
       - "说明规则依据、可能需要的补充材料和需要人工或系统核保确认的边界。"
       - "不得承诺可承保、费率、除外条件或最终核保结论。"
-

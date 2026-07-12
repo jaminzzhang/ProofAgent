@@ -3,19 +3,26 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 from shutil import which
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
+import click
 import typer
 import yaml  # type: ignore[import-untyped]
+from pydantic import ValidationError
+from typer.core import TyperCommand
 
 from proof_agent import __version__
+from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.configuration.importer import build_agent_package_contract_bundle
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
 from proof_agent.delivery.remote_verify_gateway import VERIFY_REMOTE_CHAT_BASE
 from proof_agent.errors import ProofAgentError
@@ -32,6 +39,14 @@ from proof_agent.evaluation.frozen_bundles import (
 )
 from proof_agent.evaluation.suites import load_evaluation_suite
 from proof_agent.observability.storage.run_store import RunStore
+from proof_agent.release.contracts import ReleaseGateManifest
+from proof_agent.release.digests import reject_duplicate_json_keys
+from proof_agent.release.verifier import (
+    EvidenceRootArtifactReader,
+    UnavailableAttestationVerifier,
+    VerifierInternalError,
+    verify_release_manifest,
+)
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.ingestion.worker import (
@@ -42,12 +57,19 @@ if TYPE_CHECKING:
 app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
 campaign_app = typer.Typer(no_args_is_help=True)
+release_app = typer.Typer(no_args_is_help=True)
 app.add_typer(evaluate_app, name="evaluate")
 evaluate_app.add_typer(campaign_app, name="campaign")
+app.add_typer(release_app, name="release")
 
-DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
-REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
-PUBLIC_EXAMPLE_PATH = Path("examples/insurance_customer_service/agent.yaml")
+DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
+REACT_DEMO_AGENT_PATH = DEMO_AGENT_PATH
+PUBLIC_EXAMPLE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "examples"
+    / "agent_management_insurance_specialist"
+    / "agent.yaml"
+)
 DEV_PROCESS_POLL_SECONDS = 0.5
 SERVER_HISTORY_DIR_ENV = "PROOF_AGENT_SERVER_HISTORY_DIR"
 SERVER_CONFIG_DIR_ENV = "PROOF_AGENT_SERVER_CONFIG_DIR"
@@ -61,8 +83,26 @@ VERIFY_REMOTE_STOP_MARKERS = (
     "node",
     "npm",
     "vite",
-    "cloudflared",
 )
+_STRICT_RFC3339 = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
+)
+
+
+class ReleaseVerifyCommand(TyperCommand):
+    """Scope parser-level JSON errors to the release authority command."""
+
+    def make_context(
+        self,
+        info_name: str | None,
+        args: list[str],
+        parent: click.Context | None = None,
+        **extra: Any,
+    ) -> click.Context:
+        try:
+            return super().make_context(info_name, args, parent=parent, **extra)
+        except click.UsageError as exc:
+            _raise_release_cli_error("release_verifier_invalid_input", exc)
 
 
 def agent_package_run_request(*args: Any, **kwargs: Any) -> Any:
@@ -100,10 +140,67 @@ def run_plain_rag(*args: Any, **kwargs: Any) -> Any:
 
 
 @app.callback()
-def load_environment() -> None:
+def load_environment(ctx: typer.Context) -> None:
     """Load local environment variables before running any CLI command."""
 
-    _load_local_dotenv()
+    if ctx.invoked_subcommand != "release":
+        _load_local_dotenv()
+
+
+@release_app.command("verify", cls=ReleaseVerifyCommand)
+def release_verify(
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help="Required. Release Gate Manifest JSON file",
+        show_default=False,
+    ),
+    evidence_root: Path | None = typer.Option(
+        None,
+        "--evidence-root",
+        help="Required. Directory containing content-addressed Evidence artifacts",
+        show_default=False,
+    ),
+    at: str | None = typer.Option(
+        None,
+        "--at",
+        help="Required. Explicit RFC3339 verification time",
+        show_default=False,
+    ),
+) -> None:
+    """Verify an Initial Private Pilot release manifest offline."""
+
+    try:
+        if manifest is None or evidence_root is None or at is None:
+            raise ValueError("--manifest, --evidence-root, and --at are required")
+        if not manifest.exists() or not manifest.is_file() or not os.access(manifest, os.R_OK):
+            raise ValueError("--manifest must be a readable file")
+        if (
+            not evidence_root.exists()
+            or not evidence_root.is_dir()
+            or not os.access(evidence_root, os.R_OK)
+        ):
+            raise ValueError("--evidence-root must be a readable directory")
+        checked_at = _parse_release_checked_at(at)
+        raw_manifest = manifest.read_text(encoding="utf-8")
+        reject_duplicate_json_keys(raw_manifest)
+        release_manifest = ReleaseGateManifest.model_validate_json(raw_manifest)
+        artifact_reader = EvidenceRootArtifactReader(evidence_root)
+    except (OSError, UnicodeError, ValidationError, ValueError) as exc:
+        _raise_release_cli_error("release_verifier_invalid_input", exc)
+
+    try:
+        decision = verify_release_manifest(
+            release_manifest,
+            checked_at=checked_at,
+            artifact_reader=artifact_reader,
+            attestation_verifier=UnavailableAttestationVerifier(),
+        )
+    except VerifierInternalError as exc:
+        _raise_release_cli_error("release_verifier_internal_error", exc)
+    typer.echo(decision.model_dump_json())
+    if decision.decision == "NO-GO":
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -173,36 +270,22 @@ def verify_remote(
         "--no-worker",
         help="Start only the API server for targeted backend debugging.",
     ),
-    local_only: bool = typer.Option(
-        False,
-        "--local-only",
-        help="Skip the public cloudflared tunnel and expose only the local gateway.",
-    ),
     cleanup: bool = typer.Option(
         True,
         "--cleanup/--no-cleanup",
-        help="Stop Python/Node/Vite/cloudflared processes on verification ports before starting.",
+        help="Stop Proof Agent development processes on verification ports before starting.",
     ),
 ) -> None:
-    """Start a restartable local and public remote verification session."""
+    """Start a restartable local verification session."""
 
     npm_path = which("npm")
     if npm_path is None:
         typer.echo("npm not found. Install Node.js/npm before starting frontends.", err=True)
         raise typer.Exit(code=1)
 
-    cloudflared_path = None if local_only else which("cloudflared")
-    if not local_only and cloudflared_path is None:
-        typer.echo(
-            "cloudflared not found. Install cloudflared or pass --local-only.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
     if cleanup:
         messages = _stop_verify_remote_processes(
             ports=(backend_port, dashboard_port, chat_port, gateway_port),
-            gateway_port=gateway_port,
         )
         for message in messages:
             typer.echo(message)
@@ -215,7 +298,6 @@ def verify_remote(
         _build_verify_remote_frontends(npm_path=npm_path)
         specs = _verify_remote_process_specs(
             npm_path=npm_path,
-            cloudflared_path=cloudflared_path,
             backend_port=backend_port,
             dashboard_port=dashboard_port,
             chat_port=chat_port,
@@ -231,9 +313,6 @@ def verify_remote(
         typer.echo(f"Local gateway: http://127.0.0.1:{gateway_port}")
         typer.echo(f"Dashboard: http://127.0.0.1:{gateway_port}/")
         typer.echo(f"Operator chat: http://127.0.0.1:{gateway_port}/operator")
-        typer.echo(f"Customer chat: http://127.0.0.1:{gateway_port}/customer")
-        if cloudflared_path is not None:
-            typer.echo("Public tunnel: waiting for cloudflared to print the quick tunnel URL")
         _run_dev_processes(specs)
     finally:
         _restore_optional_env("VITE_CHAT_URL", previous_chat_url)
@@ -242,7 +321,7 @@ def verify_remote(
 
 @app.command()
 def demo() -> None:
-    """Run the deterministic supported, unsupported, and approval-wait scenarios."""
+    """Run the deterministic supported and unsupported scenarios."""
 
     typer.echo("Proof Agent demo")
     store = RunStore(Path("runs/history"))
@@ -302,11 +381,11 @@ def doctor() -> None:
         ("Proof Agent", __version__),
         ("runs writable", _writable_status(Path("runs"))),
         (
-            "agent.yaml",
+            "canonical specialist agent.yaml",
             "ok" if PUBLIC_EXAMPLE_PATH.exists() else "missing",
         ),
         (
-            "sample knowledge",
+            "specialist sample knowledge",
             "ok" if (PUBLIC_EXAMPLE_PATH.parent / "knowledge").exists() else "missing",
         ),
         ("Docker", "available" if which("docker") else "not found"),
@@ -602,7 +681,10 @@ def server(
     seed_example_agent: bool = typer.Option(
         True,
         "--seed-example-agent/--no-seed-example-agent",
-        help="Import and publish the canonical Insurance Customer Service Agent when absent.",
+        help=(
+            "Import and publish the canonical Agent Management Insurance Specialist "
+            "when absent; reject a stale local version."
+        ),
     ),
 ) -> None:
     """Start the Proof Agent API server."""
@@ -619,13 +701,13 @@ def server(
     from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
     configuration_store = LocalAgentConfigurationStore(Path(config_dir))
-    if seed_example_agent and _seed_default_dev_agent(configuration_store):
-        typer.echo("Seeded local configuration with insurance_customer_service.")
+    if seed_example_agent and _seed_default_dev_agent_or_exit(configuration_store):
+        typer.echo("Seeded local configuration with agent_management_insurance_specialist.")
 
     typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
     typer.echo("To start the frontends in development mode, run:")
     typer.echo("  Dashboard: cd dashboard && npm run dev (port 5173)")
-    typer.echo("  Unified Chat: cd chat && npm run dev (port 5174, /operator and /customer)")
+    typer.echo("  Operator Chat: cd chat && npm run dev (port 5174, /operator)")
     if reload:
         os.environ[SERVER_HISTORY_DIR_ENV] = history_dir
         os.environ[SERVER_CONFIG_DIR_ENV] = config_dir
@@ -660,7 +742,7 @@ def _create_server_app_from_env() -> Any:
     seed_example_agent = os.environ.get(SERVER_SEED_EXAMPLE_AGENT_ENV, "1") != "0"
     configuration_store = LocalAgentConfigurationStore(config_dir)
     if seed_example_agent:
-        _seed_default_dev_agent(configuration_store)
+        _seed_default_dev_agent_or_exit(configuration_store)
 
     return create_app(
         history_dir=history_dir,
@@ -725,6 +807,21 @@ def knowledge_worker(
 
 def main() -> None:
     app()
+
+
+def _parse_release_checked_at(value: str) -> datetime:
+    if _STRICT_RFC3339.fullmatch(value) is None:
+        raise ValueError("--at must be a complete timezone-aware RFC3339 datetime")
+    normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("--at must be timezone-aware")
+    return parsed
+
+
+def _raise_release_cli_error(error: str, cause: Exception) -> NoReturn:
+    typer.echo(json.dumps({"error": error}, separators=(",", ":")), err=True)
+    raise typer.Exit(code=2) from cause
 
 
 def _load_local_dotenv() -> None:
@@ -795,7 +892,6 @@ def _dev_process_specs(
 def _verify_remote_process_specs(
     *,
     npm_path: str,
-    cloudflared_path: str | None,
     backend_port: int,
     dashboard_port: int,
     chat_port: int,
@@ -871,18 +967,6 @@ def _verify_remote_process_specs(
             ),
         ]
     )
-    if cloudflared_path is not None:
-        specs.append(
-            (
-                "cloudflared",
-                [
-                    cloudflared_path,
-                    "tunnel",
-                    "--url",
-                    f"http://127.0.0.1:{gateway_port}",
-                ],
-            )
-        )
     return specs
 
 
@@ -915,13 +999,10 @@ def _build_verify_remote_frontends(*, npm_path: str) -> None:
             raise typer.Exit(code=exc.returncode) from exc
 
 
-def _stop_verify_remote_processes(*, ports: Iterable[int], gateway_port: int) -> list[str]:
+def _stop_verify_remote_processes(*, ports: Iterable[int]) -> list[str]:
     messages: list[str] = []
     seen_pids: set[int] = set()
-    candidates = [
-        *_find_verify_remote_port_listeners(ports),
-        *_find_verify_remote_cloudflared_processes(gateway_port),
-    ]
+    candidates = _find_verify_remote_port_listeners(ports)
     for pid, label, command in candidates:
         if pid in seen_pids:
             continue
@@ -960,37 +1041,6 @@ def _find_verify_remote_port_listeners(ports: Iterable[int]) -> list[tuple[int, 
         for pid in sorted(pids):
             listeners.append((pid, f"port {port}", _process_command(pid)))
     return listeners
-
-
-def _find_verify_remote_cloudflared_processes(gateway_port: int) -> list[tuple[int, str, str]]:
-    try:
-        result = subprocess.run(
-            ["ps", "-axo", "pid=,command="],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return []
-    if result.returncode != 0:
-        return []
-
-    gateway_target = f":{gateway_port}"
-    processes: list[tuple[int, str, str]] = []
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        pid_text, separator, command = stripped.partition(" ")
-        if not separator or not pid_text.isdigit():
-            continue
-        lowered = command.lower()
-        if (
-            "cloudflared" in lowered
-            and "tunnel" in lowered
-            and "--url" in lowered
-            and gateway_target in lowered
-        ):
-            processes.append((int(pid_text), "cloudflared tunnel", command))
-    return processes
 
 
 def _process_command(pid: int) -> str:
@@ -1076,24 +1126,131 @@ def _run_dev_processes(specs: list[tuple[str, list[str]]]) -> None:
 
 
 def _seed_default_dev_agent(store: Any) -> bool:
-    """Publish the canonical customer-facing example into an empty local workspace."""
+    """Publish the canonical V3 operator Agent or reject stale local state."""
 
-    agent_id = "insurance_customer_service"
-    if store.get_active_version(agent_id) is not None:
-        return False
+    agent_id = "agent_management_insurance_specialist"
     if not PUBLIC_EXAMPLE_PATH.exists():
-        return False
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"canonical development Agent package is missing: {PUBLIC_EXAMPLE_PATH}",
+            "Install a distribution containing the canonical Agent package or restore it.",
+            artifact_path=PUBLIC_EXAMPLE_PATH,
+        )
+    active_agent_ids = store.list_active_agent_ids()
+    if active_agent_ids:
+        active = store.get_active_version(agent_id)
+        if (
+            active_agent_ids == (agent_id,)
+            and active is not None
+            and _active_dev_seed_is_current(
+                store,
+                agent_id=agent_id,
+                expected_active_version_id=active.version_id,
+            )
+        ):
+            if store.ensure_canonical_seed_authority(
+                agent_id=agent_id,
+                expected_active_version_id=active.version_id,
+            ):
+                return False
+        _raise_noncanonical_dev_seed_state()
 
     from proof_agent.configuration.importer import import_agent_package
 
     draft = import_agent_package(PUBLIC_EXAMPLE_PATH, store=store, actor="proof-agent-dev")
-    store.publish_version(
+    version = store.publish_canonical_seed_version_if_store_empty(
         agent_id=draft.agent_id,
         draft_id=draft.draft_id,
         validation_run_id="local_dev_seed",
         actor="proof-agent-dev",
     )
-    return True
+    if version is not None:
+        return True
+    active_agent_ids = store.list_active_agent_ids()
+    active = store.get_active_version(agent_id)
+    if (
+        active_agent_ids == (agent_id,)
+        and active is not None
+        and _active_dev_seed_is_current(
+            store,
+            agent_id=agent_id,
+            expected_active_version_id=active.version_id,
+        )
+    ):
+        if store.ensure_canonical_seed_authority(
+            agent_id=agent_id,
+            expected_active_version_id=active.version_id,
+        ):
+            return False
+    _raise_noncanonical_dev_seed_state()
+
+
+def _seed_default_dev_agent_or_exit(store: Any) -> bool:
+    """Render canonical seed failures at a Typer/Uvicorn CLI boundary."""
+
+    try:
+        return _seed_default_dev_agent(store)
+    except ProofAgentError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+
+
+def _raise_noncanonical_dev_seed_state() -> NoReturn:
+    raise ProofAgentError(
+        "PA_CONFIG_002",
+        (
+            "local Agent Configuration Store contains active state outside the "
+            "canonical Controlled ReAct V3 development seed"
+        ),
+        (
+            "Run `proof-agent config-reset --scope local-store --yes`, then restart "
+            "the local development server so the canonical Agent can be seeded."
+        ),
+    )
+
+
+def _active_dev_seed_is_current(
+    store: Any,
+    *,
+    agent_id: str,
+    expected_active_version_id: str | None = None,
+) -> bool:
+    active = store.get_active_version(agent_id)
+    if active is None or (
+        expected_active_version_id is not None and active.version_id != expected_active_version_id
+    ):
+        return False
+    manifest_path = (
+        store.root_dir / "agents" / agent_id / "versions" / active.version_id / "agent.yaml"
+    )
+    try:
+        manifest = load_agent_manifest(manifest_path)
+    except ProofAgentError:
+        return False
+    version = store.get_version(agent_id, active.version_id)
+    if version is None:
+        return False
+    canonical_bundle = build_agent_package_contract_bundle(PUBLIC_EXAMPLE_PATH)
+    review_provider = (
+        manifest.review.subagent.provider
+        if manifest.review is not None and manifest.review.subagent is not None
+        else None
+    )
+    return bool(
+        manifest.name == agent_id
+        and manifest.workflow.template == "react_enterprise_qa_v3"
+        and manifest.workflow.template_descriptor_version == "react_enterprise_qa.v3"
+        and manifest.workflow.stages == ()
+        and manifest.react is not None
+        and manifest.react.max_tool_calls == 0
+        and manifest.react.planner.provider == "deterministic"
+        and review_provider == "deterministic"
+        and manifest.model.provider == "deterministic"
+        and not manifest.capabilities.tools.enabled
+        and manifest.capabilities.tools.file is None
+        and manifest.customer is None
+        and version.contract_bundle == canonical_bundle
+    )
 
 
 def _safe_path_segment(value: str) -> str:

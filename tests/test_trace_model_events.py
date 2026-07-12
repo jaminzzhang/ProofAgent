@@ -8,8 +8,14 @@ import yaml
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import EnvironmentModelCredentialReference, ModelCallRole
 from proof_agent.errors import ProofAgentError
-from proof_agent.runtime.langgraph_runner import run_with_langgraph
 from proof_agent.contracts import TraceEventType
+from proof_agent.delivery.agent_package_execution import (
+    AgentPackageRunRequest,
+    execute_agent_package_run,
+)
+
+
+V3_AGENT = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
 
 
 def test_trace_event_types_include_react_review_events() -> None:
@@ -31,10 +37,12 @@ def test_model_call_roles_include_intent_resolution() -> None:
 
 
 def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) -> None:
-    result = run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path,
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=V3_AGENT,
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path,
+        )
     )
 
     events = _read_events(result.trace_path)
@@ -51,6 +59,7 @@ def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) 
         "response_format",
         "role",
         "stream",
+        "stage_id",
         "system_prompt_length",
     }
     assert "content" not in model_response["payload"]
@@ -59,10 +68,12 @@ def test_model_trace_events_do_not_store_raw_prompts_or_outputs(tmp_path: Path) 
 
 
 def test_final_answer_model_trace_includes_role_and_response_format(tmp_path: Path) -> None:
-    result = run_with_langgraph(
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path,
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=V3_AGENT,
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path,
+        )
     )
 
     events = _read_events(result.trace_path)
@@ -77,8 +88,8 @@ def test_shared_model_connection_resolution_trace_is_secret_safe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DEMO_MODEL_KEY", "raw-secret-value")
-    example_dir = tmp_path / "enterprise_qa"
-    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), example_dir)
+    example_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(V3_AGENT.parent, example_dir)
     manifest_path = example_dir / "agent.yaml"
     raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     raw["model"] = {
@@ -98,11 +109,13 @@ def test_shared_model_connection_resolution_trace_is_secret_safe(
         actor="operator",
     )
 
-    result = run_with_langgraph(
-        manifest_path,
-        question="What is the reimbursement rule for travel meals?",
-        runs_dir=tmp_path,
-        configuration_store=store,
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=manifest_path,
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            configuration_store=store,
+        )
     )
 
     events = _read_events(result.trace_path)
@@ -123,8 +136,8 @@ def test_model_error_is_traced_when_provider_resolution_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    example_dir = tmp_path / "enterprise_qa"
-    shutil.copytree(Path("proof_agent/evaluation/demo/fixtures/enterprise_qa"), example_dir)
+    example_dir = tmp_path / "react_enterprise_qa_v3"
+    shutil.copytree(V3_AGENT.parent, example_dir)
     manifest_path = example_dir / "agent.yaml"
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8")
@@ -135,13 +148,15 @@ def test_model_error_is_traced_when_provider_resolution_fails(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     with pytest.raises(ProofAgentError):
-        run_with_langgraph(
-            manifest_path,
-            question="What is the reimbursement rule for travel meals?",
-            runs_dir=tmp_path,
+        execute_agent_package_run(
+            AgentPackageRunRequest(
+                agent_yaml=manifest_path,
+                question="What is the reimbursement rule for travel meals?",
+                runs_dir=tmp_path / "run",
+            )
         )
 
-    events = _read_events(tmp_path / "trace.jsonl")
+    events = _read_events(tmp_path / "run" / "trace.jsonl")
     model_error = next(event for event in events if event["event_type"] == "model_error")
     assert model_error["status"] == "error"
     assert model_error["payload"]["provider"] == "openai_compatible"

@@ -38,7 +38,10 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.observability.api.serializers import serialize_dashboard_evidence_chunk
-from proof_agent.runtime.approval_resume import LangGraphApprovalResumeRegistry
+from proof_agent.control.workflow.controlled_react.ports import (
+    ObservationTruthStorePort,
+    SnapshotStorePort,
+)
 
 
 router = APIRouter(tags=["execution"])
@@ -268,7 +271,10 @@ def _execute_published_agent_run(
                 store=_get_store(app_request),
                 runs_dir=_get_runs_dir(app_request),
                 configuration_store=_get_configuration_store(app_request),
-                approval_resume_registry=_get_approval_resume_registry(app_request),
+                controlled_react_snapshot_store=_get_controlled_react_snapshot_store(app_request),
+                controlled_react_observation_truth_store=(
+                    _get_controlled_react_observation_truth_store(app_request)
+                ),
             ),
             published_agent=published_agent,
             question=question,
@@ -379,8 +385,17 @@ def _get_configuration_store(request: Request) -> LocalAgentConfigurationStore:
     return cast(LocalAgentConfigurationStore, request.app.state.agent_configuration_store)
 
 
-def _get_approval_resume_registry(request: Request) -> LangGraphApprovalResumeRegistry:
-    return cast(LangGraphApprovalResumeRegistry, request.app.state.approval_resume_registry)
+def _get_controlled_react_snapshot_store(request: Request) -> SnapshotStorePort:
+    return cast(SnapshotStorePort, request.app.state.controlled_react_snapshot_store)
+
+
+def _get_controlled_react_observation_truth_store(
+    request: Request,
+) -> ObservationTruthStorePort:
+    return cast(
+        ObservationTruthStorePort,
+        request.app.state.controlled_react_observation_truth_store,
+    )
 
 
 def _require_conversation(request: Request, conversation_id: str) -> ConversationRecord:

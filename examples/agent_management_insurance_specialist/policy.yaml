@@ -1,5 +1,5 @@
 rules:
-  - rule_id: answering.require_evidence_or_authorized_read
+  - rule_id: answering.require_evidence
     enforcement_point: before_answer
     condition:
       require_retrieval: true
@@ -8,70 +8,7 @@ rules:
     decision:
       on_pass: allow
       on_fail: deny
-    reason_template: "Insurance specialist answers require accepted evidence or authorized read support."
-
-  - rule_id: tools.agent_performance_lookup.read_only
-    enforcement_point: before_tool_call
-    condition:
-      tool_name: agent_performance_lookup
-      risk_level: medium
-    decision:
-      on_match: allow
-    reason_template: "Managed-agent performance lookup is allowed only as a read-only, parameter-bounded tool call."
-
-  - rule_id: tools.agent_activity_lookup.read_only
-    enforcement_point: before_tool_call
-    condition:
-      tool_name: agent_activity_lookup
-      risk_level: medium
-    decision:
-      on_match: allow
-    reason_template: "Managed-agent activity lookup is allowed only as a read-only, parameter-bounded tool call."
-
-  - rule_id: tools.agent_profile_lookup.read_only
-    enforcement_point: before_tool_call
-    condition:
-      tool_name: agent_profile_lookup
-      risk_level: medium
-    decision:
-      on_match: allow
-    reason_template: "Managed-agent profile lookup is allowed only as a read-only, parameter-bounded tool call."
-
-  - rule_id: tools.policy_record_lookup.read_only
-    enforcement_point: before_tool_call
-    condition:
-      tool_name: policy_record_lookup
-      risk_level: medium
-    decision:
-      on_match: allow
-    reason_template: "Policy record lookup is allowed only as a read-only, parameter-bounded tool call."
-
-  - rule_id: tools.claim_record_lookup.read_only
-    enforcement_point: before_tool_call
-    condition:
-      tool_name: claim_record_lookup
-      risk_level: medium
-    decision:
-      on_match: allow
-    reason_template: "Claim record lookup is allowed only as a read-only, parameter-bounded tool call."
-
-  - rule_id: tools.customer_profile_lookup.read_only
-    enforcement_point: before_tool_call
-    condition:
-      tool_name: customer_profile_lookup
-      risk_level: medium
-    decision:
-      on_match: allow
-    reason_template: "Customer profile lookup is allowed only as a read-only, parameter-bounded tool call."
-
-  - rule_id: tools.transactional_insurance_operation.deny
-    enforcement_point: before_tool_call
-    condition:
-      tool_name: transactional_insurance_operation
-      risk_level: high
-    decision:
-      on_match: deny
-    reason_template: "Transactional Insurance Operation requests are out of this Agent's supported scope."
+    reason_template: "Insurance specialist answers require accepted Knowledge evidence."
 
   - rule_id: response.no_coverage_or_payment_guarantee
     enforcement_point: before_answer
@@ -111,4 +48,3 @@ rules:
       on_match: deny
       on_pass: allow
     reason_template: "Institution specialist memory stores current-case context only."
-

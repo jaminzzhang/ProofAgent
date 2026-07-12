@@ -31,14 +31,11 @@ def _publish_package(
     return store, draft.agent_id, version.version_id
 
 
-def test_registry_defaults_to_customer_facing_insurance_example_agent() -> None:
+def test_registry_has_no_static_default_agents() -> None:
     registry = PublishedAgentRegistry()
 
-    resolved = registry.resolve_customer_facing("insurance_customer_service")
-
-    assert resolved is not None
-    assert resolved.customer_facing
-    assert registry.list_agent_ids() == ("insurance_customer_service",)
+    assert registry.resolve("agent_management_insurance_specialist") is None
+    assert registry.list_agent_ids() == ()
 
 
 def test_registry_can_be_explicitly_configured_empty() -> None:
@@ -53,7 +50,7 @@ def test_published_agent_directory_lists_only_active_published_versions(
 ) -> None:
     store, agent_id, version_id = _publish_package(
         tmp_path,
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
     )
     app = create_app(
         history_dir=tmp_path / "history",
@@ -70,56 +67,14 @@ def test_published_agent_directory_lists_only_active_published_versions(
         "data": [
             {
                 "agent_id": agent_id,
-                "display_name": "enterprise_qa",
-                "purpose": "Answer enterprise knowledge questions only when evidence supports the answer.",
+                "display_name": "react_enterprise_qa_v3",
+                "purpose": (
+                    "Answer enterprise knowledge questions through the governed Controlled "
+                    "ReAct Loop (ADR-0032): observation actions return to plan under a dual-axis "
+                    "budget and deterministic Convergence Check."
+                ),
                 "agent_version_id": version_id,
                 "customer_facing": False,
-            }
-        ],
-        "meta": {"total": 1},
-    }
-
-
-def test_customer_agent_directory_lists_only_customer_facing_published_versions(
-    tmp_path: Path,
-) -> None:
-    store, _, _ = _publish_package(
-        tmp_path,
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
-    )
-    insurance_draft = import_agent_package(
-        Path("examples/insurance_customer_service/agent.yaml"),
-        store=store,
-        actor="test-user",
-    )
-    insurance_version = store.publish_version(
-        agent_id=insurance_draft.agent_id,
-        draft_id=insurance_draft.draft_id,
-        validation_run_id="run_validation_customer",
-        actor="test-user",
-    )
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        published_agents={},
-        agent_configuration_store=store,
-    )
-    client = TestClient(app)
-
-    response = client.get("/api/customer/agents")
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "data": [
-            {
-                "agent_id": "insurance_customer_service",
-                "display_name": "insurance_customer_service",
-                "purpose": (
-                    "Provide read-only customer service for insurance policy and claim questions "
-                    "when evidence or authorized account data supports the answer."
-                ),
-                "agent_version_id": insurance_version.version_id,
-                "customer_facing": True,
             }
         ],
         "meta": {"total": 1},
@@ -131,7 +86,7 @@ def test_registry_resolves_active_agent_version_from_configuration_store(
 ) -> None:
     store, agent_id, version_id = _publish_package(
         tmp_path,
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
     )
     registry = PublishedAgentRegistry(agents={}, configuration_store=store)
 
@@ -151,7 +106,7 @@ def test_published_agent_version_persists_resolved_knowledge_bindings(
 ) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
     draft = import_agent_package(
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
         store=store,
         actor="test-user",
     )
@@ -188,12 +143,17 @@ def test_published_agent_version_persists_resolved_knowledge_bindings(
         actor="test-user",
         contract_bundle=ContractBundle(
             agent_yaml="""
-name: enterprise_qa
+name: react_enterprise_qa_v3
 purpose: "Answer enterprise knowledge questions only when evidence supports the answer."
 
 workflow:
-  runtime: langgraph
-  template: enterprise_qa
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+
+react:
+  planner:
+    provider: deterministic
+    name: demo
 
 package_knowledge_sources: []
 
@@ -217,8 +177,7 @@ policy:
 
 capabilities:
   tools:
-    enabled: true
-    file: ./tools.yaml
+    enabled: false
   memory:
     enabled: true
     provider: session
@@ -271,11 +230,7 @@ audit:
     persisted_binding = persisted.resolved_knowledge_bindings.bindings[0]
     assert persisted_binding.source_version_id == "kssnapshot_001"
     assert Path(persisted_binding.provider_params["snapshot_path"]) == (
-        store.root_dir
-        / "knowledge_sources"
-        / "ks_policy"
-        / "snapshots"
-        / "kssnapshot_001"
+        store.root_dir / "knowledge_sources" / "ks_policy" / "snapshots" / "kssnapshot_001"
     )
     assert resolved_agent is not None
     assert resolved_agent.resolved_knowledge_bindings == persisted.resolved_knowledge_bindings
@@ -284,7 +239,7 @@ audit:
 def test_chat_production_run_records_resolved_agent_version_id(tmp_path: Path) -> None:
     store, agent_id, version_id = _publish_package(
         tmp_path,
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
     )
     app = create_app(
         history_dir=tmp_path / "history",
@@ -311,77 +266,25 @@ def test_chat_production_run_records_resolved_agent_version_id(tmp_path: Path) -
     assert detail.json()["agent_version_id"] == version_id
 
 
-def test_customer_production_run_records_resolved_agent_version_id(tmp_path: Path) -> None:
-    store, agent_id, version_id = _publish_package(
-        tmp_path,
-        Path("examples/insurance_customer_service/agent.yaml"),
-    )
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        conversations_dir=tmp_path / "conversations",
-        published_agents={},
-        agent_configuration_store=store,
-    )
-    client = TestClient(app)
-    created = client.post(
-        "/api/customer/conversations",
-        json={"agent_id": agent_id, "customer_id": "CUST-001"},
-    )
-    conversation_id = created.json()["conversation_id"]
-
-    response = client.post(
-        f"/api/customer/conversations/{conversation_id}/runs",
-        json={"question": "What documents are required for inpatient claim reimbursement?"},
-    )
-
-    assert response.status_code == 200
-    run_id = response.json()["run_id"]
-    detail = client.get(f"/api/runs/{run_id}")
-    assert detail.status_code == 200
-    assert detail.json()["agent_id"] == agent_id
-    assert detail.json()["agent_version_id"] == version_id
-
-
-def test_customer_conversation_rejects_operator_only_published_agent(tmp_path: Path) -> None:
-    store, agent_id, _version_id = _publish_package(
-        tmp_path,
-        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
-    )
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        conversations_dir=tmp_path / "conversations",
-        published_agents={},
-        agent_configuration_store=store,
-    )
-    client = TestClient(app)
-
-    response = client.post(
-        "/api/customer/conversations",
-        json={"agent_id": agent_id, "customer_id": "CUST-001"},
-    )
-
-    assert response.status_code == 404
-    assert response.json()["detail"] == {
-        "message": f"Customer-facing Published Agent not found: {agent_id}",
-        "available_agent_ids": [],
-    }
-
-
 def test_execution_api_still_rejects_arbitrary_manifest_paths(tmp_path: Path) -> None:
     app = create_app(
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
-        published_agents={"enterprise_qa": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")},
+        published_agents={
+            "react_enterprise_qa_v3": Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            )
+        },
     )
     client = TestClient(app)
 
     response = client.post(
         "/api/chat/runs",
         json={
-            "agent_id": "enterprise_qa",
-            "agent_yaml": "proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml",
+            "agent_id": "react_enterprise_qa_v3",
+            "agent_yaml": (
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
             "question": "What is the reimbursement rule for travel meals?",
         },
     )

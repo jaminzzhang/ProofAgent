@@ -35,14 +35,8 @@ describe('module configuration field options', () => {
     // at render time, so the field config carries no static template list.
     expect(optionsFor(WORKFLOW_FIELDS, 'Template')).toEqual([])
     // The Template Selector Fallback is the degradation safety net.
-    expect(WORKFLOW_TEMPLATE_FALLBACK).toEqual([
-      'react_enterprise_qa_v3',
-      'react_enterprise_qa_v2',
-      'react_enterprise_qa',
-      'enterprise_qa',
-    ])
-    expect(optionsFor(WORKFLOW_FIELDS, 'Runtime')).toEqual(['controlled_react', 'langgraph'])
-    expect(optionsFor(WORKFLOW_FIELDS, 'Checkpointer Provider')).toEqual(['sqlite'])
+    expect(WORKFLOW_TEMPLATE_FALLBACK).toEqual(['react_enterprise_qa_v3'])
+    expect(fieldPaths(WORKFLOW_FIELDS)).toEqual(['workflow.template'])
     expect(optionsFor(MODEL_FIELDS, 'Answer Model Provider')).toEqual(modelProviders)
     expect(optionsFor(MODEL_FIELDS, 'Planner Provider')).toEqual(modelProviders)
     expect(optionsFor(MODEL_FIELDS, 'Review Mode')).toEqual(['rules_only', 'auto'])
