@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     EffectiveToolProposalScope,
+    InstitutionAuthorizationContext,
     MemoryRecallWorkingPayload,
     ObservationRecord,
     ObservationTruthArtifact,
@@ -62,6 +63,9 @@ class ControlledReActStartRequest:
     template_name: str
     template_descriptor_version: str
     question: str
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
     conversation_context: ContextAdmission | None = None
     memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = ()
     max_plan_rounds: int = 4
@@ -99,6 +103,7 @@ class ControlledReActOrchestrator:
             template_name=request.template_name,
             template_descriptor_version=request.template_descriptor_version,
             question=request.question,
+            institution_authorization=request.institution_authorization,
             conversation_context=request.conversation_context,
             memory_recall_payloads=request.memory_recall_payloads,
             phase=ControlledReActRunPhase.PLANNING,

@@ -6,6 +6,7 @@ import yaml
 
 from proof_agent.contracts import (
     ContextAdmission,
+    InstitutionAuthorizationContext,
     IntentResolution,
     IntentResolutionResult,
     MemoryRecallAdmission,
@@ -89,6 +90,44 @@ def test_execute_agent_package_run_passes_conversation_context_to_v3_orchestrato
 
     assert orchestrator.start_request is not None
     assert orchestrator.start_request.conversation_context == conversation_context
+
+
+def test_execute_agent_package_run_pins_authorization_in_both_start_contracts(
+    tmp_path: Path,
+) -> None:
+    authorization = InstitutionAuthorizationContext(
+        institutions=("branch-1",), roles=("specialist",)
+    )
+    orchestrator = _CapturingControlledReActOrchestrator()
+
+    controlled = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "controlled",
+            controlled_react_orchestrator=orchestrator,
+            institution_authorization=authorization,
+        )
+    )
+    legacy = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "legacy",
+            institution_authorization=authorization,
+        )
+    )
+
+    assert orchestrator.start_request is not None
+    assert orchestrator.start_request.institution_authorization == authorization
+    assert controlled.workflow_template_execution_input is not None
+    assert controlled.workflow_template_execution_input.institution_authorization == authorization
+    assert legacy.workflow_template_execution_input is not None
+    assert legacy.workflow_template_execution_input.institution_authorization == authorization
 
 
 def test_execute_agent_package_run_emits_shared_run_start_context_summary_for_v3(

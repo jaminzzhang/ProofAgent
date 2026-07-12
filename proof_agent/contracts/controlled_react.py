@@ -10,6 +10,7 @@ from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.conversation import ContextAdmission
 from proof_agent.contracts.context import MemoryRecallWorkingPayload
 from proof_agent.contracts.evidence import EvidenceChunk
+from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
 from proof_agent.contracts.react_workflow import ReActActionProposal, ReActActionType
 from proof_agent.contracts.workflow_execution import WorkflowStageLlmInteraction
 
@@ -211,6 +212,9 @@ class ControlledReActRunState(FrozenModel):
     template_name: str
     template_descriptor_version: str
     question: str
+    institution_authorization: InstitutionAuthorizationContext = Field(
+        default_factory=InstitutionAuthorizationContext
+    )
     conversation_context: ContextAdmission | None = None
     memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = Field(default_factory=tuple)
     phase: ControlledReActRunPhase = ControlledReActRunPhase.PLANNING

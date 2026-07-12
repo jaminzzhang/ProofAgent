@@ -5,7 +5,7 @@ import json
 import os
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
+    InstitutionAuthorizationContext,
     ControlledReActRunStateSnapshot,
     ObservationTruthArtifact,
     ObservationTruthKind,
@@ -79,6 +80,9 @@ class LangGraphApprovalResumeContext:
     draft_id: str | None = None
     allow_untrusted_web_supplement: bool = False
     workflow_template_execution_input: WorkflowTemplateExecutionInput | None = None
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,9 @@ class ControlledReActApprovalResumeContext:
     agent_id: str | None = None
     agent_version_id: str | None = None
     draft_id: str | None = None
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
 
 
 CONTROLLED_REACT_SNAPSHOT_REF_PREFIX = "controlled-react://"
@@ -265,6 +272,15 @@ class LangGraphApprovalResumeRegistry:
                 "approval resume context requires Workflow Template Execution Input",
                 "Start the run through a Workflow Template Execution-aware runtime.",
             )
+        if (
+            context.workflow_template_execution_input.institution_authorization
+            != context.institution_authorization
+        ):
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "approval resume institution authorization does not match run-start input",
+                "Restart the run with one pinned institution authorization context.",
+            )
         sync_checkpointer(context.checkpointer)
         self._write_metadata(context)
         self._contexts[context.run_id] = context
@@ -308,6 +324,7 @@ class LangGraphApprovalResumeRegistry:
 
     def _write_metadata(self, context: LangGraphApprovalResumeContext) -> None:
         execution_input_payload = _model_payload(context.workflow_template_execution_input)
+        authorization_payload = _model_payload(context.institution_authorization)
         metadata = {
             "agent_yaml": str(context.agent_yaml),
             "runs_dir": str(context.runs_dir),
@@ -322,6 +339,8 @@ class LangGraphApprovalResumeRegistry:
             "allow_untrusted_web_supplement": context.allow_untrusted_web_supplement,
             "workflow_template_execution_input": execution_input_payload,
             "workflow_template_execution_input_sha256": _payload_sha256(execution_input_payload),
+            "institution_authorization": authorization_payload,
+            "institution_authorization_sha256": _payload_sha256(authorization_payload),
         }
         path = self._metadata_path(context.run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -331,6 +350,7 @@ class LangGraphApprovalResumeRegistry:
         self,
         context: ControlledReActApprovalResumeContext,
     ) -> None:
+        authorization_payload = _model_payload(context.institution_authorization)
         metadata = {
             "agent_yaml": str(context.agent_yaml),
             "run_id": context.run_id,
@@ -340,6 +360,8 @@ class LangGraphApprovalResumeRegistry:
             "agent_id": context.agent_id,
             "agent_version_id": context.agent_version_id,
             "draft_id": context.draft_id,
+            "institution_authorization": authorization_payload,
+            "institution_authorization_sha256": _payload_sha256(authorization_payload),
         }
         path = self._controlled_react_metadata_path(context.run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -363,6 +385,14 @@ class LangGraphApprovalResumeRegistry:
             else None
         )
         execution_input = _load_execution_input(data, path=path)
+        institution_authorization = _load_institution_authorization(data, path=path)
+        if execution_input.institution_authorization != institution_authorization:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "approval resume institution authorization failed integrity validation",
+                "Discard the stale approval checkpoint and restart the run.",
+                artifact_path=path,
+            )
         context = LangGraphApprovalResumeContext(
             agent_yaml=agent_yaml,
             runs_dir=Path(str(data["runs_dir"])),
@@ -379,6 +409,7 @@ class LangGraphApprovalResumeRegistry:
             draft_id=data.get("draft_id"),
             allow_untrusted_web_supplement=bool(data.get("allow_untrusted_web_supplement", False)),
             workflow_template_execution_input=execution_input,
+            institution_authorization=institution_authorization,
         )
         self._contexts[run_id] = context
         return context
@@ -409,6 +440,7 @@ class LangGraphApprovalResumeRegistry:
             agent_id=data.get("agent_id"),
             agent_version_id=data.get("agent_version_id"),
             draft_id=data.get("draft_id"),
+            institution_authorization=_load_institution_authorization(data, path=path),
         )
 
     def _metadata_path(self, run_id: str) -> Path:
@@ -456,6 +488,32 @@ def _load_execution_input(
             artifact_path=path,
         )
     return WorkflowTemplateExecutionInput.model_validate(payload)
+
+
+def _load_institution_authorization(
+    data: dict[str, Any],
+    *,
+    path: Path,
+) -> InstitutionAuthorizationContext:
+    payload = data.get("institution_authorization")
+    if payload is None:
+        return InstitutionAuthorizationContext()
+    digest = data.get("institution_authorization_sha256")
+    if not isinstance(payload, dict) or not isinstance(digest, str) or not digest:
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            "approval resume institution authorization is missing integrity metadata",
+            "Discard the stale approval checkpoint and restart the run.",
+            artifact_path=path,
+        )
+    if _payload_sha256(payload) != digest:
+        raise ProofAgentError(
+            "PA_RUNTIME_001",
+            "approval resume institution authorization failed integrity validation",
+            "Discard the stale approval checkpoint and restart the run.",
+            artifact_path=path,
+        )
+    return InstitutionAuthorizationContext.model_validate(payload)
 
 
 def _payload_sha256(value: Any) -> str:

@@ -10,6 +10,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
+    InstitutionAuthorizationContext,
     MemoryRecallAdmission,
     RunPurpose,
 )
@@ -52,6 +53,7 @@ def execute_published_agent_run(
     memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     allow_untrusted_web_supplement: bool = False,
+    institution_authorization: InstitutionAuthorizationContext | None = None,
 ) -> PublishedAgentRunExecution:
     """Execute one governed run for an already-resolved Published Agent."""
 
@@ -84,6 +86,9 @@ def execute_published_agent_run(
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
             published_agent_runtime_facts=published_agent.runtime_facts,
             controlled_react_orchestrator=dependencies.controlled_react_orchestrator,
+            institution_authorization=(
+                institution_authorization or InstitutionAuthorizationContext()
+            ),
             controlled_react_snapshot_store=(
                 dependencies.approval_resume_registry.controlled_react_snapshot_store()
                 if is_controlled_react_v3
@@ -114,6 +119,9 @@ def execute_published_agent_run(
                     agent_id=published_agent.agent_id,
                     agent_version_id=published_agent.agent_version_id,
                     draft_id=published_agent.source_draft_id,
+                    institution_authorization=(
+                        institution_authorization or InstitutionAuthorizationContext()
+                    ),
                 )
             )
             return PublishedAgentRunExecution(result=result, detail=detail, manifest=manifest)
@@ -141,6 +149,9 @@ def execute_published_agent_run(
                 draft_id=published_agent.source_draft_id,
                 allow_untrusted_web_supplement=allow_untrusted_web_supplement,
                 workflow_template_execution_input=execution_input,
+                institution_authorization=(
+                    institution_authorization or InstitutionAuthorizationContext()
+                ),
             )
         )
     return PublishedAgentRunExecution(result=result, detail=detail, manifest=manifest)

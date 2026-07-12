@@ -12,6 +12,7 @@ from proof_agent.contracts import (
     ControlledReActRunStateSnapshot,
     EffectiveWorkflowStageConfiguration,
     EffectiveWorkflowStageConfigurationStage,
+    InstitutionAuthorizationContext,
     WorkflowStageAvailability,
     WorkflowStageAvailabilityReason,
     WorkflowStageAvailabilitySet,
@@ -77,6 +78,12 @@ def test_approval_resume_registry_persists_execution_input_with_integrity(
 ) -> None:
     execution_input = _execution_input()
     registry = LangGraphApprovalResumeRegistry(tmp_path)
+    authorization = InstitutionAuthorizationContext(
+        institutions=("branch-1",), roles=("specialist",)
+    )
+    execution_input = execution_input.model_copy(
+        update={"institution_authorization": authorization}
+    )
     registry.put(
         LangGraphApprovalResumeContext(
             agent_yaml=REACT_AGENT,
@@ -86,6 +93,7 @@ def test_approval_resume_registry_persists_execution_input_with_integrity(
             checkpointer=MemorySaver(),
             manifest=load_agent_manifest(REACT_AGENT),
             workflow_template_execution_input=execution_input,
+            institution_authorization=authorization,
         )
     )
 
@@ -100,6 +108,7 @@ def test_approval_resume_registry_persists_execution_input_with_integrity(
 
     assert loaded is not None
     assert loaded.workflow_template_execution_input == execution_input
+    assert loaded.institution_authorization == authorization
 
 
 def test_approval_resume_registry_rejects_tampered_execution_input(
@@ -136,6 +145,7 @@ def test_controlled_react_resume_registry_persists_context_and_snapshot(
     tmp_path: Path,
 ) -> None:
     registry = LangGraphApprovalResumeRegistry(tmp_path)
+    authorization = InstitutionAuthorizationContext(regions=("east",), roles=("reviewer",))
     snapshot = ControlledReActRunStateSnapshot(
         snapshot_id="snap_run_controlled",
         run_id="run_controlled",
@@ -144,6 +154,7 @@ def test_controlled_react_resume_registry_persists_context_and_snapshot(
             template_name="react_enterprise_qa_v3",
             template_descriptor_version="react_enterprise_qa.v3",
             question="Please look up customer policy status for CUST-001.",
+            institution_authorization=authorization,
         ),
     )
 
@@ -154,6 +165,7 @@ def test_controlled_react_resume_registry_persists_context_and_snapshot(
             run_id="run_controlled",
             question=snapshot.state.question,
             manifest=load_agent_manifest(REACT_V3_AGENT),
+            institution_authorization=authorization,
         )
     )
 
@@ -167,3 +179,59 @@ def test_controlled_react_resume_registry_persists_context_and_snapshot(
     assert loaded_snapshot == snapshot
     assert loaded_context is not None
     assert loaded_context.manifest.workflow.template == "react_enterprise_qa_v3"
+    assert loaded_context.institution_authorization == authorization
+    assert loaded_snapshot.state.institution_authorization == authorization
+
+
+def test_controlled_react_resume_registry_rejects_tampered_authorization(
+    tmp_path: Path,
+) -> None:
+    registry = LangGraphApprovalResumeRegistry(tmp_path)
+    registry.put_controlled_react(
+        ControlledReActApprovalResumeContext(
+            agent_yaml=REACT_V3_AGENT,
+            run_id="run_tampered_authorization",
+            question="Question",
+            manifest=load_agent_manifest(REACT_V3_AGENT),
+            institution_authorization=InstitutionAuthorizationContext(roles=("reviewer",)),
+        )
+    )
+    path = tmp_path / "run_tampered_authorization" / "controlled_react_resume_context.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata["institution_authorization"]["roles"] = ["administrator"]
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError) as exc:
+        LangGraphApprovalResumeRegistry(tmp_path).get_controlled_react(
+            "run_tampered_authorization"
+        )
+
+    assert "failed integrity validation" in exc.value.message
+
+
+def test_old_resume_metadata_defaults_institution_authorization_to_public_only(
+    tmp_path: Path,
+) -> None:
+    execution_input = _execution_input()
+    registry = LangGraphApprovalResumeRegistry(tmp_path)
+    registry.put(
+        LangGraphApprovalResumeContext(
+            agent_yaml=REACT_AGENT,
+            runs_dir=tmp_path / "runs",
+            run_id=execution_input.run_id,
+            question=execution_input.question,
+            checkpointer=MemorySaver(),
+            manifest=load_agent_manifest(REACT_AGENT),
+            workflow_template_execution_input=execution_input,
+        )
+    )
+    path = tmp_path / execution_input.run_id / "resume_context.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata.pop("institution_authorization")
+    metadata.pop("institution_authorization_sha256")
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    loaded = LangGraphApprovalResumeRegistry(tmp_path).get(execution_input.run_id)
+
+    assert loaded is not None
+    assert loaded.institution_authorization == InstitutionAuthorizationContext()

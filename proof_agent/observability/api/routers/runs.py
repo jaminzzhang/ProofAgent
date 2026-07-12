@@ -318,6 +318,7 @@ def _resume_controlled_react_approval(
         manifest=context.manifest,
         resolved_knowledge_bindings=context.resolved_knowledge_bindings,
         configuration_store=context.configuration_store,
+        institution_authorization=context.institution_authorization,
     )
     orchestrator = build_controlled_react_orchestrator_for_invocation(
         invocation,

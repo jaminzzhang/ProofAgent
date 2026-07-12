@@ -20,6 +20,7 @@ from proof_agent.contracts import (
     AgentContextConfiguration,
     ClarificationNeed,
     ContextAdmission,
+    InstitutionAuthorizationContext,
     EvidenceChunk,
     MemoryRecallWorkingPayload,
     PolicyDecisionType,
@@ -81,6 +82,7 @@ def run_with_langgraph(
     published_agent_runtime_facts: PublishedAgentRuntimeFacts | None = None,
     run_start_context: RunStartContextAssembly | None = None,
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
+    institution_authorization: InstitutionAuthorizationContext = InstitutionAuthorizationContext(),
 ) -> RunResult:
     """Runtime adapter that executes the Harness using a LangGraph StateGraph."""
 
@@ -100,7 +102,14 @@ def run_with_langgraph(
         context_config=resolved_manifest.context,
     )
 
-    trace.emit("run_started", status="ok", payload={"manifest_path": str(agent_yaml)})
+    trace.emit(
+        "run_started",
+        status="ok",
+        payload={
+            "manifest_path": str(agent_yaml),
+            "institution_authorization": institution_authorization.trace_safe_summary(),
+        },
+    )
     trace.emit("manifest_loaded", status="ok", payload={"agent_name": resolved_manifest.name})
     if context_assembly is not None:
         if context_assembly.conversation_context is not None:
@@ -141,6 +150,7 @@ def run_with_langgraph(
         stage_runtime_configuration=stage_runtime_configuration,
         conversation_context=conversation_context,
         run_start_context=context_assembly,
+        institution_authorization=institution_authorization,
     )
     try:
         invocation = compose_harness_invocation(
@@ -149,6 +159,7 @@ def run_with_langgraph(
             knowledge_binding_resolver=knowledge_binding_resolver,
             resolved_knowledge_bindings=resolved_knowledge_bindings,
             configuration_store=configuration_store,
+            institution_authorization=institution_authorization,
         )
     except Exception as exc:
         if is_model_error(exc):
@@ -308,6 +319,11 @@ def resume_langgraph_approval(
         resolved_knowledge_bindings=resolved_knowledge_bindings,
         configuration_store=configuration_store,
         context_budget_calibration_store=context_budget_calibration_store,
+        institution_authorization=(
+            execution_input.institution_authorization
+            if execution_input is not None
+            else InstitutionAuthorizationContext()
+        ),
     )
     if execution_input is None:
         stage_runtime_configuration = _resolve_workflow_stage_runtime_configuration(
@@ -808,6 +824,7 @@ def _workflow_template_execution_input(
     stage_runtime_configuration: ResolvedWorkflowStageRuntimeConfiguration,
     conversation_context: ContextAdmission | None,
     run_start_context: RunStartContextAssembly | None = None,
+    institution_authorization: InstitutionAuthorizationContext = InstitutionAuthorizationContext(),
 ) -> WorkflowTemplateExecutionInput:
     return WorkflowTemplateExecutionInput(
         run_id=run_id,
@@ -816,6 +833,7 @@ def _workflow_template_execution_input(
             stage_runtime_configuration.effective_stage_configuration.template_descriptor_version
         ),
         question=question,
+        institution_authorization=institution_authorization,
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         draft_id=draft_id,

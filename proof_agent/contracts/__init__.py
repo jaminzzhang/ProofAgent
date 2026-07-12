@@ -159,6 +159,7 @@ from proof_agent.contracts.insurance_rules import (
     ScopeDimension,
     TaxonomyCondition,
 )
+from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
 from proof_agent.contracts.knowledge_resolution import (
     ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBinding,
@@ -437,6 +438,7 @@ __all__ = [
     "IntentResolution",
     "IntentResolutionResult",
     "InsuranceEvidenceSlotRequirement",
+    "InstitutionAuthorizationContext",
     "InsuranceRuleApplicability",
     "InsuranceRuleAuthorityGateResult",
     "InsuranceRuleMetadataDraft",

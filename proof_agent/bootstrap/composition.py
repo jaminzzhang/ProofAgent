@@ -24,6 +24,7 @@ from proof_agent.contracts import (
     ModelCallRole,
     ModelConnectionResolutionRecord,
     ModelConfig,
+    InstitutionAuthorizationContext,
     ReActPlannerConfig,
     ResolvedKnowledgeBindingSet,
     ReviewSubagentConfig,
@@ -66,6 +67,9 @@ class HarnessInvocation:
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore = field(
         default_factory=InMemoryContextBudgetCalibrationStore
     )
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
 
     def create_memory(self) -> SessionMemory:
         """Create per-run memory with the configured sensitivity boundary."""
@@ -82,6 +86,7 @@ def compose_harness_invocation(
     configuration_store: LocalAgentConfigurationStore | None = None,
     require_runtime_credentials: bool = True,
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
+    institution_authorization: InstitutionAuthorizationContext | None = None,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
 
@@ -208,6 +213,9 @@ def compose_harness_invocation(
             context_budget_calibration_store
             if context_budget_calibration_store is not None
             else InMemoryContextBudgetCalibrationStore()
+        ),
+        institution_authorization=(
+            institution_authorization or InstitutionAuthorizationContext()
         ),
     )
 

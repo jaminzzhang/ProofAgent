@@ -9,6 +9,7 @@ from pytest import MonkeyPatch
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts.dashboard import RunPurpose
+from proof_agent.contracts import InstitutionAuthorizationContext
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.errors import ProofAgentError
 import proof_agent.delivery.run_execution_service as run_execution_service
@@ -39,15 +40,86 @@ def _app_with_published_agent(tmp_path: Path, manifest_path: Path):
 
 
 class _StaticOperatorIdentityProvider:
-    def __init__(self, permissions: set[OperatorPermission]) -> None:
+    def __init__(
+        self,
+        permissions: set[OperatorPermission],
+        institution_authorization: InstitutionAuthorizationContext | None = None,
+    ) -> None:
         self._permissions = permissions
+        self._institution_authorization = (
+            institution_authorization or InstitutionAuthorizationContext()
+        )
 
     def current_identity(self) -> OperatorIdentityContext:
         return OperatorIdentityContext(
             operator_id="test-operator",
             display_name="Test Operator",
             permissions=frozenset(self._permissions),
+            institution_authorization=self._institution_authorization,
         )
+
+
+def test_run_request_bodies_reject_institution_authorization_and_knowledge_scope(
+    tmp_path: Path,
+) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+    )
+    client = TestClient(app)
+
+    chat_response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa",
+            "question": "Question",
+            "institution_authorization": {"roles": ["administrator"]},
+        },
+    )
+    conversation_response = client.post(
+        "/api/chat/conversations/not-used/runs",
+        json={"question": "Question", "knowledge_scope": {"regions": ["all"]}},
+    )
+
+    assert chat_response.status_code == 422
+    assert conversation_response.status_code == 422
+
+
+def test_chat_run_uses_only_server_side_institution_authorization(tmp_path: Path) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml"),
+    )
+    authorization = InstitutionAuthorizationContext(
+        institutions=("branch-2", "branch-1"),
+        roles=("specialist",),
+    )
+    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(
+        set(), authorization
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()
+    run_started = next(
+        event for event in trace["events"] if event["event_type"] == "run_started"
+    )
+    summary = run_started["payload"]["institution_authorization"]
+    assert summary["public_only"] is False
+    assert summary["institutions"] == {
+        "values": ["branch-1", "branch-2"],
+        "count": 2,
+    }
+    assert "operator_id" not in json.dumps(summary)
+    assert "permissions" not in json.dumps(summary)
 
 
 def _write_artifacts(tmp_path: Path, run_id: str) -> tuple[Path, Path]:
@@ -407,6 +479,12 @@ def test_chat_run_v3_approval_endpoint_resumes_after_restart_with_tool_gateway(
         tmp_path,
         Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
     )
+    original_authorization = InstitutionAuthorizationContext(
+        institutions=("branch-1",), roles=("specialist",)
+    )
+    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(
+        set(), original_authorization
+    )
     client = TestClient(app)
 
     waiting = client.post(
@@ -430,6 +508,12 @@ def test_chat_run_v3_approval_endpoint_resumes_after_restart_with_tool_gateway(
         published_agents={},
         agent_configuration_store=restarted_store,
     )
+    restarted_app.state.operator_identity_provider = _StaticOperatorIdentityProvider(
+        {OperatorPermission.APPROVAL_RESOLVE},
+        InstitutionAuthorizationContext(
+            institutions=("branch-9",), roles=("administrator",)
+        ),
+    )
     restarted_client = TestClient(restarted_app)
 
     approved = restarted_client.post(
@@ -452,6 +536,17 @@ def test_chat_run_v3_approval_endpoint_resumes_after_restart_with_tool_gateway(
     final_output = approved_body["trace_events"][-1]
     assert final_output["event_type"] == "final_output"
     assert "active" in final_output["payload"]["message"]
+    snapshot_path = (
+        tmp_path
+        / "approval_resume"
+        / waiting_body["run_id"]
+        / "controlled_react"
+        / f"snap_{waiting_body['run_id']}.json"
+    )
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert snapshot["state"]["institution_authorization"] == (
+        original_authorization.model_dump(mode="json")
+    )
 
 
 def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:
