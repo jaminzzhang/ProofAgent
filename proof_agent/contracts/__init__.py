@@ -134,6 +134,16 @@ from proof_agent.contracts.evaluation import (
     EvaluationSuite,
 )
 from proof_agent.contracts.handoff import CustomerHandoff, HandoffProjection, HandoffReason
+from proof_agent.contracts.hybrid_documents import (
+    BoundingBox,
+    ParserWarning,
+    StructuredArtifactBuildIdentity,
+    StructuredBlock,
+    StructuredKnowledgeDocumentArtifact,
+    StructuredPage,
+    StructuredTable,
+    StructuredTableCell,
+)
 from proof_agent.contracts.knowledge_resolution import (
     ResolvedKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
@@ -291,6 +301,7 @@ __all__ = [
     "BusinessFlowSkillPackRecommendation",
     "BusinessFlowSkillPackRecommendationType",
     "BoundToolProposal",
+    "BoundingBox",
     "CandidateKnowledgeSourceSnapshot",
     "CapabilitiesConfig",
     "ConfigurationOperation",
@@ -435,6 +446,7 @@ __all__ = [
     "ObservationTruthArtifact",
     "ObservationTruthKind",
     "PackageKnowledgeSourceConfig",
+    "ParserWarning",
     "PendingApproval",
     "PolicyConfig",
     "PolicyDecision",
@@ -472,6 +484,12 @@ __all__ = [
     "SharedModelConnectionReferenceSummary",
     "SkillsAdmissionConfig",
     "SkillsCapabilityConfig",
+    "StructuredArtifactBuildIdentity",
+    "StructuredBlock",
+    "StructuredKnowledgeDocumentArtifact",
+    "StructuredPage",
+    "StructuredTable",
+    "StructuredTableCell",
     "ToolSource",
     "ToolSourceDescriptor",
     "ToolSourceLifecycleState",
