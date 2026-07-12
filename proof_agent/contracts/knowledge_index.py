@@ -72,6 +72,8 @@ def _validate_percent_encoding(value: str, *, field_name: str) -> None:
 
 
 def _validate_uri_characters(value: str, *, field_name: str) -> None:
+    if not value.isascii():
+        raise ValueError(f"{field_name} source must contain ASCII characters only")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValueError(f"{field_name} must not contain ASCII controls")
     if any(character.isspace() for character in value):
@@ -80,26 +82,32 @@ def _validate_uri_characters(value: str, *, field_name: str) -> None:
         raise ValueError(f"{field_name} must not contain backslashes")
     _validate_percent_encoding(value, field_name=field_name)
     decoded = unquote_to_bytes(value)
+    try:
+        decoded.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{field_name} contains invalid UTF-8 percent encoding") from exc
     if any(byte < 32 or byte == 127 for byte in decoded):
         raise ValueError(f"{field_name} must not contain percent-encoded ASCII controls")
     if b"\\" in decoded:
         raise ValueError(f"{field_name} must not contain percent-encoded backslashes")
 
 
-def _validate_hostname(hostname: str | None, *, field_name: str) -> None:
+def _canonicalize_hostname(hostname: str | None, *, field_name: str) -> str:
     if not hostname:
         raise ValueError(f"{field_name} requires a hostname")
     if hostname.endswith("."):
         raise ValueError(f"{field_name} must not contain a trailing-dot hostname")
     try:
-        ip_address(hostname)
-        return
+        return ip_address(hostname).compressed.lower()
     except ValueError:
         pass
+    if all(character.isdigit() or character == "." for character in hostname):
+        raise ValueError(f"{field_name} contains an invalid IPv4 literal")
     if len(hostname) > 253 or any(
         _HOST_LABEL.fullmatch(label) is None for label in hostname.split(".")
     ):
         raise ValueError(f"{field_name} contains an invalid hostname")
+    return hostname.lower()
 
 
 def _validate_canonical_path(path: str, *, field_name: str) -> None:
@@ -136,38 +144,38 @@ def _validate_artifact_uri(value: str) -> str:
     _validate_canonical_path(parsed.path, field_name="artifact_uri")
     canonical_authority = parsed.netloc.lower()
     if scheme == "https":
-        hostname_value = parsed.hostname
-        _validate_hostname(hostname_value, field_name="artifact_uri")
-        assert hostname_value is not None
         if parsed.netloc.endswith(":"):
             raise ValueError("artifact_uri contains an empty port")
         if port is not None and not 1 <= port <= 65535:
             raise ValueError("artifact_uri contains an invalid port")
-        hostname = hostname_value.lower()
+        hostname = _canonicalize_hostname(parsed.hostname, field_name="artifact_uri")
         if ":" in hostname:
             hostname = f"[{hostname}]"
-        canonical_authority = hostname + (f":{port}" if port is not None else "")
+        canonical_authority = hostname + (f":{port}" if port is not None and port != 443 else "")
     elif scheme == "s3":
         if not parsed.netloc:
             raise ValueError("s3 artifact_uri requires a bucket authority")
         if parsed.hostname != parsed.netloc.lower():
             raise ValueError("s3 artifact_uri authority must be a bucket without a port")
-        _validate_hostname(parsed.hostname, field_name="artifact_uri")
-        canonical_authority = parsed.hostname.lower()
+        canonical_authority = _canonicalize_hostname(parsed.hostname, field_name="artifact_uri")
     elif scheme == "proofagent":
         if not parsed.netloc:
             raise ValueError("proofagent artifact_uri requires an authority")
-        hostname_value = parsed.hostname
-        _validate_hostname(hostname_value, field_name="artifact_uri")
-        assert hostname_value is not None
-        hostname = hostname_value.lower()
+        if parsed.netloc.endswith(":"):
+            raise ValueError("artifact_uri contains an empty port")
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError("artifact_uri contains an invalid port")
+        hostname = _canonicalize_hostname(parsed.hostname, field_name="artifact_uri")
         if ":" in hostname:
             hostname = f"[{hostname}]"
         canonical_authority = hostname + (f":{port}" if port is not None else "")
-    elif parsed.netloc and (parsed.hostname != "localhost" or parsed.port is not None):
-        raise ValueError("file artifact_uri authority must be empty or localhost")
-    elif parsed.netloc:
-        canonical_authority = "localhost"
+    else:
+        if parsed.netloc.endswith(":"):
+            raise ValueError("file artifact_uri does not accept a port delimiter")
+        if parsed.netloc and (parsed.hostname != "localhost" or parsed.port is not None):
+            raise ValueError("file artifact_uri authority must be empty or localhost")
+        if parsed.netloc:
+            canonical_authority = "localhost"
     return f"{scheme}://{canonical_authority}{parsed.path}"
 
 
@@ -181,6 +189,7 @@ def _validate_citation_uri(value: str) -> str:
         parsed = urlsplit(canonical)
         username = parsed.username
         password = parsed.password
+        port = parsed.port
     except ValueError as exc:
         raise ValueError("citation_uri is malformed") from exc
     if username is not None or password is not None or "@" in parsed.netloc:
@@ -189,6 +198,10 @@ def _validate_citation_uri(value: str) -> str:
         raise ValueError("citation_uri requires an authority")
     if parsed.hostname is not None and parsed.hostname.endswith("."):
         raise ValueError("citation_uri must not contain a trailing-dot authority")
+    if parsed.netloc.endswith(":"):
+        raise ValueError("citation_uri must not contain an empty port")
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("citation_uri contains an invalid port")
     if "?" in canonical:
         raise ValueError("citation_uri must not contain a query")
     _validate_canonical_path(parsed.path, field_name="citation_uri")
@@ -197,7 +210,17 @@ def _validate_citation_uri(value: str) -> str:
     if "#" in canonical and _CITATION_FRAGMENT.fullmatch(parsed.fragment) is None:
         raise ValueError("citation_uri fragment is not a canonical page or anchor identity")
     fragment = f"#{parsed.fragment}" if parsed.fragment else ""
-    return f"{raw_scheme.lower()}://{parsed.netloc.lower()}{parsed.path}{fragment}"
+    hostname = parsed.hostname
+    if hostname is None:
+        raise ValueError("citation_uri requires a hostname or authority identity")
+    try:
+        hostname = ip_address(hostname).compressed.lower()
+    except ValueError:
+        hostname = hostname.lower()
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    canonical_authority = hostname + (f":{port}" if port is not None else "")
+    return f"{raw_scheme.lower()}://{canonical_authority}{parsed.path}{fragment}"
 
 
 _MEDIA_TYPE_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+$")

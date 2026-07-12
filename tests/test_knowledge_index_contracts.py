@@ -303,6 +303,34 @@ def test_exact_artifact_ref_canonicalizes_supported_scheme_to_lowercase() -> Non
 
 
 @pytest.mark.parametrize(
+    ("variant", "canonical"),
+    [
+        ("https://EXAMPLE.COM:443/path", "https://example.com/path"),
+        ("https://EXAMPLE.COM:8443/path", "https://example.com:8443/path"),
+        ("https://192.0.2.1:443/path", "https://192.0.2.1/path"),
+        ("HTTPS://EXAMPLE.COM/%E4%B8%AD", "https://example.com/%E4%B8%AD"),
+        (
+            "https://[2001:0DB8:0000:0000:0000:0000:0000:0001]:443/path",
+            "https://[2001:db8::1]/path",
+        ),
+        (
+            "proofagent://[2001:0DB8:0000:0000:0000:0000:0000:0001]:8443/path",
+            "proofagent://[2001:db8::1]:8443/path",
+        ),
+    ],
+)
+def test_exact_artifact_ref_canonicalizes_host_literals_and_ports(
+    variant: str, canonical: str
+) -> None:
+    first = artifact_ref(artifact_uri=variant)
+    second = artifact_ref(artifact_uri=canonical)
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.model_dump()["artifact_uri"] == canonical
+    assert ExactArtifactRef.model_validate_json(first.model_dump_json()) == second
+
+
+@pytest.mark.parametrize(
     "artifact_uri",
     [
         "relative/path",
@@ -323,6 +351,7 @@ def test_exact_artifact_ref_canonicalizes_supported_scheme_to_lowercase() -> Non
         "https://host:not-a-port/path",
         "https://host:/path",
         "s3://bucket/key with space",
+        "s3://bucket/中",
         "s3://bucket/key%2",
         "s3://bucket/key%3f",
         "s3://bucket/key%41",
@@ -336,6 +365,10 @@ def test_exact_artifact_ref_canonicalizes_supported_scheme_to_lowercase() -> Non
         "s3://bucket/a\\b",
         "s3://bucket/a%5Cb",
         "s3://bucket/a%0Ab",
+        "s3://bucket/%FF",
+        "s3://bucket/%C0%AF",
+        "s3://bucket/%ED%A0%80",
+        "s3://bucket/%E4%B8",
         "https://user@host/path",
         "https://host/path?signature=secret",
         "https://host/path?",
@@ -354,6 +387,16 @@ def test_exact_artifact_ref_canonicalizes_supported_scheme_to_lowercase() -> Non
         "proofagent://artifact/a%2Fb",
         "proofagent://artifact/a%252Fb",
         "https://host./path",
+        "https://host:0/path",
+        "https://host:65536/path",
+        "https://192.168.001.001/path",
+        "https://[2001:db8::1]:/path",
+        "proofagent://host:/path",
+        "proofagent://host:0/path",
+        "proofagent://host:65536/path",
+        "proofagent://host:not-a-port/path",
+        "proofagent://[2001:db8::1]:/path",
+        "file://localhost:/path",
     ],
 )
 def test_exact_artifact_ref_rejects_unsafe_or_malformed_uris(
@@ -417,6 +460,13 @@ def test_manifest_entry_accepts_canonical_internal_citations() -> None:
     )
     assert proofagent == canonical
     assert hash(proofagent) == hash(canonical)
+    ipv6 = RuleUnitManifestEntry.model_validate(
+        {
+            **entry.model_dump(),
+            "citation_uri": "proofagent://[2001:0DB8:0:0:0:0:0:1]:8443/path#page=1",
+        }
+    )
+    assert ipv6.citation_uri == "proofagent://[2001:db8::1]:8443/path#page=1"
 
 
 @pytest.mark.parametrize(
@@ -439,8 +489,16 @@ def test_manifest_entry_accepts_canonical_internal_citations() -> None:
         "knowledge://source/a%0Ab#page=1",
         "knowledge://source/a\\b#page=1",
         "knowledge://source./path#page=1",
+        "knowledge://source/中#page=1",
+        "knowledge://source/%FF#page=1",
+        "knowledge://source/%C0%AF#page=1",
+        "knowledge://source/%ED%A0%80#page=1",
+        "knowledge://source/%E4%B8#page=1",
         "proofagent://source/a%2Fb#page=1",
         "proofagent://source/a%252Fb#page=1",
+        "proofagent://source:/path#page=1",
+        "proofagent://source:0/path#page=1",
+        "proofagent://source:65536/path#page=1",
     ],
 )
 def test_manifest_entry_rejects_noncanonical_internal_citations(
