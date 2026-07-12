@@ -141,13 +141,15 @@ def test_metadata_draft_is_explicitly_non_authoritative() -> None:
     )
 
     assert draft.authoritative is False
-    with pytest.raises(ValidationError):
-        InsuranceRuleMetadataDraft(
-            metadata_draft_id="draft-1",
-            document_id="doc-1",
-            revision_id="doc-rev-2",
-            authoritative=True,
-        )
+    assert json.loads(draft.model_dump_json())["authoritative"] is False
+    for invalid in (True, 0, "false", "False", "0"):
+        with pytest.raises(ValidationError):
+            InsuranceRuleMetadataDraft(
+                metadata_draft_id="draft-1",
+                document_id="doc-1",
+                revision_id="doc-rev-2",
+                authoritative=invalid,
+            )
 
 
 def test_approved_metadata_revision_preserves_business_authority_distinctions() -> None:
@@ -354,6 +356,27 @@ def test_authority_gate_pass_requires_every_required_check_to_pass() -> None:
             rule_unit_revision_id="rule-rev-1",
             checks=tuple(failed_checks),
         )
+
+
+@pytest.mark.parametrize("invalid", ["true", "false", "yes", "no", 1, 0])
+def test_authority_gate_rejects_coercive_boolean_values(invalid: object) -> None:
+    checks = [check.model_dump() for check in passing_checks()]
+    checks[0]["passed"] = invalid
+
+    with pytest.raises(ValidationError):
+        InsuranceRuleAuthorityGateResult(
+            outcome="PASS",
+            rule_unit_revision_id="rule-rev-1",
+            checks=tuple(checks),
+        )
+
+    payload = {
+        "outcome": "PASS",
+        "rule_unit_revision_id": "rule-rev-1",
+        "checks": checks,
+    }
+    with pytest.raises(ValidationError):
+        InsuranceRuleAuthorityGateResult.model_validate_json(json.dumps(payload))
 
 
 def test_authority_gate_failure_requires_terminal_handling_and_reason() -> None:

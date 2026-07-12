@@ -11,6 +11,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     StringConstraints,
+    field_validator,
     model_validator,
 )
 
@@ -144,7 +145,7 @@ class InsuranceRuleMetadataDraft(_InsuranceRuleModel):
     metadata_draft_id: NonBlankStr
     document_id: NonBlankStr
     revision_id: NonBlankStr
-    authoritative: Literal[False] = False
+    authoritative: StrictBool = False
     applicability: InsuranceRuleApplicability | None = None
     effective_from: BusinessDate | None = None
     effective_to: BusinessDate | None = None
@@ -152,6 +153,13 @@ class InsuranceRuleMetadataDraft(_InsuranceRuleModel):
     precedence: InsuranceRulePrecedence | None = None
     supersedes_rule_unit_revision_ids: CanonicalIdentifierSet = ()
     proposed_visibility: ProposedInsuranceKnowledgeVisibilityScope | None = None
+
+    @field_validator("authoritative")
+    @classmethod
+    def validate_non_authoritative(cls, value: bool) -> bool:
+        if value:
+            raise ValueError("an Insurance Rule Metadata Draft is never authoritative")
+        return value
 
     @model_validator(mode="after")
     def validate_effective_period(self) -> Self:
@@ -233,7 +241,7 @@ _REQUIRED_AUTHORITY_CHECKS = frozenset(
 
 class AuthorityGateCheck(_InsuranceRuleModel):
     check: AuthorityGateCheckName
-    passed: bool
+    passed: StrictBool
     reason_code: NonBlankStr | None = None
 
     @model_validator(mode="after")
