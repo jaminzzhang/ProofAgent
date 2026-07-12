@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 import unicodedata
 from typing import Any
+import zipfile
 
 from proof_agent.capabilities.knowledge.ingestion.contracts import (
     HybridIntakeLimits,
@@ -21,8 +22,31 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 _MIN_MEANINGFUL_CHARACTERS = 8
 _MIN_NATIVE_TEXT_QUALITY_RATIO = 0.5
 _ACTIVE_KEYS = {"/OpenAction", "/AA", "/JS", "/JavaScript", "/Launch"}
+_ACTION_TYPES = {
+    "/GoTo",
+    "/GoToR",
+    "/GoToE",
+    "/Launch",
+    "/Thread",
+    "/URI",
+    "/Sound",
+    "/Movie",
+    "/Hide",
+    "/Named",
+    "/SubmitForm",
+    "/ResetForm",
+    "/ImportData",
+    "/JavaScript",
+    "/SetOCGState",
+    "/Rendition",
+    "/Trans",
+    "/GoTo3DView",
+    "/RichMediaExecute",
+}
 _EMBEDDED_KEYS = {"/EmbeddedFiles", "/EF", "/AF"}
 _MAX_VISITED_PDF_OBJECTS = 100_000
+_PDF_EOF_MARKER = b"%%EOF"
+_PDF_TRAILING_WHITESPACE = frozenset(b"\x00\x09\x0a\x0c\x0d\x20")
 _FIX = "Upload a safe, unencrypted PDF within the configured Hybrid intake limits."
 
 
@@ -35,6 +59,7 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
     """
 
     source_sha256, source_size = _hash_safe_source(path, limits.max_file_bytes)
+    _reject_polyglot_payload(path)
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -138,6 +163,45 @@ def _profile_page(page: Any, page_number: int) -> HybridPdfPageProfile:
     )
 
 
+def _reject_polyglot_payload(path: Path) -> None:
+    """Reject a PDF that is also an archive or carries bytes after its final EOF marker."""
+
+    try:
+        if zipfile.is_zipfile(path) or _has_non_whitespace_after_final_pdf_eof(path):
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_009",
+                "Hybrid PDF upload contains an appended archive or executable payload.",
+            )
+    except ProofAgentError:
+        raise
+    except OSError as exc:
+        raise _hybrid_error("PA_HYBRID_INTAKE_001", "Hybrid PDF upload could not be read.") from exc
+
+
+def _has_non_whitespace_after_final_pdf_eof(path: Path) -> bool:
+    last_eof_end: int | None = None
+    offset = 0
+    overlap = b""
+    with path.open("rb") as handle:
+        while chunk := handle.read(_HASH_CHUNK_BYTES):
+            searchable = overlap + chunk
+            searchable_offset = offset - len(overlap)
+            marker_index = searchable.find(_PDF_EOF_MARKER)
+            while marker_index >= 0:
+                last_eof_end = searchable_offset + marker_index + len(_PDF_EOF_MARKER)
+                marker_index = searchable.find(_PDF_EOF_MARKER, marker_index + 1)
+            offset += len(chunk)
+            overlap = searchable[-(len(_PDF_EOF_MARKER) - 1) :]
+
+        if last_eof_end is None:
+            return False
+        handle.seek(last_eof_end)
+        while trailing := handle.read(_HASH_CHUNK_BYTES):
+            if any(byte not in _PDF_TRAILING_WHITESPACE for byte in trailing):
+                return True
+    return False
+
+
 def _reject_unsafe_pdf_objects(reader: Any) -> None:
     from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject
 
@@ -164,10 +228,12 @@ def _reject_unsafe_pdf_objects(reader: Any) -> None:
         if isinstance(item, DictionaryObject):
             keys = {str(key) for key in item.keys()}
             action_type = item.get(NameObject("/S"))
-            if keys & _ACTIVE_KEYS or action_type in {
-                NameObject("/JavaScript"),
-                NameObject("/Launch"),
-            }:
+            object_type = item.get(NameObject("/Type"))
+            if (
+                keys & _ACTIVE_KEYS
+                or str(action_type) in _ACTION_TYPES
+                or object_type == NameObject("/Action")
+            ):
                 raise _hybrid_error(
                     "PA_HYBRID_INTAKE_007", "Hybrid PDF upload contains active content."
                 )

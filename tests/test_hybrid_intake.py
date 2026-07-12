@@ -4,8 +4,10 @@ import hashlib
 from importlib import import_module
 from importlib.util import find_spec
 import math
+from io import BytesIO
 from pathlib import Path
 from types import ModuleType
+import zipfile
 
 import pytest
 from pydantic import ValidationError
@@ -112,6 +114,46 @@ def _write_unsafe_pdf(path: Path, *, embedded: bool) -> Path:
     return path
 
 
+def _write_action_pdf(path: Path, action_type: str) -> Path:
+    pypdf, generic = _modules()
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer._root_object[generic.NameObject("/A")] = generic.DictionaryObject(
+        {
+            generic.NameObject("/Type"): generic.NameObject("/Action"),
+            generic.NameObject("/S"): generic.NameObject(action_type),
+        }
+    )
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def _write_benign_transparency_pdf(path: Path) -> Path:
+    pypdf, generic = _modules()
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    page[generic.NameObject("/Group")] = generic.DictionaryObject(
+        {
+            generic.NameObject("/Type"): generic.NameObject("/Group"),
+            generic.NameObject("/S"): generic.NameObject("/Transparency"),
+        }
+    )
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def _append_zip_payload(path: Path, *, filename: str, content: bytes) -> Path:
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as writer:
+        writer.writestr(filename, content)
+    with path.open("ab") as handle:
+        handle.write(archive.getvalue())
+    assert zipfile.is_zipfile(path)
+    return path
+
+
 def test_blank_scanned_pdf_is_accepted_by_hybrid_preflight(tmp_path: Path) -> None:
     path = _write_pdf(tmp_path / "scan.pdf")
     result = preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
@@ -210,6 +252,45 @@ def test_preflight_rejects_active_content_and_embedded_files(
     with pytest.raises(ProofAgentError) as exc:
         preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
     assert exc.value.code == code
+
+
+def test_preflight_rejects_pdf_zip_polyglot_with_executable_payload(tmp_path: Path) -> None:
+    path = _append_zip_payload(
+        _write_pdf(tmp_path / "polyglot.pdf"),
+        filename="payload.exe",
+        content=b"MZ\x90\x00",
+    )
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_009"
+
+
+def test_preflight_rejects_non_archive_payload_after_pdf_eof(tmp_path: Path) -> None:
+    path = _write_pdf(tmp_path / "appended.pdf")
+    with path.open("ab") as handle:
+        handle.write(b"MZ\x90\x00executable")
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_009"
+
+
+@pytest.mark.parametrize("action_type", ["/URI", "/SubmitForm", "/GoToR"])
+def test_preflight_rejects_pdf_action_dictionaries(
+    tmp_path: Path,
+    action_type: str,
+) -> None:
+    path = _write_action_pdf(tmp_path / "action.pdf", action_type)
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_007"
+
+
+def test_preflight_preserves_benign_non_action_s_dictionary(tmp_path: Path) -> None:
+    result = preflight_hybrid_pdf(
+        _write_benign_transparency_pdf(tmp_path / "transparency.pdf"),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
 
 
 def test_preflight_requires_regular_non_symlink_pdf(tmp_path: Path) -> None:
