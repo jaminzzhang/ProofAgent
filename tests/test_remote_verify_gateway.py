@@ -69,7 +69,4 @@ def test_remote_verify_gateway_routes_api_chat_and_dashboard_paths() -> None:
     ):
         assert read_text(f"{gateway_origin}/api/health") == "backend:/api/health"
         assert read_text(f"{gateway_origin}/operator") == "chat:/operator"
-        assert read_text(f"{gateway_origin}/customer/agents/agent_1") == (
-            "chat:/customer/agents/agent_1"
-        )
         assert read_text(f"{gateway_origin}/runs/run_1") == "dashboard:/runs/run_1"

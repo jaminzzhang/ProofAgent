@@ -315,23 +315,24 @@ def test_before_memory_write_denial_blocks_memory_side_effect_without_changing_a
     assert memory_stage.summary["written_fields"] == ()
     event_types = [event["event_type"] for event in trace.events]
     assert event_types == [
+        "reasoning_summary",
         "memory_write_requested",
         "policy_decision",
         "memory_write_decision",
     ]
-    assert trace.events[0]["payload"] == {
+    assert trace.events[1]["payload"] == {
         "stage_id": "memory",
         "field_names": ["final_output_length", "outcome", "question"],
         "field_count": 3,
         "write_source": "controlled_react_v3",
     }
-    assert trace.events[1]["status"] == "blocked"
-    assert trace.events[1]["payload"]["stage_id"] == "memory"
-    assert trace.events[1]["payload"]["enforcement_point"] == "before_memory_write"
-    assert trace.events[1]["payload"]["decision"] == "deny"
     assert trace.events[2]["status"] == "blocked"
     assert trace.events[2]["payload"]["stage_id"] == "memory"
+    assert trace.events[2]["payload"]["enforcement_point"] == "before_memory_write"
     assert trace.events[2]["payload"]["decision"] == "deny"
+    assert trace.events[3]["status"] == "blocked"
+    assert trace.events[3]["payload"]["stage_id"] == "memory"
+    assert trace.events[3]["payload"]["decision"] == "deny"
     assert "Submit the claim form" not in repr(trace.events)
 
 
@@ -376,15 +377,16 @@ def test_before_memory_write_allow_commits_memory_side_effect_without_changing_a
     )
     event_types = [event["event_type"] for event in trace.events]
     assert event_types == [
+        "reasoning_summary",
         "memory_write_requested",
         "policy_decision",
         "memory_write_decision",
     ]
-    assert trace.events[1]["status"] == "ok"
-    assert trace.events[1]["payload"]["enforcement_point"] == "before_memory_write"
-    assert trace.events[1]["payload"]["decision"] == "allow"
     assert trace.events[2]["status"] == "ok"
+    assert trace.events[2]["payload"]["enforcement_point"] == "before_memory_write"
     assert trace.events[2]["payload"]["decision"] == "allow"
+    assert trace.events[3]["status"] == "ok"
+    assert trace.events[3]["payload"]["decision"] == "allow"
     assert "Submit the claim form" not in repr(trace.events)
 
 

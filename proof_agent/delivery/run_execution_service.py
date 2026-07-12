@@ -20,9 +20,9 @@ from proof_agent.delivery.agent_package_execution import (
 )
 from proof_agent.delivery.published_agents import PublishedAgent
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.approval_resume import (
-    ControlledReActApprovalResumeContext,
-    LangGraphApprovalResumeRegistry,
+from proof_agent.control.workflow.controlled_react.ports import (
+    ObservationTruthStorePort,
+    SnapshotStorePort,
 )
 
 
@@ -31,7 +31,8 @@ class RunExecutionDependencies:
     store: RunStore
     runs_dir: Path
     configuration_store: LocalAgentConfigurationStore
-    approval_resume_registry: LangGraphApprovalResumeRegistry
+    controlled_react_snapshot_store: SnapshotStorePort | None = None
+    controlled_react_observation_truth_store: ObservationTruthStorePort | None = None
     controlled_react_orchestrator: ControlledReActOrchestratorDependency | None = None
 
 
@@ -76,11 +77,9 @@ def execute_published_agent_run(
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
             published_agent_runtime_facts=published_agent.runtime_facts,
             controlled_react_orchestrator=dependencies.controlled_react_orchestrator,
-            controlled_react_snapshot_store=(
-                dependencies.approval_resume_registry.controlled_react_snapshot_store()
-            ),
+            controlled_react_snapshot_store=dependencies.controlled_react_snapshot_store,
             controlled_react_observation_truth_store=(
-                dependencies.approval_resume_registry.controlled_react_observation_truth_store()
+                dependencies.controlled_react_observation_truth_store
             ),
         )
     )
@@ -88,19 +87,4 @@ def execute_published_agent_run(
     detail = dependencies.store.get_run_detail(run_id)
     if detail is None:
         raise RuntimeError("Run artifacts were not persisted.")
-    if detail.pending_approvals:
-        dependencies.approval_resume_registry.put_controlled_react(
-            ControlledReActApprovalResumeContext(
-                agent_yaml=published_agent.manifest_path,
-                run_id=run_id,
-                question=question,
-                manifest=manifest,
-                resolved_knowledge_bindings=published_agent.resolved_knowledge_bindings,
-                configuration_store=dependencies.configuration_store,
-                run_purpose=detail.run_purpose,
-                agent_id=published_agent.agent_id,
-                agent_version_id=published_agent.agent_version_id,
-                draft_id=published_agent.source_draft_id,
-            )
-        )
     return PublishedAgentRunExecution(result=result, detail=detail, manifest=manifest)

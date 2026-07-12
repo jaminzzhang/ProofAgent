@@ -129,8 +129,6 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
             is_public_chat_path = (
                 path == "/operator"
                 or path.startswith("/operator/")
-                or path == "/customer"
-                or path.startswith("/customer/")
             )
             chat_base = config.chat_base
             if chat_base is not None and is_public_chat_path:

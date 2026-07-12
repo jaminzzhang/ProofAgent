@@ -329,7 +329,6 @@ def verify_remote(
         typer.echo(f"Local gateway: http://127.0.0.1:{gateway_port}")
         typer.echo(f"Dashboard: http://127.0.0.1:{gateway_port}/")
         typer.echo(f"Operator chat: http://127.0.0.1:{gateway_port}/operator")
-        typer.echo(f"Customer chat: http://127.0.0.1:{gateway_port}/customer")
         if cloudflared_path is not None:
             typer.echo("Public tunnel: waiting for cloudflared to print the quick tunnel URL")
         _run_dev_processes(specs)
@@ -726,7 +725,7 @@ def server(
     typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
     typer.echo("To start the frontends in development mode, run:")
     typer.echo("  Dashboard: cd dashboard && npm run dev (port 5173)")
-    typer.echo("  Unified Chat: cd chat && npm run dev (port 5174, /operator and /customer)")
+    typer.echo("  Operator Chat: cd chat && npm run dev (port 5174, /operator)")
     if reload:
         os.environ[SERVER_HISTORY_DIR_ENV] = history_dir
         os.environ[SERVER_CONFIG_DIR_ENV] = config_dir

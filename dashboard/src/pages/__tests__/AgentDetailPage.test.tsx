@@ -1084,33 +1084,6 @@ workflow:
     })
   })
 
-  it('saves Workflow core settings through the draft contract API', async () => {
-    mockContract = {
-      ...mockContract,
-      agent_yaml: `name: insurance
-workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
-  checkpointer:
-    provider: sqlite
-    uri: sqlite:///runs/config/checkpoints.db
-`,
-    }
-
-    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
-    const checkpointerUri = await screen.findByLabelText('Checkpointer URI')
-
-    fireEvent.change(checkpointerUri, {
-      target: { value: 'sqlite:///runs/config/checkpoints-v2.db' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Core' }))
-
-    await waitFor(() => {
-      expect(updateConfigDraftContract).toHaveBeenCalled()
-    })
-    expect(latestSavedAgentYaml()).toContain('uri: "sqlite:///runs/config/checkpoints-v2.db"')
-  })
-
   it('keeps Workflow core template_descriptor_version aligned when changing templates', async () => {
     mockContract = {
       ...mockContract,
@@ -1365,7 +1338,7 @@ workflow:
   it('shows chat entry actions for the active Published Agent version', () => {
     mockContract = {
       ...mockContract,
-      agent_yaml: 'name: insurance\ncustomer:\n  adapter: ./customer_adapter.py\nmemory:\n  provider: local\n',
+      agent_yaml: 'name: insurance\nmemory:\n  provider: local\n',
     }
     mockVersions = [
       {
@@ -1387,10 +1360,6 @@ workflow:
     expect(screen.getByRole('link', { name: 'Open in Operator Chat' })).toHaveAttribute(
       'href',
       'http://localhost:5174/operator/agents/agent-1/new',
-    )
-    expect(screen.getByRole('link', { name: 'Open in Customer Chat' })).toHaveAttribute(
-      'href',
-      'http://localhost:5174/customer/agents/agent-1',
     )
   })
 

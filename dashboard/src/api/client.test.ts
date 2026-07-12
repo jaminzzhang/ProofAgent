@@ -3,12 +3,9 @@ import {
   ApiError,
   archiveModelConnection,
   archiveKnowledgeSource,
-  approveRun,
   bindKnowledgeSourceToDraft,
   createModelConnection,
   deleteModelConnection,
-  denyRun,
-  fetchApprovals,
   fetchModelConnection,
   fetchModelConnectionDeletionEligibility,
   fetchModelConnectionReferences,
@@ -53,25 +50,10 @@ import {
   validateCandidateKnowledgeSourceSnapshotFoundation,
   validateConfigDraft,
   validateModelConnection,
-  fetchHandoffs,
 } from './client'
 
 afterEach(() => {
   vi.restoreAllMocks()
-})
-
-test('fetchHandoffs requests internal handoff projection', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({ data: [] }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
-
-  const response = await fetchHandoffs()
-
-  expect(fetchMock).toHaveBeenCalledWith('/api/handoffs', undefined)
-  expect(response.data).toEqual([])
 })
 
 test('evaluation campaign client methods use dashboard campaign endpoints', async () => {
@@ -247,23 +229,6 @@ test('promoteEvaluationProductionSample posts reviewer-gated promotion payload',
   expect(response.status).toBe('promoted')
 })
 
-test('fetchApprovals requests the global pending approval queue projection', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({ data: [], meta: { total: 0, limit: 25, offset: 0 } }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
-
-  const response = await fetchApprovals({ limit: 25, offset: 50 })
-
-  const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost')
-  expect(url.pathname).toBe('/api/approvals')
-  expect(url.searchParams.get('limit')).toBe('25')
-  expect(url.searchParams.get('offset')).toBe('50')
-  expect(response.data).toEqual([])
-})
-
 test('updateModelConnection preserves structured impact review conflicts', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(
@@ -318,38 +283,6 @@ test('fetchRuns includes run purpose filter', async () => {
   expect(url.pathname).toBe('/api/runs')
   expect(url.searchParams.get('run_purpose')).toBe('validation')
   expect(url.searchParams.get('search')).toBe('draft')
-})
-
-test('approveRun targets the Run History approval endpoint', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({ run_id: 'run_1', pending_approvals: [] }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
-
-  await approveRun('run_1', 'appr_customer_lookup')
-
-  expect(fetchMock).toHaveBeenCalledWith(
-    '/api/runs/run_1/approvals/appr_customer_lookup/approve',
-    { method: 'POST' },
-  )
-})
-
-test('denyRun targets the Run History approval endpoint', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({ run_id: 'run_1', pending_approvals: [] }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
-
-  await denyRun('run_1', 'appr_customer_lookup')
-
-  expect(fetchMock).toHaveBeenCalledWith(
-    '/api/runs/run_1/approvals/appr_customer_lookup/deny',
-    { method: 'POST' },
-  )
 })
 
 test('fetchConfigAgents requests Agent Configuration list', async () => {

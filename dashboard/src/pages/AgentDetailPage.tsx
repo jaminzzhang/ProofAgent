@@ -50,7 +50,6 @@ import { useConfigDraft } from '../hooks/useConfigDraft'
 import { useConfigVersions } from '../hooks/useConfigVersions'
 import { useLocale } from '../i18n/locale'
 import {
-  extractAgentYamlSection,
   readAgentYamlField,
   replaceAgentContextConfiguration,
   replaceAgentYamlMapping,
@@ -190,7 +189,6 @@ export function AgentDetailPage() {
   }, [activeTab, agentId, draftId, skillsLoaded])
 
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
-  const isCustomerFacing = Boolean(extractAgentYamlSection(agentYaml, 'customer'))
   const memoryReadinessBlockers = useMemo(
     () => memoryConfigurationBlockers(agentYaml, t),
     [agentYaml, t],
@@ -660,16 +658,6 @@ export function AgentDetailPage() {
                         >
                           {t('agentDetail.openOperator')}
                         </a>
-                        {isCustomerFacing && (
-                          <a
-                            href={chatUrl(`/customer/agents/${version.agent_id}`)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
-                          >
-                            {t('agentDetail.openCustomer')}
-                          </a>
-                        )}
                         <Badge variant="success">{t('agentDetail.active')}</Badge>
                       </div>
                     ) : (

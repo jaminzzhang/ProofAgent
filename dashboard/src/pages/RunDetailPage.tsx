@@ -19,7 +19,6 @@ import { TimelineTab } from './tabs/TimelineTab'
 import { EvidenceTab } from './tabs/EvidenceTab'
 import { ModelUsageTab } from './tabs/ModelUsageTab'
 import { ReceiptTab } from './tabs/ReceiptTab'
-import { ApprovalTab } from './tabs/ApprovalTab'
 import { WorkflowTab } from './tabs/WorkflowTab'
 import type { GovernanceDetails } from '../api/types'
 import { ValidationCapturePanel } from '../components/agent/ValidationCapturePanel'
@@ -27,7 +26,6 @@ import { ValidationCapturePanel } from '../components/agent/ValidationCapturePan
 type Tab =
   | 'workflow'
   | 'receipt'
-  | 'approval'
   | 'timeline'
   | 'evidence'
   | 'model'
@@ -37,7 +35,7 @@ type Tab =
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>()
   const location = useLocation()
-  const initialTab = location.hash === '#approval' ? 'approval' : 'workflow'
+  const initialTab = 'workflow'
   const returnState = runDetailReturnState(location.state)
 
   return (
@@ -68,7 +66,7 @@ export function RunDetailContent({
   className,
 }: RunDetailContentProps) {
   const { t, formatDateTime } = useLocale()
-  const { detail, loading, error, refetch } = useRunDetail(runId)
+  const { detail, loading, error } = useRunDetail(runId)
   const [activeTab, setActiveTab] = useState<Tab>(initialTab)
 
   useEffect(() => {
@@ -92,8 +90,6 @@ export function RunDetailContent({
       </Card>
     )
 
-  const needsApproval =
-    detail.outcome === 'WAITING_FOR_APPROVAL' || detail.approval_state
   const hasWorkflowProjection = detail.workflow_projection.stages.length > 0
   const visibleActiveTab =
     activeTab === 'workflow' && !hasWorkflowProjection ? 'receipt' : activeTab
@@ -101,7 +97,6 @@ export function RunDetailContent({
   const tabs: { key: Tab; label: string }[] = []
   if (hasWorkflowProjection) tabs.push({ key: 'workflow', label: 'Workflow' })
   tabs.push({ key: 'receipt', label: 'Governance Receipt' })
-  if (needsApproval) tabs.push({ key: 'approval', label: 'Approval State' })
   if (!hasWorkflowProjection && hasGovernanceDetails(detail.governance_details)) {
     tabs.push({ key: 'governance', label: 'Governance Details' })
   }
@@ -203,16 +198,6 @@ export function RunDetailContent({
         <TabsContent value="receipt">
           <ReceiptTab markdown={detail.receipt_markdown} />
         </TabsContent>
-        {needsApproval && (
-          <TabsContent value="approval">
-            <ApprovalTab
-              state={detail.approval_state}
-              pendingApprovals={detail.pending_approvals}
-              runId={detail.run_id}
-              onResolved={refetch}
-            />
-          </TabsContent>
-        )}
         {!hasWorkflowProjection && hasGovernanceDetails(detail.governance_details) && (
           <TabsContent value="governance">
             <GovernanceTab details={detail.governance_details} />

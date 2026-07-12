@@ -2,8 +2,6 @@ import { Routes, Route } from 'react-router-dom'
 import { OverviewPage } from './pages/OverviewPage'
 import { RunsListPage } from './pages/RunsListPage'
 import { RunDetailPage } from './pages/RunDetailPage'
-import { HandoffsPage } from './pages/HandoffsPage'
-import { ApprovalsPage } from './pages/ApprovalsPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { AgentDetailPage } from './pages/AgentDetailPage'
 import { PoliciesPage } from './pages/PoliciesPage'
@@ -29,8 +27,6 @@ export function AppRoutes() {
       <Route path="/models" element={<ModelsPage />} />
       <Route path="/models/:connectionId" element={<ModelConnectionDetailPage />} />
       <Route path="/runs" element={<RunsListPage />} />
-      <Route path="/handoffs" element={<HandoffsPage />} />
-      <Route path="/approvals" element={<ApprovalsPage />} />
       <Route path="/runs/:runId" element={<RunDetailPage />} />
       <Route path="/evaluation-lab" element={<EvaluationLabPage />} />
     </Routes>

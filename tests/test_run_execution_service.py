@@ -6,7 +6,10 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import ReceiptOutcome, WorkflowTemplateExecutionResult
 from proof_agent.delivery.published_agents import PublishedAgent
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.runtime.approval_resume import LangGraphApprovalResumeRegistry
+from proof_agent.control.workflow.controlled_react.local_stores import (
+    FileControlledReActSnapshotStore,
+    FileObservationTruthStore,
+)
 
 
 def test_published_agent_run_uses_per_run_history_artifact_dir(
@@ -33,9 +36,11 @@ def test_published_agent_run_uses_per_run_history_artifact_dir(
             store=store,
             runs_dir=tmp_path / "latest",
             configuration_store=configuration_store,
-            approval_resume_registry=LangGraphApprovalResumeRegistry(
-                tmp_path / "approval_resume",
-                configuration_store=configuration_store,
+            controlled_react_snapshot_store=FileControlledReActSnapshotStore(
+                tmp_path / "controlled_react"
+            ),
+            controlled_react_observation_truth_store=FileObservationTruthStore(
+                tmp_path / "controlled_react"
             ),
             controlled_react_orchestrator=FakeControlledReActOrchestrator(),
         ),
@@ -83,9 +88,11 @@ def test_v3_published_agent_run_uses_controlled_react_orchestrator(
             store=store,
             runs_dir=tmp_path / "latest",
             configuration_store=configuration_store,
-            approval_resume_registry=LangGraphApprovalResumeRegistry(
-                tmp_path / "approval_resume",
-                configuration_store=configuration_store,
+            controlled_react_snapshot_store=FileControlledReActSnapshotStore(
+                tmp_path / "controlled_react"
+            ),
+            controlled_react_observation_truth_store=FileObservationTruthStore(
+                tmp_path / "controlled_react"
             ),
             controlled_react_orchestrator=FakeControlledReActOrchestrator(),
         ),

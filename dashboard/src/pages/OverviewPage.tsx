@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Activity, Clock, FileText, ShieldQuestion } from 'lucide-react'
+import { Activity, Clock, FileText } from 'lucide-react'
 import {
   Card,
   EmptyState,
@@ -139,7 +139,6 @@ export function OverviewPage() {
   const answeredCount = stats?.outcome_distribution['ANSWERED_WITH_CITATIONS'] ?? 0
   const totalCount = stats?.total_runs ?? 0
   const answerRate = totalCount > 0 ? Math.round((answeredCount / totalCount) * 100) : 0
-  const pendingCount = stats?.pending_approvals ?? 0
 
   return (
     <div className="max-w-7xl space-y-8">
@@ -150,9 +149,9 @@ export function OverviewPage() {
         <p className="mt-1 text-sm text-[var(--text-muted)]">{t('overview.description')}</p>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
         {statsLoading ? (
-          Array.from({ length: 3 }).map((_, i) => (
+          Array.from({ length: 2 }).map((_, i) => (
             <Skeleton key={i} className="h-[132px] rounded-lg" />
           ))
         ) : (
@@ -169,13 +168,6 @@ export function OverviewPage() {
               subtitle={t('overview.answeredRateSubtitle')}
               icon={FileText}
               tone="success"
-            />
-            <StatCard
-              label={t('overview.pendingApprovals')}
-              value={formatNumber(pendingCount)}
-              subtitle={t('overview.pendingApprovalsSubtitle')}
-              icon={ShieldQuestion}
-              warning={pendingCount > 0}
             />
           </>
         )}
