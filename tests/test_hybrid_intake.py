@@ -120,7 +120,6 @@ def _write_action_pdf(path: Path, action_type: str) -> Path:
     writer.add_blank_page(width=612, height=792)
     writer._root_object[generic.NameObject("/A")] = generic.DictionaryObject(
         {
-            generic.NameObject("/Type"): generic.NameObject("/Action"),
             generic.NameObject("/S"): generic.NameObject(action_type),
         }
     )
@@ -274,7 +273,10 @@ def test_preflight_rejects_non_archive_payload_after_pdf_eof(tmp_path: Path) -> 
     assert exc.value.code == "PA_HYBRID_INTAKE_009"
 
 
-@pytest.mark.parametrize("action_type", ["/URI", "/SubmitForm", "/GoToR"])
+@pytest.mark.parametrize(
+    "action_type",
+    ["/URI", "/SubmitForm", "/GoToR", "/FutureAction"],
+)
 def test_preflight_rejects_pdf_action_dictionaries(
     tmp_path: Path,
     action_type: str,

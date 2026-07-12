@@ -22,6 +22,7 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 _MIN_MEANINGFUL_CHARACTERS = 8
 _MIN_NATIVE_TEXT_QUALITY_RATIO = 0.5
 _ACTIVE_KEYS = {"/OpenAction", "/AA", "/JS", "/JavaScript", "/Launch"}
+_ACTION_CONTAINER_KEYS = {"/A", "/PA", "/Next"}
 _ACTION_TYPES = {
     "/GoTo",
     "/GoToR",
@@ -205,15 +206,17 @@ def _has_non_whitespace_after_final_pdf_eof(path: Path) -> bool:
 def _reject_unsafe_pdf_objects(reader: Any) -> None:
     from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject
 
-    pending: list[Any] = [reader.trailer]
-    seen: set[tuple[int, int] | int] = set()
+    pending: list[tuple[Any, str | None]] = [(reader.trailer, None)]
+    seen: set[tuple[tuple[int, int] | int, bool]] = set()
     while pending:
-        item = pending.pop()
+        item, parent_key = pending.pop()
+        in_action_container = parent_key in _ACTION_CONTAINER_KEYS
         if isinstance(item, IndirectObject):
             identity: tuple[int, int] | int = (item.idnum, item.generation)
-            if identity in seen:
+            seen_key = (identity, in_action_container)
+            if seen_key in seen:
                 continue
-            seen.add(identity)
+            seen.add(seen_key)
             if len(seen) > _MAX_VISITED_PDF_OBJECTS:
                 raise _hybrid_error(
                     "PA_HYBRID_INTAKE_006", "Hybrid PDF object graph exceeds safety limits."
@@ -221,9 +224,10 @@ def _reject_unsafe_pdf_objects(reader: Any) -> None:
             item = item.get_object()
         elif isinstance(item, (DictionaryObject, ArrayObject)):
             identity = id(item)
-            if identity in seen:
+            seen_key = (identity, in_action_container)
+            if seen_key in seen:
                 continue
-            seen.add(identity)
+            seen.add(seen_key)
 
         if isinstance(item, DictionaryObject):
             keys = {str(key) for key in item.keys()}
@@ -231,6 +235,7 @@ def _reject_unsafe_pdf_objects(reader: Any) -> None:
             object_type = item.get(NameObject("/Type"))
             if (
                 keys & _ACTIVE_KEYS
+                or (in_action_container and "/S" in keys)
                 or str(action_type) in _ACTION_TYPES
                 or object_type == NameObject("/Action")
             ):
@@ -243,9 +248,9 @@ def _reject_unsafe_pdf_objects(reader: Any) -> None:
                 raise _hybrid_error(
                     "PA_HYBRID_INTAKE_008", "Hybrid PDF upload contains embedded files."
                 )
-            pending.extend(item.values())
+            pending.extend((value, str(key)) for key, value in item.items())
         elif isinstance(item, ArrayObject):
-            pending.extend(item)
+            pending.extend((value, parent_key) for value in item)
 
 
 def _hybrid_error(code: str, message: str) -> ProofAgentError:
