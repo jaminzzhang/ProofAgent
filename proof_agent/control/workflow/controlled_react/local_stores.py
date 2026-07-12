@@ -37,6 +37,44 @@ from proof_agent.errors import ProofAgentError
 _PUBLISH_LOCK_FILENAME = ".proofagent.publish.lock"
 _ROOT_THREAD_LOCKS_GUARD = threading.Lock()
 _ROOT_THREAD_LOCKS: dict[tuple[int, int], LockType] = {}
+_FORK_STATE_GUARD = threading.Lock()
+_ACTIVE_FORK_FDS: set[int] = set()
+
+
+def _prepare_local_store_fork() -> None:
+    _FORK_STATE_GUARD.acquire()
+
+
+def _finish_local_store_fork_in_parent() -> None:
+    _FORK_STATE_GUARD.release()
+
+
+def _reset_local_store_state_after_fork_in_child() -> None:
+    global _ACTIVE_FORK_FDS
+    global _FORK_STATE_GUARD
+    global _ROOT_THREAD_LOCKS
+    global _ROOT_THREAD_LOCKS_GUARD
+
+    inherited_descriptors = tuple(_ACTIVE_FORK_FDS)
+    try:
+        for file_descriptor in inherited_descriptors:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+    finally:
+        _ACTIVE_FORK_FDS = set()
+        _FORK_STATE_GUARD = threading.Lock()
+        _ROOT_THREAD_LOCKS = {}
+        _ROOT_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(
+        before=_prepare_local_store_fork,
+        after_in_parent=_finish_local_store_fork_in_parent,
+        after_in_child=_reset_local_store_state_after_fork_in_child,
+    )
 
 
 class FileControlledReActSnapshotStore:
@@ -152,8 +190,8 @@ class _AnchoredLocalStorage:
                 "PA_RUNTIME_001",
                 "controlled ReAct local stores require anchored POSIX filesystem capabilities",
                 (
-                    "Use a POSIX runtime with dir_fd, O_NOFOLLOW, and flock support, "
-                    "or configure a production artifact-store adapter."
+                    "Use a POSIX runtime with dir_fd, O_NOFOLLOW, at-fork hooks, "
+                    "and flock support, or configure a production artifact-store adapter."
                 ),
                 artifact_path=root_dir,
             )
@@ -181,7 +219,6 @@ class _AnchoredLocalStorage:
         self._root = root
         self._root_identity = (root_stat.st_dev, root_stat.st_ino)
         self._publish_lock_identity = (lock_stat.st_dev, lock_stat.st_ino)
-        self._thread_lock = _thread_lock_for_root(self._root_identity)
 
     def artifact_path(self, directories: tuple[str, ...], filename: str) -> Path:
         return self._root.joinpath(*directories, filename)
@@ -254,26 +291,38 @@ class _AnchoredLocalStorage:
 
     @contextmanager
     def _locked_root_publication(self) -> Iterator[None]:
-        with self._thread_lock:
-            root_fd = self._open_root_fd_posix()
+        with _thread_lock_for_root(self._root_identity):
+            with _FORK_STATE_GUARD:
+                root_fd = self._open_root_fd_posix()
+                _ACTIVE_FORK_FDS.add(root_fd)
             lock_fd: int | None = None
-            lock_acquired = False
+            primary_error: BaseException | None = None
             try:
-                lock_fd, _, _ = _open_publish_lock_at(
-                    root_fd,
-                    expected_identity=self._publish_lock_identity,
-                )
+                with _FORK_STATE_GUARD:
+                    lock_fd, _, _ = _open_publish_lock_at(
+                        root_fd,
+                        expected_identity=self._publish_lock_identity,
+                    )
+                    _ACTIVE_FORK_FDS.add(lock_fd)
                 _flock(lock_fd, exclusive=True)
-                lock_acquired = True
                 yield
+            except BaseException as exc:
+                primary_error = exc
+                raise
             finally:
+                cleanup_error: BaseException | None = None
                 if lock_fd is not None:
                     try:
-                        if lock_acquired:
-                            _flock(lock_fd, exclusive=False)
-                    finally:
-                        os.close(lock_fd)
-                os.close(root_fd)
+                        _close_registered_descriptor(lock_fd)
+                    except BaseException as exc:
+                        cleanup_error = exc
+                try:
+                    _close_registered_descriptor(root_fd)
+                except BaseException as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+                if primary_error is None and cleanup_error is not None:
+                    raise cleanup_error
 
     def _read_bytes_posix(
         self,
@@ -523,6 +572,7 @@ def _observation_truth_from_payload(
 def _supports_posix_dir_fd() -> bool:
     return (
         os.name == "posix"
+        and hasattr(os, "register_at_fork")
         and hasattr(os, "O_NOFOLLOW")
         and hasattr(os, "geteuid")
         and hasattr(os, "fchmod")
@@ -572,6 +622,14 @@ def _thread_lock_for_root(root_identity: tuple[int, int]) -> LockType:
             lock = threading.Lock()
             _ROOT_THREAD_LOCKS[root_identity] = lock
         return lock
+
+
+def _close_registered_descriptor(file_descriptor: int) -> None:
+    with _FORK_STATE_GUARD:
+        try:
+            os.close(file_descriptor)
+        finally:
+            _ACTIVE_FORK_FDS.discard(file_descriptor)
 
 
 def _open_publish_lock_at(

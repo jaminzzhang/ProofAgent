@@ -3,10 +3,12 @@ from __future__ import annotations
 import errno
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -745,6 +747,56 @@ def test_publication_waits_for_lock_held_by_another_process(tmp_path: Path) -> N
     assert store.load(snapshot_ref) == _snapshot()
 
 
+def test_child_store_after_active_multithreaded_fork_does_not_inherit_deadlock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = FileControlledReActSnapshotStore(tmp_path / "store")
+    publisher_snapshot = _snapshot()
+    child_snapshot = _snapshot().model_copy(update={"snapshot_id": "snap_child"})
+    real_fsync = os.fsync
+    publisher_holds_lock = threading.Event()
+    release_publisher = threading.Event()
+    blocked_once = False
+
+    def hold_first_file_fsync(file_descriptor: int) -> None:
+        nonlocal blocked_once
+        real_fsync(file_descriptor)
+        if blocked_once or not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+            return
+        blocked_once = True
+        publisher_holds_lock.set()
+        release_publisher.wait(timeout=5.0)
+
+    monkeypatch.setattr(os, "fsync", hold_first_file_fsync)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        publisher = executor.submit(store.save, publisher_snapshot)
+        assert publisher_holds_lock.wait(timeout=2.0)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="This process .* is multi-threaded.*",
+                category=DeprecationWarning,
+            )
+            child_pid = os.fork()
+        if child_pid == 0:  # pragma: no branch - child exits directly
+            signal.signal(signal.SIGALRM, lambda *_args: os._exit(91))
+            signal.alarm(2)
+            try:
+                child_ref = store.save(child_snapshot)
+                store.load(child_ref)
+            except BaseException:
+                os._exit(92)
+            os._exit(0)
+        release_publisher.set()
+        publisher.result(timeout=3.0)
+
+    _, child_status = os.waitpid(child_pid, 0)
+    assert os.WIFEXITED(child_status)
+    assert os.WEXITSTATUS(child_status) == 0
+
+
 def test_publication_lock_acquire_failure_is_not_masked_by_unlock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -765,6 +817,40 @@ def test_publication_lock_acquire_failure_is_not_masked_by_unlock(
     assert operations == [True]
     assert exc.value.__cause__ is not None
     assert "acquire failure" in str(exc.value.__cause__)
+
+
+def test_body_failure_is_not_masked_by_unlock_and_closes_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = FileControlledReActSnapshotStore(tmp_path / "store")
+    real_flock = local_stores._flock
+
+    def fail_link(
+        _source: os.PathLike[str] | str,
+        _target: os.PathLike[str] | str,
+        **_kwargs: object,
+    ) -> None:
+        raise OSError(errno.ENOSPC, "BODY_LINK_FAILURE")
+
+    def fail_unlock(file_descriptor: int, *, exclusive: bool) -> None:
+        if exclusive:
+            real_flock(file_descriptor, exclusive=True)
+            return
+        raise OSError(errno.EIO, "UNLOCK_MASK")
+
+    monkeypatch.setattr(os, "link", fail_link)
+    monkeypatch.setattr(local_stores, "_flock", fail_unlock)
+    descriptor_count_before = len(os.listdir("/dev/fd"))
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.save(_snapshot())
+
+    descriptor_count_after = len(os.listdir("/dev/fd"))
+    assert exc.value.__cause__ is not None
+    assert "BODY_LINK_FAILURE" in str(exc.value.__cause__)
+    assert "UNLOCK_MASK" not in str(exc.value.__cause__)
+    assert descriptor_count_after == descriptor_count_before
 
 
 def test_observation_committer_records_file_store_authoritative_ref(
