@@ -46,6 +46,7 @@ def create_app(
     mem0_memory_store: Mem0MemoryStore | None = None,
     agent_configuration_store: LocalAgentConfigurationStore | None = None,
     agent_configuration_dir: Path = Path("runs/config"),
+    approval_resume_integrity_key: bytes | None = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -120,6 +121,7 @@ def create_app(
     application.state.approval_resume_registry = LangGraphApprovalResumeRegistry(
         history_dir.parent / "approval_resume",
         configuration_store=configuration_store,
+        integrity_key=approval_resume_integrity_key,
     )
     application.state.operator_identity_provider = LocalOperatorIdentityProvider()
     application.state.published_agents = PublishedAgentRegistry(

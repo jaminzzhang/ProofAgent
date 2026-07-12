@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import shutil
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,9 @@ from proof_agent.contracts import (
     EffectiveWorkflowStageConfiguration,
     EffectiveWorkflowStageConfigurationStage,
     InstitutionAuthorizationContext,
+    ReActActionProposal,
+    ReActActionType,
+    ReasoningSummary,
     WorkflowStageAvailability,
     WorkflowStageAvailabilityReason,
     WorkflowStageAvailabilitySet,
@@ -22,6 +27,7 @@ from proof_agent.contracts import (
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.runtime.approval_resume import (
+    ApprovalResumeIntegritySigner,
     CONTROLLED_REACT_SNAPSHOT_REF_PREFIX,
     ControlledReActApprovalResumeContext,
     LangGraphApprovalResumeContext,
@@ -138,7 +144,7 @@ def test_approval_resume_registry_rejects_tampered_execution_input(
         LangGraphApprovalResumeRegistry(tmp_path).get(execution_input.run_id)
 
     assert exc.value.code == "PA_RUNTIME_001"
-    assert "failed integrity validation" in exc.value.message
+    assert "failed HMAC integrity validation" in exc.value.message
 
 
 def test_controlled_react_resume_registry_persists_context_and_snapshot(
@@ -176,9 +182,9 @@ def test_controlled_react_resume_registry_persists_context_and_snapshot(
     loaded_context = LangGraphApprovalResumeRegistry(tmp_path).get_controlled_react(
         "run_controlled"
     )
-    assert loaded_snapshot.model_copy(update={"integrity_sha256": None}) == snapshot
-    assert loaded_snapshot.integrity_sha256 is not None
-    assert len(loaded_snapshot.integrity_sha256) == 64
+    assert loaded_snapshot.model_copy(update={"integrity_hmac_sha256": None}) == snapshot
+    assert loaded_snapshot.integrity_hmac_sha256 is not None
+    assert len(loaded_snapshot.integrity_hmac_sha256) == 64
     assert loaded_context is not None
     assert loaded_context.manifest.workflow.template == "react_enterprise_qa_v3"
     assert loaded_context.institution_authorization == authorization
@@ -212,20 +218,23 @@ def test_controlled_react_snapshot_rejects_tampering(
     elif tamper == "question":
         payload["state"]["question"] = "Tampered question"
     else:
-        payload["integrity_sha256"] = "0" * 64
+        payload["integrity_hmac_sha256"] = "0" * 64
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ProofAgentError) as exc:
         store.load(snapshot_ref)
 
     assert exc.value.code == "PA_RUNTIME_001"
-    assert "failed integrity validation" in exc.value.message
+    assert "failed HMAC integrity validation" in exc.value.message
 
 
 def test_controlled_react_legacy_unsigned_snapshot_allows_only_public_authorization(
     tmp_path: Path,
 ) -> None:
-    registry = LangGraphApprovalResumeRegistry(tmp_path)
+    registry = LangGraphApprovalResumeRegistry(
+        tmp_path,
+        allow_legacy_unsigned_snapshots=True,
+    )
     store = registry.controlled_react_snapshot_store()
     public_snapshot = ControlledReActRunStateSnapshot(
         snapshot_id="snap_public",
@@ -257,7 +266,7 @@ def test_controlled_react_legacy_unsigned_snapshot_allows_only_public_authorizat
             / f"{snapshot.snapshot_id}.json"
         )
         payload = json.loads(path.read_text(encoding="utf-8"))
-        payload.pop("integrity_sha256")
+        payload.pop("integrity_hmac_sha256")
         if snapshot.run_id == "run_public":
             payload["state"].pop("institution_authorization")
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -265,8 +274,12 @@ def test_controlled_react_legacy_unsigned_snapshot_allows_only_public_authorizat
     loaded = store.load("controlled-react://run_public/snap_public")
     assert loaded.state.institution_authorization == InstitutionAuthorizationContext()
 
-    with pytest.raises(ProofAgentError, match="unsigned controlled ReAct snapshot"):
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
         store.load("controlled-react://run_scoped/snap_scoped")
+
+    default_store = LangGraphApprovalResumeRegistry(tmp_path).controlled_react_snapshot_store()
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
+        default_store.load("controlled-react://run_public/snap_public")
 
 
 def test_controlled_react_resume_registry_rejects_tampered_authorization(
@@ -292,7 +305,7 @@ def test_controlled_react_resume_registry_rejects_tampered_authorization(
             "run_tampered_authorization"
         )
 
-    assert "failed integrity validation" in exc.value.message
+    assert "failed HMAC integrity validation" in exc.value.message
 
 
 def test_old_resume_metadata_defaults_institution_authorization_to_public_only(
@@ -313,11 +326,215 @@ def test_old_resume_metadata_defaults_institution_authorization_to_public_only(
     )
     path = tmp_path / execution_input.run_id / "resume_context.json"
     metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata.pop("integrity_hmac_sha256")
     metadata.pop("institution_authorization")
     metadata.pop("institution_authorization_sha256")
     path.write_text(json.dumps(metadata), encoding="utf-8")
 
-    loaded = LangGraphApprovalResumeRegistry(tmp_path).get(execution_input.run_id)
+    loaded = LangGraphApprovalResumeRegistry(
+        tmp_path,
+        allow_legacy_unsigned_metadata=True,
+    ).get(execution_input.run_id)
 
     assert loaded is not None
     assert loaded.institution_authorization == InstitutionAuthorizationContext()
+
+
+def test_approval_resume_integrity_key_requires_32_bytes(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="at least 32 bytes"):
+        ApprovalResumeIntegritySigner(b"short")
+    with pytest.raises(ValueError, match="at least 32 bytes"):
+        LangGraphApprovalResumeRegistry(tmp_path, integrity_key=b"short")
+
+
+@pytest.mark.parametrize("tamper", ["question", "action", "tool_args"])
+def test_controlled_react_snapshot_rejects_wrong_key_and_plain_sha_recompute(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    key = b"a" * 32
+    action = ReActActionProposal(
+        action_id="act_keyed",
+        action_type=ReActActionType.PROPOSE_TOOL_CALL,
+        reasoning_summary=ReasoningSummary(
+            goal="look up status",
+            observations=(),
+            candidate_actions=(ReActActionType.PROPOSE_TOOL_CALL,),
+            selected_action=ReActActionType.PROPOSE_TOOL_CALL,
+            rationale_summary="A governed lookup is required.",
+            risk_flags=(),
+            required_evidence=(),
+        ),
+        target_tool_name="customer_lookup",
+        parameters={"customer_id": "CUST-001"},
+        risk_level="low",
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_keyed",
+        run_id="run_keyed",
+        state=ControlledReActRunState(
+            run_id="run_keyed",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Original question",
+            action_history=(action,),
+        ),
+    )
+    store = LangGraphApprovalResumeRegistry(
+        tmp_path,
+        integrity_key=key,
+    ).controlled_react_snapshot_store()
+    snapshot_ref = store.save(snapshot)
+
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
+        LangGraphApprovalResumeRegistry(
+            tmp_path,
+            integrity_key=b"b" * 32,
+        ).controlled_react_snapshot_store().load(snapshot_ref)
+
+    path = tmp_path / "run_keyed" / "controlled_react" / "snap_keyed.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("integrity_hmac_sha256")
+    if tamper == "question":
+        payload["state"]["question"] = "Tampered question"
+    elif tamper == "action":
+        payload["state"]["action_history"][0]["action_id"] = "act_other"
+    else:
+        payload["state"]["action_history"][0]["parameters"] = {
+            "customer_id": "CUST-999"
+        }
+    canonical = json.dumps(payload["state"], sort_keys=True, separators=(",", ":"))
+    payload["integrity_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
+        store.load(snapshot_ref)
+
+
+def test_langgraph_resume_metadata_rejects_wrong_key(tmp_path: Path) -> None:
+    execution_input = _execution_input()
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=b"a" * 32)
+    registry.put(
+        LangGraphApprovalResumeContext(
+            agent_yaml=REACT_AGENT,
+            runs_dir=tmp_path / "runs",
+            run_id=execution_input.run_id,
+            question=execution_input.question,
+            checkpointer=MemorySaver(),
+            manifest=load_agent_manifest(REACT_AGENT),
+            workflow_template_execution_input=execution_input,
+        )
+    )
+
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
+        LangGraphApprovalResumeRegistry(
+            tmp_path,
+            integrity_key=b"b" * 32,
+        ).get(execution_input.run_id)
+
+
+def test_legacy_flag_rejects_unsigned_scoped_resume_metadata(tmp_path: Path) -> None:
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=b"a" * 32)
+    registry.put_controlled_react(
+        ControlledReActApprovalResumeContext(
+            agent_yaml=REACT_V3_AGENT,
+            run_id="run_scoped_metadata",
+            question="Question",
+            manifest=load_agent_manifest(REACT_V3_AGENT),
+            institution_authorization=InstitutionAuthorizationContext(roles=("reviewer",)),
+        )
+    )
+    path = tmp_path / "run_scoped_metadata" / "controlled_react_resume_context.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("integrity_hmac_sha256")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError, match="HMAC integrity validation"):
+        LangGraphApprovalResumeRegistry(
+            tmp_path,
+            integrity_key=b"a" * 32,
+            allow_legacy_unsigned_metadata=True,
+        ).get_controlled_react("run_scoped_metadata")
+
+
+@pytest.mark.parametrize(
+    "snapshot_ref",
+    [
+        "controlled-react://../snap",
+        "controlled-react://run/..",
+        "controlled-react://run/snap/extra",
+        "controlled-react://run%2Fother/snap",
+        "controlled-react://run.name/snap",
+        "controlled-react://run//snap",
+    ],
+)
+def test_controlled_react_snapshot_ref_rejects_path_controls(
+    tmp_path: Path,
+    snapshot_ref: str,
+) -> None:
+    store = LangGraphApprovalResumeRegistry(tmp_path).controlled_react_snapshot_store()
+
+    with pytest.raises(ProofAgentError) as exc:
+        store.load(snapshot_ref)
+
+    assert exc.value.code == "PA_RUNTIME_001"
+
+
+def test_controlled_react_snapshot_rejects_cross_run_file_transplant(
+    tmp_path: Path,
+) -> None:
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=b"a" * 32)
+    store = registry.controlled_react_snapshot_store()
+    source_ref = store.save(
+        ControlledReActRunStateSnapshot(
+            snapshot_id="snap_source",
+            run_id="run_source",
+            state=ControlledReActRunState(
+                run_id="run_source",
+                template_name="react_enterprise_qa_v3",
+                template_descriptor_version="react_enterprise_qa.v3",
+                question="Source question",
+            ),
+        )
+    )
+    assert store.load(source_ref).run_id == "run_source"
+    source = tmp_path / "run_source" / "controlled_react" / "snap_source.json"
+    target = tmp_path / "run_target" / "controlled_react" / "snap_target.json"
+    target.parent.mkdir(parents=True)
+    shutil.copyfile(source, target)
+
+    with pytest.raises(ProofAgentError, match="reference identity mismatch"):
+        store.load("controlled-react://run_target/snap_target")
+
+    with pytest.raises(ProofAgentError, match="run identity mismatch"):
+        store.save(
+            ControlledReActRunStateSnapshot(
+                snapshot_id="snap_mismatch",
+                run_id="run_source",
+                state=ControlledReActRunState(
+                    run_id="run_other",
+                    template_name="react_enterprise_qa_v3",
+                    template_descriptor_version="react_enterprise_qa.v3",
+                    question="Mismatched question",
+                ),
+            )
+        )
+
+
+def test_controlled_resume_metadata_rejects_cross_run_transplant(tmp_path: Path) -> None:
+    registry = LangGraphApprovalResumeRegistry(tmp_path, integrity_key=b"a" * 32)
+    registry.put_controlled_react(
+        ControlledReActApprovalResumeContext(
+            agent_yaml=REACT_V3_AGENT,
+            run_id="run_source",
+            question="Question",
+            manifest=load_agent_manifest(REACT_V3_AGENT),
+        )
+    )
+    source = tmp_path / "run_source" / "controlled_react_resume_context.json"
+    target = tmp_path / "run_target" / "controlled_react_resume_context.json"
+    target.parent.mkdir(parents=True)
+    shutil.copyfile(source, target)
+
+    with pytest.raises(ProofAgentError, match="run identity mismatch"):
+        registry.get_controlled_react("run_target")

@@ -839,6 +839,93 @@ def test_resume_rejects_validly_signed_snapshot_when_authorization_context_diffe
     assert "does not match snapshot" in exc.value.message
 
 
+@pytest.mark.parametrize("approved", [True, False])
+def test_resume_rejects_approval_action_mismatch_before_any_execution(
+    approved: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    action = _proposal("act_snapshot", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_action_binding",
+        run_id="run_action_binding",
+        state=ControlledReActRunState(
+            run_id="run_action_binding",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Question",
+            action_history=(action,),
+        ),
+    )
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolObservationThenAnswerPlanner(),
+            snapshot_store=_ResumeSnapshotStore(snapshot),
+            tool_observation=_FailingToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+    planner_calls = 0
+
+    def fail_if_planner_runs(*args: object, **kwargs: object) -> object:
+        nonlocal planner_calls
+        planner_calls += 1
+        raise AssertionError("approval mismatch must not execute planner")
+
+    monkeypatch.setattr(orchestrator, "_plan_next_action", fail_if_planner_runs)
+
+    with pytest.raises(ProofAgentError) as exc:
+        orchestrator.resume(
+            ControlledReActResumeRequest(
+                snapshot_ref="snapshot://run_004/snap_001",
+                approval_id="appr_act_other",
+                approved=approved,
+                actor="ops",
+            )
+        )
+
+    assert exc.value.code == "PA_RUNTIME_001"
+    assert "approval identity does not match" in exc.value.message
+    assert planner_calls == 0
+
+
+def test_resume_rejects_snapshot_from_different_signed_run_context() -> None:
+    action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_other_run",
+        run_id="run_other",
+        state=ControlledReActRunState(
+            run_id="run_other",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Question",
+            action_history=(action,),
+        ),
+    )
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolObservationThenAnswerPlanner(),
+            snapshot_store=_ResumeSnapshotStore(snapshot),
+            tool_observation=_FailingToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    with pytest.raises(ProofAgentError, match="run identity does not match"):
+        orchestrator.resume(
+            ControlledReActResumeRequest(
+                snapshot_ref="snapshot://run_004/snap_001",
+                approval_id="appr_act_tool",
+                approved=True,
+                actor="ops",
+                expected_run_id="run_expected",
+            )
+        )
+
+
 def test_resume_fails_closed_when_approved_tool_snapshot_integrity_mismatches() -> None:
     action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
         update={

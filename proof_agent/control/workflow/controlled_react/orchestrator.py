@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+import re
 from typing import Any, Literal, cast
 
 from proof_agent.contracts import (
@@ -80,6 +81,7 @@ class ControlledReActResumeRequest:
     approved: bool
     actor: str
     max_plan_rounds: int = 4
+    expected_run_id: str | None = None
     institution_authorization: InstitutionAuthorizationContext = field(
         default_factory=InstitutionAuthorizationContext
     )
@@ -408,6 +410,12 @@ class ControlledReActOrchestrator:
             raise ValueError("snapshot store port is required for approval resume")
         snapshot = self._ports.snapshot_store.load(request.snapshot_ref)
         state = snapshot.state
+        if request.expected_run_id is not None and state.run_id != request.expected_run_id:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct resume run identity does not match signed context",
+                "Discard the stale approval checkpoint and restart the run.",
+            )
         if state.institution_authorization != request.institution_authorization:
             raise ProofAgentError(
                 "PA_RUNTIME_001",
@@ -417,6 +425,22 @@ class ControlledReActOrchestrator:
         if not state.action_history:
             raise ValueError("approval resume snapshot is missing pending action")
         action = state.action_history[-1]
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", action.action_id) is None:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct resume action identity is invalid",
+                "Discard the stale approval checkpoint and restart the run.",
+            )
+        expected_approval_id = f"appr_{action.action_id}"
+        if (
+            re.fullmatch(r"[A-Za-z0-9_-]{1,133}", request.approval_id) is None
+            or request.approval_id != expected_approval_id
+        ):
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct resume approval identity does not match pending action",
+                "Discard the stale approval checkpoint and restart the run.",
+            )
         if not request.approved:
             planning_state = self._observe_tool_approval_denial(state, action, request)
             planning_state, next_action = self._plan_next_action(

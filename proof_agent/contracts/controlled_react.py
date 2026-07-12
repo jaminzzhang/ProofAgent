@@ -254,7 +254,8 @@ class ControlledReActRunStateSnapshot(FrozenModel):
     snapshot_id: str
     run_id: str
     state: ControlledReActRunState
-    integrity_sha256: str | None = Field(
+    integrity_version: Literal[1] = 1
+    integrity_hmac_sha256: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
         strict=True,

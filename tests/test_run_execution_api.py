@@ -22,7 +22,12 @@ from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.runtime import langgraph_runner
 
 
-def _app_with_published_agent(tmp_path: Path, manifest_path: Path):
+def _app_with_published_agent(
+    tmp_path: Path,
+    manifest_path: Path,
+    *,
+    approval_resume_integrity_key: bytes | None = None,
+):
     store = LocalAgentConfigurationStore(tmp_path / "config")
     draft = import_agent_package(manifest_path, store=store, actor="test-user")
     store.publish_version(
@@ -36,6 +41,7 @@ def _app_with_published_agent(tmp_path: Path, manifest_path: Path):
         runs_dir=tmp_path / "latest",
         published_agents={},
         agent_configuration_store=store,
+        approval_resume_integrity_key=approval_resume_integrity_key,
     )
 
 
@@ -475,9 +481,11 @@ def test_chat_run_v3_uses_configured_tool_policy_for_denial(tmp_path: Path) -> N
 def test_chat_run_v3_approval_endpoint_resumes_after_restart_with_tool_gateway(
     tmp_path: Path,
 ) -> None:
+    integrity_key = b"stable-test-approval-resume-key" + b"!" * 8
     app = _app_with_published_agent(
         tmp_path,
         Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+        approval_resume_integrity_key=integrity_key,
     )
     original_authorization = InstitutionAuthorizationContext(
         institutions=("branch-1",), roles=("specialist",)
@@ -507,6 +515,7 @@ def test_chat_run_v3_approval_endpoint_resumes_after_restart_with_tool_gateway(
         runs_dir=tmp_path / "latest",
         published_agents={},
         agent_configuration_store=restarted_store,
+        approval_resume_integrity_key=integrity_key,
     )
     restarted_app.state.operator_identity_provider = _StaticOperatorIdentityProvider(
         {OperatorPermission.APPROVAL_RESOLVE},

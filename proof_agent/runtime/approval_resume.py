@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
+import re
+import secrets
+import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -106,23 +110,63 @@ class ControlledReActApprovalResumeContext:
 
 
 CONTROLLED_REACT_SNAPSHOT_REF_PREFIX = "controlled-react://"
+_INTEGRITY_VERSION = 1
+_PROCESS_INTEGRITY_KEY = secrets.token_bytes(32)
+_OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+class ApprovalResumeIntegritySigner:
+    """Server-held HMAC signer for execution-driving approval resume envelopes."""
+
+    def __init__(self, integrity_key: bytes) -> None:
+        if not isinstance(integrity_key, bytes) or len(integrity_key) < 32:
+            raise ValueError("approval resume integrity key must be at least 32 bytes")
+        self._key = integrity_key
+
+    def sign(self, payload: Mapping[str, Any], *, purpose: str) -> str:
+        message = _integrity_message(payload, purpose=purpose)
+        return hmac.new(self._key, message, hashlib.sha256).hexdigest()
+
+    def verify(self, payload: Mapping[str, Any], *, purpose: str) -> bool:
+        supplied = payload.get("integrity_hmac_sha256")
+        if not isinstance(supplied, str) or re.fullmatch(r"[0-9a-f]{64}", supplied) is None:
+            return False
+        expected = self.sign(payload, purpose=purpose)
+        return hmac.compare_digest(supplied, expected)
 
 
 class FileControlledReActSnapshotStore:
     """Disk-backed snapshot store for Controlled ReAct approval resume."""
 
-    def __init__(self, root_dir: Path) -> None:
-        self._root_dir = root_dir
+    def __init__(
+        self,
+        root_dir: Path,
+        *,
+        signer: ApprovalResumeIntegritySigner | None = None,
+        integrity_key: bytes | None = None,
+        allow_legacy_unsigned_snapshots: bool = False,
+    ) -> None:
+        if signer is not None and integrity_key is not None:
+            raise ValueError("provide either signer or integrity_key, not both")
+        self._root_dir = root_dir.resolve()
+        self._signer = signer or ApprovalResumeIntegritySigner(
+            integrity_key if integrity_key is not None else _PROCESS_INTEGRITY_KEY
+        )
+        self._allow_legacy_unsigned_snapshots = allow_legacy_unsigned_snapshots
 
     def save(self, snapshot: ControlledReActRunStateSnapshot) -> str:
         path = self._snapshot_path(snapshot.run_id, snapshot.snapshot_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        _validate_opaque_id(snapshot.run_id, label="run_id")
+        _validate_opaque_id(snapshot.snapshot_id, label="snapshot_id")
+        if snapshot.state.run_id != snapshot.run_id:
+            raise _resume_integrity_error("controlled ReAct snapshot run identity mismatch")
         payload = _model_payload(snapshot)
-        payload["integrity_sha256"] = _controlled_react_snapshot_sha256(payload)
-        path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True),
-            encoding="utf-8",
+        payload["integrity_version"] = _INTEGRITY_VERSION
+        payload["integrity_hmac_sha256"] = self._signer.sign(
+            payload,
+            purpose="controlled-react-snapshot",
         )
+        _atomic_write_json(path, payload)
         return f"{CONTROLLED_REACT_SNAPSHOT_REF_PREFIX}{snapshot.run_id}/{snapshot.snapshot_id}"
 
     def load(self, snapshot_ref: str) -> ControlledReActRunStateSnapshot:
@@ -139,15 +183,12 @@ class FileControlledReActSnapshotStore:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("snapshot payload must be an object")
-            integrity_sha256 = payload.get("integrity_sha256")
-            if integrity_sha256 is not None:
-                if integrity_sha256 != _controlled_react_snapshot_sha256(payload):
-                    raise ProofAgentError(
-                        "PA_RUNTIME_001",
-                        "controlled ReAct snapshot failed integrity validation",
-                        "Discard the stale approval checkpoint and restart the run.",
-                        artifact_path=path,
-                    )
+            signed = self._signer.verify(payload, purpose="controlled-react-snapshot")
+            if not signed and not self._legacy_snapshot_allowed(payload):
+                raise _resume_integrity_error(
+                    "controlled ReAct snapshot failed HMAC integrity validation",
+                    path=path,
+                )
             snapshot = ControlledReActRunStateSnapshot.model_validate(payload)
         except ProofAgentError:
             raise
@@ -158,19 +199,41 @@ class FileControlledReActSnapshotStore:
                 "Discard the stale approval checkpoint and restart the run.",
                 artifact_path=path,
             ) from exc
-        if snapshot.integrity_sha256 is None and (
-            snapshot.state.institution_authorization != InstitutionAuthorizationContext()
-        ):
-            raise ProofAgentError(
-                "PA_RUNTIME_001",
-                "unsigned controlled ReAct snapshot contains non-public authorization",
-                "Discard the stale approval checkpoint and restart the run.",
-                artifact_path=path,
+        if snapshot.run_id != run_id or snapshot.snapshot_id != snapshot_id:
+            raise _resume_integrity_error(
+                "controlled ReAct snapshot reference identity mismatch", path=path
+            )
+        if snapshot.state.run_id != run_id:
+            raise _resume_integrity_error(
+                "controlled ReAct snapshot state run identity mismatch", path=path
             )
         return snapshot
 
+    def _legacy_snapshot_allowed(self, payload: Mapping[str, Any]) -> bool:
+        if not self._allow_legacy_unsigned_snapshots:
+            return False
+        if payload.get("integrity_hmac_sha256") is not None:
+            return False
+        state = payload.get("state")
+        if not isinstance(state, Mapping):
+            return False
+        authorization = state.get("institution_authorization")
+        try:
+            return (
+                InstitutionAuthorizationContext.model_validate(authorization or {})
+                == InstitutionAuthorizationContext()
+            )
+        except ValidationError:
+            return False
+
     def _snapshot_path(self, run_id: str, snapshot_id: str) -> Path:
-        return self._root_dir / run_id / "controlled_react" / f"{snapshot_id}.json"
+        _validate_opaque_id(run_id, label="run_id")
+        _validate_opaque_id(snapshot_id, label="snapshot_id")
+        controlled_root = (self._root_dir / run_id / "controlled_react").resolve()
+        candidate = (controlled_root / f"{snapshot_id}.json").resolve()
+        if not candidate.is_relative_to(controlled_root):
+            raise _resume_integrity_error("controlled ReAct snapshot path escaped storage root")
+        return candidate
 
 
 class FileObservationTruthStore:
@@ -288,9 +351,20 @@ class LangGraphApprovalResumeRegistry:
         root_dir: Path,
         *,
         configuration_store: LocalAgentConfigurationStore | None = None,
+        signer: ApprovalResumeIntegritySigner | None = None,
+        integrity_key: bytes | None = None,
+        allow_legacy_unsigned_metadata: bool = False,
+        allow_legacy_unsigned_snapshots: bool = False,
     ) -> None:
-        self._root_dir = root_dir
+        if signer is not None and integrity_key is not None:
+            raise ValueError("provide either signer or integrity_key, not both")
+        self._root_dir = root_dir.resolve()
         self._configuration_store = configuration_store
+        self._signer = signer or ApprovalResumeIntegritySigner(
+            integrity_key if integrity_key is not None else _PROCESS_INTEGRITY_KEY
+        )
+        self._allow_legacy_unsigned_metadata = allow_legacy_unsigned_metadata
+        self._allow_legacy_unsigned_snapshots = allow_legacy_unsigned_snapshots
         self._contexts: dict[str, LangGraphApprovalResumeContext] = {}
         self._root_dir.mkdir(parents=True, exist_ok=True)
 
@@ -299,6 +373,7 @@ class LangGraphApprovalResumeRegistry:
         return self._root_dir
 
     def put(self, context: LangGraphApprovalResumeContext) -> None:
+        _validate_opaque_id(context.run_id, label="run_id")
         if context.workflow_template_execution_input is None:
             raise ProofAgentError(
                 "PA_RUNTIME_001",
@@ -319,9 +394,11 @@ class LangGraphApprovalResumeRegistry:
         self._contexts[context.run_id] = context
 
     def put_controlled_react(self, context: ControlledReActApprovalResumeContext) -> None:
+        _validate_opaque_id(context.run_id, label="run_id")
         self._write_controlled_react_metadata(context)
 
     def get(self, run_id: str) -> LangGraphApprovalResumeContext | None:
+        _validate_opaque_id(run_id, label="run_id")
         if context := self._contexts.get(run_id):
             return context
         return self._load_context(run_id)
@@ -330,6 +407,7 @@ class LangGraphApprovalResumeRegistry:
         self,
         run_id: str,
     ) -> ControlledReActApprovalResumeContext | None:
+        _validate_opaque_id(run_id, label="run_id")
         return self._load_controlled_react_context(run_id)
 
     def discard(self, run_id: str) -> None:
@@ -350,7 +428,11 @@ class LangGraphApprovalResumeRegistry:
         return create_persistent_checkpointer(self._checkpoint_dir(run_id))
 
     def controlled_react_snapshot_store(self) -> FileControlledReActSnapshotStore:
-        return FileControlledReActSnapshotStore(self._root_dir)
+        return FileControlledReActSnapshotStore(
+            self._root_dir,
+            signer=self._signer,
+            allow_legacy_unsigned_snapshots=self._allow_legacy_unsigned_snapshots,
+        )
 
     def controlled_react_observation_truth_store(self) -> FileObservationTruthStore:
         return FileObservationTruthStore(self._root_dir)
@@ -359,6 +441,7 @@ class LangGraphApprovalResumeRegistry:
         execution_input_payload = _model_payload(context.workflow_template_execution_input)
         authorization_payload = _model_payload(context.institution_authorization)
         metadata = {
+            "integrity_version": _INTEGRITY_VERSION,
             "agent_yaml": str(context.agent_yaml),
             "runs_dir": str(context.runs_dir),
             "run_id": context.run_id,
@@ -375,9 +458,12 @@ class LangGraphApprovalResumeRegistry:
             "institution_authorization": authorization_payload,
             "institution_authorization_sha256": _payload_sha256(authorization_payload),
         }
+        metadata["integrity_hmac_sha256"] = self._signer.sign(
+            metadata,
+            purpose="langgraph-resume-metadata",
+        )
         path = self._metadata_path(context.run_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+        _atomic_write_json(path, metadata)
 
     def _write_controlled_react_metadata(
         self,
@@ -385,6 +471,7 @@ class LangGraphApprovalResumeRegistry:
     ) -> None:
         authorization_payload = _model_payload(context.institution_authorization)
         metadata = {
+            "integrity_version": _INTEGRITY_VERSION,
             "agent_yaml": str(context.agent_yaml),
             "run_id": context.run_id,
             "question": context.question,
@@ -396,15 +483,25 @@ class LangGraphApprovalResumeRegistry:
             "institution_authorization": authorization_payload,
             "institution_authorization_sha256": _payload_sha256(authorization_payload),
         }
+        metadata["integrity_hmac_sha256"] = self._signer.sign(
+            metadata,
+            purpose="controlled-react-resume-metadata",
+        )
         path = self._controlled_react_metadata_path(context.run_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+        _atomic_write_json(path, metadata)
 
     def _load_context(self, run_id: str) -> LangGraphApprovalResumeContext | None:
         path = self._metadata_path(run_id)
         if not path.exists():
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = self._read_verified_metadata(
+            path,
+            purpose="langgraph-resume-metadata",
+        )
+        if data.get("run_id") != run_id:
+            raise _resume_integrity_error(
+                "LangGraph resume metadata run identity mismatch", path=path
+            )
         agent_yaml = Path(str(data["agent_yaml"]))
         manifest = load_agent_manifest(agent_yaml)
         conversation_context = (
@@ -454,7 +551,15 @@ class LangGraphApprovalResumeRegistry:
         path = self._controlled_react_metadata_path(run_id)
         if not path.exists():
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = self._read_verified_metadata(
+            path,
+            purpose="controlled-react-resume-metadata",
+        )
+        if data.get("run_id") != run_id:
+            raise _resume_integrity_error(
+                "controlled ReAct resume metadata run identity mismatch",
+                path=path,
+            )
         agent_yaml = Path(str(data["agent_yaml"]))
         manifest = load_agent_manifest(agent_yaml)
         resolved_knowledge_bindings = (
@@ -476,16 +581,39 @@ class LangGraphApprovalResumeRegistry:
             institution_authorization=_load_institution_authorization(data, path=path),
         )
 
+    def _read_verified_metadata(self, path: Path, *, purpose: str) -> dict[str, Any]:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("resume metadata must be an object")
+            if self._signer.verify(data, purpose=purpose):
+                return data
+            if self._allow_legacy_unsigned_metadata and _legacy_metadata_is_public_only(data):
+                return data
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise _resume_integrity_error(
+                "approval resume metadata failed HMAC integrity validation",
+                path=path,
+            ) from exc
+        raise _resume_integrity_error(
+            "approval resume metadata failed HMAC integrity validation",
+            path=path,
+        )
+
     def _metadata_path(self, run_id: str) -> Path:
+        _validate_opaque_id(run_id, label="run_id")
         return self._root_dir / run_id / "resume_context.json"
 
     def _checkpoint_dir(self, run_id: str) -> Path:
+        _validate_opaque_id(run_id, label="run_id")
         return self._root_dir / run_id / "checkpoint"
 
     def _controlled_react_metadata_path(self, run_id: str) -> Path:
+        _validate_opaque_id(run_id, label="run_id")
         return self._root_dir / run_id / "controlled_react_resume_context.json"
 
     def _lock_path(self, run_id: str) -> Path:
+        _validate_opaque_id(run_id, label="run_id")
         return self._root_dir / run_id / "resume.lock"
 
 
@@ -549,6 +677,23 @@ def _load_institution_authorization(
     return InstitutionAuthorizationContext.model_validate(payload)
 
 
+def _legacy_metadata_is_public_only(data: Mapping[str, Any]) -> bool:
+    if data.get("integrity_hmac_sha256") is not None:
+        return False
+    authorization_payloads = [data.get("institution_authorization")]
+    execution_input = data.get("workflow_template_execution_input")
+    if isinstance(execution_input, Mapping):
+        authorization_payloads.append(execution_input.get("institution_authorization"))
+    try:
+        return all(
+            InstitutionAuthorizationContext.model_validate(payload or {})
+            == InstitutionAuthorizationContext()
+            for payload in authorization_payloads
+        )
+    except ValidationError:
+        return False
+
+
 def _payload_sha256(value: Any) -> str:
     canonical = json.dumps(
         _jsonable(value),
@@ -559,13 +704,57 @@ def _payload_sha256(value: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _controlled_react_snapshot_sha256(value: Any) -> str:
-    payload = _model_payload(value)
-    if not isinstance(payload, dict):
-        raise ValueError("controlled ReAct snapshot payload must be an object")
-    unsigned_payload = dict(payload)
-    unsigned_payload.pop("integrity_sha256", None)
-    return _payload_sha256(unsigned_payload)
+def _integrity_message(payload: Mapping[str, Any], *, purpose: str) -> bytes:
+    unsigned_payload = dict(_jsonable(payload))
+    unsigned_payload.pop("integrity_hmac_sha256", None)
+    version = unsigned_payload.get("integrity_version")
+    if version != _INTEGRITY_VERSION:
+        raise ValueError("unsupported approval resume integrity envelope version")
+    canonical = json.dumps(
+        unsigned_payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return b"proof-agent:approval-resume\0" + purpose.encode("ascii") + b"\0v1\0" + canonical
+
+
+def _validate_opaque_id(value: str, *, label: str) -> None:
+    if not isinstance(value, str) or _OPAQUE_ID_PATTERN.fullmatch(value) is None:
+        raise _resume_integrity_error(f"invalid approval resume {label}")
+
+
+def _resume_integrity_error(message: str, *, path: Path | None = None) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_RUNTIME_001",
+        message,
+        "Discard the stale approval checkpoint and restart the run.",
+        artifact_path=path,
+    )
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".resume-", suffix=".tmp", dir=path.parent)
+    temp_path = Path(temp_name)
+    try:
+        os.chmod(temp_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
 
 
 def _parse_controlled_react_snapshot_ref(snapshot_ref: str) -> tuple[str, str]:
@@ -583,6 +772,8 @@ def _parse_controlled_react_snapshot_ref(snapshot_ref: str) -> tuple[str, str]:
             f"invalid controlled ReAct snapshot reference: {snapshot_ref}",
             "Use the checkpoint_ref emitted by the pending approval event.",
         )
+    _validate_opaque_id(parts[0], label="run_id")
+    _validate_opaque_id(parts[1], label="snapshot_id")
     return parts[0], parts[1]
 
 
@@ -602,6 +793,8 @@ def _parse_observation_truth_ref(truth_ref: str) -> tuple[str, str]:
             f"invalid observation truth reference: {truth_ref}",
             "Use the truth_ref allocated by the Controlled ReAct Orchestrator.",
         )
+    _validate_opaque_id(parts[0], label="run_id")
+    _validate_opaque_id(parts[1], label="observation_id")
     return parts[0], parts[1]
 
 

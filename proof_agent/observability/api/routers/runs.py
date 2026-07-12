@@ -331,6 +331,7 @@ def _resume_controlled_react_approval(
             approval_id=approval_id,
             approved=approved,
             actor=actor,
+            expected_run_id=context.run_id,
             institution_authorization=context.institution_authorization,
         )
     )
