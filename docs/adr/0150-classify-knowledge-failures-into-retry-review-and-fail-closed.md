@@ -1,0 +1,5 @@
+# Classify Knowledge Failures Into Retry Review And Fail Closed
+
+Accepted.
+
+[FRAME | HIGH] Knowledge processing and retrieval distinguish transient infrastructure failures, content or business-review obligations, and security or integrity failures. Transient failures use bounded retry and backoff; uncertain parsing, table structure, Rule Unit boundaries, or metadata enter a separate Knowledge Revision Review State and cannot gain Knowledge Revision Publication Readiness until approved or corrected; authorization, generation, artifact-integrity, projection-attestation, publication-version, or citation failures fail closed immediately. Runtime may use a Prevalidated Retrieval Degradation such as BM25-only or Source-local RRF without a reranker only when the exact Source and query-type path passed Sealed Knowledge Acceptance Evaluation and the pinned Knowledge Retrieval Profile Revision enables it. TreeIndex, mutable latest state, or a different corpus are never silent fallbacks. We accept explicit states and occasional no-recommendation outcomes to prevent availability handling from weakening corpus identity, authority, or access control.

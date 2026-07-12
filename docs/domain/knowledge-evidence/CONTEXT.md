@@ -60,6 +60,38 @@ _Avoid_: Index-only retention, quarantine file, public attachment URL, mutable o
 The normalized Unicode text derivative retained with one validated Knowledge Document Revision after Quarantined Knowledge Upload validation. It is parser-metadata-bound input for index artifact construction and reingestion, with its own derivative content hash for integrity verification; it is not the Managed Knowledge Document Original, the revision content-hash identity, or a runtime evidence payload.
 _Avoid_: Raw upload, index artifact, trace evidence content, parser-independent cache
 
+**Structured Knowledge Document Artifact**:
+The immutable provider-neutral parsing derivative for one Knowledge Document Revision, preserving pages, ordered blocks, headings, tables and cells, source coordinates, native-versus-OCR lineage, parser warnings, and stable projections used to build Insurance Rule Units and citations.
+_Avoid_: Vendor parser object, flat extracted text, Markdown as source of truth, retrieval index
+
+**Structured Knowledge Artifact Build Identity**:
+The immutable compatibility identity for one Structured Knowledge Document Artifact build, derived from the Knowledge Document Revision content hash, parser adapter and library revisions, exact model and weight digests, OCR and preprocessing configuration, and canonical artifact schema. One source-byte revision may have multiple build identities, and every Insurance Rule Unit lineage pins the selected identity.
+_Avoid_: Knowledge Document Revision id, mutable parser latest, filename identity, Index Generation
+
+**Private Knowledge Processing Boundary**:
+The company-controlled network boundary within which Knowledge document originals and every content-bearing derivative must be parsed, transformed, indexed, retrieved, reranked, and supplied to Knowledge-backed model calls.
+_Avoid_: Original-file-only residency, embedding exception, external SaaS processing, egress allowlist as content authorization
+
+**Private Knowledge Model Serving Plane**:
+The company-controlled internal service boundary that hosts OCR and layout models, embedding models, rerankers, and Knowledge-bearing LLM inference behind governed APIs, separately from Proof Agent API, Knowledge Worker, and retrieval process roles.
+_Avoid_: External model SaaS, in-process heavyweight model, Knowledge Worker as model server, Agent-selected endpoint
+
+**Knowledge Model Work Scheduler**:
+The single private-plane resource arbiter for the shared GPU, owning model residency, queue admission, online query-embedding and reranking priority, bounded offline OCR and embedding work, preemption or pause behavior, and queue-time metrics across otherwise separate model services.
+_Avoid_: Independent service-local priority, unbounded GPU queue, Knowledge Worker concurrency as GPU scheduling, latency excluding queue time
+
+**Layout-Complex Knowledge Document**:
+A text-bearing Knowledge PDF whose business meaning depends on spatial or structural relationships such as tables, multiple columns, repeated page furniture, callouts, or cross-page sections, so plain reading-order text is not a faithful representation.
+_Avoid_: Simple text PDF, flattened text blob, OCR-required page
+
+**OCR-Required Knowledge Page**:
+A PDF page whose meaningful business text is image-only or cannot be recovered reliably through direct Unicode extraction and therefore requires OCR before structural normalization.
+_Avoid_: Whole-file scanned-PDF assumption, empty page, layout-complex text page
+
+**Hybrid Knowledge Document Intake**:
+The provider-specific operator intake for a Hybrid Index Provider Source. It reuses system-generated quarantine paths, signature and MIME validation, encryption rejection, byte hashing, and request-envelope protection, but accepts native-text, layout-complex, scanned, and mixed PDF pages for structured parsing and OCR under Hybrid-specific document, file, page, and batch capacity limits. It does not change the text-only, 500-document V1 Operator Knowledge Document Intake used by Local Index Provider.
+_Avoid_: Local Index intake mutation, customer attachment upload, unlimited PDF, scan-only rejection
+
 **Knowledge Document Original Download Audit**:
 The configuration-operation audit record written when an authorized operator downloads a Managed Knowledge Document Original. Download requires `knowledge_source.view`.
 _Avoid_: Anonymous download, raw-file runtime trace, unaudited file export
@@ -201,12 +233,16 @@ The Draft Agent behavior that resolves an unpinned Agent Knowledge Binding to th
 _Avoid_: Published Agent drift, unpublished source version, hidden resolution
 
 **Published Knowledge Binding Resolution**:
-The immutable Published Agent Version record of each Agent Knowledge Binding's resolved Knowledge Source snapshot or configuration version and resolved binding settings. A later Knowledge Source publication cannot silently change it.
+The immutable Published Agent Version record of each Agent Knowledge Binding's discriminated resolved provider identity and settings. A Hybrid binding pins Source publication, snapshot, Index Generation, Publication Sequence, Retrieval Profile Revision, Rule Unit Publication Manifest, and Projection Attestation; Local Index and remote variants retain their own exact identity shapes. A later Knowledge Source or Retrieval Profile publication cannot silently change it.
 _Avoid_: Latest-at-runtime lookup, mutable Agent version, source publication side effect
 
 **Resolved Knowledge Binding Set**:
 The execution-time collection of resolved Agent Knowledge Bindings used by a governed Agent run. For shared Knowledge Sources it includes immutable source snapshot or configuration version references plus resolved binding settings; for Package-Local Knowledge Sources it includes package-scoped provider configuration. Dashboard-managed Draft Agent provider parameters never appear here as mutable Source Draft copies.
 _Avoid_: Draft binding intent, latest Source lookup, inline provider configuration, ambiguous source lookup
+
+**Resolved Hybrid Knowledge Binding**:
+The discriminated shared-Source binding variant for Hybrid Index Provider execution, pinning the Source publication version, source snapshot, Knowledge Index Generation, Knowledge Source Publication Sequence, Knowledge Retrieval Profile Revision, Rule Unit Publication Manifest, and Knowledge Index Projection Attestation. Legacy Local Index and remote bindings retain their existing distinct identity shapes until explicitly migrated.
+_Avoid_: Universal optional fields, inferred provider shape, mutable latest generation, Local Index compatibility mutation
 
 **Knowledge Binding Upgrade Available**:
 The Dashboard-visible condition where a Knowledge Source has a newer published snapshot or configuration version than the one resolved by a Draft Agent or Published Agent Version. Applying the upgrade updates a Draft Agent and requires Agent Validation Run plus Agent Publication for a new Published Agent Version.
@@ -248,9 +284,25 @@ _Avoid_: Priority-only fallback, unbounded fan-out, provider-specific merge
 The Control Plane service that executes governed retrieval for Enterprise QA and Controlled ReAct workflows. It owns Knowledge Source Routing, provider call coordination, required or advisory failure handling, cross-source fusion, citation enforcement, evidence admission, and trace-safe retrieval summaries.
 _Avoid_: Knowledge Provider Adapter, Runtime graph node, direct provider call, answer generator
 
+**Governed Hybrid Retrieval Request**:
+The typed Control Plane request sent to Hybrid Index Provider, containing the bounded query set, Resolved Hybrid Knowledge Binding, authorized scope, approved applicability filters, as-of time, and candidate budgets resolved by its Knowledge Retrieval Profile Revision without permitting model-authored authorization or authority fields.
+_Avoid_: Raw user filters, OpenSearch DSL, model-selected ACL, latest-source query
+
+**Knowledge Retrieval Profile Revision**:
+The immutable query-time retrieval behavior pinned by a Resolved Hybrid Knowledge Binding, including query-expansion revision, lexical and dense lane budgets, RRF parameters, reranker model and inference revision, reranker limits, Rule Unit Context Expansion policy, final candidate budgets, and enabled Prevalidated Retrieval Degradations. Changing it requires applicable evaluation and Agent validation/publication but does not create a Knowledge Index Generation unless a stored index-compatibility field also changes.
+_Avoid_: OpenSearch mapping, embedding dimension, mutable Agent override, runtime latest reranker
+
+**Rule Unit Context Expansion**:
+The bounded post-ranking step that adds only the selected Insurance Rule Unit's necessary structural context, such as heading path, table headers, neighboring rule rows, or referenced definitions, while retaining source lineage and context-budget accounting.
+_Avoid_: Whole-document prompt, pre-authorization expansion, arbitrary neighbor window, uncited context
+
 **Knowledge Provider Adapter**:
 The provider-specific implementation that invokes one local or remote knowledge technology stack for one selected Knowledge Source and converts its retrieval results into normalized Candidate Evidence.
 _Avoid_: Knowledge Source, Agent binding, answer model, cross-source fusion, evidence admission
+
+**Knowledge Retrieval Index Service**:
+The replaceable internal derived-index service that supports authorized metadata filtering, lexical retrieval, vector retrieval, and hybrid candidate ranking for published Knowledge content while remaining rebuildable from authoritative configuration and immutable Knowledge artifacts.
+_Avoid_: Knowledge Source of truth, Production Transactional State Store, Production Artifact Store, vector-only authority
 
 **Candidate Evidence Identity**:
 The normalized trace-safe identifier set carried by Candidate Evidence: evidence id, source id, source version id, binding id, provider name, optional document id, optional revision id, optional chunk id, citation, provider-native score, fusion rank, admission score, and allowlisted metadata.
@@ -432,6 +484,10 @@ _Avoid_: Current remote provider, Local Index Provider, remote Knowledge Hub def
 A Knowledge Provider that retrieves candidate evidence from locally persisted tree indexes built by LlamaIndex TreeIndex. Supports structured retrieval interfaces (`list_structure()`, `retrieve_at_scope()`) in addition to standard `retrieve()`. Uses ProofAgentLLM bridge to route all LLM calls through Proof Agent's ModelProvider protocol for unified governance.
 _Avoid_: PageIndex Provider, Local Vector Provider, final answer generator, remote retrieval service
 
+**Hybrid Index Provider**:
+The production-directed Knowledge Provider Adapter for expanded insurance Knowledge that translates governed authorization and applicability inputs into bounded lexical and vector retrieval against Knowledge Retrieval Index Service, then returns normalized, cited Candidate Evidence without owning source authority, evidence admission, or answer generation.
+_Avoid_: Local Index Provider, OpenSearch SDK contract, vector-only provider, authority scorer
+
 **RetrievalPlanner**:
 An orchestrator component that drives a multi-round agentic retrieval loop inside one governed retrieval execution. It may rewrite retrieval queries and assess evidence sufficiency, but it does not select Knowledge Sources, call tools, generate final answers, or alter the outer Controlled ReAct Workflow route.
 _Avoid_: ReAct planner, final answer model, source router, tool calling loop
@@ -492,6 +548,18 @@ _Avoid_: Agent-scoped upload, retrieval result, raw document folder
 The maximum number of Knowledge Documents retained by one Knowledge Source; V1 targets up to 500 documents per source.
 _Avoid_: Selected document count per query, unlimited corpus size, Agent binding count
 
+**Target Knowledge Source Corpus Envelope**:
+The production-planning range for the expanded insurance Knowledge design: one Knowledge Source may contain 500 through 10,000 long PDF documents and approximately 100,000 through 2,000,000 pages while ingestion and query work remain explicitly bounded.
+_Avoid_: Current 500-document foundation limit, unbounded corpus claim, query-time full scan, pilot-only volume
+
+**Routine Knowledge Change Activation Objective**:
+The one-to-four-hour target for a named target Agent from receipt of an approved routine insurance rule file through parsing, rule-metadata review, Source validation and publication, explicit Draft Agent binding upgrade, Agent Validation Run, Agent Publication, and availability through the resulting Active Agent Version, while prior Published Knowledge and Published Agent Versions remain immutable until their respective replacement steps succeed.
+_Avoid_: Source-publication-only latency, automatic Agent mutation, emergency stop-sale switch, unvalidated immediate activation, in-place published mutation
+
+**Routine Knowledge Change Workload Envelope**:
+The versioned measured workload definition under which the Routine Knowledge Change Activation Objective is valid, recording document and page counts, layout and OCR mix, model revisions, hardware allocation, online concurrency, queue priority, acceptance checks, named target Agent count, and required reviewer availability instead of treating one-to-four hours as an unqualified promise.
+_Avoid_: Page-count-free SLO, best-case benchmark, unlimited routine batch, hardware-independent claim
+
 **Knowledge Source Document Capacity Reservation**:
 The temporary Source-capacity slot held by one queued or processing Quarantined Knowledge Upload before promotion. Staging checks and reserves capacity atomically with the local queue lock; accepted promotion hands the slot to its managed Knowledge Document, while rejection releases it immediately even though quarantined bytes remain under Rejected Knowledge Upload Retention.
 _Avoid_: Pending-upload capacity bypass, rejected-upload slot retention, non-atomic concurrent staging
@@ -528,6 +596,22 @@ _Avoid_: Lock inside renamed artifact directory, infinite store-lock wait, age-o
 The independent lifecycle state of one Knowledge Document revision during Knowledge Source Ingestion: `QUEUED`, `PROCESSING`, `READY`, or `FAILED`. A failed document may be retried, replaced, or archived without discarding other READY document revisions.
 _Avoid_: Knowledge Source Index State, Knowledge Ingestion Job status, silent omission
 
+**Knowledge Revision Review State**:
+The business-visible review condition kept separate from Knowledge Document Ingestion State when parsing quality, table reconstruction, Rule Unit boundaries, or Insurance Rule Metadata Draft values require human confirmation before publication readiness.
+_Avoid_: Recoverable infrastructure failure, automatic approval, ingestion retry counter, silent exclusion
+
+**Knowledge Revision Publication Readiness**:
+The condition where one Knowledge Document Revision has compatible validated parsing artifacts, approved immutable Insurance Rule Unit Revisions, required embeddings and search projections, resolvable citations, candidate Rule Unit Publication Manifest membership, and no blocking review or integrity failure, making it eligible for candidate publication membership.
+_Avoid_: Upload success, parser completion only, index write acknowledgement, Knowledge Source Publication
+
+**Prevalidated Retrieval Degradation**:
+An explicit Source- and query-type-scoped fallback such as BM25-only or Source-local RRF without a reranker that may run only after Sealed Knowledge Acceptance Evaluation proves its declared quality, authority, authorization, citation, latency, and failure thresholds and the pinned Knowledge Retrieval Profile Revision enables it.
+_Avoid_: Exception-handler fallback, latest-provider retry, untested best effort, authority bypass
+
+**Knowledge Shadow Cutover**:
+The migration regime where the structured parser and Hybrid Index Provider process the same approved corpus and queries without changing active Published Knowledge, compare outputs against the incumbent path, enter a bounded assisted pilot, and switch only after release gates pass. Immediate cutover rollback uses Agent Version Rollback to a retained immutable Published Agent Version; reverting shared Source content instead creates a Knowledge Source Rollback Draft, validates and publishes a new Source version, then follows explicit binding upgrade, Agent validation, and Agent publication.
+_Avoid_: Big-bang provider replacement, dual-write authority, silent TreeIndex fallback, ambiguous active-pointer rewind
+
 **Knowledge Document Archive**:
 The reversible lifecycle state that removes a Knowledge Document from candidate snapshots while preserving referenced revisions and index artifacts.
 _Avoid_: Physical deletion, immediate active-snapshot mutation, hard purge
@@ -543,6 +627,26 @@ _Avoid_: Mutable upload folder, Draft Agent version, partial rebuild, implicitly
 **Knowledge Source Snapshot Manifest**:
 The immutable manifest for one READY local-index Knowledge Source Snapshot. It records trace-safe document and revision identities, routing metadata, and references to reusable Knowledge Revision Artifacts without copying artifact directories or rebuilding indexes during snapshot freeze or publication.
 _Avoid_: Snapshot-owned artifact copy, merged publication index, mutable artifact path list, runtime folder scan
+
+**Knowledge Index Generation**:
+The rebuildable hybrid-search compatibility generation identified by the Structured Knowledge Document Artifact schema, Rule Unit search projection, search mapping, embedding model revision, instruction, output dimension, normalization, and related index-affecting configuration. Multiple routine Knowledge Source Publications may share one generation.
+_Avoid_: Knowledge Source Publication, mutable latest index, model name only, business effective period
+
+**Rule Unit Publication Manifest**:
+The immutable S3-backed authoritative artifact for one Hybrid Knowledge Source publication, enumerating exact Insurance Rule Unit Revision identities and their canonical-content, Structured Knowledge Artifact Build Identity, Approved Insurance Rule Metadata, Approved Insurance Knowledge Visibility Scope, citation, and publication-membership digests. PostgreSQL binds its exact object version and digest at publication.
+_Avoid_: OpenSearch query result, mutable ACL table, snapshot acceleration file, content-free count manifest
+
+**Knowledge Index Projection Attestation**:
+An immutable PostgreSQL-bound chain entry created after projection validation, tying Rule Unit Publication Manifest digests and covered Source Publication Sequences to the exact OpenSearch index UUID, Knowledge Index Generation, mapping and projection digest, refresh checkpoint, validated counts, publication attempt, and optional parent-attestation digest. A later publication in the same generation creates a descendant that must preserve every retained earlier sequence; runtime accepts the binding's publication-time attestation or a verified descendant whose coverage includes the pinned sequence and fails closed on index identity, generation, chain, coverage, or candidate-digest mismatch.
+_Avoid_: OpenSearch as authority, mutable health flag, alias name, smoke query only, post-answer integrity check
+
+**Knowledge Source Publication Sequence**:
+The monotonic Source-owned sequence assigned to each explicit Knowledge Source Publication and captured with its source snapshot and Knowledge Index Generation so historical Published Agent Versions can resolve the same rule membership without querying latest state.
+_Avoid_: Rule effective date, index generation, worker attempt, runtime latest lookup
+
+**Rule Unit Publication Membership**:
+The rebuildable search projection that records the Knowledge Source Publication Sequence intervals in which one immutable Insurance Rule Unit Revision belongs to the published corpus. It is distinct from that rule's business effective period and never replaces the Rule Unit Publication Manifest plus PostgreSQL publication authority.
+_Avoid_: Insurance Rule Applicability, business validity interval, mutable source authority, duplicated full index per publication
 
 **Frozen Knowledge Source Snapshot**:
 An immutable development-stage READY Knowledge Source Snapshot created from a foundation-validated Candidate Knowledge Source Snapshot. It may support preview and routing-smoke development through the Source's latest snapshot pointer, but it is not production-bindable and cannot become a Resolved Knowledge Snapshot Binding until full Knowledge Source Publication Validation succeeds.

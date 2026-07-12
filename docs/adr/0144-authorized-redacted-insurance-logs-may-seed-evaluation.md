@@ -1,0 +1,5 @@
+# Authorized Redacted Insurance Logs May Seed Evaluation
+
+Accepted.
+
+[FRAME | HIGH] Authorized historical insurance consultation logs may seed Evaluation Curation only inside the company-controlled Private Knowledge Processing Boundary and only after deterministic removal of customer identity, policy or claim identifiers, contact values, credentials, and other unnecessary sensitive fields. Curated cases retain the minimum redacted question, approved taxonomy and risk labels, expected governed resolution, business claim expectations, and reviewed rule or citation basis; model-assisted prelabeling receives only that redacted projection and cannot promote a case without Evaluation Curation Review Permission and human confirmation. Raw logs remain subject to their existing retention and access controls rather than being copied into the evaluation suite. We accept curation cost and reduced context to gain representative production coverage without turning evaluation into a second raw-data store.
