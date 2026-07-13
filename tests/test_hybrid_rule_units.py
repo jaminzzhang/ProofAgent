@@ -769,6 +769,56 @@ def test_generic_definition_cross_references_are_ordinary_content(
     assert units[0].definitions == ()
 
 
+@pytest.mark.parametrize(
+    ("definition_text", "reference_text"),
+    (
+        ("Applicant: means the person applying for cover.", "Applicants must be adults."),
+        ("投保人，是指申请保险保障的人。", "投保人必须年满十八周岁。"),
+        ("“投保人”，是指申请保险保障的人。", "投保人必须年满十八周岁。"),
+        ("投保人：是指申请保险保障的人。", "投保人必须年满十八周岁。"),
+    ),
+)
+def test_definition_separator_punctuation_preserves_reference_attachment(
+    definition_text: str,
+    reference_text: str,
+) -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="punctuated-definition",
+                    kind="paragraph",
+                    text=definition_text,
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                ),
+                StructuredBlock(
+                    block_id="punctuated-definition-reference",
+                    kind="list_item",
+                    text=reference_text,
+                    bbox=bbox(40, 80, 572, 110),
+                    reading_order=1,
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    reference = next(
+        unit
+        for unit in project_rule_units(
+            artifact,
+            document_defaults=defaults(),
+            source_id="source-1",
+        )
+        if unit.block_ids == ("punctuated-definition-reference",)
+    )
+
+    assert reference.definitions == (definition_text,)
+
+
 def test_ten_thousand_cells_stay_within_deterministic_work_bound() -> None:
     artifact = canonical_artifact()
     header = artifact.pages[1].tables[0].cells[:2]

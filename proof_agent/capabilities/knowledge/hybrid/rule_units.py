@@ -44,7 +44,8 @@ _ENGLISH_DEFINITION_STATEMENT = re.compile(
     ^\s*
     (?:["“](?P<quoted>[^"”\r\n]{1,127})["”]
       |(?P<plain>[A-Za-z][A-Za-z0-9 _-]{0,126}?))
-    \s+(?:means|is\s+defined\s+as|refers\s+to)\s+
+    (?:\s*[:：,，]\s*|\s+)
+    (?:means|is\s+defined\s+as|refers\s+to)\s+
     (?P<body>\S.*?)\s*$
     """,
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
@@ -54,7 +55,7 @@ _CHINESE_DEFINITION_STATEMENT = re.compile(
     ^\s*
     (?:["“](?P<quoted>[^"”\r\n]{1,64})["”]
       |(?P<plain>[^，。；：:\s][^，。；：:\r\n]{0,63}?))
-    \s*[:：]?\s*(?:是指|系指|定义为|指)\s*
+    \s*[:：,，]?\s*(?:是指|系指|定义为|指)\s*
     (?P<body>\S.*?)\s*$
     """,
     re.DOTALL | re.VERBOSE,
