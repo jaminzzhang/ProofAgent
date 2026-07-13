@@ -49,6 +49,9 @@ _ACTION_TYPES = {
 }
 _EMBEDDED_KEYS = {"/EmbeddedFiles", "/EF", "/AF"}
 _MAX_VISITED_PDF_OBJECTS = 100_000
+_MAX_INDEXED_PDF_OBJECTS = 100_000
+_MAX_PDF_REVISIONS = 32
+_MAX_HISTORICAL_REVISION_BYTES = 100 * 1024 * 1024
 _PDF_TERMINAL_REGION = re.compile(
     rb"startxref[\x00\x09\x0a\x0c\x0d\x20]+"
     rb"(?P<offset>[0-9]+)[\x00\x09\x0a\x0c\x0d\x20]+"
@@ -93,6 +96,7 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
                 f"Hybrid PDF upload exceeds the {limits.max_pdf_pages}-page limit.",
             )
         _reject_unsafe_pdf_objects(reader)
+        _reject_unsafe_historical_revisions(snapshot, PdfReader)
         profiles = tuple(_profile_page(page, number) for number, page in enumerate(reader.pages, 1))
     except ProofAgentError:
         raise
@@ -294,9 +298,15 @@ def _last_marker_offset(
 
 
 def _previous_revision_before(source: IO[bytes], before: int) -> tuple[int, int] | None:
+    revisions = _structural_revisions_before(source, before)
+    return revisions[-1] if revisions else None
+
+
+def _structural_revisions_before(source: IO[bytes], before: int) -> list[tuple[int, int]]:
     eof_offsets = _marker_offsets(source, b"%%EOF", before=before)
     startxref_offsets = _marker_offsets(source, b"startxref", before=before)
-    for eof_offset in reversed(eof_offsets):
+    revisions: list[tuple[int, int]] = []
+    for eof_offset in eof_offsets:
         eof_end = eof_offset + len(b"%%EOF")
         for previous_startxref in reversed(startxref_offsets):
             if previous_startxref >= eof_offset:
@@ -307,8 +317,9 @@ def _previous_revision_before(source: IO[bytes], before: int) -> tuple[int, int]
             revision_end = source.read(eof_end - previous_startxref)
             match = _PDF_TERMINAL_REGION.fullmatch(revision_end)
             if match is not None:
-                return eof_end, int(match.group("offset"))
-    return None
+                revisions.append((eof_end, int(match.group("offset"))))
+                break
+    return revisions
 
 
 def _marker_offsets(source: IO[bytes], marker: bytes, *, before: int) -> list[int]:
@@ -390,7 +401,10 @@ def _validate_incremental_revision(
 def _reject_unsafe_pdf_objects(reader: Any) -> None:
     from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject
 
-    pending: list[tuple[Any, str | None]] = [(reader.trailer, None)]
+    pending: list[tuple[Any, str | None]] = [
+        (reader.trailer, None),
+        *((item, None) for item in _indexed_pdf_objects(reader)),
+    ]
     seen: set[tuple[tuple[int, int] | int, bool]] = set()
     while pending:
         item, parent_key = pending.pop()
@@ -435,6 +449,75 @@ def _reject_unsafe_pdf_objects(reader: Any) -> None:
             pending.extend((value, str(key)) for key, value in item.items())
         elif isinstance(item, ArrayObject):
             pending.extend((value, parent_key) for value in item)
+
+
+def _indexed_pdf_objects(reader: Any) -> tuple[Any, ...]:
+    """Return every object registered by the complete parsed xref revision chain."""
+
+    from pypdf.generic import IndirectObject
+
+    references: set[tuple[int, int]] = set()
+    for generation, entries in reader.xref.items():
+        references.update((int(idnum), int(generation)) for idnum in entries if int(idnum) > 0)
+    references.update((int(idnum), 0) for idnum in reader.xref_objStm if int(idnum) > 0)
+    if len(references) > _MAX_INDEXED_PDF_OBJECTS:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006",
+            "Hybrid PDF indexed object count exceeds safety limits.",
+        )
+
+    indexed: list[Any] = [
+        IndirectObject(idnum, generation, reader)
+        for idnum, generation in sorted(references, key=lambda item: (item[1], item[0]))
+    ]
+    for resolved in reader.resolved_objects.values():
+        indexed.append(resolved)
+        if len(indexed) > _MAX_INDEXED_PDF_OBJECTS:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF indexed object count exceeds safety limits.",
+            )
+    return tuple(indexed)
+
+
+def _reject_unsafe_historical_revisions(source: IO[bytes], reader_type: Any) -> None:
+    source.seek(0, os.SEEK_END)
+    revisions = _structural_revisions_before(source, source.tell())
+    if len(revisions) > _MAX_PDF_REVISIONS:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006",
+            "Hybrid PDF revision count exceeds safety limits.",
+        )
+
+    historical_bytes = 0
+    for eof_end, _xref_offset in revisions[:-1]:
+        historical_bytes += eof_end
+        if historical_bytes > _MAX_HISTORICAL_REVISION_BYTES:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF historical revision scan exceeds safety limits.",
+            )
+        historical: IO[bytes] = tempfile.SpooledTemporaryFile(
+            max_size=_SNAPSHOT_MEMORY_BYTES,
+            mode="w+b",
+        )
+        try:
+            source.seek(0)
+            remaining = eof_end
+            while remaining > 0:
+                chunk = source.read(min(_HASH_CHUNK_BYTES, remaining))
+                if not chunk:
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006",
+                        "Hybrid PDF historical revision is incomplete.",
+                    )
+                historical.write(chunk)
+                remaining -= len(chunk)
+            historical.seek(0)
+            historical_reader = reader_type(historical, strict=True)
+            _reject_unsafe_pdf_objects(historical_reader)
+        finally:
+            historical.close()
 
 
 def _hybrid_error(code: str, message: str) -> ProofAgentError:
