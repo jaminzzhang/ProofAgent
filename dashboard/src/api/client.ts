@@ -26,6 +26,8 @@ import type {
   KnowledgeDocumentsResponse,
   KnowledgeIngestionJob,
   KnowledgeIngestionJobsResponse,
+  InsuranceMetadataReview,
+  InsuranceMetadataReviewsResponse,
   KnowledgeSource,
   KnowledgeSourceDeletionEligibility,
   KnowledgeSourceSnapshotManifest,
@@ -528,6 +530,35 @@ export function fetchKnowledgeSourcePublications(
 ): Promise<KnowledgeSourcePublicationsResponse> {
   return fetchJson<KnowledgeSourcePublicationsResponse>(
     `${BASE}/config/knowledge-sources/${sourceId}/publications`,
+  )
+}
+
+export function fetchInsuranceMetadataReviews(
+  sourceId: string,
+): Promise<InsuranceMetadataReviewsResponse> {
+  return fetchJson<InsuranceMetadataReviewsResponse>(
+    `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews`,
+  )
+}
+
+export function resolveInsuranceMetadataReview(
+  sourceId: string,
+  review: InsuranceMetadataReview,
+  action: 'approve' | 'correct' | 'reject',
+  payload: { reason: string; corrections?: Record<string, string | number | null> },
+): Promise<InsuranceMetadataReview> {
+  return fetchJson<InsuranceMetadataReview>(
+    `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews/${review.review_id}/${action}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_review_version: review.review_version,
+        expected_review_identity: review.review_identity,
+        reason: payload.reason,
+        corrections: payload.corrections ?? {},
+      }),
+    },
   )
 }
 

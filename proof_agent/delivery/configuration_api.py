@@ -10,7 +10,7 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -35,6 +35,12 @@ from proof_agent.capabilities.tools.source_descriptors import (
     list_tool_source_descriptors,
 )
 from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
+from proof_agent.capabilities.knowledge.hybrid.workbook import (
+    FilesystemInsuranceMetadataReviewRepository,
+    InsuranceMetadataReview,
+    WorkbookReviewConflictError,
+    WorkbookValidationError,
+)
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import (
@@ -471,6 +477,17 @@ class KnowledgeSourcePublicationRequest(BaseModel):
 
     validation_id: str = Field(min_length=1)
     change_note: str = Field(min_length=1)
+
+
+class KnowledgeMetadataReviewResolutionRequest(BaseModel):
+    """Exact optimistic command envelope for one metadata review decision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_review_version: int = Field(gt=0)
+    expected_review_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=2_000)
+    corrections: dict[str, str | int | None] = Field(default_factory=dict)
 
 
 class KnowledgeBindingAttachRequest(BaseModel):
@@ -1306,6 +1323,115 @@ def retry_knowledge_ingestion_job(
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return _knowledge_ingestion_job_payload(job)
+
+
+@router.get("/config/knowledge-sources/{source_id}/metadata-reviews")
+def list_knowledge_metadata_reviews(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """List trace-safe metadata review projections for one Hybrid Source."""
+
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
+    store = _get_configuration_store(app_request)
+    source = _require_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(status_code=400, detail="Metadata reviews require hybrid_index.")
+    reviews = _metadata_review_repository(store).list(source_id)
+    return {
+        "data": [_metadata_review_payload(review) for review in reviews],
+        "meta": {
+            "total": len(reviews),
+            "unresolved": sum(1 for review in reviews if review.publication_blocked),
+        },
+    }
+
+
+@router.get("/config/knowledge-sources/{source_id}/metadata-reviews/{review_id}")
+def get_knowledge_metadata_review(
+    source_id: str,
+    review_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return one exact trace-safe metadata review projection."""
+
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
+    store = _get_configuration_store(app_request)
+    source = _require_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(status_code=400, detail="Metadata reviews require hybrid_index.")
+    review = _metadata_review_repository(store).get(source_id, review_id)
+    if review is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Metadata Review not found: {source_id}/{review_id}",
+        )
+    return _metadata_review_payload(review)
+
+
+@router.post("/config/knowledge-sources/{source_id}/metadata-reviews/{review_id}/approve")
+def approve_knowledge_metadata_review(
+    source_id: str,
+    review_id: str,
+    request: KnowledgeMetadataReviewResolutionRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Approve a conflict-free review using Knowledge publish permission."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
+    return _resolve_metadata_review(
+        source_id=source_id,
+        review_id=review_id,
+        request=request,
+        app_request=app_request,
+        action="approve",
+        actor=actor,
+    )
+
+
+@router.post("/config/knowledge-sources/{source_id}/metadata-reviews/{review_id}/correct")
+def correct_knowledge_metadata_review(
+    source_id: str,
+    review_id: str,
+    request: KnowledgeMetadataReviewResolutionRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Apply explicit governed field corrections using Knowledge edit permission."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
+    return _resolve_metadata_review(
+        source_id=source_id,
+        review_id=review_id,
+        request=request,
+        app_request=app_request,
+        action="correct",
+        actor=actor,
+    )
+
+
+@router.post("/config/knowledge-sources/{source_id}/metadata-reviews/{review_id}/reject")
+def reject_knowledge_metadata_review(
+    source_id: str,
+    review_id: str,
+    request: KnowledgeMetadataReviewResolutionRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Reject a review using Knowledge publish permission."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
+    return _resolve_metadata_review(
+        source_id=source_id,
+        review_id=review_id,
+        request=request,
+        app_request=app_request,
+        action="reject",
+        actor=actor,
+    )
 
 
 @router.get("/config/knowledge-sources/{source_id}/candidate-snapshot")
@@ -3079,6 +3205,54 @@ def _quarantined_upload_payload(upload: QuarantinedKnowledgeUpload) -> dict[str,
 
 def _knowledge_ingestion_job_payload(job: KnowledgeIngestionJob) -> dict[str, Any]:
     return job.model_dump(mode="json")
+
+
+def _metadata_review_payload(review: InsuranceMetadataReview) -> dict[str, Any]:
+    """Serialize only governed drafts, conflicts, anchors, and decision identity."""
+
+    return review.model_dump(mode="json")
+
+
+def _metadata_review_repository(
+    store: LocalAgentConfigurationStore,
+) -> FilesystemInsuranceMetadataReviewRepository:
+    return FilesystemInsuranceMetadataReviewRepository(store.root_dir)
+
+
+def _resolve_metadata_review(
+    *,
+    source_id: str,
+    review_id: str,
+    request: KnowledgeMetadataReviewResolutionRequest,
+    app_request: Request,
+    action: Literal["approve", "correct", "reject"],
+    actor: str,
+) -> dict[str, Any]:
+    store = _get_configuration_store(app_request)
+    source = _require_active_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(status_code=400, detail="Metadata reviews require hybrid_index.")
+    try:
+        review = _metadata_review_repository(store).resolve(
+            source_id=source_id,
+            review_id=review_id,
+            expected_review_version=request.expected_review_version,
+            expected_review_identity=request.expected_review_identity,
+            action=action,
+            actor=actor,
+            reason=request.reason,
+            corrections=request.corrections,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Metadata Review not found: {source_id}/{review_id}",
+        ) from exc
+    except WorkbookReviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WorkbookValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _metadata_review_payload(review)
 
 
 def _bind_source_in_agent_yaml(

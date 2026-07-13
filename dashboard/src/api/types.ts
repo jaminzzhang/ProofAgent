@@ -1108,6 +1108,54 @@ export interface KnowledgeSourcePublicationsResponse {
   }
 }
 
+export interface InsuranceMetadataDraftInput {
+  origin: 'pdf' | 'workbook'
+  source_id: string
+  document_id: string
+  revision_id: string
+  canonical_anchor: string | null
+  authority: string | null
+  effective_from: string | null
+  effective_to: string | null
+  taxonomy_id: string | null
+  taxonomy_revision_id: string | null
+  precedence_policy_revision_id: string | null
+  precedence_authority_tier: string | null
+  precedence_order: number | null
+}
+
+export interface InsuranceMetadataConflict {
+  field: string
+  label: string
+  pdf_value: string | number | null
+  workbook_value: string | number | null
+}
+
+export interface InsuranceMetadataReview {
+  schema_version: 'insurance-metadata-review.v1'
+  review_id: string
+  review_identity: string
+  review_version: number
+  source_id: string
+  document_id: string
+  revision_id: string
+  canonical_anchor: string | null
+  citation_uri: string
+  state: 'review_required' | 'ready_for_review' | 'approved' | 'corrected' | 'rejected'
+  publication_blocked: boolean
+  pdf_draft: InsuranceMetadataDraftInput
+  workbook_draft: InsuranceMetadataDraftInput
+  conflicts: InsuranceMetadataConflict[]
+  resolved_values: Record<string, string | number | null>
+  resolution_reason: string | null
+  resolved_by: string | null
+}
+
+export interface InsuranceMetadataReviewsResponse {
+  data: InsuranceMetadataReview[]
+  meta: { total: number; unresolved: number }
+}
+
 export interface DraftValidationResponse {
   validation_id: string
   run_id: string

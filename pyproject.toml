@@ -25,7 +25,8 @@ dashboard = ["fastapi>=0.111.0", "uvicorn>=0.30.0"]
 openai = ["openai>=1.30.0"]
 tree = ["llama-index-core>=0.12.0"]
 ingestion = ["pypdf>=6.12.2,<7"]
-all = ["proof-agent[ingestion,openai,tree]"]
+hybrid = ["httpx>=0.27.0,<1", "openpyxl>=3.1.5,<4"]
+all = ["proof-agent[hybrid,ingestion,openai,tree]"]
 
 [project.scripts]
 proof-agent = "proof_agent.delivery.cli:main"

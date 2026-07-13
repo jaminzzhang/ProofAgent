@@ -14,6 +14,11 @@ import proof_agent.bootstrap.composition as bootstrap_composition
 import proof_agent.delivery.configuration_api as configuration_api_module
 import proof_agent.capabilities.knowledge.http_json as http_json_module
 from proof_agent.capabilities.knowledge.ingestion import parse_quarantined_upload
+from proof_agent.capabilities.knowledge.hybrid.workbook import (
+    FilesystemInsuranceMetadataReviewRepository,
+    InsuranceMetadataDraftInput,
+    reconcile_metadata_drafts,
+)
 from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     ARTIFACT_META_FILENAME,
     REQUIRED_LLAMA_INDEX_FILES,
@@ -3566,3 +3571,117 @@ def test_rollback_switches_active_version(tmp_path: Path) -> None:
     assert rollback.json()["version_id"] == version_one
     assert rollback.json()["rollback_from_version_id"] == version_two
     assert client.get("/api/config/agents").json()["data"][0]["active_version_id"] == version_one
+
+
+def _seed_metadata_review(client: TestClient) -> dict[str, Any]:
+    store = _configuration_store(client)
+    repository = FilesystemInsuranceMetadataReviewRepository(store.root_dir)
+    common = {
+        "source_id": "ks_hybrid_index",
+        "document_id": "doc_policy_terms",
+        "revision_id": "rev_2026_01",
+        "canonical_anchor": "section:eligibility",
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "taxonomy_id": "insurance-product-applicability",
+        "taxonomy_revision_id": "taxonomy-2026-01",
+        "precedence_policy_revision_id": "precedence-2026-01",
+        "precedence_authority_tier": "policy_terms",
+        "precedence_order": 10,
+    }
+    review = reconcile_metadata_drafts(
+        InsuranceMetadataDraftInput(origin="pdf", authority="national", **common),
+        InsuranceMetadataDraftInput(origin="workbook", authority="regional", **common),
+    )
+    return repository.put(review).model_dump(mode="json")
+
+
+def test_metadata_review_routes_enforce_exact_identity_and_conflict_resolution(
+    tmp_path: Path,
+) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+            OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH,
+        },
+    )
+    _create_hybrid_index_source(client)
+    seeded = _seed_metadata_review(client)
+    path = f"/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews/{seeded['review_id']}"
+
+    listed = client.get(path.rsplit("/", 1)[0])
+    blocked = client.post(
+        f"{path}/approve",
+        json={
+            "expected_review_version": seeded["review_version"],
+            "expected_review_identity": seeded["review_identity"],
+            "reason": "Approve reviewed metadata.",
+        },
+    )
+    corrected = client.post(
+        f"{path}/correct",
+        json={
+            "expected_review_version": seeded["review_version"],
+            "expected_review_identity": seeded["review_identity"],
+            "reason": "Use the signed national authority classification.",
+            "corrections": {"authority": "national"},
+        },
+    )
+    stale = client.post(
+        f"{path}/reject",
+        json={
+            "expected_review_version": seeded["review_version"],
+            "expected_review_identity": seeded["review_identity"],
+            "reason": "Stale command must fail.",
+        },
+    )
+    approved = client.post(
+        f"{path}/approve",
+        json={
+            "expected_review_version": corrected.json()["review_version"],
+            "expected_review_identity": corrected.json()["review_identity"],
+            "reason": "Business review complete.",
+        },
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["meta"] == {"total": 1, "unresolved": 1}
+    assert "formula" not in json.dumps(listed.json()).lower()
+    assert blocked.status_code == 409
+    assert corrected.status_code == 200
+    assert corrected.json()["state"] == "corrected"
+    assert corrected.json()["conflicts"] == []
+    assert corrected.json()["publication_blocked"] is True
+    assert stale.status_code == 409
+    assert approved.status_code == 200
+    assert approved.json()["state"] == "approved"
+    assert approved.json()["publication_blocked"] is False
+
+
+def test_metadata_review_approval_requires_knowledge_publish_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+        },
+    )
+    _create_hybrid_index_source(client)
+    seeded = _seed_metadata_review(client)
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews/"
+        f"{seeded['review_id']}/approve",
+        json={
+            "expected_review_version": seeded["review_version"],
+            "expected_review_identity": seeded["review_identity"],
+            "reason": "Unauthorized approval.",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Operator lacks required permission: knowledge_source.publish"
+    )

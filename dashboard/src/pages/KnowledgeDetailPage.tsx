@@ -31,6 +31,7 @@ import type {
   QuarantinedKnowledgeUpload,
 } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
+import { KnowledgeReviewPanel } from '../components/knowledge/KnowledgeReviewPanel'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 
 type RoutingFormState = {
@@ -321,6 +322,7 @@ export function KnowledgeDetailPage() {
   if (error && !source) return <div className="text-sm text-[var(--danger)]">{error}</div>
   if (!source) return <div className="text-sm text-[var(--text-muted)]">Knowledge Source not found.</div>
   const isLocalIndexSource = source.provider === 'local_index'
+  const isHybridIndexSource = source.provider === 'hybrid_index'
   const supportsPublication = source.provider === 'local_index' || source.provider === 'http_json'
   const isArchived = source.lifecycle_state === 'ARCHIVED'
   const activeUploadCount = uploads.filter((upload) => isActiveKnowledgeTaskState(upload.state)).length
@@ -625,6 +627,8 @@ export function KnowledgeDetailPage() {
         )}
       </section>
       )}
+
+      {isHybridIndexSource && <KnowledgeReviewPanel sourceId={source.source_id} />}
 
       {supportsPublication && (
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">
