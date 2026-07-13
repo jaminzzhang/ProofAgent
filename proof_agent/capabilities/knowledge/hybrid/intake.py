@@ -30,7 +30,9 @@ _MAX_NATIVE_TEXT_CALLBACKS = 4096
 _MAX_PAGE_CONTENT_DECODED_BYTES = 2 * 1024 * 1024
 _MAX_FORM_XOBJECT_DEPTH = 16
 _MAX_FORM_XOBJECTS = 256
+_MAX_FORM_DO_INVOCATIONS = 64
 _MAX_XOBJECT_RESOURCE_ENTRIES = 1024
+_MAX_FONT_RESOURCE_ENTRIES = 1024
 _ACTIVE_KEYS = {"/OpenAction", "/AA", "/JS", "/JavaScript", "/Launch"}
 _ACTION_CONTAINER_KEYS = {"/A", "/PA", "/Next"}
 _ACTION_TYPES = {
@@ -230,7 +232,8 @@ class _NativeTextExtractionLimit(Exception):
 
 
 def _sample_native_page_text(page: Any) -> str:
-    _validate_bounded_page_content(page)
+    if not _validate_bounded_page_content(page):
+        return ""
     chunks: list[str] = []
     sampled_characters = 0
     callback_count = 0
@@ -260,16 +263,21 @@ def _sample_native_page_text(page: Any) -> str:
     return "".join(chunks)
 
 
-def _validate_bounded_page_content(page: Any) -> None:
+def _validate_bounded_page_content(page: Any) -> bool:
     from pypdf.generic import ArrayObject, IndirectObject, NameObject
 
+    decoded_page_content: list[bytes] = []
     try:
         contents = page.raw_get(NameObject("/Contents"))
     except KeyError:
-        return
+        contents = None
 
     remaining = _MAX_PAGE_CONTENT_DECODED_BYTES
-    pending = list(contents) if isinstance(contents, ArrayObject) else [contents]
+    pending = (
+        list(contents)
+        if isinstance(contents, ArrayObject)
+        else ([] if contents is None else [contents])
+    )
     while pending:
         item = pending.pop()
         if isinstance(item, IndirectObject):
@@ -277,14 +285,17 @@ def _validate_bounded_page_content(page: Any) -> None:
         if isinstance(item, ArrayObject):
             pending.extend(item)
             continue
-        remaining = _charge_bounded_content_stream(item, remaining)
+        remaining, decoded = _charge_bounded_content_stream(item, remaining)
+        decoded_page_content.append(decoded)
 
     resources = page.get_inherited(key="/Resources", default=None)
     if resources is not None:
-        _validate_bounded_form_xobjects(resources, remaining)
+        _remaining, form_lookup = _validate_bounded_resources(resources, remaining)
+        _validate_form_do_work(decoded_page_content, resources, form_lookup)
+    return any(decoded_page_content)
 
 
-def _charge_bounded_content_stream(stream: Any, remaining: int) -> int:
+def _charge_bounded_content_stream(stream: Any, remaining: int) -> tuple[int, bytes]:
     from pypdf.generic import ArrayObject, NameObject, StreamObject
 
     if not isinstance(stream, StreamObject):
@@ -295,7 +306,7 @@ def _charge_bounded_content_stream(stream: Any, remaining: int) -> int:
     raw_data = stream._data  # pypdf retains encoded stream bytes without decoding them.
     filters = stream.get(NameObject("/Filter"))
     if filters is None:
-        decoded_size = len(raw_data)
+        decoded = raw_data
     else:
         filter_names = (
             tuple(str(value) for value in filters)
@@ -307,23 +318,30 @@ def _charge_bounded_content_stream(stream: Any, remaining: int) -> int:
                 "PA_HYBRID_INTAKE_006",
                 "Hybrid PDF page content filter cannot be sampled safely.",
             )
-        decoded_size = _bounded_flate_decoded_size(raw_data, remaining)
-    remaining -= decoded_size
+        decoded = _bounded_flate_decoded_data(raw_data, remaining)
+    remaining -= len(decoded)
     if remaining < 0:
         raise _hybrid_error(
             "PA_HYBRID_INTAKE_006",
             "Hybrid PDF decoded page content exceeds safety limits.",
         )
-    return remaining
+    return remaining, decoded
 
 
-def _validate_bounded_form_xobjects(resources: Any, remaining: int) -> None:
+def _validate_bounded_resources(
+    resources: Any,
+    remaining: int,
+) -> tuple[int, dict[tuple[int, str], tuple[tuple[int, int] | int, bytes, Any | None]]]:
     from pypdf.generic import DictionaryObject, IndirectObject, NameObject, StreamObject
 
     pending: list[tuple[Any, int]] = [(resources, 0)]
     seen_forms: set[tuple[int, int] | int] = set()
+    seen_resources: set[int] = set()
+    seen_tounicode: set[tuple[int, int] | int] = set()
     form_count = 0
     resource_entry_count = 0
+    font_entry_count = 0
+    form_lookup: dict[tuple[int, str], tuple[tuple[int, int] | int, bytes, Any | None]] = {}
     while pending:
         current_resources, depth = pending.pop()
         if isinstance(current_resources, IndirectObject):
@@ -333,6 +351,55 @@ def _validate_bounded_form_xobjects(resources: Any, remaining: int) -> None:
                 "PA_HYBRID_INTAKE_006",
                 "Hybrid PDF Form XObject resources are invalid.",
             )
+        resources_identity = id(current_resources)
+        if resources_identity in seen_resources:
+            continue
+        seen_resources.add(resources_identity)
+
+        fonts = current_resources.get(NameObject("/Font"))
+        if isinstance(fonts, IndirectObject):
+            fonts = fonts.get_object()
+        if fonts is not None:
+            if not isinstance(fonts, DictionaryObject):
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006", "Hybrid PDF Font resources are invalid."
+                )
+            for font_candidate in fonts.values():
+                font_entry_count += 1
+                if font_entry_count > _MAX_FONT_RESOURCE_ENTRIES:
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006",
+                        "Hybrid PDF Font resource work exceeds safety limits.",
+                    )
+                font = (
+                    font_candidate.get_object()
+                    if isinstance(font_candidate, IndirectObject)
+                    else font_candidate
+                )
+                if not isinstance(font, DictionaryObject):
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006", "Hybrid PDF Font resource is invalid."
+                    )
+                to_unicode = font.get(NameObject("/ToUnicode"))
+                if to_unicode is None:
+                    continue
+                if isinstance(to_unicode, IndirectObject):
+                    unicode_identity: tuple[int, int] | int = (
+                        to_unicode.idnum,
+                        to_unicode.generation,
+                    )
+                    unicode_stream = to_unicode.get_object()
+                else:
+                    unicode_identity = id(to_unicode)
+                    unicode_stream = to_unicode
+                if unicode_identity in seen_tounicode:
+                    continue
+                seen_tounicode.add(unicode_identity)
+                remaining, _decoded_unicode = _charge_bounded_content_stream(
+                    unicode_stream,
+                    remaining,
+                )
+
         xobjects = current_resources.get(NameObject("/XObject"))
         if isinstance(xobjects, IndirectObject):
             xobjects = xobjects.get_object()
@@ -343,7 +410,7 @@ def _validate_bounded_form_xobjects(resources: Any, remaining: int) -> None:
                 "PA_HYBRID_INTAKE_006",
                 "Hybrid PDF XObject resources are invalid.",
             )
-        for candidate in xobjects.values():
+        for name, candidate in xobjects.items():
             resource_entry_count += 1
             if resource_entry_count > _MAX_XOBJECT_RESOURCE_ENTRIES:
                 raise _hybrid_error(
@@ -356,12 +423,23 @@ def _validate_bounded_form_xobjects(resources: Any, remaining: int) -> None:
             else:
                 identity = id(candidate)
                 form = candidate
-            if (
-                not isinstance(form, StreamObject)
-                or str(form.get(NameObject("/Subtype"))) != "/Form"
-            ):
+            if not isinstance(form, StreamObject):
+                raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF XObject is invalid.")
+            subtype = str(form.get(NameObject("/Subtype")))
+            if subtype == "/Image":
                 continue
+            if subtype != "/Form":
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006",
+                    "Hybrid PDF XObject subtype cannot be sampled safely.",
+                )
             if identity in seen_forms:
+                existing = next(
+                    (value for value in form_lookup.values() if value[0] == identity),
+                    None,
+                )
+                if existing is not None:
+                    form_lookup[(resources_identity, str(name))] = existing
                 continue
             seen_forms.add(identity)
             form_count += 1
@@ -370,13 +448,71 @@ def _validate_bounded_form_xobjects(resources: Any, remaining: int) -> None:
                     "PA_HYBRID_INTAKE_006",
                     "Hybrid PDF Form XObject graph exceeds safety limits.",
                 )
-            remaining = _charge_bounded_content_stream(form, remaining)
+            remaining, decoded_form = _charge_bounded_content_stream(form, remaining)
             nested_resources = form.get(NameObject("/Resources"))
+            form_lookup[(resources_identity, str(name))] = (
+                identity,
+                decoded_form,
+                nested_resources,
+            )
             if nested_resources is not None:
                 pending.append((nested_resources, depth + 1))
+    return remaining, form_lookup
 
 
-def _bounded_flate_decoded_size(data: bytes, remaining: int) -> int:
+_FORM_DO_OPERATOR = re.compile(
+    rb"(?<!\S)(/[^\x00\x09\x0a\x0c\x0d\x20()<>{}\[\]/%]+)"
+    rb"[\x00\x09\x0a\x0c\x0d\x20]+Do\b"
+)
+
+
+def _validate_form_do_work(
+    content_streams: list[bytes],
+    resources: Any,
+    form_lookup: dict[tuple[int, str], tuple[tuple[int, int] | int, bytes, Any | None]],
+) -> None:
+    from pypdf.generic import IndirectObject
+
+    if isinstance(resources, IndirectObject):
+        resources = resources.get_object()
+    invocation_count = 0
+
+    def visit(
+        streams: list[bytes],
+        current_resources: Any,
+        depth: int,
+        stack: set[tuple[int, int] | int],
+    ) -> None:
+        nonlocal invocation_count
+        resources_identity = id(current_resources)
+        for content in streams:
+            for match in _FORM_DO_OPERATOR.finditer(content):
+                form = form_lookup.get((resources_identity, match.group(1).decode("latin-1")))
+                if form is None:
+                    continue
+                identity, form_content, nested_resources = form
+                invocation_count += 1
+                if (
+                    invocation_count > _MAX_FORM_DO_INVOCATIONS
+                    or depth + 1 > _MAX_FORM_XOBJECT_DEPTH
+                ):
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006",
+                        "Hybrid PDF Form XObject invocation work exceeds safety limits.",
+                    )
+                if identity in stack or nested_resources is None:
+                    continue
+                resolved_nested = (
+                    nested_resources.get_object()
+                    if isinstance(nested_resources, IndirectObject)
+                    else nested_resources
+                )
+                visit([form_content], resolved_nested, depth + 1, stack | {identity})
+
+    visit(content_streams, resources, 0, set())
+
+
+def _bounded_flate_decoded_data(data: bytes, remaining: int) -> bytes:
     try:
         decompressor = zlib.decompressobj()
         decoded = decompressor.decompress(data, remaining + 1)
@@ -385,7 +521,7 @@ def _bounded_flate_decoded_size(data: bytes, remaining: int) -> int:
                 "PA_HYBRID_INTAKE_006",
                 "Hybrid PDF decoded page content exceeds safety limits.",
             )
-        return len(decoded)
+        return decoded
     except ProofAgentError:
         raise
     except zlib.error as exc:

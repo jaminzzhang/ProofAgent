@@ -124,7 +124,7 @@ def _write_compressed_content_pdf(path: Path, content_bytes: bytes) -> Path:
     return path
 
 
-def _write_nested_form_pdf(path: Path, form_content: bytes) -> Path:
+def _write_nested_form_pdf(path: Path, form_content: bytes, *, page_do_count: int = 1) -> Path:
     pypdf, generic = _modules()
     writer = pypdf.PdfWriter()
     page = writer.add_blank_page(width=612, height=792)
@@ -176,12 +176,66 @@ def _write_nested_form_pdf(path: Path, form_content: bytes) -> Path:
     outer_ref = writer._add_object(outer)
 
     page_content = generic.DecodedStreamObject()
-    page_content.set_data(b"/Outer Do")
+    page_content.set_data(b"/Outer Do\n" * page_do_count)
     page[generic.NameObject("/Contents")] = writer._add_object(page_content)
     page[generic.NameObject("/Resources")] = generic.DictionaryObject(
         {
             generic.NameObject("/XObject"): generic.DictionaryObject(
                 {generic.NameObject("/Outer"): outer_ref}
+            )
+        }
+    )
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def _write_unknown_xobject_pdf(path: Path, subtype: str = "/PS") -> Path:
+    pypdf, generic = _modules()
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    unknown_decoded = generic.DecodedStreamObject()
+    unknown_decoded.set_data(b"compressed provider-specific XObject")
+    unknown = unknown_decoded.flate_encode()
+    unknown.update(
+        {
+            generic.NameObject("/Type"): generic.NameObject("/XObject"),
+            generic.NameObject("/Subtype"): generic.NameObject(subtype),
+        }
+    )
+    page_content = generic.DecodedStreamObject()
+    page_content.set_data(b"/Unknown Do")
+    page[generic.NameObject("/Contents")] = writer._add_object(page_content)
+    page[generic.NameObject("/Resources")] = generic.DictionaryObject(
+        {
+            generic.NameObject("/XObject"): generic.DictionaryObject(
+                {generic.NameObject("/Unknown"): writer._add_object(unknown)}
+            )
+        }
+    )
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def _write_pdf_with_compressed_tounicode(path: Path, cmap_bytes: bytes) -> Path:
+    pypdf, generic = _modules()
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    cmap_decoded = generic.DecodedStreamObject()
+    cmap_decoded.set_data(cmap_bytes)
+    font = generic.DictionaryObject(
+        {
+            generic.NameObject("/Type"): generic.NameObject("/Font"),
+            generic.NameObject("/Subtype"): generic.NameObject("/Type1"),
+            generic.NameObject("/BaseFont"): generic.NameObject("/Helvetica"),
+            generic.NameObject("/ToUnicode"): writer._add_object(cmap_decoded.flate_encode()),
+        }
+    )
+    page[generic.NameObject("/Resources")] = generic.DictionaryObject(
+        {
+            generic.NameObject("/Font"): generic.DictionaryObject(
+                {generic.NameObject("/F1"): writer._add_object(font)}
             )
         }
     )
@@ -471,13 +525,19 @@ def test_preflight_accepts_pdf_comments_at_incremental_object_boundaries(
 
 
 def test_native_page_profile_stops_at_bounded_text_sample() -> None:
+    _, generic = _modules()
     callback_returned = False
+    content_stream = generic.DecodedStreamObject()
+    content_stream.set_data(b"q")
 
     class LargeTextPage:
         mediabox = SimpleNamespace(width=612, height=792)
 
         def raw_get(self, _key: object) -> object:
-            raise KeyError
+            return content_stream
+
+        def get_inherited(self, *, key: str, default: object) -> object:
+            return default
 
         def extract_text(self, *, visitor_text: object) -> str:
             nonlocal callback_returned
@@ -562,6 +622,76 @@ def test_preflight_rejects_nested_form_bomb_before_real_pypdf_text_extraction(
         preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
     assert exc.value.code == "PA_HYBRID_INTAKE_006"
     assert extraction_called is False
+
+
+def test_preflight_rejects_non_image_non_form_xobject(tmp_path: Path) -> None:
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(
+            _write_unknown_xobject_pdf(tmp_path / "postscript-xobject.pdf"),
+            limits=HybridIntakeLimits(),
+        )
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+
+
+def test_preflight_accepts_bounded_compressed_tounicode_on_contentless_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_module = import_module("pypdf._page")
+    original_extract_text = page_module.PageObject.extract_text
+    extraction_called = False
+
+    def track_extract_text(self: object, *args: object, **kwargs: object) -> str:
+        nonlocal extraction_called
+        extraction_called = True
+        return original_extract_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(page_module.PageObject, "extract_text", track_extract_text)
+    result = preflight_hybrid_pdf(
+        _write_pdf_with_compressed_tounicode(
+            tmp_path / "bounded-tounicode.pdf",
+            b"/CIDInit /ProcSet findresource begin\nbegincmap\nendcmap\nend",
+        ),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+    assert extraction_called is False
+
+
+def test_preflight_rejects_tounicode_bomb_before_text_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_module = import_module("pypdf._page")
+    original_extract_text = page_module.PageObject.extract_text
+    extraction_called = False
+
+    def track_extract_text(self: object, *args: object, **kwargs: object) -> str:
+        nonlocal extraction_called
+        extraction_called = True
+        return original_extract_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(page_module.PageObject, "extract_text", track_extract_text)
+    path = _write_pdf_with_compressed_tounicode(
+        tmp_path / "tounicode-bomb.pdf",
+        b"A" * (2 * 1024 * 1024 + 1),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert extraction_called is False
+
+
+def test_preflight_rejects_excessive_repeated_form_do_work(tmp_path: Path) -> None:
+    path = _write_nested_form_pdf(
+        tmp_path / "repeated-form.pdf",
+        b"% bounded form\n",
+        page_do_count=300,
+    )
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
 
 
 def test_preflight_rejects_unreferenced_embedded_stream_in_incremental_xref(
