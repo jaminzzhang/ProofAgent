@@ -192,8 +192,8 @@ def test_hybrid_worker_factory_requires_exact_composed_scheduler_property() -> N
     factory = HybridKnowledgeWorkerFactory(scheduler=scheduler)
 
     class MissingSchedulerPipeline:
-        def build(self, request):
-            raise AssertionError(request)
+        def build(self, request, *, cancellation):
+            raise AssertionError((request, cancellation))
 
     with pytest.raises(ValueError, match="composed scheduler"):
         factory.create(

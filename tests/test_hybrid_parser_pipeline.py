@@ -23,6 +23,7 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
 )
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     ImmediateKnowledgeModelWorkScheduler,
+    KnowledgeModelCancellation,
 )
 from proof_agent.capabilities.knowledge.hybrid.pipeline import (
     MergeSelection,
@@ -166,7 +167,10 @@ def test_private_pipeline_builds_passing_docling_artifact_through_shared_schedul
 
     pipeline = PrivateHybridParserPipeline(docling=Docling(), paddle=Paddle())  # type: ignore[arg-type]
 
-    result = pipeline.build(hybrid_build_request())
+    result = pipeline.build(
+        hybrid_build_request(),
+        cancellation=KnowledgeModelCancellation(),
+    )
 
     assert result.artifact.document_id == "doc-simple"
     assert result.artifact.build_identity.parser_adapter == "docling"
@@ -204,7 +208,10 @@ def test_private_pipeline_never_auto_replaces_an_escalated_whole_page() -> None:
         paddle=Client(paddle),  # type: ignore[arg-type]
     )
 
-    result = pipeline.build(hybrid_build_request())
+    result = pipeline.build(
+        hybrid_build_request(),
+        cancellation=KnowledgeModelCancellation(),
+    )
 
     assert result.artifact.pages[0].blocks == ()
     assert any(signal.requires_review for signal in result.artifact.quality_signals)

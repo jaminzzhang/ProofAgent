@@ -97,9 +97,15 @@ class PrivateHybridParserPipeline:
             cancellation=cancellation,
         )
 
-    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+    def build(
+        self,
+        request: HybridArtifactBuildRequest,
+        *,
+        cancellation: KnowledgeModelCancellation,
+    ) -> HybridParserBuildOutput:
         """Build one canonical artifact through scheduled Docling/Paddle calls."""
 
+        cancellation.raise_if_cancelled()
         parser_request = ParserServiceRequest(
             original_ref=request.original_ref,
             page_numbers=request.page_numbers,
@@ -107,13 +113,21 @@ class PrivateHybridParserPipeline:
             model_digests=request.model_digests,
             configuration_sha256=request.configuration_sha256,
         )
-        docling_response = self.parse_document(parser_request, timeout_seconds=120.0)
+        cancellation.raise_if_cancelled()
+        docling_response = self.parse_document(
+            parser_request,
+            timeout_seconds=120.0,
+            cancellation=cancellation,
+        )
+        cancellation.raise_if_cancelled()
         docling_build = _service_build_identity(
             request,
             adapter="docling",
             vendor_sha256=docling_response.attestation.vendor_json_sha256,
         )
+        cancellation.raise_if_cancelled()
         docling_artifact = canonicalize_docling(docling_response, build=docling_build)
+        cancellation.raise_if_cancelled()
         decisions = assess_document_quality(docling_artifact)
         pages = {page.page_number: page for page in docling_artifact.pages}
         warnings = list(docling_artifact.warnings)
@@ -125,6 +139,7 @@ class PrivateHybridParserPipeline:
             )
         ]
         for decision in decisions:
+            cancellation.raise_if_cancelled()
             if decision.outcome is QualityOutcome.PASS:
                 continue
             if decision.outcome is QualityOutcome.REVIEW_REQUIRED:
@@ -140,13 +155,20 @@ class PrivateHybridParserPipeline:
             paddle_request = parser_request.model_copy(
                 update={"page_numbers": (decision.page_number,)}
             )
-            paddle_response = self.parse_ocr_page(paddle_request, timeout_seconds=120.0)
+            cancellation.raise_if_cancelled()
+            paddle_response = self.parse_ocr_page(
+                paddle_request,
+                timeout_seconds=120.0,
+                cancellation=cancellation,
+            )
+            cancellation.raise_if_cancelled()
             paddle_build = _service_build_identity(
                 request,
                 adapter="paddle",
                 vendor_sha256=paddle_response.attestation.vendor_json_sha256,
                 page_number=decision.page_number,
             )
+            cancellation.raise_if_cancelled()
             paddle_page = canonicalize_paddle_page(paddle_response, build=paddle_build)
             vendor_artifacts.append(
                 HybridVendorArtifact(
@@ -181,8 +203,10 @@ class PrivateHybridParserPipeline:
                         requires_review=True,
                     )
                 )
+        cancellation.raise_if_cancelled()
         final_pages = tuple(pages[number] for number in request.page_numbers)
         final_build = docling_build
+        cancellation.raise_if_cancelled()
         artifact = StructuredKnowledgeDocumentArtifact(
             schema_version="structured-knowledge.v1",
             document_id=docling_artifact.document_id,
@@ -196,6 +220,7 @@ class PrivateHybridParserPipeline:
         metadata_id = hashlib.sha256(
             f"{request.source_id}:{request.revision_id}:{final_build.build_id}".encode()
         ).hexdigest()
+        cancellation.raise_if_cancelled()
         return HybridParserBuildOutput(
             artifact=artifact,
             vendor_artifacts=tuple(vendor_artifacts),

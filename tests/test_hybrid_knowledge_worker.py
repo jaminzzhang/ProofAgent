@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+from threading import Event, enumerate as enumerate_threads
+from time import sleep
 from typing import Literal
 
 import pytest
@@ -14,6 +17,18 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridKnowledgeJobClaim,
     HybridKnowledgeJobRequest,
 )
+from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    KnowledgeModelCancellation,
+    KnowledgeModelWorkCancelled,
+    PrivateHostPolicy,
+    PrivateKnowledgeModelWorkSchedulerClient,
+    SchedulerLease,
+)
+from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
+    PrivateDoclingClient,
+    PrivatePaddleClient,
+)
+from proof_agent.capabilities.knowledge.hybrid.pipeline import PrivateHybridParserPipeline
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
     HybridArtifactBuildResult,
@@ -237,7 +252,14 @@ class FakePipeline:
         self.failure = failure
         self.calls = 0
 
-    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+    def build(
+        self,
+        request: HybridArtifactBuildRequest,
+        *,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> HybridParserBuildOutput:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         self.calls += 1
         if self.failure is not None:
             raise self.failure
@@ -260,8 +282,13 @@ class FakePipeline:
 
 
 class ReviewSignalPipeline(FakePipeline):
-    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
-        result = super().build(request)
+    def build(
+        self,
+        request: HybridArtifactBuildRequest,
+        *,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> HybridParserBuildOutput:
+        result = super().build(request, cancellation=cancellation)
         artifact = result.artifact.model_copy(
             update={
                 "quality_signals": (
@@ -278,15 +305,26 @@ class ReviewSignalPipeline(FakePipeline):
 
 
 class TimeoutOncePipeline(FakePipeline):
-    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+    def build(
+        self,
+        request: HybridArtifactBuildRequest,
+        *,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> HybridParserBuildOutput:
         if self.calls == 0:
             self.calls += 1
             raise TransientKnowledgeServiceError("timeout")
-        return super().build(request)
+        return super().build(request, cancellation=cancellation)
 
 
 class AlwaysTimeoutPipeline(FakePipeline):
-    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+    def build(
+        self,
+        request: HybridArtifactBuildRequest,
+        *,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> HybridParserBuildOutput:
+        del cancellation
         self.calls += 1
         raise TransientKnowledgeServiceError("timeout")
 
@@ -295,7 +333,13 @@ class PrebuiltPipeline:
     def __init__(self, output: HybridParserBuildOutput) -> None:
         self.output = output
 
-    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+    def build(
+        self,
+        request: HybridArtifactBuildRequest,
+        *,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> HybridParserBuildOutput:
+        del request, cancellation
         return self.output
 
 
@@ -304,8 +348,13 @@ class LeaseExpiringPipeline(FakePipeline):
         super().__init__()
         self.clock = clock
 
-    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
-        result = super().build(request)
+    def build(
+        self,
+        request: HybridArtifactBuildRequest,
+        *,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> HybridParserBuildOutput:
+        result = super().build(request, cancellation=cancellation)
         self.clock.advance(seconds=61)
         return result
 
@@ -628,9 +677,7 @@ def test_hybrid_parser_resource_envelope_rejects_one_over_each_boundary(
         total_artifact_count=5,
         total_artifact_bytes=5,
     )
-    oversized = envelope.model_copy(
-        update={field: getattr(hybrid_worker_module, limit_name) + 1}
-    )
+    oversized = envelope.model_copy(update={field: getattr(hybrid_worker_module, limit_name) + 1})
 
     with pytest.raises(ValueError, match="exceed"):
         hybrid_worker_module._require_parser_output_within_limits(oversized)
@@ -833,6 +880,193 @@ def test_parser_cannot_commit_after_lease_expires_during_call(tmp_path) -> None:
     assert repository.get_build_result("job_1") is None
 
 
+@pytest.mark.parametrize("blocked_stage", ["queue", "service"])
+@pytest.mark.parametrize("renew_failure", ["error", "false"])
+def test_claim_heartbeat_cancels_blocked_private_build_and_allows_new_owner(
+    tmp_path,
+    blocked_stage: Literal["queue", "service"],
+    renew_failure: Literal["error", "false"],
+) -> None:
+    original = b"%PDF-1.7\n"
+    request = _build_request(original)
+    stage_started = Event()
+    renewal_during_stage = Event()
+    lease_cancelled = Event()
+    ignored_service_waiting = Event()
+    release_ignored_service = Event()
+    ignored_service_stopped = Event()
+
+    class OwnershipLosingLifecycle(FakeLifecycle):
+        def __init__(self) -> None:
+            super().__init__(request)
+            self.renew_calls = 0
+            self.ownership_lost = False
+            self.reclaimed = False
+
+        def claim_next(self, *, worker_id: str, lease_seconds: int):
+            assert worker_id == "worker_1"
+            assert lease_seconds == 1
+            if self.ownership_lost and not self.reclaimed:
+                self.reclaimed = True
+                self.claimed = True
+                self.ownership_lost = False
+                self.claim = self.claim.model_copy(
+                    update={
+                        "fencing_token": self.claim.fencing_token + 1,
+                        "claimed_at": NOW + timedelta(seconds=2),
+                        "lease_expires_at": NOW + timedelta(seconds=3),
+                    }
+                )
+                return self.claim
+            if self.claimed:
+                return None
+            self.claimed = True
+            return self.claim
+
+        def renew_claim(self, claim, *, lease_seconds: int):
+            assert lease_seconds == 1
+            self.renew_calls += 1
+            if stage_started.is_set():
+                renewal_during_stage.set()
+            if self.renew_calls == 3:
+                self.claimed = False
+                self.ownership_lost = True
+                if renew_failure == "false":
+                    return False
+                raise HybridKnowledgeLeaseError("fencing ownership lost")
+            return claim.model_copy(
+                update={"lease_expires_at": claim.lease_expires_at + timedelta(seconds=1)}
+            )
+
+    class SchedulerTransport:
+        def __init__(self) -> None:
+            self.completed = 0
+
+        def acquire(self, *, cancellation, **kwargs) -> SchedulerLease:
+            del kwargs
+            if blocked_stage == "queue":
+                stage_started.set()
+                while not cancellation.is_cancelled():
+                    sleep(0.002)
+            return SchedulerLease(
+                work_id="heartbeat-work",
+                lease_token="heartbeat-lease",
+                queue_time_ms=0.0,
+            )
+
+        def complete(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self.completed += 1
+
+        def cancel(self, *args, **kwargs) -> None:
+            del args, kwargs
+            lease_cancelled.set()
+
+        def close(self) -> None:
+            return None
+
+    class ParserTransport:
+        def __init__(self, *, paddle: bool = False) -> None:
+            self.paddle = paddle
+            self.calls = 0
+
+        def parse_scheduled(
+            self,
+            request,
+            *,
+            cancellation: KnowledgeModelCancellation,
+            **kwargs,
+        ):
+            del request, kwargs
+            self.calls += 1
+            if self.paddle:
+                raise AssertionError("ownership loss must prevent a later Paddle call")
+            if blocked_stage == "service":
+                stage_started.set()
+                while not cancellation.is_cancelled():
+                    sleep(0.002)
+                ignored_service_waiting.set()
+                assert release_ignored_service.wait(timeout=2)
+                ignored_service_stopped.set()
+            raise KnowledgeModelWorkCancelled("cancelled after ownership loss")
+
+        def parse(self, request, **kwargs):
+            raise AssertionError((request, kwargs))
+
+        def close(self) -> None:
+            return None
+
+    lifecycle = OwnershipLosingLifecycle()
+    scheduler_transport = SchedulerTransport()
+    scheduler = PrivateKnowledgeModelWorkSchedulerClient(
+        endpoint="https://scheduler.internal",
+        namespace="insurance-knowledge",
+        allowed_hosts=PrivateHostPolicy.from_entries(("scheduler.internal",)),
+        transport=scheduler_transport,
+    )
+    docling_transport = ParserTransport()
+    paddle_transport = ParserTransport(paddle=True)
+    pipeline = PrivateHybridParserPipeline(
+        docling=PrivateDoclingClient(transport=docling_transport, scheduler=scheduler),
+        paddle=PrivatePaddleClient(transport=paddle_transport, scheduler=scheduler),
+    )
+    artifact_store = RecordingArtifactStore()
+    worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=artifact_store,
+        pipeline=pipeline,
+        worker_id="worker_1",
+        lease_seconds=1,
+        heartbeat_interval_seconds=0.02,
+        scheduler=scheduler,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(worker.run_once)
+        assert stage_started.wait(timeout=1)
+        expected_failure = HybridKnowledgeLeaseError if renew_failure == "error" else ValueError
+        expected_message = "ownership lost" if renew_failure == "error" else "exact claim"
+        with pytest.raises(expected_failure, match=expected_message):
+            first.result(timeout=1)
+        if blocked_stage == "service":
+            assert ignored_service_waiting.wait(timeout=1)
+            assert not ignored_service_stopped.is_set()
+
+    assert renewal_during_stage.is_set()
+    assert lease_cancelled.wait(timeout=1)
+    assert scheduler_transport.completed == 0
+    assert paddle_transport.calls == 0
+    assert artifact_store.put_calls == []
+    assert lifecycle.committed is None
+    assert lifecycle.retry is None
+    assert lifecycle.review is None
+    assert lifecycle.integrity_failure is None
+    assert lifecycle.exhausted_failure is None
+
+    try:
+        successor = HybridKnowledgeWorker(
+            lifecycle=lifecycle,
+            original_store=MemoryOriginalStore(original),
+            artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "successor-artifacts"),
+            pipeline=FakePipeline(),
+            worker_id="worker_1",
+            lease_seconds=1,
+            heartbeat_interval_seconds=0.02,
+        )
+        succeeded = successor.run_once()
+
+        assert succeeded is not None and succeeded.state == "completed"
+        assert lifecycle.claim.fencing_token == 2
+    finally:
+        release_ignored_service.set()
+    if blocked_stage == "service":
+        assert ignored_service_stopped.wait(timeout=1)
+    assert not any(
+        thread.name.startswith("hybrid-claim-heartbeat-") for thread in enumerate_threads()
+    )
+
+
 @pytest.mark.parametrize("adapter", ["inmemory", "localstore"])
 def test_hybrid_lifecycle_adapters_reject_the_same_non_exact_result(
     tmp_path, adapter: Literal["inmemory", "localstore"]
@@ -936,9 +1170,7 @@ def test_exact_result_validator_rejects_build_and_artifact_ref_tampering(
             update={
                 "vendor_refs": (
                     vendor.model_copy(
-                        update={
-                            "ref": vendor.ref.model_copy(update={"media_type": "text/plain"})
-                        }
+                        update={"ref": vendor.ref.model_copy(update={"media_type": "text/plain"})}
                     ),
                 )
             }
@@ -1084,9 +1316,7 @@ def test_localstore_exhausted_transient_is_not_classified_as_integrity_failure(t
         store=store,
         original_store=LocalManagedOriginalStore(),
     )
-    selection = store.claim_next_knowledge_worker_task(
-        lease_seconds=60, providers={"hybrid_index"}
-    )
+    selection = store.claim_next_knowledge_worker_task(lease_seconds=60, providers={"hybrid_index"})
     assert selection.task is not None and selection.task.ingestion_job is not None
     claim = lifecycle.claim_from_job(selection.task.ingestion_job)
     assert claim is not None

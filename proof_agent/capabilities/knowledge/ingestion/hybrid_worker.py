@@ -8,8 +8,9 @@ import os
 from datetime import UTC, datetime
 from dataclasses import dataclass
 from pathlib import Path
-from threading import RLock
-from typing import TYPE_CHECKING, Annotated, Literal, Protocol, Self
+from threading import Event, RLock, Thread
+from types import TracebackType
+from typing import TYPE_CHECKING, Annotated, Callable, Literal, Protocol, Self
 
 from pydantic import (
     ConfigDict,
@@ -29,6 +30,7 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     KnowledgeArtifactStore,
 )
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    KnowledgeModelCancellation,
     KnowledgeModelWorkCancelled,
     KnowledgeModelWorkScheduler,
 )
@@ -314,7 +316,103 @@ class ReviewRequiredError(RuntimeError):
 
 
 class HybridParserPipeline(Protocol):
-    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput: ...
+    def build(
+        self,
+        request: HybridArtifactBuildRequest,
+        *,
+        cancellation: KnowledgeModelCancellation,
+    ) -> HybridParserBuildOutput: ...
+
+
+class _HybridClaimOwnershipLost(RuntimeError):
+    def __init__(self, failure: BaseException) -> None:
+        super().__init__("Hybrid claim ownership was lost during artifact build")
+        self.failure = failure
+
+
+class _HybridClaimHeartbeat:
+    """Renew one exact fence and cancel its build immediately on ownership loss."""
+
+    def __init__(
+        self,
+        *,
+        lifecycle: HybridKnowledgeArtifactLifecycle,
+        claim: HybridKnowledgeJobClaim,
+        lease_seconds: int,
+        interval_seconds: float,
+        cancellation: KnowledgeModelCancellation,
+    ) -> None:
+        self._lifecycle = lifecycle
+        self._claim = claim
+        self._lease_seconds = lease_seconds
+        self._interval_seconds = interval_seconds
+        self._cancellation = cancellation
+        self._stop = Event()
+        self._lock = RLock()
+        self._failure: BaseException | None = None
+        self._thread = Thread(
+            target=self._run,
+            name=f"hybrid-claim-heartbeat-{claim.job_id}",
+        )
+
+    def __enter__(self) -> "_HybridClaimHeartbeat":
+        self._thread.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
+        del exc_type, exc, traceback
+        self._stop.set()
+        self._thread.join()
+        self.check()
+        return False
+
+    @property
+    def claim(self) -> HybridKnowledgeJobClaim:
+        with self._lock:
+            return self._claim
+
+    def check(self) -> None:
+        with self._lock:
+            failure = self._failure
+        if failure is not None:
+            raise _HybridClaimOwnershipLost(failure) from failure
+        self._cancellation.raise_if_cancelled()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_seconds):
+            try:
+                renewed = self._lifecycle.renew_claim(
+                    self.claim,
+                    lease_seconds=self._lease_seconds,
+                )
+                renewed_claim = _require_same_claim(self.claim, renewed)
+            except BaseException as failure:
+                with self._lock:
+                    self._failure = failure
+                self._cancellation.cancel()
+                return
+            with self._lock:
+                self._claim = renewed_claim
+
+
+def _require_same_claim(
+    current: HybridKnowledgeJobClaim,
+    renewed: object,
+) -> HybridKnowledgeJobClaim:
+    if not isinstance(renewed, HybridKnowledgeJobClaim):
+        raise ValueError("Hybrid claim renewal did not return an exact claim")
+    if (
+        renewed.job_id != current.job_id
+        or renewed.worker_id != current.worker_id
+        or renewed.fencing_token != current.fencing_token
+    ):
+        raise ValueError("Hybrid claim renewal changed its exact fence")
+    return renewed
 
 
 @dataclass(frozen=True)
@@ -332,6 +430,7 @@ class HybridKnowledgeWorkerFactory:
         pipeline: HybridParserPipeline,
         worker_id: str,
         lease_seconds: int = 60,
+        heartbeat_interval_seconds: float | None = None,
     ) -> "HybridKnowledgeWorker":
         pipeline_scheduler = getattr(pipeline, "scheduler", None)
         if pipeline_scheduler is not self.scheduler:
@@ -343,6 +442,7 @@ class HybridKnowledgeWorkerFactory:
             pipeline=pipeline,
             worker_id=worker_id,
             lease_seconds=lease_seconds,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
             scheduler=self.scheduler,
         )
 
@@ -359,12 +459,22 @@ class HybridKnowledgeWorker:
         pipeline: HybridParserPipeline,
         worker_id: str,
         lease_seconds: int = 60,
+        heartbeat_interval_seconds: float | None = None,
         scheduler: KnowledgeModelWorkScheduler | None = None,
     ) -> None:
         if not worker_id.strip():
             raise ValueError("worker_id must be non-empty")
         if type(lease_seconds) is not int or lease_seconds <= 0:
             raise ValueError("lease_seconds must be a positive integer")
+        resolved_heartbeat_interval = (
+            lease_seconds / 3 if heartbeat_interval_seconds is None else heartbeat_interval_seconds
+        )
+        if (
+            isinstance(resolved_heartbeat_interval, bool)
+            or not isinstance(resolved_heartbeat_interval, (int, float))
+            or not 0 < resolved_heartbeat_interval < lease_seconds / 2
+        ):
+            raise ValueError("heartbeat interval must be positive and below half the claim lease")
         self._lifecycle = lifecycle
         self._original_store = original_store
         self._artifact_store = artifact_store
@@ -375,6 +485,7 @@ class HybridKnowledgeWorker:
         self._scheduler = scheduler
         self._worker_id = worker_id.strip()
         self._lease_seconds = lease_seconds
+        self._heartbeat_interval_seconds = float(resolved_heartbeat_interval)
 
     @property
     def scheduler(self) -> KnowledgeModelWorkScheduler | None:
@@ -396,14 +507,43 @@ class HybridKnowledgeWorker:
         try:
             request = self._lifecycle.load_build_request(claim)
             self._validate_claim_binding(claim, request)
-            claim = self._lifecycle.renew_claim(claim, lease_seconds=self._lease_seconds)
-            original = self._original_store.get_exact(request.original_ref)
-            _verify_exact_bytes(request.original_ref, original)
-            parsed = self._pipeline.build(request)
-            claim = self._lifecycle.renew_claim(claim, lease_seconds=self._lease_seconds)
-            self._validate_parser_output(request, parsed)
-            result = self._persist_artifacts(request, original=original, parsed=parsed)
-            validate_hybrid_artifact_build_result(request, result)
+            cancellation = KnowledgeModelCancellation()
+            try:
+                renewed = self._lifecycle.renew_claim(
+                    claim,
+                    lease_seconds=self._lease_seconds,
+                )
+                claim = _require_same_claim(claim, renewed)
+            except BaseException as failure:
+                cancellation.cancel()
+                raise _HybridClaimOwnershipLost(failure) from failure
+            with _HybridClaimHeartbeat(
+                lifecycle=self._lifecycle,
+                claim=claim,
+                lease_seconds=self._lease_seconds,
+                interval_seconds=self._heartbeat_interval_seconds,
+                cancellation=cancellation,
+            ) as ownership:
+                ownership.check()
+                original = self._original_store.get_exact(request.original_ref)
+                ownership.check()
+                _verify_exact_bytes(request.original_ref, original)
+                parsed = self._pipeline.build(request, cancellation=cancellation)
+                ownership.check()
+                self._validate_parser_output(request, parsed)
+                ownership.check()
+                result = self._persist_artifacts(
+                    request,
+                    original=original,
+                    parsed=parsed,
+                    assert_owned=ownership.check,
+                )
+                ownership.check()
+                validate_hybrid_artifact_build_result(request, result)
+                ownership.check()
+                claim = ownership.claim
+        except _HybridClaimOwnershipLost as ownership_lost:
+            raise ownership_lost.failure
         except (
             TransientKnowledgeServiceError,
             KnowledgeModelWorkCancelled,
@@ -555,7 +695,9 @@ class HybridKnowledgeWorker:
         *,
         original: bytes,
         parsed: HybridParserBuildOutput,
+        assert_owned: Callable[[], None],
     ) -> HybridArtifactBuildResult:
+        assert_owned()
         artifact = parsed.artifact
         _validate_parser_output_resource_limits(parsed, original_size=len(original))
         key_root = (
@@ -566,41 +708,62 @@ class HybridKnowledgeWorker:
             key=f"{key_root}/original.pdf",
             content=original,
             media_type="application/pdf",
+            assert_owned=assert_owned,
         )
-        vendor_refs = tuple(
-            HybridVendorArtifactRef(
-                adapter=vendor.adapter,
-                ref=self._put_verified(
-                    key=f"{key_root}/vendor-{index:04d}.json",
-                    content=_validated_canonical_vendor_json(vendor.content),
-                    media_type=vendor.media_type,
-                ),
+        vendor_refs_list: list[HybridVendorArtifactRef] = []
+        for index, vendor in enumerate(parsed.vendor_artifacts, 1):
+            assert_owned()
+            vendor_content = _validated_canonical_vendor_json(vendor.content)
+            assert_owned()
+            vendor_refs_list.append(
+                HybridVendorArtifactRef(
+                    adapter=vendor.adapter,
+                    ref=self._put_verified(
+                        key=f"{key_root}/vendor-{index:04d}.json",
+                        content=vendor_content,
+                        media_type=vendor.media_type,
+                        assert_owned=assert_owned,
+                    ),
+                )
             )
-            for index, vendor in enumerate(parsed.vendor_artifacts, 1)
-        )
+        vendor_refs = tuple(vendor_refs_list)
+        assert_owned()
         canonical = _canonical_json(artifact.model_dump(mode="json", by_alias=True))
+        assert_owned()
         canonical_ref = self._put_verified(
             key=f"{key_root}/canonical.json",
             content=canonical,
             media_type="application/json",
+            assert_owned=assert_owned,
         )
+        assert_owned()
+        preview = _preview_markdown(artifact)
+        assert_owned()
         preview_ref = self._put_verified(
             key=f"{key_root}/preview.md",
-            content=_preview_markdown(artifact),
+            content=preview,
             media_type="text/markdown",
+            assert_owned=assert_owned,
         )
+        assert_owned()
+        build_identity = _canonical_json(artifact.build_identity.model_dump(mode="json"))
+        assert_owned()
         build_identity_ref = self._put_verified(
             key=f"{key_root}/build-identity.json",
-            content=_canonical_json(artifact.build_identity.model_dump(mode="json")),
+            content=build_identity,
             media_type="application/json",
+            assert_owned=assert_owned,
         )
+        assert_owned()
         insurance_metadata = _canonical_json(
             _insurance_metadata_artifact(request, parsed).model_dump(mode="json")
         )
+        assert_owned()
         insurance_metadata_ref = self._put_verified(
             key=f"{key_root}/insurance-metadata.json",
             content=insurance_metadata,
             media_type="application/json",
+            assert_owned=assert_owned,
         )
         return HybridArtifactBuildResult(
             job_id=request.job_id,
@@ -619,13 +782,23 @@ class HybridKnowledgeWorker:
             insurance_metadata_ref=insurance_metadata_ref,
         )
 
-    def _put_verified(self, *, key: str, content: bytes, media_type: str) -> ExactArtifactRef:
+    def _put_verified(
+        self,
+        *,
+        key: str,
+        content: bytes,
+        media_type: str,
+        assert_owned: Callable[[], None],
+    ) -> ExactArtifactRef:
+        assert_owned()
         ref = self._artifact_store.put_immutable(
             key=key,
             content=content,
             media_type=media_type,
         )
+        assert_owned()
         stored = self._artifact_store.get_exact(ref)
+        assert_owned()
         _verify_exact_bytes(ref, stored)
         if stored != content:
             raise ValueError("immutable artifact read-back bytes do not match finalized bytes")

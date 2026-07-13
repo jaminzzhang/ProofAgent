@@ -526,7 +526,10 @@ def _persist_completed_hybrid_metadata_authority(
     )
 
     class MetadataPipeline:
-        def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+        def build(
+            self, request: HybridArtifactBuildRequest, *, cancellation
+        ) -> HybridParserBuildOutput:
+            cancellation.raise_if_cancelled()
             build_identity = StructuredArtifactBuildIdentity(
                 build_id="build_server_managed",
                 source_sha256=request.original_ref.sha256,
@@ -3919,9 +3922,7 @@ def test_metadata_workbook_replay_repairs_missing_audit_exactly_once(
     workbook_bytes = _metadata_workbook_for_revision(document_id, revision_id)
     request_payload = {
         "filename": "metadata-workbook.xlsx",
-        "content_type": (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        "content_type": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         "content_base64": base64.b64encode(workbook_bytes).decode("ascii"),
         "document_id": document_id,
         "revision_id": revision_id,
