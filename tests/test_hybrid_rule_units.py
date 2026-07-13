@@ -6,8 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from proof_agent.capabilities.knowledge.hybrid.rule_units import (
+    RuleUnitProjectionLimits,
     InsuranceRuleUnitDraft,
     RuleUnitProjectionReviewRequired,
+    RuleUnitProjectionWorkCounter,
     project_rule_units,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import (
@@ -593,3 +595,196 @@ def test_materialized_revision_retains_inspectable_coherent_lineage() -> None:
 def test_projection_requires_explicit_source_identity() -> None:
     with pytest.raises(TypeError):
         project_rule_units(canonical_artifact(), document_defaults=defaults())  # type: ignore[call-arg]
+
+
+def test_table_between_two_headings_uses_nearest_preceding_heading() -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[1].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="heading-a",
+                    kind="heading",
+                    text="Section A",
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                    heading_level=1,
+                    heading_path=("Section A",),
+                ),
+                StructuredBlock(
+                    block_id="heading-b",
+                    kind="heading",
+                    text="Section B",
+                    bbox=bbox(40, 320, 572, 350),
+                    reading_order=1,
+                    heading_level=1,
+                    heading_path=("Section B",),
+                ),
+            )
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    units = project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+
+    assert {unit.heading_path for unit in units} == {("Section A",)}
+    assert all(unit.block_ids != ("heading-a",) for unit in units)
+    assert all(unit.block_ids != ("heading-b",) for unit in units)
+
+
+def test_overlapping_table_cell_spans_require_review() -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[1]
+    table = page.tables[0]
+    overlapping = table.cells[:2] + (
+        table.cells[2].model_copy(update={"column_span": 2}),
+        table.cells[3],
+    )
+    page = page.model_copy(update={"tables": (table.model_copy(update={"cells": overlapping}),)})
+    artifact = artifact.model_copy(update={"pages": (artifact.pages[0], page)})
+
+    with pytest.raises(RuleUnitProjectionReviewRequired, match="overlap"):
+        project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+
+
+def test_overlapping_row_spans_require_review_without_grid_expansion() -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[1]
+    table = page.tables[0]
+    cells = table.cells + (
+        StructuredTableCell(
+            row=2,
+            column=0,
+            text="overlap",
+            bbox=bbox(40, 170, 220, 210),
+        ),
+    )
+    cells = (*cells[:2], cells[2].model_copy(update={"row_span": 2}), *cells[3:])
+    page = page.model_copy(update={"tables": (table.model_copy(update={"cells": cells}),)})
+    artifact = artifact.model_copy(update={"pages": (artifact.pages[0], page)})
+
+    with pytest.raises(RuleUnitProjectionReviewRequired, match="overlap"):
+        project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+
+
+def test_dedicated_definition_section_is_attached_by_explicit_term_reference() -> None:
+    artifact = canonical_artifact()
+    definitions_page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="heading-definitions",
+                    kind="heading",
+                    text="Definitions",
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                    heading_level=1,
+                    heading_path=("Definitions",),
+                ),
+                artifact.pages[0]
+                .blocks[1]
+                .model_copy(update={"heading_path": ("Definitions",), "reading_order": 1}),
+                StructuredBlock(
+                    block_id="heading-eligibility-after-definitions",
+                    kind="heading",
+                    text="Eligibility",
+                    bbox=bbox(40, 120, 572, 150),
+                    reading_order=2,
+                    heading_level=1,
+                    heading_path=("Eligibility",),
+                ),
+                artifact.pages[0]
+                .blocks[2]
+                .model_copy(
+                    update={
+                        "heading_path": ("Eligibility",),
+                        "reading_order": 3,
+                        "bbox": bbox(40, 160, 572, 190),
+                    }
+                ),
+            )
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (definitions_page,)})
+
+    clause = next(
+        unit
+        for unit in project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+        if unit.block_ids == ("clause-age",)
+    )
+
+    assert clause.definitions == ("Applicant means the person applying for cover.",)
+
+
+def test_ambiguous_duplicate_referenced_definitions_require_review() -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[0]
+    duplicate = page.blocks[1].model_copy(
+        update={
+            "block_id": "definition-applicant-duplicate",
+            "text": "Applicant means an insured person.",
+            "reading_order": 2,
+        }
+    )
+    clause = page.blocks[2].model_copy(update={"reading_order": 3})
+    page = page.model_copy(update={"blocks": (*page.blocks[:2], duplicate, clause)})
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    with pytest.raises(RuleUnitProjectionReviewRequired, match="duplicate definitions"):
+        project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+
+
+def test_ten_thousand_cells_stay_within_deterministic_work_bound() -> None:
+    artifact = canonical_artifact()
+    header = artifact.pages[1].tables[0].cells[:2]
+    cells = header + tuple(
+        StructuredTableCell(
+            row=row,
+            column=column,
+            text=f"row-{row}" if column == 0 else "value",
+            bbox=bbox(40 + column * 180, 130, 220 + column * 180, 170),
+        )
+        for row in range(1, 5_000)
+        for column in range(2)
+    )
+    assert len(cells) == 10_000
+    page = artifact.pages[1].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="heading-large-table",
+                    kind="heading",
+                    text="Large Table",
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                    heading_level=1,
+                    heading_path=("Large Table",),
+                ),
+            ),
+            "tables": (artifact.pages[1].tables[0].model_copy(update={"cells": cells}),),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+    limits = RuleUnitProjectionLimits(max_work_units=1_000_000)
+    first_counter = RuleUnitProjectionWorkCounter(1_000_000)
+    second_counter = RuleUnitProjectionWorkCounter(1_000_000)
+
+    first = project_rule_units(
+        artifact,
+        document_defaults=defaults(),
+        source_id="source-1",
+        limits=limits,
+        work_counter=first_counter,
+    )
+    second = project_rule_units(
+        artifact,
+        document_defaults=defaults(),
+        source_id="source-1",
+        limits=limits,
+        work_counter=second_counter,
+    )
+
+    assert len(first) == 4_999
+    assert first == second
+    assert first_counter.used == second_counter.used
+    assert first_counter.used < 1_000_000

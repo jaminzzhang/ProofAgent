@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Annotated, Literal, Self
 from urllib.parse import quote
 
@@ -48,6 +50,40 @@ class _RuleProjectionModel(FrozenModel):
 
 class RuleUnitProjectionReviewRequired(ValueError):
     """Canonical structure cannot form a coherent authority unit without human review."""
+
+
+class RuleUnitProjectionLimits(_RuleProjectionModel):
+    max_pages: PositiveInt = 500
+    max_blocks: PositiveInt = 100_000
+    max_tables: PositiveInt = 10_000
+    max_cells: PositiveInt = 250_000
+    max_units: PositiveInt = 100_000
+    max_text_characters: PositiveInt = 50_000_000
+    max_work_units: PositiveInt = 5_000_000
+
+
+@dataclass(slots=True)
+class RuleUnitProjectionWorkCounter:
+    """Deterministic operation counter used to enforce projection work bounds."""
+
+    max_work_units: int
+    used: int = 0
+
+    def __post_init__(self) -> None:
+        if type(self.max_work_units) is not int or self.max_work_units <= 0:
+            raise ValueError("max_work_units must be a positive integer")
+        if type(self.used) is not int or not 0 <= self.used <= self.max_work_units:
+            raise ValueError("used work units must be within the configured limit")
+
+    def consume(self, amount: int) -> None:
+        if type(amount) is not int or amount < 0:
+            raise ValueError("projection work amount must be a nonnegative integer")
+        self.used += amount
+        if self.used > self.max_work_units:
+            raise RuleUnitProjectionReviewRequired("rule-unit projection work budget exceeded")
+
+
+DEFAULT_RULE_UNIT_PROJECTION_LIMITS = RuleUnitProjectionLimits()
 
 
 PageBoundingBox = InsuranceRulePageBoundingBox
@@ -174,20 +210,43 @@ def project_rule_units(
     *,
     document_defaults: InsuranceRuleMetadataDraft,
     source_id: str,
+    limits: RuleUnitProjectionLimits = DEFAULT_RULE_UNIT_PROJECTION_LIMITS,
+    work_counter: RuleUnitProjectionWorkCounter | None = None,
 ) -> tuple[InsuranceRuleUnitDraft, ...]:
     """Project business-reviewable structural units; never split by token count or cell."""
 
-    _validate_projection_inputs(artifact, document_defaults=document_defaults, source_id=source_id)
+    if work_counter is None:
+        work_counter = RuleUnitProjectionWorkCounter(limits.max_work_units)
+    elif work_counter.max_work_units > limits.max_work_units:
+        raise ValueError("work counter cannot exceed the projection limit")
+    _validate_projection_inputs(
+        artifact,
+        document_defaults=document_defaults,
+        source_id=source_id,
+        limits=limits,
+        work=work_counter,
+    )
     source_id = source_id.strip()
-    definitions = _collect_definitions(artifact.pages)
-    block_candidates = _project_blocks(artifact.pages, definitions=definitions)
-    table_candidates = _project_tables(artifact.pages, definitions=definitions)
+    definitions = _build_definition_index(artifact.pages, work=work_counter)
+    block_candidates = _project_blocks(
+        artifact.pages,
+        definitions=definitions,
+        work=work_counter,
+    )
+    table_candidates = _project_tables(
+        artifact.pages,
+        definitions=definitions,
+        work=work_counter,
+    )
     candidates = sorted(
         (*block_candidates, *table_candidates),
         key=lambda item: item.sort_key,
     )
     if not candidates:
         raise ValueError("canonical artifact contains no coherent rule units")
+    if len(candidates) > limits.max_units:
+        raise RuleUnitProjectionReviewRequired("projected rule-unit count exceeds the limit")
+    work_counter.consume(len(candidates))
     units = tuple(
         _draft_from_candidate(
             artifact,
@@ -230,6 +289,8 @@ def _validate_projection_inputs(
     *,
     document_defaults: InsuranceRuleMetadataDraft,
     source_id: str,
+    limits: RuleUnitProjectionLimits,
+    work: RuleUnitProjectionWorkCounter,
 ) -> None:
     # Revalidation closes model_copy/construct bypasses before identity material is produced.
     artifact = StructuredKnowledgeDocumentArtifact.model_validate(artifact.model_dump())
@@ -241,14 +302,31 @@ def _validate_projection_inputs(
         raise ValueError("metadata draft lineage must match the canonical artifact")
     if not isinstance(source_id, str) or not source_id.strip():
         raise ValueError("source_id must be an explicit non-empty string")
+    if len(artifact.pages) > limits.max_pages:
+        raise RuleUnitProjectionReviewRequired("canonical page count exceeds projection limits")
     page_numbers = tuple(page.page_number for page in artifact.pages)
     if tuple(sorted(set(page_numbers))) != page_numbers:
         raise ValueError("canonical page numbers must be strictly increasing and unique")
     prior_table_ids: set[str] = set()
     seen_block_ids: set[str] = set()
     seen_table_ids: set[str] = set()
+    total_blocks = 0
+    total_tables = 0
+    total_cells = 0
+    total_text = 0
     for page in artifact.pages:
+        work.consume(1 + len(page.blocks) + len(page.tables))
         validate_page_geometry_and_bounds(page)
+        total_blocks += len(page.blocks)
+        total_tables += len(page.tables)
+        page_cell_count = sum(len(table.cells) for table in page.tables)
+        total_cells += page_cell_count
+        work.consume(page_cell_count)
+        total_text += sum(len(block.text) for block in page.blocks)
+        total_text += sum(
+            len(table.title or "") + sum(len(cell.text) for cell in table.cells)
+            for table in page.tables
+        )
         block_ids = {block.block_id for block in page.blocks}
         table_ids = {table.table_id for table in page.tables}
         if len(block_ids) != len(page.blocks) or block_ids & seen_block_ids:
@@ -267,21 +345,118 @@ def _validate_projection_inputs(
         seen_block_ids.update(block_ids)
         seen_table_ids.update(table_ids)
         prior_table_ids.update(table_ids)
+    if (
+        total_blocks > limits.max_blocks
+        or total_tables > limits.max_tables
+        or total_cells > limits.max_cells
+        or total_text > limits.max_text_characters
+    ):
+        raise RuleUnitProjectionReviewRequired("canonical document exceeds projection limits")
 
 
-def _collect_definitions(pages: tuple[StructuredPage, ...]) -> tuple[StructuredBlock, ...]:
-    return tuple(
-        block
-        for page in pages
-        for block in page.blocks
-        if block.text.strip() and _DEFINITION_PATTERN.search(block.text) is not None
+@dataclass(frozen=True, slots=True)
+class _DefinitionEntry:
+    term: str
+    normalized_term: str
+    text: str
+    block_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DefinitionIndex:
+    entries: tuple[_DefinitionEntry, ...]
+
+    def resolve(
+        self,
+        text: str,
+        *,
+        work: RuleUnitProjectionWorkCounter,
+    ) -> tuple[str, ...]:
+        matched: list[str] = []
+        by_term: dict[str, list[_DefinitionEntry]] = {}
+        for entry in self.entries:
+            work.consume(1 + len(text) // max(1, len(entry.term)))
+            if _references_term(text, entry.term):
+                by_term.setdefault(entry.normalized_term, []).append(entry)
+        matched_terms = sorted(by_term)
+        for index, left in enumerate(matched_terms):
+            for right in matched_terms[index + 1 :]:
+                if left in right or right in left:
+                    raise RuleUnitProjectionReviewRequired(
+                        "definition reference matches overlapping ambiguous terms"
+                    )
+        for normalized_term in sorted(by_term):
+            entries = by_term[normalized_term]
+            if len(entries) != 1:
+                raise RuleUnitProjectionReviewRequired(
+                    "referenced definition term has ambiguous duplicate definitions"
+                )
+            matched.append(entries[0].text)
+        return tuple(matched)
+
+
+def _build_definition_index(
+    pages: tuple[StructuredPage, ...],
+    *,
+    work: RuleUnitProjectionWorkCounter,
+) -> _DefinitionIndex:
+    entries: list[_DefinitionEntry] = []
+    for page in pages:
+        for block in page.blocks:
+            if not block.text.strip() or _DEFINITION_PATTERN.search(block.text) is None:
+                continue
+            work.consume(1)
+            term = _definition_term(block.text)
+            if term is None:
+                raise RuleUnitProjectionReviewRequired(
+                    "definition text does not expose one bounded explicit term"
+                )
+            entries.append(
+                _DefinitionEntry(
+                    term=term,
+                    normalized_term=term.casefold(),
+                    text=block.text.strip(),
+                    block_id=block.block_id,
+                )
+            )
+    entries.sort(key=lambda item: (item.normalized_term, item.block_id))
+    work.consume(_sort_work(len(entries)))
+    return _DefinitionIndex(entries=tuple(entries))
+
+
+def _definition_term(text: str) -> str | None:
+    stripped = text.strip()
+    english = re.match(
+        r'^["“”\s]*([A-Za-z][A-Za-z0-9 _-]{0,126}?)\s+(?:means|is defined as)\b',
+        stripped,
+        re.IGNORECASE,
     )
+    if english is not None:
+        return english.group(1).strip(' \t"“”')
+    chinese = re.match(r"^[“”\s]*([^，。；：:]{1,64}?)(?:是指|定义为)", stripped)
+    if chinese is not None:
+        return chinese.group(1).strip(' \t"“”')
+    return None
+
+
+def _references_term(text: str, term: str) -> bool:
+    if term.isascii():
+        return (
+            re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(term)}(?:s)?(?![A-Za-z0-9_])",
+                text,
+                re.IGNORECASE,
+            )
+            is not None
+        )
+    return term in text
 
 
 def _project_blocks(
     pages: tuple[StructuredPage, ...],
     *,
-    definitions: tuple[StructuredBlock, ...],
+    definitions: _DefinitionIndex,
+    work: RuleUnitProjectionWorkCounter,
 ) -> tuple[_ProjectionCandidate, ...]:
     ordered = tuple((page, block) for page in pages for block in page.blocks)
     candidates: list[_ProjectionCandidate] = []
@@ -290,8 +465,15 @@ def _project_blocks(
         page, block = ordered[index]
         if block.block_type != "heading":
             if block.block_type in {"paragraph", "list_item"} and block.text.strip():
+                work.consume(1)
                 candidates.append(
-                    _block_candidate(page, block, definitions=definitions, unit_kind="clause")
+                    _block_candidate(
+                        page,
+                        block,
+                        definitions=definitions,
+                        unit_kind="clause",
+                        work=work,
+                    )
                 )
             index += 1
             continue
@@ -303,7 +485,16 @@ def _project_blocks(
             if candidate.block_type not in {"header", "footer"} and candidate.text.strip():
                 section_blocks.append(candidate)
             cursor += 1
-        candidates.append(_section_candidate(ordered[index:cursor], section_blocks, definitions))
+        if len(section_blocks) > 1:
+            work.consume(1)
+            candidates.append(
+                _section_candidate(
+                    ordered[index:cursor],
+                    section_blocks,
+                    definitions,
+                    work=work,
+                )
+            )
         index += 1
     return tuple(candidates)
 
@@ -312,15 +503,16 @@ def _block_candidate(
     page: StructuredPage,
     block: StructuredBlock,
     *,
-    definitions: tuple[StructuredBlock, ...],
+    definitions: _DefinitionIndex,
     unit_kind: Literal["clause"],
+    work: RuleUnitProjectionWorkCounter,
 ) -> _ProjectionCandidate:
     return _ProjectionCandidate(
         sort_key=(page.page_number, block.reading_order, 1, block.block_id),
         unit_kind=unit_kind,
         content=block.text.strip(),
         heading_path=block.heading_path,
-        definitions=_definition_texts(definitions, block.heading_path),
+        definitions=definitions.resolve(block.text.strip(), work=work),
         page_numbers=(page.page_number,),
         page_bboxes=(PageBoundingBox(page_number=page.page_number, bbox=block.bbox),),
         block_ids=(block.block_id,),
@@ -331,7 +523,9 @@ def _block_candidate(
 def _section_candidate(
     ordered_slice: tuple[tuple[StructuredPage, StructuredBlock], ...],
     blocks: list[StructuredBlock],
-    definitions: tuple[StructuredBlock, ...],
+    definitions: _DefinitionIndex,
+    *,
+    work: RuleUnitProjectionWorkCounter,
 ) -> _ProjectionCandidate:
     heading = blocks[0]
     included_block_ids = {block.block_id for block in blocks}
@@ -348,12 +542,13 @@ def _section_candidate(
         )
         for page_number in page_numbers
     )
+    content = "\n".join(block.text.strip() for block in blocks)
     return _ProjectionCandidate(
         sort_key=(ordered_slice[0][0].page_number, heading.reading_order, 0, heading.block_id),
         unit_kind="section",
-        content="\n".join(block.text.strip() for block in blocks),
+        content=content,
         heading_path=heading.heading_path or (heading.text.strip(),),
-        definitions=_definition_texts(definitions, heading.heading_path),
+        definitions=definitions.resolve(content, work=work),
         page_numbers=page_numbers,
         page_bboxes=page_bboxes,
         block_ids=tuple(block.block_id for block in blocks),
@@ -364,26 +559,96 @@ def _section_candidate(
 def _project_tables(
     pages: tuple[StructuredPage, ...],
     *,
-    definitions: tuple[StructuredBlock, ...],
+    definitions: _DefinitionIndex,
+    work: RuleUnitProjectionWorkCounter,
 ) -> tuple[_ProjectionCandidate, ...]:
     candidates: list[_ProjectionCandidate] = []
-    active_heading: tuple[str, ...] = ()
+    heading_paths = _resolve_table_heading_paths(pages, work=work)
     for page in pages:
-        page_headings = [block for block in page.blocks if block.block_type == "heading"]
-        if page_headings:
-            final_heading = page_headings[-1]
-            active_heading = final_heading.heading_path or (final_heading.text.strip(),)
         for table_index, table in enumerate(page.tables):
             candidates.extend(
                 _table_candidates(
                     page,
                     table,
                     table_index=table_index,
-                    heading_path=active_heading,
+                    heading_path=heading_paths[table.table_id],
                     definitions=definitions,
+                    work=work,
                 )
             )
     return tuple(candidates)
+
+
+def _resolve_table_heading_paths(
+    pages: tuple[StructuredPage, ...],
+    *,
+    work: RuleUnitProjectionWorkCounter,
+) -> dict[str, tuple[str, ...]]:
+    resolved: dict[str, tuple[str, ...]] = {}
+    prior_page_heading: tuple[str, ...] | None = None
+    for page in pages:
+        headings = tuple(block for block in page.blocks if block.block_type == "heading")
+        tables = tuple(
+            sorted(page.tables, key=lambda table: (table.bbox.y0, table.bbox.x0, table.table_id))
+        )
+        work.consume(len(headings) + _sort_work(len(tables)))
+        for table in tables:
+            if table.continuation_of is not None:
+                inherited = resolved.get(table.continuation_of)
+                if inherited is None:
+                    raise RuleUnitProjectionReviewRequired(
+                        "table continuation has no resolved parent heading context"
+                    )
+                resolved[table.table_id] = inherited
+                continue
+            work.consume(len(headings))
+            preceding = tuple(
+                heading
+                for heading in headings
+                if heading.bbox.y1 <= table.bbox.y0
+                and _horizontal_overlap(heading.bbox, table.bbox)
+            )
+            if preceding:
+                nearest_edge = max(heading.bbox.y1 for heading in preceding)
+                nearest = tuple(heading for heading in preceding if heading.bbox.y1 == nearest_edge)
+                paths = {
+                    heading.heading_path or (heading.text.strip(),)
+                    for heading in nearest
+                    if heading.text.strip()
+                }
+                if len(paths) != 1:
+                    raise RuleUnitProjectionReviewRequired(
+                        "table heading association is geometrically ambiguous"
+                    )
+                resolved[table.table_id] = next(iter(paths))
+            elif prior_page_heading is not None:
+                resolved[table.table_id] = prior_page_heading
+            else:
+                raise RuleUnitProjectionReviewRequired(
+                    "table has no reliable preceding heading association"
+                )
+        if headings:
+            final = max(headings, key=lambda heading: heading.reading_order)
+            if not final.text.strip():
+                raise RuleUnitProjectionReviewRequired("page heading context is empty")
+            prior_page_heading = final.heading_path or (final.text.strip(),)
+    return resolved
+
+
+def _horizontal_overlap(left: BoundingBox, right: BoundingBox) -> bool:
+    return min(left.x1, right.x1) > max(left.x0, right.x0)
+
+
+@dataclass(frozen=True, slots=True)
+class _IndexedRowGroup:
+    row_numbers: tuple[int, ...]
+    cells: tuple[StructuredTableCell, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TableCellIndex:
+    header_cells: tuple[StructuredTableCell, ...]
+    row_groups: tuple[_IndexedRowGroup, ...]
 
 
 def _table_candidates(
@@ -392,35 +657,21 @@ def _table_candidates(
     *,
     table_index: int,
     heading_path: tuple[str, ...],
-    definitions: tuple[StructuredBlock, ...],
+    definitions: _DefinitionIndex,
+    work: RuleUnitProjectionWorkCounter,
 ) -> tuple[_ProjectionCandidate, ...]:
-    nonempty = tuple(cell for cell in table.cells if cell.text.strip())
-    if not nonempty:
+    index = _build_table_cell_index(table, work=work)
+    if not index.row_groups:
         return ()
-    rows = _covered_grid_rows(nonempty)
-    if len(rows) == 1:
-        header_rows: tuple[int, ...] = ()
-        data_rows = tuple(rows)
-    else:
-        header_rows = (rows[0],)
-        data_rows = tuple(rows[1:])
-    header_cells = tuple(
-        sorted(
-            (cell for cell in nonempty if cell.row in header_rows),
-            key=lambda cell: (cell.row, cell.column),
-        )
-    )
-    data_source_cells = tuple(cell for cell in nonempty if cell.row not in header_rows)
+    header_cells = index.header_cells
     table_title = table.title.strip() if table.title and table.title.strip() else None
     table_headers = tuple(cell.text.strip() for cell in header_cells)
     table_context = _table_context(table, header_cells)
-    row_groups = _coherent_row_groups(
-        _connected_row_groups(data_rows, data_source_cells),
-        data_source_cells,
-    )
     candidates: list[_ProjectionCandidate] = []
-    for group_index, row_numbers in enumerate(row_groups):
-        data_cells = _data_cells_for_group(data_source_cells, row_numbers)
+    for group_index, row_group in enumerate(index.row_groups):
+        work.consume(1)
+        row_numbers = row_group.row_numbers
+        data_cells = row_group.cells
         first_column = min(cell.column for cell in data_cells)
         row_headers = tuple(
             dict.fromkeys(
@@ -430,6 +681,8 @@ def _table_candidates(
             )
         )
         row_header = " | ".join(row_headers) or None
+        content = _table_group_content(data_cells, row_numbers)
+        definition_context = "\n".join((content, table_context))
         unit_kind: Literal["table_row", "row_group"] = (
             "row_group" if len(row_numbers) > 1 else "table_row"
         )
@@ -437,9 +690,9 @@ def _table_candidates(
             _ProjectionCandidate(
                 sort_key=(page.page_number, 1_000_000 + table_index, group_index, table.table_id),
                 unit_kind=unit_kind,
-                content=_table_group_content(data_cells, row_numbers),
+                content=content,
                 heading_path=heading_path,
-                definitions=_definition_texts(definitions, heading_path),
+                definitions=definitions.resolve(definition_context, work=work),
                 page_numbers=(page.page_number,),
                 page_bboxes=(
                     PageBoundingBox(
@@ -469,34 +722,180 @@ def _table_candidates(
     return tuple(candidates)
 
 
-def _coherent_row_groups(
-    groups: tuple[tuple[int, ...], ...],
-    cells: tuple[StructuredTableCell, ...],
-) -> tuple[tuple[int, ...], ...]:
-    for group in groups:
-        if not _is_coherent_table_group(cells, group):
+def _build_table_cell_index(
+    table: StructuredTable,
+    *,
+    work: RuleUnitProjectionWorkCounter,
+) -> _TableCellIndex:
+    _validate_table_occupancy(table.cells, work=work)
+    nonempty = tuple(cell for cell in table.cells if cell.text.strip())
+    work.consume(len(table.cells))
+    if not nonempty:
+        return _TableCellIndex(header_cells=(), row_groups=())
+    rows = _covered_grid_rows(nonempty)
+    work.consume(len(rows))
+    header_rows: tuple[int, ...]
+    data_rows: tuple[int, ...]
+    if len(rows) == 1:
+        header_rows = ()
+        data_rows = rows
+    else:
+        header_rows = (rows[0],)
+        data_rows = rows[1:]
+    header_cells = tuple(
+        sorted(
+            (cell for cell in nonempty if cell.row in header_rows),
+            key=lambda cell: (cell.row, cell.column),
+        )
+    )
+    if any(cell.row_span != 1 for cell in header_cells):
+        raise RuleUnitProjectionReviewRequired(
+            "table header spans data rows and requires structural review"
+        )
+    data_cells = tuple(cell for cell in nonempty if cell.row not in header_rows)
+    row_groups = _structural_row_groups(data_rows, data_cells, work=work)
+    row_to_group = {
+        row: group_index
+        for group_index, row_numbers in enumerate(row_groups)
+        for row in row_numbers
+    }
+    indexed_cells: list[list[StructuredTableCell]] = [[] for _ in row_groups]
+    for cell in data_cells:
+        group_index = row_to_group.get(cell.row)
+        if group_index is None:
+            raise RuleUnitProjectionReviewRequired("data cell has no structural row group")
+        indexed_cells[group_index].append(cell)
+    indexed_groups: list[_IndexedRowGroup] = []
+    for row_numbers, cells in zip(row_groups, indexed_cells, strict=True):
+        ordered_cells = tuple(sorted(cells, key=lambda cell: (cell.row, cell.column)))
+        if len(ordered_cells) < 2 or len({cell.column for cell in ordered_cells}) < 2:
             raise RuleUnitProjectionReviewRequired(
                 "table contains an isolated cell without canonical row-group structure"
             )
-    return groups
+        indexed_groups.append(_IndexedRowGroup(row_numbers=row_numbers, cells=ordered_cells))
+    work.consume(len(data_cells) + len(data_rows) + _sort_work(len(data_cells)))
+    return _TableCellIndex(header_cells=header_cells, row_groups=tuple(indexed_groups))
 
 
-def _is_coherent_table_group(
-    cells: tuple[StructuredTableCell, ...], row_numbers: tuple[int, ...]
-) -> bool:
-    group_cells = _data_cells_for_group(cells, row_numbers)
-    return len(group_cells) >= 2 and len({cell.column for cell in group_cells}) >= 2
-
-
-def _data_cells_for_group(
-    cells: tuple[StructuredTableCell, ...], row_numbers: tuple[int, ...]
-) -> tuple[StructuredTableCell, ...]:
-    selected = (
-        cell
+def _structural_row_groups(
+    data_rows: tuple[int, ...],
+    cells: tuple[StructuredTableCell, ...],
+    *,
+    work: RuleUnitProjectionWorkCounter,
+) -> tuple[tuple[int, ...], ...]:
+    if not data_rows:
+        return ()
+    intervals = [(row, row) for row in data_rows]
+    intervals.extend(
+        (cell.row, cell.row + cell.row_span - 1)
         for cell in cells
-        if cell.row <= row_numbers[-1] and cell.row + cell.row_span - 1 >= row_numbers[0]
+        if cell.row <= data_rows[-1] and cell.row + cell.row_span - 1 >= data_rows[0]
     )
-    return tuple(sorted(selected, key=lambda cell: (cell.row, cell.column)))
+    merged = _merge_integer_intervals(intervals)
+    work.consume(len(intervals) + _sort_work(len(intervals)))
+    groups: list[tuple[int, ...]] = []
+    row_index = 0
+    for start, end in merged:
+        group: list[int] = []
+        while row_index < len(data_rows) and data_rows[row_index] < start:
+            row_index += 1
+        while row_index < len(data_rows) and data_rows[row_index] <= end:
+            group.append(data_rows[row_index])
+            row_index += 1
+        if group:
+            groups.append(tuple(group))
+    return tuple(groups)
+
+
+class _RangeMaxTree:
+    def __init__(self, segment_count: int) -> None:
+        size = 1
+        while size < segment_count:
+            size *= 2
+        self._size = size
+        self._maximum = [0] * (2 * size)
+        self._lazy = [0] * (2 * size)
+
+    def add(self, left: int, right: int, delta: int) -> None:
+        self._add(left, right, delta, 1, 0, self._size)
+
+    def maximum(self, left: int, right: int) -> int:
+        return self._query(left, right, 1, 0, self._size)
+
+    def _add(
+        self,
+        left: int,
+        right: int,
+        delta: int,
+        node: int,
+        node_left: int,
+        node_right: int,
+    ) -> None:
+        if right <= node_left or node_right <= left:
+            return
+        if left <= node_left and node_right <= right:
+            self._maximum[node] += delta
+            self._lazy[node] += delta
+            return
+        middle = (node_left + node_right) // 2
+        self._add(left, right, delta, node * 2, node_left, middle)
+        self._add(left, right, delta, node * 2 + 1, middle, node_right)
+        self._maximum[node] = self._lazy[node] + max(
+            self._maximum[node * 2], self._maximum[node * 2 + 1]
+        )
+
+    def _query(
+        self,
+        left: int,
+        right: int,
+        node: int,
+        node_left: int,
+        node_right: int,
+    ) -> int:
+        if right <= node_left or node_right <= left:
+            return 0
+        if left <= node_left and node_right <= right:
+            return self._maximum[node]
+        middle = (node_left + node_right) // 2
+        return self._lazy[node] + max(
+            self._query(left, right, node * 2, node_left, middle),
+            self._query(left, right, node * 2 + 1, middle, node_right),
+        )
+
+
+def _validate_table_occupancy(
+    cells: tuple[StructuredTableCell, ...],
+    *,
+    work: RuleUnitProjectionWorkCounter,
+) -> None:
+    if not cells:
+        return
+    boundaries = sorted(
+        {value for cell in cells for value in (cell.column, cell.column + cell.column_span)}
+    )
+    work.consume(2 * len(cells))
+    boundary_index = {value: index for index, value in enumerate(boundaries)}
+    events: list[tuple[int, int, int, int]] = []
+    for cell in cells:
+        left = boundary_index[cell.column]
+        right = boundary_index[cell.column + cell.column_span]
+        events.append((cell.row, 1, left, right))
+        events.append((cell.row + cell.row_span, 0, left, right))
+    work.consume(2 * len(cells))
+    events.sort()
+    work.consume(_sort_work(len(boundaries)) + _sort_work(len(events)))
+    tree = _RangeMaxTree(max(1, len(boundaries) - 1))
+    logarithmic_cost = max(1, math.ceil(math.log2(max(2, len(boundaries)))))
+    for _, event_kind, left, right in events:
+        work.consume(logarithmic_cost)
+        if event_kind == 0:
+            tree.add(left, right, -1)
+        else:
+            if tree.maximum(left, right) > 0:
+                raise RuleUnitProjectionReviewRequired(
+                    "table cell row/column spans overlap canonical occupancy"
+                )
+            tree.add(left, right, 1)
 
 
 def _table_group_content(
@@ -512,23 +911,6 @@ def _table_group_content(
         if row_cells:
             lines.append(" | ".join(row_cells))
     return "\n".join(lines)
-
-
-def _connected_row_groups(
-    data_rows: tuple[int, ...], cells: tuple[StructuredTableCell, ...]
-) -> tuple[tuple[int, ...], ...]:
-    if not data_rows:
-        return ()
-    intervals = [(row, row) for row in data_rows]
-    intervals.extend(
-        (cell.row, cell.row + cell.row_span - 1)
-        for cell in cells
-        if cell.row <= data_rows[-1] and cell.row + cell.row_span - 1 >= data_rows[0]
-    )
-    return tuple(
-        tuple(row for row in data_rows if start <= row <= end)
-        for start, end in _merge_integer_intervals(intervals)
-    )
 
 
 def _covered_grid_rows(cells: tuple[StructuredTableCell, ...]) -> tuple[int, ...]:
@@ -590,24 +972,6 @@ def _cell_coordinate(page_number: int, cell: StructuredTableCell) -> RuleCellCoo
         column_span=cell.column_span,
         bbox=cell.bbox,
     )
-
-
-def _definition_texts(
-    definitions: tuple[StructuredBlock, ...], heading_path: tuple[str, ...]
-) -> tuple[str, ...]:
-    related = tuple(
-        block.text.strip()
-        for block in definitions
-        if _paths_related(block.heading_path, heading_path)
-    )
-    return tuple(dict.fromkeys(related))
-
-
-def _paths_related(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
-    if not left or not right:
-        return True
-    shared = min(len(left), len(right))
-    return left[:shared] == right[:shared]
 
 
 def _draft_from_candidate(
@@ -701,6 +1065,12 @@ def _bbox_contains(outer: BoundingBox, inner: BoundingBox) -> bool:
     )
 
 
+def _sort_work(item_count: int) -> int:
+    if item_count < 2:
+        return item_count
+    return item_count * math.ceil(math.log2(item_count))
+
+
 def _sha256_json(value: object) -> str:
     payload = json.dumps(
         value,
@@ -712,9 +1082,12 @@ def _sha256_json(value: object) -> str:
 
 
 __all__ = [
+    "DEFAULT_RULE_UNIT_PROJECTION_LIMITS",
     "InsuranceRuleUnitDraft",
     "PageBoundingBox",
+    "RuleUnitProjectionLimits",
     "RuleUnitProjectionReviewRequired",
+    "RuleUnitProjectionWorkCounter",
     "RuleCellCoordinate",
     "project_rule_units",
 ]
