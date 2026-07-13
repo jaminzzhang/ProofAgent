@@ -50,6 +50,19 @@ _ENGLISH_DEFINITION_STATEMENT = re.compile(
     """,
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
 )
+_CHINESE_SUOCHENG_DEFINITION_STATEMENT = re.compile(
+    r"""
+    ^\s*[^，。；：:\r\n]{0,32}?所称\s*
+    (?:["“](?P<quoted>[^"”\r\n]{1,64})["”]
+      |(?P<plain>[A-Za-z0-9\u3400-\u9fff·_-]{1,64}))
+    \s*[:：,，]?\s*(?:是指|系指|定义为)\s*
+    (?P<body>\S.*?)\s*$
+    """,
+    re.DOTALL | re.VERBOSE,
+)
+_CHINESE_SUOCHENG_DEFINITION_CANDIDATE = re.compile(
+    r"^\s*[^，。；：:\r\n]{0,32}?所称[\s\S]*?(?:是指|系指|定义为)",
+)
 _CHINESE_DEFINITION_STATEMENT = re.compile(
     r"""
     ^\s*
@@ -523,6 +536,14 @@ def _build_definition_index(
 
 
 def _definition_term(text: str) -> str | None:
+    suocheng = _CHINESE_SUOCHENG_DEFINITION_STATEMENT.fullmatch(text)
+    if suocheng is not None:
+        term = suocheng.group("quoted") or suocheng.group("plain")
+        return term.strip()
+    if _CHINESE_SUOCHENG_DEFINITION_CANDIDATE.match(text) is not None:
+        raise RuleUnitProjectionReviewRequired(
+            "所称 definition statement does not expose one reliably bounded term"
+        )
     for pattern in (
         _ENGLISH_DEFINITION_STATEMENT,
         _CHINESE_DEFINITION_STATEMENT,

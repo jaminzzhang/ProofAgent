@@ -866,6 +866,79 @@ def test_definition_separator_punctuation_preserves_reference_attachment(
     assert reference.definitions == (definition_text,)
 
 
+@pytest.mark.parametrize(
+    "definition_text",
+    (
+        "本合同所称“投保人”是指申请保险保障的人。",
+        "本保险合同所称投保人，是指申请保险保障的人。",
+    ),
+)
+def test_suocheng_definition_extracts_only_the_terminal_term(
+    definition_text: str,
+) -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="suocheng-definition",
+                    kind="paragraph",
+                    text=definition_text,
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                ),
+                StructuredBlock(
+                    block_id="suocheng-reference",
+                    kind="list_item",
+                    text="投保人必须年满十八周岁。",
+                    bbox=bbox(40, 80, 572, 110),
+                    reading_order=1,
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    reference = next(
+        unit
+        for unit in project_rule_units(
+            artifact,
+            document_defaults=defaults(),
+            source_id="source-1",
+        )
+        if unit.block_ids == ("suocheng-reference",)
+    )
+
+    assert reference.definitions == (definition_text,)
+
+
+def test_unbounded_unquoted_suocheng_term_requires_review() -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="unbounded-suocheng-definition",
+                    kind="paragraph",
+                    text="本合同所称投保人 及被保险人，是指申请保险保障的人。",
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    with pytest.raises(RuleUnitProjectionReviewRequired, match="reliably bounded term"):
+        project_rule_units(
+            artifact,
+            document_defaults=defaults(),
+            source_id="source-1",
+        )
+
+
 def test_ten_thousand_cells_stay_within_deterministic_work_bound() -> None:
     artifact = canonical_artifact()
     header = artifact.pages[1].tables[0].cells[:2]
