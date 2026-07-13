@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from threading import Event, Thread
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -78,16 +79,13 @@ def _fixture_with_member_name(member_name: str) -> bytes:
 def _fixture_with_relationship_target(target_value: str) -> bytes:
     output = BytesIO()
     relationship = (
-        '<Relationship Id="rUnsafe" Type="urn:test" '
-        f'Target="{target_value}" />'
+        f'<Relationship Id="rUnsafe" Type="urn:test" Target="{target_value}" />'
     ).encode()
     with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
         for member in source.infolist():
             payload = source.read(member.filename)
             if member.filename == "xl/_rels/workbook.xml.rels":
-                payload = payload.replace(
-                    b"</Relationships>", relationship + b"</Relationships>"
-                )
+                payload = payload.replace(b"</Relationships>", relationship + b"</Relationships>")
             target.writestr(member, payload)
     return output.getvalue()
 
@@ -106,10 +104,7 @@ def _fixture_with_far_cell() -> bytes:
 
 def _fixture_with_evil_macro_content_type() -> bytes:
     output = BytesIO()
-    declaration = (
-        b'<Default Extension="bin" '
-        b'ContentType="application/vnd.ms-office.vbaProject"/>'
-    )
+    declaration = b'<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>'
     with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
         for member in source.infolist():
             payload = source.read(member.filename)
@@ -561,6 +556,15 @@ def test_review_pages_are_bounded_and_include_global_server_summary(tmp_path: Pa
     assert first.summary.total == 3
     assert first.summary.ready_for_review == 3
     assert first.summary.all_approved is False
+    repository.resolve(
+        source_id=first.items[0].source_id,
+        review_id=first.items[0].review_id,
+        expected_review_version=first.items[0].review_version,
+        expected_review_identity=first.items[0].review_identity,
+        action="approve",
+        actor="reviewer",
+        reason="Advance the index generation without changing its ordering.",
+    )
     second = repository.list_page(base.source_id, limit=2, cursor=first.next_cursor)
     assert len(second.items) == 1
     assert second.next_cursor is None
@@ -569,3 +573,209 @@ def test_review_pages_are_bounded_and_include_global_server_summary(tmp_path: Pa
         repository.list_page(base.source_id, limit=101)
     with pytest.raises(WorkbookValidationError):
         repository.list_page(base.source_id, cursor="not-a-valid-cursor")
+
+
+def _review_with_sequence(
+    base: workbook_module.InsuranceMetadataReview,
+    sequence: int,
+) -> workbook_module.InsuranceMetadataReview:
+    candidate = base.model_copy(
+        update={
+            "review_id": f"metadata_review_scale_{sequence:05d}",
+            "review_identity": "0" * 64,
+            "workbook_row_number": sequence + 1,
+        }
+    )
+    return candidate.model_copy(
+        update={"review_identity": workbook_module._review_identity(candidate)}
+    )
+
+
+def test_review_page_parses_only_selected_files_for_ten_thousand_entry_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    base = _reconcile(
+        tmp_path,
+        _draft(origin="pdf", authority="national"),
+        _draft(origin="workbook", authority="national"),
+    )
+    entries = []
+    source_dir = repository._source_dir(base.source_id)
+    source_dir.mkdir(parents=True)
+    for sequence in range(10_000):
+        review = _review_with_sequence(base, sequence)
+        entries.append(workbook_module._review_index_entry(review))
+        if sequence < 200:
+            repository._review_path(base.source_id, review.review_id).write_text(
+                review.model_dump_json()
+            )
+    ordered = tuple(entries)
+    index = workbook_module._InsuranceMetadataReviewIndex(
+        source_id=base.source_id,
+        generation=1,
+        entries=ordered,
+        summary=workbook_module._review_summary_from_entries(ordered),
+    )
+    repository._write_payload(
+        repository._review_index_path(base.source_id),
+        index.model_dump(mode="json"),
+    )
+    parse_count = 0
+    original_parse = workbook_module.InsuranceMetadataReview.model_validate_json
+
+    def counted_parse(payload: bytes | str, *args: object, **kwargs: object):
+        nonlocal parse_count
+        parse_count += 1
+        return original_parse(payload, *args, **kwargs)
+
+    monkeypatch.setattr(
+        workbook_module.InsuranceMetadataReview,
+        "model_validate_json",
+        staticmethod(counted_parse),
+    )
+
+    first = repository.list_page(base.source_id, limit=100)
+    second = repository.list_page(base.source_id, limit=100, cursor=first.next_cursor)
+
+    assert first.total == 10_000
+    assert len(first.items) == len(second.items) == 100
+    assert parse_count == 200
+
+
+def test_failed_review_batch_rolls_back_files_and_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    base = _reconcile(
+        tmp_path,
+        _draft(origin="pdf", authority="national"),
+        _draft(origin="workbook", authority="national"),
+    )
+    reviews = (_review_with_sequence(base, 1), _review_with_sequence(base, 2))
+    original_write = repository._write
+    write_count = 0
+
+    def fail_second_write(review: workbook_module.InsuranceMetadataReview) -> None:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 2:
+            raise OSError("simulated batch write failure")
+        original_write(review)
+
+    monkeypatch.setattr(repository, "_write", fail_second_write)
+    with pytest.raises(OSError, match="simulated batch"):
+        repository.put_many(reviews)
+
+    page = FilesystemInsuranceMetadataReviewRepository(tmp_path).list_page(base.source_id)
+    assert page.items == ()
+    assert page.summary.total == 0
+
+
+def test_malformed_derived_review_index_is_quarantined_and_rebuilt(tmp_path: Path) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    review = repository.put(
+        _reconcile(
+            tmp_path,
+            _draft(origin="pdf", authority="national"),
+            _draft(origin="workbook", authority="national"),
+        )
+    )
+    index_path = repository._review_index_path(review.source_id)
+    index_path.write_bytes(b'{"schema_version":"partial-index"')
+
+    page = FilesystemInsuranceMetadataReviewRepository(tmp_path).list_page(review.source_id)
+
+    assert page.items == (review,)
+    assert page.summary.total == 1
+    assert tuple(index_path.parent.glob(f"{index_path.name}.invalid-*"))
+
+
+def test_pending_review_batch_is_redone_after_rollback_itself_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    base = _reconcile(
+        tmp_path,
+        _draft(origin="pdf", authority="national"),
+        _draft(origin="workbook", authority="national"),
+    )
+    reviews = (_review_with_sequence(base, 11), _review_with_sequence(base, 12))
+    original_write = repository._write
+    write_count = 0
+
+    def fail_second_write_once(review: workbook_module.InsuranceMetadataReview) -> None:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 2:
+            raise OSError("simulated process interruption")
+        original_write(review)
+
+    monkeypatch.setattr(repository, "_write", fail_second_write_once)
+    monkeypatch.setattr(
+        repository,
+        "_rollback_review_transaction_unlocked",
+        lambda _transaction: (_ for _ in ()).throw(OSError("rollback interrupted")),
+    )
+    with pytest.raises(OSError, match="process interruption"):
+        repository.put_many(reviews)
+
+    recovered = FilesystemInsuranceMetadataReviewRepository(tmp_path).list_page(base.source_id)
+    assert {review.review_id for review in recovered.items} == {
+        review.review_id for review in reviews
+    }
+    assert recovered.summary.total == 2
+
+
+def test_cross_instance_reader_never_observes_partial_review_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    reader = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    base = _reconcile(
+        tmp_path,
+        _draft(origin="pdf", authority="national"),
+        _draft(origin="workbook", authority="national"),
+    )
+    reviews = (_review_with_sequence(base, 21), _review_with_sequence(base, 22))
+    first_file_written = Event()
+    release_writer = Event()
+    reader_finished = Event()
+    original_write = writer._write
+    write_count = 0
+    observed: list[workbook_module.InsuranceMetadataReviewPage] = []
+
+    def paused_write(review: workbook_module.InsuranceMetadataReview) -> None:
+        nonlocal write_count
+        original_write(review)
+        write_count += 1
+        if write_count == 1:
+            first_file_written.set()
+            assert release_writer.wait(timeout=5)
+
+    monkeypatch.setattr(writer, "_write", paused_write)
+    writer_thread = Thread(target=lambda: writer.put_many(reviews))
+    reader_thread = Thread(
+        target=lambda: (
+            observed.append(reader.list_page(base.source_id)),
+            reader_finished.set(),
+        )
+    )
+    writer_thread.start()
+    assert first_file_written.wait(timeout=5)
+    reader_thread.start()
+    assert not reader_finished.wait(timeout=0.1)
+    release_writer.set()
+    writer_thread.join(timeout=5)
+    reader_thread.join(timeout=5)
+
+    assert not writer_thread.is_alive()
+    assert not reader_thread.is_alive()
+    assert len(observed) == 1
+    assert {review.review_id for review in observed[0].items} == {
+        review.review_id for review in reviews
+    }

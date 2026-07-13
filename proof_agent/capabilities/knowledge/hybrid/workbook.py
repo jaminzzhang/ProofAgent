@@ -255,10 +255,11 @@ class InsuranceMetadataPdfDraftRecord(_WorkbookModel):
 
     @model_validator(mode="after")
     def validate_pdf_lineage(self) -> "InsuranceMetadataPdfDraftRecord":
-        if (
-            self.pdf_draft.origin != "pdf"
-            or _draft_identity(self.pdf_draft)
-            != (self.source_id, self.document_id, self.revision_id, self.canonical_anchor)
+        if self.pdf_draft.origin != "pdf" or _draft_identity(self.pdf_draft) != (
+            self.source_id,
+            self.document_id,
+            self.revision_id,
+            self.canonical_anchor,
         ):
             raise ValueError("persisted PDF draft must match the exact authority lineage")
         if self.original_ref.media_type != "application/pdf":
@@ -278,9 +279,7 @@ class InsuranceMetadataConflict(_WorkbookModel):
 class InsuranceMetadataReviewDecision(_WorkbookModel):
     sequence: PositiveInt
     prior_review_identity: Sha256
-    prior_state: Literal[
-        "review_required", "ready_for_review", "approved", "corrected", "rejected"
-    ]
+    prior_state: Literal["review_required", "ready_for_review", "approved", "corrected", "rejected"]
     action: Literal["approve", "correct", "reject"]
     actor: NonBlankStr
     reason: NonBlankStr
@@ -339,6 +338,59 @@ class InsuranceMetadataReviewPage(_WorkbookModel):
     summary: InsuranceMetadataReviewSummary
 
 
+class WorkbookImportPersistResult(_WorkbookModel):
+    created: StrictBool
+
+
+class _InsuranceMetadataReviewIndexEntry(_WorkbookModel):
+    filename: NonBlankStr
+    review_id: NonBlankStr
+    import_id: NonBlankStr
+    state: Literal["review_required", "ready_for_review", "approved", "corrected", "rejected"]
+    review_version: PositiveInt
+    publication_blocked: StrictBool
+
+
+class _InsuranceMetadataReviewIndex(_WorkbookModel):
+    schema_version: Literal["insurance-metadata-review-index.v1"] = (
+        "insurance-metadata-review-index.v1"
+    )
+    source_id: NonBlankStr
+    generation: PositiveInt
+    entries: tuple[_InsuranceMetadataReviewIndexEntry, ...] = ()
+    summary: InsuranceMetadataReviewSummary
+
+    @model_validator(mode="after")
+    def validate_index_summary(self) -> "_InsuranceMetadataReviewIndex":
+        if tuple(entry.filename for entry in self.entries) != tuple(
+            sorted(entry.filename for entry in self.entries)
+        ):
+            raise ValueError("metadata review index entries must be ordered")
+        if len({entry.review_id for entry in self.entries}) != len(self.entries):
+            raise ValueError("metadata review index contains duplicate reviews")
+        expected = _review_summary_from_entries(self.entries)
+        if self.summary != expected:
+            raise ValueError("metadata review index summary does not match entries")
+        return self
+
+
+class _InsuranceMetadataReviewIndexTransaction(_WorkbookModel):
+    schema_version: Literal["insurance-metadata-review-index-transaction.v1"] = (
+        "insurance-metadata-review-index-transaction.v1"
+    )
+    source_id: NonBlankStr
+    prior_index: _InsuranceMetadataReviewIndex
+    index: _InsuranceMetadataReviewIndex
+    reviews: tuple[InsuranceMetadataReview, ...] = Field(min_length=1)
+    prior_reviews: tuple[InsuranceMetadataReview | None, ...]
+
+    @model_validator(mode="after")
+    def validate_transaction_shape(self) -> "_InsuranceMetadataReviewIndexTransaction":
+        if len(self.reviews) != len(self.prior_reviews):
+            raise ValueError("metadata review transaction rollback shape is invalid")
+        return self
+
+
 class InsuranceMetadataReviewRepository(Protocol):
     def list(self, source_id: str) -> tuple[InsuranceMetadataReview, ...]: ...
 
@@ -349,6 +401,7 @@ class InsuranceMetadataReviewRepository(Protocol):
         limit: int = 50,
         cursor: str | None = None,
         state: str | None = None,
+        import_id: str | None = None,
     ) -> InsuranceMetadataReviewPage: ...
 
     def get(self, source_id: str, review_id: str) -> InsuranceMetadataReview | None: ...
@@ -533,23 +586,22 @@ class FilesystemInsuranceMetadataReviewRepository:
         self._authority_root = root_dir / "insurance_metadata_authority"
         self._pdf_drafts_root = root_dir / "insurance_metadata_pdf_drafts"
         self._decisions_root = root_dir / "insurance_metadata_review_decisions"
+        self._indexes_root = root_dir / "insurance_metadata_review_indexes"
         self._root.mkdir(parents=True, exist_ok=True)
         self._imports_root.mkdir(parents=True, exist_ok=True)
         self._authority_root.mkdir(parents=True, exist_ok=True)
         self._pdf_drafts_root.mkdir(parents=True, exist_ok=True)
         self._decisions_root.mkdir(parents=True, exist_ok=True)
+        self._indexes_root.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
         self._file_lock = FileLock(self._root / ".reviews.lock", timeout=10)
 
     def list(self, source_id: str) -> tuple[InsuranceMetadataReview, ...]:
-        items: list[InsuranceMetadataReview] = []
-        cursor: str | None = None
-        while True:
-            page = self.list_page(source_id, limit=100, cursor=cursor)
-            items.extend(page.items)
-            cursor = page.next_cursor
-            if cursor is None:
-                return tuple(items)
+        with self._lock, self._file_lock:
+            index = self._load_or_rebuild_index_unlocked(source_id)
+            return tuple(
+                self._review_for_entry_unlocked(source_id, entry) for entry in index.entries
+            )
 
     def list_page(
         self,
@@ -558,60 +610,92 @@ class FilesystemInsuranceMetadataReviewRepository:
         limit: int = 50,
         cursor: str | None = None,
         state: str | None = None,
+        import_id: str | None = None,
     ) -> InsuranceMetadataReviewPage:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise WorkbookValidationError("metadata review page limit must be between 1 and 100")
         if state is not None and state not in _REVIEW_STATES:
             raise WorkbookValidationError("metadata review state filter is invalid")
-        after_name = _decode_review_cursor(cursor) if cursor is not None else None
-        source_dir = self._source_dir(source_id)
-        counts = {review_state: 0 for review_state in _REVIEW_STATES}
-        unresolved = 0
-        filtered_total = 0
-        items: list[InsuranceMetadataReview] = []
-        last_item_name: str | None = None
-        has_more = False
-        if source_dir.exists():
-            for path in sorted(source_dir.glob("*.json")):
-                if path.is_symlink() or not path.is_file():
-                    continue
-                review = InsuranceMetadataReview.model_validate_json(path.read_bytes())
-                counts[review.state] += 1
-                if review.publication_blocked:
-                    unresolved += 1
-                if state is not None and review.state != state:
-                    continue
-                filtered_total += 1
-                if after_name is not None and path.name <= after_name:
-                    continue
-                if len(items) < limit:
-                    items.append(review)
-                    last_item_name = path.name
+        normalized_import_id = (
+            _safe_identifier(import_id, "import_id") if import_id is not None else None
+        )
+        with self._lock, self._file_lock:
+            index = self._load_or_rebuild_index_unlocked(source_id)
+            start_position = 0
+            if cursor is not None:
+                (
+                    cursor_generation,
+                    cursor_position,
+                    cursor_filename,
+                    cursor_state,
+                    cursor_import_id,
+                ) = _decode_review_cursor(cursor)
+                if cursor_state != state or cursor_import_id != normalized_import_id:
+                    raise WorkbookReviewConflictError(
+                        "metadata review page changed; restart pagination"
+                    )
+                if (
+                    cursor_generation == index.generation
+                    and cursor_position < len(index.entries)
+                    and index.entries[cursor_position].filename == cursor_filename
+                ):
+                    pass
                 else:
-                    has_more = True
-        total = sum(counts.values())
-        summary = InsuranceMetadataReviewSummary(
-            total=total,
-            unresolved=unresolved,
-            review_required=counts["review_required"],
-            ready_for_review=counts["ready_for_review"],
-            approved=counts["approved"],
-            corrected=counts["corrected"],
-            rejected=counts["rejected"],
-            all_approved=total > 0 and counts["approved"] == total,
-        )
-        return InsuranceMetadataReviewPage(
-            items=tuple(items),
-            next_cursor=(
-                _encode_review_cursor(last_item_name)
-                if has_more and last_item_name is not None
-                else None
-            ),
-            total=filtered_total,
-            summary=summary,
-        )
+                    cursor_position = next(
+                        (
+                            position
+                            for position, entry in enumerate(index.entries)
+                            if entry.filename == cursor_filename
+                        ),
+                        -1,
+                    )
+                    if cursor_position < 0:
+                        raise WorkbookReviewConflictError(
+                            "metadata review page changed; restart pagination"
+                        )
+                start_position = cursor_position + 1
+            matching_positions = [
+                position
+                for position, entry in enumerate(index.entries)
+                if (state is None or entry.state == state)
+                and (normalized_import_id is None or entry.import_id == normalized_import_id)
+            ]
+            selected_positions = [
+                position for position in matching_positions if position >= start_position
+            ][:limit]
+            selected_entries = tuple(index.entries[position] for position in selected_positions)
+            items = tuple(
+                self._review_for_entry_unlocked(source_id, entry) for entry in selected_entries
+            )
+            has_more = bool(selected_positions) and any(
+                position > selected_positions[-1] for position in matching_positions
+            )
+            return InsuranceMetadataReviewPage(
+                items=items,
+                next_cursor=(
+                    _encode_review_cursor(
+                        generation=index.generation,
+                        position=selected_positions[-1],
+                        filename=index.entries[selected_positions[-1]].filename,
+                        state=state,
+                        import_id=normalized_import_id,
+                    )
+                    if has_more
+                    else None
+                ),
+                total=len(matching_positions),
+                summary=index.summary,
+            )
 
     def get(self, source_id: str, review_id: str) -> InsuranceMetadataReview | None:
+        with self._lock, self._file_lock:
+            index = self._load_or_rebuild_index_unlocked(source_id)
+            entry = next((item for item in index.entries if item.review_id == review_id), None)
+            if entry is None:
+                return None
+            return self._review_for_entry_unlocked(source_id, entry)
+
+    def _get_unlocked(self, source_id: str, review_id: str) -> InsuranceMetadataReview | None:
         path = self._review_path(source_id, review_id)
         if not path.exists():
             return None
@@ -657,6 +741,10 @@ class FilesystemInsuranceMetadataReviewRepository:
         return tuple(sorted(records, key=lambda item: item.canonical_anchor or ""))
 
     def get_import_record(self, import_id: str) -> WorkbookImportRecord | None:
+        with self._lock, self._file_lock:
+            return self._get_import_record_unlocked(import_id)
+
+    def _get_import_record_unlocked(self, import_id: str) -> WorkbookImportRecord | None:
         path = self._imports_root / f"{_safe_identifier(import_id, 'import_id')}.json"
         if not path.exists():
             return None
@@ -666,25 +754,36 @@ class FilesystemInsuranceMetadataReviewRepository:
         self,
         record: WorkbookImportRecord,
         reviews: Iterable[InsuranceMetadataReview],
-    ) -> tuple[InsuranceMetadataReview, ...]:
+    ) -> WorkbookImportPersistResult:
         review_batch = tuple(reviews)
         if any(review.import_id != record.import_id for review in review_batch):
             raise WorkbookValidationError("review import lineage does not match import record")
         import_path = self._imports_root / f"{_safe_identifier(record.import_id, 'import_id')}.json"
         created_import = False
         with self._lock, self._file_lock:
-            current_import = self.get_import_record(record.import_id)
+            current_import = self._get_import_record_unlocked(record.import_id)
             if current_import is not None and current_import != record:
-                raise WorkbookReviewConflictError("workbook import identity already exists")
+                expected_current = record.model_copy(
+                    update={
+                        "created_by": current_import.created_by,
+                        "created_at": current_import.created_at,
+                    }
+                )
+                if current_import != expected_current:
+                    raise WorkbookReviewConflictError("workbook import identity already exists")
             if current_import is None:
                 self._write_payload(import_path, record.model_dump(mode="json"))
                 created_import = True
             try:
-                return self._put_many_unlocked(review_batch)
+                self._put_many_unlocked(review_batch)
             except Exception:
-                if created_import:
+                if (
+                    created_import
+                    and not self._review_index_pending_path(record.source_id).exists()
+                ):
                     import_path.unlink(missing_ok=True)
                 raise
+            return WorkbookImportPersistResult(created=created_import)
 
     def put_many(
         self, reviews: Iterable[InsuranceMetadataReview]
@@ -720,7 +819,9 @@ class FilesystemInsuranceMetadataReviewRepository:
         authority_by_anchor = {record.canonical_anchor: record for record in authority_records}
         pdf_anchors = [record.canonical_anchor for record in pdf_draft_records]
         if len(pdf_anchors) != len(set(pdf_anchors)):
-            raise WorkbookValidationError("PDF metadata records contain duplicate canonical anchors")
+            raise WorkbookValidationError(
+                "PDF metadata records contain duplicate canonical anchors"
+            )
         for record in pdf_draft_records:
             authority = authority_by_anchor.get(record.canonical_anchor)
             if authority is None or (
@@ -775,7 +876,6 @@ class FilesystemInsuranceMetadataReviewRepository:
     def _put_many_unlocked(
         self, review_batch: tuple[InsuranceMetadataReview, ...]
     ) -> tuple[InsuranceMetadataReview, ...]:
-        created_paths: list[Path] = []
         if not review_batch:
             raise WorkbookValidationError("metadata review batch must not be empty")
         identities = {(review.source_id, review.review_id) for review in review_batch}
@@ -785,20 +885,25 @@ class FilesystemInsuranceMetadataReviewRepository:
             expected = _review_identity(review.model_copy(update={"review_identity": "0" * 64}))
             if review.review_identity != expected:
                 raise WorkbookValidationError("metadata review identity does not match its content")
-        try:
-            for review in review_batch:
-                current = self.get(review.source_id, review.review_id)
+        by_source: dict[str, list[InsuranceMetadataReview]] = {}
+        for review in review_batch:
+            by_source.setdefault(review.source_id, []).append(review)
+        for source_id, source_reviews in by_source.items():
+            index = self._load_or_rebuild_index_unlocked(source_id)
+            changed: list[InsuranceMetadataReview] = []
+            for review in source_reviews:
+                current = self._get_unlocked(review.source_id, review.review_id)
                 if current is not None and current != review:
                     raise WorkbookReviewConflictError("metadata review identity already exists")
-            for review in review_batch:
-                path = self._review_path(review.source_id, review.review_id)
-                if not path.exists():
-                    created_paths.append(path)
-                self._write(review)
-        except Exception:
-            for path in created_paths:
-                path.unlink(missing_ok=True)
-            raise
+                if current is None:
+                    changed.append(review)
+            if changed:
+                next_index = self._updated_index(index, tuple(changed))
+                self._commit_review_transaction_unlocked(
+                    source_id,
+                    reviews=tuple(changed),
+                    index=next_index,
+                )
         return review_batch
 
     def resolve(
@@ -814,7 +919,8 @@ class FilesystemInsuranceMetadataReviewRepository:
         corrections: Mapping[str, str | int | None] | None = None,
     ) -> InsuranceMetadataReview:
         with self._lock, self._file_lock:
-            current = self.get(source_id, review_id)
+            index = self._load_or_rebuild_index_unlocked(source_id)
+            current = self._get_unlocked(source_id, review_id)
             if current is None:
                 raise KeyError(review_id)
             if (
@@ -896,8 +1002,179 @@ class FilesystemInsuranceMetadataReviewRepository:
                 {**updated.model_dump(), "review_identity": _review_identity(updated)}
             )
             self._append_decision(current, decision)
-            self._write(updated)
+            self._commit_review_transaction_unlocked(
+                source_id,
+                reviews=(updated,),
+                index=self._updated_index(index, (updated,)),
+            )
             return updated
+
+    def _load_or_rebuild_index_unlocked(
+        self,
+        source_id: str,
+    ) -> _InsuranceMetadataReviewIndex:
+        self._recover_review_transaction_unlocked(source_id)
+        path = self._review_index_path(source_id)
+        if path.exists():
+            try:
+                index = _InsuranceMetadataReviewIndex.model_validate_json(path.read_bytes())
+            except (OSError, ValidationError, ValueError):
+                invalid_path = path.with_name(f"{path.name}.invalid-{os.getpid()}")
+                os.replace(path, invalid_path)
+                _fsync_path_directory(path.parent)
+            else:
+                if index.source_id != source_id:
+                    raise WorkbookValidationError(
+                        "metadata review index source identity is invalid"
+                    )
+                return index
+        return self._rebuild_index_unlocked(source_id)
+
+    def _rebuild_index_unlocked(
+        self,
+        source_id: str,
+    ) -> _InsuranceMetadataReviewIndex:
+        path = self._review_index_path(source_id)
+        source_dir = self._source_dir(source_id)
+        reviews = (
+            tuple(
+                InsuranceMetadataReview.model_validate_json(path.read_bytes())
+                for path in sorted(source_dir.glob("*.json"))
+                if path.is_file() and not path.is_symlink()
+            )
+            if source_dir.exists()
+            else ()
+        )
+        if any(review.source_id != source_id for review in reviews):
+            raise WorkbookValidationError("metadata review file source identity is invalid")
+        entries = tuple(
+            sorted(
+                (_review_index_entry(review) for review in reviews), key=lambda item: item.filename
+            )
+        )
+        index = _InsuranceMetadataReviewIndex(
+            source_id=source_id,
+            generation=1,
+            entries=entries,
+            summary=_review_summary_from_entries(entries),
+        )
+        self._write_payload(path, index.model_dump(mode="json"))
+        return index
+
+    def _updated_index(
+        self,
+        current: _InsuranceMetadataReviewIndex,
+        reviews: tuple[InsuranceMetadataReview, ...],
+    ) -> _InsuranceMetadataReviewIndex:
+        entries = {entry.review_id: entry for entry in current.entries}
+        entries.update((review.review_id, _review_index_entry(review)) for review in reviews)
+        ordered = tuple(sorted(entries.values(), key=lambda item: item.filename))
+        return _InsuranceMetadataReviewIndex(
+            source_id=current.source_id,
+            generation=current.generation + 1,
+            entries=ordered,
+            summary=_review_summary_from_entries(ordered),
+        )
+
+    def _commit_review_transaction_unlocked(
+        self,
+        source_id: str,
+        *,
+        reviews: tuple[InsuranceMetadataReview, ...],
+        index: _InsuranceMetadataReviewIndex,
+    ) -> None:
+        if index.source_id != source_id or any(review.source_id != source_id for review in reviews):
+            raise WorkbookValidationError("metadata review transaction source mismatch")
+        self._recover_review_transaction_unlocked(source_id)
+        prior_index = self._load_or_rebuild_index_unlocked(source_id)
+        if index.generation != prior_index.generation + 1:
+            raise WorkbookReviewConflictError("metadata review index generation changed")
+        transaction = _InsuranceMetadataReviewIndexTransaction(
+            source_id=source_id,
+            prior_index=prior_index,
+            index=index,
+            reviews=reviews,
+            prior_reviews=tuple(
+                self._get_unlocked(source_id, review.review_id) for review in reviews
+            ),
+        )
+        pending_path = self._review_index_pending_path(source_id)
+        self._write_payload(pending_path, transaction.model_dump(mode="json"))
+        try:
+            for review in reviews:
+                self._write(review)
+            self._write_payload(self._review_index_path(source_id), index.model_dump(mode="json"))
+            pending_path.unlink()
+            _fsync_path_directory(pending_path.parent)
+        except Exception:
+            try:
+                self._rollback_review_transaction_unlocked(transaction)
+            except Exception:
+                # Keep the durable redo journal. The next locked reader completes
+                # the whole transaction rather than exposing a partial batch.
+                pass
+            raise
+
+    def _recover_review_transaction_unlocked(self, source_id: str) -> None:
+        pending_path = self._review_index_pending_path(source_id)
+        if not pending_path.exists():
+            return
+        try:
+            transaction = _InsuranceMetadataReviewIndexTransaction.model_validate_json(
+                pending_path.read_bytes()
+            )
+        except (OSError, ValidationError, ValueError) as exc:
+            raise WorkbookValidationError(
+                "pending metadata review transaction is malformed"
+            ) from exc
+        if transaction.source_id != source_id or transaction.index.source_id != source_id:
+            raise WorkbookValidationError("pending metadata review transaction source mismatch")
+        for review in transaction.reviews:
+            if review.source_id != source_id:
+                raise WorkbookValidationError(
+                    "pending metadata review transaction contains another source"
+                )
+            self._write(review)
+        self._write_payload(
+            self._review_index_path(source_id),
+            transaction.index.model_dump(mode="json"),
+        )
+        pending_path.unlink()
+        _fsync_path_directory(pending_path.parent)
+
+    def _rollback_review_transaction_unlocked(
+        self,
+        transaction: _InsuranceMetadataReviewIndexTransaction,
+    ) -> None:
+        for review, prior in zip(
+            transaction.reviews,
+            transaction.prior_reviews,
+            strict=True,
+        ):
+            if prior is None:
+                self._review_path(transaction.source_id, review.review_id).unlink(missing_ok=True)
+            else:
+                self._write(prior)
+        source_dir = self._source_dir(transaction.source_id)
+        if source_dir.exists():
+            _fsync_path_directory(source_dir)
+        self._write_payload(
+            self._review_index_path(transaction.source_id),
+            transaction.prior_index.model_dump(mode="json"),
+        )
+        pending_path = self._review_index_pending_path(transaction.source_id)
+        pending_path.unlink(missing_ok=True)
+        _fsync_path_directory(pending_path.parent)
+
+    def _review_for_entry_unlocked(
+        self,
+        source_id: str,
+        entry: _InsuranceMetadataReviewIndexEntry,
+    ) -> InsuranceMetadataReview:
+        review = self._get_unlocked(source_id, entry.review_id)
+        if review is None or _review_index_entry(review) != entry:
+            raise WorkbookValidationError("metadata review file does not match committed index")
+        return review
 
     def _source_dir(self, source_id: str) -> Path:
         return self._root / _safe_identifier(source_id, "source_id")
@@ -905,9 +1182,13 @@ class FilesystemInsuranceMetadataReviewRepository:
     def _review_path(self, source_id: str, review_id: str) -> Path:
         return self._source_dir(source_id) / f"{_safe_identifier(review_id, 'review_id')}.json"
 
-    def _authority_revision_dir(
-        self, source_id: str, document_id: str, revision_id: str
-    ) -> Path:
+    def _review_index_path(self, source_id: str) -> Path:
+        return self._indexes_root / f"{_safe_identifier(source_id, 'source_id')}.json"
+
+    def _review_index_pending_path(self, source_id: str) -> Path:
+        return self._indexes_root / f"{_safe_identifier(source_id, 'source_id')}.pending.json"
+
+    def _authority_revision_dir(self, source_id: str, document_id: str, revision_id: str) -> Path:
         return (
             self._authority_root
             / _safe_identifier(source_id, "source_id")
@@ -926,13 +1207,12 @@ class FilesystemInsuranceMetadataReviewRepository:
                 }
             )
         ).hexdigest()
-        return self._authority_revision_dir(
-            record.source_id, record.document_id, record.revision_id
-        ) / f"{identity}.json"
+        return (
+            self._authority_revision_dir(record.source_id, record.document_id, record.revision_id)
+            / f"{identity}.json"
+        )
 
-    def _pdf_draft_revision_dir(
-        self, source_id: str, document_id: str, revision_id: str
-    ) -> Path:
+    def _pdf_draft_revision_dir(self, source_id: str, document_id: str, revision_id: str) -> Path:
         return (
             self._pdf_drafts_root
             / _safe_identifier(source_id, "source_id")
@@ -952,9 +1232,10 @@ class FilesystemInsuranceMetadataReviewRepository:
                 }
             )
         ).hexdigest()
-        return self._pdf_draft_revision_dir(
-            record.source_id, record.document_id, record.revision_id
-        ) / f"{identity}.json"
+        return (
+            self._pdf_draft_revision_dir(record.source_id, record.document_id, record.revision_id)
+            / f"{identity}.json"
+        )
 
     def _append_decision(
         self,
@@ -970,7 +1251,9 @@ class FilesystemInsuranceMetadataReviewRepository:
         if path.exists():
             current = InsuranceMetadataReviewDecision.model_validate_json(path.read_bytes())
             if current != decision:
-                raise WorkbookReviewConflictError("metadata review decision identity already exists")
+                raise WorkbookReviewConflictError(
+                    "metadata review decision identity already exists"
+                )
             return
         self._write_payload(path, decision.model_dump(mode="json"))
 
@@ -1167,9 +1450,7 @@ def _optional_load_workbook() -> Any:
     try:
         module = import_module("openpyxl")
     except ModuleNotFoundError as exc:
-        raise WorkbookValidationError(
-            "workbook import requires the optional hybrid extra"
-        ) from exc
+        raise WorkbookValidationError("workbook import requires the optional hybrid extra") from exc
     loader = getattr(module, "load_workbook", None)
     if not callable(loader):
         raise WorkbookValidationError("openpyxl does not expose a safe workbook loader")
@@ -1199,8 +1480,7 @@ def _validate_relationship_xml(
         if _local_name(relationship.tag).casefold() != "relationship":
             continue
         attributes = {
-            _local_name(key).casefold(): value.strip()
-            for key, value in relationship.attrib.items()
+            _local_name(key).casefold(): value.strip() for key, value in relationship.attrib.items()
         }
         target_mode = attributes.get("targetmode", "").casefold()
         target = attributes.get("target", "")
@@ -1231,7 +1511,9 @@ def _validate_relationship_xml(
         if normalized_target == ".." or normalized_target.startswith("../"):
             raise WorkbookValidationError("workbook relationship escapes the package")
         if normalized_target not in package_members:
-            raise WorkbookValidationError("workbook relationship target is not contained in package")
+            raise WorkbookValidationError(
+                "workbook relationship target is not contained in package"
+            )
         if any(marker in relationship_type for marker in _DANGEROUS_OFFICE_MARKERS):
             raise WorkbookValidationError("workbook executable or embedded content is not accepted")
 
@@ -1448,9 +1730,7 @@ def _validated_corrections(
     result: dict[str, str | int | date | None] = {}
     for key, value in corrections.items():
         if value is None and key in _REQUIRED_APPROVED_METADATA_FIELDS:
-            raise WorkbookValidationError(
-                f"{key} is required for approved insurance rule metadata"
-            )
+            raise WorkbookValidationError(f"{key} is required for approved insurance rule metadata")
         if key == "precedence_order":
             if value is not None and (type(value) is not int or value < 0):
                 raise WorkbookValidationError("precedence_order correction must be nonnegative")
@@ -1466,9 +1746,7 @@ def _validated_corrections(
                 try:
                     result[key] = date.fromisoformat(value)
                 except ValueError as exc:
-                    raise WorkbookValidationError(
-                        f"{key} correction must use YYYY-MM-DD"
-                    ) from exc
+                    raise WorkbookValidationError(f"{key} correction must use YYYY-MM-DD") from exc
         else:
             if value is None:
                 result[key] = None
@@ -1501,9 +1779,7 @@ def _approved_metadata_revision(
 ) -> ApprovedInsuranceRuleMetadataRevision:
     values = review.workbook_draft.model_dump()
     values.update(dict(review.resolved_values))
-    required = {
-        field: values.get(field) for field in _REQUIRED_APPROVED_METADATA_FIELDS
-    }
+    required = {field: values.get(field) for field in _REQUIRED_APPROVED_METADATA_FIELDS}
     if any(value is None for value in required.values()):
         raise WorkbookReviewConflictError(
             "required insurance rule metadata is incomplete and cannot be approved"
@@ -1554,12 +1830,28 @@ def _safe_identifier(value: str, field: str) -> str:
     return normalized
 
 
-def _encode_review_cursor(filename: str) -> str:
-    payload = _canonical_json({"v": 1, "after": filename})
+def _encode_review_cursor(
+    *,
+    generation: int,
+    position: int,
+    filename: str,
+    state: str | None,
+    import_id: str | None,
+) -> str:
+    payload = _canonical_json(
+        {
+            "v": 2,
+            "generation": generation,
+            "position": position,
+            "after": filename,
+            "state": state,
+            "import_id": import_id,
+        }
+    )
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def _decode_review_cursor(cursor: str) -> str:
+def _decode_review_cursor(cursor: str) -> tuple[int, int, str, str | None, str | None]:
     if type(cursor) is not str or not cursor or len(cursor) > 512:
         raise WorkbookValidationError("metadata review cursor is invalid")
     try:
@@ -1569,20 +1861,79 @@ def _decode_review_cursor(cursor: str) -> str:
         raise WorkbookValidationError("metadata review cursor is invalid") from exc
     if (
         not isinstance(payload, dict)
-        or payload.get("v") != 1
-        or not isinstance(payload.get("after"), str)
+        or payload.get("v") != 2
+        or type(payload.get("generation")) is not int
+        or payload["generation"] < 1
+        or type(payload.get("position")) is not int
+        or payload["position"] < 0
+        or type(payload.get("after")) is not str
+        or payload.get("state") not in {*_REVIEW_STATES, None}
+        or (payload.get("import_id") is not None and type(payload["import_id"]) is not str)
     ):
         raise WorkbookValidationError("metadata review cursor is invalid")
-    after = cast(str, payload["after"])
-    if not after.endswith(".json"):
+    filename = cast(str, payload["after"])
+    if not filename.endswith(".json"):
         raise WorkbookValidationError("metadata review cursor is invalid")
     try:
-        identifier = _safe_identifier(after.removesuffix(".json"), "cursor")
+        identifier = _safe_identifier(filename.removesuffix(".json"), "cursor")
     except WorkbookValidationError as exc:
         raise WorkbookValidationError("metadata review cursor is invalid") from exc
-    if after != f"{identifier}.json":
+    if filename != f"{identifier}.json":
         raise WorkbookValidationError("metadata review cursor is invalid")
-    return after
+    import_id = cast(str | None, payload.get("import_id"))
+    if import_id is not None:
+        try:
+            _safe_identifier(import_id, "import_id")
+        except WorkbookValidationError as exc:
+            raise WorkbookValidationError("metadata review cursor is invalid") from exc
+    return (
+        cast(int, payload["generation"]),
+        cast(int, payload["position"]),
+        filename,
+        cast(str | None, payload.get("state")),
+        import_id,
+    )
+
+
+def _review_index_entry(
+    review: InsuranceMetadataReview,
+) -> _InsuranceMetadataReviewIndexEntry:
+    return _InsuranceMetadataReviewIndexEntry(
+        filename=f"{_safe_identifier(review.review_id, 'review_id')}.json",
+        review_id=review.review_id,
+        import_id=review.import_id,
+        state=review.state,
+        review_version=review.review_version,
+        publication_blocked=review.publication_blocked,
+    )
+
+
+def _review_summary_from_entries(
+    entries: Iterable[_InsuranceMetadataReviewIndexEntry],
+) -> InsuranceMetadataReviewSummary:
+    materialized = tuple(entries)
+    counts = {review_state: 0 for review_state in _REVIEW_STATES}
+    for entry in materialized:
+        counts[entry.state] += 1
+    total = len(materialized)
+    return InsuranceMetadataReviewSummary(
+        total=total,
+        unresolved=sum(1 for entry in materialized if entry.publication_blocked),
+        review_required=counts["review_required"],
+        ready_for_review=counts["ready_for_review"],
+        approved=counts["approved"],
+        corrected=counts["corrected"],
+        rejected=counts["rejected"],
+        all_approved=total > 0 and counts["approved"] == total,
+    )
+
+
+def _fsync_path_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _require_nonblank(value: str, field: str) -> str:

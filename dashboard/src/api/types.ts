@@ -1201,9 +1201,11 @@ export interface InsuranceMetadataWorkbookImportResponse {
   import_id: string
   template_revision: 'insurance-rule-metadata.v1'
   row_count: number
+  replayed: boolean
   original_ref: InsuranceMetadataWorkbookArtifactRef
   normalized_ref: InsuranceMetadataWorkbookArtifactRef
   reviews: InsuranceMetadataReview[]
+  meta: InsuranceMetadataReviewsResponse['meta']
 }
 
 export interface DraftValidationResponse {

@@ -793,9 +793,7 @@ def list_tool_source_descriptor_payloads(
     """List built-in trusted Tool Source descriptors."""
 
     _require_operator(identity, OperatorPermission.TOOL_SOURCE_VIEW)
-    data = [
-        descriptor.model_dump(mode="json") for descriptor in list_tool_source_descriptors()
-    ]
+    data = [descriptor.model_dump(mode="json") for descriptor in list_tool_source_descriptors()]
     return {"data": data, "meta": {"total": len(data)}}
 
 
@@ -877,9 +875,7 @@ def update_tool_source(
             source_type=request.source_type,
             provider=request.provider,
             tool_contract_ids=(
-                tuple(request.tool_contract_ids)
-                if request.tool_contract_ids is not None
-                else None
+                tuple(request.tool_contract_ids) if request.tool_contract_ids is not None else None
             ),
             credential_env_ref=request.credential_env_ref,
             params=dict(request.params) if request.params is not None else None,
@@ -1400,7 +1396,12 @@ def import_knowledge_metadata_workbook(
                 "persisted canonical Rule Unit lineage is required for workbook import"
             )
         authority_by_identity = {
-            (record.source_id, record.document_id, record.revision_id, record.canonical_anchor): record
+            (
+                record.source_id,
+                record.document_id,
+                record.revision_id,
+                record.canonical_anchor,
+            ): record
             for record in authority_records
         }
         if len(authority_by_identity) != len(authority_records):
@@ -1513,23 +1514,29 @@ def import_knowledge_metadata_workbook(
                 )
             reviews.append(review)
         persisted = repository.put_import_with_reviews(import_record, reviews)
-        store.record_configuration_operation(
-            ConfigurationOperationAudit(
-                operation_id=f"op_{uuid4().hex[:8]}",
-                operation=ConfigurationOperation.IMPORTED,
-                actor=actor,
-                created_at=datetime.now(UTC).isoformat(),
-                summary=f"Imported insurance metadata workbook {imported.import_id}.",
-                metadata={
-                    "import_id": imported.import_id,
-                    "source_id": source_id,
-                    "document_id": request.document_id,
-                    "revision_id": request.revision_id,
-                    "original_ref_id": imported.original_ref.version_id,
-                    "normalized_ref_id": imported.normalized_ref.version_id,
-                },
-            )
+        page = repository.list_page(
+            source_id,
+            limit=100,
+            import_id=import_record.import_id,
         )
+        if persisted.created:
+            store.record_configuration_operation(
+                ConfigurationOperationAudit(
+                    operation_id=f"op_metadata_import_{imported.import_id}",
+                    operation=ConfigurationOperation.IMPORTED,
+                    actor=actor,
+                    created_at=import_record.created_at.isoformat(),
+                    summary=f"Imported insurance metadata workbook {imported.import_id}.",
+                    metadata={
+                        "import_id": imported.import_id,
+                        "source_id": source_id,
+                        "document_id": request.document_id,
+                        "revision_id": request.revision_id,
+                        "original_ref_id": imported.original_ref.version_id,
+                        "normalized_ref_id": imported.normalized_ref.version_id,
+                    },
+                )
+            )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     except (ImmutableArtifactError, WorkbookValidationError) as exc:
@@ -1540,9 +1547,16 @@ def import_knowledge_metadata_workbook(
         "import_id": imported.import_id,
         "template_revision": imported.template_revision,
         "row_count": len(imported.rows),
+        "replayed": not persisted.created,
         "original_ref": imported.original_ref.model_dump(mode="json"),
         "normalized_ref": imported.normalized_ref.model_dump(mode="json"),
-        "reviews": [_metadata_review_payload(review) for review in persisted],
+        "reviews": [_metadata_review_payload(review) for review in page.items],
+        "meta": {
+            "total": page.total,
+            "unresolved": page.summary.unresolved,
+            "next_cursor": page.next_cursor,
+            "summary": page.summary.model_dump(mode="json"),
+        },
     }
 
 
@@ -1553,6 +1567,7 @@ def list_knowledge_metadata_reviews(
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = Query(default=None, max_length=512),
     state: str | None = Query(default=None),
+    import_id: str | None = Query(default=None),
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """List trace-safe metadata review projections for one Hybrid Source."""
@@ -1568,9 +1583,12 @@ def list_knowledge_metadata_reviews(
             limit=limit,
             cursor=cursor,
             state=state,
+            import_id=import_id,
         )
     except WorkbookValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except WorkbookReviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
         "data": [_metadata_review_payload(review) for review in page.items],
         "meta": {
@@ -2371,9 +2389,7 @@ def preview_config_draft_workflow_stage(
         manifest = load_agent_manifest(package_dir / "agent.yaml")
         descriptor = resolve_workflow_template(manifest.workflow.template)
         stage_descriptor = descriptor.stage(stage_id)
-        prompt = WorkflowStagePromptConfig(
-            **_workflow_stage_prompt_request_payload(request.prompt)
-        )
+        prompt = WorkflowStagePromptConfig(**_workflow_stage_prompt_request_payload(request.prompt))
         validate_workflow_stage_prompt_config(
             stage_id=stage_id,
             prompt=prompt,
@@ -2561,8 +2577,7 @@ def _validation_model_connection_warnings(
                 "connection_id": connection_id,
                 "role": role,
                 "message": (
-                    "Publish is blocked while Shared Model Connection "
-                    f"{connection_id} is archived."
+                    f"Publish is blocked while Shared Model Connection {connection_id} is archived."
                 ),
             }
         )
@@ -3061,14 +3076,10 @@ def _create_business_flow_skill_pack_bundle(
     business_flows = skills.get("business_flows") or []
     if not isinstance(business_flows, list):
         raise ValueError("agent_yaml capabilities.skills.business_flows must be a list.")
-    if any(
-        isinstance(item, Mapping) and item.get("id") == request.id
-        for item in business_flows
-    ):
+    if any(isinstance(item, Mapping) and item.get("id") == request.id for item in business_flows):
         raise ValueError(f"Business Flow Skill Pack already exists: {request.id}")
     if request.default and any(
-        isinstance(item, Mapping) and item.get("default") is True
-        for item in business_flows
+        isinstance(item, Mapping) and item.get("default") is True for item in business_flows
     ):
         raise ValueError("Only one Business Flow Skill Pack can be marked default.")
 
@@ -3240,9 +3251,7 @@ def _business_flow_bindings(raw: dict[str, Any]) -> list[Any]:
 
 def _has_other_default_business_flow(raw: dict[str, Any], pack_id: str) -> bool:
     return any(
-        isinstance(item, Mapping)
-        and item.get("id") != pack_id
-        and item.get("default") is True
+        isinstance(item, Mapping) and item.get("id") != pack_id and item.get("default") is True
         for item in _business_flow_bindings(raw)
     )
 
@@ -3268,12 +3277,8 @@ def _business_flow_skill_pack_payload(
         )
         for slot in slots
     ]
-    configured_stage_ids = [
-        item["stage_id"] for item in stage_addenda if item["configured"]
-    ]
-    missing_stage_ids = [
-        item["stage_id"] for item in stage_addenda if not item["configured"]
-    ]
+    configured_stage_ids = [item["stage_id"] for item in stage_addenda if item["configured"]]
+    missing_stage_ids = [item["stage_id"] for item in stage_addenda if not item["configured"]]
     return {
         "id": skill_pack.id,
         "label": skill_pack.label,

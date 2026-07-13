@@ -500,9 +500,7 @@ def _persist_completed_hybrid_metadata_authority(
         content=original,
         actor="test-operator",
     )
-    claimed_upload = store.claim_next_quarantined_knowledge_upload(
-        source_id="ks_hybrid_index"
-    )
+    claimed_upload = store.claim_next_quarantined_knowledge_upload(source_id="ks_hybrid_index")
     assert claimed_upload is not None and claimed_upload.claim_token is not None
     document, _job = store.accept_hybrid_quarantined_knowledge_upload(
         source_id="ks_hybrid_index",
@@ -588,9 +586,7 @@ def _persist_completed_hybrid_metadata_authority(
                         revision_id=request.revision_id,
                     ),
                     pdf_drafts=(
-                        (InsuranceMetadataDraftInput(**common),)
-                        if include_pdf_draft
-                        else ()
+                        (InsuranceMetadataDraftInput(**common),) if include_pdf_draft else ()
                     ),
                 ),
             )
@@ -3804,9 +3800,7 @@ def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
 
     request_payload = {
         "filename": "metadata-workbook.xlsx",
-        "content_type": (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        "content_type": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         "content_base64": base64.b64encode(workbook_bytes).decode("ascii"),
         "document_id": document_id,
         "revision_id": revision_id,
@@ -3822,6 +3816,10 @@ def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
         in client.get("/api/openapi.json").json()["paths"]
     )
     payload = response.json()
+    assert payload["replayed"] is False
+    assert payload["meta"]["total"] == 1
+    assert payload["meta"]["next_cursor"] is None
+    assert payload["meta"]["summary"]["total"] == 1
     assert payload["template_revision"] == "insurance-rule-metadata.v1"
     assert payload["row_count"] == 1
     assert payload["original_ref"]["artifact_uri"].startswith("file://")
@@ -3842,9 +3840,7 @@ def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
     assert import_record.created_by == "test-operator"
     assert import_record.created_at.tzinfo is not None
     assert import_record.created_at.utcoffset() is not None
-    assert import_record.rows[0].metadata_draft_id == payload["reviews"][0][
-        "workbook_draft_id"
-    ]
+    assert import_record.rows[0].metadata_draft_id == payload["reviews"][0]["workbook_draft_id"]
     audit_payloads = [
         json.loads(path.read_text())
         for path in sorted(
@@ -3852,9 +3848,7 @@ def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
         )
     ]
     import_audit = next(
-        item
-        for item in audit_payloads
-        if item["metadata"].get("import_id") == payload["import_id"]
+        item for item in audit_payloads if item["metadata"].get("import_id") == payload["import_id"]
     )
     assert import_audit["operation"] == "imported"
     assert import_audit["actor"] == "test-operator"
@@ -3873,13 +3867,20 @@ def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
     )
     assert replayed.status_code == 200
     assert replayed.json()["import_id"] == payload["import_id"]
+    assert replayed.json()["replayed"] is True
     replayed_record = FilesystemInsuranceMetadataReviewRepository(
         _configuration_store(client).root_dir
     ).get_import_record(payload["import_id"])
     assert replayed_record == import_record
-    listed = client.get(
-        "/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews"
-    )
+    replay_audits = [
+        json.loads(path.read_text())
+        for path in sorted(
+            (_configuration_store(client).root_dir / "configuration_audit").glob("*.json")
+        )
+        if json.loads(path.read_text())["metadata"].get("import_id") == payload["import_id"]
+    ]
+    assert len(replay_audits) == 1
+    listed = client.get("/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews")
     assert listed.status_code == 200
     assert listed.json()["data"] == payload["reviews"]
     view_only_client = _client_with_operator_permissions(
@@ -3985,15 +3986,9 @@ def test_metadata_review_routes_enforce_exact_identity_and_conflict_resolution(
     path = f"/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews/{seeded['review_id']}"
 
     listed = client.get(path.rsplit("/", 1)[0])
-    filtered = client.get(
-        path.rsplit("/", 1)[0], params={"limit": 1, "state": "review_required"}
-    )
-    invalid_cursor = client.get(
-        path.rsplit("/", 1)[0], params={"cursor": "not-a-valid-cursor"}
-    )
-    invalid_state = client.get(
-        path.rsplit("/", 1)[0], params={"state": "not-a-review-state"}
-    )
+    filtered = client.get(path.rsplit("/", 1)[0], params={"limit": 1, "state": "review_required"})
+    invalid_cursor = client.get(path.rsplit("/", 1)[0], params={"cursor": "not-a-valid-cursor"})
+    invalid_state = client.get(path.rsplit("/", 1)[0], params={"state": "not-a-review-state"})
     blocked = client.post(
         f"{path}/approve",
         json={
@@ -4056,9 +4051,10 @@ def test_metadata_review_routes_enforce_exact_identity_and_conflict_resolution(
     assert corrected.json()["conflicts"] == []
     assert corrected.json()["publication_blocked"] is True
     assert [item["action"] for item in corrected.json()["decision_history"]] == ["correct"]
-    assert corrected.json()["decision_history"][0]["prior_review_identity"] == seeded[
-        "review_identity"
-    ]
+    assert (
+        corrected.json()["decision_history"][0]["prior_review_identity"]
+        == seeded["review_identity"]
+    )
     assert stale.status_code == 409
     assert approved.status_code == 200
     assert approved.json()["state"] == "approved"
