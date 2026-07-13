@@ -119,6 +119,7 @@ def merge_selected_results(
         _merge_page(page, page_lookup, tuple(by_page.get(page.page_number, ())))
         for page in docling.pages
     )
+    _validate_merged_continuations(merged_pages)
     signals = tuple(
         StructuredQualitySignal(
             code=f"paddle_{decision.boundary_kind}_replacement",
@@ -224,6 +225,7 @@ def _merge_page(
     )
     validate_page_geometry_and_bounds(merged)
     _require_unique_boundary_ids(merged, parser="merged")
+    _validate_merged_reading_order(merged)
     return merged
 
 
@@ -252,22 +254,28 @@ def _require_unique_boundary_ids(page: StructuredPage, *, parser: str) -> None:
 
 
 def _validate_block_replacement(original: StructuredBlock, selected: StructuredBlock) -> None:
-    if (
-        selected.block_type != original.block_type
-        or selected.reading_order != original.reading_order
-        or selected.heading_level != original.heading_level
-        or selected.heading_path != original.heading_path
-    ):
-        raise ValueError("Paddle block is incompatible with the selected canonical boundary")
     if not _bbox_compatible(original.bbox, selected.bbox):
         raise ValueError("Paddle block violates the canonical boundary geometry policy")
 
 
 def _validate_table_replacement(original: StructuredTable, selected: StructuredTable) -> None:
-    if selected.continuation_of != original.continuation_of:
-        raise ValueError("Paddle table continuation is incompatible with the selected boundary")
     if not _bbox_compatible(original.bbox, selected.bbox):
         raise ValueError("Paddle table violates the canonical boundary geometry policy")
+
+
+def _validate_merged_reading_order(page: StructuredPage) -> None:
+    orders = sorted(block.reading_order for block in page.blocks)
+    if any(actual != expected for expected, actual in enumerate(orders)):
+        raise ValueError("merged page reading order remains ambiguous")
+
+
+def _validate_merged_continuations(pages: tuple[StructuredPage, ...]) -> None:
+    prior_table_ids: set[str] = set()
+    for page in pages:
+        for table in page.tables:
+            if table.continuation_of is not None and table.continuation_of not in prior_table_ids:
+                raise ValueError("merged table continuation remains unresolved")
+        prior_table_ids.update(table.table_id for table in page.tables)
 
 
 def _bbox_compatible(original: BoundingBox, selected: BoundingBox) -> bool:

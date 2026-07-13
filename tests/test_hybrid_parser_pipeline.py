@@ -327,7 +327,7 @@ def test_merge_rejects_duplicate_boundaries_before_dict_projection() -> None:
         )
 
 
-def test_merge_rejects_incompatible_block_lineage_and_geometry() -> None:
+def test_merge_rejects_replacement_that_leaves_ambiguous_reading_order() -> None:
     docling = canonicalize_docling(parser_response("docling-simple.json"), build=build_id())
     paddle_page = canonicalize_paddle_page(
         parser_response("paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64),
@@ -338,7 +338,7 @@ def test_merge_rejects_incompatible_block_lineage_and_geometry() -> None:
     incompatible_page = paddle_page.page.model_copy(update={"blocks": (wrong_order,)})
     incompatible = paddle_page.model_copy(update={"page": incompatible_page})
 
-    with pytest.raises(ValueError, match="incompatible"):
+    with pytest.raises(ValueError, match="reading order"):
         merge_selected_results(
             docling,
             (incompatible,),
@@ -353,6 +353,36 @@ def test_merge_rejects_incompatible_block_lineage_and_geometry() -> None:
             ),
         )
 
+
+def test_merge_allows_explicit_paddle_reading_order_correction() -> None:
+    response = parser_response("docling-simple.json")
+    payload = response.vendor_json
+    payload["pages"][0]["blocks"][1]["reading_order"] = 2
+    docling = canonicalize_docling(with_vendor_payload(response, payload), build=build_id())
+    assert [block.reading_order for block in docling.pages[0].blocks] == [0, 2]
+
+    paddle_page = canonicalize_paddle_page(
+        parser_response("paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64),
+        build=build_id(adapter="paddle", configuration_sha256="c" * 64),
+    )
+    result = merge_selected_results(
+        docling,
+        (paddle_page,),
+        decisions=(
+            MergeSelection(
+                page_number=1,
+                boundary_kind="block",
+                docling_id="paragraph-1",
+                paddle_id="ocr-paragraph-1",
+                reason="correct Docling reading-order gap",
+            ),
+        ),
+    )
+
+    assert [block.reading_order for block in result.artifact.pages[0].blocks] == [0, 1]
+    assert result.merge_records[0].reason == "correct Docling reading-order gap"
+
+    selected = paddle_page.page.blocks[0]
     far_bbox = selected.bbox.model_copy(update={"y0": 300.0, "y1": 340.0})
     far_block = selected.model_copy(update={"bbox": far_bbox})
     far_page = paddle_page.page.model_copy(update={"blocks": (far_block,)})
@@ -373,13 +403,16 @@ def test_merge_rejects_incompatible_block_lineage_and_geometry() -> None:
         )
 
 
-def test_merge_rejects_incompatible_table_continuation_boundary() -> None:
-    docling = canonicalize_docling(parser_response("docling-complex-table.json"), build=build_id())
+def test_merge_allows_explicit_table_continuation_correction() -> None:
+    response = parser_response("docling-complex-table.json")
+    payload = response.vendor_json
+    payload["pages"][0]["tables"][0]["continuation_of"] = "missing-table"
+    docling = canonicalize_docling(with_vendor_payload(response, payload), build=build_id())
     source_table = docling.pages[0].tables[0]
     paddle_table = source_table.model_copy(
         update={
             "table_id": "paddle-table",
-            "continuation_of": "different-table",
+            "continuation_of": None,
             "cells": tuple(
                 cell.model_copy(update={"source_method": "ocr"}) for cell in source_table.cells
             ),
@@ -396,20 +429,22 @@ def test_merge_rejects_incompatible_table_continuation_boundary() -> None:
         page=paddle_page,
     )
 
-    with pytest.raises(ValueError, match="continuation is incompatible"):
-        merge_selected_results(
-            docling,
-            (candidate,),
-            decisions=(
-                MergeSelection(
-                    page_number=12,
-                    boundary_kind="table",
-                    docling_id="table-4",
-                    paddle_id="paddle-table",
-                    reason="table reconstruction",
-                ),
+    result = merge_selected_results(
+        docling,
+        (candidate,),
+        decisions=(
+            MergeSelection(
+                page_number=12,
+                boundary_kind="table",
+                docling_id="table-4",
+                paddle_id="paddle-table",
+                reason="correct unresolved continuation",
             ),
-        )
+        ),
+    )
+
+    assert result.artifact.pages[0].tables[0].continuation_of is None
+    assert result.artifact.pages[0].tables[0].cells[0].source_method == "ocr"
 
 
 @pytest.mark.parametrize(
