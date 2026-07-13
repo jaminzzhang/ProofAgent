@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import {
   fetchInsuranceMetadataReviews,
@@ -321,4 +321,58 @@ it('uses global summary across bounded pages and keeps terminal actions disabled
     limit: 100, cursor: 'page_2',
   })
   expect(screen.getByText('Showing 1 of 2 reviews')).toBeVisible()
+})
+
+it('does not let a late page response overwrite a newer approval', async () => {
+  const pending = readyReview('review_epoch', 'doc_epoch')
+  const stalePage = deferred<Awaited<ReturnType<typeof fetchInsuranceMetadataReviews>>>()
+  const approval = deferred<InsuranceMetadataReview>()
+  const readySummary = {
+    total: 1, unresolved: 1, review_required: 0, ready_for_review: 1,
+    approved: 0, corrected: 0, rejected: 0, all_approved: false,
+  }
+  vi.mocked(fetchInsuranceMetadataReviews)
+    .mockResolvedValueOnce({
+      data: [pending],
+      meta: { total: 1, unresolved: 1, next_cursor: 'stale_page', summary: readySummary },
+    })
+    .mockReturnValueOnce(stalePage.promise)
+  vi.mocked(resolveInsuranceMetadataReview).mockReturnValue(approval.promise)
+
+  render(<KnowledgeReviewPanel sourceId="ks_1" onReady={vi.fn()} />)
+  await screen.findByText('doc_epoch · rev_1')
+  fireEvent.click(screen.getByRole('button', { name: 'Load next reviews' }))
+  fireEvent.change(screen.getByLabelText('Review reason'), {
+    target: { value: 'Approve while the stale page is still loading.' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Approve review' }))
+  expect(screen.getByRole('button', { name: 'Load next reviews' })).toBeDisabled()
+
+  await act(async () => {
+    approval.resolve({
+      ...pending,
+      state: 'approved',
+      publication_blocked: false,
+      review_version: 2,
+      review_identity: '9'.repeat(64),
+      approved_metadata_revision_id: 'approved_metadata_epoch',
+    })
+    await approval.promise
+  })
+  await waitFor(() => {
+    expect(screen.getByText('approved')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Confirm publication readiness' })).toBeEnabled()
+  })
+
+  await act(async () => {
+    stalePage.resolve({
+      data: [pending],
+      meta: { total: 1, unresolved: 1, next_cursor: null, summary: readySummary },
+    })
+    await stalePage.promise
+  })
+
+  expect(screen.getByText('approved')).toBeVisible()
+  expect(screen.queryByText('ready_for_review')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Confirm publication readiness' })).toBeEnabled()
 })

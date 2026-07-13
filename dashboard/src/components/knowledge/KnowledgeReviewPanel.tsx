@@ -29,12 +29,14 @@ export function KnowledgeReviewPanel({
   const [error, setError] = useState<string | null>(null)
   const generationRef = useRef(0)
   const pageRequestRef = useRef(0)
+  const dataEpochRef = useRef(0)
 
   useEffect(() => {
     const generation = generationRef.current + 1
     generationRef.current = generation
     const pageRequest = pageRequestRef.current + 1
     pageRequestRef.current = pageRequest
+    dataEpochRef.current += 1
     setLoading(true)
     setReviews([])
     setSummary(null)
@@ -72,9 +74,12 @@ export function KnowledgeReviewPanel({
   }, [summary, onPublicationBlockedChange])
 
   async function loadPage(cursor: string | null, direction: 'next' | 'previous') {
+    if (Object.values(busyByReview).some(Boolean)) return
     const generation = generationRef.current
     const pageRequest = pageRequestRef.current + 1
     pageRequestRef.current = pageRequest
+    const dataEpoch = dataEpochRef.current + 1
+    dataEpochRef.current = dataEpoch
     setLoadingPage(true)
     setError(null)
     try {
@@ -82,7 +87,11 @@ export function KnowledgeReviewPanel({
         limit: 100,
         ...(cursor ? { cursor } : {}),
       })
-      if (generationRef.current !== generation || pageRequestRef.current !== pageRequest) return
+      if (
+        generationRef.current !== generation
+        || pageRequestRef.current !== pageRequest
+        || dataEpochRef.current !== dataEpoch
+      ) return
       setReviews(response.data)
       setSummary(response.meta.summary)
       setNextCursor(response.meta.next_cursor)
@@ -111,6 +120,9 @@ export function KnowledgeReviewPanel({
     if (!reason.trim()) return
     const generation = generationRef.current
     const requestedSourceId = sourceId
+    pageRequestRef.current += 1
+    dataEpochRef.current += 1
+    setLoadingPage(false)
     setBusyByReview((current) => ({ ...current, [review.review_id]: true }))
     setErrorByReview((current) => {
       const next = { ...current }
@@ -136,6 +148,7 @@ export function KnowledgeReviewPanel({
       }
     } finally {
       if (generationRef.current === generation && sourceId === requestedSourceId) {
+        dataEpochRef.current += 1
         setBusyByReview((current) => {
           const next = { ...current }
           delete next[review.review_id]
@@ -147,6 +160,7 @@ export function KnowledgeReviewPanel({
 
   const publicationBlocked = (summary?.unresolved ?? 0) > 0
   const publicationReady = summary?.all_approved ?? false
+  const mutationBusy = Object.values(busyByReview).some(Boolean)
 
   return (
     <section
@@ -278,7 +292,7 @@ export function KnowledgeReviewPanel({
           <Button
             type="button"
             variant="outline"
-            disabled={previousCursors.length === 0 || loadingPage}
+            disabled={previousCursors.length === 0 || loadingPage || mutationBusy}
             onClick={() => void loadPage(previousCursors.at(-1) ?? null, 'previous')}
           >
             Previous reviews
@@ -289,7 +303,7 @@ export function KnowledgeReviewPanel({
           <Button
             type="button"
             variant="outline"
-            disabled={nextCursor === null || loadingPage}
+            disabled={nextCursor === null || loadingPage || mutationBusy}
             onClick={() => nextCursor && void loadPage(nextCursor, 'next')}
           >
             Load next reviews
