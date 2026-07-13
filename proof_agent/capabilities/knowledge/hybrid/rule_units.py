@@ -65,7 +65,7 @@ _CHINESE_BARE_ZHI_DEFINITION_STATEMENT = re.compile(
     ^\s*
     (?:["“](?P<quoted>[^"”\r\n]{1,64})["”]\s*[:：,，]?
       |(?P<plain>[^，。；：:\s][^，。；：:\r\n]{0,63}?)\s*[:：,，])
-    \s*指\s*
+    \s*指(?!向|出|示|导|定|派|令|引|控|责|挥|明|代|标|数|针|纹|甲|摘|认|望|教)\s*
     (?P<body>\S.*?)\s*$
     """,
     re.DOTALL | re.VERBOSE,

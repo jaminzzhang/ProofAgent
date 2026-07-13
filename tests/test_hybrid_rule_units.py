@@ -736,7 +736,14 @@ def test_ambiguous_duplicate_referenced_definitions_require_review() -> None:
 
 @pytest.mark.parametrize(
     "cross_reference",
-    ("详见本合同释义章节。", "See the definition section.", "本条所指的投保人须签字。"),
+    (
+        "详见本合同释义章节。",
+        "See the definition section.",
+        "本条所指的投保人须签字。",
+        "箭头：指向右侧。",
+        "本条：指出本合同无效。",
+        "该标志：指示投保人签字。",
+    ),
 )
 def test_generic_definition_cross_references_are_ordinary_content(
     cross_reference: str,
