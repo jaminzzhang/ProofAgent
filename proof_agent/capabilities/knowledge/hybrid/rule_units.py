@@ -42,6 +42,7 @@ RuleUnitKind = Literal["document", "clause", "section", "table_row", "row_group"
 _DEFINITION_PATTERN = re.compile(
     r"(?:\bmeans\b|\bdefinition\b|\bis defined as\b|是指|定义为|释义)", re.IGNORECASE
 )
+_DEFINITION_CONTENT_BLOCK_TYPES = frozenset({"paragraph", "list_item"})
 
 
 class _RuleProjectionModel(FrozenModel):
@@ -59,6 +60,8 @@ class RuleUnitProjectionLimits(_RuleProjectionModel):
     max_cells: PositiveInt = 250_000
     max_units: PositiveInt = 100_000
     max_text_characters: PositiveInt = 50_000_000
+    max_unit_output_characters: PositiveInt = 5_000_000
+    max_document_output_characters: PositiveInt = 50_000_000
     max_work_units: PositiveInt = 5_000_000
 
 
@@ -84,6 +87,36 @@ class RuleUnitProjectionWorkCounter:
 
 
 DEFAULT_RULE_UNIT_PROJECTION_LIMITS = RuleUnitProjectionLimits()
+
+
+@dataclass(slots=True)
+class _ProjectionOutputBudget:
+    max_unit_characters: int
+    max_document_characters: int
+    work: RuleUnitProjectionWorkCounter
+    used: int = 0
+
+    def preflight_content(self, character_count: int) -> None:
+        """Reject and charge a content allocation before constructing its string."""
+
+        self._check(character_count)
+        self.work.consume(character_count)
+
+    def commit_unit(self, character_count: int, *, precharged: int) -> None:
+        if precharged > character_count:
+            raise ValueError("precharged output cannot exceed unit output")
+        self._check(character_count)
+        self.used += character_count
+
+    def _check(self, character_count: int) -> None:
+        if character_count > self.max_unit_characters:
+            raise RuleUnitProjectionReviewRequired(
+                "projected rule-unit output characters exceed the limit"
+            )
+        if self.used + character_count > self.max_document_characters:
+            raise RuleUnitProjectionReviewRequired(
+                "projected document output characters exceed the limit"
+            )
 
 
 PageBoundingBox = InsuranceRulePageBoundingBox
@@ -226,17 +259,24 @@ def project_rule_units(
         limits=limits,
         work=work_counter,
     )
+    output = _ProjectionOutputBudget(
+        max_unit_characters=limits.max_unit_output_characters,
+        max_document_characters=limits.max_document_output_characters,
+        work=work_counter,
+    )
     source_id = source_id.strip()
     definitions = _build_definition_index(artifact.pages, work=work_counter)
     block_candidates = _project_blocks(
         artifact.pages,
         definitions=definitions,
         work=work_counter,
+        output=output,
     )
     table_candidates = _project_tables(
         artifact.pages,
         definitions=definitions,
         work=work_counter,
+        output=output,
     )
     candidates = sorted(
         (*block_candidates, *table_candidates),
@@ -403,7 +443,11 @@ def _build_definition_index(
     entries: list[_DefinitionEntry] = []
     for page in pages:
         for block in page.blocks:
-            if not block.text.strip() or _DEFINITION_PATTERN.search(block.text) is None:
+            if (
+                block.block_type not in _DEFINITION_CONTENT_BLOCK_TYPES
+                or not block.text.strip()
+                or _DEFINITION_PATTERN.search(block.text) is None
+            ):
                 continue
             work.consume(1)
             term = _definition_term(block.text)
@@ -457,6 +501,7 @@ def _project_blocks(
     *,
     definitions: _DefinitionIndex,
     work: RuleUnitProjectionWorkCounter,
+    output: _ProjectionOutputBudget,
 ) -> tuple[_ProjectionCandidate, ...]:
     ordered = tuple((page, block) for page in pages for block in page.blocks)
     candidates: list[_ProjectionCandidate] = []
@@ -473,6 +518,7 @@ def _project_blocks(
                         definitions=definitions,
                         unit_kind="clause",
                         work=work,
+                        output=output,
                     )
                 )
             index += 1
@@ -493,6 +539,7 @@ def _project_blocks(
                     section_blocks,
                     definitions,
                     work=work,
+                    output=output,
                 )
             )
         index += 1
@@ -506,18 +553,27 @@ def _block_candidate(
     definitions: _DefinitionIndex,
     unit_kind: Literal["clause"],
     work: RuleUnitProjectionWorkCounter,
+    output: _ProjectionOutputBudget,
 ) -> _ProjectionCandidate:
-    return _ProjectionCandidate(
+    content = block.text.strip()
+    output.preflight_content(len(content))
+    resolved_definitions = definitions.resolve(content, work=work)
+    candidate = _ProjectionCandidate(
         sort_key=(page.page_number, block.reading_order, 1, block.block_id),
         unit_kind=unit_kind,
-        content=block.text.strip(),
+        content=content,
         heading_path=block.heading_path,
-        definitions=definitions.resolve(block.text.strip(), work=work),
+        definitions=resolved_definitions,
         page_numbers=(page.page_number,),
         page_bboxes=(PageBoundingBox(page_number=page.page_number, bbox=block.bbox),),
         block_ids=(block.block_id,),
         anchor_parts=(block.block_id,),
     )
+    output.commit_unit(
+        _candidate_output_characters(candidate),
+        precharged=len(content),
+    )
+    return candidate
 
 
 def _section_candidate(
@@ -526,6 +582,7 @@ def _section_candidate(
     definitions: _DefinitionIndex,
     *,
     work: RuleUnitProjectionWorkCounter,
+    output: _ProjectionOutputBudget,
 ) -> _ProjectionCandidate:
     heading = blocks[0]
     included_block_ids = {block.block_id for block in blocks}
@@ -542,18 +599,27 @@ def _section_candidate(
         )
         for page_number in page_numbers
     )
-    content = "\n".join(block.text.strip() for block in blocks)
-    return _ProjectionCandidate(
+    content_parts = tuple(block.text.strip() for block in blocks)
+    content_characters = sum(map(len, content_parts)) + len(content_parts) - 1
+    output.preflight_content(content_characters)
+    content = "\n".join(content_parts)
+    resolved_definitions = definitions.resolve(content, work=work)
+    candidate = _ProjectionCandidate(
         sort_key=(ordered_slice[0][0].page_number, heading.reading_order, 0, heading.block_id),
         unit_kind="section",
         content=content,
         heading_path=heading.heading_path or (heading.text.strip(),),
-        definitions=definitions.resolve(content, work=work),
+        definitions=resolved_definitions,
         page_numbers=page_numbers,
         page_bboxes=page_bboxes,
         block_ids=tuple(block.block_id for block in blocks),
         anchor_parts=(heading.block_id,),
     )
+    output.commit_unit(
+        _candidate_output_characters(candidate),
+        precharged=content_characters,
+    )
+    return candidate
 
 
 def _project_tables(
@@ -561,6 +627,7 @@ def _project_tables(
     *,
     definitions: _DefinitionIndex,
     work: RuleUnitProjectionWorkCounter,
+    output: _ProjectionOutputBudget,
 ) -> tuple[_ProjectionCandidate, ...]:
     candidates: list[_ProjectionCandidate] = []
     heading_paths = _resolve_table_heading_paths(pages, work=work)
@@ -574,6 +641,7 @@ def _project_tables(
                     heading_path=heading_paths[table.table_id],
                     definitions=definitions,
                     work=work,
+                    output=output,
                 )
             )
     return tuple(candidates)
@@ -659,6 +727,7 @@ def _table_candidates(
     heading_path: tuple[str, ...],
     definitions: _DefinitionIndex,
     work: RuleUnitProjectionWorkCounter,
+    output: _ProjectionOutputBudget,
 ) -> tuple[_ProjectionCandidate, ...]:
     index = _build_table_cell_index(table, work=work)
     if not index.row_groups:
@@ -681,44 +750,47 @@ def _table_candidates(
             )
         )
         row_header = " | ".join(row_headers) or None
-        content = _table_group_content(data_cells, row_numbers)
+        content_parts, content_characters = _table_group_content_parts(data_cells)
+        output.preflight_content(content_characters)
+        content = _table_group_content(content_parts)
         definition_context = "\n".join((content, table_context))
         unit_kind: Literal["table_row", "row_group"] = (
             "row_group" if len(row_numbers) > 1 else "table_row"
         )
-        candidates.append(
-            _ProjectionCandidate(
-                sort_key=(page.page_number, 1_000_000 + table_index, group_index, table.table_id),
-                unit_kind=unit_kind,
-                content=content,
-                heading_path=heading_path,
-                definitions=definitions.resolve(definition_context, work=work),
-                page_numbers=(page.page_number,),
-                page_bboxes=(
-                    PageBoundingBox(
-                        page_number=page.page_number,
-                        bbox=table.bbox,
-                    ),
+        candidate = _ProjectionCandidate(
+            sort_key=(page.page_number, 1_000_000 + table_index, group_index, table.table_id),
+            unit_kind=unit_kind,
+            content=content,
+            heading_path=heading_path,
+            definitions=definitions.resolve(definition_context, work=work),
+            page_numbers=(page.page_number,),
+            page_bboxes=(
+                PageBoundingBox(
+                    page_number=page.page_number,
+                    bbox=table.bbox,
                 ),
-                anchor_parts=(
-                    table.table_id,
-                    "rows-" + "-".join(str(row) for row in row_numbers),
-                ),
-                table_id=table.table_id,
-                table_continuation_id=table.continuation_of,
-                table_title=table_title,
-                table_headers=table_headers,
-                table_context=table_context,
-                row_header=row_header,
-                row_numbers=row_numbers,
-                header_cell_coordinates=tuple(
-                    _cell_coordinate(page.page_number, cell) for cell in header_cells
-                ),
-                cell_coordinates=tuple(
-                    _cell_coordinate(page.page_number, cell) for cell in data_cells
-                ),
-            )
+            ),
+            anchor_parts=(
+                table.table_id,
+                "rows-" + "-".join(str(row) for row in row_numbers),
+            ),
+            table_id=table.table_id,
+            table_continuation_id=table.continuation_of,
+            table_title=table_title,
+            table_headers=table_headers,
+            table_context=table_context,
+            row_header=row_header,
+            row_numbers=row_numbers,
+            header_cell_coordinates=tuple(
+                _cell_coordinate(page.page_number, cell) for cell in header_cells
+            ),
+            cell_coordinates=tuple(_cell_coordinate(page.page_number, cell) for cell in data_cells),
         )
+        output.commit_unit(
+            _candidate_output_characters(candidate),
+            precharged=content_characters,
+        )
+        candidates.append(candidate)
     return tuple(candidates)
 
 
@@ -898,19 +970,48 @@ def _validate_table_occupancy(
             tree.add(left, right, 1)
 
 
-def _table_group_content(
-    cells: tuple[StructuredTableCell, ...], row_numbers: tuple[int, ...]
-) -> str:
-    if len(row_numbers) == 1:
-        return " | ".join(cell.text.strip() for cell in cells)
-    lines = []
-    for row in row_numbers:
-        row_cells = tuple(
-            cell.text.strip() for cell in cells if cell.row <= row < cell.row + cell.row_span
-        )
-        if row_cells:
-            lines.append(" | ".join(row_cells))
-    return "\n".join(lines)
+def _table_group_content_parts(
+    cells: tuple[StructuredTableCell, ...],
+) -> tuple[tuple[tuple[str, ...], ...], int]:
+    """Plan a canonical serialization with each anchored cell represented exactly once."""
+
+    rows: list[tuple[str, ...]] = []
+    current_row: int | None = None
+    current_texts: list[str] = []
+    character_count = 0
+    for cell in cells:
+        if current_row is not None and cell.row != current_row:
+            rows.append(tuple(current_texts))
+            character_count += 1
+            current_texts = []
+        if current_texts:
+            character_count += 3
+        text = cell.text.strip()
+        character_count += len(text)
+        current_texts.append(text)
+        current_row = cell.row
+    if current_texts:
+        rows.append(tuple(current_texts))
+    elif character_count:
+        raise ValueError("table serialization has characters without content rows")
+    return tuple(rows), character_count
+
+
+def _table_group_content(rows: tuple[tuple[str, ...], ...]) -> str:
+    return "\n".join(" | ".join(row) for row in rows)
+
+
+def _candidate_output_characters(candidate: _ProjectionCandidate) -> int:
+    values = (
+        candidate.content,
+        *candidate.heading_path,
+        *candidate.definitions,
+        candidate.table_title or "",
+        *candidate.table_headers,
+        candidate.table_context,
+        candidate.row_header or "",
+    )
+    return sum(len(value) for value in values)
 
 
 def _covered_grid_rows(cells: tuple[StructuredTableCell, ...]) -> tuple[int, ...]:

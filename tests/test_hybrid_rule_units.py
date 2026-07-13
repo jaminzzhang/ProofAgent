@@ -788,3 +788,220 @@ def test_ten_thousand_cells_stay_within_deterministic_work_bound() -> None:
     assert first == second
     assert first_counter.used == second_counter.used
     assert first_counter.used < 1_000_000
+
+
+def test_thousand_by_thousand_span_serializes_each_cell_once() -> None:
+    artifact = canonical_artifact()
+    payload = "x" * 2_000
+    page = artifact.pages[1].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="heading-spanning-table",
+                    kind="heading",
+                    text="Spanning Table",
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                    heading_level=1,
+                    heading_path=("Spanning Table",),
+                ),
+            ),
+            "tables": (
+                StructuredTable(
+                    table_id="table-thousand-span",
+                    title="Large spans",
+                    bbox=bbox(40, 90, 572, 280),
+                    cells=(
+                        StructuredTableCell(
+                            row=0, column=0, text="Label", bbox=bbox(40, 90, 220, 130)
+                        ),
+                        StructuredTableCell(
+                            row=0,
+                            column=1_000,
+                            text="Value",
+                            bbox=bbox(220, 90, 400, 130),
+                        ),
+                        StructuredTableCell(
+                            row=1,
+                            column=0,
+                            row_span=1_000,
+                            column_span=1_000,
+                            text=payload,
+                            bbox=bbox(40, 130, 220, 170),
+                        ),
+                        StructuredTableCell(
+                            row=1,
+                            column=1_000,
+                            row_span=1_000,
+                            text="edge",
+                            bbox=bbox(220, 130, 400, 170),
+                        ),
+                    ),
+                ),
+            ),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+    first_counter = RuleUnitProjectionWorkCounter(100_000)
+    second_counter = RuleUnitProjectionWorkCounter(100_000)
+    limits = RuleUnitProjectionLimits(max_work_units=100_000)
+
+    first = project_rule_units(
+        artifact,
+        document_defaults=defaults(),
+        source_id="source-1",
+        limits=limits,
+        work_counter=first_counter,
+    )
+    second = project_rule_units(
+        artifact,
+        document_defaults=defaults(),
+        source_id="source-1",
+        limits=limits,
+        work_counter=second_counter,
+    )
+
+    assert first == second
+    assert len(first) == 1
+    assert first[0].row_numbers == tuple(range(1, 1_001))
+    assert first[0].content == f"{payload} | edge"
+    assert first[0].content.count(payload) == 1
+    assert first_counter.used == second_counter.used
+    assert first_counter.used < 50_000
+
+
+@pytest.mark.parametrize("limit_scope", ("unit", "document"))
+def test_output_limits_require_review_without_returning_partial_units(
+    limit_scope: str,
+) -> None:
+    artifact = canonical_artifact()
+    first_text = "First bounded clause."
+    second_text = "Second bounded clause."
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="first-bounded-clause",
+                    kind="list_item",
+                    text=first_text,
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                ),
+                StructuredBlock(
+                    block_id="second-bounded-clause",
+                    kind="list_item",
+                    text=second_text,
+                    bbox=bbox(40, 80, 572, 110),
+                    reading_order=1,
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+    if limit_scope == "unit":
+        limits = RuleUnitProjectionLimits(
+            max_unit_output_characters=len(first_text) - 1,
+            max_document_output_characters=100,
+        )
+        message = "rule-unit output"
+    else:
+        limits = RuleUnitProjectionLimits(
+            max_unit_output_characters=100,
+            max_document_output_characters=len(first_text) + len(second_text) - 1,
+        )
+        message = "document output"
+
+    with pytest.raises(RuleUnitProjectionReviewRequired, match=message):
+        project_rule_units(
+            artifact,
+            document_defaults=defaults(),
+            source_id="source-1",
+            limits=limits,
+        )
+
+
+@pytest.mark.parametrize(
+    ("heading_text", "definition_text", "clause_text", "expected_definition"),
+    (
+        (
+            "Definition",
+            "Applicant means the person applying for cover.",
+            "Applicants must be adults.",
+            "Applicant means the person applying for cover.",
+        ),
+        (
+            "Definitions",
+            "Applicant means the person applying for cover.",
+            "Applicants must be adults.",
+            "Applicant means the person applying for cover.",
+        ),
+        (
+            "释义",
+            "投保人是指申请保险保障的人。",
+            "投保人必须年满十八周岁。",
+            "投保人是指申请保险保障的人。",
+        ),
+    ),
+)
+def test_definition_headings_are_context_while_body_statements_are_indexed(
+    heading_text: str,
+    definition_text: str,
+    clause_text: str,
+    expected_definition: str,
+) -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="definition-context-heading",
+                    kind="heading",
+                    text=heading_text,
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                    heading_level=1,
+                    heading_path=(heading_text,),
+                ),
+                StructuredBlock(
+                    block_id="definition-context-body",
+                    kind="paragraph",
+                    text=definition_text,
+                    bbox=bbox(40, 80, 572, 110),
+                    reading_order=1,
+                    heading_path=(heading_text,),
+                ),
+                StructuredBlock(
+                    block_id="definition-reference-heading",
+                    kind="heading",
+                    text="Eligibility",
+                    bbox=bbox(40, 120, 572, 150),
+                    reading_order=2,
+                    heading_level=1,
+                    heading_path=("Eligibility",),
+                ),
+                StructuredBlock(
+                    block_id="definition-reference-clause",
+                    kind="list_item",
+                    text=clause_text,
+                    bbox=bbox(40, 160, 572, 190),
+                    reading_order=3,
+                    heading_path=("Eligibility",),
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    clause = next(
+        unit
+        for unit in project_rule_units(
+            artifact,
+            document_defaults=defaults(),
+            source_id="source-1",
+        )
+        if unit.block_ids == ("definition-reference-clause",)
+    )
+
+    assert clause.definitions == (expected_definition,)
