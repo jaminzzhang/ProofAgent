@@ -14,6 +14,7 @@ import json
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal, Self, TypeVar
+from urllib.parse import quote, urlsplit
 
 from pydantic import (
     ConfigDict,
@@ -123,6 +124,12 @@ class RuleUnitManifestMaterialization(_ManifestModel):
             raise ValueError("persisted manifest document identities must be unique")
         if set(by_document) != {item.document_id for item in self.root.shards}:
             raise ValueError("persisted shards must cover exactly the root shard references")
+        if any(
+            item.shard.source_id != self.root.source_id
+            or item.shard.generation_id != self.root.generation_id
+            for item in self.shards
+        ):
+            raise ValueError("persisted shards must match the root source and generation")
         for root_ref in self.root.shards:
             persisted = by_document[root_ref.document_id]
             if (
@@ -227,6 +234,8 @@ def build_rule_unit_manifest(
         raise ValueError("manifest Rule Unit revision identities must be unique")
     if any(item.rule_unit.lineage.source_id != source_id for item in canonical_memberships):
         raise ValueError("every manifest Rule Unit must match the source")
+    for item in canonical_memberships:
+        _validate_rule_unit_semantics(item.rule_unit, source_id=source_id)
     if any(
         item.publication_seq_from > source_publication_seq
         or (
@@ -251,23 +260,7 @@ def build_rule_unit_manifest(
                 "one manifest document shard must bind one exact revision and structured build"
             )
 
-    validated_previous = _validate_previous(previous, artifact_store)
-    if validated_previous is not None and (
-        validated_previous.root.source_id != source_id
-        or validated_previous.root.generation_id != generation_id
-    ):
-        raise ValueError("previous manifest must match the source and generation")
-    if (
-        validated_previous is not None
-        and validated_previous.root.source_publication_seq > source_publication_seq
-    ):
-        raise ValueError("previous manifest publication sequence cannot be in the future")
-    previous_by_document = (
-        {item.shard.document_id: item for item in validated_previous.shards}
-        if validated_previous is not None
-        else {}
-    )
-    persisted_shards: list[PersistedRuleUnitManifestShard] = []
+    planned_shards: list[tuple[RuleUnitManifestShard, bytes]] = []
     for document_id in sorted(grouped):
         canonical_entries = tuple(
             sorted(grouped[document_id], key=lambda entry: entry.rule_unit_revision_id)
@@ -288,7 +281,41 @@ def build_rule_unit_manifest(
             entries=canonical_entries,
             sha256=shard_sha256,
         )
-        content = _shard_artifact_bytes(shard)
+        planned_shards.append((shard, _shard_artifact_bytes(shard)))
+
+    validated_previous = _validate_previous(previous, artifact_store)
+    if validated_previous is not None and (
+        validated_previous.root.source_id != source_id
+        or validated_previous.root.generation_id != generation_id
+    ):
+        raise ValueError("previous manifest must match the source and generation")
+    if (
+        validated_previous is not None
+        and validated_previous.root.source_publication_seq > source_publication_seq
+    ):
+        raise ValueError("previous manifest publication sequence cannot be in the future")
+    if (
+        validated_previous is not None
+        and validated_previous.root.source_publication_seq == source_publication_seq
+    ):
+        same_snapshot = validated_previous.root.source_snapshot_id == source_snapshot_id
+        same_shards = tuple(shard for shard, _ in planned_shards) == tuple(
+            item.shard for item in validated_previous.shards
+        )
+        if not same_snapshot or not same_shards:
+            raise ValueError(
+                "equal publication sequence is allowed only for an exact manifest replay"
+            )
+        return validated_previous
+    previous_by_document = (
+        {item.shard.document_id: item for item in validated_previous.shards}
+        if validated_previous is not None
+        else {}
+    )
+    persisted_shards: list[PersistedRuleUnitManifestShard] = []
+    for shard, content in planned_shards:
+        document_id = shard.document_id
+        shard_sha256 = shard.sha256
         reusable = previous_by_document.get(document_id)
         if reusable is not None and reusable.shard.sha256 == shard.sha256:
             _verify_exact_artifact(
@@ -493,6 +520,10 @@ def append_projection_attestation(
             raise ValueError("parent attestation mapping does not match")
         if validated_parent.index_uuid != validation.identity.index_uuid:
             raise ValueError("parent attestation index identity does not match")
+        if root.source_publication_seq <= max(validated_parent.covered_publication_sequences):
+            raise ValueError(
+                "descendant attestation must strictly advance the publication sequence"
+            )
         retained = set(validated_parent.covered_publication_sequences)
         if not retained.issubset(validation.covered_publication_sequences):
             raise ValueError("descendant attestation lost a retained sequence")
@@ -545,6 +576,26 @@ def _manifest_entry(item: ManifestRuleUnitMembership) -> RuleUnitManifestEntry:
         publication_seq_from=item.publication_seq_from,
         publication_seq_to=item.publication_seq_to,
     )
+
+
+def _validate_rule_unit_semantics(
+    rule_unit: InsuranceRuleUnitRevision,
+    *,
+    source_id: str,
+) -> None:
+    content_digest = hashlib.sha256(rule_unit.content.encode("utf-8")).hexdigest()
+    if content_digest != rule_unit.content_sha256:
+        raise ValueError("Rule Unit content digest does not match its exact UTF-8 content")
+    parsed = urlsplit(rule_unit.citation_uri)
+    if parsed.scheme != "knowledge":
+        raise ValueError("Hybrid manifest citations must use the knowledge scheme")
+    expected_path = (
+        f"/{quote(source_id, safe='')}/document/"
+        f"{quote(rule_unit.document_id, safe='')}/revision/"
+        f"{quote(rule_unit.revision_id, safe='')}"
+    )
+    if parsed.netloc != "source" or parsed.path != expected_path:
+        raise ValueError("Rule Unit citation does not bind its exact source lineage")
 
 
 def _shard_artifact_bytes(shard: RuleUnitManifestShard) -> bytes:
@@ -662,7 +713,7 @@ def _verify_exact_artifact(
     expected_digest: str,
     media_type: str,
     label: str,
-) -> None:
+) -> bytes:
     if (
         ref.sha256 != expected_digest
         or ref.size_bytes != len(expected_content)
@@ -677,6 +728,7 @@ def _verify_exact_artifact(
         raise ValueError(f"{label} bytes do not match canonical bytes")
     if hashlib.sha256(stored).hexdigest() != expected_digest:
         raise ValueError(f"{label} digest does not match canonical bytes")
+    return stored
 
 
 def _validate_previous(
@@ -689,7 +741,7 @@ def _validate_previous(
     root = _validate_manifest_root(validated.root)
     for item in validated.shards:
         shard = _validate_manifest_shard(item.shard)
-        _verify_exact_artifact(
+        content = _verify_exact_artifact(
             store,
             item.artifact_ref,
             _shard_artifact_bytes(shard),
@@ -697,7 +749,9 @@ def _validate_previous(
             media_type=_SHARD_MEDIA_TYPE,
             label="exact shard artifact",
         )
-    _verify_exact_artifact(
+        if decode_manifest_shard_artifact(content) != shard:
+            raise ValueError("exact decoded shard does not match the root reference")
+    root_content = _verify_exact_artifact(
         store,
         validated.root_ref,
         _root_artifact_bytes(root),
@@ -705,6 +759,8 @@ def _validate_previous(
         media_type=_ROOT_MEDIA_TYPE,
         label="exact root artifact",
     )
+    if decode_manifest_root_artifact(root_content, created_at=root.created_at) != root:
+        raise ValueError("exact decoded root does not match the materialization")
     return validated
 
 
