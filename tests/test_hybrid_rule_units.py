@@ -740,9 +740,6 @@ def test_ambiguous_duplicate_referenced_definitions_require_review() -> None:
         "详见本合同释义章节。",
         "See the definition section.",
         "本条所指的投保人须签字。",
-        "箭头：指向右侧。",
-        "本条：指出本合同无效。",
-        "该标志：指示投保人签字。",
     ),
 )
 def test_generic_definition_cross_references_are_ordinary_content(
@@ -777,6 +774,43 @@ def test_generic_definition_cross_references_are_ordinary_content(
 
 
 @pytest.mark.parametrize(
+    "ambiguous_text",
+    (
+        "箭头：指向右侧。",
+        "本条：指出本合同无效。",
+        "该标志：指示投保人签字。",
+        "保险金申请人：指向保险人提出给付保险金申请的人。",
+    ),
+)
+def test_unquoted_bare_zhi_compound_continuations_require_review(
+    ambiguous_text: str,
+) -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="ambiguous-bare-zhi",
+                    kind="paragraph",
+                    text=ambiguous_text,
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    with pytest.raises(RuleUnitProjectionReviewRequired, match="ambiguous compound-verb"):
+        project_rule_units(
+            artifact,
+            document_defaults=defaults(),
+            source_id="source-1",
+        )
+
+
+@pytest.mark.parametrize(
     ("definition_text", "reference_text"),
     (
         ("Applicant: means the person applying for cover.", "Applicants must be adults."),
@@ -785,6 +819,10 @@ def test_generic_definition_cross_references_are_ordinary_content(
         ("投保人：是指申请保险保障的人。", "投保人必须年满十八周岁。"),
         ("“投保人”指申请保险保障的人。", "投保人必须年满十八周岁。"),
         ("投保人：指申请保险保障的人。", "投保人必须年满十八周岁。"),
+        (
+            "“保险金申请人”指向保险人提出给付保险金申请的人。",
+            "保险金申请人须提交申请材料。",
+        ),
     ),
 )
 def test_definition_separator_punctuation_preserves_reference_attachment(

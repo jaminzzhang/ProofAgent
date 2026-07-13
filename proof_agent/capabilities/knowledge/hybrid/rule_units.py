@@ -60,15 +60,47 @@ _CHINESE_DEFINITION_STATEMENT = re.compile(
     """,
     re.DOTALL | re.VERBOSE,
 )
-_CHINESE_BARE_ZHI_DEFINITION_STATEMENT = re.compile(
+_CHINESE_QUOTED_BARE_ZHI_DEFINITION_STATEMENT = re.compile(
     r"""
     ^\s*
-    (?:["“](?P<quoted>[^"”\r\n]{1,64})["”]\s*[:：,，]?
-      |(?P<plain>[^，。；：:\s][^，。；：:\r\n]{0,63}?)\s*[:：,，])
-    \s*指(?!向|出|示|导|定|派|令|引|控|责|挥|明|代|标|数|针|纹|甲|摘|认|望|教)\s*
+    ["“](?P<quoted>[^"”\r\n]{1,64})["”]\s*[:：,，]?\s*指\s*
     (?P<body>\S.*?)\s*$
     """,
     re.DOTALL | re.VERBOSE,
+)
+_CHINESE_UNQUOTED_BARE_ZHI_DEFINITION_STATEMENT = re.compile(
+    r"""
+    ^\s*
+    (?P<plain>[^，。；：:\s][^，。；：:\r\n]{0,63}?)\s*[:：,，]\s*指\s*
+    (?P<body>\S.*?)\s*$
+    """,
+    re.DOTALL | re.VERBOSE,
+)
+_AMBIGUOUS_BARE_ZHI_CONTINUATIONS = frozenset(
+    {
+        "向",
+        "出",
+        "示",
+        "导",
+        "定",
+        "派",
+        "令",
+        "引",
+        "控",
+        "责",
+        "挥",
+        "明",
+        "代",
+        "标",
+        "数",
+        "针",
+        "纹",
+        "甲",
+        "摘",
+        "认",
+        "望",
+        "教",
+    }
 )
 _DEFINITION_CONTENT_BLOCK_TYPES = frozenset({"paragraph", "list_item"})
 
@@ -494,7 +526,7 @@ def _definition_term(text: str) -> str | None:
     for pattern in (
         _ENGLISH_DEFINITION_STATEMENT,
         _CHINESE_DEFINITION_STATEMENT,
-        _CHINESE_BARE_ZHI_DEFINITION_STATEMENT,
+        _CHINESE_QUOTED_BARE_ZHI_DEFINITION_STATEMENT,
     ):
         match = pattern.fullmatch(text)
         if match is not None:
@@ -502,6 +534,16 @@ def _definition_term(text: str) -> str | None:
             term = term.strip()
             if term:
                 return term
+    unquoted_bare_zhi = _CHINESE_UNQUOTED_BARE_ZHI_DEFINITION_STATEMENT.fullmatch(text)
+    if unquoted_bare_zhi is not None:
+        body = unquoted_bare_zhi.group("body")
+        if body[0] in _AMBIGUOUS_BARE_ZHI_CONTINUATIONS:
+            raise RuleUnitProjectionReviewRequired(
+                "unquoted bare 指 statement has an ambiguous compound-verb continuation"
+            )
+        term = unquoted_bare_zhi.group("plain").strip()
+        if term:
+            return term
     return None
 
 
