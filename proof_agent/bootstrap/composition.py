@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from threading import Lock
+from collections.abc import Callable
 from typing import Mapping, cast
 
 from proof_agent.capabilities.knowledge import KnowledgeProvider
@@ -45,6 +46,7 @@ from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     GuardedKnowledgeModelSchedulerTransport,
     GuardedRerankerTransport,
     PrivateEmbeddingClient,
+    PrivateHostPolicy,
     PrivateKnowledgeModelWorkSchedulerClient,
     PrivateRerankerClient,
     _private_https_endpoint,
@@ -57,6 +59,7 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
 from proof_agent.capabilities.knowledge.hybrid.pipeline import PrivateHybridParserPipeline
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridKnowledgeWorkerFactory,
+    HybridPrivateParserBuildConfig,
 )
 
 
@@ -73,8 +76,25 @@ class HybridKnowledgeModelSettings:
     paddle_endpoint: str
     embedding_endpoint: str
     reranker_endpoint: str
+    allowed_hosts: tuple[str, ...]
+    parser_revision: str
+    model_digests: tuple[str, ...]
+    parser_configuration_sha256: str
+    host_policy: PrivateHostPolicy = field(init=False, repr=False)
+    build_config: HybridPrivateParserBuildConfig = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        policy = PrivateHostPolicy.from_entries(self.allowed_hosts)
+        object.__setattr__(self, "host_policy", policy)
+        object.__setattr__(
+            self,
+            "build_config",
+            HybridPrivateParserBuildConfig(
+                parser_revision=self.parser_revision,
+                model_digests=self.model_digests,
+                configuration_sha256=self.parser_configuration_sha256,
+            ),
+        )
         for field_name in (
             "scheduler_endpoint",
             "docling_endpoint",
@@ -85,7 +105,11 @@ class HybridKnowledgeModelSettings:
             object.__setattr__(
                 self,
                 field_name,
-                _private_https_endpoint(getattr(self, field_name), field=field_name),
+                _private_https_endpoint(
+                    getattr(self, field_name),
+                    field=field_name,
+                    allowed_hosts=policy,
+                ),
             )
 
 
@@ -109,6 +133,7 @@ class HybridKnowledgeComposition:
         embedding: PrivateEmbeddingClient,
         reranker: PrivateRerankerClient,
         ingestion_worker: HybridKnowledgeWorkerFactory,
+        build_config: HybridPrivateParserBuildConfig,
         transports: HybridKnowledgeTransportBundle,
     ) -> None:
         self.scheduler = scheduler
@@ -116,8 +141,16 @@ class HybridKnowledgeComposition:
         self.embedding = embedding
         self.reranker = reranker
         self.ingestion_worker = ingestion_worker
+        self.build_config = build_config
         self._transports = transports
         self._close_lock = Lock()
+        self._pending_closers: dict[str, Callable[[], None]] = {
+            "scheduler": self.scheduler.close,
+            "docling": getattr(self._transports.docling, "close", lambda: None),
+            "paddle": getattr(self._transports.paddle, "close", lambda: None),
+            "embedding": getattr(self._transports.embedding, "close", lambda: None),
+            "reranker": getattr(self._transports.reranker, "close", lambda: None),
+        }
         self._closed = False
 
     def close(self) -> None:
@@ -126,17 +159,18 @@ class HybridKnowledgeComposition:
         with self._close_lock:
             if self._closed:
                 return
-            self._closed = True
-            self.scheduler.close()
-            for transport in (
-                self._transports.docling,
-                self._transports.paddle,
-                self._transports.embedding,
-                self._transports.reranker,
-            ):
-                close = getattr(transport, "close", None)
-                if close is not None:
+            failures: list[Exception] = []
+            for name, close in tuple(self._pending_closers.items()):
+                try:
                     close()
+                except Exception as exc:
+                    exc.add_note(f"Hybrid composition close failed for {name}")
+                    failures.append(exc)
+                else:
+                    self._pending_closers.pop(name, None)
+            if failures:
+                raise ExceptionGroup("Hybrid Knowledge composition close failed", failures)
+            self._closed = True
 
 
 def compose_hybrid_knowledge(
@@ -150,6 +184,7 @@ def compose_hybrid_knowledge(
     scheduler = PrivateKnowledgeModelWorkSchedulerClient(
         endpoint=settings.scheduler_endpoint,
         namespace=settings.scheduler_namespace,
+        allowed_hosts=settings.host_policy,
         transport=resolved_transports.scheduler,
     )
     parser = PrivateHybridParserPipeline(
@@ -174,6 +209,7 @@ def compose_hybrid_knowledge(
             scheduler=scheduler,
         ),
         ingestion_worker=HybridKnowledgeWorkerFactory(scheduler=scheduler),
+        build_config=settings.build_config,
         transports=resolved_transports,
     )
 
@@ -203,7 +239,38 @@ def compose_hybrid_knowledge_from_env(
         if not value:
             raise ValueError(f"{key} is required when private Knowledge models are enabled")
         values[field_name] = value
-    return compose_hybrid_knowledge(settings=HybridKnowledgeModelSettings(**values))
+    allowed_hosts_value = source.get("PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS", "").strip()
+    if not allowed_hosts_value:
+        raise ValueError(
+            "PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS is required when private Knowledge models are enabled"
+        )
+    allowed_hosts = tuple(item.strip() for item in allowed_hosts_value.split(",") if item.strip())
+    parser_revision = source.get("PA_KNOWLEDGE_PARSER_REVISION", "").strip()
+    if not parser_revision:
+        raise ValueError(
+            "PA_KNOWLEDGE_PARSER_REVISION is required when private Knowledge models are enabled"
+        )
+    model_digests_value = source.get("PA_KNOWLEDGE_MODEL_DIGESTS", "").strip()
+    model_digests = tuple(item.strip() for item in model_digests_value.split(",") if item.strip())
+    if not model_digests:
+        raise ValueError(
+            "PA_KNOWLEDGE_MODEL_DIGESTS is required when private Knowledge models are enabled"
+        )
+    parser_configuration_sha256 = source.get("PA_KNOWLEDGE_PARSER_CONFIGURATION_SHA256", "").strip()
+    if not parser_configuration_sha256:
+        raise ValueError(
+            "PA_KNOWLEDGE_PARSER_CONFIGURATION_SHA256 is required when private Knowledge models "
+            "are enabled"
+        )
+    return compose_hybrid_knowledge(
+        settings=HybridKnowledgeModelSettings(
+            **values,
+            allowed_hosts=allowed_hosts,
+            parser_revision=parser_revision,
+            model_digests=model_digests,
+            parser_configuration_sha256=parser_configuration_sha256,
+        )
+    )
 
 
 def _default_hybrid_transports(
@@ -218,10 +285,22 @@ def _default_hybrid_transports(
 
     return HybridKnowledgeTransportBundle(
         scheduler=HttpKnowledgeModelSchedulerTransport(),
-        docling=HttpParserTransport(endpoint=settings.docling_endpoint),
-        paddle=HttpParserTransport(endpoint=settings.paddle_endpoint),
-        embedding=HttpEmbeddingTransport(endpoint=settings.embedding_endpoint),
-        reranker=HttpRerankerTransport(endpoint=settings.reranker_endpoint),
+        docling=HttpParserTransport(
+            endpoint=settings.docling_endpoint,
+            allowed_hosts=settings.host_policy,
+        ),
+        paddle=HttpParserTransport(
+            endpoint=settings.paddle_endpoint,
+            allowed_hosts=settings.host_policy,
+        ),
+        embedding=HttpEmbeddingTransport(
+            endpoint=settings.embedding_endpoint,
+            allowed_hosts=settings.host_policy,
+        ),
+        reranker=HttpRerankerTransport(
+            endpoint=settings.reranker_endpoint,
+            allowed_hosts=settings.host_policy,
+        ),
     )
 
 

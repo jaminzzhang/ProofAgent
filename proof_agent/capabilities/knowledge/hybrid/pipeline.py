@@ -11,6 +11,8 @@ from pydantic import ConfigDict, Field, StrictStr, StringConstraints, model_vali
 
 from proof_agent.capabilities.knowledge.hybrid.canonicalizer import (
     CanonicalParserPage,
+    canonicalize_docling,
+    canonicalize_paddle_page,
     validate_page_geometry_and_bounds,
 )
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
@@ -23,6 +25,17 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     PrivateDoclingClient,
     PrivatePaddleClient,
 )
+from proof_agent.capabilities.knowledge.hybrid.quality import (
+    QualityOutcome,
+    assess_document_quality,
+    assess_page_quality,
+)
+from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+    HybridArtifactBuildRequest,
+    HybridInsuranceMetadataArtifact,
+    HybridParserBuildOutput,
+    HybridVendorArtifact,
+)
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import (
     BoundingBox,
@@ -34,6 +47,7 @@ from proof_agent.contracts.hybrid_documents import (
     StructuredQualitySignal,
     StructuredTable,
 )
+from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
 
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -82,6 +96,149 @@ class PrivateHybridParserPipeline:
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
         )
+
+    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+        """Build one canonical artifact through scheduled Docling/Paddle calls."""
+
+        parser_request = ParserServiceRequest(
+            original_ref=request.original_ref,
+            page_numbers=request.page_numbers,
+            parser_revision=request.parser_revision,
+            model_digests=request.model_digests,
+            configuration_sha256=request.configuration_sha256,
+        )
+        docling_response = self.parse_document(parser_request, timeout_seconds=120.0)
+        docling_build = _service_build_identity(
+            request,
+            adapter="docling",
+            vendor_sha256=docling_response.attestation.vendor_json_sha256,
+        )
+        docling_artifact = canonicalize_docling(docling_response, build=docling_build)
+        decisions = assess_document_quality(docling_artifact)
+        pages = {page.page_number: page for page in docling_artifact.pages}
+        warnings = list(docling_artifact.warnings)
+        signals = list(docling_artifact.quality_signals)
+        vendor_artifacts = [
+            HybridVendorArtifact(
+                adapter="docling",
+                content=docling_response.attestation.vendor_json_bytes,
+            )
+        ]
+        for decision in decisions:
+            if decision.outcome is QualityOutcome.PASS:
+                continue
+            if decision.outcome is QualityOutcome.REVIEW_REQUIRED:
+                signals.append(
+                    StructuredQualitySignal(
+                        code="docling_review_required",
+                        score=0.0,
+                        page_number=decision.page_number,
+                        requires_review=True,
+                    )
+                )
+                continue
+            paddle_request = parser_request.model_copy(
+                update={"page_numbers": (decision.page_number,)}
+            )
+            paddle_response = self.parse_ocr_page(paddle_request, timeout_seconds=120.0)
+            paddle_build = _service_build_identity(
+                request,
+                adapter="paddle",
+                vendor_sha256=paddle_response.attestation.vendor_json_sha256,
+                page_number=decision.page_number,
+            )
+            paddle_page = canonicalize_paddle_page(paddle_response, build=paddle_build)
+            vendor_artifacts.append(
+                HybridVendorArtifact(
+                    adapter="paddle",
+                    content=paddle_response.attestation.vendor_json_bytes,
+                )
+            )
+            paddle_quality = assess_page_quality(
+                paddle_page.page,
+                warnings=paddle_page.warnings,
+            )
+            docling_page = pages[decision.page_number]
+            if (
+                paddle_quality.outcome is QualityOutcome.PASS
+                and paddle_page.page.width == docling_page.width
+                and paddle_page.page.height == docling_page.height
+            ):
+                signals.append(
+                    StructuredQualitySignal(
+                        code="paddle_page_available_review_required",
+                        score=0.0,
+                        page_number=decision.page_number,
+                        requires_review=True,
+                    )
+                )
+            else:
+                signals.append(
+                    StructuredQualitySignal(
+                        code="paddle_review_required",
+                        score=0.0,
+                        page_number=decision.page_number,
+                        requires_review=True,
+                    )
+                )
+        final_pages = tuple(pages[number] for number in request.page_numbers)
+        final_build = docling_build
+        artifact = StructuredKnowledgeDocumentArtifact(
+            schema_version="structured-knowledge.v1",
+            document_id=docling_artifact.document_id,
+            revision_id=docling_artifact.revision_id,
+            original_sha256=docling_artifact.original_sha256,
+            build_identity=final_build,
+            pages=final_pages,
+            warnings=tuple(warnings),
+            quality_signals=tuple(signals),
+        )
+        metadata_id = hashlib.sha256(
+            f"{request.source_id}:{request.revision_id}:{final_build.build_id}".encode()
+        ).hexdigest()
+        return HybridParserBuildOutput(
+            artifact=artifact,
+            vendor_artifacts=tuple(vendor_artifacts),
+            insurance_metadata=HybridInsuranceMetadataArtifact(
+                source_id=request.source_id,
+                document_id=request.document_id,
+                revision_id=request.revision_id,
+                structured_build_id=final_build.build_id,
+                original_sha256=request.original_ref.sha256,
+                document_defaults=InsuranceRuleMetadataDraft(
+                    metadata_draft_id=f"metadata-draft-{metadata_id}",
+                    document_id=request.document_id,
+                    revision_id=request.revision_id,
+                ),
+                pdf_drafts=(),
+            ),
+        )
+
+
+def _service_build_identity(
+    request: HybridArtifactBuildRequest,
+    *,
+    adapter: Literal["docling", "paddle"],
+    vendor_sha256: str,
+    page_number: int | None = None,
+) -> StructuredArtifactBuildIdentity:
+    digest = _sha256_json(
+        {
+            "request_sha256": request.request_sha256,
+            "adapter": adapter,
+            "vendor_sha256": vendor_sha256,
+            "page_number": page_number,
+        }
+    )
+    return StructuredArtifactBuildIdentity(
+        build_id=f"skab-{digest}",
+        source_sha256=request.original_ref.sha256,
+        parser_adapter=adapter,
+        parser_revision=request.parser_revision,
+        model_digests=request.model_digests,
+        canonical_schema_version="structured-knowledge.v1",
+        configuration_sha256=request.configuration_sha256,
+    )
 
 
 class MergeSelection(FrozenModel):

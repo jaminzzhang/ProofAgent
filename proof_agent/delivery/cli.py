@@ -16,6 +16,7 @@ import typer
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent import __version__
+from proof_agent.bootstrap.composition import compose_hybrid_knowledge_from_env
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
 from proof_agent.delivery.remote_verify_gateway import VERIFY_REMOTE_CHAT_BASE
 from proof_agent.errors import ProofAgentError
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
         KnowledgeWorkerTaskOutcome,
     )
     from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+        HybridKnowledgeWorkerFactory,
         HybridParserPipeline,
         HybridPrivateParserBuildConfig,
     )
@@ -688,9 +690,18 @@ def knowledge_worker(
 ) -> None:
     """Process persisted Local Index knowledge ingestion tasks."""
 
+    hybrid_graph = None
     try:
         config_path = Path(config_dir)
-        worker = create_knowledge_ingestion_worker(config_path)
+        hybrid_graph = compose_hybrid_knowledge_from_env()
+        worker = create_knowledge_ingestion_worker(
+            config_path,
+            hybrid_pipeline=hybrid_graph.parser if hybrid_graph is not None else None,
+            hybrid_build_config=hybrid_graph.build_config if hybrid_graph is not None else None,
+            hybrid_worker_factory=(
+                hybrid_graph.ingestion_worker if hybrid_graph is not None else None
+            ),
+        )
         if once:
             result = worker.run_once()
         else:
@@ -714,6 +725,9 @@ def knowledge_worker(
     except ProofAgentError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
+    finally:
+        if hybrid_graph is not None:
+            hybrid_graph.close()
 
     _echo_knowledge_worker_result(result)
 
@@ -724,6 +738,7 @@ def create_knowledge_ingestion_worker(
     hybrid_task_handler: HybridClaimedTaskHandler | None = None,
     hybrid_pipeline: HybridParserPipeline | None = None,
     hybrid_build_config: HybridPrivateParserBuildConfig | None = None,
+    hybrid_worker_factory: HybridKnowledgeWorkerFactory | None = None,
 ) -> KnowledgeIngestionWorker:
     """Compose provider handlers; fail before claims if Hybrid dependencies are absent."""
 
@@ -739,6 +754,12 @@ def create_knowledge_ingestion_worker(
             "PA_HYBRID_WORKER_001",
             "Hybrid worker parser pipeline and approved build identity must be configured together.",
             "Provide both guarded private parser dependencies and exact approved revisions.",
+        )
+    if hybrid_worker_factory is not None and hybrid_pipeline is None:
+        raise ProofAgentError(
+            "PA_HYBRID_WORKER_001",
+            "Hybrid worker factory requires its composed parser pipeline.",
+            "Provide the complete guarded private parser composition.",
         )
     if hybrid_pipeline is not None and hybrid_build_config is not None:
         if hybrid_task_handler is not None:
@@ -765,15 +786,27 @@ def create_knowledge_ingestion_worker(
             store=store,
             original_store=original_store,
         )
-        hybrid_task_handler = LocalStoreHybridTaskHandler(
-            lifecycle=lifecycle,
-            worker=HybridKnowledgeWorker(
+        artifact_store = FileSystemKnowledgeArtifactStore(config_path / "hybrid_artifacts")
+        hybrid_worker = (
+            hybrid_worker_factory.create(
                 lifecycle=lifecycle,
                 original_store=original_store,
-                artifact_store=FileSystemKnowledgeArtifactStore(config_path / "hybrid_artifacts"),
+                artifact_store=artifact_store,
                 pipeline=hybrid_pipeline,
                 worker_id="local-store-hybrid-worker",
-            ),
+            )
+            if hybrid_worker_factory is not None
+            else HybridKnowledgeWorker(
+                lifecycle=lifecycle,
+                original_store=original_store,
+                artifact_store=artifact_store,
+                pipeline=hybrid_pipeline,
+                worker_id="local-store-hybrid-worker",
+            )
+        )
+        hybrid_task_handler = LocalStoreHybridTaskHandler(
+            lifecycle=lifecycle,
+            worker=hybrid_worker,
             quarantine_promoter=LocalStoreHybridQuarantinePromoter(
                 store=store,
                 build_config=hybrid_build_config,

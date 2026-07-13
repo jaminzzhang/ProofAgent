@@ -7,6 +7,8 @@ from threading import Condition
 from time import monotonic
 from typing import Generic, Literal, TypeVar
 
+import pytest
+
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     PrivateRerankerClient,
     RerankCandidate,
@@ -18,6 +20,9 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     ParserServiceRequest,
     PrivatePaddleClient,
     canonical_vendor_json_bytes,
+)
+from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+    HybridKnowledgeWorkerFactory,
 )
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
 
@@ -54,7 +59,11 @@ class PausedScheduler:
             while not work.released:
                 self._condition.wait()
         started = monotonic()
-        value = work.operation(work.timeout_seconds)
+        from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+            KnowledgeModelCancellation,
+        )
+
+        value = work.operation(work.timeout_seconds, KnowledgeModelCancellation())
         work.result = ScheduledWorkResult(
             value=value,
             queue_time_ms=1.0,
@@ -176,3 +185,35 @@ def test_online_rerank_preempts_queued_ingestion_across_real_adapters() -> None:
 
     assert paddle_transport.calls == 1
     assert rerank_transport.calls == 1
+
+
+def test_hybrid_worker_factory_requires_exact_composed_scheduler_property() -> None:
+    scheduler = PausedScheduler()
+    factory = HybridKnowledgeWorkerFactory(scheduler=scheduler)
+
+    class MissingSchedulerPipeline:
+        def build(self, request):
+            raise AssertionError(request)
+
+    with pytest.raises(ValueError, match="composed scheduler"):
+        factory.create(
+            lifecycle=object(),  # type: ignore[arg-type]
+            original_store=object(),  # type: ignore[arg-type]
+            artifact_store=object(),  # type: ignore[arg-type]
+            pipeline=MissingSchedulerPipeline(),  # type: ignore[arg-type]
+            worker_id="worker-1",
+        )
+
+    class ComposedPipeline(MissingSchedulerPipeline):
+        def __init__(self) -> None:
+            self.scheduler = scheduler
+
+    worker = factory.create(
+        lifecycle=object(),  # type: ignore[arg-type]
+        original_store=object(),  # type: ignore[arg-type]
+        artifact_store=object(),  # type: ignore[arg-type]
+        pipeline=ComposedPipeline(),  # type: ignore[arg-type]
+        worker_id="worker-1",
+    )
+
+    assert worker.scheduler is scheduler

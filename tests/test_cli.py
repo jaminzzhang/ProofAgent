@@ -647,6 +647,89 @@ def test_knowledge_worker_once_prints_no_task_text_when_empty(
     assert "no queued knowledge tasks" in result.output
 
 
+def test_knowledge_worker_uses_and_closes_remote_hybrid_composition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from proof_agent.delivery import cli
+
+    calls: list[tuple[object, object, object]] = []
+
+    class Graph:
+        parser = object()
+        build_config = object()
+        ingestion_worker = object()
+
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    class Worker:
+        def run_once(self) -> None:
+            return None
+
+    graph = Graph()
+    monkeypatch.setattr(cli, "compose_hybrid_knowledge_from_env", lambda: graph)
+
+    def create_worker(config_path: Path, **kwargs: object) -> Worker:
+        assert config_path == tmp_path
+        calls.append(
+            (
+                kwargs["hybrid_pipeline"],
+                kwargs["hybrid_build_config"],
+                kwargs["hybrid_worker_factory"],
+            )
+        )
+        return Worker()
+
+    monkeypatch.setattr(cli, "create_knowledge_ingestion_worker", create_worker)
+
+    result = runner.invoke(
+        app,
+        ["knowledge-worker", "--config-dir", str(tmp_path), "--once"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [(graph.parser, graph.build_config, graph.ingestion_worker)]
+    assert graph.close_count == 1
+
+
+def test_knowledge_worker_closes_remote_hybrid_composition_when_worker_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from proof_agent.delivery import cli
+
+    class Graph:
+        parser = object()
+        build_config = object()
+        ingestion_worker = object()
+
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    class Worker:
+        def run_once(self) -> None:
+            raise ProofAgentError("PA_TEST", "worker failed", "retry")
+
+    graph = Graph()
+    monkeypatch.setattr(cli, "compose_hybrid_knowledge_from_env", lambda: graph)
+    monkeypatch.setattr(cli, "create_knowledge_ingestion_worker", lambda *args, **kwargs: Worker())
+
+    result = runner.invoke(
+        app,
+        ["knowledge-worker", "--config-dir", str(tmp_path), "--once"],
+    )
+
+    assert result.exit_code == 1
+    assert graph.close_count == 1
+
+
 @pytest.mark.parametrize(
     ("outcome", "expected_output"),
     [

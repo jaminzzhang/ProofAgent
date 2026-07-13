@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
+from functools import partial
+import ipaddress
 import json
 import math
-from threading import Event
-from threading import Lock
+from threading import Condition, Event, Lock
 from time import monotonic
-from typing import Annotated, Generic, Literal, Protocol, TypeVar
+from typing import Annotated, Generic, Literal, Protocol, TypeVar, cast
 from urllib.parse import urlsplit
 
 from pydantic import (
     ConfigDict,
     Field,
+    JsonValue,
     StrictBool,
     StrictFloat,
     StrictInt,
@@ -55,6 +58,69 @@ T = TypeVar("T")
 MAX_MODEL_TIMEOUT_SECONDS = 600.0
 MAX_EMBEDDING_BATCH_CHARACTERS = 1_000_000
 MAX_RERANK_BATCH_CHARACTERS = 2_000_000
+MAX_MODEL_JSON_DEPTH = 32
+MAX_MODEL_JSON_NODES = 1_000_000
+MAX_MODEL_JSON_COLLECTION_ITEMS = 100_000
+MAX_MODEL_JSON_STRING_CHARACTERS = 1_000_000
+
+
+@dataclass(frozen=True)
+class PrivateHostPolicy:
+    """Explicit exact-host and suffix allowlist for private service origins."""
+
+    exact_hosts: frozenset[str]
+    suffixes: tuple[str, ...]
+
+    @classmethod
+    def from_entries(cls, entries: tuple[str, ...]) -> "PrivateHostPolicy":
+        exact: set[str] = set()
+        suffixes: set[str] = set()
+        if not entries:
+            raise ValueError("private Knowledge model allowed hosts must be configured")
+        for raw_entry in entries:
+            entry = raw_entry.strip().lower().rstrip(".")
+            if not entry or any(character.isspace() for character in entry):
+                raise ValueError("private Knowledge model allowed host is invalid")
+            is_suffix = entry.startswith(".")
+            host = entry[1:] if is_suffix else entry
+            _validate_private_hostname(host, field="allowed host")
+            if is_suffix:
+                suffixes.add(f".{host}")
+            else:
+                exact.add(host)
+        return cls(
+            exact_hosts=frozenset(exact),
+            suffixes=tuple(sorted(suffixes)),
+        )
+
+    def allows(self, hostname: str) -> bool:
+        host = hostname.lower().rstrip(".")
+        _validate_private_hostname(host, field="service host")
+        return host in self.exact_hosts or any(host.endswith(suffix) for suffix in self.suffixes)
+
+
+def _validate_private_hostname(host: str, *, field: str) -> None:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"{field} cannot be an IP literal")
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError(f"{field} cannot be localhost")
+    labels = host.split(".")
+    if len(labels) < 2 or any(
+        not label
+        or len(label) > 63
+        or label.startswith("-")
+        or label.endswith("-")
+        or any(
+            not (character.isascii() and (character.isalnum() or character == "-"))
+            for character in label
+        )
+        for label in labels
+    ):
+        raise ValueError(f"{field} must be a bounded DNS hostname")
 
 
 class KnowledgeModelWorkCancelled(RuntimeError):
@@ -66,9 +132,40 @@ class KnowledgeModelCancellation:
 
     def __init__(self) -> None:
         self._event = Event()
+        self._lock = Lock()
+        self._callbacks: dict[int, Callable[[], None]] = {}
+        self._next_callback_id = 0
 
     def cancel(self) -> None:
-        self._event.set()
+        with self._lock:
+            if self._event.is_set():
+                return
+            self._event.set()
+            callbacks = tuple(self._callbacks.values())
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                continue
+
+    def register(self, callback: Callable[[], None]) -> Callable[[], None]:
+        with self._lock:
+            if self._event.is_set():
+                invoke_now = True
+                callback_id = -1
+            else:
+                invoke_now = False
+                self._next_callback_id += 1
+                callback_id = self._next_callback_id
+                self._callbacks[callback_id] = callback
+        if invoke_now:
+            callback()
+
+        def unregister() -> None:
+            with self._lock:
+                self._callbacks.pop(callback_id, None)
+
+        return unregister
 
     def is_cancelled(self) -> bool:
         return self._event.is_set()
@@ -164,6 +261,7 @@ class GuardedEmbeddingTransport(Protocol):
         timeout_seconds: float,
         follow_redirects: Literal[False],
         allow_runtime_downloads: Literal[False],
+        cancellation: KnowledgeModelCancellation,
     ) -> EmbeddingTransportResponse: ...
 
 
@@ -175,6 +273,7 @@ class GuardedRerankerTransport(Protocol):
         timeout_seconds: float,
         follow_redirects: Literal[False],
         allow_runtime_downloads: Literal[False],
+        cancellation: KnowledgeModelCancellation,
     ) -> RerankerTransportResponse: ...
 
 
@@ -188,6 +287,7 @@ class GuardedKnowledgeModelSchedulerTransport(Protocol):
         priority: WorkPriority,
         timeout_seconds: float,
         follow_redirects: Literal[False],
+        cancellation: KnowledgeModelCancellation,
     ) -> SchedulerLease: ...
 
     def complete(
@@ -227,7 +327,7 @@ class KnowledgeModelWorkScheduler(Protocol):
         kind: WorkKind,
         priority: WorkPriority,
         timeout_seconds: float,
-        operation: Callable[[float], T],
+        operation: Callable[[float, KnowledgeModelCancellation], T],
         cancellation: KnowledgeModelCancellation | None = None,
     ) -> ScheduledWorkResult[T]: ...
 
@@ -243,17 +343,16 @@ class ImmediateKnowledgeModelWorkScheduler:
         kind: WorkKind,
         priority: WorkPriority,
         timeout_seconds: float,
-        operation: Callable[[float], T],
+        operation: Callable[[float, KnowledgeModelCancellation], T],
         cancellation: KnowledgeModelCancellation | None = None,
     ) -> ScheduledWorkResult[T]:
         del kind, priority
         _validate_timeout(timeout_seconds)
-        if cancellation is not None:
-            cancellation.raise_if_cancelled()
+        token = cancellation or KnowledgeModelCancellation()
+        token.raise_if_cancelled()
         started = monotonic()
-        value = operation(timeout_seconds)
-        if cancellation is not None:
-            cancellation.raise_if_cancelled()
+        value = operation(timeout_seconds, token)
+        token.raise_if_cancelled()
         elapsed = monotonic() - started
         if elapsed > timeout_seconds:
             raise TimeoutError("private Knowledge model service exceeded its timeout")
@@ -329,9 +428,14 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         *,
         endpoint: str,
         namespace: str,
+        allowed_hosts: PrivateHostPolicy,
         transport: GuardedKnowledgeModelSchedulerTransport,
     ) -> None:
-        self.endpoint = _private_https_endpoint(endpoint, field="scheduler endpoint")
+        self.endpoint = _private_https_endpoint(
+            endpoint,
+            field="scheduler endpoint",
+            allowed_hosts=allowed_hosts,
+        )
         normalized_namespace = namespace.strip()
         if not normalized_namespace or len(normalized_namespace) > 128:
             raise ValueError("scheduler namespace must be non-empty and bounded")
@@ -342,7 +446,9 @@ class PrivateKnowledgeModelWorkSchedulerClient:
             raise ValueError("scheduler namespace contains unsupported characters")
         self.namespace = normalized_namespace
         self._transport = transport
-        self._close_lock = Lock()
+        self._state = Condition()
+        self._active_tokens: set[KnowledgeModelCancellation] = set()
+        self._closing = False
         self._closed = False
 
     def submit_and_wait(
@@ -351,79 +457,261 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         kind: WorkKind,
         priority: WorkPriority,
         timeout_seconds: float,
-        operation: Callable[[float], T],
+        operation: Callable[[float, KnowledgeModelCancellation], T],
         cancellation: KnowledgeModelCancellation | None = None,
     ) -> ScheduledWorkResult[T]:
-        if self._closed:
-            raise RuntimeError("private Knowledge model scheduler client is closed")
         _validate_timeout(timeout_seconds)
-        if cancellation is not None:
-            cancellation.raise_if_cancelled()
-        queue_started = monotonic()
-        lease = self._transport.acquire(
+        token = KnowledgeModelCancellation()
+        with self._state:
+            if self._closing or self._closed:
+                raise RuntimeError("private Knowledge model scheduler client is closing")
+            self._active_tokens.add(token)
+        unregister = cancellation.register(token.cancel) if cancellation is not None else None
+        try:
+            token.raise_if_cancelled()
+            deadline = monotonic() + timeout_seconds
+            queue_started = monotonic()
+            lease = self._acquire_cancellable(
+                kind=kind,
+                priority=priority,
+                deadline=deadline,
+                token=token,
+            )
+            measured_queue_time_ms = (monotonic() - queue_started) * 1000
+            effective_queue_time_ms = max(lease.queue_time_ms, measured_queue_time_ms)
+            remaining = min(
+                deadline - monotonic(),
+                timeout_seconds - effective_queue_time_ms / 1000,
+            )
+            if remaining <= 0:
+                primary = TimeoutError(
+                    "private Knowledge model scheduler queue exceeded its timeout"
+                )
+                self._cancel_lease_best_effort(
+                    lease,
+                    timeout_seconds=timeout_seconds,
+                    primary=primary,
+                )
+                raise primary
+            started = monotonic()
+            try:
+                value = self._run_service_cancellable(
+                    operation=operation,
+                    remaining=remaining,
+                    token=token,
+                )
+            except BaseException as primary:
+                self._cancel_lease_best_effort(
+                    lease,
+                    timeout_seconds=max(deadline - monotonic(), 0.001),
+                    primary=primary,
+                )
+                raise
+            service_time_ms = (monotonic() - started) * 1000
+            try:
+                token.raise_if_cancelled()
+            except BaseException as primary:
+                self._cancel_lease_best_effort(
+                    lease,
+                    timeout_seconds=max(deadline - monotonic(), 0.001),
+                    primary=primary,
+                )
+                raise
+            if service_time_ms / 1000 > remaining:
+                timeout_error = TimeoutError("private Knowledge model service exceeded its timeout")
+                self._cancel_lease_best_effort(
+                    lease,
+                    timeout_seconds=max(deadline - monotonic(), 0.001),
+                    primary=timeout_error,
+                )
+                raise timeout_error
+            try:
+                self._transport.complete(
+                    self.endpoint,
+                    self.namespace,
+                    lease,
+                    timeout_seconds=max(deadline - monotonic(), 0.001),
+                    follow_redirects=False,
+                )
+            except BaseException as primary:
+                self._cancel_lease_best_effort(
+                    lease,
+                    timeout_seconds=max(deadline - monotonic(), 0.001),
+                    primary=primary,
+                )
+                raise
+            return ScheduledWorkResult(
+                value=value,
+                queue_time_ms=effective_queue_time_ms,
+                service_time_ms=service_time_ms,
+            )
+        finally:
+            if unregister is not None:
+                unregister()
+            with self._state:
+                self._active_tokens.discard(token)
+                self._state.notify_all()
+
+    def _acquire_cancellable(
+        self,
+        *,
+        kind: WorkKind,
+        priority: WorkPriority,
+        deadline: float,
+        token: KnowledgeModelCancellation,
+    ) -> SchedulerLease:
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="knowledge-scheduler")
+        future = executor.submit(
+            self._transport.acquire,
             endpoint=self.endpoint,
             namespace=self.namespace,
             kind=kind,
             priority=priority,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=max(deadline - monotonic(), 0.001),
             follow_redirects=False,
+            cancellation=token,
         )
-        measured_queue_time_ms = (monotonic() - queue_started) * 1000
-        effective_queue_time_ms = max(lease.queue_time_ms, measured_queue_time_ms)
-        remaining = timeout_seconds - effective_queue_time_ms / 1000
-        if remaining <= 0:
-            self._cancel_lease(lease, timeout_seconds=timeout_seconds)
-            raise TimeoutError("private Knowledge model scheduler queue exceeded its timeout")
         try:
-            if cancellation is not None:
-                cancellation.raise_if_cancelled()
-            started = monotonic()
-            value = operation(remaining)
-            service_time_ms = (monotonic() - started) * 1000
-            if cancellation is not None:
-                cancellation.raise_if_cancelled()
-            if service_time_ms / 1000 > remaining:
-                raise TimeoutError("private Knowledge model service exceeded its timeout")
-        except BaseException:
-            self._cancel_lease(lease, timeout_seconds=max(remaining, 0.001))
+            lease = _await_cancellable_future(future, token=token, deadline=deadline)
+            token.raise_if_cancelled()
+            return lease
+        except BaseException as primary:
+            try:
+                late_lease = future.result(timeout=0.25)
+            except FutureTimeoutError:
+                future.add_done_callback(
+                    partial(
+                        self._cancel_late_acquire,
+                        primary=primary,
+                    )
+                )
+            except BaseException:
+                pass
+            else:
+                self._cancel_lease_best_effort(
+                    late_lease,
+                    timeout_seconds=1.0,
+                    primary=primary,
+                )
             raise
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    def _run_service_cancellable(
+        self,
+        *,
+        operation: Callable[[float, KnowledgeModelCancellation], T],
+        remaining: float,
+        token: KnowledgeModelCancellation,
+    ) -> T:
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="knowledge-model")
+        future = executor.submit(operation, remaining, token)
         try:
-            self._transport.complete(
+            return _await_cancellable_future(
+                future,
+                token=token,
+                deadline=monotonic() + remaining,
+            )
+        except BaseException as primary:
+            future.cancel()
+            try:
+                future.result(timeout=0.25)
+            except FutureTimeoutError:
+                primary.add_note("cancelled model transport did not stop within 250 ms")
+            except BaseException:
+                pass
+            raise
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    def _cancel_late_acquire(
+        self,
+        completed: Future[SchedulerLease],
+        *,
+        primary: BaseException,
+    ) -> None:
+        if completed.cancelled() or completed.exception() is not None:
+            return
+        self._cancel_lease_best_effort(
+            completed.result(),
+            timeout_seconds=1.0,
+            primary=primary,
+        )
+
+    def _cancel_lease_best_effort(
+        self,
+        lease: SchedulerLease,
+        *,
+        timeout_seconds: float,
+        primary: BaseException,
+    ) -> None:
+        try:
+            self._transport.cancel(
                 self.endpoint,
                 self.namespace,
                 lease,
-                timeout_seconds=max(remaining - service_time_ms / 1000, 0.001),
+                timeout_seconds=min(max(timeout_seconds, 0.001), 5.0),
                 follow_redirects=False,
             )
-        except BaseException:
-            self._cancel_lease(lease, timeout_seconds=max(remaining, 0.001))
-            raise
-        return ScheduledWorkResult(
-            value=value,
-            queue_time_ms=effective_queue_time_ms,
-            service_time_ms=service_time_ms,
-        )
-
-    def _cancel_lease(self, lease: SchedulerLease, *, timeout_seconds: float) -> None:
-        self._transport.cancel(
-            self.endpoint,
-            self.namespace,
-            lease,
-            timeout_seconds=min(max(timeout_seconds, 0.001), 5.0),
-            follow_redirects=False,
-        )
+        except Exception as cleanup_error:
+            primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
 
     def close(self) -> None:
-        with self._close_lock:
+        with self._state:
+            while self._closing and not self._closed:
+                self._state.wait()
             if self._closed:
                 return
-            self._closed = True
+            self._closing = True
+            active = tuple(self._active_tokens)
+        for token in active:
+            token.cancel()
+        deadline = monotonic() + 5.0
+        with self._state:
+            while self._active_tokens and monotonic() < deadline:
+                self._state.wait(timeout=min(0.05, deadline - monotonic()))
+        try:
             self._transport.close()
+        except Exception:
+            with self._state:
+                self._closing = False
+                self._state.notify_all()
+            raise
+        with self._state:
+            self._closed = True
+            self._closing = False
+            self._state.notify_all()
 
 
-def _private_https_endpoint(value: str, *, field: str) -> str:
+def _await_cancellable_future(
+    future: Future[T],
+    *,
+    token: KnowledgeModelCancellation,
+    deadline: float,
+) -> T:
+    while True:
+        token.raise_if_cancelled()
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("private Knowledge model work exceeded its timeout")
+        try:
+            return future.result(timeout=min(0.02, remaining))
+        except FutureTimeoutError:
+            continue
+
+
+def _private_https_endpoint(
+    value: str,
+    *,
+    field: str,
+    allowed_hosts: PrivateHostPolicy,
+) -> str:
     normalized = value.strip().rstrip("/")
     parsed = urlsplit(normalized)
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{field} must use a valid HTTPS port") from exc
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -434,6 +722,8 @@ def _private_https_endpoint(value: str, *, field: str) -> str:
         or parsed.fragment
     ):
         raise ValueError(f"{field} must be a secret-free HTTPS service origin")
+    if not allowed_hosts.allows(parsed.hostname):
+        raise ValueError(f"{field} host is not in the private service allowlist")
     return normalized
 
 
@@ -457,6 +747,48 @@ def _raise_mapped_httpx_failure(exc: Exception) -> None:
     raise ConnectionError("private Knowledge service connection failed") from exc
 
 
+def decode_bounded_json_bytes(content: bytes | bytearray) -> JsonValue:
+    """Decode strict JSON and reject structurally abusive or non-finite payloads."""
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON number is forbidden: {value}")
+
+    try:
+        value = cast(JsonValue, json.loads(content, parse_constant=reject_constant))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise ValueError("private Knowledge service returned invalid bounded JSON") from exc
+    validate_bounded_json(value)
+    return value
+
+
+def validate_bounded_json(value: JsonValue) -> None:
+    pending: list[tuple[JsonValue, int]] = [(value, 1)]
+    visited = 0
+    while pending:
+        current, depth = pending.pop()
+        visited += 1
+        if visited > MAX_MODEL_JSON_NODES:
+            raise ValueError("private Knowledge JSON exceeds the node limit")
+        if depth > MAX_MODEL_JSON_DEPTH:
+            raise ValueError("private Knowledge JSON exceeds the nesting-depth limit")
+        if isinstance(current, str):
+            if len(current) > MAX_MODEL_JSON_STRING_CHARACTERS:
+                raise ValueError("private Knowledge JSON string exceeds the character limit")
+        elif isinstance(current, list):
+            if len(current) > MAX_MODEL_JSON_COLLECTION_ITEMS:
+                raise ValueError("private Knowledge JSON array exceeds the item limit")
+            pending.extend((item, depth + 1) for item in current)
+        elif isinstance(current, dict):
+            if len(current) > MAX_MODEL_JSON_COLLECTION_ITEMS:
+                raise ValueError("private Knowledge JSON object exceeds the item limit")
+            for key, item in current.items():
+                if len(key) > MAX_MODEL_JSON_STRING_CHARACTERS:
+                    raise ValueError("private Knowledge JSON key exceeds the character limit")
+                pending.append((item, depth + 1))
+        elif isinstance(current, float) and not math.isfinite(current):
+            raise ValueError("private Knowledge JSON numbers must be finite")
+
+
 class _HttpJsonTransport:
     """Small guarded HTTP boundary: HTTPS only, no redirects, proxies, or retries."""
 
@@ -465,8 +797,12 @@ class _HttpJsonTransport:
             import httpx
         except ImportError as exc:  # pragma: no cover - optional production dependency
             raise ImportError("Hybrid private-model HTTP support requires httpx") from exc
-        self._client = httpx.Client(follow_redirects=False, trust_env=False)
+        self._httpx = httpx
         self._max_response_bytes = max_response_bytes
+        self._state = Condition()
+        self._active_clients: set[object] = set()
+        self._closing = False
+        self._closed = False
 
     def _post(
         self,
@@ -475,11 +811,17 @@ class _HttpJsonTransport:
         *,
         timeout_seconds: float,
         expect_json: bool = True,
+        cancellation: KnowledgeModelCancellation,
     ) -> object:
+        client = self._httpx.Client(follow_redirects=False, trust_env=False)
+        with self._state:
+            if self._closing or self._closed:
+                client.close()
+                raise RuntimeError("private Knowledge HTTP transport is closing")
+            self._active_clients.add(client)
+        unregister = cancellation.register(client.close)
         try:
-            with self._client.stream(
-                "POST", url, json=payload, timeout=timeout_seconds
-            ) as response:
+            with client.stream("POST", url, json=payload, timeout=timeout_seconds) as response:
                 if 300 <= response.status_code < 400:
                     raise ValueError("private Knowledge service redirects are forbidden")
                 if response.status_code in {408, 425, 429} or response.status_code >= 500:
@@ -508,15 +850,31 @@ class _HttpJsonTransport:
         except Exception as exc:
             _raise_mapped_httpx_failure(exc)
             raise
+        finally:
+            unregister()
+            client.close()
+            with self._state:
+                self._active_clients.discard(client)
+                self._state.notify_all()
         if not expect_json:
             return None
-        try:
-            return json.loads(content)
-        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("private Knowledge service returned invalid JSON") from exc
+        return decode_bounded_json_bytes(content)
 
     def close(self) -> None:
-        self._client.close()
+        with self._state:
+            if self._closed:
+                return
+            self._closing = True
+            active = tuple(self._active_clients)
+        for client in active:
+            close = getattr(client, "close", None)
+            if close is not None:
+                close()
+        deadline = monotonic() + 5.0
+        with self._state:
+            while self._active_clients and monotonic() < deadline:
+                self._state.wait(timeout=min(0.05, deadline - monotonic()))
+            self._closed = True
 
 
 class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
@@ -534,6 +892,7 @@ class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
         priority: WorkPriority,
         timeout_seconds: float,
         follow_redirects: Literal[False],
+        cancellation: KnowledgeModelCancellation,
     ) -> SchedulerLease:
         if follow_redirects is not False:
             raise ValueError("scheduler redirects are forbidden")
@@ -546,6 +905,7 @@ class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
                 "timeout_seconds": timeout_seconds,
             },
             timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
         )
         return SchedulerLease.model_validate(payload)
 
@@ -569,6 +929,7 @@ class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
             },
             timeout_seconds=timeout_seconds,
             expect_json=False,
+            cancellation=KnowledgeModelCancellation(),
         )
 
     def cancel(
@@ -591,15 +952,20 @@ class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
             },
             timeout_seconds=timeout_seconds,
             expect_json=False,
+            cancellation=KnowledgeModelCancellation(),
         )
 
 
 class HttpEmbeddingTransport(_HttpJsonTransport):
     """Guarded transport for one pinned private embedding service."""
 
-    def __init__(self, *, endpoint: str) -> None:
+    def __init__(self, *, endpoint: str, allowed_hosts: PrivateHostPolicy) -> None:
         super().__init__(max_response_bytes=64 * 1024 * 1024)
-        self._endpoint = _private_https_endpoint(endpoint, field="embedding endpoint")
+        self._endpoint = _private_https_endpoint(
+            endpoint,
+            field="embedding endpoint",
+            allowed_hosts=allowed_hosts,
+        )
 
     def embed(
         self,
@@ -608,6 +974,7 @@ class HttpEmbeddingTransport(_HttpJsonTransport):
         timeout_seconds: float,
         follow_redirects: Literal[False],
         allow_runtime_downloads: Literal[False],
+        cancellation: KnowledgeModelCancellation,
     ) -> EmbeddingTransportResponse:
         if follow_redirects is not False or allow_runtime_downloads is not False:
             raise ValueError("embedding redirects and runtime downloads are forbidden")
@@ -617,6 +984,7 @@ class HttpEmbeddingTransport(_HttpJsonTransport):
             f"{self._endpoint}/v1/embeddings",
             payload,
             timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
         )
         return EmbeddingTransportResponse.model_validate(response)
 
@@ -624,9 +992,13 @@ class HttpEmbeddingTransport(_HttpJsonTransport):
 class HttpRerankerTransport(_HttpJsonTransport):
     """Guarded transport for one pinned private reranker service."""
 
-    def __init__(self, *, endpoint: str) -> None:
+    def __init__(self, *, endpoint: str, allowed_hosts: PrivateHostPolicy) -> None:
         super().__init__(max_response_bytes=16 * 1024 * 1024)
-        self._endpoint = _private_https_endpoint(endpoint, field="reranker endpoint")
+        self._endpoint = _private_https_endpoint(
+            endpoint,
+            field="reranker endpoint",
+            allowed_hosts=allowed_hosts,
+        )
 
     def rerank(
         self,
@@ -635,6 +1007,7 @@ class HttpRerankerTransport(_HttpJsonTransport):
         timeout_seconds: float,
         follow_redirects: Literal[False],
         allow_runtime_downloads: Literal[False],
+        cancellation: KnowledgeModelCancellation,
     ) -> RerankerTransportResponse:
         if follow_redirects is not False or allow_runtime_downloads is not False:
             raise ValueError("reranker redirects and runtime downloads are forbidden")
@@ -644,6 +1017,7 @@ class HttpRerankerTransport(_HttpJsonTransport):
             f"{self._endpoint}/v1/rerank",
             payload,
             timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
         )
         return RerankerTransportResponse.model_validate(response)
 
@@ -684,11 +1058,12 @@ class PrivateEmbeddingClient:
             priority=priority,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            operation=lambda remaining: self._transport.embed(
+            operation=lambda remaining, scheduled_cancellation: self._transport.embed(
                 request,
                 timeout_seconds=remaining,
                 follow_redirects=False,
                 allow_runtime_downloads=False,
+                cancellation=scheduled_cancellation,
             ),
         )
         response = scheduled.value
@@ -743,11 +1118,12 @@ class PrivateRerankerClient:
             priority=priority,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            operation=lambda remaining: self._transport.rerank(
+            operation=lambda remaining, scheduled_cancellation: self._transport.rerank(
                 request,
                 timeout_seconds=remaining,
                 follow_redirects=False,
                 allow_runtime_downloads=False,
+                cancellation=scheduled_cancellation,
             ),
         )
         response = scheduled.value

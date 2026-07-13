@@ -67,6 +67,16 @@ def _settings() -> HybridKnowledgeModelSettings:
         paddle_endpoint="https://paddle.internal",
         embedding_endpoint="https://embedding.internal",
         reranker_endpoint="https://reranker.internal",
+        allowed_hosts=(
+            "scheduler.internal",
+            "docling.internal",
+            "paddle.internal",
+            "embedding.internal",
+            "reranker.internal",
+        ),
+        parser_revision="docling+paddle@sha256:parser",
+        model_digests=("sha256:model",),
+        parser_configuration_sha256="b" * 64,
     )
 
 
@@ -108,6 +118,50 @@ def test_default_production_composition_never_builds_an_in_memory_queue() -> Non
         graph.close()
 
 
+def test_composition_closes_every_transport_and_retries_only_failed_closer() -> None:
+    class FailingParserTransport(ParserTransport):
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+            if self.close_count == 1:
+                raise RuntimeError("close failed")
+
+    class CountingParserTransport(ParserTransport):
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    scheduler_transport = SchedulerTransport()
+    failing = FailingParserTransport()
+    paddle = CountingParserTransport()
+    embedding = EmbeddingTransport()
+    reranker = RerankerTransport()
+    graph = compose_hybrid_knowledge(
+        settings=_settings(),
+        transports=HybridKnowledgeTransportBundle(
+            scheduler=scheduler_transport,
+            docling=failing,
+            paddle=paddle,
+            embedding=embedding,
+            reranker=reranker,
+        ),
+    )
+
+    with pytest.raises(ExceptionGroup, match="composition close"):
+        graph.close()
+    assert scheduler_transport.close_count == 1
+    assert paddle.close_count == 1
+
+    graph.close()
+    assert failing.close_count == 2
+    assert scheduler_transport.close_count == 1
+    assert paddle.close_count == 1
+
+
 def test_enabled_production_composition_fails_closed_without_complete_config() -> None:
     with pytest.raises(ValueError, match="PA_KNOWLEDGE_MODEL_SCHEDULER_NAMESPACE"):
         compose_hybrid_knowledge_from_env(
@@ -120,6 +174,60 @@ def test_enabled_production_composition_fails_closed_without_complete_config() -
 
 def test_disabled_local_composition_keeps_deterministic_path_unconfigured() -> None:
     assert compose_hybrid_knowledge_from_env({}) is None
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    (
+        "https://8.8.8.8",
+        "https://127.0.0.1",
+        "https://169.254.169.254",
+        "https://[::1]",
+        "https://example.com",
+        "https://user:password@scheduler.internal",
+        "https://scheduler.internal/private/path",
+        "https://scheduler.internal?token=value",
+        "https://scheduler.internal#fragment",
+        "https://scheduler.internal:not-a-port",
+    ),
+)
+def test_private_scheduler_endpoint_rejects_ssrf_and_secret_bearing_origins(
+    endpoint: str,
+) -> None:
+    with pytest.raises(ValueError):
+        HybridKnowledgeModelSettings(
+            scheduler_endpoint=endpoint,
+            scheduler_namespace="insurance-knowledge",
+            docling_endpoint="https://docling.internal",
+            paddle_endpoint="https://paddle.internal",
+            embedding_endpoint="https://embedding.internal",
+            reranker_endpoint="https://reranker.internal",
+            allowed_hosts=(
+                "scheduler.internal",
+                "docling.internal",
+                "paddle.internal",
+                "embedding.internal",
+                "reranker.internal",
+            ),
+            parser_revision="docling+paddle@sha256:parser",
+            model_digests=("sha256:model",),
+            parser_configuration_sha256="b" * 64,
+        )
+
+
+def test_enabled_composition_requires_explicit_private_host_allowlist() -> None:
+    with pytest.raises(ValueError, match="PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS"):
+        compose_hybrid_knowledge_from_env(
+            {
+                "PA_HYBRID_KNOWLEDGE_MODELS_ENABLED": "1",
+                "PA_KNOWLEDGE_MODEL_SCHEDULER_ENDPOINT": "https://scheduler.internal",
+                "PA_KNOWLEDGE_MODEL_SCHEDULER_NAMESPACE": "insurance-knowledge",
+                "PA_KNOWLEDGE_DOCLING_ENDPOINT": "https://docling.internal",
+                "PA_KNOWLEDGE_PADDLE_ENDPOINT": "https://paddle.internal",
+                "PA_KNOWLEDGE_EMBEDDING_ENDPOINT": "https://embedding.internal",
+                "PA_KNOWLEDGE_RERANKER_ENDPOINT": "https://reranker.internal",
+            }
+        )
 
 
 def test_fastapi_lifespan_registers_and_closes_composition_once(monkeypatch) -> None:

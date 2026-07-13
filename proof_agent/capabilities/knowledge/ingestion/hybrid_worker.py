@@ -333,7 +333,7 @@ class HybridKnowledgeWorkerFactory:
         worker_id: str,
         lease_seconds: int = 60,
     ) -> "HybridKnowledgeWorker":
-        pipeline_scheduler = getattr(pipeline, "scheduler", self.scheduler)
+        pipeline_scheduler = getattr(pipeline, "scheduler", None)
         if pipeline_scheduler is not self.scheduler:
             raise ValueError("Hybrid worker pipeline must use the composed scheduler")
         return HybridKnowledgeWorker(
@@ -369,7 +369,7 @@ class HybridKnowledgeWorker:
         self._original_store = original_store
         self._artifact_store = artifact_store
         self._pipeline = pipeline
-        pipeline_scheduler = getattr(pipeline, "scheduler", scheduler)
+        pipeline_scheduler = getattr(pipeline, "scheduler", None)
         if scheduler is not None and pipeline_scheduler is not scheduler:
             raise ValueError("Hybrid worker pipeline must use the injected scheduler")
         self._scheduler = scheduler

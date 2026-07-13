@@ -21,9 +21,17 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     PrivatePaddleClient,
     canonical_vendor_json_bytes,
 )
+from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    ImmediateKnowledgeModelWorkScheduler,
+)
 from proof_agent.capabilities.knowledge.hybrid.pipeline import (
     MergeSelection,
+    PrivateHybridParserPipeline,
     merge_selected_results,
+)
+from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+    HybridArtifactBuildRequest,
+    hybrid_build_request_sha256,
 )
 from proof_agent.capabilities.knowledge.hybrid.quality import (
     QualityOutcome,
@@ -65,6 +73,22 @@ def original_ref() -> ExactArtifactRef:
         size_bytes=123,
         media_type="application/pdf",
     )
+
+
+def hybrid_build_request() -> HybridArtifactBuildRequest:
+    request = HybridArtifactBuildRequest(
+        job_id="job-1",
+        request_identity="request-1",
+        source_id="source-1",
+        document_id="doc-simple",
+        revision_id="rev-simple",
+        original_ref=original_ref(),
+        page_numbers=(1,),
+        parser_revision="2.112.0",
+        model_digests=("sha256:model-digest",),
+        configuration_sha256="b" * 64,
+    )
+    return request.model_copy(update={"request_sha256": hybrid_build_request_sha256(request)})
 
 
 def parser_response(
@@ -117,6 +141,74 @@ def with_vendor_payload(
     return response.model_copy(
         update={"attestation": response.attestation.model_copy(update=update)}
     )
+
+
+def test_private_pipeline_builds_passing_docling_artifact_through_shared_scheduler() -> None:
+    scheduler = ImmediateKnowledgeModelWorkScheduler()
+    calls: list[tuple[str, str]] = []
+
+    class Docling:
+        def __init__(self) -> None:
+            self.scheduler = scheduler
+
+        def parse(self, request, *, priority, timeout_seconds, cancellation=None):
+            del timeout_seconds, cancellation
+            calls.append(("docling", priority))
+            assert request == parser_response("docling-simple.json").request
+            return parser_response("docling-simple.json")
+
+    class Paddle:
+        def __init__(self) -> None:
+            self.scheduler = scheduler
+
+        def parse(self, *args, **kwargs):
+            raise AssertionError((args, kwargs))
+
+    pipeline = PrivateHybridParserPipeline(docling=Docling(), paddle=Paddle())  # type: ignore[arg-type]
+
+    result = pipeline.build(hybrid_build_request())
+
+    assert result.artifact.document_id == "doc-simple"
+    assert result.artifact.build_identity.parser_adapter == "docling"
+    assert tuple(vendor.adapter for vendor in result.vendor_artifacts) == ("docling",)
+    assert calls == [("docling", "offline")]
+
+
+def test_private_pipeline_never_auto_replaces_an_escalated_whole_page() -> None:
+    scheduler = ImmediateKnowledgeModelWorkScheduler()
+    docling = parser_response("docling-simple.json")
+    docling_payload = docling.vendor_json
+    docling_payload["pages"][0]["native_text_ratio"] = 0.0
+    docling_payload["pages"][0]["blocks"] = []
+    docling = with_vendor_payload(docling, docling_payload)
+    paddle = parser_response("paddle-ocr-page.json", adapter="paddle")
+    paddle_request = paddle.request.model_copy(update={"parser_revision": "2.112.0"})
+    paddle = ParserServiceResponse(
+        adapter="paddle",
+        request=paddle_request,
+        attestation=paddle.attestation.model_copy(update={"parser_revision": "2.112.0"}),
+    )
+
+    class Client:
+        def __init__(self, response: ParserServiceResponse) -> None:
+            self.scheduler = scheduler
+            self.response = response
+
+        def parse(self, request, **kwargs):
+            del kwargs
+            assert request == self.response.request
+            return self.response
+
+    pipeline = PrivateHybridParserPipeline(
+        docling=Client(docling),  # type: ignore[arg-type]
+        paddle=Client(paddle),  # type: ignore[arg-type]
+    )
+
+    result = pipeline.build(hybrid_build_request())
+
+    assert result.artifact.pages[0].blocks == ()
+    assert any(signal.requires_review for signal in result.artifact.quality_signals)
+    assert tuple(vendor.adapter for vendor in result.vendor_artifacts) == ("docling", "paddle")
 
 
 def test_docling_fixture_maps_page_bbox_reading_order_and_table_cells() -> None:
@@ -646,7 +738,10 @@ def exact_request() -> ParserServiceRequest:
 
 def test_private_client_preserves_service_attestation_and_disables_redirects() -> None:
     transport = RecordingTransport()
-    response = PrivateDoclingClient(transport=transport).parse(exact_request())
+    response = PrivateDoclingClient(
+        transport=transport,
+        scheduler=ImmediateKnowledgeModelWorkScheduler(),
+    ).parse(exact_request())
 
     assert response.attestation == transport.attestation
     assert response.attestation.original_ref.sha256 == "a" * 64
@@ -658,7 +753,10 @@ def test_paddle_client_rejects_multi_page_request_before_transport() -> None:
     transport = RecordingTransport()
 
     with pytest.raises(ValueError, match="exactly one page_number"):
-        PrivatePaddleClient(transport=transport).parse(request)
+        PrivatePaddleClient(
+            transport=transport,
+            scheduler=ImmediateKnowledgeModelWorkScheduler(),
+        ).parse(request)
     assert transport.requests == []
 
 
@@ -728,7 +826,10 @@ def test_private_client_rejects_each_mismatched_service_attestation(
         update={field: wrong}
     )
     with pytest.raises(ValidationError, match="match"):
-        PrivateDoclingClient(transport=RecordingTransport(attestation)).parse(exact_request())
+        PrivateDoclingClient(
+            transport=RecordingTransport(attestation),
+            scheduler=ImmediateKnowledgeModelWorkScheduler(),
+        ).parse(exact_request())
 
 
 def test_private_client_rejects_vendor_payload_outside_attested_source_binding() -> None:
@@ -743,7 +844,10 @@ def test_private_client_rejects_vendor_payload_outside_attested_source_binding()
         }
     )
     with pytest.raises(ValueError, match="service attestation"):
-        PrivateDoclingClient(transport=RecordingTransport(attestation)).parse(exact_request())
+        PrivateDoclingClient(
+            transport=RecordingTransport(attestation),
+            scheduler=ImmediateKnowledgeModelWorkScheduler(),
+        ).parse(exact_request())
 
 
 def test_canonicalizer_rejects_build_not_bound_to_service_attestation() -> None:
