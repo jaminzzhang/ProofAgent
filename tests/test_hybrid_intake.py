@@ -195,8 +195,14 @@ def _write_png_predictor_content_pdf(path: Path) -> Path:
     return path
 
 
-def _write_object_stream_bomb_pdf(path: Path) -> Path:
-    object_stream_decoded = b"2 0 << /Dummy true >>\n%" + b"A" * (2 * 1024 * 1024 + 1)
+def _write_object_stream_pdf(
+    path: Path,
+    *,
+    padding_bytes: int,
+    nested_dictionary_before_type: bool = False,
+    indirect_filter_and_length: bool = False,
+) -> Path:
+    object_stream_decoded = b"2 0 << /Dummy true >>\n%" + b"A" * padding_bytes
     object_stream_encoded = zlib.compress(object_stream_decoded)
     parts = [b"%PDF-1.5\n"]
     offsets: dict[int, int] = {}
@@ -205,10 +211,22 @@ def _write_object_stream_bomb_pdf(path: Path) -> Path:
         offsets[object_id] = sum(len(part) for part in parts)
         parts.append(f"{object_id} 0 obj\n".encode("ascii") + body + b"\nendobj\n")
 
+    dictionary_prefix = (
+        b"<< /DecodeParms << /Predictor 1 >> /Type /ObjStm"
+        if nested_dictionary_before_type
+        else b"<< /Type /ObjStm"
+    )
+    filter_value = b"7 0 R" if indirect_filter_and_length else b"/FlateDecode"
+    length_value = (
+        b"8 0 R" if indirect_filter_and_length else str(len(object_stream_encoded)).encode("ascii")
+    )
     add_object(
         1,
-        b"<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /Length "
-        + str(len(object_stream_encoded)).encode("ascii")
+        dictionary_prefix
+        + b" /N 1 /First 4 /Filter "
+        + filter_value
+        + b" /Length "
+        + length_value
         + b" >>\nstream\n"
         + object_stream_encoded
         + b"\nendstream",
@@ -219,25 +237,33 @@ def _write_object_stream_bomb_pdf(path: Path) -> Path:
         5,
         b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << >> >>",
     )
+    if indirect_filter_and_length:
+        add_object(7, b"/FlateDecode")
+        add_object(8, str(len(object_stream_encoded)).encode("ascii"))
     offsets[6] = sum(len(part) for part in parts)
 
     def xref_entry(entry_type: int, field2: int, field3: int) -> bytes:
         return bytes((entry_type,)) + field2.to_bytes(4, "big") + field3.to_bytes(2, "big")
 
-    xref_data = b"".join(
-        [
-            xref_entry(0, 0, 65535),
-            xref_entry(1, offsets[1], 0),
-            xref_entry(2, 1, 0),
-            xref_entry(1, offsets[3], 0),
-            xref_entry(1, offsets[4], 0),
-            xref_entry(1, offsets[5], 0),
-            xref_entry(1, offsets[6], 0),
-        ]
-    )
+    size = 9 if indirect_filter_and_length else 7
+    xref_entries = []
+    for object_id in range(size):
+        if object_id == 0:
+            xref_entries.append(xref_entry(0, 0, 65535))
+        elif object_id == 2:
+            xref_entries.append(xref_entry(2, 1, 0))
+        elif object_id in offsets:
+            xref_entries.append(xref_entry(1, offsets[object_id], 0))
+        else:
+            xref_entries.append(xref_entry(0, 0, 0))
+    xref_data = b"".join(xref_entries)
     add_object(
         6,
-        b"<< /Type /XRef /Size 7 /Root 3 0 R /W [1 4 2] /Index [0 7] /Length "
+        b"<< /Type /XRef /Size "
+        + str(size).encode("ascii")
+        + b" /Root 3 0 R /W [1 4 2] /Index [0 "
+        + str(size).encode("ascii")
+        + b"] /Length "
         + str(len(xref_data)).encode("ascii")
         + b" >>\nstream\n"
         + xref_data
@@ -1035,11 +1061,89 @@ def test_preflight_rejects_object_stream_bomb_before_pdfreader_construction(
     monkeypatch.setattr(pypdf, "PdfReader", track_reader)
     with pytest.raises(ProofAgentError) as exc:
         preflight_hybrid_pdf(
-            _write_object_stream_bomb_pdf(tmp_path / "object-stream-bomb.pdf"),
+            _write_object_stream_pdf(
+                tmp_path / "object-stream-bomb.pdf",
+                padding_bytes=2 * 1024 * 1024 + 1,
+            ),
             limits=HybridIntakeLimits(),
         )
     assert exc.value.code == "PA_HYBRID_INTAKE_006"
     assert reader_entered is False
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"nested_dictionary_before_type": True},
+        {"indirect_filter_and_length": True},
+    ],
+)
+def test_preflight_accepts_bounded_structural_stream_dictionary_variants(
+    tmp_path: Path,
+    options: dict[str, bool],
+) -> None:
+    result = preflight_hybrid_pdf(
+        _write_object_stream_pdf(
+            tmp_path / "bounded-object-stream.pdf",
+            padding_bytes=32,
+            **options,
+        ),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"nested_dictionary_before_type": True},
+        {"indirect_filter_and_length": True},
+    ],
+)
+def test_preflight_rejects_structural_stream_variant_bombs_before_pdfreader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, bool],
+) -> None:
+    pypdf = import_module("pypdf")
+    original_reader = pypdf.PdfReader
+    reader_entered = False
+
+    def track_reader(*args: object, **kwargs: object) -> object:
+        nonlocal reader_entered
+        reader_entered = True
+        return original_reader(*args, **kwargs)
+
+    monkeypatch.setattr(pypdf, "PdfReader", track_reader)
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(
+            _write_object_stream_pdf(
+                tmp_path / "variant-object-stream-bomb.pdf",
+                padding_bytes=2 * 1024 * 1024 + 1,
+                **options,
+            ),
+            limits=HybridIntakeLimits(),
+        )
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert reader_entered is False
+
+
+def test_preflight_ignores_structural_markers_inside_ordinary_stream_data(
+    tmp_path: Path,
+) -> None:
+    pypdf, generic = _modules()
+    path = tmp_path / "ordinary-marker-stream.pdf"
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    content = generic.DecodedStreamObject()
+    content.set_data(b"% /Type /ObjStm /Type /XRef\n" * 300)
+    page[generic.NameObject("/Contents")] = writer._add_object(content)
+    page[generic.NameObject("/Resources")] = generic.DictionaryObject()
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    result = preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert result.page_count == 1
 
 
 def test_preflight_rejects_unreferenced_embedded_stream_in_incremental_xref(

@@ -816,84 +816,197 @@ def _reject_polyglot_payload(source: IO[bytes]) -> None:
 def _validate_bounded_structural_streams(source: IO[bytes]) -> None:
     source.seek(0)
     raw = source.read()
-    for candidate_count, marker in enumerate(
-        re.finditer(rb"/Type[\x00\x09\x0a\x0c\x0d\x20]+/(?:ObjStm|XRef)\b", raw),
-        1,
+    simple_objects = _simple_indirect_pdf_values(raw)
+    position = 0
+    recent: list[bytes] = []
+    in_object = False
+    dictionary_depth = 0
+    dictionary_tokens: list[tuple[bytes, int]] | None = None
+    completed_dictionary: list[tuple[bytes, int]] | None = None
+    structural_count = 0
+    while True:
+        token_result = _next_raw_pdf_token(raw, position)
+        if token_result is None:
+            return
+        token, _start, end = token_result
+        position = end
+        if token == b"obj" and len(recent) >= 2 and all(value.isdigit() for value in recent[-2:]):
+            in_object = True
+            completed_dictionary = None
+        elif in_object and token == b"<<":
+            if dictionary_depth == 0:
+                dictionary_tokens = []
+            if dictionary_tokens is not None:
+                dictionary_tokens.append((token, dictionary_depth))
+            dictionary_depth += 1
+        elif in_object and token == b">>" and dictionary_depth > 0:
+            dictionary_depth -= 1
+            if dictionary_tokens is not None:
+                dictionary_tokens.append((token, dictionary_depth))
+            if dictionary_depth == 0:
+                completed_dictionary = dictionary_tokens
+                dictionary_tokens = None
+        elif dictionary_depth > 0 and dictionary_tokens is not None:
+            dictionary_tokens.append((token, dictionary_depth))
+        elif in_object and token == b"stream" and completed_dictionary is not None:
+            length = _structural_dictionary_length(completed_dictionary, simple_objects)
+            data_start = _raw_stream_data_start(raw, end)
+            data_end = data_start + length
+            if data_end > len(raw):
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006", "Hybrid PDF structural stream is truncated."
+                )
+            structural_type = _top_dictionary_name(completed_dictionary, b"/Type")
+            if structural_type in {b"/ObjStm", b"/XRef"}:
+                structural_count += 1
+                if structural_count > _MAX_STRUCTURAL_STREAM_CANDIDATES:
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006",
+                        "Hybrid PDF structural stream candidate count exceeds safety limits.",
+                    )
+                decoded = raw[data_start:data_end]
+                for filter_name in _structural_dictionary_filters(
+                    completed_dictionary, simple_objects
+                ):
+                    decoded = _decode_bounded_standard_filter(
+                        decoded,
+                        filter_name,
+                        None,
+                        _MAX_STRUCTURAL_STREAM_DECODED_BYTES,
+                    )
+                _require_decoded_limit(decoded, _MAX_STRUCTURAL_STREAM_DECODED_BYTES)
+            position = data_end
+            completed_dictionary = None
+        elif token == b"endobj":
+            in_object = False
+            completed_dictionary = None
+        recent.append(token)
+        if len(recent) > 3:
+            del recent[0]
+
+
+def _next_raw_pdf_token(raw: bytes, position: int) -> tuple[bytes, int, int] | None:
+    while position < len(raw) and raw[position] in _PDF_WHITESPACE:
+        position += 1
+    if position >= len(raw):
+        return None
+    if raw[position] == ord("%"):
+        newline = min(
+            (
+                index
+                for index in (raw.find(b"\n", position), raw.find(b"\r", position))
+                if index >= 0
+            ),
+            default=len(raw) - 1,
+        )
+        return _next_raw_pdf_token(raw, newline + 1)
+    start = position
+    if raw.startswith(b"<<", position) or raw.startswith(b">>", position):
+        return raw[position : position + 2], start, position + 2
+    if raw[position] == ord("("):
+        return b"(string)", start, _skip_pdf_literal_string(raw, position + 1)
+    if raw[position] == ord("<"):
+        closing = raw.find(b">", position + 1)
+        if closing < 0:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF hex string is invalid.")
+        return b"<hex>", start, closing + 1
+    if raw[position] in b"[]{}":
+        return raw[position : position + 1], start, position + 1
+    position += 1
+    while (
+        position < len(raw)
+        and raw[position] not in _PDF_WHITESPACE
+        and raw[position] not in b"()<>[]{}/%"
     ):
-        if candidate_count > _MAX_STRUCTURAL_STREAM_CANDIDATES:
-            raise _hybrid_error(
-                "PA_HYBRID_INTAKE_006",
-                "Hybrid PDF structural stream candidate count exceeds safety limits.",
-            )
-        dictionary_start = raw.rfind(
-            b"<<",
-            max(0, marker.start() - _MAX_STRUCTURAL_STREAM_DICTIONARY_BYTES),
-            marker.start(),
-        )
-        if (
-            dictionary_start < 0
-            or re.search(
-                rb"[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+[0-9]+"
-                rb"[\x00\x09\x0a\x0c\x0d\x20]+obj[\x00\x09\x0a\x0c\x0d\x20]*\Z",
-                raw[max(0, dictionary_start - 96) : dictionary_start],
-            )
-            is None
+        position += 1
+    if raw[start] == ord("/"):
+        while (
+            position < len(raw)
+            and raw[position] not in _PDF_WHITESPACE
+            and raw[position] not in b"()<>[]{}/%"
         ):
+            position += 1
+    return raw[start:position], start, position
+
+
+def _simple_indirect_pdf_values(raw: bytes) -> dict[tuple[int, int], tuple[bytes, ...]]:
+    values: dict[tuple[int, int], tuple[bytes, ...]] = {}
+    pattern = re.compile(
+        rb"(?m)(?P<id>[0-9]+)[\x00\x09\x0a\x0c\x0d\x20]+(?P<generation>[0-9]+)"
+        rb"[\x00\x09\x0a\x0c\x0d\x20]+obj[\x00\x09\x0a\x0c\x0d\x20]+"
+        rb"(?P<value>[0-9]+|/[A-Za-z0-9]+|\[[\x00\x09\x0a\x0c\x0d\x20/A-Za-z0-9]+\])"
+        rb"[\x00\x09\x0a\x0c\x0d\x20]+endobj\b"
+    )
+    for match in pattern.finditer(raw):
+        values[(int(match.group("id")), int(match.group("generation")))] = tuple(
+            re.findall(rb"/[A-Za-z0-9]+|[0-9]+|\[|\]", match.group("value"))
+        )
+    return values
+
+
+def _top_dictionary_value(tokens: list[tuple[bytes, int]], key: bytes) -> tuple[bytes, ...] | None:
+    for index, (token, depth) in enumerate(tokens):
+        if token != key or depth != 1 or index + 1 >= len(tokens):
             continue
-        stream_keyword = raw.find(
-            b"stream",
-            marker.end(),
-            min(len(raw), marker.end() + _MAX_STRUCTURAL_STREAM_DICTIONARY_BYTES),
-        )
-        if stream_keyword < 0:
-            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF structural stream is invalid.")
-        dictionary = raw[dictionary_start:stream_keyword]
-        length_match = re.search(
-            rb"/Length[\x00\x09\x0a\x0c\x0d\x20]+(?P<length>[0-9]+)"
-            rb"(?![0-9])"
-            rb"(?![\x00\x09\x0a\x0c\x0d\x20]+[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+R)",
-            dictionary,
-        )
-        if length_match is None:
-            raise _hybrid_error(
-                "PA_HYBRID_INTAKE_006",
-                "Hybrid PDF structural stream requires a direct bounded length.",
-            )
-        data_start = stream_keyword + len(b"stream")
-        if raw[data_start : data_start + 2] == b"\r\n":
-            data_start += 2
-        elif raw[data_start : data_start + 1] in {b"\r", b"\n"}:
-            data_start += 1
-        else:
-            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF structural stream is invalid.")
-        length = int(length_match.group("length"))
-        data = raw[data_start : data_start + length]
-        if len(data) != length:
-            raise _hybrid_error(
-                "PA_HYBRID_INTAKE_006", "Hybrid PDF structural stream is truncated."
-            )
-        decoded = data
-        for filter_name in _raw_pdf_filter_names(dictionary):
-            decoded = _decode_bounded_standard_filter(
-                decoded,
-                filter_name,
-                None,
-                _MAX_STRUCTURAL_STREAM_DECODED_BYTES,
-            )
-        _require_decoded_limit(decoded, _MAX_STRUCTURAL_STREAM_DECODED_BYTES)
+        values = [tokens[index + 1][0]]
+        if values[0] == b"[":
+            cursor = index + 2
+            while cursor < len(tokens) and tokens[cursor][0] != b"]":
+                values.append(tokens[cursor][0])
+                cursor += 1
+            values.append(b"]")
+        elif index + 3 < len(tokens) and tokens[index + 3][0] == b"R":
+            values.extend((tokens[index + 2][0], tokens[index + 3][0]))
+        return tuple(values)
+    return None
 
 
-def _raw_pdf_filter_names(dictionary: bytes) -> tuple[str, ...]:
-    match = re.search(
-        rb"/Filter[\x00\x09\x0a\x0c\x0d\x20]+"
-        rb"(?P<filters>/[A-Za-z0-9]+|\[[^\]]{0,1024}\])",
-        dictionary,
+def _top_dictionary_name(tokens: list[tuple[bytes, int]], key: bytes) -> bytes | None:
+    value = _top_dictionary_value(tokens, key)
+    return value[0] if value and value[0].startswith(b"/") else None
+
+
+def _structural_dictionary_length(
+    tokens: list[tuple[bytes, int]],
+    simple_objects: dict[tuple[int, int], tuple[bytes, ...]],
+) -> int:
+    value = _top_dictionary_value(tokens, b"/Length")
+    if value and len(value) == 1 and value[0].isdigit():
+        return int(value[0])
+    if value and len(value) == 3 and value[0].isdigit() and value[1].isdigit() and value[2] == b"R":
+        resolved = simple_objects.get((int(value[0]), int(value[1])))
+        if resolved and len(resolved) == 1 and resolved[0].isdigit():
+            return int(resolved[0])
+    raise _hybrid_error(
+        "PA_HYBRID_INTAKE_006", "Hybrid PDF stream length cannot be bounded safely."
     )
-    if match is None:
+
+
+def _structural_dictionary_filters(
+    tokens: list[tuple[bytes, int]],
+    simple_objects: dict[tuple[int, int], tuple[bytes, ...]],
+) -> tuple[str, ...]:
+    value = _top_dictionary_value(tokens, b"/Filter")
+    if value is None:
         return ()
-    return tuple(
-        value.decode("ascii") for value in re.findall(rb"/[A-Za-z0-9]+", match.group("filters"))
-    )
+    if len(value) == 3 and value[0].isdigit() and value[1].isdigit() and value[2] == b"R":
+        value = simple_objects.get((int(value[0]), int(value[1])))
+        if value is None:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF structural Filter cannot be resolved safely."
+            )
+    names = tuple(token.decode("ascii") for token in value if token.startswith(b"/"))
+    if not names or any(not token.startswith(b"/") for token in value if token not in {b"[", b"]"}):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF structural Filter is invalid.")
+    return names
+
+
+def _raw_stream_data_start(raw: bytes, stream_token_end: int) -> int:
+    if raw[stream_token_end : stream_token_end + 2] == b"\r\n":
+        return stream_token_end + 2
+    if raw[stream_token_end : stream_token_end + 1] in {b"\r", b"\n"}:
+        return stream_token_end + 1
+    raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF stream boundary is invalid.")
 
 
 def _validate_terminal_pdf_region(source: IO[bytes]) -> None:
