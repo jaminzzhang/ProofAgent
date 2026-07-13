@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import ConfigDict, StrictStr, StringConstraints
 
+from proof_agent.capabilities.knowledge.hybrid.parser_clients import ParserServiceResponse
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import (
     BoundingBox,
@@ -41,13 +42,15 @@ class CanonicalParserPage(FrozenModel):
 
 
 def canonicalize_docling(
-    payload: Mapping[str, object],
+    response: ParserServiceResponse,
     *,
     build: StructuredArtifactBuildIdentity,
 ) -> StructuredKnowledgeDocumentArtifact:
     """Map Docling service JSON without retaining vendor-specific objects."""
 
-    _require_adapter(build, "docling")
+    response = ParserServiceResponse.model_validate(response.model_dump())
+    _require_attested_build(response, build, "docling")
+    payload = response.vendor_json
     document_id, revision_id, original_sha256 = _document_identity(payload, build)
     pages = tuple(
         _canonical_page(_mapping(page, "pages[]"), source_method="native")
@@ -65,13 +68,15 @@ def canonicalize_docling(
 
 
 def canonicalize_paddle_page(
-    payload: Mapping[str, object],
+    response: ParserServiceResponse,
     *,
     build: StructuredArtifactBuildIdentity,
 ) -> CanonicalParserPage:
     """Map one selected Paddle page and keep its exact build identity beside the page."""
 
-    _require_adapter(build, "paddle")
+    response = ParserServiceResponse.model_validate(response.model_dump())
+    _require_attested_build(response, build, "paddle")
+    payload = response.vendor_json
     document_id, revision_id, original_sha256 = _document_identity(payload, build)
     page = _canonical_page(_mapping(payload.get("page"), "page"), source_method="ocr")
     return CanonicalParserPage(
@@ -241,6 +246,19 @@ def _number(value: object, name: str) -> float:
     return float(value)
 
 
-def _require_adapter(build: StructuredArtifactBuildIdentity, adapter: str) -> None:
-    if build.parser_adapter != adapter:
+def _require_attested_build(
+    response: ParserServiceResponse,
+    build: StructuredArtifactBuildIdentity,
+    adapter: Literal["docling", "paddle"],
+) -> None:
+    if response.adapter != adapter or build.parser_adapter != adapter:
         raise ValueError(f"{adapter} canonicalization requires a {adapter} build identity")
+    attestation = response.attestation
+    if build.source_sha256 != attestation.original_ref.sha256:
+        raise ValueError("build source_sha256 must match the service attestation")
+    if build.parser_revision != attestation.parser_revision:
+        raise ValueError("build parser_revision must match the service attestation")
+    if build.model_digests != attestation.model_digests:
+        raise ValueError("build model_digests must match the service attestation")
+    if build.configuration_sha256 != attestation.configuration_sha256:
+        raise ValueError("build configuration_sha256 must match the service attestation")

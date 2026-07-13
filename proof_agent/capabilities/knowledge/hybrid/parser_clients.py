@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Mapping, Protocol, Self
+from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import (
     ConfigDict,
@@ -49,12 +49,44 @@ class ParserServiceRequest(_ParserServiceModel):
         return self
 
 
+class ParserServiceAttestation(_ParserServiceModel):
+    """Service-produced identity and JSON payload; never synthesized from the request."""
+
+    parser_adapter: Literal["docling", "paddle"]
+    original_ref: ExactArtifactRef
+    page_numbers: tuple[PositiveInt, ...] = Field(min_length=1)
+    parser_revision: NonBlankStr
+    model_digests: tuple[NonBlankStr, ...]
+    configuration_sha256: Sha256
+    vendor_json: dict[str, JsonValue]
+
+
 class ParserServiceResponse(_ParserServiceModel):
-    """Request-bound JSON response; vendor SDK classes cannot cross this boundary."""
+    """Validated request plus the independent service-attested response envelope."""
 
     adapter: Literal["docling", "paddle"]
     request: ParserServiceRequest
-    vendor_json: dict[str, JsonValue]
+    attestation: ParserServiceAttestation
+
+    @model_validator(mode="after")
+    def validate_attestation(self) -> Self:
+        if self.attestation.parser_adapter != self.adapter:
+            raise ValueError("parser response adapter must match the requested private client")
+        if self.attestation.original_ref != self.request.original_ref:
+            raise ValueError("parser response original_ref must match the exact request")
+        if self.attestation.page_numbers != self.request.page_numbers:
+            raise ValueError("parser response pages must exactly match requested page_numbers")
+        if self.attestation.parser_revision != self.request.parser_revision:
+            raise ValueError("parser response parser_revision must match the exact request")
+        if self.attestation.model_digests != self.request.model_digests:
+            raise ValueError("parser response model_digests must match the exact request")
+        if self.attestation.configuration_sha256 != self.request.configuration_sha256:
+            raise ValueError("parser response configuration_sha256 must match the exact request")
+        return self
+
+    @property
+    def vendor_json(self) -> dict[str, JsonValue]:
+        return self.attestation.vendor_json
 
 
 class GuardedParserTransport(Protocol):
@@ -65,7 +97,7 @@ class GuardedParserTransport(Protocol):
         request: ParserServiceRequest,
         *,
         follow_redirects: Literal[False],
-    ) -> Mapping[str, JsonValue]: ...
+    ) -> ParserServiceAttestation: ...
 
 
 class PrivateParserClient(Protocol):
@@ -79,23 +111,19 @@ class _PrivateParserClient:
         self._transport = transport
 
     def parse(self, request: ParserServiceRequest) -> ParserServiceResponse:
-        vendor_payload = self._transport.parse(request, follow_redirects=False)
-        self._validate_payload_identity(request, vendor_payload)
-        return ParserServiceResponse(
+        attestation = self._transport.parse(request, follow_redirects=False)
+        response = ParserServiceResponse(
             adapter=self.adapter,
             request=request,
-            vendor_json=dict(vendor_payload),
+            attestation=attestation,
         )
+        self._validate_payload_pages(response)
+        return response
 
-    def _validate_payload_identity(
-        self,
-        request: ParserServiceRequest,
-        payload: Mapping[str, JsonValue],
-    ) -> None:
-        if payload.get("source_sha256") != request.original_ref.sha256:
-            raise ValueError(
-                "parser response source_sha256 must match the exact original reference"
-            )
+    def _validate_payload_pages(self, response: ParserServiceResponse) -> None:
+        payload = response.vendor_json
+        if payload.get("source_sha256") != response.attestation.original_ref.sha256:
+            raise ValueError("vendor JSON source_sha256 must match the service attestation")
         if self.adapter == "docling":
             pages = payload.get("pages")
             if not isinstance(pages, list):
@@ -110,8 +138,8 @@ class _PrivateParserClient:
                 returned_pages = tuple(_page_number(item) for item in pages)
             else:
                 raise ValueError("Paddle response must contain a page object or pages array")
-        if returned_pages != request.page_numbers:
-            raise ValueError("parser response pages must exactly match requested page_numbers")
+        if returned_pages != response.attestation.page_numbers:
+            raise ValueError("vendor JSON pages must exactly match the service attestation")
 
 
 def _page_number(value: JsonValue) -> int:

@@ -78,12 +78,15 @@ def assess_page_quality(
                 review_reasons.append("table_cell_outside_table")
                 break
 
-    if not page.blocks and not page.tables:
-        escalation_reasons.append("missing_native_text")
-    elif page.native_text_ratio == 0 and (
-        any(block.source_method == "native" for block in page.blocks)
-        or any(cell.source_method == "native" for table in page.tables for cell in table.cells)
-    ):
+    native_texts = tuple(
+        block.text for block in page.blocks if block.source_method == "native"
+    ) + tuple(
+        cell.text for table in page.tables for cell in table.cells if cell.source_method == "native"
+    )
+    ocr_texts = tuple(block.text for block in page.blocks if block.source_method == "ocr") + tuple(
+        cell.text for table in page.tables for cell in table.cells if cell.source_method == "ocr"
+    )
+    if not any(text.strip() for text in (*native_texts, *ocr_texts)):
         escalation_reasons.append("missing_native_text")
 
     if review_reasons:

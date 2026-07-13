@@ -11,6 +11,7 @@ from pydantic import ConfigDict, Field, StrictStr, StringConstraints, model_vali
 from proof_agent.capabilities.knowledge.hybrid.canonicalizer import CanonicalParserPage
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import (
+    ParserWarning,
     StructuredArtifactBuildIdentity,
     StructuredBlock,
     StructuredKnowledgeDocumentArtifact,
@@ -21,6 +22,7 @@ from proof_agent.contracts.hybrid_documents import (
 
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
+Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
 class MergeSelection(FrozenModel):
@@ -41,24 +43,66 @@ class MergeSelection(FrozenModel):
         return self
 
 
+class MergeRecord(FrozenModel):
+    """Immutable evidence of one complete canonical-boundary parser selection."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    page_number: int = Field(ge=1)
+    boundary_kind: Literal["block", "table"]
+    target_id: NonBlankStr
+    docling_source_id: NonBlankStr
+    paddle_source_id: NonBlankStr
+    docling_build_id: NonBlankStr
+    paddle_build_id: NonBlankStr
+    decision: Literal["REPLACE_WITH_PADDLE"]
+    reason: NonBlankStr
+
+
+class CanonicalMergeResult(FrozenModel):
+    """Canonical artifact plus complete merge and source-build lineage."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    artifact: StructuredKnowledgeDocumentArtifact
+    merge_records: tuple[MergeRecord, ...]
+    source_build_identities: tuple[StructuredArtifactBuildIdentity, ...]
+    canonical_content_sha256: Sha256
+    artifact_sha256: Sha256
+
+
 def merge_selected_results(
     docling: StructuredKnowledgeDocumentArtifact,
     paddle_pages: tuple[CanonicalParserPage, ...],
     *,
     decisions: tuple[MergeSelection, ...],
-) -> StructuredKnowledgeDocumentArtifact:
+) -> CanonicalMergeResult:
     """Apply complete-boundary replacements; text is never concatenated across parsers."""
 
     _validate_paddle_identity(docling, paddle_pages)
     page_lookup = {candidate.page.page_number: candidate for candidate in paddle_pages}
     if len(page_lookup) != len(paddle_pages):
         raise ValueError("Paddle page numbers must be unique")
-    decision_keys = [(item.page_number, item.boundary_kind, item.docling_id) for item in decisions]
+    normalized_decisions = tuple(
+        sorted(
+            decisions,
+            key=lambda item: (
+                item.page_number,
+                item.boundary_kind,
+                item.docling_id,
+                item.paddle_id,
+                item.reason,
+            ),
+        )
+    )
+    decision_keys = [
+        (item.page_number, item.boundary_kind, item.docling_id) for item in normalized_decisions
+    ]
     if len(decision_keys) != len(set(decision_keys)):
         raise ValueError("a canonical boundary may be selected only once")
 
     by_page: dict[int, list[MergeSelection]] = {}
-    for decision in decisions:
+    for decision in normalized_decisions:
         by_page.setdefault(decision.page_number, []).append(decision)
     unknown_pages = set(by_page) - {page.page_number for page in docling.pages}
     if unknown_pages:
@@ -76,19 +120,53 @@ def merge_selected_results(
             block_id=(decision.docling_id if decision.boundary_kind == "block" else None),
             table_id=(decision.docling_id if decision.boundary_kind == "table" else None),
         )
-        for decision in decisions
+        for decision in normalized_decisions
     )
     used_pages = tuple(page_lookup[number] for number in sorted(by_page))
-    return StructuredKnowledgeDocumentArtifact(
+    records = tuple(
+        MergeRecord(
+            page_number=decision.page_number,
+            boundary_kind=decision.boundary_kind,
+            target_id=decision.docling_id,
+            docling_source_id=decision.docling_id,
+            paddle_source_id=decision.paddle_id,
+            docling_build_id=docling.build_identity.build_id,
+            paddle_build_id=page_lookup[decision.page_number].build_identity.build_id,
+            decision="REPLACE_WITH_PADDLE",
+            reason=decision.reason,
+        )
+        for decision in normalized_decisions
+    )
+    warnings = docling.warnings + tuple(
+        warning for candidate in used_pages for warning in candidate.warnings
+    )
+    content_sha256 = _canonical_content_digest(
+        docling=docling,
+        pages=merged_pages,
+        warnings=warnings,
+        quality_signals=docling.quality_signals + signals,
+    )
+    source_builds = _source_builds(docling.build_identity, used_pages)
+    artifact = StructuredKnowledgeDocumentArtifact(
         schema_version=docling.schema_version,
         document_id=docling.document_id,
         revision_id=docling.revision_id,
         original_sha256=docling.original_sha256,
-        build_identity=_combined_build(docling.build_identity, used_pages),
+        build_identity=_combined_build(
+            source_builds=source_builds,
+            records=records,
+            canonical_content_sha256=content_sha256,
+        ),
         pages=merged_pages,
-        warnings=docling.warnings
-        + tuple(warning for candidate in used_pages for warning in candidate.warnings),
+        warnings=warnings,
         quality_signals=docling.quality_signals + signals,
+    )
+    return CanonicalMergeResult(
+        artifact=artifact,
+        merge_records=records,
+        source_build_identities=source_builds,
+        canonical_content_sha256=content_sha256,
+        artifact_sha256=_sha256_json(artifact.model_dump(mode="json")),
     )
 
 
@@ -160,20 +238,38 @@ def _validate_paddle_identity(
             raise ValueError("Paddle result identity must match the Docling artifact")
 
 
-def _combined_build(
+def _source_builds(
     docling: StructuredArtifactBuildIdentity,
     selected_pages: tuple[CanonicalParserPage, ...],
-) -> StructuredArtifactBuildIdentity:
-    if not selected_pages:
-        return docling
+) -> tuple[StructuredArtifactBuildIdentity, ...]:
     paddle_builds = tuple(dict.fromkeys(page.build_identity for page in selected_pages))
+    return (docling, *paddle_builds)
+
+
+def _combined_build(
+    *,
+    source_builds: tuple[StructuredArtifactBuildIdentity, ...],
+    records: tuple[MergeRecord, ...],
+    canonical_content_sha256: str,
+) -> StructuredArtifactBuildIdentity:
+    docling, *paddle_builds = source_builds
+    if not paddle_builds:
+        return docling
+    configuration_sha256 = _sha256_json(
+        [
+            {
+                "parser_adapter": build.parser_adapter,
+                "configuration_sha256": build.configuration_sha256,
+            }
+            for build in source_builds
+        ]
+    )
     identity_payload = {
-        "docling": docling.model_dump(mode="json"),
-        "paddle": [build.model_dump(mode="json") for build in paddle_builds],
+        "source_build_identities": [build.model_dump(mode="json") for build in source_builds],
+        "merge_records": [record.model_dump(mode="json") for record in records],
+        "canonical_content_sha256": canonical_content_sha256,
     }
-    digest = hashlib.sha256(
-        json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    digest = _sha256_json(identity_payload)
     return StructuredArtifactBuildIdentity(
         build_id=f"skab-{digest}",
         source_sha256=docling.source_sha256,
@@ -187,5 +283,31 @@ def _combined_build(
             )
         ),
         canonical_schema_version=docling.canonical_schema_version,
-        configuration_sha256=digest,
+        configuration_sha256=configuration_sha256,
     )
+
+
+def _canonical_content_digest(
+    *,
+    docling: StructuredKnowledgeDocumentArtifact,
+    pages: tuple[StructuredPage, ...],
+    warnings: tuple[ParserWarning, ...],
+    quality_signals: tuple[StructuredQualitySignal, ...],
+) -> str:
+    return _sha256_json(
+        {
+            "schema_version": docling.schema_version,
+            "document_id": docling.document_id,
+            "revision_id": docling.revision_id,
+            "original_sha256": docling.original_sha256,
+            "pages": [page.model_dump(mode="json") for page in pages],
+            "warnings": [warning.model_dump(mode="json") for warning in warnings],
+            "quality_signals": [signal.model_dump(mode="json") for signal in quality_signals],
+        }
+    )
+
+
+def _sha256_json(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
