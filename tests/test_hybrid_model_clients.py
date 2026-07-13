@@ -9,6 +9,7 @@ import pytest
 
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     EmbeddingTransportResponse,
+    HttpEmbeddingTransport,
     ImmediateKnowledgeModelWorkScheduler,
     InMemoryKnowledgeModelWorkScheduler,
     KnowledgeModelCancellation,
@@ -398,7 +399,11 @@ def test_blocked_scheduler_cancel_is_bounded_and_cannot_hold_shutdown_open() -> 
             assert release_cancel.wait(timeout=2)
 
     scheduler_transport = BlockedCancelTransport()
-    scheduler = remote_scheduler(scheduler_transport)
+    scheduler = remote_scheduler(
+        scheduler_transport,
+        active_lease_limit=2,
+        online_reserved_leases=1,
+    )
     client = PrivateEmbeddingClient(
         transport=RecordingEmbeddingTransport(),
         scheduler=scheduler,
@@ -412,12 +417,19 @@ def test_blocked_scheduler_cancel_is_bounded_and_cannot_hold_shutdown_open() -> 
             instruction="Represent for retrieval",
             dimension=2,
             normalized=True,
-            priority="online",
+            priority="offline",
             timeout_seconds=1.0,
         )
     assert monotonic() - started < 0.75
     assert cancel_started.is_set()
     assert any("250 ms" in note for note in caught.value.__notes__)
+    with pytest.raises(RuntimeError, match="offline lease admission is saturated"):
+        scheduler.submit_and_wait(
+            kind="ocr",
+            priority="offline",
+            timeout_seconds=1.0,
+            operation=lambda _remaining, _cancellation: "must-not-run",
+        )
 
     started = monotonic()
     scheduler.close()
@@ -613,6 +625,57 @@ def test_pinned_backend_connects_validated_ip_once_and_preserves_host_and_tls_na
     assert connector.hosts == ["10.20.30.40"]
     assert connector.stream.server_hostname == "embedding.internal"
     assert b"Host: embedding.internal\r\n" in b"".join(connector.stream.writes)
+
+
+def test_pinned_http_transport_conforms_to_installed_public_httpx_contract(monkeypatch) -> None:
+    import httpx
+
+    class Stream:
+        def __init__(self) -> None:
+            self.response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+
+        def read(self, max_bytes, timeout=None):
+            del max_bytes, timeout
+            response, self.response = self.response, b""
+            return response
+
+        def write(self, buffer, timeout=None):
+            del buffer, timeout
+
+        def close(self):
+            return None
+
+        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            del ssl_context, server_hostname, timeout
+            return self
+
+        def get_extra_info(self, info):
+            return False if info == "is_readable" else None
+
+    class Backend:
+        def connect_tcp(self, **kwargs):
+            del kwargs
+            return Stream()
+
+    transport = HttpEmbeddingTransport(
+        endpoint="https://embedding.internal",
+        allowed_hosts=PrivateHostPolicy.from_entries(("embedding.internal",)),
+        network_policy=PrivateNetworkPolicy.from_entries(("10.0.0.0/8",)),
+        resolver=StaticResolver(),
+    )
+    monkeypatch.setattr(transport._httpcore, "SyncBackend", Backend)
+    client = transport._create_pinned_client()
+    try:
+        assert isinstance(client._transport, httpx.BaseTransport)
+        assert not isinstance(client._transport, httpx.HTTPTransport)
+        assert callable(client._transport.handle_request)
+        assert callable(client._transport.close)
+        response = client.post("https://embedding.internal/conformance", content=b"{}")
+        assert response.status_code == 200
+        assert response.json() == {}
+    finally:
+        client.close()
+        transport.close()
 
 
 def test_cancellation_during_blocked_acquire_cancels_late_lease_without_service() -> None:
@@ -944,6 +1007,255 @@ def test_concurrent_scheduler_close_closes_transport_once() -> None:
     assert transport.close_count == 1
 
 
+def test_online_rerank_reaches_remote_scheduler_while_offline_acquires_are_blocked() -> None:
+    offline_started = Event()
+    release_offline = Event()
+    online_acquired = Event()
+
+    class PriorityTransport(RecordingSchedulerTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sequence = 0
+
+        def acquire(self, *, priority, **kwargs) -> SchedulerLease:
+            del kwargs
+            self._sequence += 1
+            if priority == "offline":
+                offline_started.set()
+                assert release_offline.wait(timeout=2)
+            else:
+                online_acquired.set()
+            return SchedulerLease(
+                work_id=f"work-{self._sequence}",
+                lease_token=f"lease-{self._sequence}",
+                queue_time_ms=0.0,
+            )
+
+    transport = PriorityTransport()
+    scheduler = remote_scheduler(
+        transport,
+        acquire_workers_per_lane=2,
+        acquire_pending_per_lane=1,
+        active_lease_limit=3,
+        online_reserved_leases=1,
+    )
+
+    class RerankTransport:
+        def rerank(self, request, **kwargs):
+            del kwargs
+            return RerankerTransportResponse(
+                model_revision=request.model_revision,
+                scores=((request.candidates[0].candidate_id, 0.9),),
+            )
+
+    reranker = PrivateRerankerClient(
+        transport=RerankTransport(),
+        scheduler=scheduler,
+    )
+
+    def offline_operation(_remaining, _cancellation):
+        return "offline"
+
+    with ThreadPoolExecutor(max_workers=3) as callers:
+        offline_calls = tuple(
+            callers.submit(
+                scheduler.submit_and_wait,
+                kind="ocr",
+                priority="offline",
+                timeout_seconds=5.0,
+                operation=offline_operation,
+            )
+            for _ in range(2)
+        )
+        deadline = monotonic() + 1
+        while transport._sequence < 2 and monotonic() < deadline:
+            sleep(0.005)
+        assert transport._sequence == 2
+
+        online = callers.submit(
+            reranker.rerank,
+            query="waiting period",
+            candidates=(RerankCandidate(candidate_id="rule-1", text="Thirty days."),),
+            model_revision="reranker@sha256:model",
+            max_input_tokens=2048,
+            priority="online",
+            timeout_seconds=5.0,
+        )
+        assert online_acquired.wait(timeout=0.5)
+        assert online.result(timeout=1).scores == (("rule-1", 0.9),)
+
+        release_offline.set()
+        assert tuple(call.result(timeout=1).value for call in offline_calls) == (
+            "offline",
+            "offline",
+        )
+
+    scheduler.close()
+
+
+def test_service_lane_saturation_after_acquire_uses_reserved_cancel_lane_once() -> None:
+    service_started = Event()
+    release_service = Event()
+
+    class TerminalTransport(RecordingSchedulerTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.acquired: list[str] = []
+            self.completed_ids: list[str] = []
+            self.cancelled_ids: list[str] = []
+
+        def acquire(self, **kwargs):
+            del kwargs
+            work_id = f"work-{len(self.acquired) + 1}"
+            self.acquired.append(work_id)
+            return SchedulerLease(
+                work_id=work_id,
+                lease_token=f"lease-{work_id}",
+                queue_time_ms=0.0,
+            )
+
+        def complete(self, _endpoint, _namespace, lease, **kwargs):
+            del kwargs
+            self.completed_ids.append(lease.work_id)
+
+        def cancel(self, _endpoint, _namespace, lease, **kwargs):
+            del kwargs
+            self.cancelled_ids.append(lease.work_id)
+
+    transport = TerminalTransport()
+    scheduler = remote_scheduler(
+        transport,
+        executor_workers=1,
+        executor_pending=1,
+        active_lease_limit=4,
+        online_reserved_leases=1,
+    )
+
+    def blocked_operation(_remaining, _cancellation):
+        service_started.set()
+        assert release_service.wait(timeout=2)
+        return "done"
+
+    with ThreadPoolExecutor(max_workers=2) as callers:
+        first = callers.submit(
+            scheduler.submit_and_wait,
+            kind="embedding",
+            priority="online",
+            timeout_seconds=5.0,
+            operation=blocked_operation,
+        )
+        assert service_started.wait(timeout=1)
+        second = callers.submit(
+            scheduler.submit_and_wait,
+            kind="embedding",
+            priority="online",
+            timeout_seconds=5.0,
+            operation=lambda _remaining, _cancellation: "queued",
+        )
+        deadline = monotonic() + 1
+        while scheduler._service_executor.pending_count() != 1 and monotonic() < deadline:
+            sleep(0.005)
+        assert scheduler._service_executor.pending_count() == 1
+
+        with pytest.raises(RuntimeError, match="saturated"):
+            scheduler.submit_and_wait(
+                kind="embedding",
+                priority="online",
+                timeout_seconds=5.0,
+                operation=lambda _remaining, _cancellation: "must-not-run",
+            )
+        assert transport.cancelled_ids == ["work-3"]
+        assert "work-3" not in transport.completed_ids
+
+        release_service.set()
+        assert first.result(timeout=1).value == "done"
+        assert second.result(timeout=1).value == "queued"
+
+    scheduler.close()
+
+
+def test_complete_lane_saturation_after_service_uses_reserved_cancel_lane_once() -> None:
+    complete_started = Event()
+    release_complete = Event()
+
+    class BlockingCompleteTransport(RecordingSchedulerTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.acquired: list[str] = []
+            self.completed_ids: list[str] = []
+            self.cancelled_ids: list[str] = []
+
+        def acquire(self, **kwargs):
+            del kwargs
+            work_id = f"work-{len(self.acquired) + 1}"
+            self.acquired.append(work_id)
+            return SchedulerLease(
+                work_id=work_id,
+                lease_token=f"lease-{work_id}",
+                queue_time_ms=0.0,
+            )
+
+        def complete(self, _endpoint, _namespace, lease, **kwargs):
+            del kwargs
+            if not self.completed_ids:
+                complete_started.set()
+                assert release_complete.wait(timeout=2)
+            self.completed_ids.append(lease.work_id)
+
+        def cancel(self, _endpoint, _namespace, lease, **kwargs):
+            del kwargs
+            self.cancelled_ids.append(lease.work_id)
+
+    transport = BlockingCompleteTransport()
+    scheduler = remote_scheduler(
+        transport,
+        terminal_workers=1,
+        complete_pending=1,
+        active_lease_limit=4,
+        online_reserved_leases=1,
+    )
+
+    def operation(_remaining, _cancellation):
+        return "done"
+
+    with ThreadPoolExecutor(max_workers=2) as callers:
+        first = callers.submit(
+            scheduler.submit_and_wait,
+            kind="embedding",
+            priority="online",
+            timeout_seconds=5.0,
+            operation=operation,
+        )
+        assert complete_started.wait(timeout=1)
+        second = callers.submit(
+            scheduler.submit_and_wait,
+            kind="embedding",
+            priority="online",
+            timeout_seconds=5.0,
+            operation=operation,
+        )
+        deadline = monotonic() + 1
+        while scheduler._complete_executor.pending_count() != 1 and monotonic() < deadline:
+            sleep(0.005)
+        assert scheduler._complete_executor.pending_count() == 1
+
+        with pytest.raises(RuntimeError, match="saturated"):
+            scheduler.submit_and_wait(
+                kind="embedding",
+                priority="online",
+                timeout_seconds=5.0,
+                operation=operation,
+            )
+        assert transport.cancelled_ids == ["work-3"]
+        assert "work-3" not in transport.completed_ids
+
+        release_complete.set()
+        assert first.result(timeout=1).value == "done"
+        assert second.result(timeout=1).value == "done"
+
+    scheduler.close()
+
+
 def test_scheduler_executor_is_bounded_saturates_closed_and_uses_daemon_workers() -> None:
     acquire_started = Event()
     release_acquire = Event()
@@ -956,15 +1268,18 @@ def test_scheduler_executor_is_bounded_saturates_closed_and_uses_daemon_workers(
             return super().acquire()
 
     before = tuple(
-        thread
-        for thread in enumerate_threads()
-        if thread.name.startswith("knowledge-model-executor")
+        thread for thread in enumerate_threads() if thread.name.startswith("knowledge-model-")
     )
     scheduler_transport = IgnoringAcquireTransport()
     scheduler = remote_scheduler(
         scheduler_transport,
         executor_workers=1,
         executor_pending=1,
+        acquire_workers_per_lane=1,
+        acquire_pending_per_lane=1,
+        terminal_workers=1,
+        active_lease_limit=4,
+        online_reserved_leases=1,
     )
 
     def operation(_remaining, _cancellation):
@@ -999,10 +1314,10 @@ def test_scheduler_executor_is_bounded_saturates_closed_and_uses_daemon_workers(
         workers = tuple(
             thread
             for thread in enumerate_threads()
-            if thread.name.startswith("knowledge-model-executor") and thread not in before
+            if thread.name.startswith("knowledge-model-") and thread not in before
         )
-        assert len(workers) == 1
-        assert workers[0].daemon is True
+        assert len(workers) == 5
+        assert all(worker.daemon for worker in workers)
 
         started = monotonic()
         scheduler.close()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from functools import partial
@@ -92,6 +92,7 @@ class _BoundedDaemonExecutor:
         self._queue: Queue[_ExecutionTask] = Queue(maxsize=max_pending)
         self._lock = Lock()
         self._closed = False
+        self._drain_on_close = False
         self._threads = tuple(
             Thread(target=self._run, name=f"{name}-{index}", daemon=True)
             for index in range(max_workers)
@@ -116,17 +117,19 @@ class _BoundedDaemonExecutor:
                 raise RuntimeError("bounded private-model executor is saturated") from exc
         return future
 
-    def close(self) -> None:
+    def close(self, *, cancel_pending: bool = True) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-        while True:
-            try:
-                pending = self._queue.get_nowait()
-            except Empty:
-                break
-            pending.future.cancel()
+            self._drain_on_close = not cancel_pending
+        if cancel_pending:
+            while True:
+                try:
+                    pending = self._queue.get_nowait()
+                except Empty:
+                    break
+                pending.future.cancel()
         deadline = monotonic() + 0.25
         for thread in self._threads:
             thread.join(timeout=max(deadline - monotonic(), 0.0))
@@ -134,10 +137,13 @@ class _BoundedDaemonExecutor:
     def runs_on_current_thread(self) -> bool:
         return current_thread() in self._threads
 
+    def pending_count(self) -> int:
+        return self._queue.qsize()
+
     def _run(self) -> None:
         while True:
             with self._lock:
-                if self._closed:
+                if self._closed and (not self._drain_on_close or self._queue.empty()):
                     return
             try:
                 task = self._queue.get(timeout=0.05)
@@ -151,6 +157,31 @@ class _BoundedDaemonExecutor:
                 task.future.set_exception(exc)
             else:
                 task.future.set_result(value)
+
+
+class _LeaseAdmission:
+    """Reference-counted admission retained until any late lease is cancelled."""
+
+    def __init__(self, release: Callable[[], None]) -> None:
+        self._release = release
+        self._lock = Lock()
+        self._references = 1
+
+    def retain(self) -> None:
+        with self._lock:
+            if self._references <= 0:
+                raise RuntimeError("cannot retain a released lease admission")
+            self._references += 1
+
+    def release(self) -> None:
+        should_release = False
+        with self._lock:
+            if self._references <= 0:
+                return
+            self._references -= 1
+            should_release = self._references == 0
+        if should_release:
+            self._release()
 
 
 @dataclass(frozen=True)
@@ -696,6 +727,12 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         transport: GuardedKnowledgeModelSchedulerTransport,
         executor_workers: int = 4,
         executor_pending: int = 16,
+        acquire_workers_per_lane: int = 2,
+        acquire_pending_per_lane: int = 8,
+        terminal_workers: int = 2,
+        complete_pending: int | None = None,
+        active_lease_limit: int = 16,
+        online_reserved_leases: int = 4,
     ) -> None:
         self.endpoint = _private_https_endpoint(
             endpoint,
@@ -714,12 +751,54 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         self._transport = transport
         self._state = Condition()
         self._active_tokens: set[KnowledgeModelCancellation] = set()
+        resolved_complete_pending = (
+            active_lease_limit if complete_pending is None else complete_pending
+        )
+        if any(
+            limit <= 0
+            for limit in (
+                executor_workers,
+                executor_pending,
+                acquire_workers_per_lane,
+                acquire_pending_per_lane,
+                terminal_workers,
+                resolved_complete_pending,
+                active_lease_limit,
+            )
+        ):
+            raise ValueError("private Knowledge scheduler bounds must be positive")
+        if not 0 < online_reserved_leases < active_lease_limit:
+            raise ValueError("online lease reserve must be positive and below active lease limit")
+        self._active_lease_limit = active_lease_limit
+        self._offline_lease_limit = active_lease_limit - online_reserved_leases
+        self._active_admissions = 0
+        self._offline_admissions = 0
         self._closing = False
         self._closed = False
-        self._executor = _BoundedDaemonExecutor(
-            name="knowledge-model-executor",
+        self._online_acquire_executor = _BoundedDaemonExecutor(
+            name="knowledge-model-acquire-online",
+            max_workers=acquire_workers_per_lane,
+            max_pending=acquire_pending_per_lane,
+        )
+        self._offline_acquire_executor = _BoundedDaemonExecutor(
+            name="knowledge-model-acquire-offline",
+            max_workers=acquire_workers_per_lane,
+            max_pending=acquire_pending_per_lane,
+        )
+        self._service_executor = _BoundedDaemonExecutor(
+            name="knowledge-model-service",
             max_workers=executor_workers,
             max_pending=executor_pending,
+        )
+        self._complete_executor = _BoundedDaemonExecutor(
+            name="knowledge-model-complete",
+            max_workers=terminal_workers,
+            max_pending=resolved_complete_pending,
+        )
+        self._cancel_executor = _BoundedDaemonExecutor(
+            name="knowledge-model-cancel",
+            max_workers=terminal_workers,
+            max_pending=active_lease_limit,
         )
 
     def submit_and_wait(
@@ -736,6 +815,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         with self._state:
             if self._closing or self._closed:
                 raise RuntimeError("private Knowledge model scheduler client is closing")
+            admission = self._admit_lease_locked(priority)
             self._active_tokens.add(token)
         unregister = cancellation.register(token.cancel) if cancellation is not None else None
         try:
@@ -747,6 +827,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 priority=priority,
                 deadline=deadline,
                 token=token,
+                admission=admission,
             )
             measured_queue_time_ms = (monotonic() - queue_started) * 1000
             effective_queue_time_ms = max(lease.queue_time_ms, measured_queue_time_ms)
@@ -762,6 +843,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                     lease,
                     timeout_seconds=timeout_seconds,
                     primary=primary,
+                    admission=admission,
                 )
                 raise primary
             started = monotonic()
@@ -776,6 +858,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                     lease,
                     timeout_seconds=max(deadline - monotonic(), 0.001),
                     primary=primary,
+                    admission=admission,
                 )
                 raise
             service_time_ms = (monotonic() - started) * 1000
@@ -786,6 +869,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                     lease,
                     timeout_seconds=max(deadline - monotonic(), 0.001),
                     primary=primary,
+                    admission=admission,
                 )
                 raise
             if service_time_ms / 1000 > remaining:
@@ -794,6 +878,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                     lease,
                     timeout_seconds=max(deadline - monotonic(), 0.001),
                     primary=timeout_error,
+                    admission=admission,
                 )
                 raise timeout_error
             try:
@@ -811,6 +896,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                     lease,
                     timeout_seconds=max(deadline - monotonic(), 0.001),
                     primary=primary,
+                    admission=admission,
                 )
                 raise
             return ScheduledWorkResult(
@@ -819,11 +905,30 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 service_time_ms=service_time_ms,
             )
         finally:
+            admission.release()
             if unregister is not None:
                 unregister()
             with self._state:
                 self._active_tokens.discard(token)
                 self._state.notify_all()
+
+    def _admit_lease_locked(self, priority: WorkPriority) -> _LeaseAdmission:
+        if self._active_admissions >= self._active_lease_limit:
+            raise RuntimeError("private Knowledge model active lease admission is saturated")
+        if priority == "offline" and self._offline_admissions >= self._offline_lease_limit:
+            raise RuntimeError("private Knowledge model offline lease admission is saturated")
+        self._active_admissions += 1
+        if priority == "offline":
+            self._offline_admissions += 1
+
+        def release() -> None:
+            with self._state:
+                self._active_admissions -= 1
+                if priority == "offline":
+                    self._offline_admissions -= 1
+                self._state.notify_all()
+
+        return _LeaseAdmission(release)
 
     def _acquire_cancellable(
         self,
@@ -832,8 +937,14 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         priority: WorkPriority,
         deadline: float,
         token: KnowledgeModelCancellation,
+        admission: _LeaseAdmission,
     ) -> SchedulerLease:
-        future = self._executor.submit(
+        acquire_executor = (
+            self._online_acquire_executor
+            if priority == "online"
+            else self._offline_acquire_executor
+        )
+        future = acquire_executor.submit(
             self._transport.acquire,
             endpoint=self.endpoint,
             namespace=self.namespace,
@@ -851,10 +962,12 @@ class PrivateKnowledgeModelWorkSchedulerClient:
             try:
                 late_lease = future.result(timeout=0.25)
             except FutureTimeoutError:
+                admission.retain()
                 future.add_done_callback(
                     partial(
                         self._cancel_late_acquire,
                         primary=primary,
+                        admission=admission,
                     )
                 )
             except BaseException:
@@ -864,6 +977,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                     late_lease,
                     timeout_seconds=1.0,
                     primary=primary,
+                    admission=admission,
                 )
             raise
 
@@ -874,7 +988,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         remaining: float,
         token: KnowledgeModelCancellation,
     ) -> T:
-        future = self._executor.submit(operation, remaining, token)
+        future = self._service_executor.submit(operation, remaining, token)
         try:
             return _await_cancellable_future(
                 future,
@@ -911,7 +1025,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
             )
             acknowledged.set()
 
-        future = self._executor.submit(
+        future = self._complete_executor.submit(
             complete_and_acknowledge,
         )
         while True:
@@ -938,14 +1052,19 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         completed: Future[SchedulerLease],
         *,
         primary: BaseException,
+        admission: _LeaseAdmission,
     ) -> None:
-        if completed.cancelled() or completed.exception() is not None:
-            return
-        self._cancel_lease_best_effort(
-            completed.result(),
-            timeout_seconds=1.0,
-            primary=primary,
-        )
+        try:
+            if completed.cancelled() or completed.exception() is not None:
+                return
+            self._cancel_lease_best_effort(
+                completed.result(),
+                timeout_seconds=1.0,
+                primary=primary,
+                admission=admission,
+            )
+        finally:
+            admission.release()
 
     def _cancel_lease_best_effort(
         self,
@@ -953,9 +1072,11 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         *,
         timeout_seconds: float,
         primary: BaseException,
+        admission: _LeaseAdmission,
     ) -> None:
+        admission.retain()
         try:
-            future = self._executor.submit(
+            future = self._cancel_executor.submit(
                 self._transport.cancel,
                 self.endpoint,
                 self.namespace,
@@ -963,24 +1084,41 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 timeout_seconds=min(max(timeout_seconds, 0.001), 5.0),
                 follow_redirects=False,
             )
-            if self._executor.runs_on_current_thread():
-                future.add_done_callback(partial(self._record_cancel_failure, primary=primary))
-                return
-            future.result(timeout=min(max(timeout_seconds, 0.001), 0.25))
-        except FutureTimeoutError:
-            future.cancel()
-            primary.add_note("scheduler lease cleanup did not stop within 250 ms")
         except Exception as cleanup_error:
+            admission.release()
             primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
-
-    @staticmethod
-    def _record_cancel_failure(completed: Future[None], *, primary: BaseException) -> None:
-        if completed.cancelled():
+            return
+        future.add_done_callback(
+            partial(
+                self._finish_cancel,
+                primary=primary,
+                admission=admission,
+            )
+        )
+        if self._cancel_executor.runs_on_current_thread():
             return
         try:
-            completed.result()
+            future.result(timeout=min(max(timeout_seconds, 0.001), 0.25))
+        except FutureTimeoutError:
+            primary.add_note("scheduler lease cleanup did not stop within 250 ms")
+        except Exception:
+            # The completion callback records the cleanup failure and releases admission.
+            return
+
+    @staticmethod
+    def _finish_cancel(
+        completed: Future[None],
+        *,
+        primary: BaseException,
+        admission: _LeaseAdmission,
+    ) -> None:
+        try:
+            if not completed.cancelled():
+                completed.result()
         except Exception as cleanup_error:
             primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
+        finally:
+            admission.release()
 
     def close(self) -> None:
         with self._state:
@@ -1004,7 +1142,11 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 self._state.notify_all()
             raise
         finally:
-            self._executor.close()
+            self._online_acquire_executor.close()
+            self._offline_acquire_executor.close()
+            self._service_executor.close()
+            self._complete_executor.close()
+            self._cancel_executor.close(cancel_pending=False)
         with self._state:
             self._closed = True
             self._closing = False
@@ -1207,16 +1349,56 @@ class _HttpJsonTransport:
             resolver=self._resolver,
             backend=self._httpcore.SyncBackend(),
         )
-        transport = self._httpx.HTTPTransport(retries=0)
-        original_pool = transport._pool
-        original_pool.close()
-        transport._pool = self._httpcore.ConnectionPool(
+        pool = self._httpcore.ConnectionPool(
             ssl_context=ssl.create_default_context(),
             max_connections=1,
             max_keepalive_connections=0,
             retries=0,
             network_backend=cast(Any, backend),
         )
+        httpx = self._httpx
+        httpcore = self._httpcore
+        sync_byte_stream_base: Any = httpx.SyncByteStream
+        base_transport: Any = httpx.BaseTransport
+
+        class HttpCoreResponseStream(sync_byte_stream_base):  # type: ignore[misc]
+            def __init__(self, stream: Any) -> None:
+                self._stream = stream
+
+            def __iter__(self) -> Iterator[bytes]:
+                yield from self._stream
+
+            def close(self) -> None:
+                self._stream.close()
+
+        class PinnedHttpTransport(base_transport):  # type: ignore[misc]
+            def handle_request(self, request: Any) -> Any:
+                if not isinstance(request.stream, httpx.SyncByteStream):
+                    raise TypeError("pinned private transport requires a synchronous byte stream")
+                core_request = httpcore.Request(
+                    method=request.method,
+                    url=httpcore.URL(
+                        scheme=request.url.raw_scheme,
+                        host=request.url.raw_host,
+                        port=request.url.port,
+                        target=request.url.raw_path,
+                    ),
+                    headers=request.headers.raw,
+                    content=request.stream,
+                    extensions=request.extensions,
+                )
+                core_response = pool.handle_request(core_request)
+                return httpx.Response(
+                    status_code=core_response.status,
+                    headers=core_response.headers,
+                    stream=HttpCoreResponseStream(core_response.stream),
+                    extensions=core_response.extensions,
+                )
+
+            def close(self) -> None:
+                pool.close()
+
+        transport = PinnedHttpTransport()
         return self._httpx.Client(
             follow_redirects=False,
             trust_env=False,
