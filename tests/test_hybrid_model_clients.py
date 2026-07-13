@@ -403,6 +403,7 @@ def test_blocked_scheduler_cancel_is_bounded_and_cannot_hold_shutdown_open() -> 
         scheduler_transport,
         active_lease_limit=2,
         online_reserved_leases=1,
+        close_timeout_seconds=0.2,
     )
     client = PrivateEmbeddingClient(
         transport=RecordingEmbeddingTransport(),
@@ -432,9 +433,140 @@ def test_blocked_scheduler_cancel_is_bounded_and_cannot_hold_shutdown_open() -> 
         )
 
     started = monotonic()
-    scheduler.close()
+    with pytest.raises(TimeoutError, match="unresolved lease cleanup"):
+        scheduler.close()
     assert monotonic() - started < 0.75
     release_cancel.set()
+    scheduler.close()
+
+
+def test_close_keeps_transport_and_cancel_lane_open_for_late_acquired_lease() -> None:
+    acquire_started = Event()
+    release_acquire = Event()
+    cancel_started = Event()
+    release_cancel = Event()
+
+    class LateLeaseTransport(RecordingSchedulerTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+            self.active_leases: set[str] = set()
+
+        def acquire(self, **kwargs):
+            del kwargs
+            acquire_started.set()
+            assert release_acquire.wait(timeout=2)
+            self.active_leases.add("work-late-close")
+            return SchedulerLease(
+                work_id="work-late-close",
+                lease_token="lease-late-close",
+                queue_time_ms=0.0,
+            )
+
+        def cancel(self, _endpoint, _namespace, lease, **kwargs):
+            del kwargs
+            assert self.closed is False
+            cancel_started.set()
+            assert release_cancel.wait(timeout=2)
+            self.active_leases.remove(lease.work_id)
+
+        def close(self):
+            assert self.active_leases == set()
+            self.closed = True
+
+    transport = LateLeaseTransport()
+    scheduler = remote_scheduler(transport, close_timeout_seconds=2.0)
+
+    def operation(_remaining, _cancellation):
+        return "must-not-run"
+
+    with ThreadPoolExecutor(max_workers=2) as callers:
+        call = callers.submit(
+            scheduler.submit_and_wait,
+            kind="embedding",
+            priority="online",
+            timeout_seconds=5.0,
+            operation=operation,
+        )
+        assert acquire_started.wait(timeout=1)
+        closing = callers.submit(scheduler.close)
+        sleep(0.05)
+        assert transport.closed is False
+        release_acquire.set()
+        assert cancel_started.wait(timeout=1)
+        assert closing.done() is False
+        assert transport.closed is False
+        release_cancel.set()
+        closing.result(timeout=1)
+        with pytest.raises(KnowledgeModelWorkCancelled):
+            call.result(timeout=1)
+
+    assert transport.active_leases == set()
+    assert transport.closed is True
+
+
+def test_close_timeout_preserves_failed_lease_cleanup_for_retry() -> None:
+    allow_cancel = Event()
+
+    class RetryCleanupTransport(RecordingSchedulerTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active_leases: set[str] = set()
+            self.closed = False
+            self.cancel_attempts = 0
+
+        def acquire(self, **kwargs):
+            del kwargs
+            self.active_leases.add("work-retry-close")
+            return SchedulerLease(
+                work_id="work-retry-close",
+                lease_token="lease-retry-close",
+                queue_time_ms=0.0,
+            )
+
+        def cancel(self, _endpoint, _namespace, lease, **kwargs):
+            del kwargs
+            self.cancel_attempts += 1
+            if not allow_cancel.is_set():
+                raise ConnectionError("scheduler cancel unavailable")
+            self.active_leases.remove(lease.work_id)
+
+        def close(self):
+            assert self.active_leases == set()
+            self.closed = True
+
+    transport = RetryCleanupTransport()
+    scheduler = remote_scheduler(transport, close_timeout_seconds=0.15)
+
+    def fail_service(_remaining, _cancellation):
+        raise ValueError("invalid service result")
+
+    with pytest.raises(ValueError, match="invalid service result"):
+        scheduler.submit_and_wait(
+            kind="embedding",
+            priority="online",
+            timeout_seconds=2.0,
+            operation=fail_service,
+        )
+
+    with pytest.raises(TimeoutError, match="unresolved lease cleanup"):
+        scheduler.close()
+    assert transport.closed is False
+    assert transport.active_leases == {"work-retry-close"}
+    with pytest.raises(RuntimeError, match="closing"):
+        scheduler.submit_and_wait(
+            kind="embedding",
+            priority="online",
+            timeout_seconds=1.0,
+            operation=lambda _remaining, _cancellation: "rejected",
+        )
+
+    allow_cancel.set()
+    scheduler.close()
+
+    assert transport.active_leases == set()
+    assert transport.closed is True
+    assert transport.cancel_attempts >= 2
 
 
 def test_test_only_in_memory_scheduler_claims_online_before_offline() -> None:
@@ -1319,12 +1451,12 @@ def test_scheduler_executor_is_bounded_saturates_closed_and_uses_daemon_workers(
         assert len(workers) == 5
         assert all(worker.daemon for worker in workers)
 
-        started = monotonic()
-        scheduler.close()
-        assert monotonic() - started < 1.0
+        closing = callers.submit(scheduler.close)
+        sleep(0.05)
+        assert not closing.done()
+        release_acquire.set()
+        closing.result(timeout=1)
         with pytest.raises(KnowledgeModelWorkCancelled):
             first.result(timeout=1)
         with pytest.raises(KnowledgeModelWorkCancelled):
             second.result(timeout=1)
-
-    release_acquire.set()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from concurrent.futures import CancelledError, Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from functools import partial
 import ipaddress
@@ -733,6 +733,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         complete_pending: int | None = None,
         active_lease_limit: int = 16,
         online_reserved_leases: int = 4,
+        close_timeout_seconds: float = 5.0,
     ) -> None:
         self.endpoint = _private_https_endpoint(
             endpoint,
@@ -767,12 +768,18 @@ class PrivateKnowledgeModelWorkSchedulerClient:
             )
         ):
             raise ValueError("private Knowledge scheduler bounds must be positive")
+        if close_timeout_seconds <= 0:
+            raise ValueError("private Knowledge scheduler close timeout must be positive")
         if not 0 < online_reserved_leases < active_lease_limit:
             raise ValueError("online lease reserve must be positive and below active lease limit")
         self._active_lease_limit = active_lease_limit
         self._offline_lease_limit = active_lease_limit - online_reserved_leases
         self._active_admissions = 0
         self._offline_admissions = 0
+        self._pending_lease_cleanups: dict[tuple[str, str], SchedulerLease] = {}
+        self._cleanup_in_flight: set[tuple[str, str]] = set()
+        self._close_timeout_seconds = close_timeout_seconds
+        self._accepting = True
         self._closing = False
         self._closed = False
         self._online_acquire_executor = _BoundedDaemonExecutor(
@@ -813,7 +820,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         _validate_timeout(timeout_seconds)
         token = KnowledgeModelCancellation()
         with self._state:
-            if self._closing or self._closed:
+            if not self._accepting or self._closing or self._closed:
                 raise RuntimeError("private Knowledge model scheduler client is closing")
             admission = self._admit_lease_locked(priority)
             self._active_tokens.add(token)
@@ -1074,6 +1081,12 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         primary: BaseException,
         admission: _LeaseAdmission,
     ) -> None:
+        cleanup_key = (lease.work_id, lease.lease_token)
+        with self._state:
+            self._pending_lease_cleanups.setdefault(cleanup_key, lease)
+            if cleanup_key in self._cleanup_in_flight:
+                return
+            self._cleanup_in_flight.add(cleanup_key)
         admission.retain()
         try:
             future = self._cancel_executor.submit(
@@ -1085,6 +1098,9 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 follow_redirects=False,
             )
         except Exception as cleanup_error:
+            with self._state:
+                self._cleanup_in_flight.discard(cleanup_key)
+                self._state.notify_all()
             admission.release()
             primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
             return
@@ -1093,6 +1109,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 self._finish_cancel,
                 primary=primary,
                 admission=admission,
+                cleanup_key=cleanup_key,
             )
         )
         if self._cancel_executor.runs_on_current_thread():
@@ -1105,20 +1122,78 @@ class PrivateKnowledgeModelWorkSchedulerClient:
             # The completion callback records the cleanup failure and releases admission.
             return
 
-    @staticmethod
     def _finish_cancel(
+        self,
         completed: Future[None],
         *,
         primary: BaseException,
         admission: _LeaseAdmission,
+        cleanup_key: tuple[str, str],
     ) -> None:
+        succeeded = False
         try:
             if not completed.cancelled():
                 completed.result()
+                succeeded = True
         except Exception as cleanup_error:
             primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
         finally:
+            with self._state:
+                self._cleanup_in_flight.discard(cleanup_key)
+                if succeeded:
+                    self._pending_lease_cleanups.pop(cleanup_key, None)
+                self._state.notify_all()
             admission.release()
+
+    def _retry_pending_lease_cleanups(self, *, deadline: float) -> None:
+        with self._state:
+            candidates = tuple(
+                (key, lease)
+                for key, lease in self._pending_lease_cleanups.items()
+                if key not in self._cleanup_in_flight
+            )
+        for cleanup_key, lease in candidates:
+            with self._state:
+                if cleanup_key not in self._pending_lease_cleanups:
+                    continue
+                if cleanup_key in self._cleanup_in_flight:
+                    continue
+                self._cleanup_in_flight.add(cleanup_key)
+            try:
+                future = self._cancel_executor.submit(
+                    self._transport.cancel,
+                    self.endpoint,
+                    self.namespace,
+                    lease,
+                    timeout_seconds=min(max(deadline - monotonic(), 0.001), 5.0),
+                    follow_redirects=False,
+                )
+            except Exception:
+                with self._state:
+                    self._cleanup_in_flight.discard(cleanup_key)
+                    self._state.notify_all()
+                continue
+            future.add_done_callback(partial(self._finish_retry_cancel, cleanup_key=cleanup_key))
+
+    def _finish_retry_cancel(
+        self,
+        completed: Future[None],
+        *,
+        cleanup_key: tuple[str, str],
+    ) -> None:
+        succeeded = False
+        try:
+            if not completed.cancelled():
+                completed.result()
+                succeeded = True
+        except Exception:
+            pass
+        finally:
+            with self._state:
+                self._cleanup_in_flight.discard(cleanup_key)
+                if succeeded:
+                    self._pending_lease_cleanups.pop(cleanup_key, None)
+                self._state.notify_all()
 
     def close(self) -> None:
         with self._state:
@@ -1126,14 +1201,36 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 self._state.wait()
             if self._closed:
                 return
+            self._accepting = False
             self._closing = True
             active = tuple(self._active_tokens)
         for token in active:
             token.cancel()
-        deadline = monotonic() + 5.0
-        with self._state:
-            while self._active_tokens and monotonic() < deadline:
-                self._state.wait(timeout=min(0.05, deadline - monotonic()))
+        self._online_acquire_executor.close()
+        self._offline_acquire_executor.close()
+        self._service_executor.close()
+        self._complete_executor.close()
+        deadline = monotonic() + self._close_timeout_seconds
+        while True:
+            self._retry_pending_lease_cleanups(deadline=deadline)
+            with self._state:
+                cleanup_complete = (
+                    not self._active_tokens
+                    and self._active_admissions == 0
+                    and not self._pending_lease_cleanups
+                    and not self._cleanup_in_flight
+                )
+                if cleanup_complete:
+                    break
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    self._closing = False
+                    self._state.notify_all()
+                    raise TimeoutError(
+                        "private Knowledge scheduler close has unresolved lease cleanup"
+                    )
+                self._state.wait(timeout=min(0.05, remaining))
+        self._cancel_executor.close(cancel_pending=False)
         try:
             self._transport.close()
         except Exception:
@@ -1141,12 +1238,6 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 self._closing = False
                 self._state.notify_all()
             raise
-        finally:
-            self._online_acquire_executor.close()
-            self._offline_acquire_executor.close()
-            self._service_executor.close()
-            self._complete_executor.close()
-            self._cancel_executor.close(cancel_pending=False)
         with self._state:
             self._closed = True
             self._closing = False
@@ -1166,6 +1257,9 @@ def _await_cancellable_future(
             raise TimeoutError("private Knowledge model work exceeded its timeout")
         try:
             return future.result(timeout=min(0.02, remaining))
+        except CancelledError:
+            token.raise_if_cancelled()
+            raise
         except FutureTimeoutError:
             continue
 
