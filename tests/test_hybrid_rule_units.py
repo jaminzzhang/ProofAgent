@@ -939,6 +939,83 @@ def test_unbounded_unquoted_suocheng_term_requires_review() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "composite_term",
+    (
+        "投保人及被保险人",
+        "投保人和被保险人",
+        "投保人与被保险人",
+        "投保人或被保险人",
+        "投保人以及被保险人",
+    ),
+)
+def test_unquoted_suocheng_conjunction_terms_require_review(
+    composite_term: str,
+) -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="conjoined-suocheng-definition",
+                    kind="paragraph",
+                    text=f"本合同所称{composite_term}，是指申请保险保障的人。",
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    with pytest.raises(RuleUnitProjectionReviewRequired, match="conjunction markers"):
+        project_rule_units(
+            artifact,
+            document_defaults=defaults(),
+            source_id="source-1",
+        )
+
+
+def test_quoted_suocheng_composite_term_remains_exact() -> None:
+    artifact = canonical_artifact()
+    definition_text = "本合同所称“投保人及被保险人”是指申请或接受保险保障的人。"
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="quoted-composite-suocheng-definition",
+                    kind="paragraph",
+                    text=definition_text,
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                ),
+                StructuredBlock(
+                    block_id="quoted-composite-suocheng-reference",
+                    kind="list_item",
+                    text="投保人及被保险人须共同签字。",
+                    bbox=bbox(40, 80, 572, 110),
+                    reading_order=1,
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    reference = next(
+        unit
+        for unit in project_rule_units(
+            artifact,
+            document_defaults=defaults(),
+            source_id="source-1",
+        )
+        if unit.block_ids == ("quoted-composite-suocheng-reference",)
+    )
+
+    assert reference.definitions == (definition_text,)
+
+
 def test_ten_thousand_cells_stay_within_deterministic_work_bound() -> None:
     artifact = canonical_artifact()
     header = artifact.pages[1].tables[0].cells[:2]

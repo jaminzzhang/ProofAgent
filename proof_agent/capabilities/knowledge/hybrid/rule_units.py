@@ -63,6 +63,7 @@ _CHINESE_SUOCHENG_DEFINITION_STATEMENT = re.compile(
 _CHINESE_SUOCHENG_DEFINITION_CANDIDATE = re.compile(
     r"^\s*[^，。；：:\r\n]{0,32}?所称[\s\S]*?(?:是指|系指|定义为)",
 )
+_SUOCHENG_UNQUOTED_CONJUNCTIONS = ("以及", "及", "和", "与", "或")
 _CHINESE_DEFINITION_STATEMENT = re.compile(
     r"""
     ^\s*
@@ -538,8 +539,15 @@ def _build_definition_index(
 def _definition_term(text: str) -> str | None:
     suocheng = _CHINESE_SUOCHENG_DEFINITION_STATEMENT.fullmatch(text)
     if suocheng is not None:
-        term = suocheng.group("quoted") or suocheng.group("plain")
-        return term.strip()
+        quoted = suocheng.group("quoted")
+        if quoted is not None:
+            return quoted.strip()
+        plain = suocheng.group("plain").strip()
+        if any(marker in plain for marker in _SUOCHENG_UNQUOTED_CONJUNCTIONS):
+            raise RuleUnitProjectionReviewRequired(
+                "unquoted 所称 definition term contains ambiguous conjunction markers"
+            )
+        return plain
     if _CHINESE_SUOCHENG_DEFINITION_CANDIDATE.match(text) is not None:
         raise RuleUnitProjectionReviewRequired(
             "所称 definition statement does not expose one reliably bounded term"
