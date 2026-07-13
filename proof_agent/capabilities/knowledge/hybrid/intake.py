@@ -55,6 +55,7 @@ _PDF_TERMINAL_REGION = re.compile(
     rb"%%EOF[\x00\x09\x0a\x0c\x0d\x20]*\Z"
 )
 _PDF_TERMINAL_SCAN_BYTES = 64 * 1024
+_PDF_REVISION_STRUCTURE_BYTES = 4 * 1024 * 1024
 _SNAPSHOT_MEMORY_BYTES = 1024 * 1024
 _FIX = "Upload a safe, unencrypted PDF within the configured Hybrid intake limits."
 
@@ -76,9 +77,9 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
 
     try:
         _reject_polyglot_payload(snapshot)
-        _validate_terminal_pdf_region(snapshot)
         snapshot.seek(0)
         reader = PdfReader(snapshot, strict=True)
+        _validate_terminal_pdf_region(snapshot)
         if reader.is_encrypted:
             raise _hybrid_error(
                 "PA_HYBRID_INTAKE_003", "Encrypted Hybrid PDF uploads are not supported."
@@ -242,16 +243,43 @@ def _validate_terminal_pdf_region(source: IO[bytes]) -> None:
             "Hybrid PDF upload contains an appended archive or executable payload.",
         )
     xref_offset = int(match.group("offset"))
-    if xref_offset >= size:
+    if xref_offset >= startxref_offset:
         raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF startxref is invalid.")
+    previous_revision = _previous_revision_before(source, startxref_offset)
+    if previous_revision is None:
+        return
+
+    previous_eof_end, previous_xref_offset = previous_revision
+    if xref_offset <= previous_eof_end:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_009",
+            "Hybrid PDF upload contains bytes outside a valid incremental revision.",
+        )
+    _validate_incremental_revision(
+        source,
+        previous_eof_end=previous_eof_end,
+        previous_xref_offset=previous_xref_offset,
+        xref_offset=xref_offset,
+        startxref_offset=startxref_offset,
+    )
 
 
-def _last_marker_offset(source: IO[bytes], marker: bytes) -> int | None:
+def _last_marker_offset(
+    source: IO[bytes],
+    marker: bytes,
+    *,
+    before: int | None = None,
+) -> int | None:
     source.seek(0)
     last_offset: int | None = None
     offset = 0
     overlap = b""
-    while chunk := source.read(_HASH_CHUNK_BYTES):
+    remaining = before
+    while remaining is None or remaining > 0:
+        read_size = _HASH_CHUNK_BYTES if remaining is None else min(_HASH_CHUNK_BYTES, remaining)
+        chunk = source.read(read_size)
+        if not chunk:
+            break
         searchable = overlap + chunk
         searchable_offset = offset - len(overlap)
         marker_index = searchable.find(marker)
@@ -259,8 +287,104 @@ def _last_marker_offset(source: IO[bytes], marker: bytes) -> int | None:
             last_offset = searchable_offset + marker_index
             marker_index = searchable.find(marker, marker_index + 1)
         offset += len(chunk)
+        if remaining is not None:
+            remaining -= len(chunk)
         overlap = searchable[-(len(marker) - 1) :]
     return last_offset
+
+
+def _previous_revision_before(source: IO[bytes], before: int) -> tuple[int, int] | None:
+    eof_offsets = _marker_offsets(source, b"%%EOF", before=before)
+    startxref_offsets = _marker_offsets(source, b"startxref", before=before)
+    for eof_offset in reversed(eof_offsets):
+        eof_end = eof_offset + len(b"%%EOF")
+        for previous_startxref in reversed(startxref_offsets):
+            if previous_startxref >= eof_offset:
+                continue
+            if eof_end - previous_startxref > _PDF_TERMINAL_SCAN_BYTES:
+                break
+            source.seek(previous_startxref)
+            revision_end = source.read(eof_end - previous_startxref)
+            match = _PDF_TERMINAL_REGION.fullmatch(revision_end)
+            if match is not None:
+                return eof_end, int(match.group("offset"))
+    return None
+
+
+def _marker_offsets(source: IO[bytes], marker: bytes, *, before: int) -> list[int]:
+    offsets: list[int] = []
+    source.seek(0)
+    offset = 0
+    overlap = b""
+    remaining = before
+    while remaining > 0:
+        chunk = source.read(min(_HASH_CHUNK_BYTES, remaining))
+        if not chunk:
+            break
+        searchable = overlap + chunk
+        searchable_offset = offset - len(overlap)
+        marker_index = searchable.find(marker)
+        while marker_index >= 0:
+            absolute_offset = searchable_offset + marker_index
+            if not offsets or offsets[-1] != absolute_offset:
+                offsets.append(absolute_offset)
+            marker_index = searchable.find(marker, marker_index + 1)
+        offset += len(chunk)
+        remaining -= len(chunk)
+        overlap = searchable[-(len(marker) - 1) :]
+    return offsets
+
+
+def _validate_incremental_revision(
+    source: IO[bytes],
+    *,
+    previous_eof_end: int,
+    previous_xref_offset: int,
+    xref_offset: int,
+    startxref_offset: int,
+) -> None:
+    structure_size = startxref_offset - xref_offset
+    if structure_size <= 0 or structure_size > _PDF_REVISION_STRUCTURE_BYTES:
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF incremental revision is invalid.")
+    source.seek(xref_offset)
+    structure = source.read(structure_size)
+    if not (
+        structure.startswith(b"xref")
+        or re.match(
+            rb"[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+obj\b", structure
+        )
+    ):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF incremental xref is invalid.")
+    prev_pattern = (
+        rb"/Prev[\x00\x09\x0a\x0c\x0d\x20]+"
+        + str(previous_xref_offset).encode("ascii")
+        + rb"(?![0-9])"
+    )
+    if re.search(prev_pattern, structure) is None:
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF incremental /Prev is invalid.")
+
+    prefix_size = xref_offset - previous_eof_end
+    source.seek(previous_eof_end)
+    prefix_start = source.read(min(prefix_size, 128)).lstrip(b"\x00\x09\x0a\x0c\x0d\x20")
+    if not prefix_start:
+        return
+    if (
+        re.match(
+            rb"[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+obj\b",
+            prefix_start,
+        )
+        is None
+    ):
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_009",
+            "Hybrid PDF upload contains bytes outside a valid incremental revision.",
+        )
+    source.seek(max(previous_eof_end, xref_offset - 128))
+    prefix_end = source.read(xref_offset - max(previous_eof_end, xref_offset - 128)).rstrip(
+        b"\x00\x09\x0a\x0c\x0d\x20"
+    )
+    if not prefix_end.endswith(b"endobj"):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF incremental objects are invalid.")
 
 
 def _reject_unsafe_pdf_objects(reader: Any) -> None:

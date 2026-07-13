@@ -7,6 +7,7 @@ import math
 from io import BytesIO
 import os
 from pathlib import Path
+import re
 from types import ModuleType
 import zipfile
 
@@ -145,6 +146,18 @@ def _write_benign_transparency_pdf(path: Path) -> Path:
     return path
 
 
+def _write_incremental_pdf(path: Path) -> Path:
+    pypdf, _ = _modules()
+    original = _write_pdf(path)
+    writer = pypdf.PdfWriter(original, incremental=True)
+    writer.add_metadata({"/Title": "Incrementally updated policy"})
+    updated = path.with_name("incremental-output.pdf")
+    with updated.open("wb") as handle:
+        writer.write(handle)
+    os.replace(updated, path)
+    return path
+
+
 def _append_zip_payload(path: Path, *, filename: str, content: bytes) -> Path:
     archive = BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as writer:
@@ -273,6 +286,27 @@ def test_preflight_rejects_non_archive_payload_after_pdf_eof(tmp_path: Path) -> 
     with pytest.raises(ProofAgentError) as exc:
         preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
     assert exc.value.code == "PA_HYBRID_INTAKE_009"
+
+
+def test_preflight_rejects_payload_with_replayed_original_startxref(tmp_path: Path) -> None:
+    path = _write_pdf(tmp_path / "replayed-xref.pdf")
+    content = path.read_bytes()
+    match = re.search(rb"startxref\s+(?P<offset>[0-9]+)\s+%%EOF\s*\Z", content)
+    assert match is not None
+    with path.open("ab") as handle:
+        handle.write(b"MZpayload-executable\nstartxref\n" + match.group("offset") + b"\n%%EOF\n")
+
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_009"
+
+
+def test_preflight_accepts_structurally_valid_incremental_revision(tmp_path: Path) -> None:
+    result = preflight_hybrid_pdf(
+        _write_incremental_pdf(tmp_path / "incremental.pdf"),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
 
 
 def test_preflight_digest_and_profiles_use_same_immutable_opened_bytes(
