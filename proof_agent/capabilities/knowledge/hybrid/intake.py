@@ -34,6 +34,8 @@ _MAX_FORM_DO_INVOCATIONS = 64
 _MAX_XOBJECT_RESOURCE_ENTRIES = 1024
 _MAX_FONT_RESOURCE_ENTRIES = 1024
 _MAX_CONTENT_OPERATIONS = 100_000
+_MAX_CONTENT_TOKENS = 100_000
+_MAX_DESCENDANT_FONT_ENTRIES = 256
 _ACTIVE_KEYS = {"/OpenAction", "/AA", "/JS", "/JavaScript", "/Launch"}
 _ACTION_CONTAINER_KEYS = {"/A", "/PA", "/Next"}
 _ACTION_TYPES = {
@@ -455,13 +457,30 @@ def _charge_bounded_font_streams(
     from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject
 
     font_dictionaries = [font]
+    seen_font_dictionaries: set[tuple[int, int] | int] = {id(font)}
     descendants = font.get(NameObject("/DescendantFonts"))
     if isinstance(descendants, IndirectObject):
         descendants = descendants.get_object()
     if isinstance(descendants, ArrayObject):
-        font_dictionaries.extend(
-            item.get_object() if isinstance(item, IndirectObject) else item for item in descendants
-        )
+        if len(descendants) > _MAX_DESCENDANT_FONT_ENTRIES:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF descendant Font count exceeds safety limits.",
+            )
+        for item in descendants:
+            if isinstance(item, IndirectObject):
+                descendant_identity: tuple[int, int] | int = (item.idnum, item.generation)
+                if descendant_identity in seen_font_dictionaries:
+                    continue
+                seen_font_dictionaries.add(descendant_identity)
+                descendant = item.get_object()
+            else:
+                descendant_identity = id(item)
+                if descendant_identity in seen_font_dictionaries:
+                    continue
+                seen_font_dictionaries.add(descendant_identity)
+                descendant = item
+            font_dictionaries.append(descendant)
 
     stream_candidates: list[Any] = []
     to_unicode = font.get(NameObject("/ToUnicode"))
@@ -545,6 +564,7 @@ def _validate_form_do_work(
 def _form_do_names(content: bytes) -> tuple[str, ...]:
     from pypdf.generic import ContentStream, DecodedStreamObject, NameObject
 
+    _preflight_pdf_content_tokens(content)
     stream = DecodedStreamObject()
     stream.set_data(content)
     operations = ContentStream(stream, None).operations
@@ -561,6 +581,71 @@ def _form_do_names(content: bytes) -> tuple[str, ...]:
             raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF Do operation is invalid.")
         names.append(str(operands[0]))
     return tuple(names)
+
+
+def _preflight_pdf_content_tokens(content: bytes) -> None:
+    position = 0
+    token_count = 0
+    delimiters = b"()<>[]{}/%"
+    while position < len(content):
+        byte = content[position]
+        if byte in _PDF_WHITESPACE:
+            position += 1
+            continue
+        if byte == ord("%"):
+            position += 1
+            while position < len(content) and content[position] not in b"\r\n":
+                position += 1
+            continue
+
+        token_count += 1
+        if token_count > _MAX_CONTENT_TOKENS:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF content token count exceeds safety limits.",
+            )
+        if byte == ord("("):
+            position = _skip_pdf_literal_string(content, position + 1)
+        elif byte == ord("<") and position + 1 < len(content) and content[position + 1] == ord("<"):
+            position += 2
+        elif byte == ord("<"):
+            closing = content.find(b">", position + 1)
+            if closing < 0:
+                raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF hex string is invalid.")
+            position = closing + 1
+        elif byte in b">[]{}":
+            position += (
+                2
+                if byte == ord(">")
+                and position + 1 < len(content)
+                and content[position + 1] == ord(">")
+                else 1
+            )
+        else:
+            position += 1
+            while (
+                position < len(content)
+                and content[position] not in _PDF_WHITESPACE
+                and content[position] not in delimiters
+            ):
+                position += 1
+
+
+def _skip_pdf_literal_string(content: bytes, position: int) -> int:
+    depth = 1
+    while position < len(content):
+        byte = content[position]
+        if byte == ord("\\"):
+            position += 2
+            continue
+        if byte == ord("("):
+            depth += 1
+        elif byte == ord(")"):
+            depth -= 1
+            if depth == 0:
+                return position + 1
+        position += 1
+    raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF literal string is invalid.")
 
 
 def _bounded_flate_decoded_data(data: bytes, remaining: int) -> bytes:

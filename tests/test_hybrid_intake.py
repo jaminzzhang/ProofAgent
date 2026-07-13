@@ -119,6 +119,7 @@ def _write_compressed_content_pdf(path: Path, content_bytes: bytes) -> Path:
     decoded = generic.DecodedStreamObject()
     decoded.set_data(content_bytes)
     page[generic.NameObject("/Contents")] = writer._add_object(decoded.flate_encode())
+    page[generic.NameObject("/Resources")] = generic.DictionaryObject()
     with path.open("wb") as handle:
         writer.write(handle)
     return path
@@ -276,6 +277,36 @@ def _write_pdf_with_compressed_type1_fontfile(path: Path, font_bytes: bytes) -> 
     content = generic.DecodedStreamObject()
     content.set_data(b"BT /F1 12 Tf 72 720 Td (A) Tj ET")
     page[generic.NameObject("/Contents")] = writer._add_object(content)
+    page[generic.NameObject("/Resources")] = generic.DictionaryObject(
+        {
+            generic.NameObject("/Font"): generic.DictionaryObject(
+                {generic.NameObject("/F1"): writer._add_object(font)}
+            )
+        }
+    )
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def _write_pdf_with_many_descendant_fonts(path: Path, count: int) -> Path:
+    pypdf, generic = _modules()
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    descendant = generic.DictionaryObject(
+        {
+            generic.NameObject("/Type"): generic.NameObject("/Font"),
+            generic.NameObject("/Subtype"): generic.NameObject("/CIDFontType2"),
+        }
+    )
+    font = generic.DictionaryObject(
+        {
+            generic.NameObject("/Type"): generic.NameObject("/Font"),
+            generic.NameObject("/Subtype"): generic.NameObject("/Type0"),
+            generic.NameObject("/BaseFont"): generic.NameObject("/BoundedComposite"),
+            generic.NameObject("/DescendantFonts"): generic.ArrayObject([descendant] * count),
+        }
+    )
     page[generic.NameObject("/Resources")] = generic.DictionaryObject(
         {
             generic.NameObject("/Font"): generic.DictionaryObject(
@@ -773,6 +804,43 @@ def test_preflight_rejects_type1_fontfile_bomb_before_text_extraction(
         preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
     assert exc.value.code == "PA_HYBRID_INTAKE_006"
     assert extraction_called is False
+
+
+def test_preflight_rejects_content_token_flood_before_contentstream_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generic = import_module("pypdf.generic")
+    original_init = generic.ContentStream.__init__
+    materialization_entered = False
+
+    def track_init(self: object, *args: object, **kwargs: object) -> None:
+        nonlocal materialization_entered
+        materialization_entered = True
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(generic.ContentStream, "__init__", track_init)
+    path = _write_compressed_content_pdf(
+        tmp_path / "token-flood.pdf",
+        b"q\n" * 100_001,
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert materialization_entered is False
+
+
+def test_preflight_rejects_excessive_descendant_font_entries(tmp_path: Path) -> None:
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(
+            _write_pdf_with_many_descendant_fonts(
+                tmp_path / "many-descendant-fonts.pdf",
+                count=300,
+            ),
+            limits=HybridIntakeLimits(),
+        )
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
 
 
 def test_preflight_rejects_unreferenced_embedded_stream_in_incremental_xref(
