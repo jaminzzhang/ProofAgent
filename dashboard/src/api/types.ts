@@ -1136,6 +1136,11 @@ export interface InsuranceMetadataReview {
   review_id: string
   review_identity: string
   review_version: number
+  import_id: string
+  workbook_row_number: number
+  workbook_draft_id: string
+  original_ref: InsuranceMetadataWorkbookArtifactRef
+  normalized_ref: InsuranceMetadataWorkbookArtifactRef
   source_id: string
   document_id: string
   revision_id: string
@@ -1143,12 +1148,22 @@ export interface InsuranceMetadataReview {
   citation_uri: string
   state: 'review_required' | 'ready_for_review' | 'approved' | 'corrected' | 'rejected'
   publication_blocked: boolean
-  pdf_draft: InsuranceMetadataDraftInput
+  pdf_draft: InsuranceMetadataDraftInput | null
   workbook_draft: InsuranceMetadataDraftInput
   conflicts: InsuranceMetadataConflict[]
   resolved_values: Record<string, string | number | null>
   resolution_reason: string | null
   resolved_by: string | null
+  decision_history: Array<{
+    sequence: number
+    prior_review_identity: string
+    prior_state: InsuranceMetadataReview['state']
+    action: 'approve' | 'correct' | 'reject'
+    actor: string
+    reason: string
+    corrections: Record<string, string | number | null>
+    resulting_state: InsuranceMetadataReview['state']
+  }>
 }
 
 export interface InsuranceMetadataReviewsResponse {

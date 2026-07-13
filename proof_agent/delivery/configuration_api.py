@@ -35,19 +35,24 @@ from proof_agent.capabilities.tools.source_descriptors import (
     list_tool_source_descriptors,
 )
 from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
+from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import HybridArtifactBuildResult
 from proof_agent.capabilities.knowledge.hybrid.workbook import (
     DEFAULT_WORKBOOK_IMPORT_LIMITS,
     FilesystemInsuranceMetadataReviewRepository,
     InsuranceMetadataDraftInput,
     InsuranceMetadataReview,
     WorkbookKnownAnchor,
+    WorkbookImportRecord,
+    WorkbookImportRowIdentity,
     WorkbookMetadataRow,
     WorkbookReviewConflictError,
     WorkbookValidationError,
     WORKBOOK_MEDIA_TYPE,
+    create_workbook_only_review,
     import_metadata_workbook,
     reconcile_metadata_drafts,
 )
+from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
 from proof_agent.configuration.hybrid_knowledge_repository import (
     FileSystemKnowledgeArtifactStore,
     ImmutableArtifactError,
@@ -511,8 +516,6 @@ class KnowledgeMetadataWorkbookImportRequest(BaseModel):
     content_base64: str = Field(min_length=1)
     document_id: str = Field(min_length=1, max_length=255)
     revision_id: str = Field(min_length=1, max_length=255)
-    canonical_anchors: list[str | None] = Field(min_length=1, max_length=10_000)
-    pdf_drafts: list[InsuranceMetadataDraftInput] = Field(min_length=1, max_length=10_000)
 
 
 class KnowledgeBindingAttachRequest(BaseModel):
@@ -1372,73 +1375,113 @@ def import_knowledge_metadata_workbook(
         request.content_base64,
         max_upload_bytes=DEFAULT_WORKBOOK_IMPORT_LIMITS.max_file_bytes,
     )
-    expected_identities = {
-        (source_id, request.document_id, request.revision_id, anchor)
-        for anchor in request.canonical_anchors
-    }
-    if len(expected_identities) != len(request.canonical_anchors):
-        raise HTTPException(status_code=400, detail="Canonical anchors must be unique.")
-    pdf_by_identity: dict[tuple[str, str, str, str | None], InsuranceMetadataDraftInput] = {}
-    for draft in request.pdf_drafts:
-        draft_identity = (
-            draft.source_id,
-            draft.document_id,
-            draft.revision_id,
-            draft.canonical_anchor,
-        )
-        if draft.origin != "pdf" or draft_identity not in expected_identities:
-            raise HTTPException(
-                status_code=400,
-                detail="Every PDF draft must match the exact Source, document revision, and anchor.",
-            )
-        if draft_identity in pdf_by_identity:
-            raise HTTPException(status_code=400, detail="PDF draft identities must be unique.")
-        pdf_by_identity[draft_identity] = draft
-    if set(pdf_by_identity) != expected_identities:
-        raise HTTPException(
-            status_code=400,
-            detail="PDF drafts must cover every exact canonical anchor once.",
-        )
-    known_anchors = tuple(
-        WorkbookKnownAnchor(
+    try:
+        build_result = store.get_completed_hybrid_artifact_build_result(
             source_id=source_id,
             document_id=request.document_id,
             revision_id=request.revision_id,
-            canonical_anchor=anchor,
         )
-        for anchor in request.canonical_anchors
-    )
-    try:
+        repository = _metadata_review_repository(store)
+        authority_records = repository.list_authority_records(
+            source_id=source_id,
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+        )
+        authority_records = tuple(
+            record
+            for record in authority_records
+            if record.structured_build_id == build_result.build_id
+        )
+        if not authority_records:
+            raise WorkbookValidationError(
+                "persisted canonical Rule Unit lineage is required for workbook import"
+            )
+        authority_by_identity = {
+            (record.source_id, record.document_id, record.revision_id, record.canonical_anchor): record
+            for record in authority_records
+        }
+        if len(authority_by_identity) != len(authority_records):
+            raise WorkbookValidationError("persisted canonical anchors are not unique")
+        pdf_records = tuple(
+            record
+            for record in repository.list_pdf_draft_records(
+                source_id=source_id,
+                document_id=request.document_id,
+                revision_id=request.revision_id,
+            )
+            if record.structured_build_id == build_result.build_id
+        )
+        pdf_by_identity = {
+            (record.source_id, record.document_id, record.revision_id, record.canonical_anchor): (
+                record.pdf_draft
+            )
+            for record in pdf_records
+        }
+        if len(pdf_by_identity) != len(pdf_records):
+            raise WorkbookValidationError("persisted PDF metadata draft anchors are not unique")
+        known_anchors = tuple(
+            WorkbookKnownAnchor(
+                source_id=record.source_id,
+                document_id=record.document_id,
+                revision_id=record.revision_id,
+                canonical_anchor=record.canonical_anchor,
+            )
+            for record in authority_records
+        )
         with FileSystemKnowledgeArtifactStore(store.root_dir / "hybrid_artifacts") as artifacts:
+            _verify_hybrid_result_artifacts(artifacts, build_result)
             imported = import_metadata_workbook(
                 content,
                 known_anchors=known_anchors,
                 artifact_store=artifacts,
             )
-        workbook_drafts = tuple(_workbook_row_draft(row) for row in imported.rows)
-        workbook_identities = {
-            (draft.source_id, draft.document_id, draft.revision_id, draft.canonical_anchor)
-            for draft in workbook_drafts
-        }
-        if workbook_identities != expected_identities:
-            raise WorkbookValidationError(
-                "workbook rows must cover every exact canonical anchor once"
-            )
-        reviews = tuple(
-            reconcile_metadata_drafts(
-                pdf_by_identity[
-                    (
-                        draft.source_id,
-                        draft.document_id,
-                        draft.revision_id,
-                        draft.canonical_anchor,
-                    )
-                ],
-                draft,
-            )
-            for draft in workbook_drafts
+        import_record = WorkbookImportRecord(
+            import_id=imported.import_id,
+            template_revision=imported.template_revision,
+            source_id=source_id,
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+            original_ref=imported.original_ref,
+            normalized_ref=imported.normalized_ref,
+            rows=tuple(
+                WorkbookImportRowIdentity(
+                    row_number=row.row_number,
+                    source_id=row.source_id,
+                    document_id=row.document_id,
+                    revision_id=row.revision_id,
+                    canonical_anchor=row.canonical_anchor,
+                    metadata_draft_id=row.metadata.metadata_draft_id,
+                )
+                for row in imported.rows
+            ),
         )
-        persisted = _metadata_review_repository(store).put_many(reviews)
+        workbook_drafts = tuple(_workbook_row_draft(row) for row in imported.rows)
+        reviews: list[InsuranceMetadataReview] = []
+        for row, draft in zip(imported.rows, workbook_drafts, strict=True):
+            authority = authority_by_identity[
+                (draft.source_id, draft.document_id, draft.revision_id, draft.canonical_anchor)
+            ]
+            pdf_draft = pdf_by_identity.get(
+                (draft.source_id, draft.document_id, draft.revision_id, draft.canonical_anchor)
+            )
+            if pdf_draft is None:
+                review = create_workbook_only_review(
+                    draft,
+                    import_record=import_record,
+                    row=row,
+                    citation_uri=authority.citation_uri,
+                )
+            else:
+                review = reconcile_metadata_drafts(
+                    pdf_draft,
+                    draft,
+                    import_record=import_record,
+                    row=row,
+                )
+            reviews.append(review)
+        persisted = repository.put_import_with_reviews(import_record, reviews)
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
     except (ImmutableArtifactError, WorkbookValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except WorkbookReviewConflictError as exc:
@@ -3361,6 +3404,36 @@ def _workbook_row_draft(row: WorkbookMetadataRow) -> InsuranceMetadataDraftInput
         precedence_authority_tier=precedence.authority_tier,
         precedence_order=precedence.order,
     )
+
+
+def _verify_hybrid_result_artifacts(
+    artifact_store: FileSystemKnowledgeArtifactStore,
+    result: HybridArtifactBuildResult,
+) -> StructuredKnowledgeDocumentArtifact:
+    managed_refs = (
+        result.persisted_original_ref,
+        *(item.ref for item in result.vendor_refs),
+        result.canonical_ref,
+        result.preview_ref,
+        result.build_identity_ref,
+    )
+    payloads = {ref.artifact_uri: artifact_store.get_exact(ref) for ref in managed_refs}
+    try:
+        canonical = StructuredKnowledgeDocumentArtifact.model_validate_json(
+            payloads[result.canonical_ref.artifact_uri]
+        )
+    except ValidationError as exc:
+        raise WorkbookValidationError("persisted canonical Hybrid artifact is invalid") from exc
+    if (
+        canonical.document_id != result.document_id
+        or canonical.revision_id != result.revision_id
+        or canonical.original_sha256 != result.original_ref.sha256
+        or canonical.build_identity != result.build_identity
+    ):
+        raise WorkbookValidationError(
+            "persisted canonical Hybrid artifact does not match its completed result"
+        )
+    return canonical
 
 
 def _metadata_review_repository(

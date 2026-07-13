@@ -79,16 +79,6 @@ test('insurance metadata workbook import uses the protected Source route', async
     content_base64: 'UEsDBA==',
     document_id: 'doc_1',
     revision_id: 'rev_1',
-    canonical_anchors: ['section:eligibility'],
-    pdf_drafts: [{
-      origin: 'pdf' as const,
-      source_id: 'ks_hybrid', document_id: 'doc_1', revision_id: 'rev_1',
-      canonical_anchor: 'section:eligibility', authority: 'national',
-      effective_from: '2026-01-01', effective_to: null,
-      taxonomy_id: 'insurance', taxonomy_revision_id: 'tax_1',
-      precedence_policy_revision_id: 'policy_1', precedence_authority_tier: 'terms',
-      precedence_order: 10,
-    }],
   }
 
   await importInsuranceMetadataWorkbook('ks_hybrid', payload)

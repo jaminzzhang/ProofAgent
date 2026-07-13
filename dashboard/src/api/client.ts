@@ -28,7 +28,6 @@ import type {
   KnowledgeIngestionJobsResponse,
   InsuranceMetadataReview,
   InsuranceMetadataReviewsResponse,
-  InsuranceMetadataDraftInput,
   InsuranceMetadataWorkbookImportResponse,
   KnowledgeSource,
   KnowledgeSourceDeletionEligibility,
@@ -551,8 +550,6 @@ export function importInsuranceMetadataWorkbook(
     content_base64: string
     document_id: string
     revision_id: string
-    canonical_anchors: Array<string | null>
-    pdf_drafts: InsuranceMetadataDraftInput[]
   },
 ): Promise<InsuranceMetadataWorkbookImportResponse> {
   return fetchJson<InsuranceMetadataWorkbookImportResponse>(

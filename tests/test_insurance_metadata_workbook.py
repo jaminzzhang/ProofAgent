@@ -10,6 +10,8 @@ import proof_agent.capabilities.knowledge.hybrid.workbook as workbook_module
 from proof_agent.capabilities.knowledge.hybrid.workbook import (
     FilesystemInsuranceMetadataReviewRepository,
     InsuranceMetadataDraftInput,
+    WorkbookImportRecord,
+    WorkbookImportRowIdentity,
     WorkbookKnownAnchor,
     WorkbookValidationError,
     import_metadata_workbook,
@@ -70,6 +72,49 @@ def _fixture_with_far_cell() -> bytes:
             payload = source.read(member.filename)
             if member.filename == "xl/worksheets/sheet1.xml":
                 payload = payload.replace(b"</x:sheetData>", far_row + b"</x:sheetData>")
+            target.writestr(member, payload)
+    return output.getvalue()
+
+
+def _fixture_with_evil_macro_content_type() -> bytes:
+    output = BytesIO()
+    declaration = (
+        b'<Default Extension="bin" '
+        b'ContentType="application/vnd.ms-office.vbaProject"/>'
+    )
+    with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            payload = source.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                payload = payload.replace(b"</Types>", declaration + b"</Types>")
+            target.writestr(member, payload)
+        target.writestr("xl/evil.bin", b"not executable but declared as VBA")
+    return output.getvalue()
+
+
+def _fixture_with_row_10007() -> bytes:
+    output = BytesIO()
+    row = b'<x:row r="10007"><x:c r="A10007" t="str"><x:v>hidden</x:v></x:c></x:row>'
+    with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            payload = source.read(member.filename)
+            if member.filename == "xl/worksheets/sheet1.xml":
+                payload = payload.replace(b"</x:sheetData>", row + b"</x:sheetData>")
+            target.writestr(member, payload)
+    return output.getvalue()
+
+
+def _fixture_with_string_date(value: str) -> bytes:
+    output = BytesIO()
+    replacement = f'<x:c r="G6" s="31" t="str"><x:v>{value}</x:v></x:c>'.encode()
+    with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            payload = source.read(member.filename)
+            if member.filename == "xl/worksheets/sheet1.xml":
+                payload = payload.replace(
+                    b'<x:c r="G6" s="31" t="n"><x:v>46023</x:v></x:c>',
+                    replacement,
+                )
             target.writestr(member, payload)
     return output.getvalue()
 
@@ -156,6 +201,31 @@ def test_workbook_rejects_nonempty_cells_beyond_template_bounds() -> None:
         )
 
 
+def test_workbook_rejects_macro_content_type_with_arbitrary_filename() -> None:
+    with pytest.raises(WorkbookValidationError, match="executable or embedded"):
+        import_metadata_workbook(
+            _fixture_with_evil_macro_content_type(),
+            known_anchors=(_known_anchor(),),
+        )
+
+
+def test_workbook_bounds_are_relative_to_the_discovered_header() -> None:
+    with pytest.raises(WorkbookValidationError, match="template bounds"):
+        import_metadata_workbook(
+            _fixture_with_row_10007(),
+            known_anchors=(_known_anchor(),),
+        )
+
+
+@pytest.mark.parametrize("value", ["20260101", "2026-W01-1"])
+def test_workbook_string_dates_require_exact_calendar_format(value: str) -> None:
+    with pytest.raises(WorkbookValidationError, match="YYYY-MM-DD"):
+        import_metadata_workbook(
+            _fixture_with_string_date(value),
+            known_anchors=(_known_anchor(),),
+        )
+
+
 def _draft(*, origin: str, authority: str) -> InsuranceMetadataDraftInput:
     return InsuranceMetadataDraftInput(
         origin=origin,
@@ -174,8 +244,48 @@ def _draft(*, origin: str, authority: str) -> InsuranceMetadataDraftInput:
     )
 
 
-def test_pdf_and_workbook_disagreement_blocks_readiness() -> None:
-    result = reconcile_metadata_drafts(
+def _reconcile(
+    tmp_path: Path,
+    pdf_draft: InsuranceMetadataDraftInput,
+    workbook_draft: InsuranceMetadataDraftInput,
+):
+    with FileSystemKnowledgeArtifactStore(tmp_path / "lineage-artifacts") as artifact_store:
+        imported = import_metadata_workbook(
+            FIXTURE,
+            known_anchors=(_known_anchor(),),
+            artifact_store=artifact_store,
+        )
+    row = imported.rows[0]
+    record = WorkbookImportRecord(
+        import_id=imported.import_id,
+        template_revision=imported.template_revision,
+        source_id=row.source_id,
+        document_id=row.document_id,
+        revision_id=row.revision_id,
+        original_ref=imported.original_ref,
+        normalized_ref=imported.normalized_ref,
+        rows=(
+            WorkbookImportRowIdentity(
+                row_number=row.row_number,
+                source_id=row.source_id,
+                document_id=row.document_id,
+                revision_id=row.revision_id,
+                canonical_anchor=row.canonical_anchor,
+                metadata_draft_id=row.metadata.metadata_draft_id,
+            ),
+        ),
+    )
+    return reconcile_metadata_drafts(
+        pdf_draft,
+        workbook_draft,
+        import_record=record,
+        row=row,
+    )
+
+
+def test_pdf_and_workbook_disagreement_blocks_readiness(tmp_path: Path) -> None:
+    result = _reconcile(
+        tmp_path,
         _draft(origin="pdf", authority="national"),
         _draft(origin="workbook", authority="regional"),
     )
@@ -187,8 +297,9 @@ def test_pdf_and_workbook_disagreement_blocks_readiness() -> None:
     assert result.conflicts[0].workbook_value == "regional"
 
 
-def test_matching_drafts_are_ready_but_not_approved_or_publishable() -> None:
-    result = reconcile_metadata_drafts(
+def test_matching_drafts_are_ready_but_not_approved_or_publishable(tmp_path: Path) -> None:
+    result = _reconcile(
+        tmp_path,
         _draft(origin="pdf", authority="national"),
         _draft(origin="workbook", authority="national"),
     )
@@ -212,7 +323,8 @@ def test_review_corrections_reject_unsafe_or_invalid_metadata(
 ) -> None:
     repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
     review = repository.put(
-        reconcile_metadata_drafts(
+        _reconcile(
+            tmp_path,
             _draft(origin="pdf", authority="national"),
             _draft(origin="workbook", authority="regional"),
         )

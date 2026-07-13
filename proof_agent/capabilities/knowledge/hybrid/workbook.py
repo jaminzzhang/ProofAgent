@@ -71,6 +71,7 @@ _AUTHORITY_FIELDS = frozenset(_HEADERS)
 _FORMULA_PREFIXES = ("=", "+", "-", "@")
 _EXTERNAL_LINK_MARKERS = ("xl/externalLinks/", "externalLink")
 _MACRO_MARKERS = ("vbaProject.bin", "xl/macrosheets/", "xl/dialogsheets/")
+_DANGEROUS_OFFICE_MARKERS = ("vba", "macroenabled", "activex", "oleobject", "ole/object")
 _CONFLICT_FIELDS = (
     "authority",
     "effective_from",
@@ -136,6 +137,29 @@ class InsuranceMetadataWorkbookImport(_WorkbookModel):
     authoritative: StrictBool = False
 
 
+class WorkbookImportRowIdentity(_WorkbookModel):
+    row_number: PositiveInt
+    source_id: NonBlankStr
+    document_id: NonBlankStr
+    revision_id: NonBlankStr
+    canonical_anchor: NonBlankStr | None = None
+    metadata_draft_id: NonBlankStr
+
+
+class WorkbookImportRecord(_WorkbookModel):
+    schema_version: Literal["insurance-metadata-workbook-import-record.v1"] = (
+        "insurance-metadata-workbook-import-record.v1"
+    )
+    import_id: NonBlankStr
+    template_revision: Literal["insurance-rule-metadata.v1"]
+    source_id: NonBlankStr
+    document_id: NonBlankStr
+    revision_id: NonBlankStr
+    original_ref: ExactArtifactRef
+    normalized_ref: ExactArtifactRef
+    rows: tuple[WorkbookImportRowIdentity, ...] = Field(min_length=1)
+
+
 class InsuranceMetadataDraftInput(_WorkbookModel):
     """One parallel, non-authoritative PDF or workbook metadata proposal."""
 
@@ -173,6 +197,45 @@ class InsuranceMetadataDraftInput(_WorkbookModel):
         return self
 
 
+class InsuranceMetadataAuthorityRecord(_WorkbookModel):
+    """Server-authored canonical Rule Unit lineage."""
+
+    schema_version: Literal["insurance-metadata-authority-record.v1"] = (
+        "insurance-metadata-authority-record.v1"
+    )
+    source_id: NonBlankStr
+    document_id: NonBlankStr
+    revision_id: NonBlankStr
+    canonical_anchor: NonBlankStr | None = None
+    structured_build_id: NonBlankStr
+    rule_unit_draft_id: NonBlankStr
+    citation_uri: NonBlankStr
+
+
+class InsuranceMetadataPdfDraftRecord(_WorkbookModel):
+    """Persisted server-derived PDF metadata proposal for one canonical anchor."""
+
+    schema_version: Literal["insurance-metadata-pdf-draft-record.v1"] = (
+        "insurance-metadata-pdf-draft-record.v1"
+    )
+    source_id: NonBlankStr
+    document_id: NonBlankStr
+    revision_id: NonBlankStr
+    canonical_anchor: NonBlankStr | None = None
+    structured_build_id: NonBlankStr
+    pdf_draft: InsuranceMetadataDraftInput
+
+    @model_validator(mode="after")
+    def validate_pdf_lineage(self) -> "InsuranceMetadataPdfDraftRecord":
+        if (
+            self.pdf_draft.origin != "pdf"
+            or _draft_identity(self.pdf_draft)
+            != (self.source_id, self.document_id, self.revision_id, self.canonical_anchor)
+        ):
+            raise ValueError("persisted PDF draft must match the exact authority lineage")
+        return self
+
+
 class InsuranceMetadataConflict(_WorkbookModel):
     field: NonBlankStr
     label: NonBlankStr
@@ -180,11 +243,33 @@ class InsuranceMetadataConflict(_WorkbookModel):
     workbook_value: StrictStr | StrictInt | date | None = None
 
 
+class InsuranceMetadataReviewDecision(_WorkbookModel):
+    sequence: PositiveInt
+    prior_review_identity: Sha256
+    prior_state: Literal[
+        "review_required", "ready_for_review", "approved", "corrected", "rejected"
+    ]
+    action: Literal["approve", "correct", "reject"]
+    actor: NonBlankStr
+    reason: NonBlankStr
+    corrections: Mapping[StrictStr, StrictStr | StrictInt | date | None] = Field(
+        default_factory=dict
+    )
+    resulting_state: Literal[
+        "review_required", "ready_for_review", "approved", "corrected", "rejected"
+    ]
+
+
 class InsuranceMetadataReview(_WorkbookModel):
     schema_version: Literal["insurance-metadata-review.v1"] = "insurance-metadata-review.v1"
     review_id: NonBlankStr
     review_identity: Sha256
     review_version: PositiveInt
+    import_id: NonBlankStr
+    workbook_row_number: PositiveInt
+    workbook_draft_id: NonBlankStr
+    original_ref: ExactArtifactRef
+    normalized_ref: ExactArtifactRef
     source_id: NonBlankStr
     document_id: NonBlankStr
     revision_id: NonBlankStr
@@ -192,7 +277,7 @@ class InsuranceMetadataReview(_WorkbookModel):
     citation_uri: NonBlankStr
     state: Literal["review_required", "ready_for_review", "approved", "corrected", "rejected"]
     publication_blocked: StrictBool
-    pdf_draft: InsuranceMetadataDraftInput
+    pdf_draft: InsuranceMetadataDraftInput | None = None
     workbook_draft: InsuranceMetadataDraftInput
     conflicts: tuple[InsuranceMetadataConflict, ...] = ()
     resolved_values: Mapping[StrictStr, StrictStr | StrictInt | date | None] = Field(
@@ -200,6 +285,7 @@ class InsuranceMetadataReview(_WorkbookModel):
     )
     resolution_reason: NonBlankStr | None = None
     resolved_by: NonBlankStr | None = None
+    decision_history: tuple[InsuranceMetadataReviewDecision, ...] = ()
 
 
 class InsuranceMetadataReviewRepository(Protocol):
@@ -285,6 +371,9 @@ def import_metadata_workbook(
 def reconcile_metadata_drafts(
     pdf_draft: InsuranceMetadataDraftInput,
     workbook_draft: InsuranceMetadataDraftInput,
+    *,
+    import_record: WorkbookImportRecord,
+    row: WorkbookMetadataRow,
 ) -> InsuranceMetadataReview:
     """Keep parallel proposals visible and block every unresolved disagreement."""
 
@@ -305,6 +394,8 @@ def reconcile_metadata_drafts(
         if getattr(pdf_draft, field) != getattr(workbook_draft, field)
     )
     seed = {
+        "import_id": import_record.import_id,
+        "row_number": row.row_number,
         "pdf": pdf_draft.model_dump(mode="json"),
         "workbook": workbook_draft.model_dump(mode="json"),
     }
@@ -315,6 +406,11 @@ def reconcile_metadata_drafts(
         review_id=review_id,
         review_identity="0" * 64,
         review_version=1,
+        import_id=import_record.import_id,
+        workbook_row_number=row.row_number,
+        workbook_draft_id=row.metadata.metadata_draft_id,
+        original_ref=import_record.original_ref,
+        normalized_ref=import_record.normalized_ref,
         source_id=pdf_draft.source_id,
         document_id=pdf_draft.document_id,
         revision_id=pdf_draft.revision_id,
@@ -329,12 +425,59 @@ def reconcile_metadata_drafts(
     return draft_review.model_copy(update={"review_identity": _review_identity(draft_review)})
 
 
+def create_workbook_only_review(
+    workbook_draft: InsuranceMetadataDraftInput,
+    *,
+    import_record: WorkbookImportRecord,
+    row: WorkbookMetadataRow,
+    citation_uri: str,
+) -> InsuranceMetadataReview:
+    """Create a blocked review without inventing missing PDF-derived authority facts."""
+
+    if workbook_draft.origin != "workbook":
+        raise ValueError("workbook-only review requires a workbook draft")
+    seed = {
+        "import_id": import_record.import_id,
+        "row": row.model_dump(mode="json"),
+        "workbook": workbook_draft.model_dump(mode="json"),
+    }
+    digest = hashlib.sha256(_canonical_json(seed)).hexdigest()
+    draft_review = InsuranceMetadataReview(
+        review_id=f"metadata_review_{digest[:24]}",
+        review_identity="0" * 64,
+        review_version=1,
+        import_id=import_record.import_id,
+        workbook_row_number=row.row_number,
+        workbook_draft_id=row.metadata.metadata_draft_id,
+        original_ref=import_record.original_ref,
+        normalized_ref=import_record.normalized_ref,
+        source_id=workbook_draft.source_id,
+        document_id=workbook_draft.document_id,
+        revision_id=workbook_draft.revision_id,
+        canonical_anchor=workbook_draft.canonical_anchor,
+        citation_uri=citation_uri,
+        state="review_required",
+        publication_blocked=True,
+        pdf_draft=None,
+        workbook_draft=workbook_draft,
+    )
+    return draft_review.model_copy(update={"review_identity": _review_identity(draft_review)})
+
+
 class FilesystemInsuranceMetadataReviewRepository:
     """Atomic local review projection with exact optimistic command identity."""
 
     def __init__(self, root_dir: Path) -> None:
         self._root = root_dir / "insurance_metadata_reviews"
+        self._imports_root = root_dir / "insurance_metadata_imports"
+        self._authority_root = root_dir / "insurance_metadata_authority"
+        self._pdf_drafts_root = root_dir / "insurance_metadata_pdf_drafts"
+        self._decisions_root = root_dir / "insurance_metadata_review_decisions"
         self._root.mkdir(parents=True, exist_ok=True)
+        self._imports_root.mkdir(parents=True, exist_ok=True)
+        self._authority_root.mkdir(parents=True, exist_ok=True)
+        self._pdf_drafts_root.mkdir(parents=True, exist_ok=True)
+        self._decisions_root.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
         self._file_lock = FileLock(self._root / ".reviews.lock", timeout=10)
 
@@ -360,10 +503,111 @@ class FilesystemInsuranceMetadataReviewRepository:
     def put(self, review: InsuranceMetadataReview) -> InsuranceMetadataReview:
         return self.put_many((review,))[0]
 
+    def put_authority_record(
+        self, record: InsuranceMetadataAuthorityRecord
+    ) -> InsuranceMetadataAuthorityRecord:
+        path = self._authority_path(record)
+        with self._lock, self._file_lock:
+            if path.exists():
+                current = InsuranceMetadataAuthorityRecord.model_validate_json(path.read_bytes())
+                if current != record:
+                    raise WorkbookReviewConflictError(
+                        "canonical metadata authority identity already exists"
+                    )
+                return current
+            self._write_payload(path, record.model_dump(mode="json"))
+        return record
+
+    def list_authority_records(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+    ) -> tuple[InsuranceMetadataAuthorityRecord, ...]:
+        root = self._authority_revision_dir(source_id, document_id, revision_id)
+        if not root.exists():
+            return ()
+        records = tuple(
+            InsuranceMetadataAuthorityRecord.model_validate_json(path.read_bytes())
+            for path in sorted(root.glob("*.json"))
+            if path.is_file() and not path.is_symlink()
+        )
+        return tuple(sorted(records, key=lambda item: item.canonical_anchor or ""))
+
+    def put_pdf_draft_record(
+        self, record: InsuranceMetadataPdfDraftRecord
+    ) -> InsuranceMetadataPdfDraftRecord:
+        path = self._pdf_draft_path(record)
+        with self._lock, self._file_lock:
+            if path.exists():
+                current = InsuranceMetadataPdfDraftRecord.model_validate_json(path.read_bytes())
+                if current != record:
+                    raise WorkbookReviewConflictError(
+                        "persisted PDF metadata draft identity already exists"
+                    )
+                return current
+            self._write_payload(path, record.model_dump(mode="json"))
+        return record
+
+    def list_pdf_draft_records(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+    ) -> tuple[InsuranceMetadataPdfDraftRecord, ...]:
+        root = self._pdf_draft_revision_dir(source_id, document_id, revision_id)
+        if not root.exists():
+            return ()
+        records = tuple(
+            InsuranceMetadataPdfDraftRecord.model_validate_json(path.read_bytes())
+            for path in sorted(root.glob("*.json"))
+            if path.is_file() and not path.is_symlink()
+        )
+        return tuple(sorted(records, key=lambda item: item.canonical_anchor or ""))
+
+    def get_import_record(self, import_id: str) -> WorkbookImportRecord | None:
+        path = self._imports_root / f"{_safe_identifier(import_id, 'import_id')}.json"
+        if not path.exists():
+            return None
+        return WorkbookImportRecord.model_validate_json(path.read_bytes())
+
+    def put_import_with_reviews(
+        self,
+        record: WorkbookImportRecord,
+        reviews: Iterable[InsuranceMetadataReview],
+    ) -> tuple[InsuranceMetadataReview, ...]:
+        review_batch = tuple(reviews)
+        if any(review.import_id != record.import_id for review in review_batch):
+            raise WorkbookValidationError("review import lineage does not match import record")
+        import_path = self._imports_root / f"{_safe_identifier(record.import_id, 'import_id')}.json"
+        created_import = False
+        with self._lock, self._file_lock:
+            current_import = self.get_import_record(record.import_id)
+            if current_import is not None and current_import != record:
+                raise WorkbookReviewConflictError("workbook import identity already exists")
+            if current_import is None:
+                self._write_payload(import_path, record.model_dump(mode="json"))
+                created_import = True
+            try:
+                return self._put_many_unlocked(review_batch)
+            except Exception:
+                if created_import:
+                    import_path.unlink(missing_ok=True)
+                raise
+
     def put_many(
         self, reviews: Iterable[InsuranceMetadataReview]
     ) -> tuple[InsuranceMetadataReview, ...]:
         review_batch = tuple(reviews)
+        with self._lock, self._file_lock:
+            return self._put_many_unlocked(review_batch)
+
+    def _put_many_unlocked(
+        self, review_batch: tuple[InsuranceMetadataReview, ...]
+    ) -> tuple[InsuranceMetadataReview, ...]:
+        created_paths: list[Path] = []
         if not review_batch:
             raise WorkbookValidationError("metadata review batch must not be empty")
         identities = {(review.source_id, review.review_id) for review in review_batch}
@@ -373,22 +617,20 @@ class FilesystemInsuranceMetadataReviewRepository:
             expected = _review_identity(review.model_copy(update={"review_identity": "0" * 64}))
             if review.review_identity != expected:
                 raise WorkbookValidationError("metadata review identity does not match its content")
-        created_paths: list[Path] = []
-        with self._lock, self._file_lock:
+        try:
             for review in review_batch:
                 current = self.get(review.source_id, review.review_id)
                 if current is not None and current != review:
                     raise WorkbookReviewConflictError("metadata review identity already exists")
-            try:
-                for review in review_batch:
-                    path = self._review_path(review.source_id, review.review_id)
-                    if not path.exists():
-                        created_paths.append(path)
-                    self._write(review)
-            except Exception:
-                for path in created_paths:
-                    path.unlink(missing_ok=True)
-                raise
+            for review in review_batch:
+                path = self._review_path(review.source_id, review.review_id)
+                if not path.exists():
+                    created_paths.append(path)
+                self._write(review)
+        except Exception:
+            for path in created_paths:
+                path.unlink(missing_ok=True)
+            raise
         return review_batch
 
     def resolve(
@@ -412,13 +654,23 @@ class FilesystemInsuranceMetadataReviewRepository:
                 or current.review_identity != expected_review_identity
             ):
                 raise WorkbookReviewConflictError("metadata review changed; reload exact identity")
+            normalized_reason = _require_nonblank(reason, "reason")
+            normalized_actor = _require_nonblank(actor, "actor")
+            decision_corrections: Mapping[str, str | int | date | None] = {}
+            next_state: Literal[
+                "review_required", "ready_for_review", "approved", "corrected", "rejected"
+            ] = current.state
             updates: dict[str, object] = {
                 "review_version": current.review_version + 1,
                 "review_identity": "0" * 64,
-                "resolution_reason": _require_nonblank(reason, "reason"),
-                "resolved_by": _require_nonblank(actor, "actor"),
+                "resolution_reason": normalized_reason,
+                "resolved_by": normalized_actor,
             }
             if action == "approve":
+                if current.pdf_draft is None:
+                    raise WorkbookReviewConflictError(
+                        "persisted PDF metadata draft is required before approval"
+                    )
                 if current.conflicts:
                     raise WorkbookReviewConflictError(
                         "unresolved metadata conflicts block approval and publication"
@@ -428,10 +680,16 @@ class FilesystemInsuranceMetadataReviewRepository:
                         "only a ready or corrected metadata review can be approved"
                     )
                 _validate_resolved_draft(current, {})
-                updates.update(state="approved", publication_blocked=False)
+                next_state = "approved"
+                updates.update(state=next_state, publication_blocked=False)
             elif action == "reject":
-                updates.update(state="rejected", publication_blocked=True)
+                next_state = "rejected"
+                updates.update(state=next_state, publication_blocked=True)
             else:
+                if current.pdf_draft is None:
+                    raise WorkbookReviewConflictError(
+                        "persisted PDF metadata draft is required before correction"
+                    )
                 if current.state in {"approved", "rejected"}:
                     raise WorkbookReviewConflictError(
                         "terminal metadata reviews cannot be corrected"
@@ -442,16 +700,30 @@ class FilesystemInsuranceMetadataReviewRepository:
                 unresolved = tuple(
                     conflict for conflict in current.conflicts if conflict.field not in resolved
                 )
+                next_state = "corrected" if not unresolved else "review_required"
+                decision_corrections = resolved
                 updates.update(
-                    state="corrected" if not unresolved else "review_required",
+                    state=next_state,
                     publication_blocked=True,
                     conflicts=unresolved,
                     resolved_values={**dict(current.resolved_values), **resolved},
                 )
+            decision = InsuranceMetadataReviewDecision(
+                sequence=len(current.decision_history) + 1,
+                prior_review_identity=current.review_identity,
+                prior_state=current.state,
+                action=action,
+                actor=normalized_actor,
+                reason=normalized_reason,
+                corrections=decision_corrections,
+                resulting_state=next_state,
+            )
+            updates["decision_history"] = (*current.decision_history, decision)
             updated = InsuranceMetadataReview.model_validate({**current.model_dump(), **updates})
             updated = InsuranceMetadataReview.model_validate(
                 {**updated.model_dump(), "review_identity": _review_identity(updated)}
             )
+            self._append_decision(current, decision)
             self._write(updated)
             return updated
 
@@ -461,10 +733,82 @@ class FilesystemInsuranceMetadataReviewRepository:
     def _review_path(self, source_id: str, review_id: str) -> Path:
         return self._source_dir(source_id) / f"{_safe_identifier(review_id, 'review_id')}.json"
 
+    def _authority_revision_dir(
+        self, source_id: str, document_id: str, revision_id: str
+    ) -> Path:
+        return (
+            self._authority_root
+            / _safe_identifier(source_id, "source_id")
+            / _safe_identifier(document_id, "document_id")
+            / _safe_identifier(revision_id, "revision_id")
+        )
+
+    def _authority_path(self, record: InsuranceMetadataAuthorityRecord) -> Path:
+        identity = hashlib.sha256(
+            _canonical_json(
+                {
+                    "source_id": record.source_id,
+                    "document_id": record.document_id,
+                    "revision_id": record.revision_id,
+                    "canonical_anchor": record.canonical_anchor,
+                }
+            )
+        ).hexdigest()
+        return self._authority_revision_dir(
+            record.source_id, record.document_id, record.revision_id
+        ) / f"{identity}.json"
+
+    def _pdf_draft_revision_dir(
+        self, source_id: str, document_id: str, revision_id: str
+    ) -> Path:
+        return (
+            self._pdf_drafts_root
+            / _safe_identifier(source_id, "source_id")
+            / _safe_identifier(document_id, "document_id")
+            / _safe_identifier(revision_id, "revision_id")
+        )
+
+    def _pdf_draft_path(self, record: InsuranceMetadataPdfDraftRecord) -> Path:
+        identity = hashlib.sha256(
+            _canonical_json(
+                {
+                    "source_id": record.source_id,
+                    "document_id": record.document_id,
+                    "revision_id": record.revision_id,
+                    "canonical_anchor": record.canonical_anchor,
+                    "structured_build_id": record.structured_build_id,
+                }
+            )
+        ).hexdigest()
+        return self._pdf_draft_revision_dir(
+            record.source_id, record.document_id, record.revision_id
+        ) / f"{identity}.json"
+
+    def _append_decision(
+        self,
+        review: InsuranceMetadataReview,
+        decision: InsuranceMetadataReviewDecision,
+    ) -> None:
+        path = (
+            self._decisions_root
+            / _safe_identifier(review.source_id, "source_id")
+            / _safe_identifier(review.review_id, "review_id")
+            / f"{decision.sequence:08d}-{decision.prior_review_identity}.json"
+        )
+        if path.exists():
+            current = InsuranceMetadataReviewDecision.model_validate_json(path.read_bytes())
+            if current != decision:
+                raise WorkbookReviewConflictError("metadata review decision identity already exists")
+            return
+        self._write_payload(path, decision.model_dump(mode="json"))
+
     def _write(self, review: InsuranceMetadataReview) -> None:
         path = self._review_path(review.source_id, review.review_id)
+        self._write_payload(path, review.model_dump(mode="json"))
+
+    def _write_payload(self, path: Path, value: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = _canonical_json(review.model_dump(mode="json"))
+        payload = _canonical_json(value)
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -506,7 +850,12 @@ def _read_source_bytes(
     return content
 
 
-def _preflight_package(content: bytes, *, limits: WorkbookImportLimits) -> None:
+def _preflight_package(
+    content: bytes,
+    *,
+    limits: WorkbookImportLimits,
+    header_row: int | None = None,
+) -> None:
     try:
         with ZipFile(BytesIO(content)) as archive:
             members = archive.infolist()
@@ -548,8 +897,10 @@ def _preflight_package(content: bytes, *, limits: WorkbookImportLimits) -> None:
                     raise WorkbookValidationError("workbook XML is malformed") from exc
                 if member.filename.casefold().endswith(".rels"):
                     _validate_relationship_xml(root)
+                if member.filename.casefold() == "[content_types].xml":
+                    _validate_content_types_xml(root)
                 if member.filename.casefold().startswith("xl/worksheets/"):
-                    _validate_worksheet_bounds(root, limits=limits)
+                    _validate_worksheet_bounds(root, limits=limits, header_row=header_row)
     except (BadZipFile, OSError) as exc:
         raise WorkbookValidationError("workbook package is malformed") from exc
 
@@ -577,6 +928,7 @@ def _read_rows(
             raise WorkbookValidationError("workbook must contain only the versioned Metadata sheet")
         sheet = workbook[_SHEET_NAME]
         header_row = _find_header_row(sheet, limits=limits)
+        _preflight_package(content, limits=limits, header_row=header_row)
         rows: list[WorkbookMetadataRow] = []
         identities: set[tuple[str, str, str, str | None]] = set()
         for row_number, cells in enumerate(
@@ -644,6 +996,7 @@ def _validate_relationship_xml(root: ElementTree.Element) -> None:
         }
         target_mode = attributes.get("targetmode", "").casefold()
         target = attributes.get("target", "")
+        relationship_type = attributes.get("type", "").casefold()
         parsed = urlsplit(target)
         if (
             target_mode == "external"
@@ -652,14 +1005,28 @@ def _validate_relationship_xml(root: ElementTree.Element) -> None:
             or target.startswith("//")
         ):
             raise WorkbookValidationError("workbook external links are not accepted")
+        if any(marker in relationship_type for marker in _DANGEROUS_OFFICE_MARKERS):
+            raise WorkbookValidationError("workbook executable or embedded content is not accepted")
+
+
+def _validate_content_types_xml(root: ElementTree.Element) -> None:
+    for element in root.iter():
+        content_type = "".join(
+            value.strip().casefold()
+            for key, value in element.attrib.items()
+            if _local_name(key).casefold() == "contenttype"
+        )
+        if any(marker in content_type for marker in _DANGEROUS_OFFICE_MARKERS):
+            raise WorkbookValidationError("workbook executable or embedded content is not accepted")
 
 
 def _validate_worksheet_bounds(
     root: ElementTree.Element,
     *,
     limits: WorkbookImportLimits,
+    header_row: int | None,
 ) -> None:
-    maximum_row = limits.max_rows + 20
+    maximum_row = limits.max_rows + (header_row if header_row is not None else 20)
     for element in root.iter():
         local_name = _local_name(element.tag).casefold()
         if local_name == "dimension":
@@ -811,6 +1178,8 @@ def _business_date(value: object, field: str) -> date | None:
     if type(value) is date:
         return value
     if type(value) is str:
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value) is None:
+            raise WorkbookValidationError(f"{field} must use YYYY-MM-DD")
         try:
             return date.fromisoformat(value)
         except ValueError as exc:

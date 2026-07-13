@@ -117,6 +117,9 @@ VALIDATION_CAPTURE_EXCLUSION_METADATA = {
 }
 
 if TYPE_CHECKING:
+    from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+        HybridArtifactBuildResult,
+    )
     from proof_agent.capabilities.tools.mcp_discovery import MCPDiscoveryTransport
 
 
@@ -2372,6 +2375,54 @@ class LocalAgentConfigurationStore:
             self._write_knowledge_ingestion_job(completed)
             self._advance_source_draft_version_unlocked(source_id, updated_at=now)
             return completed
+
+    def get_completed_hybrid_artifact_build_result(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+    ) -> HybridArtifactBuildResult:
+        """Load and revalidate one completed exact Hybrid build from managed state."""
+
+        from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+            HybridArtifactBuildRequest,
+            HybridArtifactBuildResult,
+            validate_hybrid_artifact_build_result,
+        )
+
+        source = self._require_knowledge_source(source_id)
+        if source.provider != "hybrid_index":
+            raise _invalid_ingestion_transition("Hybrid build lookup requires hybrid_index.")
+        document = self.get_knowledge_document(source_id=source_id, document_id=document_id)
+        if document is None or document.revision_id != revision_id:
+            raise _invalid_ingestion_transition("Exact Hybrid document revision was not found.")
+        if document.ingestion_job_id is None:
+            raise _invalid_ingestion_transition("Hybrid document has no persisted build job.")
+        job = self.get_knowledge_ingestion_job(
+            source_id=source_id,
+            job_id=document.ingestion_job_id,
+        )
+        if job is None or job.state != "ready":
+            raise _invalid_ingestion_transition("Hybrid artifact build is not completed.")
+        revision_dir = self.knowledge_document_original_path(document).parent
+        request_path = revision_dir / "hybrid-build-request.json"
+        result_path = self._knowledge_ingestion_job_path(source_id, job.job_id).with_name(
+            "hybrid-artifact-result.json"
+        )
+        try:
+            request = HybridArtifactBuildRequest.model_validate_json(request_path.read_bytes())
+            result = HybridArtifactBuildResult.model_validate_json(result_path.read_bytes())
+            validate_hybrid_artifact_build_result(request, result)
+        except (OSError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+            raise _invalid_ingestion_transition(
+                "Completed Hybrid artifact result is missing or invalid."
+            ) from exc
+        if job.artifact_path != result.canonical_ref.artifact_uri:
+            raise _invalid_ingestion_transition(
+                "Completed Hybrid job does not match its canonical artifact reference."
+            )
+        return result
 
     def require_hybrid_knowledge_ingestion_review(
         self,

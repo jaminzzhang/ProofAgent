@@ -382,6 +382,18 @@ describe('KnowledgeDetailPage', () => {
         review_id: 'metadata_review_approved',
         review_identity: 'a'.repeat(64),
         review_version: 2,
+        import_id: 'metadata_import_1',
+        workbook_row_number: 6,
+        workbook_draft_id: 'metadata_draft_1',
+        original_ref: {
+          artifact_uri: 'file:///managed/original.xlsx', version_id: `sha256:${'1'.repeat(64)}`,
+          sha256: '1'.repeat(64), size_bytes: 100,
+          media_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+        normalized_ref: {
+          artifact_uri: 'file:///managed/normalized.json', version_id: `sha256:${'2'.repeat(64)}`,
+          sha256: '2'.repeat(64), size_bytes: 100, media_type: 'application/json',
+        },
         source_id: 'ks_hybrid_index',
         document_id: 'doc_1',
         revision_id: 'rev_1',
@@ -405,6 +417,7 @@ describe('KnowledgeDetailPage', () => {
         resolved_values: {},
         resolution_reason: 'Approved against the signed source.',
         resolved_by: 'reviewer',
+        decision_history: [],
       }],
       meta: { total: 1, unresolved: 0 },
     })

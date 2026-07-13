@@ -14,11 +14,25 @@ vi.mock('../../../api/client', () => ({
   resolveInsuranceMetadataReview: vi.fn(),
 }))
 
+const originalRef = {
+  artifact_uri: 'file:///managed/original.xlsx', version_id: `sha256:${'1'.repeat(64)}`,
+  sha256: '1'.repeat(64), size_bytes: 100, media_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+}
+const normalizedRef = {
+  artifact_uri: 'file:///managed/normalized.json', version_id: `sha256:${'2'.repeat(64)}`,
+  sha256: '2'.repeat(64), size_bytes: 100, media_type: 'application/json',
+}
+
 const review: InsuranceMetadataReview = {
   schema_version: 'insurance-metadata-review.v1',
   review_id: 'metadata_review_1',
   review_identity: 'a'.repeat(64),
   review_version: 1,
+  import_id: 'metadata_import_1',
+  workbook_row_number: 6,
+  workbook_draft_id: 'metadata_draft_1',
+  original_ref: originalRef,
+  normalized_ref: normalizedRef,
   source_id: 'ks_1',
   document_id: 'doc_1',
   revision_id: 'rev_1',
@@ -51,6 +65,7 @@ const review: InsuranceMetadataReview = {
   resolved_values: {},
   resolution_reason: null,
   resolved_by: null,
+  decision_history: [],
 }
 
 beforeEach(() => {
@@ -135,4 +150,22 @@ it('enables the readiness action only after a conflict-free review is approved',
   await waitFor(() => expect(readiness).toBeEnabled())
   fireEvent.click(readiness)
   expect(onReady).toHaveBeenCalledOnce()
+})
+
+it('keeps a workbook-only review blocked while persisted PDF facts are absent', async () => {
+  vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
+    data: [{ ...review, pdf_draft: null, conflicts: [] }],
+    meta: { total: 1, unresolved: 1 },
+  })
+
+  render(<KnowledgeReviewPanel sourceId="ks_1" onReady={vi.fn()} />)
+
+  expect(await screen.findByText(
+    'Awaiting persisted PDF metadata draft before correction or approval.',
+  )).toBeVisible()
+  fireEvent.change(screen.getByLabelText('Review reason'), {
+    target: { value: 'Cannot approve without PDF facts.' },
+  })
+  expect(screen.getByRole('button', { name: 'Approve review' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Confirm publication readiness' })).toBeDisabled()
 })

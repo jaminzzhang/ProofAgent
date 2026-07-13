@@ -130,7 +130,11 @@ export function KnowledgeReviewPanel({
               </Badge>
             </div>
 
-            {review.conflicts.length ? (
+            {review.pdf_draft === null ? (
+              <p className="mt-4 text-sm text-[var(--warning-fg)]">
+                Awaiting persisted PDF metadata draft before correction or approval.
+              </p>
+            ) : review.conflicts.length ? (
               <div className="mt-4 space-y-3">
                 {review.conflicts.map((conflict) => (
                   <div key={conflict.field} className="rounded-md border border-[var(--warning-border)] bg-[var(--warning-bg)] p-3">
@@ -170,7 +174,7 @@ export function KnowledgeReviewPanel({
               <Button
                 type="button"
                 onClick={() => void resolveReview(review, 'approve')}
-                disabled={!reason.trim() || busyReviewId === review.review_id || review.conflicts.length > 0 || review.state === 'approved'}
+                disabled={!reason.trim() || busyReviewId === review.review_id || review.conflicts.length > 0 || !['ready_for_review', 'corrected'].includes(review.state)}
               >
                 Approve review
               </Button>
