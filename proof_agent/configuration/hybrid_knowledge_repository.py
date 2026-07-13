@@ -171,6 +171,17 @@ class InMemoryHybridKnowledgeRepository:
                     "job identity is already bound to a different build request"
                 )
             job = self.enqueue(request)
+            if existing is not None:
+                if job.max_auto_retries != build_request.max_auto_retries:
+                    raise HybridKnowledgeIdempotencyConflict(
+                        "durable retry limit does not match the immutable build request"
+                    )
+                return job
+            job = _validated_job_update(
+                job,
+                max_auto_retries=build_request.max_auto_retries,
+            )
+            self._jobs[request.job_id] = job
             self._build_requests[request.job_id] = build_request
             return job
 

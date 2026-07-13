@@ -70,7 +70,9 @@ def _ref(content: bytes, *, media_type: str = "application/pdf") -> ExactArtifac
     )
 
 
-def _build_request(original: bytes = b"%PDF-1.7\n") -> HybridArtifactBuildRequest:
+def _build_request(
+    original: bytes = b"%PDF-1.7\n", *, max_auto_retries: int = 2
+) -> HybridArtifactBuildRequest:
     request = HybridArtifactBuildRequest(
         job_id="job_1",
         request_identity="request_1",
@@ -83,7 +85,7 @@ def _build_request(original: bytes = b"%PDF-1.7\n") -> HybridArtifactBuildReques
         model_digests=("sha256:model",),
         configuration_sha256="b" * 64,
         auto_retry_count=0,
-        max_auto_retries=2,
+        max_auto_retries=max_auto_retries,
     )
     return request.model_copy(update={"request_sha256": hybrid_build_request_sha256(request)})
 
@@ -187,6 +189,12 @@ class TimeoutOncePipeline(FakePipeline):
             self.calls += 1
             raise TransientKnowledgeServiceError("timeout")
         return super().build(request)
+
+
+class AlwaysTimeoutPipeline(FakePipeline):
+    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+        self.calls += 1
+        raise TransientKnowledgeServiceError("timeout")
 
 
 class LeaseExpiringPipeline(FakePipeline):
@@ -454,6 +462,62 @@ def test_real_repository_persists_retry_and_recovers_with_next_fence(tmp_path) -
     assert repository.get_build_result("job_1") == completed.artifacts
     terminal = repository.get("job_1")
     assert terminal is not None and terminal.fencing_token == 2
+
+
+@pytest.mark.parametrize("max_auto_retries", [0, 1, 3])
+def test_real_repository_binds_exact_retry_limit_and_exhausts_safely(
+    tmp_path, max_auto_retries: int
+) -> None:
+    original = b"%PDF-1.7\n"
+    request = _build_request(original, max_auto_retries=max_auto_retries)
+    clock = ManualHybridClock(NOW)
+    repository = InMemoryHybridKnowledgeRepository(clock=clock)
+    enqueued = repository.enqueue_artifact_build(
+        HybridKnowledgeJobRequest(
+            job_id=request.job_id,
+            idempotency_key="idempotency_1",
+            request_identity=request.request_identity,
+            request_sha256=request.request_sha256,
+            kind="parse",
+        ),
+        request,
+    )
+    assert enqueued.max_auto_retries == max_auto_retries
+    worker = HybridKnowledgeWorker(
+        lifecycle=repository,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
+        pipeline=AlwaysTimeoutPipeline(),
+        worker_id="worker_1",
+    )
+
+    outcomes: list[HybridWorkerOutcome] = []
+    for attempt in range(max_auto_retries + 1):
+        outcome = worker.run_once()
+        assert outcome is not None
+        outcomes.append(outcome)
+        if attempt < max_auto_retries:
+            assert outcome.state == "retry_scheduled"
+            assert outcome.auto_retry_count == attempt + 1
+            persisted_retry = repository.get(request.job_id)
+            assert persisted_retry is not None
+            assert persisted_retry.state == "RETRY_SCHEDULED"
+            assert persisted_retry.auto_retry_count == attempt + 1
+            assert persisted_retry.max_auto_retries == max_auto_retries
+            clock.advance(seconds=5)
+
+    assert [outcome.state for outcome in outcomes] == [
+        *("retry_scheduled" for _ in range(max_auto_retries)),
+        "failed",
+    ]
+    terminal = repository.get(request.job_id)
+    assert terminal is not None
+    assert terminal.state == "FAILED"
+    assert terminal.auto_retry_count == max_auto_retries
+    assert terminal.max_auto_retries == max_auto_retries
+    assert terminal.failure_code == "PA_HYBRID_WORKER_RETRY_EXHAUSTED"
+    assert terminal.safe_reason == "Private parser service retry limit reached."
+    assert worker.run_once() is None
 
 
 def test_parser_cannot_commit_after_lease_expires_during_call(tmp_path) -> None:
