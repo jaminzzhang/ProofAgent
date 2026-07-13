@@ -779,3 +779,139 @@ def test_cross_instance_reader_never_observes_partial_review_batch(
     assert {review.review_id for review in observed[0].items} == {
         review.review_id for review in reviews
     }
+
+
+@pytest.mark.parametrize(
+    "failure_phase",
+    ["journal_before", "journal_after", "review", "index", "decision", "finalize"],
+)
+def test_review_decision_transaction_rolls_back_every_write_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str,
+) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    review = repository.put(
+        _reconcile(
+            tmp_path,
+            _draft(origin="pdf", authority="national"),
+            _draft(origin="workbook", authority="national"),
+        )
+    )
+    original_write_payload = repository._write_payload
+    original_finalize = repository._finalize_review_transaction_unlocked
+    failed = False
+
+    def fail_phase(path: Path, value: object) -> None:
+        nonlocal failed
+        is_target = {
+            "journal_before": path == repository._review_index_pending_path(review.source_id),
+            "journal_after": path == repository._review_index_pending_path(review.source_id),
+            "review": path == repository._review_path(review.source_id, review.review_id),
+            "index": path == repository._review_index_path(review.source_id),
+            "decision": repository._decisions_root in path.parents,
+            "finalize": False,
+        }[failure_phase]
+        if is_target and not failed:
+            failed = True
+            if failure_phase == "journal_after":
+                original_write_payload(path, value)
+            raise OSError(f"simulated {failure_phase} write failure")
+        original_write_payload(path, value)
+
+    def fail_finalize_once(path: Path) -> None:
+        nonlocal failed
+        if failure_phase == "finalize" and not failed:
+            failed = True
+            raise OSError("simulated finalize write failure")
+        original_finalize(path)
+
+    monkeypatch.setattr(repository, "_write_payload", fail_phase)
+    monkeypatch.setattr(
+        repository,
+        "_finalize_review_transaction_unlocked",
+        fail_finalize_once,
+    )
+    with pytest.raises(OSError, match=failure_phase):
+        repository.resolve(
+            source_id=review.source_id,
+            review_id=review.review_id,
+            expected_review_version=review.review_version,
+            expected_review_identity=review.review_identity,
+            action="approve",
+            actor="reviewer",
+            reason="This approval is fault injected.",
+        )
+    monkeypatch.setattr(repository, "_write_payload", original_write_payload)
+    monkeypatch.setattr(
+        repository,
+        "_finalize_review_transaction_unlocked",
+        original_finalize,
+    )
+
+    assert repository.get(review.source_id, review.review_id) == review
+    assert tuple(repository._decisions_root.rglob("*.json")) == ()
+    rejected = repository.resolve(
+        source_id=review.source_id,
+        review_id=review.review_id,
+        expected_review_version=review.review_version,
+        expected_review_identity=review.review_identity,
+        action="reject",
+        actor="reviewer",
+        reason="Alternative decision after rolled-back approval.",
+    )
+    assert rejected.state == "rejected"
+    assert len(tuple(repository._decisions_root.rglob("*.json"))) == 1
+
+
+def test_interrupted_decision_rollback_is_redone_before_next_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    review = repository.put(
+        _reconcile(
+            tmp_path,
+            _draft(origin="pdf", authority="national"),
+            _draft(origin="workbook", authority="national"),
+        )
+    )
+    original_write_payload = repository._write_payload
+    failed = False
+
+    def fail_decision_once(path: Path, value: object) -> None:
+        nonlocal failed
+        if repository._decisions_root in path.parents and not failed:
+            failed = True
+            raise OSError("simulated decision interruption")
+        original_write_payload(path, value)
+
+    monkeypatch.setattr(repository, "_write_payload", fail_decision_once)
+    monkeypatch.setattr(
+        repository,
+        "_rollback_review_transaction_unlocked",
+        lambda _transaction: (_ for _ in ()).throw(OSError("rollback interrupted")),
+    )
+    with pytest.raises(OSError, match="decision interruption"):
+        repository.resolve(
+            source_id=review.source_id,
+            review_id=review.review_id,
+            expected_review_version=review.review_version,
+            expected_review_identity=review.review_identity,
+            action="approve",
+            actor="reviewer",
+            reason="Approval must be completed by redo recovery.",
+        )
+
+    recovered_repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    recovered = recovered_repository.get(review.source_id, review.review_id)
+    replayed = recovered_repository.get(review.source_id, review.review_id)
+
+    assert recovered is not None and recovered.state == "approved"
+    assert replayed == recovered
+    decision_files = tuple(recovered_repository._decisions_root.rglob("*.json"))
+    assert len(decision_files) == 1
+    decision = workbook_module.InsuranceMetadataReviewDecision.model_validate_json(
+        decision_files[0].read_bytes()
+    )
+    assert decision.action == "approve"

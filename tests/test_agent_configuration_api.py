@@ -81,12 +81,18 @@ def _client(tmp_path: Path) -> TestClient:
 
 
 class _StaticOperatorIdentityProvider:
-    def __init__(self, permissions: set[OperatorPermission]) -> None:
+    def __init__(
+        self,
+        permissions: set[OperatorPermission],
+        *,
+        operator_id: str = "test-operator",
+    ) -> None:
         self._permissions = permissions
+        self._operator_id = operator_id
 
     def current_identity(self) -> OperatorIdentityContext:
         return OperatorIdentityContext(
-            operator_id="test-operator",
+            operator_id=self._operator_id,
             display_name="Test Operator",
             permissions=frozenset(self._permissions),
         )
@@ -95,6 +101,8 @@ class _StaticOperatorIdentityProvider:
 def _client_with_operator_permissions(
     tmp_path: Path,
     permissions: set[OperatorPermission],
+    *,
+    operator_id: str = "test-operator",
 ) -> TestClient:
     app = create_app(
         history_dir=tmp_path / "history",
@@ -103,7 +111,10 @@ def _client_with_operator_permissions(
         published_agents={},
         agent_configuration_dir=tmp_path / "config",
     )
-    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(permissions)
+    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(
+        permissions,
+        operator_id=operator_id,
+    )
     return TestClient(app)
 
 
@@ -3892,6 +3903,92 @@ def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
         json=request_payload,
     )
     assert denied.status_code == 403
+
+
+def test_metadata_workbook_replay_repairs_missing_audit_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    permissions = {
+        OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+        OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+    }
+    creator = _client_with_operator_permissions(tmp_path, permissions)
+    _create_hybrid_index_source(creator)
+    document_id, revision_id = _persist_completed_hybrid_metadata_authority(creator)
+    workbook_bytes = _metadata_workbook_for_revision(document_id, revision_id)
+    request_payload = {
+        "filename": "metadata-workbook.xlsx",
+        "content_type": (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        "content_base64": base64.b64encode(workbook_bytes).decode("ascii"),
+        "document_id": document_id,
+        "revision_id": revision_id,
+    }
+    creator_store = _configuration_store(creator)
+
+    def fail_audit_once(_audit: object) -> None:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "Simulated audit persistence failure.",
+            "Replay the exact import.",
+        )
+
+    monkeypatch.setattr(
+        creator_store,
+        "ensure_configuration_operation",
+        fail_audit_once,
+    )
+    failed = creator.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    assert failed.status_code == 400
+    import_paths = tuple((tmp_path / "config" / "insurance_metadata_imports").glob("*.json"))
+    assert len(import_paths) == 1
+    import_id = import_paths[0].stem
+    import_record = FilesystemInsuranceMetadataReviewRepository(
+        tmp_path / "config"
+    ).get_import_record(import_id)
+    assert import_record is not None
+    assert import_record.created_by == "test-operator"
+    assert tuple((tmp_path / "config" / "configuration_audit").glob("*metadata_import*.json")) == ()
+
+    replayer = _client_with_operator_permissions(
+        tmp_path,
+        permissions,
+        operator_id="replay-operator",
+    )
+    repaired = replayer.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    third = replayer.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+
+    assert repaired.status_code == 200
+    assert third.status_code == 200
+    assert repaired.json()["replayed"] is True
+    assert third.json()["replayed"] is True
+    audit_paths = tuple(
+        (tmp_path / "config" / "configuration_audit").glob("*metadata_import*.json")
+    )
+    assert len(audit_paths) == 1
+    audit_payload = json.loads(audit_paths[0].read_text())
+    assert audit_payload["actor"] == import_record.created_by
+    assert audit_payload["created_at"] == import_record.created_at.isoformat()
+
+    audit_payload["actor"] = "tampered-operator"
+    audit_paths[0].write_text(json.dumps(audit_payload))
+    mismatch = replayer.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    assert mismatch.status_code == 400
+    assert json.loads(audit_paths[0].read_text())["actor"] == "tampered-operator"
 
 
 def test_metadata_workbook_import_uses_only_server_persisted_authority(

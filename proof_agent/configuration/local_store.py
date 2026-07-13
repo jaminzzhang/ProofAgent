@@ -1174,6 +1174,25 @@ class LocalAgentConfigurationStore:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             self._record_configuration_operation_unlocked(audit)
 
+    def ensure_configuration_operation(self, audit: ConfigurationOperationAudit) -> None:
+        """Create one immutable audit record or verify its exact persisted replay."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            path = self._configuration_audit_path(audit.operation_id)
+            if path.exists():
+                try:
+                    current = ConfigurationOperationAudit.model_validate(_read_json(path))
+                except (OSError, json.JSONDecodeError, ValidationError) as exc:
+                    raise _configuration_operation_conflict(
+                        "Configuration operation audit is malformed."
+                    ) from exc
+                if current != audit:
+                    raise _configuration_operation_conflict(
+                        "Configuration operation audit identity already exists with different facts."
+                    )
+                return
+            self._record_configuration_operation_unlocked(audit)
+
     def archive_knowledge_source(
         self,
         *,
@@ -4940,6 +4959,14 @@ def _invalid_configuration_operation_id(operation_id: str) -> ProofAgentError:
         "PA_CONFIG_001",
         f"Configuration operation_id is invalid: {operation_id!r}.",
         "Use a non-empty operation id without path separators, '.' or '..'.",
+    )
+
+
+def _configuration_operation_conflict(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_002",
+        message,
+        "Preserve the original immutable audit record and investigate the conflicting replay.",
     )
 
 

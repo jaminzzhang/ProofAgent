@@ -1517,26 +1517,25 @@ def import_knowledge_metadata_workbook(
         page = repository.list_page(
             source_id,
             limit=100,
-            import_id=import_record.import_id,
+            import_id=persisted.record.import_id,
         )
-        if persisted.created:
-            store.record_configuration_operation(
-                ConfigurationOperationAudit(
-                    operation_id=f"op_metadata_import_{imported.import_id}",
-                    operation=ConfigurationOperation.IMPORTED,
-                    actor=actor,
-                    created_at=import_record.created_at.isoformat(),
-                    summary=f"Imported insurance metadata workbook {imported.import_id}.",
-                    metadata={
-                        "import_id": imported.import_id,
-                        "source_id": source_id,
-                        "document_id": request.document_id,
-                        "revision_id": request.revision_id,
-                        "original_ref_id": imported.original_ref.version_id,
-                        "normalized_ref_id": imported.normalized_ref.version_id,
-                    },
-                )
+        store.ensure_configuration_operation(
+            ConfigurationOperationAudit(
+                operation_id=f"op_metadata_import_{persisted.record.import_id}",
+                operation=ConfigurationOperation.IMPORTED,
+                actor=persisted.record.created_by,
+                created_at=persisted.record.created_at.isoformat(),
+                summary=f"Imported insurance metadata workbook {persisted.record.import_id}.",
+                metadata={
+                    "import_id": persisted.record.import_id,
+                    "source_id": persisted.record.source_id,
+                    "document_id": persisted.record.document_id,
+                    "revision_id": persisted.record.revision_id,
+                    "original_ref_id": persisted.record.original_ref.version_id,
+                    "normalized_ref_id": persisted.record.normalized_ref.version_id,
+                },
             )
+        )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     except (ImmutableArtifactError, WorkbookValidationError) as exc:

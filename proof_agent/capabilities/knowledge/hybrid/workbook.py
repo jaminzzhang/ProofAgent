@@ -340,6 +340,7 @@ class InsuranceMetadataReviewPage(_WorkbookModel):
 
 class WorkbookImportPersistResult(_WorkbookModel):
     created: StrictBool
+    record: WorkbookImportRecord
 
 
 class _InsuranceMetadataReviewIndexEntry(_WorkbookModel):
@@ -383,11 +384,18 @@ class _InsuranceMetadataReviewIndexTransaction(_WorkbookModel):
     index: _InsuranceMetadataReviewIndex
     reviews: tuple[InsuranceMetadataReview, ...] = Field(min_length=1)
     prior_reviews: tuple[InsuranceMetadataReview | None, ...]
+    decision_review_id: NonBlankStr | None = None
+    decision: InsuranceMetadataReviewDecision | None = None
+    prior_decision: InsuranceMetadataReviewDecision | None = None
 
     @model_validator(mode="after")
     def validate_transaction_shape(self) -> "_InsuranceMetadataReviewIndexTransaction":
         if len(self.reviews) != len(self.prior_reviews):
             raise ValueError("metadata review transaction rollback shape is invalid")
+        if (self.decision_review_id is None) != (self.decision is None):
+            raise ValueError("metadata review transaction decision shape is invalid")
+        if self.prior_decision is not None and self.prior_decision != self.decision:
+            raise ValueError("metadata review transaction prior decision is not exact")
         return self
 
 
@@ -771,6 +779,7 @@ class FilesystemInsuranceMetadataReviewRepository:
                 )
                 if current_import != expected_current:
                     raise WorkbookReviewConflictError("workbook import identity already exists")
+            persisted_record = current_import or record
             if current_import is None:
                 self._write_payload(import_path, record.model_dump(mode="json"))
                 created_import = True
@@ -783,7 +792,10 @@ class FilesystemInsuranceMetadataReviewRepository:
                 ):
                     import_path.unlink(missing_ok=True)
                 raise
-            return WorkbookImportPersistResult(created=created_import)
+            return WorkbookImportPersistResult(
+                created=created_import,
+                record=persisted_record,
+            )
 
     def put_many(
         self, reviews: Iterable[InsuranceMetadataReview]
@@ -1001,11 +1013,12 @@ class FilesystemInsuranceMetadataReviewRepository:
             updated = InsuranceMetadataReview.model_validate(
                 {**updated.model_dump(), "review_identity": _review_identity(updated)}
             )
-            self._append_decision(current, decision)
             self._commit_review_transaction_unlocked(
                 source_id,
                 reviews=(updated,),
                 index=self._updated_index(index, (updated,)),
+                decision_review_id=current.review_id,
+                decision=decision,
             )
             return updated
 
@@ -1082,6 +1095,8 @@ class FilesystemInsuranceMetadataReviewRepository:
         *,
         reviews: tuple[InsuranceMetadataReview, ...],
         index: _InsuranceMetadataReviewIndex,
+        decision_review_id: str | None = None,
+        decision: InsuranceMetadataReviewDecision | None = None,
     ) -> None:
         if index.source_id != source_id or any(review.source_id != source_id for review in reviews):
             raise WorkbookValidationError("metadata review transaction source mismatch")
@@ -1089,6 +1104,17 @@ class FilesystemInsuranceMetadataReviewRepository:
         prior_index = self._load_or_rebuild_index_unlocked(source_id)
         if index.generation != prior_index.generation + 1:
             raise WorkbookReviewConflictError("metadata review index generation changed")
+        prior_decision = None
+        if decision_review_id is not None and decision is not None:
+            prior_decision = self._get_decision_unlocked(
+                source_id,
+                decision_review_id,
+                decision,
+            )
+            if prior_decision is not None and prior_decision != decision:
+                raise WorkbookReviewConflictError(
+                    "metadata review decision identity already exists"
+                )
         transaction = _InsuranceMetadataReviewIndexTransaction(
             source_id=source_id,
             prior_index=prior_index,
@@ -1097,15 +1123,26 @@ class FilesystemInsuranceMetadataReviewRepository:
             prior_reviews=tuple(
                 self._get_unlocked(source_id, review.review_id) for review in reviews
             ),
+            decision_review_id=decision_review_id,
+            decision=decision,
+            prior_decision=prior_decision,
         )
         pending_path = self._review_index_pending_path(source_id)
-        self._write_payload(pending_path, transaction.model_dump(mode="json"))
+        try:
+            self._write_payload(pending_path, transaction.model_dump(mode="json"))
+        except Exception:
+            if pending_path.exists():
+                try:
+                    self._rollback_review_transaction_unlocked(transaction)
+                except Exception:
+                    pass
+            raise
         try:
             for review in reviews:
                 self._write(review)
             self._write_payload(self._review_index_path(source_id), index.model_dump(mode="json"))
-            pending_path.unlink()
-            _fsync_path_directory(pending_path.parent)
+            self._write_transaction_decision_unlocked(transaction)
+            self._finalize_review_transaction_unlocked(pending_path)
         except Exception:
             try:
                 self._rollback_review_transaction_unlocked(transaction)
@@ -1139,6 +1176,10 @@ class FilesystemInsuranceMetadataReviewRepository:
             self._review_index_path(source_id),
             transaction.index.model_dump(mode="json"),
         )
+        self._write_transaction_decision_unlocked(transaction)
+        self._finalize_review_transaction_unlocked(pending_path)
+
+    def _finalize_review_transaction_unlocked(self, pending_path: Path) -> None:
         pending_path.unlink()
         _fsync_path_directory(pending_path.parent)
 
@@ -1162,6 +1203,7 @@ class FilesystemInsuranceMetadataReviewRepository:
             self._review_index_path(transaction.source_id),
             transaction.prior_index.model_dump(mode="json"),
         )
+        self._restore_transaction_decision_unlocked(transaction)
         pending_path = self._review_index_pending_path(transaction.source_id)
         pending_path.unlink(missing_ok=True)
         _fsync_path_directory(pending_path.parent)
@@ -1237,25 +1279,71 @@ class FilesystemInsuranceMetadataReviewRepository:
             / f"{identity}.json"
         )
 
-    def _append_decision(
+    def _decision_path(
         self,
-        review: InsuranceMetadataReview,
+        source_id: str,
+        review_id: str,
         decision: InsuranceMetadataReviewDecision,
-    ) -> None:
-        path = (
+    ) -> Path:
+        return (
             self._decisions_root
-            / _safe_identifier(review.source_id, "source_id")
-            / _safe_identifier(review.review_id, "review_id")
+            / _safe_identifier(source_id, "source_id")
+            / _safe_identifier(review_id, "review_id")
             / f"{decision.sequence:08d}-{decision.prior_review_identity}.json"
+        )
+
+    def _get_decision_unlocked(
+        self,
+        source_id: str,
+        review_id: str,
+        decision: InsuranceMetadataReviewDecision,
+    ) -> InsuranceMetadataReviewDecision | None:
+        path = self._decision_path(source_id, review_id, decision)
+        if not path.exists():
+            return None
+        if path.is_symlink() or not path.is_file():
+            raise WorkbookValidationError(
+                "metadata review decision storage entry is not a regular file"
+            )
+        return InsuranceMetadataReviewDecision.model_validate_json(path.read_bytes())
+
+    def _write_transaction_decision_unlocked(
+        self,
+        transaction: _InsuranceMetadataReviewIndexTransaction,
+    ) -> None:
+        if transaction.decision is None or transaction.decision_review_id is None:
+            return
+        path = self._decision_path(
+            transaction.source_id,
+            transaction.decision_review_id,
+            transaction.decision,
         )
         if path.exists():
             current = InsuranceMetadataReviewDecision.model_validate_json(path.read_bytes())
-            if current != decision:
+            if current != transaction.decision:
                 raise WorkbookReviewConflictError(
                     "metadata review decision identity already exists"
                 )
             return
-        self._write_payload(path, decision.model_dump(mode="json"))
+        self._write_payload(path, transaction.decision.model_dump(mode="json"))
+
+    def _restore_transaction_decision_unlocked(
+        self,
+        transaction: _InsuranceMetadataReviewIndexTransaction,
+    ) -> None:
+        if transaction.decision is None or transaction.decision_review_id is None:
+            return
+        path = self._decision_path(
+            transaction.source_id,
+            transaction.decision_review_id,
+            transaction.decision,
+        )
+        if transaction.prior_decision is None:
+            path.unlink(missing_ok=True)
+            if path.parent.exists():
+                _fsync_path_directory(path.parent)
+            return
+        self._write_payload(path, transaction.prior_decision.model_dump(mode="json"))
 
     def _write(self, review: InsuranceMetadataReview) -> None:
         path = self._review_path(review.source_id, review.review_id)
