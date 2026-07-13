@@ -1,0 +1,38 @@
+{
+  "document_id": "doc-table",
+  "revision_id": "rev-table",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "pages": [
+    {
+      "page_number": 12,
+      "width": 612.0,
+      "height": 792.0,
+      "native_text_ratio": 0.92,
+      "blocks": [
+        {
+          "id": "caption-1",
+          "label": "caption",
+          "text": "Table 4: Eligibility limits",
+          "bbox": [40.0, 60.0, 572.0, 82.0],
+          "reading_order": 0,
+          "heading_path": ["Eligibility"]
+        }
+      ],
+      "tables": [
+        {
+          "id": "table-4",
+          "title": "Eligibility limits",
+          "bbox": [40.0, 90.0, 572.0, 280.0],
+          "continuation_of": null,
+          "cells": [
+            {"row": 0, "column": 0, "text": "Plan", "bbox": [40.0, 90.0, 220.0, 130.0]},
+            {"row": 0, "column": 1, "text": "Age", "bbox": [220.0, 90.0, 400.0, 130.0]},
+            {"row": 1, "column": 0, "text": "Standard", "bbox": [40.0, 130.0, 220.0, 170.0]},
+            {"row": 1, "column": 1, "text": "18-60", "bbox": [220.0, 130.0, 400.0, 170.0]}
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}
