@@ -190,7 +190,7 @@ class HybridSearchHit(_PortModel):
     rule_unit_revision_id: BoundedStr
     document_id: BoundedStr
     revision_id: BoundedStr
-    manifest_entry_sha256: Sha256
+    manifest_entry_core_sha256: Sha256
     metadata_revision_digest: Sha256
     visibility_revision_digest: Sha256
     content_sha256: Sha256

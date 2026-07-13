@@ -34,6 +34,9 @@ from proof_agent.contracts.insurance_authorization import InstitutionAuthorizati
 from proof_agent.contracts.insurance_rules import (
     ApprovedInsuranceKnowledgeVisibilityScope,
     ApprovedInsuranceRuleMetadataRevision,
+    InsuranceRuleApplicability,
+    InsuranceRulePrecedence,
+    ScopeDimension,
     TaxonomyCondition,
 )
 from proof_agent.contracts.knowledge_index import RuleUnitManifestEntry
@@ -89,7 +92,7 @@ def _validate_bounded_json(value: object) -> None:
     while pending:
         current, depth = pending.pop()
         nodes += 1
-        if nodes > 200_000 or depth > 64:
+        if nodes > 5_000_000 or depth > 64:
             raise OpenSearchProjectionError("OpenSearch JSON exceeds structural limits")
         if isinstance(current, dict):
             if len(current) > 20_000:
@@ -118,7 +121,7 @@ class HttpxOpenSearchTransport:
         allowed_hosts: tuple[str, ...],
         timeout_seconds: float = 10.0,
         allow_insecure_loopback: bool = False,
-        max_response_bytes: int = 8 * 1024 * 1024,
+        max_response_bytes: int = 384 * 1024 * 1024,
         network_policy: PrivateNetworkPolicy | None = None,
         resolver: PrivateAddressResolver | None = None,
         secret_handle: str | None = None,
@@ -165,7 +168,10 @@ class HttpxOpenSearchTransport:
             or not 0 < float(timeout_seconds) <= 60
         ):
             raise ValueError("OpenSearch timeout must be within 60 seconds")
-        if type(max_response_bytes) is not int or not 1 <= max_response_bytes <= 64 * 1024 * 1024:
+        if (
+            type(max_response_bytes) is not int
+            or not 1 <= max_response_bytes <= 384 * 1024 * 1024
+        ):
             raise ValueError("OpenSearch response limit is invalid")
         base_url = endpoint.rstrip("/")
         self._max_response_bytes = max_response_bytes
@@ -397,6 +403,41 @@ def physical_index_name(source_id: str, generation_id: str) -> str:
 
 
 RULE_UNIT_ANALYZER = "proof_agent_cjk_v1"
+MAX_SEARCH_HIT_SOURCE_BYTES = 360_000
+MAX_SEARCH_SOURCE_BYTES = 360_000_000
+MAX_AUTHORITY_PROJECTION_BYTES = 16_384
+
+
+_FLATTENED_AUTHORITY_FIELDS = frozenset(
+    {
+        "metadata_revision_id",
+        "metadata_revision_digest",
+        "visibility_revision_id",
+        "visibility_revision_digest",
+        "visibility",
+        "institution_mode",
+        "region_mode",
+        "channel_mode",
+        "role_mode",
+        "business_line_mode",
+        "allowed_institutions",
+        "allowed_regions",
+        "allowed_channels",
+        "allowed_roles",
+        "allowed_business_lines",
+        "taxonomy_id",
+        "taxonomy_revision_id",
+        "applicability_predicates",
+        "product_codes",
+        "authority",
+        "authority_tier",
+        "precedence_policy_revision",
+        "precedence_order",
+        "supersedes_rule_unit_revision_ids",
+        "effective_from",
+        "effective_to",
+    }
+)
 
 
 def rule_unit_analysis_settings() -> dict[str, object]:
@@ -442,7 +483,7 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
             "rule_unit_revision_id",
             "structured_artifact_build_identity",
             "index_generation_id",
-            "manifest_entry_sha256",
+            "manifest_entry_core_sha256",
             "metadata_revision_id",
             "metadata_revision_digest",
             "visibility_revision_id",
@@ -493,12 +534,14 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
                 "properties": {
                     "key": dict(keyword),
                     "operator": dict(keyword),
+                    "value_type": dict(keyword),
                     "value_tokens": dict(keyword),
+                    "string_values": dict(keyword),
+                    "integer_values": {"type": "long"},
                     "numeric_values": {"type": "double"},
+                    "boolean_values": {"type": "boolean"},
                 },
             },
-            "approved_metadata": {"type": "object", "enabled": False},
-            "approved_visibility": {"type": "object", "enabled": False},
             "lexical_text": {"type": "text", "analyzer": RULE_UNIT_ANALYZER},
             "content": {"type": "text", "index": False},
             "title": {"type": "text", "analyzer": RULE_UNIT_ANALYZER},
@@ -578,21 +621,31 @@ def _cell_coordinate_tokens(document: ProjectionDocument) -> list[str]:
     ]
 
 
+def _manifest_entry_core_sha256(entry: RuleUnitManifestEntry) -> str:
+    payload = entry.model_dump(mode="json")
+    payload.pop("publication_seq_to", None)
+    return stable_digest(payload)
+
+
 def _authority_projection_fields(
     metadata: ApprovedInsuranceRuleMetadataRevision,
     visibility: ApprovedInsuranceKnowledgeVisibilityScope,
 ) -> dict[str, object]:
-    conditions = tuple(sorted(metadata.applicability.conditions, key=lambda item: item.key))
+    conditions = metadata.applicability.conditions
     if len(conditions) > 256 or sum(len(item.values) for item in conditions) > 1_024:
         raise ValueError("approved applicability exceeds projection limits")
     predicates = [
         {
             "key": condition.key,
             "operator": condition.operator,
+            "value_type": _taxonomy_value_type(condition.values[0]),
             "value_tokens": sorted(_fact_token(value) for value in condition.values),
+            "string_values": [value for value in condition.values if type(value) is str],
+            "integer_values": [value for value in condition.values if type(value) is int],
             "numeric_values": [
-                value for value in condition.values if type(value) in {int, float}
+                value for value in condition.values if type(value) is float
             ],
+            "boolean_values": [value for value in condition.values if type(value) is bool],
         }
         for condition in conditions
     ]
@@ -606,7 +659,6 @@ def _authority_projection_fields(
         }
     )
     metadata_payload = metadata.model_dump(mode="json")
-    visibility_payload = visibility.model_dump(mode="json")
     result: dict[str, object] = {
         "metadata_revision_id": metadata.metadata_revision_id,
         "metadata_revision_digest": stable_digest(metadata_payload),
@@ -621,14 +673,15 @@ def _authority_projection_fields(
         "supersedes_rule_unit_revision_ids": list(
             metadata.supersedes_rule_unit_revision_ids
         ),
-        "approved_metadata": metadata_payload,
-        "approved_visibility": visibility_payload,
         **_visibility_fields(visibility),
     }
     if metadata.effective_from is not None:
         result["effective_from"] = metadata.effective_from.isoformat()
     if metadata.effective_to is not None:
         result["effective_to"] = metadata.effective_to.isoformat()
+    encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+    if len(encoded) > MAX_AUTHORITY_PROJECTION_BYTES:
+        raise ValueError("approved authority exceeds the projection byte limit")
     return result
 
 
@@ -720,7 +773,7 @@ def project_rule_unit_document(
         "rule_unit_revision_id": rule.rule_unit_revision_id,
         "structured_artifact_build_identity": rule.structured_build_id,
         "index_generation_id": generation.generation_id,
-        "manifest_entry_sha256": stable_digest(entry.model_dump(mode="json")),
+        "manifest_entry_core_sha256": _manifest_entry_core_sha256(entry),
         "content_sha256": rule.content_sha256,
         "authority_sha256": rule.authority_sha256,
         "publication_seq_from": entry.publication_seq_from,
@@ -765,26 +818,51 @@ def _taxonomy_value(value: object) -> dict[str, object]:
     raise TypeError("taxonomy values must be exact supported scalar types")
 
 
+def _taxonomy_value_type(value: object) -> str:
+    return str(_taxonomy_value(value)["type"])
+
+
 def _fact_token(value: object) -> str:
     return stable_digest({"fact": _taxonomy_value(value)})
 
 
-_IMMUTABLE_EXCLUDED_FIELDS = frozenset(
+_IMMUTABLE_PROJECTION_FIELDS = frozenset(
     {
-        "manifest_entry_sha256",
+        "projection_id",
+        "source_id",
+        "document_id",
+        "revision_id",
+        "logical_rule_key",
+        "rule_unit_revision_id",
+        "structured_artifact_build_identity",
+        "index_generation_id",
+        "content_sha256",
+        "authority_sha256",
+        "publication_seq_from",
+        "citation_uri",
+        "content",
+        "rule_type",
+        "embedding_sha256",
+        "projection_revision",
+        *_FLATTENED_AUTHORITY_FIELDS,
+    }
+)
+
+_SEARCH_SOURCE_FIELDS = frozenset(
+    {
+        *_IMMUTABLE_PROJECTION_FIELDS,
+        "manifest_entry_core_sha256",
         "publication_seq_to",
         "publication_attempt_id",
         "immutable_projection_sha256",
         "projection_sha256",
-        "dense_vector",
-        "lexical_text",
     }
 )
 
 
 def _immutable_projection_sha256(projected: Mapping[str, object]) -> str:
     return stable_digest(
-        {key: value for key, value in projected.items() if key not in _IMMUTABLE_EXCLUDED_FIELDS}
+        {key: projected[key] for key in _IMMUTABLE_PROJECTION_FIELDS if key in projected}
     )
 
 
@@ -792,7 +870,7 @@ def _mutable_projection_sha256(projected: Mapping[str, object]) -> str:
     return stable_digest(
         {
             "immutable_projection_sha256": projected["immutable_projection_sha256"],
-            "manifest_entry_sha256": projected["manifest_entry_sha256"],
+            "manifest_entry_core_sha256": projected["manifest_entry_core_sha256"],
             "publication_seq_from": projected["publication_seq_from"],
             "publication_seq_to": projected.get("publication_seq_to"),
         }
@@ -923,15 +1001,7 @@ def build_hybrid_query(request: HybridSearchRequest) -> dict[str, object]:
     common_filter = build_common_filter(request)
     return {
         "size": request.rrf_window,
-        "_source": sorted(
-            set(
-                _mapping(
-                    rule_unit_index_mapping(dimension=1)["properties"],
-                    field_name="mapping properties",
-                )
-            )
-            - {"dense_vector", "lexical_text"}
-        ),
+        "_source": sorted(_SEARCH_SOURCE_FIELDS),
         "query": {
             "hybrid": {
                 "pagination_depth": request.lexical_budget,
@@ -973,6 +1043,9 @@ if (ctx.op == 'create') {
   if (ctx._source.immutable_projection_sha256 != params.doc.immutable_projection_sha256) {
     throw new IllegalArgumentException('immutable projection conflict');
   }
+  if (ctx._source.manifest_entry_core_sha256 != params.doc.manifest_entry_core_sha256) {
+    throw new IllegalArgumentException('manifest entry core conflict');
+  }
   boolean oldClosed = ctx._source.containsKey('publication_seq_to');
   boolean newClosed = params.doc.containsKey('publication_seq_to');
   if (oldClosed && (!newClosed || ctx._source.publication_seq_to != params.doc.publication_seq_to)) {
@@ -986,7 +1059,6 @@ if (ctx.op == 'create') {
   } else {
     if (newClosed) {
       ctx._source.publication_seq_to = params.doc.publication_seq_to;
-      ctx._source.manifest_entry_sha256 = params.doc.manifest_entry_sha256;
     }
     ctx._source.projection_sha256 = params.doc.projection_sha256;
     ctx._source.publication_attempt_id = params.doc.publication_attempt_id;
@@ -1181,7 +1253,7 @@ def _bulk_payload(request: ProjectionBulkRequest) -> tuple[bytes, str]:
                     "immutable_projection_sha256"
                 ],
                 "projection_sha256": projected["projection_sha256"],
-                "manifest_entry_sha256": projected["manifest_entry_sha256"],
+                "manifest_entry_core_sha256": projected["manifest_entry_core_sha256"],
                 "publication_seq_from": projected["publication_seq_from"],
                 "publication_seq_to": projected.get("publication_seq_to"),
             }
@@ -1252,20 +1324,19 @@ def _validate_bulk_result(
         version = _exact_integer(update.get("_version"), field_name="bulk item version")
         if sequence_number < 0 or primary_term <= 0 or version <= 0:
             raise OpenSearchProjectionError("OpenSearch bulk item version markers are invalid")
-        shard_state = _validated_shard_state(
+        _validated_shard_state(
             update.get("_shards"), field_name="bulk item shards", allow_zero=True
         )
         markers.append(
             {
                 "_id": expected_id,
                 "_index": expected_index,
-                "result": result,
                 "_seq_no": sequence_number,
                 "_primary_term": primary_term,
                 "_version": version,
-                "_shards": shard_state,
             }
         )
+    markers.sort(key=lambda item: (str(item["_index"]), str(item["_id"])))
     return tuple(markers)
 
 
@@ -1348,70 +1419,161 @@ def _applicability_allows(
     return True
 
 
-_FLATTENED_AUTHORITY_FIELDS = frozenset(
-    {
-        "metadata_revision_id",
-        "metadata_revision_digest",
-        "visibility_revision_id",
-        "visibility_revision_digest",
-        "visibility",
-        "institution_mode",
-        "region_mode",
-        "channel_mode",
-        "role_mode",
-        "business_line_mode",
-        "allowed_institutions",
-        "allowed_regions",
-        "allowed_channels",
-        "allowed_roles",
-        "allowed_business_lines",
-        "taxonomy_id",
-        "taxonomy_revision_id",
-        "applicability_predicates",
-        "product_codes",
-        "authority",
-        "authority_tier",
-        "precedence_policy_revision",
-        "precedence_order",
-        "supersedes_rule_unit_revision_ids",
-        "effective_from",
-        "effective_to",
-        "approved_metadata",
-        "approved_visibility",
+def _typed_condition_values(predicate: Mapping[str, object]) -> tuple[Any, ...]:
+    value_type = _exact_string(predicate.get("value_type"), field_name="value_type")
+    fields = {
+        "string": "string_values",
+        "integer": "integer_values",
+        "number": "numeric_values",
+        "boolean": "boolean_values",
     }
-)
+    if value_type not in fields:
+        raise OpenSearchProjectionError("applicability value type is invalid")
+    values_by_type: dict[str, tuple[object, ...]] = {}
+    for expected_type, field in fields.items():
+        raw_values = predicate.get(field)
+        if not isinstance(raw_values, list):
+            raise OpenSearchProjectionError(f"{field} must be an array")
+        values: list[object] = []
+        for value in raw_values:
+            valid = (
+                (expected_type == "string" and type(value) is str)
+                or (expected_type == "integer" and type(value) is int)
+                or (expected_type == "number" and type(value) is float and math.isfinite(value))
+                or (expected_type == "boolean" and type(value) is bool)
+            )
+            if not valid:
+                raise OpenSearchProjectionError(f"{field} contains an invalid value")
+            values.append(value)
+        values_by_type[expected_type] = tuple(values)
+    if any(values_by_type[item] for item in fields if item != value_type):
+        raise OpenSearchProjectionError("applicability predicate mixes value types")
+    typed_values = values_by_type[value_type]
+    if not typed_values:
+        raise OpenSearchProjectionError("applicability predicate has no typed values")
+    return typed_values
 
 
-def _strict_authority_payloads(
+def _optional_source_date(source: Mapping[str, object], field: str) -> date | None:
+    raw = source.get(field)
+    if raw is None:
+        return None
+    try:
+        return date.fromisoformat(_exact_string(raw, field_name=field, maximum=10))
+    except ValueError as exc:
+        raise OpenSearchProjectionError(f"{field} must be a strict ISO date") from exc
+
+
+def _strict_authority_from_flattened(
     source: Mapping[str, object],
 ) -> tuple[
     ApprovedInsuranceRuleMetadataRevision,
     ApprovedInsuranceKnowledgeVisibilityScope,
     dict[str, object],
 ]:
-    approved_metadata = _mapping(
-        source.get("approved_metadata"), field_name="approved_metadata"
-    )
-    approved_visibility = _mapping(
-        source.get("approved_visibility"), field_name="approved_visibility"
-    )
     try:
-        metadata = ApprovedInsuranceRuleMetadataRevision.model_validate_json(
-            json.dumps(approved_metadata, ensure_ascii=False, separators=(",", ":"))
+        raw_predicates = source.get("applicability_predicates")
+        if not isinstance(raw_predicates, list):
+            raise OpenSearchProjectionError("applicability_predicates must be an array")
+        conditions = tuple(
+            TaxonomyCondition(
+                key=_exact_string(
+                    _mapping(item, field_name="applicability predicate").get("key"),
+                    field_name="applicability key",
+                ),
+                operator=cast(
+                    Any,
+                    _exact_string(
+                        _mapping(item, field_name="applicability predicate").get(
+                            "operator"
+                        ),
+                        field_name="applicability operator",
+                    ),
+                ),
+                values=_typed_condition_values(
+                    _mapping(item, field_name="applicability predicate")
+                ),
+            )
+            for item in raw_predicates
         )
-        visibility = ApprovedInsuranceKnowledgeVisibilityScope.model_validate_json(
-            json.dumps(approved_visibility, ensure_ascii=False, separators=(",", ":"))
+        metadata = ApprovedInsuranceRuleMetadataRevision(
+            metadata_revision_id=_exact_string(
+                source.get("metadata_revision_id"), field_name="metadata_revision_id"
+            ),
+            applicability=InsuranceRuleApplicability(
+                taxonomy_id=_exact_string(source.get("taxonomy_id"), field_name="taxonomy_id"),
+                taxonomy_revision_id=_exact_string(
+                    source.get("taxonomy_revision_id"), field_name="taxonomy_revision_id"
+                ),
+                conditions=conditions,
+            ),
+            effective_from=_optional_source_date(source, "effective_from"),
+            effective_to=_optional_source_date(source, "effective_to"),
+            authority=_exact_string(source.get("authority"), field_name="authority"),
+            precedence=InsuranceRulePrecedence(
+                policy_revision_id=_exact_string(
+                    source.get("precedence_policy_revision"),
+                    field_name="precedence_policy_revision",
+                ),
+                authority_tier=_exact_string(
+                    source.get("authority_tier"), field_name="authority_tier"
+                ),
+                order=_exact_integer(
+                    source.get("precedence_order"), field_name="precedence_order"
+                ),
+            ),
+            supersedes_rule_unit_revision_ids=_string_list(
+                source.get("supersedes_rule_unit_revision_ids"),
+                field_name="supersedes_rule_unit_revision_ids",
+            ),
         )
+        visibility_name = _exact_string(source.get("visibility"), field_name="visibility")
+        visibility_revision = _exact_string(
+            source.get("visibility_revision_id"), field_name="visibility_revision_id"
+        )
+        if visibility_name == "PUBLIC":
+            visibility = ApprovedInsuranceKnowledgeVisibilityScope(
+                visibility="PUBLIC", revision_id=visibility_revision
+            )
+        elif visibility_name == "RESTRICTED":
+            scopes: dict[str, ScopeDimension] = {}
+            for singular, plural in (
+                ("institution", "institutions"),
+                ("region", "regions"),
+                ("channel", "channels"),
+                ("role", "roles"),
+                ("business_line", "business_lines"),
+            ):
+                scopes[plural] = ScopeDimension(
+                    mode=cast(
+                        Any,
+                        _exact_string(
+                            source.get(f"{singular}_mode"),
+                            field_name=f"{singular}_mode",
+                        ),
+                    ),
+                    values=_string_list(
+                        source.get(f"allowed_{plural}"),
+                        field_name=f"allowed_{plural}",
+                    ),
+                )
+            visibility = ApprovedInsuranceKnowledgeVisibilityScope(
+                visibility="RESTRICTED",
+                revision_id=visibility_revision,
+                **scopes,
+            )
+        else:
+            raise OpenSearchProjectionError("visibility is invalid")
         expected = _authority_projection_fields(metadata, visibility)
     except (TypeError, ValueError) as exc:
         raise OpenSearchProjectionError(
-            "search hit approved authority payload is invalid"
+            "search hit flattened authority payload is invalid"
         ) from exc
     for field in _FLATTENED_AUTHORITY_FIELDS:
         if field in expected:
             if field not in source or source[field] != expected[field]:
                 raise OpenSearchProjectionError(
-                    "search hit flattened authority does not match approved payload"
+                    "search hit flattened authority is not canonical"
                 )
         elif field in source:
             raise OpenSearchProjectionError(
@@ -1437,14 +1599,10 @@ def _normalize_search_hits(
     raw_hits = hits_envelope.get("hits")
     if not isinstance(raw_hits, list) or len(raw_hits) > request.rrf_window:
         raise OpenSearchProjectionError("OpenSearch returned an invalid candidate count")
-    allowed_fields = set(
-        _mapping(
-            rule_unit_index_mapping(dimension=1)["properties"],
-            field_name="mapping properties",
-        )
-    )
+    allowed_fields = set(_SEARCH_SOURCE_FIELDS)
     result: list[HybridSearchHit] = []
     seen_rule_units: set[str] = set()
+    aggregate_source_bytes = 0
     for rank, raw_hit in enumerate(raw_hits, start=1):
         hit = _mapping(raw_hit, field_name="search hit")
         fused_score = _finite_score(hit.get("_score"), field_name="fused score")
@@ -1453,6 +1611,15 @@ def _normalize_search_hits(
         source = _mapping(hit.get("_source"), field_name="search hit source")
         if not set(source).issubset(allowed_fields):
             raise OpenSearchProjectionError("search hit contains an unknown projection field")
+        source_bytes = len(
+            json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode()
+        )
+        aggregate_source_bytes += source_bytes
+        if (
+            source_bytes > MAX_SEARCH_HIT_SOURCE_BYTES
+            or aggregate_source_bytes > MAX_SEARCH_SOURCE_BYTES
+        ):
+            raise OpenSearchProjectionError("OpenSearch search source exceeds bounded envelope")
         projection_id = _exact_string(source.get("projection_id"), field_name="projection_id")
         if hit.get("_id") != projection_id:
             raise OpenSearchProjectionError("search hit id does not match its projection")
@@ -1463,8 +1630,9 @@ def _normalize_search_hits(
         )
         if source_id != generation.source_id or generation_id != generation.generation_id:
             raise OpenSearchProjectionError("search hit is outside the exact Source generation")
-        manifest_entry_sha256 = _sha256(
-            source.get("manifest_entry_sha256"), field_name="manifest_entry_sha256"
+        manifest_entry_core_sha256 = _sha256(
+            source.get("manifest_entry_core_sha256"),
+            field_name="manifest_entry_core_sha256",
         )
         sequence_from = _exact_integer(
             source.get("publication_seq_from"), field_name="publication_seq_from"
@@ -1537,8 +1705,8 @@ def _normalize_search_hits(
             )
         except ValueError as exc:
             raise OpenSearchProjectionError("search hit citation or lineage is invalid") from exc
-        if stable_digest(manifest_entry.model_dump(mode="json")) != manifest_entry_sha256:
-            raise OpenSearchProjectionError("search hit manifest entry digest does not match")
+        if _manifest_entry_core_sha256(manifest_entry) != manifest_entry_core_sha256:
+            raise OpenSearchProjectionError("search hit manifest entry core does not match")
         _validate_citation_binding(
             citation_uri,
             source_id=source_id,
@@ -1550,7 +1718,9 @@ def _normalize_search_hits(
         )
         if hashlib.sha256(content.encode()).hexdigest() != content_sha256:
             raise OpenSearchProjectionError("search hit content digest does not match")
-        metadata, visibility, _expected_authority = _strict_authority_payloads(source)
+        metadata, visibility, _expected_authority = _strict_authority_from_flattened(
+            source
+        )
         if metadata.metadata_revision_id != metadata_revision_id:
             raise OpenSearchProjectionError("search hit metadata revision does not match")
         if visibility.revision_id != visibility_revision_id:
@@ -1590,7 +1760,7 @@ def _normalize_search_hits(
                 rule_unit_revision_id=rule_unit_id,
                 document_id=document_id,
                 revision_id=revision_id,
-                manifest_entry_sha256=manifest_entry_sha256,
+                manifest_entry_core_sha256=manifest_entry_core_sha256,
                 metadata_revision_digest=metadata_digest,
                 visibility_revision_digest=visibility_digest,
                 content_sha256=content_sha256,

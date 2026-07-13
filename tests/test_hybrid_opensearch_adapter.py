@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from proof_agent.capabilities.knowledge.hybrid import opensearch as opensearch_module
 from proof_agent.capabilities.knowledge.hybrid.opensearch import (
     build_hybrid_query,
     HttpxOpenSearchTransport,
@@ -50,6 +51,12 @@ from proof_agent.contracts.insurance_rules import TaxonomyCondition
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+
+
+def manifest_entry_core_sha256(entry: RuleUnitManifestEntry) -> str:
+    payload = entry.model_dump(mode="json")
+    payload.pop("publication_seq_to", None)
+    return stable_digest(payload)
 
 
 def index_identity(*, index_uuid: str = "uuid-1") -> SearchIndexIdentity:
@@ -341,6 +348,9 @@ def test_http_transport_allows_only_explicit_insecure_loopback_for_integration()
         allow_insecure_loopback=True,
     )
 
+    assert transport._max_response_bytes >= (  # type: ignore[attr-defined]
+        opensearch_module.MAX_SEARCH_SOURCE_BYTES + 16 * 1024 * 1024
+    )
     transport.close()
 
 
@@ -424,7 +434,7 @@ def test_mapping_uses_typed_authority_acl_applicability_and_one_vector() -> None
     properties = mapping["properties"]
 
     assert properties["rule_unit_revision_id"]["type"] == "keyword"
-    assert properties["manifest_entry_sha256"]["type"] == "keyword"
+    assert properties["manifest_entry_core_sha256"]["type"] == "keyword"
     assert properties["allowed_institutions"]["type"] == "keyword"
     assert properties["publication_seq_from"]["type"] == "long"
     assert properties["effective_from"]["type"] == "date"
@@ -480,8 +490,8 @@ def test_hybrid_query_applies_identical_filters_inside_both_lanes() -> None:
     assert body["search_pipeline"] == rrf_pipeline_name(rank_constant=60)
     assert "dense_vector" not in body["_source"]
     assert "lexical_text" not in body["_source"]
-    assert "approved_metadata" in body["_source"]
-    assert "approved_visibility" in body["_source"]
+    assert "approved_metadata" not in body["_source"]
+    assert "approved_visibility" not in body["_source"]
     serialized_filters = json.dumps(lexical_filter, sort_keys=True)
     assert all(operator in serialized_filters for operator in ("EQ", "IN", "NOT_EQ", "NOT_IN"))
 
@@ -506,8 +516,8 @@ def test_projection_contains_only_approved_query_safe_fields() -> None:
 
     assert projected["source_id"] == "source-1"
     assert projected["index_generation_id"] == "generation-1"
-    assert projected["manifest_entry_sha256"] == stable_digest(
-        projection_document().manifest_entry.model_dump(mode="json")
+    assert projected["manifest_entry_core_sha256"] == manifest_entry_core_sha256(
+        projection_document().manifest_entry
     )
     assert projected["metadata_revision_digest"]
     assert projected["visibility_revision_digest"]
@@ -518,11 +528,13 @@ def test_projection_contains_only_approved_query_safe_fields() -> None:
     assert projected["allowed_institutions"] == ["INST-1"]
     assert projected["effective_from"] == "2026-01-01"
     assert any(
-        predicate["key"] == "insured_age" and predicate["numeric_values"] == [35]
+        predicate["key"] == "insured_age" and predicate["integer_values"] == [35]
         for predicate in projected["applicability_predicates"]
     )
     assert "住院保险金" in projected["lexical_text"]
     assert projected["dense_vector"] == [0.1, 0.2]
+    assert "approved_metadata" not in projected
+    assert "approved_visibility" not in projected
     assert "vendor_payload" not in projected
     assert "metadata_draft" not in projected
 
@@ -551,10 +563,11 @@ def test_bulk_upsert_is_attempt_scoped_and_allows_only_idempotence_or_interval_c
     assert update["scripted_upsert"] is True
     assert update["upsert"] == {}
     assert "immutable_projection_sha256" in update["script"]["source"]
+    assert "manifest entry core conflict" in update["script"]["source"]
     assert "publication_seq_to" in update["script"]["source"]
     assert update["script"]["params"]["doc"]["publication_attempt_id"] == "attempt-1"
     assert "authority_manifest_digests" not in update["script"]["params"]["doc"]
-    assert update["script"]["params"]["doc"]["manifest_entry_sha256"]
+    assert update["script"]["params"]["doc"]["manifest_entry_core_sha256"]
     assert result.accepted_count == 1
     assert result.request is request
     assert result.refresh_checkpoint.startswith("refresh-sha256:")
@@ -599,25 +612,115 @@ def test_bulk_upsert_rejects_backend_item_identity_mismatch() -> None:
 
 
 def test_refresh_checkpoint_binds_exact_projection_state_and_is_idempotent() -> None:
+    base = projection_document()
+    citation = "knowledge://source/source-1/document/document-2/revision/revision-2#page=1"
+    second_rule = base.rule_unit.model_copy(
+        update={
+            "rule_unit_revision_id": "rule-unit-2",
+            "logical_rule_key": "hospital-benefit-2",
+            "document_id": "document-2",
+            "revision_id": "revision-2",
+            "structured_build_id": "build-2",
+            "citation_uri": citation,
+        }
+    )
+    second_entry = base.manifest_entry.model_copy(
+        update={
+            "rule_unit_revision_id": "rule-unit-2",
+            "document_id": "document-2",
+            "revision_id": "revision-2",
+            "structured_build_id": "build-2",
+            "citation_uri": citation,
+        }
+    )
+    second = ProjectionDocument(
+        projection_id="projection-2",
+        rule_unit=second_rule,
+        manifest_entry=second_entry,
+        approved_metadata=base.approved_metadata,
+        projection_revision=base.projection_revision,
+        embedding=base.embedding,
+    )
+
+    class StatefulBulkTransport(RecordingTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.states: dict[str, tuple[str, int, int, int]] = {}
+
+        def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+            if kwargs["path"].endswith("/_bulk"):
+                lines = kwargs["content"].decode().splitlines()
+                items: list[dict[str, object]] = []
+                index = physical_index_name("source-1", "generation-1")
+                for offset in range(0, len(lines), 2):
+                    projection_id = json.loads(lines[offset])["update"]["_id"]
+                    document = json.loads(lines[offset + 1])["script"]["params"]["doc"]
+                    projection_sha256 = document["projection_sha256"]
+                    previous = self.states.get(projection_id)
+                    if previous is None:
+                        sequence = 7 if projection_id == "projection-1" else 8
+                        state = (projection_sha256, sequence, 2, 1)
+                        result, status, shards = "created", 201, (1, 1)
+                    elif previous[0] == projection_sha256:
+                        state = previous
+                        result, status, shards = "noop", 200, (0, 0)
+                    else:
+                        state = (
+                            projection_sha256,
+                            previous[1] + 1,
+                            previous[2],
+                            previous[3] + 1,
+                        )
+                        result, status, shards = "updated", 200, (1, 1)
+                    self.states[projection_id] = state
+                    items.append(
+                        {
+                            "update": {
+                                "status": status,
+                                "_id": projection_id,
+                                "_index": index,
+                                "result": result,
+                                "_seq_no": state[1],
+                                "_primary_term": state[2],
+                                "_version": state[3],
+                                "_shards": {
+                                    "total": shards[0],
+                                    "successful": shards[1],
+                                    "failed": 0,
+                                },
+                            }
+                        }
+                    )
+                self.calls.append(kwargs)
+                return OpenSearchTransportResponse(
+                    status_code=200, body={"errors": False, "items": items}
+                )
+            return super().request(**kwargs)
+
+    transport = StatefulBulkTransport()
+    adapter = OpenSearchHybridIndex(transport=transport)
     baseline = ProjectionBulkRequest(
         identity=index_identity(),
         publication_attempt_id="attempt-1",
         manifest_root_sha256=SHA_A,
-        documents=(projection_document(),),
+        documents=(base, second),
     )
-    identical_retry = baseline.model_copy(update={"publication_attempt_id": "attempt-2"})
+    identical_retry_reordered = ProjectionBulkRequest(
+        identity=index_identity(),
+        publication_attempt_id="attempt-2",
+        manifest_root_sha256=SHA_A,
+        documents=(second, base),
+    )
     closed = baseline.model_copy(
         update={
             "publication_attempt_id": "attempt-3",
-            "documents": (projection_document(publication_seq_to=7),),
+            "documents": (projection_document(publication_seq_to=7), second),
         }
     )
 
-    first = OpenSearchHybridIndex(transport=RecordingTransport()).bulk_upsert(baseline)
-    retry = OpenSearchHybridIndex(transport=RecordingTransport()).bulk_upsert(
-        identical_retry
-    )
-    changed = OpenSearchHybridIndex(transport=RecordingTransport()).bulk_upsert(closed)
+    first = adapter.bulk_upsert(baseline)
+    retry = adapter.bulk_upsert(identical_retry_reordered)
+    changed = adapter.bulk_upsert(closed)
 
     assert first.refresh_checkpoint == retry.refresh_checkpoint
     assert first.refresh_checkpoint != changed.refresh_checkpoint
@@ -675,6 +778,8 @@ def projected_search_hit(
         identity=index_identity(),
         publication_attempt_id="attempt-1",
     )
+    returned_fields = set(build_hybrid_query(search_request())["_source"])
+    source = {key: value for key, value in source.items() if key in returned_fields}
     source.update(updates)
     return {
         "_index": physical_index_name("source-1", "generation-1"),
@@ -696,8 +801,8 @@ def test_search_normalizes_only_bounded_authorized_manifest_matching_hits() -> N
     assert hits[0].index_generation_id == "generation-1"
     assert hits[0].index_uuid == "uuid-1"
     assert hits[0].rule_unit_revision_id == "rule-unit-1"
-    assert hits[0].manifest_entry_sha256 == stable_digest(
-        projection_document().manifest_entry.model_dump(mode="json")
+    assert hits[0].manifest_entry_core_sha256 == manifest_entry_core_sha256(
+        projection_document().manifest_entry
     )
     assert "manifest_root_sha256" not in hits[0].model_dump()
     assert hits[0].citation_uri.endswith("#page=1")
@@ -720,7 +825,7 @@ def test_search_normalizes_only_bounded_authorized_manifest_matching_hits() -> N
     (
         {"source_id": "source-2"},
         {"index_generation_id": "generation-2"},
-        {"manifest_entry_sha256": SHA_B},
+        {"manifest_entry_core_sha256": SHA_B},
         {"metadata_revision_digest": None},
         {"taxonomy_id": "forged-taxonomy"},
         {"taxonomy_revision_id": "forged-taxonomy-revision"},
@@ -840,17 +945,31 @@ def test_new_corpus_root_does_not_change_unchanged_rule_unit_projection() -> Non
         ].decode().splitlines()[1]
     )["script"]["params"]["doc"]
     assert first_doc["projection_sha256"] == second_doc["projection_sha256"]
-    assert first_doc["manifest_entry_sha256"] == second_doc["manifest_entry_sha256"]
+    assert first_doc["manifest_entry_core_sha256"] == second_doc[
+        "manifest_entry_core_sha256"
+    ]
     assert "manifest_root_sha256" not in first_doc | second_doc
     assert first_result.refresh_checkpoint != second_result.refresh_checkpoint
 
 
 def test_historical_sequence_candidate_is_root_agnostic_for_later_authority_gate() -> None:
+    open_document = projection_document()
     document = projection_document(publication_seq_to=7)
+    assert manifest_entry_core_sha256(open_document.manifest_entry) == (
+        manifest_entry_core_sha256(document.manifest_entry)
+    )
     hit = projected_search_hit(document=document)
     transport = RecordingTransport(search_hits=[hit])
     adapter = OpenSearchHybridIndex(transport=transport)
 
+    old_root_hits = adapter.search(
+        search_request().model_copy(
+            update={"source_publication_seq": 1, "manifest_root_sha256": SHA_A}
+        )
+    )
+    assert old_root_hits[0].manifest_entry_core_sha256 == manifest_entry_core_sha256(
+        open_document.manifest_entry
+    )
     assert adapter.search(
         search_request().model_copy(
             update={"source_publication_seq": 7, "manifest_root_sha256": SHA_B}
@@ -895,6 +1014,25 @@ def test_search_rejects_timed_out_response_even_with_hits() -> None:
 
     with pytest.raises(OpenSearchProjectionError, match="timed out"):
         OpenSearchHybridIndex(transport=TimedOutTransport()).search(search_request())
+
+
+def test_search_rejects_per_hit_and_aggregate_source_envelope_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oversized = projected_search_hit()
+    oversized["_source"]["content"] = "x" * (  # type: ignore[index]
+        opensearch_module.MAX_SEARCH_HIT_SOURCE_BYTES + 1
+    )
+    with pytest.raises(OpenSearchProjectionError, match="bounded envelope"):
+        OpenSearchHybridIndex(
+            transport=RecordingTransport(search_hits=[oversized])
+        ).search(search_request())
+
+    monkeypatch.setattr(opensearch_module, "MAX_SEARCH_SOURCE_BYTES", 1)
+    with pytest.raises(OpenSearchProjectionError, match="bounded envelope"):
+        OpenSearchHybridIndex(
+            transport=RecordingTransport(search_hits=[projected_search_hit()])
+        ).search(search_request())
 
 
 def metadata_with_condition(
