@@ -31,7 +31,11 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
 from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
-from proof_agent.contracts.insurance_rules import TaxonomyCondition
+from proof_agent.contracts.insurance_rules import (
+    ApprovedInsuranceKnowledgeVisibilityScope,
+    ApprovedInsuranceRuleMetadataRevision,
+    TaxonomyCondition,
+)
 from proof_agent.contracts.knowledge_index import RuleUnitManifestEntry
 from proof_agent.contracts.knowledge_index import KnowledgeIndexGeneration
 
@@ -392,13 +396,40 @@ def physical_index_name(source_id: str, generation_id: str) -> str:
     return f"pa-knowledge-{source_slug}-{generation_slug}-{suffix}"
 
 
-def rule_unit_index_mapping(*, dimension: int, analyzer: str = "cjk") -> dict[str, object]:
+RULE_UNIT_ANALYZER = "proof_agent_cjk_v1"
+
+
+def rule_unit_analysis_settings() -> dict[str, object]:
+    """Return the exact versioned analysis configuration bound to a generation."""
+
+    return {
+        "analyzer": {
+            RULE_UNIT_ANALYZER: {
+                "type": "custom",
+                "tokenizer": "standard",
+                "char_filter": [],
+                "filter": [
+                    "lowercase",
+                    "cjk_width",
+                    "proof_agent_cjk_bigram_v1",
+                ],
+            }
+        },
+        "filter": {"proof_agent_cjk_bigram_v1": {"type": "cjk_bigram"}},
+        "normalizer": {
+            "proof_agent_keyword_v1": {
+                "type": "custom",
+                "filter": ["lowercase", "asciifolding"],
+            }
+        },
+    }
+
+
+def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
     """Build the pinned Rule Unit mapping without accepting backend-native input."""
 
     if type(dimension) is not int or dimension <= 0 or dimension > 65_535:
         raise ValueError("dimension must be a positive integer no greater than 65535")
-    if type(analyzer) is not str or not analyzer.strip():
-        raise ValueError("analyzer must be a nonblank string")
     keyword = {"type": "keyword", "ignore_above": 512}
     properties: dict[str, dict[str, object]] = {
         name: dict(keyword)
@@ -411,7 +442,7 @@ def rule_unit_index_mapping(*, dimension: int, analyzer: str = "cjk") -> dict[st
             "rule_unit_revision_id",
             "structured_artifact_build_identity",
             "index_generation_id",
-            "authority_manifest_digests",
+            "manifest_entry_sha256",
             "metadata_revision_id",
             "metadata_revision_digest",
             "visibility_revision_id",
@@ -468,12 +499,12 @@ def rule_unit_index_mapping(*, dimension: int, analyzer: str = "cjk") -> dict[st
             },
             "approved_metadata": {"type": "object", "enabled": False},
             "approved_visibility": {"type": "object", "enabled": False},
-            "lexical_text": {"type": "text", "analyzer": analyzer},
+            "lexical_text": {"type": "text", "analyzer": RULE_UNIT_ANALYZER},
             "content": {"type": "text", "index": False},
-            "title": {"type": "text", "analyzer": analyzer},
-            "heading_path": {"type": "text", "analyzer": analyzer},
-            "definitions": {"type": "text", "analyzer": analyzer},
-            "table_context": {"type": "text", "analyzer": analyzer},
+            "title": {"type": "text", "analyzer": RULE_UNIT_ANALYZER},
+            "heading_path": {"type": "text", "analyzer": RULE_UNIT_ANALYZER},
+            "definitions": {"type": "text", "analyzer": RULE_UNIT_ANALYZER},
+            "table_context": {"type": "text", "analyzer": RULE_UNIT_ANALYZER},
             "dense_vector": {
                 "type": "knn_vector",
                 "dimension": dimension,
@@ -488,21 +519,21 @@ def rule_unit_index_mapping(*, dimension: int, analyzer: str = "cjk") -> dict[st
     return {"dynamic": "strict", "properties": properties}
 
 
-def _rule_unit_index_definition(*, dimension: int, analyzer: str) -> dict[str, object]:
+def _rule_unit_index_definition(*, dimension: int) -> dict[str, object]:
     return {
-        "settings": {"index": {"knn": True}},
-        "mappings": rule_unit_index_mapping(dimension=dimension, analyzer=analyzer),
+        "settings": {
+            "index": {"knn": True, "analysis": rule_unit_analysis_settings()}
+        },
+        "mappings": rule_unit_index_mapping(dimension=dimension),
     }
 
 
-def rule_unit_analyzer_sha256(*, analyzer: str = "cjk") -> str:
-    return stable_digest(
-        {"schema": "proof-agent-opensearch-analyzer.v1", "lexical_analyzer": analyzer}
-    )
+def rule_unit_analyzer_sha256() -> str:
+    return stable_digest(rule_unit_analysis_settings())
 
 
-def rule_unit_mapping_sha256(*, dimension: int, analyzer: str = "cjk") -> str:
-    return stable_digest(rule_unit_index_mapping(dimension=dimension, analyzer=analyzer))
+def rule_unit_mapping_sha256(*, dimension: int) -> str:
+    return stable_digest(rule_unit_index_mapping(dimension=dimension))
 
 
 def _bounded_text(value: str, *, field_name: str, maximum: int) -> str:
@@ -513,8 +544,9 @@ def _bounded_text(value: str, *, field_name: str, maximum: int) -> str:
     return value
 
 
-def _visibility_fields(document: ProjectionDocument) -> dict[str, object]:
-    visibility = document.rule_unit.visibility_scope
+def _visibility_fields(
+    visibility: ApprovedInsuranceKnowledgeVisibilityScope,
+) -> dict[str, object]:
     result: dict[str, object] = {
         "visibility": visibility.visibility,
         "visibility_revision_id": visibility.revision_id,
@@ -546,11 +578,64 @@ def _cell_coordinate_tokens(document: ProjectionDocument) -> list[str]:
     ]
 
 
+def _authority_projection_fields(
+    metadata: ApprovedInsuranceRuleMetadataRevision,
+    visibility: ApprovedInsuranceKnowledgeVisibilityScope,
+) -> dict[str, object]:
+    conditions = tuple(sorted(metadata.applicability.conditions, key=lambda item: item.key))
+    if len(conditions) > 256 or sum(len(item.values) for item in conditions) > 1_024:
+        raise ValueError("approved applicability exceeds projection limits")
+    predicates = [
+        {
+            "key": condition.key,
+            "operator": condition.operator,
+            "value_tokens": sorted(_fact_token(value) for value in condition.values),
+            "numeric_values": [
+                value for value in condition.values if type(value) in {int, float}
+            ],
+        }
+        for condition in conditions
+    ]
+    product_codes = sorted(
+        {
+            value
+            for condition in conditions
+            if condition.key in {"product_code", "product_codes"}
+            for value in condition.values
+            if type(value) is str
+        }
+    )
+    metadata_payload = metadata.model_dump(mode="json")
+    visibility_payload = visibility.model_dump(mode="json")
+    result: dict[str, object] = {
+        "metadata_revision_id": metadata.metadata_revision_id,
+        "metadata_revision_digest": stable_digest(metadata_payload),
+        "taxonomy_id": metadata.applicability.taxonomy_id,
+        "taxonomy_revision_id": metadata.applicability.taxonomy_revision_id,
+        "applicability_predicates": predicates,
+        "product_codes": product_codes,
+        "authority": metadata.authority,
+        "authority_tier": metadata.precedence.authority_tier,
+        "precedence_policy_revision": metadata.precedence.policy_revision_id,
+        "precedence_order": metadata.precedence.order,
+        "supersedes_rule_unit_revision_ids": list(
+            metadata.supersedes_rule_unit_revision_ids
+        ),
+        "approved_metadata": metadata_payload,
+        "approved_visibility": visibility_payload,
+        **_visibility_fields(visibility),
+    }
+    if metadata.effective_from is not None:
+        result["effective_from"] = metadata.effective_from.isoformat()
+    if metadata.effective_to is not None:
+        result["effective_to"] = metadata.effective_to.isoformat()
+    return result
+
+
 def project_rule_unit_document(
     document: ProjectionDocument,
     *,
     identity: SearchIndexIdentity,
-    manifest_root_sha256: str,
     publication_attempt_id: str,
 ) -> dict[str, object]:
     """Project one approved Rule Unit without vendor payloads or review drafts."""
@@ -567,11 +652,6 @@ def project_rule_unit_document(
         raise ValueError("projection embedding must match the exact generation dimension")
     if document.projection_revision != generation.search_projection_version:
         raise ValueError("projection revision must match the exact index generation")
-    _bounded_text(manifest_root_sha256, field_name="manifest_root_sha256", maximum=64)
-    if re.fullmatch(r"[0-9a-f]{64}", manifest_root_sha256) is None:
-        raise ValueError("manifest_root_sha256 must be a lowercase SHA-256 digest")
-    if manifest_root_sha256 not in document.authority_manifest_digests:
-        raise ValueError("projection must cover the current authority manifest")
     _bounded_text(publication_attempt_id, field_name="publication_attempt_id", maximum=512)
     _bounded_text(rule.content, field_name="Rule Unit content", maximum=50_000)
     expected_content_sha256 = hashlib.sha256(rule.content.encode()).hexdigest()
@@ -594,29 +674,7 @@ def project_rule_unit_document(
         revision_id=rule.revision_id,
     )
 
-    conditions = tuple(sorted(metadata.applicability.conditions, key=lambda item: item.key))
-    if len(conditions) > 256 or sum(len(item.values) for item in conditions) > 1_024:
-        raise ValueError("approved applicability exceeds projection limits")
-    applicability_predicates = [
-        {
-            "key": condition.key,
-            "operator": condition.operator,
-            "value_tokens": sorted(_fact_token(value) for value in condition.values),
-            "numeric_values": [
-                value for value in condition.values if type(value) in {int, float}
-            ],
-        }
-        for condition in conditions
-    ]
-    product_codes = sorted(
-        {
-            value
-            for condition in conditions
-            if condition.key in {"product_code", "product_codes"}
-            for value in condition.values
-            if type(value) is str
-        }
-    )
+    authority_fields = _authority_projection_fields(metadata, rule.visibility_scope)
     lineage = rule.lineage
     title = lineage.heading_path[-1] if lineage.heading_path else rule.logical_rule_key
     table_context = "\n".join(
@@ -662,9 +720,7 @@ def project_rule_unit_document(
         "rule_unit_revision_id": rule.rule_unit_revision_id,
         "structured_artifact_build_identity": rule.structured_build_id,
         "index_generation_id": generation.generation_id,
-        "authority_manifest_digests": list(document.authority_manifest_digests),
-        "metadata_revision_id": metadata.metadata_revision_id,
-        "metadata_revision_digest": stable_digest(metadata.model_dump(mode="json")),
+        "manifest_entry_sha256": stable_digest(entry.model_dump(mode="json")),
         "content_sha256": rule.content_sha256,
         "authority_sha256": rule.authority_sha256,
         "publication_seq_from": entry.publication_seq_from,
@@ -677,33 +733,16 @@ def project_rule_unit_document(
         "heading_path": list(lineage.heading_path),
         "definitions": list(lineage.definitions),
         "table_context": table_context,
-        "taxonomy_id": metadata.applicability.taxonomy_id,
-        "taxonomy_revision_id": metadata.applicability.taxonomy_revision_id,
-        "applicability_predicates": applicability_predicates,
-        "product_codes": product_codes,
         "rule_type": rule.unit_kind,
-        "authority": metadata.authority,
-        "authority_tier": metadata.precedence.authority_tier,
-        "precedence_policy_revision": metadata.precedence.policy_revision_id,
-        "precedence_order": metadata.precedence.order,
-        "supersedes_rule_unit_revision_ids": list(
-            metadata.supersedes_rule_unit_revision_ids
-        ),
         "lexical_text": lexical_text,
         "dense_vector": list(document.embedding),
         "embedding_sha256": stable_digest({"embedding": list(document.embedding)}),
-        "approved_metadata": approved_metadata_payload,
-        "approved_visibility": approved_visibility_payload,
         "projection_revision": document.projection_revision,
         "publication_attempt_id": publication_attempt_id,
-        **_visibility_fields(document),
+        **authority_fields,
     }
     if entry.publication_seq_to is not None:
         projected["publication_seq_to"] = entry.publication_seq_to
-    if metadata.effective_from is not None:
-        projected["effective_from"] = metadata.effective_from.isoformat()
-    if metadata.effective_to is not None:
-        projected["effective_to"] = metadata.effective_to.isoformat()
     if lineage.table_id is not None:
         projected["table_id"] = lineage.table_id
     if lineage.table_continuation_id is not None:
@@ -732,7 +771,7 @@ def _fact_token(value: object) -> str:
 
 _IMMUTABLE_EXCLUDED_FIELDS = frozenset(
     {
-        "authority_manifest_digests",
+        "manifest_entry_sha256",
         "publication_seq_to",
         "publication_attempt_id",
         "immutable_projection_sha256",
@@ -753,7 +792,7 @@ def _mutable_projection_sha256(projected: Mapping[str, object]) -> str:
     return stable_digest(
         {
             "immutable_projection_sha256": projected["immutable_projection_sha256"],
-            "authority_manifest_digests": projected["authority_manifest_digests"],
+            "manifest_entry_sha256": projected["manifest_entry_sha256"],
             "publication_seq_from": projected["publication_seq_from"],
             "publication_seq_to": projected.get("publication_seq_to"),
         }
@@ -868,7 +907,6 @@ def build_common_filter(request: HybridSearchRequest) -> list[dict[str, object]]
     filters: list[dict[str, object]] = [
         {"term": {"source_id": request.identity.generation.source_id}},
         {"term": {"index_generation_id": request.identity.generation.generation_id}},
-        {"term": {"authority_manifest_digests": request.manifest_root_sha256}},
         {"range": {"publication_seq_from": {"lte": sequence}}},
         _optional_bound_filter("publication_seq_to", "gte", sequence),
         _optional_bound_filter("effective_from", "lte", request.as_of_date.isoformat()),
@@ -935,9 +973,6 @@ if (ctx.op == 'create') {
   if (ctx._source.immutable_projection_sha256 != params.doc.immutable_projection_sha256) {
     throw new IllegalArgumentException('immutable projection conflict');
   }
-  if (!params.doc.authority_manifest_digests.containsAll(ctx._source.authority_manifest_digests)) {
-    throw new IllegalArgumentException('manifest coverage cannot shrink');
-  }
   boolean oldClosed = ctx._source.containsKey('publication_seq_to');
   boolean newClosed = params.doc.containsKey('publication_seq_to');
   if (oldClosed && (!newClosed || ctx._source.publication_seq_to != params.doc.publication_seq_to)) {
@@ -949,8 +984,10 @@ if (ctx.op == 'create') {
   if (ctx._source.projection_sha256 == params.doc.projection_sha256) {
     ctx.op = 'noop';
   } else {
-    ctx._source.authority_manifest_digests = params.doc.authority_manifest_digests;
-    if (newClosed) { ctx._source.publication_seq_to = params.doc.publication_seq_to; }
+    if (newClosed) {
+      ctx._source.publication_seq_to = params.doc.publication_seq_to;
+      ctx._source.manifest_entry_sha256 = params.doc.manifest_entry_sha256;
+    }
     ctx._source.projection_sha256 = params.doc.projection_sha256;
     ctx._source.publication_attempt_id = params.doc.publication_attempt_id;
   }
@@ -1057,6 +1094,11 @@ def _response_index_identity(
     actual_mapping = {key: value for key, value in mappings.items() if key != "_meta"}
     if stable_digest(actual_mapping) != generation.mapping_sha256:
         raise OpenSearchProjectionError("OpenSearch actual mapping digest does not match")
+    actual_analysis = _mapping(
+        index_settings.get("analysis"), field_name="index analysis settings"
+    )
+    if stable_digest(actual_analysis) != generation.analyzer_sha256:
+        raise OpenSearchProjectionError("OpenSearch actual analyzer settings do not match")
     properties = _mapping(actual_mapping.get("properties"), field_name="mapping properties")
     analyzer_fields = (
         "lexical_text",
@@ -1074,32 +1116,75 @@ def _response_index_identity(
         )
         for field in analyzer_fields
     }
-    if len(actual_analyzers) != 1:
-        raise OpenSearchProjectionError("OpenSearch actual analyzers are inconsistent")
-    actual_analyzer = next(iter(actual_analyzers))
-    if rule_unit_analyzer_sha256(analyzer=actual_analyzer) != generation.analyzer_sha256:
-        raise OpenSearchProjectionError("OpenSearch actual analyzer digest does not match")
+    if actual_analyzers != {RULE_UNIT_ANALYZER}:
+        raise OpenSearchProjectionError("OpenSearch mapping analyzer identity does not match")
     return expected
 
 
-def _refresh_checkpoint(response: OpenSearchTransportResponse) -> str:
+def _validated_shard_state(
+    value: object,
+    *,
+    field_name: str,
+    allow_zero: bool,
+) -> dict[str, int]:
+    shards = _mapping(value, field_name=field_name)
+    total = _exact_integer(shards.get("total"), field_name=f"{field_name} total")
+    successful = _exact_integer(
+        shards.get("successful"), field_name=f"{field_name} successful"
+    )
+    failed = _exact_integer(shards.get("failed"), field_name=f"{field_name} failed")
+    minimum = 0 if allow_zero else 1
+    if total < minimum or successful < 0 or failed != 0 or successful != total:
+        raise OpenSearchProjectionError(f"{field_name} are incomplete or invalid")
+    return {"total": total, "successful": successful, "failed": failed}
+
+
+def _refresh_checkpoint(
+    response: OpenSearchTransportResponse,
+    *,
+    identity: SearchIndexIdentity,
+    manifest_root_sha256: str,
+    projection_set_sha256: str,
+    bulk_markers: tuple[Mapping[str, object], ...],
+) -> str:
     if response.status_code != 200:
         raise OpenSearchProjectionError("OpenSearch refresh failed")
-    shards = _mapping(response.body.get("_shards"), field_name="refresh shards")
-    failed = _exact_integer(shards.get("failed"), field_name="refresh failed shard count")
-    if failed != 0:
-        raise OpenSearchProjectionError("OpenSearch refresh reported failed shards")
-    return f"refresh-sha256:{stable_digest(response.body)}"
+    shard_state = _validated_shard_state(
+        response.body.get("_shards"), field_name="refresh shards", allow_zero=False
+    )
+    return "refresh-sha256:" + stable_digest(
+        {
+            "schema": "proof-agent-projection-refresh.v1",
+            "index_uuid": identity.index_uuid,
+            "manifest_root_sha256": manifest_root_sha256,
+            "projection_set_sha256": projection_set_sha256,
+            "bulk_markers": list(bulk_markers),
+            "refresh_shards": shard_state,
+            "refresh_result_sha256": stable_digest(response.body),
+        }
+    )
 
 
-def _bulk_payload(request: ProjectionBulkRequest) -> bytes:
+def _bulk_payload(request: ProjectionBulkRequest) -> tuple[bytes, str]:
     lines: list[str] = []
+    projection_states: list[dict[str, object]] = []
     for document in request.documents:
         projected = project_rule_unit_document(
             document,
             identity=request.identity,
-            manifest_root_sha256=request.manifest_root_sha256,
             publication_attempt_id=request.publication_attempt_id,
+        )
+        projection_states.append(
+            {
+                "projection_id": projected["projection_id"],
+                "immutable_projection_sha256": projected[
+                    "immutable_projection_sha256"
+                ],
+                "projection_sha256": projected["projection_sha256"],
+                "manifest_entry_sha256": projected["manifest_entry_sha256"],
+                "publication_seq_from": projected["publication_seq_from"],
+                "publication_seq_to": projected.get("publication_seq_to"),
+            }
         )
         lines.append(
             json.dumps(
@@ -1123,7 +1208,10 @@ def _bulk_payload(request: ProjectionBulkRequest) -> bytes:
                 separators=(",", ":"),
             )
         )
-    return ("\n".join(lines) + "\n").encode()
+    projection_states.sort(key=lambda item: str(item["projection_id"]))
+    return ("\n".join(lines) + "\n").encode(), stable_digest(
+        {"schema": "proof-agent-projection-set.v1", "documents": projection_states}
+    )
 
 
 def _validate_bulk_result(
@@ -1131,24 +1219,54 @@ def _validate_bulk_result(
     *,
     expected_ids: tuple[str, ...],
     expected_index: str,
-) -> None:
+) -> tuple[Mapping[str, object], ...]:
     if response.status_code != 200 or response.body.get("errors") is not False:
         raise OpenSearchProjectionError("OpenSearch rejected one or more projection writes")
     items = response.body.get("items")
     if not isinstance(items, list) or len(items) != len(expected_ids):
         raise OpenSearchProjectionError("OpenSearch bulk result count does not match the request")
+    markers: list[Mapping[str, object]] = []
     for expected_id, item in zip(expected_ids, items, strict=True):
         update = _mapping(
             _mapping(item, field_name="bulk item").get("update"),
             field_name="bulk update result",
         )
         status = _exact_integer(update.get("status"), field_name="bulk item status")
-        if status not in {200, 201}:
-            raise OpenSearchProjectionError("OpenSearch bulk item did not succeed")
         if update.get("_id") != expected_id or update.get("_index") != expected_index:
             raise OpenSearchProjectionError("OpenSearch bulk item identity does not match")
         if "error" in update:
             raise OpenSearchProjectionError("OpenSearch bulk item contains an error")
+        result = _exact_string(update.get("result"), field_name="bulk item result")
+        if (result == "created" and status != 201) or (
+            result in {"updated", "noop"} and status != 200
+        ):
+            raise OpenSearchProjectionError("OpenSearch bulk item status/result is invalid")
+        if result not in {"created", "updated", "noop"}:
+            raise OpenSearchProjectionError("OpenSearch bulk item result is invalid")
+        sequence_number = _exact_integer(
+            update.get("_seq_no"), field_name="bulk item sequence number"
+        )
+        primary_term = _exact_integer(
+            update.get("_primary_term"), field_name="bulk item primary term"
+        )
+        version = _exact_integer(update.get("_version"), field_name="bulk item version")
+        if sequence_number < 0 or primary_term <= 0 or version <= 0:
+            raise OpenSearchProjectionError("OpenSearch bulk item version markers are invalid")
+        shard_state = _validated_shard_state(
+            update.get("_shards"), field_name="bulk item shards", allow_zero=True
+        )
+        markers.append(
+            {
+                "_id": expected_id,
+                "_index": expected_index,
+                "result": result,
+                "_seq_no": sequence_number,
+                "_primary_term": primary_term,
+                "_version": version,
+                "_shards": shard_state,
+            }
+        )
+    return tuple(markers)
 
 
 def _date_is_effective(source: Mapping[str, object], as_of: date) -> bool:
@@ -1230,6 +1348,78 @@ def _applicability_allows(
     return True
 
 
+_FLATTENED_AUTHORITY_FIELDS = frozenset(
+    {
+        "metadata_revision_id",
+        "metadata_revision_digest",
+        "visibility_revision_id",
+        "visibility_revision_digest",
+        "visibility",
+        "institution_mode",
+        "region_mode",
+        "channel_mode",
+        "role_mode",
+        "business_line_mode",
+        "allowed_institutions",
+        "allowed_regions",
+        "allowed_channels",
+        "allowed_roles",
+        "allowed_business_lines",
+        "taxonomy_id",
+        "taxonomy_revision_id",
+        "applicability_predicates",
+        "product_codes",
+        "authority",
+        "authority_tier",
+        "precedence_policy_revision",
+        "precedence_order",
+        "supersedes_rule_unit_revision_ids",
+        "effective_from",
+        "effective_to",
+        "approved_metadata",
+        "approved_visibility",
+    }
+)
+
+
+def _strict_authority_payloads(
+    source: Mapping[str, object],
+) -> tuple[
+    ApprovedInsuranceRuleMetadataRevision,
+    ApprovedInsuranceKnowledgeVisibilityScope,
+    dict[str, object],
+]:
+    approved_metadata = _mapping(
+        source.get("approved_metadata"), field_name="approved_metadata"
+    )
+    approved_visibility = _mapping(
+        source.get("approved_visibility"), field_name="approved_visibility"
+    )
+    try:
+        metadata = ApprovedInsuranceRuleMetadataRevision.model_validate_json(
+            json.dumps(approved_metadata, ensure_ascii=False, separators=(",", ":"))
+        )
+        visibility = ApprovedInsuranceKnowledgeVisibilityScope.model_validate_json(
+            json.dumps(approved_visibility, ensure_ascii=False, separators=(",", ":"))
+        )
+        expected = _authority_projection_fields(metadata, visibility)
+    except (TypeError, ValueError) as exc:
+        raise OpenSearchProjectionError(
+            "search hit approved authority payload is invalid"
+        ) from exc
+    for field in _FLATTENED_AUTHORITY_FIELDS:
+        if field in expected:
+            if field not in source or source[field] != expected[field]:
+                raise OpenSearchProjectionError(
+                    "search hit flattened authority does not match approved payload"
+                )
+        elif field in source:
+            raise OpenSearchProjectionError(
+                "search hit contains an inapplicable flattened authority field"
+            )
+    return metadata, visibility, expected
+
+
 def _normalize_search_hits(
     response: OpenSearchTransportResponse,
     *,
@@ -1238,9 +1428,11 @@ def _normalize_search_hits(
 ) -> tuple[HybridSearchHit, ...]:
     if response.status_code != 200:
         raise OpenSearchProjectionError("OpenSearch search failed")
-    shards = _mapping(response.body.get("_shards"), field_name="search shards")
-    if _exact_integer(shards.get("failed"), field_name="search failed shard count") != 0:
-        raise OpenSearchProjectionError("OpenSearch search reported failed shards")
+    if response.body.get("timed_out") is not False:
+        raise OpenSearchProjectionError("OpenSearch search timed out or omitted completeness")
+    _validated_shard_state(
+        response.body.get("_shards"), field_name="search shards", allow_zero=False
+    )
     hits_envelope = _mapping(response.body.get("hits"), field_name="search hits")
     raw_hits = hits_envelope.get("hits")
     if not isinstance(raw_hits, list) or len(raw_hits) > request.rrf_window:
@@ -1255,6 +1447,7 @@ def _normalize_search_hits(
     seen_rule_units: set[str] = set()
     for rank, raw_hit in enumerate(raw_hits, start=1):
         hit = _mapping(raw_hit, field_name="search hit")
+        fused_score = _finite_score(hit.get("_score"), field_name="fused score")
         if hit.get("_index") != index_name:
             raise OpenSearchProjectionError("search hit came from an unexpected physical index")
         source = _mapping(hit.get("_source"), field_name="search hit source")
@@ -1270,15 +1463,9 @@ def _normalize_search_hits(
         )
         if source_id != generation.source_id or generation_id != generation.generation_id:
             raise OpenSearchProjectionError("search hit is outside the exact Source generation")
-        manifest_digests = _string_list(
-            source.get("authority_manifest_digests"),
-            field_name="authority_manifest_digests",
+        manifest_entry_sha256 = _sha256(
+            source.get("manifest_entry_sha256"), field_name="manifest_entry_sha256"
         )
-        if any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in manifest_digests):
-            raise OpenSearchProjectionError("authority manifest digests are malformed")
-        if request.manifest_root_sha256 not in manifest_digests:
-            raise OpenSearchProjectionError("search hit manifest digest does not match")
-        manifest_digest = request.manifest_root_sha256
         sequence_from = _exact_integer(
             source.get("publication_seq_from"), field_name="publication_seq_from"
         )
@@ -1293,12 +1480,6 @@ def _normalize_search_hits(
             sequence_to is not None and sequence_to < requested_sequence
         ):
             raise OpenSearchProjectionError("search hit is outside publication membership")
-        if not _date_is_effective(source, request.as_of_date):
-            raise OpenSearchProjectionError("search hit is outside its effective period")
-        if not _is_authorized(source, request.authorization):
-            raise OpenSearchProjectionError("search hit is unauthorized")
-        if not _applicability_allows(source, request.applicability_filters):
-            raise OpenSearchProjectionError("search hit is outside approved applicability")
         immutable_projection_sha256 = _sha256(
             source.get("immutable_projection_sha256"),
             field_name="immutable_projection_sha256",
@@ -1309,7 +1490,11 @@ def _normalize_search_hits(
         _exact_string(
             source.get("publication_attempt_id"), field_name="publication_attempt_id"
         )
-        _exact_string(source.get("projection_revision"), field_name="projection_revision")
+        projection_revision = _exact_string(
+            source.get("projection_revision"), field_name="projection_revision"
+        )
+        if projection_revision != generation.search_projection_version:
+            raise OpenSearchProjectionError("search hit projection revision does not match")
 
         rule_unit_id = _exact_string(
             source.get("rule_unit_revision_id"), field_name="rule_unit_revision_id"
@@ -1337,7 +1522,7 @@ def _normalize_search_hits(
             source.get("citation_uri"), field_name="citation_uri", maximum=512
         )
         try:
-            RuleUnitManifestEntry(
+            manifest_entry = RuleUnitManifestEntry(
                 rule_unit_revision_id=rule_unit_id,
                 document_id=document_id,
                 revision_id=revision_id,
@@ -1352,6 +1537,8 @@ def _normalize_search_hits(
             )
         except ValueError as exc:
             raise OpenSearchProjectionError("search hit citation or lineage is invalid") from exc
+        if stable_digest(manifest_entry.model_dump(mode="json")) != manifest_entry_sha256:
+            raise OpenSearchProjectionError("search hit manifest entry digest does not match")
         _validate_citation_binding(
             citation_uri,
             source_id=source_id,
@@ -1363,29 +1550,30 @@ def _normalize_search_hits(
         )
         if hashlib.sha256(content.encode()).hexdigest() != content_sha256:
             raise OpenSearchProjectionError("search hit content digest does not match")
-        approved_metadata = _mapping(
-            source.get("approved_metadata"), field_name="approved_metadata"
-        )
-        approved_visibility = _mapping(
-            source.get("approved_visibility"), field_name="approved_visibility"
-        )
+        metadata, visibility, _expected_authority = _strict_authority_payloads(source)
+        if metadata.metadata_revision_id != metadata_revision_id:
+            raise OpenSearchProjectionError("search hit metadata revision does not match")
+        if visibility.revision_id != visibility_revision_id:
+            raise OpenSearchProjectionError("search hit visibility revision does not match")
         metadata_digest = _sha256(
             source.get("metadata_revision_digest"), field_name="metadata_revision_digest"
         )
         visibility_digest = _sha256(
             source.get("visibility_revision_digest"), field_name="visibility_revision_digest"
         )
-        if stable_digest(approved_metadata) != metadata_digest:
-            raise OpenSearchProjectionError("search hit metadata digest does not match")
-        if stable_digest(approved_visibility) != visibility_digest:
-            raise OpenSearchProjectionError("search hit visibility digest does not match")
         if stable_digest(
             {
-                "approved_metadata": approved_metadata,
-                "approved_visibility": approved_visibility,
+                "approved_metadata": metadata.model_dump(mode="json"),
+                "approved_visibility": visibility.model_dump(mode="json"),
             }
         ) != authority_sha256:
             raise OpenSearchProjectionError("search hit authority digest does not match")
+        if not _date_is_effective(source, request.as_of_date):
+            raise OpenSearchProjectionError("search hit is outside its effective period")
+        if not _is_authorized(source, request.authorization):
+            raise OpenSearchProjectionError("search hit is unauthorized")
+        if not _applicability_allows(source, request.applicability_filters):
+            raise OpenSearchProjectionError("search hit is outside approved applicability")
         if _immutable_projection_sha256(source) != immutable_projection_sha256:
             raise OpenSearchProjectionError("search hit immutable projection digest does not match")
         if _mutable_projection_sha256(source) != projection_sha256:
@@ -1402,14 +1590,14 @@ def _normalize_search_hits(
                 rule_unit_revision_id=rule_unit_id,
                 document_id=document_id,
                 revision_id=revision_id,
-                authority_manifest_digest=manifest_digest,
+                manifest_entry_sha256=manifest_entry_sha256,
                 metadata_revision_digest=metadata_digest,
                 visibility_revision_digest=visibility_digest,
                 content_sha256=content_sha256,
                 authority_sha256=authority_sha256,
                 citation_uri=citation_uri,
                 content=content,
-                fused_score=_finite_score(hit.get("_score"), field_name="fused score"),
+                fused_score=fused_score,
             )
         )
     return tuple(result)
@@ -1441,17 +1629,15 @@ def rrf_pipeline_name(*, rank_constant: int) -> str:
 class OpenSearchHybridIndex:
     """Deep adapter implementing the provider-neutral HybridSearchIndex seam."""
 
-    def __init__(self, *, transport: OpenSearchTransport, analyzer: str = "cjk") -> None:
+    def __init__(self, *, transport: OpenSearchTransport) -> None:
         self._transport = transport
-        self._analyzer = analyzer
 
     def _validate_generation(self, generation: KnowledgeIndexGeneration) -> None:
         if generation.mapping_sha256 != rule_unit_mapping_sha256(
             dimension=generation.embedding_dimension,
-            analyzer=self._analyzer,
         ):
             raise OpenSearchProjectionError("generation mapping digest does not match actual mapping")
-        if generation.analyzer_sha256 != rule_unit_analyzer_sha256(analyzer=self._analyzer):
+        if generation.analyzer_sha256 != rule_unit_analyzer_sha256():
             raise OpenSearchProjectionError(
                 "generation analyzer digest does not match actual analyzer configuration"
             )
@@ -1491,20 +1677,16 @@ class OpenSearchHybridIndex:
         *,
         rrf_pipeline: str,
         rrf_rank_constant: int,
-        analyzer: str = "cjk",
     ) -> SearchIndexIdentity:
         """Create one exact physical generation and its Source-local RRF pipeline."""
 
         generation = KnowledgeIndexGeneration.model_validate(
             generation.model_dump(mode="python")
         )
-        if analyzer != self._analyzer:
-            raise OpenSearchProjectionError("index analyzer must match the adapter configuration")
         self._validate_generation(generation)
         self._ensure_pipeline(pipeline=rrf_pipeline, rank_constant=rrf_rank_constant)
         definition = _rule_unit_index_definition(
             dimension=generation.embedding_dimension,
-            analyzer=analyzer,
         )
         mappings = _mapping(definition["mappings"], field_name="index mappings")
         mappings["_meta"] = {  # type: ignore[index]
@@ -1564,20 +1746,27 @@ class OpenSearchHybridIndex:
         self.verify_identity(request.identity)
         generation = request.identity.generation
         index_name = physical_index_name(generation.source_id, generation.generation_id)
+        payload, projection_set_sha256 = _bulk_payload(request)
         response = self._transport.request(
             method="POST",
             path=f"/{index_name}/_bulk",
-            content=_bulk_payload(request),
+            content=payload,
             content_type="application/x-ndjson",
         )
-        _validate_bulk_result(
+        bulk_markers = _validate_bulk_result(
             response,
             expected_ids=tuple(item.projection_id for item in request.documents),
             expected_index=index_name,
         )
         refresh = self._transport.request(method="POST", path=f"/{index_name}/_refresh")
-        checkpoint = _refresh_checkpoint(refresh)
         self.verify_identity(request.identity)
+        checkpoint = _refresh_checkpoint(
+            refresh,
+            identity=request.identity,
+            manifest_root_sha256=request.manifest_root_sha256,
+            projection_set_sha256=projection_set_sha256,
+            bulk_markers=bulk_markers,
+        )
         return ProjectionBulkResult(
             request=request,
             accepted_count=len(request.documents),
@@ -1606,6 +1795,10 @@ class OpenSearchHybridIndex:
             query_params={"search_pipeline": pipeline},
         )
         self.verify_identity(request.identity)
+        self._verify_pipeline(
+            pipeline=request.rrf_pipeline,
+            rank_constant=request.rrf_rank_constant,
+        )
         return _normalize_search_hits(
             response,
             request=request,
@@ -1627,6 +1820,7 @@ __all__ = [
     "project_rule_unit_document",
     "rrf_pipeline_body",
     "rrf_pipeline_name",
+    "rule_unit_analysis_settings",
     "rule_unit_analyzer_sha256",
     "rule_unit_index_mapping",
     "rule_unit_mapping_sha256",

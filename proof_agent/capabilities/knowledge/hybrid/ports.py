@@ -84,7 +84,6 @@ class ProjectionDocument(_PortModel):
     rule_unit: InsuranceRuleUnitRevision
     manifest_entry: RuleUnitManifestEntry
     approved_metadata: ApprovedInsuranceRuleMetadataRevision
-    authority_manifest_digests: tuple[Sha256, ...] = Field(min_length=1, max_length=1_000)
     projection_revision: NonBlankStr
     embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
 
@@ -106,8 +105,6 @@ class ProjectionDocument(_PortModel):
         )
         if not expected:
             raise ValueError("projection must bind one exact approved Rule Unit manifest entry")
-        if tuple(sorted(set(self.authority_manifest_digests))) != self.authority_manifest_digests:
-            raise ValueError("authority manifest digests must be sorted and unique")
         return self
 
 
@@ -193,7 +190,7 @@ class HybridSearchHit(_PortModel):
     rule_unit_revision_id: BoundedStr
     document_id: BoundedStr
     revision_id: BoundedStr
-    authority_manifest_digest: Sha256
+    manifest_entry_sha256: Sha256
     metadata_revision_digest: Sha256
     visibility_revision_digest: Sha256
     content_sha256: Sha256

@@ -163,7 +163,6 @@ def projection_document(
                 order=1,
             ),
         ),
-        authority_manifest_digests=("7" * 64,),
         projection_revision="projection.v1",
         embedding=embedding,
     )
@@ -385,7 +384,6 @@ def test_projection_bulk_rejects_bad_dimensions_and_nonfinite_values(
                     rule_unit=rule_unit(),
                     manifest_entry=projection_document().manifest_entry,
                     approved_metadata=projection_document().approved_metadata,
-                    authority_manifest_digests=("7" * 64,),
                     projection_revision="projection.v1",
                     embedding=values,
                 ),

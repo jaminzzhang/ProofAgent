@@ -72,7 +72,6 @@ def _document(
     content: str,
     embedding: tuple[float, float],
     publication_seq_to: int | None = None,
-    manifest_digests: tuple[str, ...] = (SHA_A,),
 ) -> ProjectionDocument:
     visibility = ApprovedInsuranceKnowledgeVisibilityScope(
         visibility="PUBLIC",
@@ -157,7 +156,6 @@ def _document(
                 order=1,
             ),
         ),
-        authority_manifest_digests=manifest_digests,
         projection_revision="rule-unit-search.v1",
         embedding=embedding,
     )
@@ -226,14 +224,12 @@ def test_disposable_opensearch_supports_exact_filtered_hybrid_rrf_and_interval_c
             content="住院保险金符合合同条件时给付。",
             embedding=(1.0, 0.0),
             publication_seq_to=1,
-            manifest_digests=(SHA_A, SHA_B),
         )
         second_with_new_manifest = _document(
             source_id=source_id,
             identifier="second",
             content="门诊责任另行约定。",
             embedding=(0.0, 1.0),
-            manifest_digests=(SHA_A, SHA_B),
         )
         adapter.bulk_upsert(
             ProjectionBulkRequest(
