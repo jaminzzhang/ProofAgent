@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from decimal import Decimal
+from types import MappingProxyType
 
 import pytest
 
@@ -171,6 +172,24 @@ def test_stable_digest_keeps_boolean_and_integer_types_distinct() -> None:
     assert stable_digest({"value": True}) != stable_digest({"value": 1})
 
 
+def test_stable_digest_snapshots_mapping_implementations_without_coercion() -> None:
+    proxied = MappingProxyType(
+        {"nested": MappingProxyType({"产品": "意外险"}), "version": 1}
+    )
+
+    assert stable_digest(proxied) == stable_digest(
+        {"nested": {"产品": "意外险"}, "version": 1}
+    )
+
+
+def test_stable_digest_rejects_mapping_cycles() -> None:
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+
+    with pytest.raises(ValueError, match="must not contain cycles"):
+        stable_digest(cyclic)
+
+
 STRUCTURED_BUILD_CHANGES: dict[str, object] = {
     "source_sha256": SHA_D,
     "parser_adapter": "docling",
@@ -207,6 +226,7 @@ def test_structured_build_field_changes_build_fingerprint(field: str) -> None:
     (
         "ab",
         b"ab",
+        ["sha256:model-a"],
         ("sha256:model-a", "sha256:model-a"),
         ("",),
         (" model",),
@@ -223,7 +243,7 @@ def test_structured_build_rejects_malformed_model_digest_sequences(
         )
 
 
-def test_structured_build_digest_sequence_is_canonical_and_not_scalar_coercion() -> None:
+def test_structured_build_digest_sequence_preserves_attested_order() -> None:
     fields = structured_build_fields()
     first = structured_build_fingerprint(**fields)  # type: ignore[arg-type]
     reversed_digest = structured_build_fingerprint(
@@ -233,9 +253,9 @@ def test_structured_build_digest_sequence_is_canonical_and_not_scalar_coercion()
         }
     )
 
-    with pytest.raises(TypeError, match="exact list or tuple"):
+    with pytest.raises(TypeError, match="exact tuple"):
         structured_build_fingerprint(**{**fields, "model_digests": "ab"})  # type: ignore[arg-type]
-    assert first == reversed_digest
+    assert first != reversed_digest
 
 
 def test_structured_build_rejects_scalar_that_json_would_split_like_a_sequence() -> None:
@@ -244,9 +264,9 @@ def test_structured_build_rejects_scalar_that_json_would_split_like_a_sequence()
         **{**fields, "model_digests": ("a", "b")}  # type: ignore[arg-type]
     )
 
-    with pytest.raises(TypeError, match="exact list or tuple"):
+    with pytest.raises(TypeError, match="exact tuple"):
         structured_build_fingerprint(**{**fields, "model_digests": "ab"})  # type: ignore[arg-type]
-    assert tuple_digest == structured_build_fingerprint(
+    assert tuple_digest != structured_build_fingerprint(
         **{**fields, "model_digests": ("b", "a")}  # type: ignore[arg-type]
     )
 

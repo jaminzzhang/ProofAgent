@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TypeVar, cast
 
@@ -47,14 +47,19 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 def stable_digest(value: Mapping[str, object]) -> str:
-    """Hash an exact JSON-native mapping after recursive canonical validation."""
+    """Snapshot and hash one canonical JSON-compatible mapping."""
 
-    if type(value) is not dict:
-        raise TypeError("canonical JSON root must be an exact dict")
-    _validate_canonical_json(value, depth=0, active_containers=set(), node_count=[0])
+    if not isinstance(value, Mapping):
+        raise TypeError("canonical JSON root must implement Mapping")
+    snapshot = _snapshot_canonical_json(
+        value,
+        depth=0,
+        active_containers=set(),
+        node_count=[0],
+    )
 
     payload = json.dumps(
-        value,
+        snapshot,
         allow_nan=False,
         ensure_ascii=False,
         sort_keys=True,
@@ -68,23 +73,21 @@ def structured_build_fingerprint(
     source_sha256: str,
     parser_adapter: str,
     parser_revision: str,
-    model_digests: Sequence[str],
+    model_digests: tuple[str, ...],
     canonical_schema_version: str,
     configuration_sha256: str,
 ) -> str:
     """Fingerprint only fields that determine one structured derivative build."""
 
-    raw_model_digests = _bounded_sequence(
+    raw_model_digests = _bounded_tuple(
         model_digests,
         field_name="model_digests",
         minimum=0,
         maximum=_MAX_MODEL_DIGESTS,
     )
     canonical_model_digests = tuple(
-        sorted(
-            _canonical_nonblank_string(item, field_name="model_digests item")
-            for item in raw_model_digests
-        )
+        _canonical_nonblank_string(item, field_name="model_digests item")
+        for item in raw_model_digests
     )
     if len(canonical_model_digests) != len(set(canonical_model_digests)):
         raise ValueError("model_digests must contain unique values")
@@ -185,11 +188,11 @@ def retrieval_profile_revision_fingerprint(
     query_expansion_revision: str | None,
     fusion_revision: str | None,
     context_expansion_revision: str | None,
-    enabled_degradations: Sequence[PrevalidatedRetrievalDegradation],
+    enabled_degradations: tuple[PrevalidatedRetrievalDegradation, ...],
 ) -> str:
     """Fingerprint immutable query-time retrieval behavior without index fields."""
 
-    raw_degradations = _bounded_sequence(
+    raw_degradations = _bounded_tuple(
         enabled_degradations,
         field_name="enabled_degradations",
         minimum=0,
@@ -252,11 +255,11 @@ def manifest_shard_fingerprint(
     source_id: str,
     generation_id: str,
     document_id: str,
-    entries: Sequence[RuleUnitManifestEntry],
+    entries: tuple[RuleUnitManifestEntry, ...],
 ) -> str:
     """Fingerprint one canonical, content-addressed Rule Unit manifest shard."""
 
-    raw_entries = _bounded_sequence(
+    raw_entries = _bounded_tuple(
         entries,
         field_name="entries",
         minimum=1,
@@ -304,13 +307,13 @@ def manifest_root_fingerprint(
     source_snapshot_id: str,
     source_publication_seq: int,
     generation_id: str,
-    shards: Sequence[RuleUnitManifestShardRef],
+    shards: tuple[RuleUnitManifestShardRef, ...],
     document_count: int,
     rule_unit_count: int,
 ) -> str:
     """Fingerprint one publication manifest root without creation metadata."""
 
-    raw_shards = _bounded_sequence(
+    raw_shards = _bounded_tuple(
         shards,
         field_name="shards",
         minimum=1,
@@ -371,7 +374,7 @@ def projection_attestation_fingerprint(
     refresh_checkpoint: str,
     manifest_root_sha256: str,
     mapping_sha256: str,
-    covered_publication_sequences: Sequence[int],
+    covered_publication_sequences: tuple[int, ...],
     parent_attestation_sha256: str | None,
     projection_sha256: str,
     validated_document_count: int,
@@ -379,7 +382,7 @@ def projection_attestation_fingerprint(
 ) -> str:
     """Fingerprint one exact index-projection proof and its chain position."""
 
-    raw_sequences = _bounded_sequence(
+    raw_sequences = _bounded_tuple(
         covered_publication_sequences,
         field_name="covered_publication_sequences",
         minimum=1,
@@ -433,13 +436,13 @@ def projection_attestation_fingerprint(
     return digest
 
 
-def _validate_canonical_json(
+def _snapshot_canonical_json(
     value: object,
     *,
     depth: int,
     active_containers: set[int],
     node_count: list[int],
-) -> None:
+) -> object:
     node_count[0] += 1
     if node_count[0] > _MAX_CANONICAL_JSON_NODES:
         raise ValueError("canonical JSON exceeds the node limit")
@@ -448,18 +451,19 @@ def _validate_canonical_json(
 
     value_type = type(value)
     if value is None or value_type in {str, bool}:
-        return
+        return value
     if value_type is int:
         integer = cast(int, value)
         if not _MIN_CANONICAL_INTEGER <= integer <= _MAX_POSITIVE_INTEGER:
             raise ValueError("canonical JSON integer exceeds the signed 64-bit limit")
-        return
+        return integer
     if value_type is float:
         floating = cast(float, value)
         if not math.isfinite(floating):
             raise ValueError("canonical JSON floats must be finite")
-        return
-    if value_type not in {dict, list}:
+        return floating
+    is_mapping = isinstance(value, Mapping)
+    if not is_mapping and value_type is not list:
         raise TypeError("canonical JSON accepts only exact JSON-native value types")
 
     identity = id(value)
@@ -467,41 +471,46 @@ def _validate_canonical_json(
         raise ValueError("canonical JSON must not contain cycles")
     active_containers.add(identity)
     try:
-        if value_type is dict:
-            mapping = cast(dict[object, object], value)
+        if is_mapping:
+            mapping = cast(Mapping[object, object], value)
+            snapshot: dict[str, object] = {}
             for key, item in mapping.items():
                 if type(key) is not str:
                     raise TypeError("canonical JSON object keys must be exact strings")
-                _validate_canonical_json(
+                if key in snapshot:
+                    raise ValueError("canonical JSON mapping yielded a duplicate key")
+                snapshot[key] = _snapshot_canonical_json(
                     item,
                     depth=depth + 1,
                     active_containers=active_containers,
                     node_count=node_count,
                 )
+            return snapshot
         else:
             array = cast(list[object], value)
-            for item in array:
-                _validate_canonical_json(
+            return [
+                _snapshot_canonical_json(
                     item,
                     depth=depth + 1,
                     active_containers=active_containers,
                     node_count=node_count,
                 )
+                for item in array
+            ]
     finally:
         active_containers.remove(identity)
 
 
-def _bounded_sequence(
+def _bounded_tuple(
     value: object,
     *,
     field_name: str,
     minimum: int,
     maximum: int,
 ) -> tuple[object, ...]:
-    if type(value) not in {list, tuple}:
-        raise TypeError(f"{field_name} must be an exact list or tuple")
-    sequence = cast(list[object] | tuple[object, ...], value)
-    result: tuple[object, ...] = tuple(sequence)
+    if type(value) is not tuple:
+        raise TypeError(f"{field_name} must be an exact tuple")
+    result = cast(tuple[object, ...], value)
     if not minimum <= len(result) <= maximum:
         raise ValueError(f"{field_name} length is outside the allowed bounds")
     return result
