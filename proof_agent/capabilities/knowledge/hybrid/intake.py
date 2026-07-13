@@ -107,7 +107,14 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
     try:
         _reject_polyglot_payload(snapshot)
         revision_boundaries = _validate_terminal_pdf_region(snapshot)
-        _validate_bounded_structural_streams(snapshot, revision_boundaries=revision_boundaries)
+        authoritative_offsets = _validated_xref_object_offsets(
+            snapshot, revision_boundaries=revision_boundaries
+        )
+        _validate_bounded_structural_streams(
+            snapshot,
+            revision_boundaries=revision_boundaries,
+            authoritative_object_offsets=authoritative_offsets,
+        )
         snapshot.seek(0)
         reader = PdfReader(snapshot, strict=True)
         if reader.is_encrypted:
@@ -311,7 +318,7 @@ def _validate_bounded_page_content(page: Any) -> bool:
 
 
 def _charge_bounded_content_stream(stream: Any, remaining: int) -> tuple[int, bytes]:
-    from pypdf.generic import ArrayObject, IndirectObject, NameObject, StreamObject
+    from pypdf.generic import ArrayObject, IndirectObject, NameObject, NullObject, StreamObject
 
     if not isinstance(stream, StreamObject):
         raise _hybrid_error(
@@ -337,6 +344,8 @@ def _charge_bounded_content_stream(stream: Any, remaining: int) -> tuple[int, by
             parms = parm_values[index] if index < len(parm_values) else None
             if isinstance(parms, IndirectObject):
                 parms = parms.get_object()
+            if isinstance(parms, NullObject):
+                parms = None
             decoded = _decode_bounded_standard_filter(
                 decoded,
                 str(filter_value),
@@ -819,12 +828,17 @@ def _reject_polyglot_payload(source: IO[bytes]) -> None:
 
 
 def _validate_bounded_structural_streams(
-    source: IO[bytes], *, revision_boundaries: tuple[int, ...] = ()
+    source: IO[bytes],
+    *,
+    revision_boundaries: tuple[int, ...] = (),
+    authoritative_object_offsets: tuple[int, ...] = (),
 ) -> None:
     source.seek(0)
     raw = source.read()
     simple_objects = _collect_simple_indirect_pdf_values(
-        raw, revision_boundaries=revision_boundaries
+        raw,
+        revision_boundaries=revision_boundaries,
+        authoritative_object_offsets=authoritative_object_offsets,
     )
     position = 0
     token_count = 0
@@ -877,7 +891,7 @@ def _validate_bounded_structural_streams(
                 raise _hybrid_error(
                     "PA_HYBRID_INTAKE_006", "Hybrid PDF structural stream is truncated."
                 )
-            structural_type = _top_dictionary_name(completed_dictionary, b"/Type")
+            structural_type = _top_dictionary_name(completed_dictionary, b"/Type", simple_objects)
             if structural_type in {b"/ObjStm", b"/XRef"}:
                 structural_count += 1
                 if structural_count > _MAX_STRUCTURAL_STREAM_CANDIDATES:
@@ -956,7 +970,9 @@ def _collect_simple_indirect_pdf_values(
     raw: bytes,
     *,
     revision_boundaries: tuple[int, ...] = (),
+    authoritative_object_offsets: tuple[int, ...] = (),
 ) -> dict[tuple[int, int], tuple[bytes, ...]]:
+    authoritative_values = _simple_indirect_values_at_offsets(raw, authoritative_object_offsets)
     values: dict[tuple[int, int], tuple[bytes, ...]] = {}
     seen_identities: set[tuple[int, int]] = set()
     last_identity_revision: dict[tuple[int, int], int] = {}
@@ -1031,7 +1047,9 @@ def _collect_simple_indirect_pdf_values(
                 raise _hybrid_error(
                     "PA_HYBRID_INTAKE_006", "Hybrid PDF stream dictionary is invalid."
                 )
-            length = _structural_dictionary_length(completed_dictionary, values)
+            resolvable_values = dict(values)
+            resolvable_values.update(authoritative_values)
+            length = _structural_dictionary_length(completed_dictionary, resolvable_values)
             data_start = _raw_stream_data_start(raw, end)
             position = data_start + length
             if position > len(raw):
@@ -1064,6 +1082,50 @@ def _collect_simple_indirect_pdf_values(
         recent.append(token)
         if len(recent) > 3:
             del recent[0]
+    return values
+
+
+def _simple_indirect_values_at_offsets(
+    raw: bytes, offsets: tuple[int, ...]
+) -> dict[tuple[int, int], tuple[bytes, ...]]:
+    values: dict[tuple[int, int], tuple[bytes, ...]] = {}
+    for offset in sorted(set(offsets)):
+        position = offset
+        header: list[bytes] = []
+        for _ in range(3):
+            result = _next_raw_pdf_token(raw, position)
+            if result is None:
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006", "Hybrid PDF xref object offset is invalid."
+                )
+            token, _start, position = result
+            header.append(token)
+        if not (header[0].isdigit() and header[1].isdigit() and header[2] == b"obj"):
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref object offset is invalid.")
+        identity = (int(header[0]), int(header[1]))
+        object_tokens: list[bytes] = []
+        for _ in range(_MAX_SIMPLE_INDIRECT_VALUE_TOKENS + 1):
+            result = _next_raw_pdf_token(raw, position)
+            if result is None:
+                break
+            token, _start, position = result
+            if token in {b"<<", b"stream"}:
+                break
+            if token == b"endobj":
+                if _is_simple_indirect_value(object_tokens):
+                    if identity not in values and len(values) >= _MAX_SIMPLE_INDIRECT_OBJECTS:
+                        raise _hybrid_error(
+                            "PA_HYBRID_INTAKE_006",
+                            "Hybrid PDF simple indirect object count exceeds safety limits.",
+                        )
+                    values[identity] = tuple(object_tokens)
+                break
+            if len(object_tokens) >= _MAX_SIMPLE_INDIRECT_VALUE_TOKENS:
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006",
+                    "Hybrid PDF simple indirect object exceeds safety limits.",
+                )
+            object_tokens.append(token)
     return values
 
 
@@ -1113,9 +1175,23 @@ def _top_dictionary_value(tokens: list[tuple[bytes, int]], key: bytes) -> tuple[
     return None
 
 
-def _top_dictionary_name(tokens: list[tuple[bytes, int]], key: bytes) -> bytes | None:
+def _top_dictionary_name(
+    tokens: list[tuple[bytes, int]],
+    key: bytes,
+    simple_objects: dict[tuple[int, int], tuple[bytes, ...]],
+) -> bytes | None:
     value = _top_dictionary_value(tokens, key)
-    return _normalize_pdf_name(value[0]) if value and value[0].startswith(b"/") else None
+    if value and len(value) == 3 and value[0].isdigit() and value[1].isdigit() and value[2] == b"R":
+        value = simple_objects.get((int(value[0]), int(value[1])))
+        if value is None:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF structural Type cannot be resolved safely."
+            )
+    if value is None:
+        return None
+    if len(value) != 1 or not value[0].startswith(b"/"):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF structural Type is invalid.")
+    return _normalize_pdf_name(value[0])
 
 
 def _normalize_pdf_name(token: bytes) -> bytes:
@@ -1242,6 +1318,176 @@ def _validate_terminal_pdf_region(source: IO[bytes]) -> tuple[int, ...]:
             raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF revision chain is invalid.")
         current_xref_offset = previous_xref_offset
         current_startxref_offset = previous_startxref_offset
+
+
+def _validated_xref_object_offsets(
+    source: IO[bytes], *, revision_boundaries: tuple[int, ...]
+) -> tuple[int, ...]:
+    source.seek(0, os.SEEK_END)
+    size = source.tell()
+    xref_offsets: list[int] = []
+    for revision_end in (*revision_boundaries, size):
+        startxref_offset = _last_marker_offset(source, b"startxref", before=revision_end)
+        if startxref_offset is None:
+            continue
+        source.seek(startxref_offset)
+        terminal_region = source.read(revision_end - startxref_offset)
+        match = _PDF_TERMINAL_REGION.fullmatch(terminal_region)
+        if match is None:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF revision boundary is invalid.")
+        xref_offsets.append(int(match.group("offset")))
+    source.seek(0)
+    raw = source.read()
+    object_offsets: set[int] = set()
+    for xref_offset in xref_offsets:
+        if raw.startswith(b"xref", xref_offset):
+            object_offsets.update(_classic_xref_object_offsets(raw, xref_offset))
+        else:
+            object_offsets.update(_xref_stream_object_offsets(raw, xref_offset))
+        if len(object_offsets) > _MAX_INDIRECT_OBJECTS:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF xref object count exceeds safety limits."
+            )
+    return tuple(sorted(object_offsets))
+
+
+def _classic_xref_object_offsets(raw: bytes, xref_offset: int) -> tuple[int, ...]:
+    position = xref_offset
+    first = _next_raw_pdf_token(raw, position)
+    if first is None or first[0] != b"xref":
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref table is invalid.")
+    position = first[2]
+    offsets: list[int] = []
+    entry_count = 0
+    while True:
+        subsection = _next_raw_pdf_token(raw, position)
+        if subsection is None:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref table is truncated.")
+        start_token, _start, position = subsection
+        if start_token == b"trailer":
+            return tuple(offsets)
+        count_result = _next_raw_pdf_token(raw, position)
+        if count_result is None or not start_token.isdigit() or not count_result[0].isdigit():
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref table is invalid.")
+        count = int(count_result[0])
+        position = count_result[2]
+        if count > _MAX_INDIRECT_OBJECTS - entry_count:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF xref object count exceeds safety limits."
+            )
+        entry_count += count
+        for _ in range(count):
+            fields: list[bytes] = []
+            for _field in range(3):
+                result = _next_raw_pdf_token(raw, position)
+                if result is None:
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006", "Hybrid PDF xref table is truncated."
+                    )
+                fields.append(result[0])
+                position = result[2]
+            if not (fields[0].isdigit() and fields[1].isdigit() and fields[2] in {b"n", b"f"}):
+                raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref entry is invalid.")
+            if fields[2] == b"n":
+                offset = int(fields[0])
+                if offset <= 0 or offset >= len(raw):
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006", "Hybrid PDF xref object offset is invalid."
+                    )
+                offsets.append(offset)
+
+
+def _xref_stream_object_offsets(raw: bytes, xref_offset: int) -> tuple[int, ...]:
+    position = xref_offset
+    for expected in (None, None, b"obj"):
+        result = _next_raw_pdf_token(raw, position)
+        if result is None or (expected is not None and result[0] != expected):
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref stream is invalid.")
+        if expected is None and not result[0].isdigit():
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref stream is invalid.")
+        position = result[2]
+    dictionary_tokens: list[tuple[bytes, int]] = []
+    dictionary_start: int | None = None
+    depth = 0
+    while True:
+        result = _next_raw_pdf_token(raw, position)
+        if result is None:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref stream is truncated.")
+        token, start, position = result
+        if token == b"<<":
+            if depth == 0:
+                dictionary_start = start
+            _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, position)
+            dictionary_tokens.append((token, depth))
+            depth += 1
+        elif token == b">>" and depth > 0:
+            depth -= 1
+            _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, position)
+            dictionary_tokens.append((token, depth))
+        elif depth > 0:
+            _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, position)
+            dictionary_tokens.append((token, depth))
+        elif token == b"stream" and dictionary_tokens:
+            break
+        else:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref stream is invalid.")
+    length = _structural_dictionary_length(dictionary_tokens, {})
+    data_start = _raw_stream_data_start(raw, position)
+    data_end = data_start + length
+    if data_end > len(raw):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref stream is truncated.")
+    decoded = raw[data_start:data_end]
+    for filter_name in _structural_dictionary_filters(dictionary_tokens, {}):
+        decoded = _decode_bounded_standard_filter(
+            decoded, filter_name, None, _MAX_STRUCTURAL_STREAM_DECODED_BYTES
+        )
+    widths = _top_dictionary_integer_array(dictionary_tokens, b"/W")
+    if len(widths) != 3 or sum(widths) <= 0:
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref widths are invalid.")
+    index = _top_dictionary_integer_array(dictionary_tokens, b"/Index")
+    if not index:
+        size_value = _top_dictionary_value(dictionary_tokens, b"/Size")
+        if size_value is None or len(size_value) != 1 or not size_value[0].isdigit():
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref size is invalid.")
+        index = (0, int(size_value[0]))
+    if len(index) % 2 != 0:
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref index is invalid.")
+    total_entries = sum(index[cursor + 1] for cursor in range(0, len(index), 2))
+    if total_entries > _MAX_INDIRECT_OBJECTS:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006", "Hybrid PDF xref object count exceeds safety limits."
+        )
+    entry_width = sum(widths)
+    if len(decoded) < total_entries * entry_width:
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref stream is truncated.")
+    offsets: list[int] = []
+    data_position = 0
+    for cursor in range(0, len(index), 2):
+        for _object_id in range(index[cursor], index[cursor] + index[cursor + 1]):
+            fields: list[int] = []
+            for field_index, width in enumerate(widths):
+                field = decoded[data_position : data_position + width]
+                data_position += width
+                fields.append(
+                    (1 if field_index == 0 else 0) if width == 0 else int.from_bytes(field)
+                )
+            if fields[0] == 1:
+                if fields[1] <= 0 or fields[1] >= len(raw):
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006", "Hybrid PDF xref object offset is invalid."
+                    )
+                offsets.append(fields[1])
+    return tuple(offsets)
+
+
+def _top_dictionary_integer_array(tokens: list[tuple[bytes, int]], key: bytes) -> tuple[int, ...]:
+    value = _top_dictionary_value(tokens, key)
+    if value is None:
+        return ()
+    integers = value[1:-1] if len(value) >= 2 and value[0] == b"[" and value[-1] == b"]" else ()
+    if not integers or any(not token.isdigit() for token in integers):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref array is invalid.")
+    return tuple(int(token) for token in integers)
 
 
 def _last_marker_offset(

@@ -141,6 +141,8 @@ def _write_standard_filtered_content_pdf(
     path: Path,
     filters: tuple[str, ...],
     content_bytes: bytes = b"% benign standard-filter content\n",
+    *,
+    null_decode_parms: bool = False,
 ) -> Path:
     pypdf, generic = _modules()
     encoded = content_bytes
@@ -165,6 +167,10 @@ def _write_standard_filtered_content_pdf(
         if len(filters) > 1
         else generic.NameObject(filters[0])
     )
+    if null_decode_parms:
+        stream[generic.NameObject("/DecodeParms")] = generic.ArrayObject(
+            [generic.NullObject() for _ in filters]
+        )
     page[generic.NameObject("/Contents")] = writer._add_object(stream)
     page[generic.NameObject("/Resources")] = generic.DictionaryObject()
     with path.open("wb") as handle:
@@ -203,6 +209,7 @@ def _write_object_stream_pdf(
     indirect_filter_and_length: bool = False,
     escaped_filter_name: bool = False,
     escaped_object_stream_type: bool = False,
+    indirect_object_stream_type: bool = False,
     escaped_xref_type: bool = False,
     xref_padding_bytes: int = 0,
 ) -> Path:
@@ -215,11 +222,15 @@ def _write_object_stream_pdf(
         offsets[object_id] = sum(len(part) for part in parts)
         parts.append(f"{object_id} 0 obj\n".encode("ascii") + body + b"\nendobj\n")
 
+    type_value = (
+        b"9 0 R"
+        if indirect_object_stream_type
+        else (b"/Obj#53tm" if escaped_object_stream_type else b"/ObjStm")
+    )
     dictionary_prefix = (
-        b"<< /DecodeParms << /Predictor 1 >> /Type "
-        + (b"/Obj#53tm" if escaped_object_stream_type else b"/ObjStm")
+        b"<< /DecodeParms << /Predictor 1 >> /Type " + type_value
         if nested_dictionary_before_type
-        else b"<< /Type " + (b"/Obj#53tm" if escaped_object_stream_type else b"/ObjStm")
+        else b"<< /Type " + type_value
     )
     filter_value = b"7 0 R" if indirect_filter_and_length else b"/FlateDecode"
     if escaped_filter_name and not indirect_filter_and_length:
@@ -230,6 +241,8 @@ def _write_object_stream_pdf(
     if indirect_filter_and_length:
         add_object(7, b"/Flate#44ecode" if escaped_filter_name else b"/FlateDecode")
         add_object(8, str(len(object_stream_encoded)).encode("ascii"))
+    if indirect_object_stream_type:
+        add_object(9, b"/Obj#53tm" if escaped_object_stream_type else b"/ObjStm")
     add_object(
         1,
         dictionary_prefix
@@ -252,7 +265,7 @@ def _write_object_stream_pdf(
     def xref_entry(entry_type: int, field2: int, field3: int) -> bytes:
         return bytes((entry_type,)) + field2.to_bytes(4, "big") + field3.to_bytes(2, "big")
 
-    size = 9 if indirect_filter_and_length else 7
+    size = 10 if indirect_object_stream_type else (9 if indirect_filter_and_length else 7)
     xref_entries = []
     for object_id in range(size):
         if object_id == 0:
@@ -311,21 +324,51 @@ def test_simple_indirect_resolver_rejects_duplicate_object_identity() -> None:
     assert exc.value.code == "PA_HYBRID_INTAKE_006"
 
 
-def test_simple_indirect_resolver_fails_closed_before_forward_length_stream_body() -> None:
+def test_forward_length_uses_xref_offset_without_lexing_stream_body() -> None:
     body = b"endstream\n7 0 obj /RunLengthDecode endobj\n" + b"9 0 obj 1 endobj\n" * 2_000
-    raw = (
-        b"1 0 obj << /Length 8 0 R >>\nstream\n"
-        + body
-        + b"\nendstream\nendobj\n8 0 obj "
-        + str(len(body)).encode("ascii")
-        + b" endobj\n"
+    parts = [b"%PDF-1.4\n"]
+    object_offsets: dict[int, int] = {}
+
+    def add_object(object_id: int, value: bytes) -> None:
+        object_offsets[object_id] = sum(len(part) for part in parts)
+        parts.append(f"{object_id} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+
+    add_object(1, b"<< /Length 8 0 R >>\nstream\n" + body + b"\nendstream")
+    add_object(8, str(len(body)).encode("ascii"))
+    xref_offset = sum(len(part) for part in parts)
+    xref_entries = [b"0000000000 65535 f \n"] + [
+        (
+            f"{object_offsets[object_id]:010d} 00000 n \n".encode("ascii")
+            if object_id in object_offsets
+            else b"0000000000 00000 f \n"
+        )
+        for object_id in range(1, 9)
+    ]
+    parts.extend(
+        (
+            b"xref\n0 9\n",
+            b"".join(xref_entries),
+            b"trailer\n<< /Size 9 >>\nstartxref\n",
+            str(xref_offset).encode("ascii"),
+            b"\n%%EOF\n",
+        )
+    )
+    raw = b"".join(parts)
+
+    source = BytesIO(raw)
+    boundaries = hybrid_intake_module._validate_terminal_pdf_region(source)
+    offsets = hybrid_intake_module._validated_xref_object_offsets(
+        source, revision_boundaries=boundaries
+    )
+    values = hybrid_intake_module._collect_simple_indirect_pdf_values(
+        raw,
+        revision_boundaries=boundaries,
+        authoritative_object_offsets=offsets,
     )
 
-    with pytest.raises(ProofAgentError) as exc:
-        hybrid_intake_module._collect_simple_indirect_pdf_values(raw)
-
-    assert exc.value.code == "PA_HYBRID_INTAKE_006"
-    assert "length cannot be bounded" in exc.value.message
+    assert values[(8, 0)] == (str(len(body)).encode("ascii"),)
+    assert (7, 0) not in values
+    assert (9, 0) not in values
 
 
 def test_stream_eof_marker_does_not_authorize_same_revision_duplicate() -> None:
@@ -1159,6 +1202,18 @@ def test_preflight_accepts_common_standard_content_filters(
     assert result.page_count == 1
 
 
+def test_preflight_accepts_chained_filters_with_null_decode_parms(tmp_path: Path) -> None:
+    result = preflight_hybrid_pdf(
+        _write_standard_filtered_content_pdf(
+            tmp_path / "null-decode-parms.pdf",
+            ("/ASCII85Decode", "/FlateDecode"),
+            null_decode_parms=True,
+        ),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+
+
 def test_preflight_accepts_bounded_png_predictor_content(tmp_path: Path) -> None:
     result = preflight_hybrid_pdf(
         _write_png_predictor_content_pdf(tmp_path / "predictor.pdf"),
@@ -1225,6 +1280,7 @@ def test_preflight_rejects_object_stream_bomb_before_pdfreader_construction(
         {"indirect_filter_and_length": True},
         {"escaped_filter_name": True},
         {"escaped_filter_name": True, "indirect_filter_and_length": True},
+        {"indirect_object_stream_type": True},
     ],
 )
 def test_preflight_accepts_bounded_structural_stream_dictionary_variants(
@@ -1248,6 +1304,7 @@ def test_preflight_accepts_bounded_structural_stream_dictionary_variants(
         {"nested_dictionary_before_type": True},
         {"indirect_filter_and_length": True},
         {"escaped_object_stream_type": True},
+        {"indirect_object_stream_type": True},
     ],
 )
 def test_preflight_rejects_structural_stream_variant_bombs_before_pdfreader(
