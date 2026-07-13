@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 from typing import Annotated, Literal, Self
@@ -11,6 +12,16 @@ from pydantic import ConfigDict, Field, StrictStr, StringConstraints, model_vali
 from proof_agent.capabilities.knowledge.hybrid.canonicalizer import (
     CanonicalParserPage,
     validate_page_geometry_and_bounds,
+)
+from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    KnowledgeModelCancellation,
+    KnowledgeModelWorkScheduler,
+)
+from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
+    ParserServiceRequest,
+    ParserServiceResponse,
+    PrivateDoclingClient,
+    PrivatePaddleClient,
 )
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import (
@@ -27,6 +38,50 @@ from proof_agent.contracts.hybrid_documents import (
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
 Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+@dataclass(frozen=True)
+class PrivateHybridParserPipeline:
+    """Scheduled private parser calls used by Hybrid build orchestration."""
+
+    docling: PrivateDoclingClient
+    paddle: PrivatePaddleClient
+
+    def __post_init__(self) -> None:
+        if self.docling.scheduler is not self.paddle.scheduler:
+            raise ValueError("Hybrid parser clients must share one scheduler instance")
+
+    @property
+    def scheduler(self) -> KnowledgeModelWorkScheduler:
+        return self.docling.scheduler
+
+    def parse_document(
+        self,
+        request: ParserServiceRequest,
+        *,
+        timeout_seconds: float,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> ParserServiceResponse:
+        return self.docling.parse(
+            request,
+            priority="offline",
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+        )
+
+    def parse_ocr_page(
+        self,
+        request: ParserServiceRequest,
+        *,
+        timeout_seconds: float,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> ParserServiceResponse:
+        return self.paddle.parse(
+            request,
+            priority="offline",
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+        )
 
 
 class MergeSelection(FrozenModel):

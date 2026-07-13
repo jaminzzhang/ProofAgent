@@ -5,13 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from typing import Annotated, Literal, Protocol, Self
+from collections.abc import Callable
+from typing import Annotated, Literal, Protocol, Self, cast
 
 from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
     StrictBytes,
+    StrictFloat,
     StrictInt,
     StrictStr,
     StringConstraints,
@@ -20,6 +22,14 @@ from pydantic import (
 
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
+from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    ImmediateKnowledgeModelWorkScheduler,
+    KnowledgeModelCancellation,
+    KnowledgeModelWorkScheduler,
+    WorkPriority,
+    _private_https_endpoint,
+    _raise_mapped_httpx_failure,
+)
 
 
 NonBlankStr = Annotated[
@@ -92,6 +102,8 @@ class ParserServiceResponse(_ParserServiceModel):
     adapter: Literal["docling", "paddle"]
     request: ParserServiceRequest
     attestation: ParserServiceAttestation
+    queue_time_ms: StrictFloat = Field(default=0.0, ge=0)
+    service_time_ms: StrictFloat = Field(default=0.0, ge=0)
 
     @model_validator(mode="after")
     def validate_attestation(self) -> Self:
@@ -130,26 +142,93 @@ class GuardedParserTransport(Protocol):
         follow_redirects: Literal[False],
     ) -> ParserServiceAttestation: ...
 
+    def parse_scheduled(
+        self,
+        request: ParserServiceRequest,
+        *,
+        timeout_seconds: float,
+        follow_redirects: Literal[False],
+        allow_runtime_downloads: Literal[False],
+    ) -> ParserServiceAttestation: ...
+
 
 class PrivateParserClient(Protocol):
-    def parse(self, request: ParserServiceRequest) -> ParserServiceResponse: ...
+    scheduler: KnowledgeModelWorkScheduler
+
+    def parse(
+        self,
+        request: ParserServiceRequest,
+        *,
+        priority: WorkPriority = "offline",
+        timeout_seconds: float = 120.0,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> ParserServiceResponse: ...
 
 
 class _PrivateParserClient:
     adapter: Literal["docling", "paddle"]
 
-    def __init__(self, *, transport: GuardedParserTransport) -> None:
+    def __init__(
+        self,
+        *,
+        transport: GuardedParserTransport,
+        scheduler: KnowledgeModelWorkScheduler | None = None,
+    ) -> None:
         self._transport = transport
+        # Compatibility for pre-scheduler unit callers remains test-only. Production
+        # composition always injects its one remote scheduler client explicitly.
+        self.scheduler = scheduler or ImmediateKnowledgeModelWorkScheduler()
 
-    def parse(self, request: ParserServiceRequest) -> ParserServiceResponse:
+    def parse(
+        self,
+        request: ParserServiceRequest,
+        *,
+        priority: WorkPriority = "offline",
+        timeout_seconds: float = 120.0,
+        cancellation: KnowledgeModelCancellation | None = None,
+    ) -> ParserServiceResponse:
         if self.adapter == "paddle" and len(request.page_numbers) != 1:
             raise ValueError("Paddle parser request requires exactly one page_number")
-        attestation = self._transport.parse(request, follow_redirects=False)
+        scheduled = self.scheduler.submit_and_wait(
+            kind="ocr" if self.adapter == "paddle" else "docling",
+            priority=priority,
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+            operation=lambda remaining: self._parse_transport(
+                request,
+                timeout_seconds=remaining,
+            ),
+        )
         return ParserServiceResponse(
             adapter=self.adapter,
             request=request,
-            attestation=attestation,
+            attestation=scheduled.value,
+            queue_time_ms=scheduled.queue_time_ms,
+            service_time_ms=scheduled.service_time_ms,
         )
+
+    def _parse_transport(
+        self,
+        request: ParserServiceRequest,
+        *,
+        timeout_seconds: float,
+    ) -> ParserServiceAttestation:
+        scheduled_parse = getattr(self._transport, "parse_scheduled", None)
+        if callable(scheduled_parse):
+            operation = cast(
+                Callable[..., ParserServiceAttestation],
+                scheduled_parse,
+            )
+            return operation(
+                request,
+                timeout_seconds=timeout_seconds,
+                follow_redirects=False,
+                allow_runtime_downloads=False,
+            )
+        # Compatibility for the pre-Task-13 fake transport interface. It is still
+        # invoked only after scheduler admission and cannot be used by production
+        # composition, which constructs HttpParserTransport below.
+        return self._transport.parse(request, follow_redirects=False)
 
 
 def _vendor_page_numbers(
@@ -242,3 +321,85 @@ class PrivateDoclingClient(_PrivateParserClient):
 
 class PrivatePaddleClient(_PrivateParserClient):
     adapter: Literal["paddle"] = "paddle"
+
+
+class HttpParserTransport:
+    """Guarded no-redirect HTTP transport for a private parser service."""
+
+    def __init__(self, *, endpoint: str) -> None:
+        try:
+            import httpx
+        except ImportError as exc:  # pragma: no cover - optional production dependency
+            raise ImportError("Hybrid private-parser HTTP support requires httpx") from exc
+        self._endpoint = _private_https_endpoint(endpoint, field="parser endpoint")
+        self._client = httpx.Client(follow_redirects=False, trust_env=False)
+
+    def parse(
+        self,
+        request: ParserServiceRequest,
+        *,
+        follow_redirects: Literal[False],
+    ) -> ParserServiceAttestation:
+        return self.parse_scheduled(
+            request,
+            timeout_seconds=120.0,
+            follow_redirects=follow_redirects,
+            allow_runtime_downloads=False,
+        )
+
+    def parse_scheduled(
+        self,
+        request: ParserServiceRequest,
+        *,
+        timeout_seconds: float,
+        follow_redirects: Literal[False],
+        allow_runtime_downloads: Literal[False],
+    ) -> ParserServiceAttestation:
+        if follow_redirects is not False or allow_runtime_downloads is not False:
+            raise ValueError("parser redirects and runtime downloads are forbidden")
+        payload = request.model_dump(mode="json")
+        payload["allow_runtime_downloads"] = False
+        try:
+            with self._client.stream(
+                "POST",
+                f"{self._endpoint}/v1/parse",
+                json=payload,
+                timeout=timeout_seconds,
+            ) as response:
+                if 300 <= response.status_code < 400:
+                    raise ValueError("private parser redirects are forbidden")
+                if response.status_code in {408, 425, 429} or response.status_code >= 500:
+                    raise ConnectionError("private parser is temporarily unavailable")
+                if response.status_code >= 400:
+                    raise ValueError("private parser rejected the typed request")
+                declared_length = response.headers.get("content-length")
+                if declared_length is not None:
+                    try:
+                        parsed_length = int(declared_length)
+                    except ValueError as exc:
+                        raise ValueError("private parser returned invalid Content-Length") from exc
+                    if not 0 <= parsed_length <= MAX_TRANSPORT_RESPONSE_BYTES:
+                        raise ValueError("private parser response exceeds the byte limit")
+                content = bytearray()
+                for chunk in response.iter_bytes():
+                    content.extend(chunk)
+                    if len(content) > MAX_TRANSPORT_RESPONSE_BYTES:
+                        raise ValueError("private parser response exceeds the byte limit")
+        except Exception as exc:
+            _raise_mapped_httpx_failure(exc)
+            raise
+        try:
+            raw = json.loads(content)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("private parser returned invalid JSON") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("private parser response root must be a JSON object")
+        vendor_json = raw.pop("vendor_json", None)
+        if not isinstance(vendor_json, dict):
+            raise ValueError("private parser response requires a vendor_json object")
+        vendor_bytes = canonical_vendor_json_bytes(cast(dict[str, JsonValue], vendor_json))
+        raw["vendor_json_bytes"] = vendor_bytes
+        return ParserServiceAttestation.model_validate(raw)
+
+    def close(self) -> None:
+        self._client.close()

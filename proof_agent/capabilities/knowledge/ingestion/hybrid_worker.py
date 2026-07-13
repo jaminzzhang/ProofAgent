@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime
+from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol, Self
@@ -26,6 +27,10 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridKnowledgeJobClaim,
     HybridKnowledgeJobRequest,
     KnowledgeArtifactStore,
+)
+from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    KnowledgeModelWorkCancelled,
+    KnowledgeModelWorkScheduler,
 )
 from proof_agent.capabilities.knowledge.hybrid.rule_units import (
     RuleUnitProjectionReviewRequired,
@@ -134,9 +139,7 @@ class HybridParserResourceEnvelope(_HybridWorkerModel):
 class HybridInsuranceMetadataArtifact(_HybridWorkerModel):
     """Immutable server-side projection inputs bound to one exact structured build."""
 
-    schema_version: Literal["hybrid-insurance-metadata.v1"] = (
-        "hybrid-insurance-metadata.v1"
-    )
+    schema_version: Literal["hybrid-insurance-metadata.v1"] = "hybrid-insurance-metadata.v1"
     source_id: NonBlankStr
     document_id: NonBlankStr
     revision_id: NonBlankStr
@@ -314,6 +317,36 @@ class HybridParserPipeline(Protocol):
     def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput: ...
 
 
+@dataclass(frozen=True)
+class HybridKnowledgeWorkerFactory:
+    """Bind every production Hybrid worker to the composed scheduler instance."""
+
+    scheduler: KnowledgeModelWorkScheduler
+
+    def create(
+        self,
+        *,
+        lifecycle: HybridKnowledgeArtifactLifecycle,
+        original_store: KnowledgeArtifactStore,
+        artifact_store: KnowledgeArtifactStore,
+        pipeline: HybridParserPipeline,
+        worker_id: str,
+        lease_seconds: int = 60,
+    ) -> "HybridKnowledgeWorker":
+        pipeline_scheduler = getattr(pipeline, "scheduler", self.scheduler)
+        if pipeline_scheduler is not self.scheduler:
+            raise ValueError("Hybrid worker pipeline must use the composed scheduler")
+        return HybridKnowledgeWorker(
+            lifecycle=lifecycle,
+            original_store=original_store,
+            artifact_store=artifact_store,
+            pipeline=pipeline,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            scheduler=self.scheduler,
+        )
+
+
 class HybridKnowledgeWorker:
     """Process one provider-owned Hybrid parse job under a durable fenced claim."""
 
@@ -326,6 +359,7 @@ class HybridKnowledgeWorker:
         pipeline: HybridParserPipeline,
         worker_id: str,
         lease_seconds: int = 60,
+        scheduler: KnowledgeModelWorkScheduler | None = None,
     ) -> None:
         if not worker_id.strip():
             raise ValueError("worker_id must be non-empty")
@@ -335,8 +369,16 @@ class HybridKnowledgeWorker:
         self._original_store = original_store
         self._artifact_store = artifact_store
         self._pipeline = pipeline
+        pipeline_scheduler = getattr(pipeline, "scheduler", scheduler)
+        if scheduler is not None and pipeline_scheduler is not scheduler:
+            raise ValueError("Hybrid worker pipeline must use the injected scheduler")
+        self._scheduler = scheduler
         self._worker_id = worker_id.strip()
         self._lease_seconds = lease_seconds
+
+    @property
+    def scheduler(self) -> KnowledgeModelWorkScheduler | None:
+        return self._scheduler
 
     def run_once(self) -> HybridWorkerOutcome | None:
         claim = self._lifecycle.claim_next(
@@ -362,7 +404,12 @@ class HybridKnowledgeWorker:
             self._validate_parser_output(request, parsed)
             result = self._persist_artifacts(request, original=original, parsed=parsed)
             validate_hybrid_artifact_build_result(request, result)
-        except (TransientKnowledgeServiceError, TimeoutError, ConnectionError):
+        except (
+            TransientKnowledgeServiceError,
+            KnowledgeModelWorkCancelled,
+            TimeoutError,
+            ConnectionError,
+        ):
             if request is None:
                 return self._fail_integrity(claim, request=None)
             return self._handle_transient(claim, request)
@@ -654,9 +701,7 @@ def _measure_parser_output(parsed: HybridParserBuildOutput) -> HybridParserResou
     build_identity_size = len(
         _canonical_json(parsed.artifact.build_identity.model_dump(mode="json"))
     )
-    metadata_size = len(
-        _canonical_json(parsed.insurance_metadata.model_dump(mode="json"))
-    )
+    metadata_size = len(_canonical_json(parsed.insurance_metadata.model_dump(mode="json")))
     aggregate_vendor = sum(vendor_sizes)
     return HybridParserResourceEnvelope(
         vendor_artifact_bytes=vendor_sizes,
@@ -667,11 +712,7 @@ def _measure_parser_output(parsed: HybridParserBuildOutput) -> HybridParserResou
         insurance_metadata_bytes=metadata_size,
         total_artifact_count=len(vendor_sizes) + 4,
         total_artifact_bytes=(
-            aggregate_vendor
-            + canonical_size
-            + preview_size
-            + build_identity_size
-            + metadata_size
+            aggregate_vendor + canonical_size + preview_size + build_identity_size + metadata_size
         ),
     )
 

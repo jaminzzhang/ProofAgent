@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
-from typing import cast
+from threading import Lock
+from typing import Mapping, cast
 
 from proof_agent.capabilities.knowledge import KnowledgeProvider
 from proof_agent.capabilities.knowledge.blended import resolve_blended_knowledge_provider
@@ -39,9 +40,189 @@ from proof_agent.bootstrap.knowledge_resolution import (
 )
 from proof_agent.bootstrap.model_resolution import resolve_model_role_config
 from proof_agent.bootstrap.skills import load_business_flow_skill_pack_set
+from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    GuardedEmbeddingTransport,
+    GuardedKnowledgeModelSchedulerTransport,
+    GuardedRerankerTransport,
+    PrivateEmbeddingClient,
+    PrivateKnowledgeModelWorkSchedulerClient,
+    PrivateRerankerClient,
+    _private_https_endpoint,
+)
+from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
+    GuardedParserTransport,
+    PrivateDoclingClient,
+    PrivatePaddleClient,
+)
+from proof_agent.capabilities.knowledge.hybrid.pipeline import PrivateHybridParserPipeline
+from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+    HybridKnowledgeWorkerFactory,
+)
 
 
 DEFAULT_MEMORY_DENY_FIELDS = frozenset({"access_token", "customer_phone", "provider_api_key"})
+
+
+@dataclass(frozen=True)
+class HybridKnowledgeModelSettings:
+    """Secret-free internal service origins for private Knowledge processing."""
+
+    scheduler_endpoint: str
+    scheduler_namespace: str
+    docling_endpoint: str
+    paddle_endpoint: str
+    embedding_endpoint: str
+    reranker_endpoint: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "scheduler_endpoint",
+            "docling_endpoint",
+            "paddle_endpoint",
+            "embedding_endpoint",
+            "reranker_endpoint",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _private_https_endpoint(getattr(self, field_name), field=field_name),
+            )
+
+
+@dataclass(frozen=True)
+class HybridKnowledgeTransportBundle:
+    scheduler: GuardedKnowledgeModelSchedulerTransport
+    docling: GuardedParserTransport
+    paddle: GuardedParserTransport
+    embedding: GuardedEmbeddingTransport
+    reranker: GuardedRerankerTransport
+
+
+class HybridKnowledgeComposition:
+    """One process graph sharing one remote, namespace-scoped scheduler client."""
+
+    def __init__(
+        self,
+        *,
+        scheduler: PrivateKnowledgeModelWorkSchedulerClient,
+        parser: PrivateHybridParserPipeline,
+        embedding: PrivateEmbeddingClient,
+        reranker: PrivateRerankerClient,
+        ingestion_worker: HybridKnowledgeWorkerFactory,
+        transports: HybridKnowledgeTransportBundle,
+    ) -> None:
+        self.scheduler = scheduler
+        self.parser = parser
+        self.embedding = embedding
+        self.reranker = reranker
+        self.ingestion_worker = ingestion_worker
+        self._transports = transports
+        self._close_lock = Lock()
+        self._closed = False
+
+    def close(self) -> None:
+        """Close the complete graph once; FastAPI owns this single hook."""
+
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self.scheduler.close()
+            for transport in (
+                self._transports.docling,
+                self._transports.paddle,
+                self._transports.embedding,
+                self._transports.reranker,
+            ):
+                close = getattr(transport, "close", None)
+                if close is not None:
+                    close()
+
+
+def compose_hybrid_knowledge(
+    *,
+    settings: HybridKnowledgeModelSettings,
+    transports: HybridKnowledgeTransportBundle | None = None,
+) -> HybridKnowledgeComposition:
+    """Compose production private-model clients without any in-memory queue."""
+
+    resolved_transports = transports or _default_hybrid_transports(settings)
+    scheduler = PrivateKnowledgeModelWorkSchedulerClient(
+        endpoint=settings.scheduler_endpoint,
+        namespace=settings.scheduler_namespace,
+        transport=resolved_transports.scheduler,
+    )
+    parser = PrivateHybridParserPipeline(
+        docling=PrivateDoclingClient(
+            transport=resolved_transports.docling,
+            scheduler=scheduler,
+        ),
+        paddle=PrivatePaddleClient(
+            transport=resolved_transports.paddle,
+            scheduler=scheduler,
+        ),
+    )
+    return HybridKnowledgeComposition(
+        scheduler=scheduler,
+        parser=parser,
+        embedding=PrivateEmbeddingClient(
+            transport=resolved_transports.embedding,
+            scheduler=scheduler,
+        ),
+        reranker=PrivateRerankerClient(
+            transport=resolved_transports.reranker,
+            scheduler=scheduler,
+        ),
+        ingestion_worker=HybridKnowledgeWorkerFactory(scheduler=scheduler),
+        transports=resolved_transports,
+    )
+
+
+def compose_hybrid_knowledge_from_env(
+    environ: Mapping[str, str] | None = None,
+) -> HybridKnowledgeComposition | None:
+    """Activate Hybrid production composition only through an explicit flag."""
+
+    source = os.environ if environ is None else environ
+    enabled = source.get("PA_HYBRID_KNOWLEDGE_MODELS_ENABLED", "").strip().lower()
+    if enabled in {"", "0", "false", "no"}:
+        return None
+    if enabled not in {"1", "true", "yes"}:
+        raise ValueError("PA_HYBRID_KNOWLEDGE_MODELS_ENABLED must be a boolean flag")
+    keys = {
+        "scheduler_endpoint": "PA_KNOWLEDGE_MODEL_SCHEDULER_ENDPOINT",
+        "scheduler_namespace": "PA_KNOWLEDGE_MODEL_SCHEDULER_NAMESPACE",
+        "docling_endpoint": "PA_KNOWLEDGE_DOCLING_ENDPOINT",
+        "paddle_endpoint": "PA_KNOWLEDGE_PADDLE_ENDPOINT",
+        "embedding_endpoint": "PA_KNOWLEDGE_EMBEDDING_ENDPOINT",
+        "reranker_endpoint": "PA_KNOWLEDGE_RERANKER_ENDPOINT",
+    }
+    values: dict[str, str] = {}
+    for field_name, key in keys.items():
+        value = source.get(key, "").strip()
+        if not value:
+            raise ValueError(f"{key} is required when private Knowledge models are enabled")
+        values[field_name] = value
+    return compose_hybrid_knowledge(settings=HybridKnowledgeModelSettings(**values))
+
+
+def _default_hybrid_transports(
+    settings: HybridKnowledgeModelSettings,
+) -> HybridKnowledgeTransportBundle:
+    from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+        HttpEmbeddingTransport,
+        HttpKnowledgeModelSchedulerTransport,
+        HttpRerankerTransport,
+    )
+    from proof_agent.capabilities.knowledge.hybrid.parser_clients import HttpParserTransport
+
+    return HybridKnowledgeTransportBundle(
+        scheduler=HttpKnowledgeModelSchedulerTransport(),
+        docling=HttpParserTransport(endpoint=settings.docling_endpoint),
+        paddle=HttpParserTransport(endpoint=settings.paddle_endpoint),
+        embedding=HttpEmbeddingTransport(endpoint=settings.embedding_endpoint),
+        reranker=HttpRerankerTransport(endpoint=settings.reranker_endpoint),
+    )
 
 
 @dataclass(frozen=True)
@@ -214,9 +395,7 @@ def compose_harness_invocation(
             if context_budget_calibration_store is not None
             else InMemoryContextBudgetCalibrationStore()
         ),
-        institution_authorization=(
-            institution_authorization or InstitutionAuthorizationContext()
-        ),
+        institution_authorization=(institution_authorization or InstitutionAuthorizationContext()),
     )
 
 

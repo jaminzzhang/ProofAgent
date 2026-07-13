@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -42,9 +44,24 @@ from proof_agent.observability.api.serializers import serialize_dashboard_eviden
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import OperatorIdentityContext
 from proof_agent.runtime.approval_resume import LangGraphApprovalResumeRegistry
+from proof_agent.bootstrap.composition import compose_hybrid_knowledge_from_env
 
 
-router = APIRouter(tags=["execution"])
+@asynccontextmanager
+async def _hybrid_knowledge_lifespan(application: Any) -> AsyncIterator[None]:
+    """Own one process-wide Hybrid composition and one matching close hook."""
+
+    graph = compose_hybrid_knowledge_from_env()
+    if graph is not None:
+        application.state.hybrid_knowledge = graph
+    try:
+        yield
+    finally:
+        if graph is not None:
+            graph.close()
+
+
+router = APIRouter(tags=["execution"], lifespan=_hybrid_knowledge_lifespan)
 
 
 class ChatRunRequest(BaseModel):
