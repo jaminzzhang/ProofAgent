@@ -33,6 +33,7 @@ _MAX_FORM_XOBJECTS = 256
 _MAX_FORM_DO_INVOCATIONS = 64
 _MAX_XOBJECT_RESOURCE_ENTRIES = 1024
 _MAX_FONT_RESOURCE_ENTRIES = 1024
+_MAX_CONTENT_OPERATIONS = 100_000
 _ACTIVE_KEYS = {"/OpenAction", "/AA", "/JS", "/JavaScript", "/Launch"}
 _ACTION_CONTAINER_KEYS = {"/A", "/PA", "/Next"}
 _ACTION_TYPES = {
@@ -337,7 +338,7 @@ def _validate_bounded_resources(
     pending: list[tuple[Any, int]] = [(resources, 0)]
     seen_forms: set[tuple[int, int] | int] = set()
     seen_resources: set[int] = set()
-    seen_tounicode: set[tuple[int, int] | int] = set()
+    seen_font_streams: set[tuple[int, int] | int] = set()
     form_count = 0
     resource_entry_count = 0
     font_entry_count = 0
@@ -380,24 +381,10 @@ def _validate_bounded_resources(
                     raise _hybrid_error(
                         "PA_HYBRID_INTAKE_006", "Hybrid PDF Font resource is invalid."
                     )
-                to_unicode = font.get(NameObject("/ToUnicode"))
-                if to_unicode is None:
-                    continue
-                if isinstance(to_unicode, IndirectObject):
-                    unicode_identity: tuple[int, int] | int = (
-                        to_unicode.idnum,
-                        to_unicode.generation,
-                    )
-                    unicode_stream = to_unicode.get_object()
-                else:
-                    unicode_identity = id(to_unicode)
-                    unicode_stream = to_unicode
-                if unicode_identity in seen_tounicode:
-                    continue
-                seen_tounicode.add(unicode_identity)
-                remaining, _decoded_unicode = _charge_bounded_content_stream(
-                    unicode_stream,
+                remaining = _charge_bounded_font_streams(
+                    font,
                     remaining,
+                    seen_font_streams,
                 )
 
         xobjects = current_resources.get(NameObject("/XObject"))
@@ -460,10 +447,53 @@ def _validate_bounded_resources(
     return remaining, form_lookup
 
 
-_FORM_DO_OPERATOR = re.compile(
-    rb"(?<!\S)(/[^\x00\x09\x0a\x0c\x0d\x20()<>{}\[\]/%]+)"
-    rb"[\x00\x09\x0a\x0c\x0d\x20]+Do\b"
-)
+def _charge_bounded_font_streams(
+    font: Any,
+    remaining: int,
+    seen_streams: set[tuple[int, int] | int],
+) -> int:
+    from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject
+
+    font_dictionaries = [font]
+    descendants = font.get(NameObject("/DescendantFonts"))
+    if isinstance(descendants, IndirectObject):
+        descendants = descendants.get_object()
+    if isinstance(descendants, ArrayObject):
+        font_dictionaries.extend(
+            item.get_object() if isinstance(item, IndirectObject) else item for item in descendants
+        )
+
+    stream_candidates: list[Any] = []
+    to_unicode = font.get(NameObject("/ToUnicode"))
+    if to_unicode is not None:
+        stream_candidates.append(to_unicode)
+    for font_dictionary in font_dictionaries:
+        if not isinstance(font_dictionary, DictionaryObject):
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF descendant Font is invalid.")
+        descriptor = font_dictionary.get(NameObject("/FontDescriptor"))
+        if isinstance(descriptor, IndirectObject):
+            descriptor = descriptor.get_object()
+        if descriptor is None:
+            continue
+        if not isinstance(descriptor, DictionaryObject):
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF FontDescriptor is invalid.")
+        for key in ("/FontFile", "/FontFile2", "/FontFile3"):
+            candidate = descriptor.get(NameObject(key))
+            if candidate is not None:
+                stream_candidates.append(candidate)
+
+    for candidate in stream_candidates:
+        if isinstance(candidate, IndirectObject):
+            identity: tuple[int, int] | int = (candidate.idnum, candidate.generation)
+            stream = candidate.get_object()
+        else:
+            identity = id(candidate)
+            stream = candidate
+        if identity in seen_streams:
+            continue
+        seen_streams.add(identity)
+        remaining, _decoded = _charge_bounded_content_stream(stream, remaining)
+    return remaining
 
 
 def _validate_form_do_work(
@@ -486,8 +516,8 @@ def _validate_form_do_work(
         nonlocal invocation_count
         resources_identity = id(current_resources)
         for content in streams:
-            for match in _FORM_DO_OPERATOR.finditer(content):
-                form = form_lookup.get((resources_identity, match.group(1).decode("latin-1")))
+            for form_name in _form_do_names(content):
+                form = form_lookup.get((resources_identity, form_name))
                 if form is None:
                     continue
                 identity, form_content, nested_resources = form
@@ -510,6 +540,27 @@ def _validate_form_do_work(
                 visit([form_content], resolved_nested, depth + 1, stack | {identity})
 
     visit(content_streams, resources, 0, set())
+
+
+def _form_do_names(content: bytes) -> tuple[str, ...]:
+    from pypdf.generic import ContentStream, DecodedStreamObject, NameObject
+
+    stream = DecodedStreamObject()
+    stream.set_data(content)
+    operations = ContentStream(stream, None).operations
+    if len(operations) > _MAX_CONTENT_OPERATIONS:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006",
+            "Hybrid PDF content operation count exceeds safety limits.",
+        )
+    names: list[str] = []
+    for operands, operator in operations:
+        if operator != b"Do":
+            continue
+        if not operands or not isinstance(operands[0], NameObject):
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF Do operation is invalid.")
+        names.append(str(operands[0]))
+    return tuple(names)
 
 
 def _bounded_flate_decoded_data(data: bytes, remaining: int) -> bytes:
