@@ -12,6 +12,7 @@ import tempfile
 import unicodedata
 from typing import Any, IO
 import zipfile
+import zlib
 
 from proof_agent.capabilities.knowledge.ingestion.contracts import (
     HybridIntakeLimits,
@@ -26,6 +27,7 @@ _MIN_MEANINGFUL_CHARACTERS = 8
 _MIN_NATIVE_TEXT_QUALITY_RATIO = 0.5
 _MAX_NATIVE_TEXT_SAMPLE_CHARS = 4096
 _MAX_NATIVE_TEXT_CALLBACKS = 4096
+_MAX_PAGE_CONTENT_DECODED_BYTES = 2 * 1024 * 1024
 _ACTIVE_KEYS = {"/OpenAction", "/AA", "/JS", "/JavaScript", "/Launch"}
 _ACTION_CONTAINER_KEYS = {"/A", "/PA", "/Next"}
 _ACTION_TYPES = {
@@ -225,6 +227,7 @@ class _NativeTextExtractionLimit(Exception):
 
 
 def _sample_native_page_text(page: Any) -> str:
+    _validate_bounded_page_content(page)
     chunks: list[str] = []
     sampled_characters = 0
     callback_count = 0
@@ -252,6 +255,71 @@ def _sample_native_page_text(page: Any) -> str:
             "Hybrid PDF native text extraction exceeds safety limits.",
         ) from exc
     return "".join(chunks)
+
+
+def _validate_bounded_page_content(page: Any) -> None:
+    from pypdf.generic import ArrayObject, IndirectObject, NameObject, StreamObject
+
+    try:
+        contents = page.raw_get(NameObject("/Contents"))
+    except KeyError:
+        return
+
+    remaining = _MAX_PAGE_CONTENT_DECODED_BYTES
+    pending = list(contents) if isinstance(contents, ArrayObject) else [contents]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, IndirectObject):
+            item = item.get_object()
+        if isinstance(item, ArrayObject):
+            pending.extend(item)
+            continue
+        if not isinstance(item, StreamObject):
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF page content stream is invalid.",
+            )
+        raw_data = item._data  # pypdf retains encoded stream bytes without decoding them.
+        filters = item.get(NameObject("/Filter"))
+        if filters is None:
+            decoded_size = len(raw_data)
+        else:
+            filter_names = (
+                tuple(str(value) for value in filters)
+                if isinstance(filters, ArrayObject)
+                else (str(filters),)
+            )
+            if filter_names not in {("/FlateDecode",), ("/Fl",)}:
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006",
+                    "Hybrid PDF page content filter cannot be sampled safely.",
+                )
+            decoded_size = _bounded_flate_decoded_size(raw_data, remaining)
+        remaining -= decoded_size
+        if remaining < 0:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF decoded page content exceeds safety limits.",
+            )
+
+
+def _bounded_flate_decoded_size(data: bytes, remaining: int) -> int:
+    try:
+        decompressor = zlib.decompressobj()
+        decoded = decompressor.decompress(data, remaining + 1)
+        if len(decoded) > remaining or decompressor.unconsumed_tail or not decompressor.eof:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF decoded page content exceeds safety limits.",
+            )
+        return len(decoded)
+    except ProofAgentError:
+        raise
+    except zlib.error as exc:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006",
+            "Hybrid PDF compressed page content is invalid.",
+        ) from exc
 
 
 def _reject_polyglot_payload(source: IO[bytes]) -> None:
@@ -501,18 +569,36 @@ def _strip_leading_pdf_trivia(value: bytes) -> bytes | None:
 
 
 def _strip_trailing_pdf_trivia(value: bytes) -> bytes | None:
-    end = len(value)
-    while end > 0:
-        while end > 0 and value[end - 1] in _PDF_WHITESPACE:
-            end -= 1
-        line_start = max(value.rfind(b"\n", 0, end), value.rfind(b"\r", 0, end)) + 1
-        line = value[line_start:end].lstrip(b"\x00\x09\x0c\x20")
-        if not line.startswith(b"%"):
-            return value[:end]
-        if line_start == 0 and len(value) == _PDF_BOUNDARY_SCAN_BYTES:
-            return None
-        end = line_start
-    return b""
+    endobj_end = value.rfind(b"endobj")
+    if endobj_end < 0:
+        return None
+    endobj_end += len(b"endobj")
+    if not _is_pdf_trivia(value[endobj_end:]):
+        return None
+    return value[:endobj_end]
+
+
+def _is_pdf_trivia(value: bytes) -> bool:
+    position = 0
+    while position < len(value):
+        while position < len(value) and value[position] in _PDF_WHITESPACE:
+            position += 1
+        if position >= len(value):
+            return True
+        if value[position] != ord("%"):
+            return False
+        newline = min(
+            (
+                index
+                for index in (value.find(b"\n", position), value.find(b"\r", position))
+                if index >= 0
+            ),
+            default=-1,
+        )
+        if newline < 0:
+            return False
+        position = newline + 1
+    return True
 
 
 def _reject_unsafe_pdf_objects(reader: Any) -> None:

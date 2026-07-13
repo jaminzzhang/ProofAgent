@@ -112,6 +112,18 @@ def _write_pdf_with_revision_markers_in_content(path: Path) -> Path:
     return path
 
 
+def _write_compressed_content_pdf(path: Path, content_bytes: bytes) -> Path:
+    pypdf, generic = _modules()
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    decoded = generic.DecodedStreamObject()
+    decoded.set_data(content_bytes)
+    page[generic.NameObject("/Contents")] = writer._add_object(decoded.flate_encode())
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
 def _write_unsafe_pdf(path: Path, *, embedded: bool) -> Path:
     pypdf, generic = _modules()
     writer = pypdf.PdfWriter()
@@ -186,8 +198,8 @@ def _write_commented_incremental_pdf(path: Path) -> Path:
     assert previous is not None
     leading_comment = b"% before first incremental object\n"
     object_offset = len(base) + len(leading_comment)
-    incremental_object = b"5 0 obj\n<< /Label (benign) >>\nendobj\n"
-    trailing_comment = b"% after final incremental object\n"
+    incremental_object = b"5 0 obj\n<< /Label (benign) >>\nendobj"
+    trailing_comment = b" % inline after final incremental object\n"
     xref_offset = object_offset + len(incremental_object) + len(trailing_comment)
     revision = (
         leading_comment
@@ -398,6 +410,9 @@ def test_native_page_profile_stops_at_bounded_text_sample() -> None:
     class LargeTextPage:
         mediabox = SimpleNamespace(width=612, height=792)
 
+        def raw_get(self, _key: object) -> object:
+            raise KeyError
+
         def extract_text(self, *, visitor_text: object) -> str:
             nonlocal callback_returned
             visitor_text("A" * 100_000, None, None, None, None)  # type: ignore[operator]
@@ -409,6 +424,42 @@ def test_native_page_profile_stops_at_bounded_text_sample() -> None:
     assert callback_returned is False
     assert profile.native_extracted_character_count == 4096
     assert profile.requires_ocr is False
+
+
+def test_preflight_accepts_ordinary_flate_compressed_page_content(tmp_path: Path) -> None:
+    result = preflight_hybrid_pdf(
+        _write_compressed_content_pdf(
+            tmp_path / "compressed.pdf",
+            b"BT /F1 12 Tf 72 720 Td (Compressed policy text) Tj ET",
+        ),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+
+
+def test_preflight_rejects_flate_bomb_before_real_pypdf_text_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_module = import_module("pypdf._page")
+    original_extract_text = page_module.PageObject.extract_text
+    extraction_called = False
+
+    def track_extract_text(self: object, *args: object, **kwargs: object) -> str:
+        nonlocal extraction_called
+        extraction_called = True
+        return original_extract_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(page_module.PageObject, "extract_text", track_extract_text)
+    path = _write_compressed_content_pdf(
+        tmp_path / "compressed-bomb.pdf",
+        b"%" + b"A" * (2 * 1024 * 1024 + 1),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert extraction_called is False
 
 
 def test_preflight_rejects_unreferenced_embedded_stream_in_incremental_xref(
