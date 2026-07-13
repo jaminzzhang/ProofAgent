@@ -14,11 +14,22 @@ from proof_agent.capabilities.knowledge.hybrid.manifest import (
     decode_manifest_shard_artifact,
 )
 from proof_agent.capabilities.knowledge.hybrid.ports import (
+    HybridProjectionPublicationPort,
+    ProjectionAuthorityDocument,
     ProjectionBulkRequest,
     ProjectionDocument,
+    ProjectionReadbackResult,
+    ProjectionSmokeRequest,
     SearchIndexIdentity,
 )
-from proof_agent.capabilities.knowledge.hybrid.publication import PublicationConflict
+from proof_agent.capabilities.knowledge.hybrid.publication import (
+    PublicationConflict,
+    projection_smoke_as_of_date,
+    projection_smoke_authorization,
+    projection_smoke_query_text,
+    select_projection_smoke_target,
+    validate_projection_smoke_result,
+)
 from proof_agent.capabilities.knowledge.hybrid.model_clients import PrivateEmbeddingClient
 from proof_agent.capabilities.knowledge.hybrid.opensearch import (
     OpenSearchHybridIndex,
@@ -32,6 +43,7 @@ from proof_agent.capabilities.knowledge.hybrid.versioning import (
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.knowledge_index import (
     ExactArtifactRef,
+    KnowledgeIndexGeneration,
     KnowledgeProjectionAttestation,
     RuleUnitManifestEntry,
     RuleUnitManifestRoot,
@@ -157,6 +169,26 @@ class RecoveryIndex(Protocol):
         root: RuleUnitManifestRoot,
         documents: tuple[ProjectionDocument, ...],
     ) -> ProjectionValidationEvidence: ...
+
+
+class RecoveryProjectionValidationIndex(HybridProjectionPublicationPort, Protocol):
+    def create_index(
+        self,
+        generation: KnowledgeIndexGeneration,
+        *,
+        rrf_pipeline: str,
+        rrf_rank_constant: int,
+        physical_name_override: str,
+    ) -> SearchIndexIdentity: ...
+
+    def delete_attempt_projection(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+    ) -> str: ...
+
+    def delete_rebuild_index(self, identity: SearchIndexIdentity) -> None: ...
 
 
 class ExactArtifactReader(Protocol):
@@ -433,7 +465,7 @@ class OpenSearchRecoveryIndex:
     def __init__(
         self,
         *,
-        index: OpenSearchHybridIndex,
+        index: RecoveryProjectionValidationIndex,
         embedding: PrivateEmbeddingClient,
         embedding_instruction: str,
         embedding_timeout_seconds: float = 300.0,
@@ -491,24 +523,39 @@ class OpenSearchRecoveryIndex:
                 manifest_root_sha256=root.root_sha256,
                 documents=projected,
             )
-            projection_digest = stable_digest(
-                {
-                    "schema_version": "hybrid-rebuild-projection.v1",
-                    "documents": [item.model_dump(mode="json") for item in projected],
-                }
+            authorities, readback = self._validate_projected_authority(
+                identity=identity,
+                operation_id=operation_id,
+                root=root,
+                documents=projected,
+            )
+            smoke_checkpoint = self._validate_smoke(
+                identity=identity,
+                operation_id=operation_id,
+                root=root,
+                source_publication_seq=root.source_publication_seq,
+                documents=projected,
+                authorities=authorities,
             )
             return identity, ProjectionValidationEvidence(
                 publication_attempt_id=operation_id,
                 candidate_digest=authority.candidate_digest,
                 identity=identity,
-                refresh_checkpoint=refresh_checkpoint,
+                refresh_checkpoint=stable_digest(
+                    {
+                        "schema_version": "hybrid-rebuild-validation.v1",
+                        "bulk_refresh": refresh_checkpoint,
+                        "readback_refresh": readback.refresh_checkpoint,
+                        "smoke_checkpoint": smoke_checkpoint,
+                    }
+                ),
                 manifest_root_sha256=root.root_sha256,
                 covered_publication_sequences=(
                     authority.current_attestation.covered_publication_sequences
                 ),
-                projection_sha256=projection_digest,
-                validated_document_count=len({item.rule_unit.document_id for item in projected}),
-                validated_rule_unit_count=len(projected),
+                projection_sha256=readback.projection_sha256,
+                validated_document_count=readback.validated_document_count,
+                validated_rule_unit_count=readback.validated_rule_unit_count,
             )
         except BaseException as primary:
             try:
@@ -541,6 +588,20 @@ class OpenSearchRecoveryIndex:
             identity=authority.current_identity,
             publication_attempt_id=orphan.attempt_id,
         )
+        authorities, readback = self._validate_projected_authority(
+            identity=authority.current_identity,
+            operation_id=operation_id,
+            root=root,
+            documents=projected,
+        )
+        smoke_checkpoint = self._validate_smoke(
+            identity=authority.current_identity,
+            operation_id=operation_id,
+            root=root,
+            source_publication_seq=root.source_publication_seq,
+            documents=projected,
+            authorities=authorities,
+        )
         return ProjectionValidationEvidence(
             publication_attempt_id=operation_id,
             candidate_digest=authority.candidate_digest,
@@ -550,30 +611,102 @@ class OpenSearchRecoveryIndex:
                     "schema_version": "hybrid-repair-refresh.v1",
                     "bulk_refresh": bulk_refresh_checkpoint,
                     "cleanup_refresh": cleanup_checkpoint,
+                    "readback_refresh": readback.refresh_checkpoint,
+                    "smoke_checkpoint": smoke_checkpoint,
                 }
             ),
             manifest_root_sha256=root.root_sha256,
             covered_publication_sequences=(
                 authority.current_attestation.covered_publication_sequences
             ),
-            projection_sha256=stable_digest(
-                {
-                    "schema_version": "hybrid-repair-projection.v1",
-                    "documents": [item.model_dump(mode="json") for item in projected],
-                    "removed_attempt_id": orphan.attempt_id,
-                }
-            ),
-            validated_document_count=len({item.rule_unit.document_id for item in projected}),
-            validated_rule_unit_count=len(projected),
+            projection_sha256=readback.projection_sha256,
+            validated_document_count=readback.validated_document_count,
+            validated_rule_unit_count=readback.validated_rule_unit_count,
         )
+
+    def _validate_projected_authority(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        operation_id: str,
+        root: RuleUnitManifestRoot,
+        documents: tuple[ProjectionDocument, ...],
+    ) -> tuple[tuple[ProjectionAuthorityDocument, ...], ProjectionReadbackResult]:
+        authorities = tuple(
+            self.index.materialize_authority(
+                document,
+                identity=identity,
+                publication_attempt_id=operation_id,
+            )
+            for document in documents
+        )
+        readback = self.index.validate_exact_projection(
+            identity=identity,
+            publication_attempt_id=operation_id,
+            manifest_root_sha256=root.root_sha256,
+            documents=authorities,
+        )
+        expected_digest = stable_digest(
+            {
+                "schema_version": "hybrid-publication-projection.v2",
+                "documents": [item.model_dump(mode="json") for item in authorities],
+            }
+        )
+        if (
+            readback.projection_sha256 != expected_digest
+            or readback.validated_document_count
+            != len({item.rule_unit.document_id for item in authorities})
+            or readback.validated_rule_unit_count != len(authorities)
+        ):
+            raise PublicationConflict("PROJECTION_READBACK_MISMATCH")
+        return authorities, readback
+
+    def _validate_smoke(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        operation_id: str,
+        root: RuleUnitManifestRoot,
+        source_publication_seq: int,
+        documents: tuple[ProjectionDocument, ...],
+        authorities: tuple[ProjectionAuthorityDocument, ...],
+    ) -> str:
+        target = select_projection_smoke_target(
+            authorities,
+            publication_sequence=source_publication_seq,
+        )
+        projected = {item.projection_id: item for item in documents}
+        query_document = projected.get(target.projection_id)
+        if query_document is None:
+            raise PublicationConflict("PROJECTION_SMOKE_MISMATCH")
+        smoke = self.index.validate_smoke_retrieval(
+            ProjectionSmokeRequest(
+                identity=identity,
+                publication_attempt_id=operation_id,
+                manifest_root_sha256=root.root_sha256,
+                source_publication_seq=source_publication_seq,
+                target_projection_id=target.projection_id,
+                query_text=projection_smoke_query_text(target),
+                query_embedding=query_document.embedding,
+                authorization=projection_smoke_authorization(target),
+                as_of_date=projection_smoke_as_of_date(target),
+                expected_documents=authorities,
+                rrf_rank_constant=self.rrf_rank_constant,
+            )
+        )
+        validate_projection_smoke_result(
+            smoke,
+            documents=authorities,
+            publication_sequence=source_publication_seq,
+            target_projection_id=target.projection_id,
+        )
+        return smoke.validation_checkpoint
 
     def _embed_documents(
         self,
         generation: object,
         documents: tuple[ProjectionDocument, ...],
     ) -> tuple[ProjectionDocument, ...]:
-        from proof_agent.contracts.knowledge_index import KnowledgeIndexGeneration
-
         exact_generation = KnowledgeIndexGeneration.model_validate(generation)
         if hashlib.sha256(self.embedding_instruction.encode("utf-8")).hexdigest() != (
             exact_generation.embedding_instruction_sha256

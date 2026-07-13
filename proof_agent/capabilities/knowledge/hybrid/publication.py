@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 import hashlib
 from threading import RLock
 from typing import Annotated, Literal, Protocol
@@ -28,6 +28,8 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     ProjectionAuthorityDocument,
     ProjectionClosure,
     ProjectionDocument,
+    ProjectionSmokeRequest,
+    ProjectionSmokeResult,
     SearchIndexIdentity,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
@@ -36,6 +38,7 @@ from proof_agent.contracts.insurance_rules import (
     ApprovedInsuranceRuleMetadataRevision,
     InsuranceRuleUnitRevision,
 )
+from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
 from proof_agent.contracts.knowledge_index import (
     HybridKnowledgePublicationRecord,
     KnowledgeIndexGeneration,
@@ -228,11 +231,6 @@ class HybridPublicationService:
                 )
                 for document in new_documents
             )
-            self.repository.record_scheduler_metrics(
-                attempt.attempt_id,
-                queue_time_ms=queue_time_ms,
-                service_time_ms=service_time_ms,
-            )
             bulk_checkpoints: list[str] = []
             for batch in _batches(new_documents, 1_000):
                 projected = True
@@ -283,6 +281,45 @@ class HybridPublicationService:
                 or readback.validated_rule_unit_count != len(union_documents)
             ):
                 raise PublicationConflict("PROJECTION_READBACK_MISMATCH")
+            smoke_target = select_projection_smoke_target(
+                union_documents,
+                publication_sequence=attempt.reserved_publication_seq,
+            )
+            smoke_query = projection_smoke_query_text(smoke_target)
+            smoke_embedding = self.embedding.embed(
+                texts=(smoke_query,),
+                model_revision=request.generation.embedding_model_revision,
+                instruction=request.embedding_instruction,
+                dimension=request.generation.embedding_dimension,
+                normalized=request.generation.normalized,
+                priority="offline",
+                timeout_seconds=request.embedding_timeout_seconds,
+            )
+            smoke = self.index.validate_smoke_retrieval(
+                ProjectionSmokeRequest(
+                    identity=request.identity,
+                    publication_attempt_id=attempt.attempt_id,
+                    manifest_root_sha256=manifest.root.root_sha256,
+                    source_publication_seq=attempt.reserved_publication_seq,
+                    target_projection_id=smoke_target.projection_id,
+                    query_text=smoke_query,
+                    query_embedding=smoke_embedding.vectors[0],
+                    authorization=projection_smoke_authorization(smoke_target),
+                    as_of_date=projection_smoke_as_of_date(smoke_target),
+                    expected_documents=union_documents,
+                )
+            )
+            validate_projection_smoke_result(
+                smoke,
+                documents=union_documents,
+                publication_sequence=attempt.reserved_publication_seq,
+                target_projection_id=smoke_target.projection_id,
+            )
+            self.repository.record_scheduler_metrics(
+                attempt.attempt_id,
+                queue_time_ms=queue_time_ms + smoke_embedding.queue_time_ms,
+                service_time_ms=service_time_ms + smoke_embedding.service_time_ms,
+            )
             validated_attempt = self.repository.mark_validated(attempt.attempt_id)
             coverage = {attempt.reserved_publication_seq}
             if authority.parent_attestation is not None:
@@ -296,6 +333,7 @@ class HybridPublicationService:
                         "schema_version": "hybrid-publication-refresh.v1",
                         "bulk_checkpoints": bulk_checkpoints,
                         "readback_checkpoint": readback.refresh_checkpoint,
+                        "smoke_checkpoint": smoke.validation_checkpoint,
                     }
                 ),
                 manifest_root_sha256=manifest.root.root_sha256,
@@ -522,6 +560,91 @@ def _embed_projection_seeds(
         for seed, vector in zip(seeds, vectors, strict=True)
     )
     return documents, queue_time_ms, service_time_ms
+
+
+def select_projection_smoke_target(
+    documents: tuple[ProjectionAuthorityDocument, ...],
+    *,
+    publication_sequence: int,
+) -> ProjectionAuthorityDocument:
+    active = tuple(
+        item
+        for item in documents
+        if item.manifest_entry.publication_seq_from <= publication_sequence
+        and (
+            item.manifest_entry.publication_seq_to is None
+            or item.manifest_entry.publication_seq_to >= publication_sequence
+        )
+    )
+    if not active:
+        raise PublicationConflict("PROJECTION_SMOKE_MISMATCH")
+    return min(active, key=lambda item: item.projection_id)
+
+
+def projection_smoke_authorization(
+    target: ProjectionAuthorityDocument,
+) -> InstitutionAuthorizationContext:
+    visibility = target.rule_unit.visibility_scope
+    if visibility.visibility == "PUBLIC":
+        return InstitutionAuthorizationContext()
+    scopes: dict[str, tuple[str, ...]] = {}
+    for field in ("institutions", "regions", "channels", "roles", "business_lines"):
+        dimension = getattr(visibility, field)
+        if dimension is None:
+            raise PublicationConflict("PROJECTION_SMOKE_MISMATCH")
+        scopes[field] = (dimension.values[0],) if dimension.mode == "ALLOWLIST" else ()
+    if not any(scopes.values()):
+        scopes["institutions"] = ("__proofagent_publication_smoke__",)
+    return InstitutionAuthorizationContext(
+        institutions=scopes["institutions"],
+        regions=scopes["regions"],
+        channels=scopes["channels"],
+        roles=scopes["roles"],
+        business_lines=scopes["business_lines"],
+    )
+
+
+def projection_smoke_as_of_date(target: ProjectionAuthorityDocument) -> date:
+    metadata = target.approved_metadata
+    return metadata.effective_from or metadata.effective_to or date(2000, 1, 1)
+
+
+def projection_smoke_query_text(target: ProjectionAuthorityDocument) -> str:
+    query = target.rule_unit.content[:10_000].strip()
+    if not query:
+        raise PublicationConflict("PROJECTION_SMOKE_MISMATCH")
+    return query
+
+
+def validate_projection_smoke_result(
+    result: ProjectionSmokeResult,
+    *,
+    documents: tuple[ProjectionAuthorityDocument, ...],
+    publication_sequence: int,
+    target_projection_id: str,
+) -> None:
+    active = {
+        item.projection_id: item.rule_unit.rule_unit_revision_id
+        for item in documents
+        if item.manifest_entry.publication_seq_from <= publication_sequence
+        and (
+            item.manifest_entry.publication_seq_to is None
+            or item.manifest_entry.publication_seq_to >= publication_sequence
+        )
+    }
+    matched = tuple(
+        zip(
+            result.matched_projection_ids,
+            result.matched_rule_unit_revision_ids,
+            strict=True,
+        )
+    )
+    if (
+        not matched
+        or target_projection_id not in result.matched_projection_ids
+        or any(active.get(projection_id) != rule_id for projection_id, rule_id in matched)
+    ):
+        raise PublicationConflict("PROJECTION_SMOKE_MISMATCH")
 
 
 def _projection_documents_digest(

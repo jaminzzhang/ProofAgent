@@ -16,6 +16,8 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     ProjectionClosureResult,
     ProjectionDocument,
     ProjectionReadbackResult,
+    ProjectionSmokeRequest,
+    ProjectionSmokeResult,
     SearchIndexIdentity,
 )
 from proof_agent.capabilities.knowledge.hybrid.publication import (
@@ -145,6 +147,7 @@ class _Index:
         self.requests: list[ProjectionBulkRequest] = []
         self.closures: list[ProjectionClosure] = []
         self.readbacks: list[tuple[ProjectionAuthorityDocument, ...]] = []
+        self.smokes: list[ProjectionSmokeRequest] = []
 
     def bulk_upsert(self, request: ProjectionBulkRequest) -> ProjectionBulkResult:
         self.requests.append(request)
@@ -224,6 +227,24 @@ class _Index:
             refresh_checkpoint="readback-1",
             validated_document_count=len({item.rule_unit.document_id for item in documents}),
             validated_rule_unit_count=len(documents),
+        )
+
+    def validate_smoke_retrieval(self, request: ProjectionSmokeRequest) -> ProjectionSmokeResult:
+        self.smokes.append(request)
+        target = next(
+            item
+            for item in request.expected_documents
+            if item.projection_id == request.target_projection_id
+            and item.manifest_entry.publication_seq_from <= request.source_publication_seq
+            and (
+                item.manifest_entry.publication_seq_to is None
+                or item.manifest_entry.publication_seq_to >= request.source_publication_seq
+            )
+        )
+        return ProjectionSmokeResult(
+            validation_checkpoint="7" * 64,
+            matched_projection_ids=(target.projection_id,),
+            matched_rule_unit_revision_ids=(target.rule_unit.rule_unit_revision_id,),
         )
 
 
@@ -317,10 +338,42 @@ def test_publication_is_offline_attested_and_metrics_do_not_change_candidate(tmp
     service, repository, embedding, _ = _service(tmp_path)
     publication = service.publish(_request())
     assert publication.source_publication_seq == 1
-    assert embedding.priorities == ["offline"]
+    assert embedding.priorities == ["offline", "offline"]
     assert repository.metrics
     assert repository.sources["source-1"]["candidate"] == _request().candidate_digest
     assert service.close() is None
+
+
+def test_publication_requires_governed_smoke_before_attestation(tmp_path: Any) -> None:
+    class SmokeFailingIndex(_Index):
+        def validate_smoke_retrieval(
+            self, request: ProjectionSmokeRequest
+        ) -> ProjectionSmokeResult:
+            del request
+            raise RuntimeError("smoke retrieval failed")
+
+    repository = InMemoryHybridPublicationRepository()
+    request = _request()
+    repository.register_source(
+        source_id=request.source_id,
+        source_draft_version_id=request.source_draft_version_id,
+        candidate_digest=request.candidate_digest,
+        generation=request.generation,
+    )
+    _register_validation(repository, request)
+    service = HybridPublicationService(
+        repository=repository,
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path),
+        index=SmokeFailingIndex(),
+        embedding=cast(Any, _Embedding()),
+    )
+
+    with pytest.raises(RuntimeError, match="smoke retrieval failed"):
+        service.publish(request)
+
+    assert repository.publications == {}
+    assert repository.attestations == {}
+    assert repository.staged_commits == {}
 
 
 def test_concurrent_attempt_and_stale_candidate_are_stable_conflicts(tmp_path: Any) -> None:

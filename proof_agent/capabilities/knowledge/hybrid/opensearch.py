@@ -34,6 +34,8 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     ProjectionClosureResult,
     ProjectionDocument,
     ProjectionReadbackResult,
+    ProjectionSmokeRequest,
+    ProjectionSmokeResult,
     SearchIndexIdentity,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
@@ -1171,7 +1173,11 @@ if (ctx.op == 'create') {
     throw new IllegalArgumentException('invalid interval close');
   }
   if (ctx._source.projection_sha256 == params.doc.projection_sha256) {
-    ctx.op = 'noop';
+    if (ctx._source.publication_attempt_id == params.doc.publication_attempt_id) {
+      ctx.op = 'noop';
+    } else {
+      ctx._source.publication_attempt_id = params.doc.publication_attempt_id;
+    }
   } else {
     if (newClosed) {
       ctx._source.publication_seq_to = params.doc.publication_seq_to;
@@ -2457,6 +2463,81 @@ class OpenSearchHybridIndex:
             refresh_checkpoint=checkpoint,
         )
 
+    def validate_smoke_retrieval(self, request: ProjectionSmokeRequest) -> ProjectionSmokeResult:
+        """Prove governed sequence/ACL retrieval returns manifest-bound evidence."""
+
+        expected = {
+            item.rule_unit.rule_unit_revision_id: item
+            for item in request.expected_documents
+            if item.manifest_entry.publication_seq_from <= request.source_publication_seq
+            and (
+                item.manifest_entry.publication_seq_to is None
+                or item.manifest_entry.publication_seq_to >= request.source_publication_seq
+            )
+        }
+        if not expected:
+            raise OpenSearchProjectionError("projection smoke has no active expected authority")
+        target = next(
+            (
+                item
+                for item in request.expected_documents
+                if item.projection_id == request.target_projection_id
+            ),
+            None,
+        )
+        if target is None or target.rule_unit.rule_unit_revision_id not in expected:
+            raise OpenSearchProjectionError("projection smoke target is not active")
+        hits = self.search(
+            HybridSearchRequest(
+                identity=request.identity,
+                manifest_root_sha256=request.manifest_root_sha256,
+                query_text=request.query_text,
+                query_embedding=request.query_embedding,
+                source_publication_seq=request.source_publication_seq,
+                authorization=request.authorization,
+                as_of_date=request.as_of_date,
+                lexical_budget=100,
+                dense_budget=100,
+                rrf_window=200,
+                rrf_pipeline=rrf_pipeline_name(rank_constant=request.rrf_rank_constant),
+                rrf_rank_constant=request.rrf_rank_constant,
+                limit=200,
+            )
+        )
+        matched: list[HybridSearchHit] = []
+        for hit in hits:
+            authority = expected.get(hit.rule_unit_revision_id)
+            if authority is None or authority.projection_id != request.target_projection_id:
+                continue
+            entry = authority.manifest_entry
+            if (
+                hit.projection_id == authority.projection_id
+                and hit.document_id == entry.document_id
+                and hit.revision_id == entry.revision_id
+                and hit.manifest_entry_core_sha256 == _manifest_entry_core_sha256(entry)
+                and hit.content_sha256 == entry.content_sha256
+                and hit.authority_sha256 == entry.authority_sha256
+                and hit.citation_uri == entry.citation_uri
+                and hit.content == authority.rule_unit.content
+            ):
+                matched.append(hit)
+        if not matched:
+            raise OpenSearchProjectionError(
+                "projection smoke did not return expected governed evidence"
+            )
+        matched.sort(key=lambda item: (item.rank, item.projection_id))
+        return ProjectionSmokeResult(
+            validation_checkpoint=stable_digest(
+                {
+                    "schema_version": "opensearch-projection-smoke.v1",
+                    "request": request.model_dump(mode="json"),
+                    "matched_hits": [item.model_dump(mode="json") for item in matched],
+                }
+            ),
+            matched_projection_ids=tuple(item.projection_id for item in matched),
+            matched_rule_unit_revision_ids=tuple(item.rule_unit_revision_id for item in matched),
+        )
+
     def delete_attempt_projection(
         self,
         *,
@@ -2470,10 +2551,8 @@ class OpenSearchHybridIndex:
         response = self._transport.request(
             method="POST",
             path=f"/{index_name}/_delete_by_query",
-            json_body={
-                "query": {"term": {"publication_attempt_id": publication_attempt_id}},
-                "conflicts": "abort",
-            },
+            json_body={"query": {"term": {"publication_attempt_id": publication_attempt_id}}},
+            query_params={"conflicts": "abort"},
         )
         failures = response.body.get("failures")
         total = response.body.get("total")

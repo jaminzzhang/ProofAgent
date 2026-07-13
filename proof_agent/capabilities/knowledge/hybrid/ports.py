@@ -147,6 +147,49 @@ class ProjectionReadbackResult(_PortModel):
     validated_rule_unit_count: PositiveInt
 
 
+class ProjectionSmokeRequest(_PortModel):
+    identity: SearchIndexIdentity
+    publication_attempt_id: NonBlankStr
+    manifest_root_sha256: Sha256
+    source_publication_seq: PositiveInt
+    target_projection_id: NonBlankStr
+    query_text: BoundedQuery
+    query_embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
+    authorization: InstitutionAuthorizationContext
+    as_of_date: Annotated[date, Field(strict=True)]
+    expected_documents: tuple[ProjectionAuthorityDocument, ...] = Field(min_length=1)
+    rrf_rank_constant: Annotated[StrictInt, Field(gt=0, le=1_000)] = 60
+
+    @model_validator(mode="after")
+    def validate_smoke_authority(self) -> Self:
+        if len(self.query_embedding) != self.identity.generation.embedding_dimension:
+            raise ValueError("smoke query embedding must match generation dimension")
+        projection_ids = [item.projection_id for item in self.expected_documents]
+        if len(projection_ids) != len(set(projection_ids)):
+            raise ValueError("smoke expected projection identities must be unique")
+        if self.target_projection_id not in projection_ids:
+            raise ValueError("smoke target projection must be in expected authority")
+        return self
+
+
+class ProjectionSmokeResult(_PortModel):
+    validation_checkpoint: Sha256
+    matched_projection_ids: tuple[NonBlankStr, ...] = Field(min_length=1)
+    matched_rule_unit_revision_ids: tuple[NonBlankStr, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_matches(self) -> Self:
+        if len(self.matched_projection_ids) != len(self.matched_rule_unit_revision_ids):
+            raise ValueError("smoke matches must pair projection and Rule Unit identities")
+        if len(self.matched_projection_ids) != len(set(self.matched_projection_ids)):
+            raise ValueError("smoke matched projection identities must be unique")
+        if len(self.matched_rule_unit_revision_ids) != len(
+            set(self.matched_rule_unit_revision_ids)
+        ):
+            raise ValueError("smoke matched Rule Unit identities must be unique")
+        return self
+
+
 class HybridProjectionPublicationPort(Protocol):
     def materialize_authority(
         self,
@@ -166,6 +209,10 @@ class HybridProjectionPublicationPort(Protocol):
         manifest_root_sha256: str,
         documents: tuple[ProjectionAuthorityDocument, ...],
     ) -> ProjectionReadbackResult: ...
+
+    def validate_smoke_retrieval(
+        self, request: ProjectionSmokeRequest
+    ) -> ProjectionSmokeResult: ...
 
     def close_projection_memberships(
         self,

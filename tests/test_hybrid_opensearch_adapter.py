@@ -29,7 +29,11 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridSearchRequest,
     ProjectionBulkRequest,
     ProjectionDocument,
+    ProjectionSmokeRequest,
     SearchIndexIdentity,
+)
+from proof_agent.capabilities.knowledge.hybrid.publication import (
+    projection_smoke_authorization,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
 from proof_agent.contracts import (
@@ -803,6 +807,95 @@ def test_bulk_upsert_is_attempt_scoped_and_allows_only_idempotence_or_interval_c
         )
         == 2
     )
+
+
+def test_delete_by_query_puts_conflicts_only_in_query_parameters() -> None:
+    class DeleteTransport(RecordingTransport):
+        def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+            if kwargs["path"].endswith("/_delete_by_query"):
+                self.calls.append(kwargs)
+                return OpenSearchTransportResponse(
+                    status_code=200,
+                    body={
+                        "timed_out": False,
+                        "failures": [],
+                        "total": 1,
+                        "deleted": 1,
+                        "version_conflicts": 0,
+                    },
+                )
+            return super().request(**kwargs)
+
+    transport = DeleteTransport()
+    OpenSearchHybridIndex(transport=transport).delete_attempt_projection(
+        identity=index_identity(),
+        publication_attempt_id="attempt-orphan",
+    )
+
+    call = next(item for item in transport.calls if item["path"].endswith("/_delete_by_query"))
+    assert call["query_params"] == {"conflicts": "abort"}
+    assert call["json_body"] == {"query": {"term": {"publication_attempt_id": "attempt-orphan"}}}
+
+
+def test_projection_smoke_uses_sequence_acl_and_returns_citation_bound_evidence() -> None:
+    document = projection_document()
+    hit = projected_search_hit(document=document)
+    transport = RecordingTransport(search_hits=[hit])
+    index = OpenSearchHybridIndex(transport=transport)
+    authority = index.materialize_authority(
+        document,
+        identity=index_identity(),
+        publication_attempt_id="attempt-1",
+    )
+
+    result = index.validate_smoke_retrieval(
+        ProjectionSmokeRequest(
+            identity=index_identity(),
+            publication_attempt_id="attempt-1",
+            manifest_root_sha256=SHA_B,
+            source_publication_seq=1,
+            target_projection_id=document.projection_id,
+            query_text=document.rule_unit.content,
+            query_embedding=document.embedding,
+            authorization=projection_smoke_authorization(authority),
+            as_of_date=date(2026, 7, 14),
+            expected_documents=(authority,),
+        )
+    )
+
+    search_call = next(item for item in transport.calls if item["path"].endswith("/_search"))
+    query = search_call["json_body"]["query"]
+    assert "hybrid" in query
+    assert result.matched_projection_ids == (document.projection_id,)
+    assert result.matched_rule_unit_revision_ids == (document.rule_unit.rule_unit_revision_id,)
+
+
+def test_projection_smoke_rejects_evidence_outside_authorized_scope() -> None:
+    document = projection_document()
+    index = OpenSearchHybridIndex(
+        transport=RecordingTransport(search_hits=[projected_search_hit(document=document)])
+    )
+    authority = index.materialize_authority(
+        document,
+        identity=index_identity(),
+        publication_attempt_id="attempt-1",
+    )
+
+    with pytest.raises(OpenSearchProjectionError, match="unauthorized"):
+        index.validate_smoke_retrieval(
+            ProjectionSmokeRequest(
+                identity=index_identity(),
+                publication_attempt_id="attempt-1",
+                manifest_root_sha256=SHA_B,
+                source_publication_seq=1,
+                target_projection_id=document.projection_id,
+                query_text=document.rule_unit.content,
+                query_embedding=document.embedding,
+                authorization=InstitutionAuthorizationContext(),
+                as_of_date=date(2026, 7, 14),
+                expected_documents=(authority,),
+            )
+        )
 
 
 def test_bulk_upsert_rejects_backend_item_identity_mismatch() -> None:

@@ -19,6 +19,7 @@ from proof_agent.capabilities.knowledge.hybrid.recovery import (
     HybridRecoveryService,
     OrphanProjection,
     OrphanReconciliationReport,
+    OpenSearchRecoveryIndex,
     RebuildProjectionAuthority,
     RetainedManifestAuthority,
     recovery_service_from_environment,
@@ -29,7 +30,7 @@ from proof_agent.capabilities.knowledge.hybrid.s3_artifacts import (
 )
 from proof_agent.configuration.hybrid_knowledge_repository import FileSystemKnowledgeArtifactStore
 from proof_agent.contracts.knowledge_index import KnowledgeProjectionAttestation
-from test_hybrid_publication import _request, _service
+from test_hybrid_publication import _Embedding, _Index, _request, _service
 
 
 class _RecoveryRepository:
@@ -241,6 +242,118 @@ def test_generation_rebuild_uses_exact_artifacts_fresh_uuid_and_same_coverage(
         repository.authority.current_attestation.attestation_sha256
     )
     assert repository.swapped is not None
+
+
+class _LowLevelRecoveryIndex(_Index):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[str] = []
+        self.deleted_rebuilds: list[SearchIndexIdentity] = []
+
+    def create_index(self, generation: Any, **kwargs: Any) -> SearchIndexIdentity:
+        self.events.append("create")
+        return SearchIndexIdentity(
+            generation=generation,
+            index_uuid="fresh-index-uuid",
+            projection_locator=kwargs["physical_name_override"],
+        )
+
+    def bulk_upsert(self, request: Any) -> Any:
+        self.events.append("bulk")
+        return super().bulk_upsert(request)
+
+    def validate_exact_projection(self, **kwargs: Any) -> Any:
+        self.events.append("readback")
+        return super().validate_exact_projection(**kwargs)
+
+    def validate_smoke_retrieval(self, request: Any) -> Any:
+        self.events.append("smoke")
+        return super().validate_smoke_retrieval(request)
+
+    def delete_attempt_projection(self, **_: Any) -> str:
+        self.events.append("cleanup")
+        return "cleanup-checkpoint"
+
+    def delete_rebuild_index(self, identity: SearchIndexIdentity) -> None:
+        self.deleted_rebuilds.append(identity)
+
+
+def test_rebuild_requires_exact_readback_and_smoke_before_evidence(tmp_path: Any) -> None:
+    service, repository, _ = _fixture(tmp_path)
+    root, shard_contents, documents = service._verified_inputs(repository.authority)
+    index = _LowLevelRecoveryIndex()
+    adapter = OpenSearchRecoveryIndex(
+        index=index,  # type: ignore[arg-type]
+        embedding=_Embedding(),  # type: ignore[arg-type]
+        embedding_instruction="Represent the insurance rule.",
+    )
+
+    _, evidence = adapter.rebuild_generation(
+        repository.authority,
+        operation_id="rebuild-operation-2",
+        root=root,
+        shard_contents=shard_contents,
+        documents=documents,
+    )
+
+    assert index.events == ["create", "bulk", "readback", "smoke"]
+    assert index.readbacks
+    assert index.smokes
+    assert evidence.validated_rule_unit_count == len(documents)
+
+
+def test_shared_orphan_repair_reads_back_after_cleanup_then_smokes(tmp_path: Any) -> None:
+    service, repository, _ = _fixture(tmp_path)
+    root, _, documents = service._verified_inputs(repository.authority)
+    index = _LowLevelRecoveryIndex()
+    adapter = OpenSearchRecoveryIndex(
+        index=index,  # type: ignore[arg-type]
+        embedding=_Embedding(),  # type: ignore[arg-type]
+        embedding_instruction="Represent the insurance rule.",
+    )
+    orphan = OrphanProjection(
+        attempt_id="orphan-attempt",
+        source_id=repository.authority.source_id,
+        identity=repository.authority.current_identity,
+    )
+
+    adapter.repair_attempt_projection(
+        repository.authority,
+        orphan,
+        operation_id="repair-operation-2",
+        root=root,
+        documents=documents,
+    )
+
+    assert index.events == ["bulk", "cleanup", "readback", "smoke"]
+
+
+def test_rebuild_readback_failure_deletes_candidate_and_never_smokes(tmp_path: Any) -> None:
+    class ReadbackFailingIndex(_LowLevelRecoveryIndex):
+        def validate_exact_projection(self, **kwargs: Any) -> Any:
+            self.events.append("readback")
+            raise RuntimeError("exact readback failed")
+
+    service, repository, _ = _fixture(tmp_path)
+    root, shard_contents, documents = service._verified_inputs(repository.authority)
+    index = ReadbackFailingIndex()
+    adapter = OpenSearchRecoveryIndex(
+        index=index,  # type: ignore[arg-type]
+        embedding=_Embedding(),  # type: ignore[arg-type]
+        embedding_instruction="Represent the insurance rule.",
+    )
+
+    with pytest.raises(RuntimeError, match="exact readback failed"):
+        adapter.rebuild_generation(
+            repository.authority,
+            operation_id="rebuild-operation-3",
+            root=root,
+            shard_contents=shard_contents,
+            documents=documents,
+        )
+
+    assert index.events == ["create", "bulk", "readback"]
+    assert len(index.deleted_rebuilds) == 1
 
 
 def test_rebuild_unions_historical_rule_across_failed_sequence_gap(tmp_path: Any) -> None:
