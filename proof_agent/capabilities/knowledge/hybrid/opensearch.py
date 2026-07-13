@@ -9,10 +9,17 @@ import hashlib
 import json
 import math
 import re
-from typing import Protocol
+import ssl
+from typing import Any, Iterator, Protocol, cast
 from urllib.parse import urlsplit
 
 import httpx
+
+from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    PrivateAddressResolver,
+    PrivateNetworkPolicy,
+    _PinnedNetworkBackend,
+)
 
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridSearchHit,
@@ -60,6 +67,43 @@ class OpenSearchTransport(Protocol):
     ) -> OpenSearchTransportResponse: ...
 
 
+@dataclass(frozen=True, slots=True)
+class OpenSearchSecretMaterial:
+    headers: Mapping[str, str]
+    client_certificate_path: str | None = None
+    client_key_path: str | None = None
+    ca_bundle_path: str | None = None
+
+
+class OpenSearchSecretProvider(Protocol):
+    def resolve(self, secret_handle: str) -> OpenSearchSecretMaterial: ...
+
+
+def _validate_bounded_json(value: object) -> None:
+    pending: list[tuple[object, int]] = [(value, 1)]
+    nodes = 0
+    while pending:
+        current, depth = pending.pop()
+        nodes += 1
+        if nodes > 200_000 or depth > 64:
+            raise OpenSearchProjectionError("OpenSearch JSON exceeds structural limits")
+        if isinstance(current, dict):
+            if len(current) > 20_000:
+                raise OpenSearchProjectionError("OpenSearch JSON object exceeds item limits")
+            for key, item in current.items():
+                if type(key) is not str or len(key) > 20_000:
+                    raise OpenSearchProjectionError("OpenSearch JSON key is invalid")
+                pending.append((item, depth + 1))
+        elif isinstance(current, list):
+            if len(current) > 20_000:
+                raise OpenSearchProjectionError("OpenSearch JSON array exceeds item limits")
+            pending.extend((item, depth + 1) for item in current)
+        elif isinstance(current, str) and len(current) > 100_000:
+            raise OpenSearchProjectionError("OpenSearch JSON string exceeds limits")
+        elif isinstance(current, float) and not math.isfinite(current):
+            raise OpenSearchProjectionError("OpenSearch JSON number must be finite")
+
+
 class HttpxOpenSearchTransport:
     """Guarded internal HTTP transport with redirects and proxy inheritance disabled."""
 
@@ -71,6 +115,10 @@ class HttpxOpenSearchTransport:
         timeout_seconds: float = 10.0,
         allow_insecure_loopback: bool = False,
         max_response_bytes: int = 8 * 1024 * 1024,
+        network_policy: PrivateNetworkPolicy | None = None,
+        resolver: PrivateAddressResolver | None = None,
+        secret_handle: str | None = None,
+        secret_provider: OpenSearchSecretProvider | None = None,
     ) -> None:
         if type(endpoint) is not str or not endpoint.strip():
             raise ValueError("OpenSearch endpoint must be a nonblank string")
@@ -103,6 +151,8 @@ class HttpxOpenSearchTransport:
             parsed.scheme == "http" and allow_insecure_loopback and loopback
         ):
             raise ValueError("OpenSearch requires internal HTTPS outside explicit loopback tests")
+        if not loopback and (network_policy is None or resolver is None):
+            raise ValueError("production OpenSearch requires pinned private DNS/CIDR policy")
         if port is not None and not 1 <= port <= 65535:
             raise ValueError("OpenSearch endpoint port is invalid")
         if (
@@ -116,11 +166,123 @@ class HttpxOpenSearchTransport:
         base_url = endpoint.rstrip("/")
         self._max_response_bytes = max_response_bytes
         self._max_request_bytes = 64 * 1024 * 1024
-        self._client = httpx.Client(
+        material = OpenSearchSecretMaterial(headers={})
+        if (secret_handle is None) != (secret_provider is None):
+            raise ValueError("OpenSearch secret handle and provider must be supplied together")
+        if secret_handle is not None and secret_provider is not None:
+            if not secret_handle.strip():
+                raise ValueError("OpenSearch secret handle must be nonblank")
+            material = secret_provider.resolve(secret_handle)
+        self._auth_headers = self._validate_secret_material(material)
+        ssl_context = ssl.create_default_context(cafile=material.ca_bundle_path)
+        if (material.client_certificate_path is None) != (material.client_key_path is None):
+            raise ValueError("OpenSearch mTLS requires both certificate and key handles")
+        if material.client_certificate_path is not None:
+            ssl_context.load_cert_chain(
+                material.client_certificate_path,
+                material.client_key_path,
+            )
+        if loopback:
+            self._client = httpx.Client(
+                base_url=base_url,
+                timeout=float(timeout_seconds),
+                follow_redirects=False,
+                trust_env=False,
+            )
+        else:
+            assert network_policy is not None and resolver is not None
+            self._client = self._pinned_client(
+                base_url=base_url,
+                timeout_seconds=float(timeout_seconds),
+                ssl_context=ssl_context,
+                network_policy=network_policy,
+                resolver=resolver,
+            )
+
+    @staticmethod
+    def _validate_secret_material(material: OpenSearchSecretMaterial) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        for key, value in material.headers.items():
+            if (
+                type(key) is not str
+                or type(value) is not str
+                or not key
+                or not value
+                or "\r" in key + value
+                or "\n" in key + value
+                or len(key) > 128
+                or len(value) > 8_192
+            ):
+                raise ValueError("OpenSearch secret provider returned invalid headers")
+            headers[key] = value
+        return headers
+
+    @staticmethod
+    def _pinned_client(
+        *,
+        base_url: str,
+        timeout_seconds: float,
+        ssl_context: ssl.SSLContext,
+        network_policy: PrivateNetworkPolicy,
+        resolver: PrivateAddressResolver,
+    ) -> httpx.Client:
+        import httpcore
+
+        backend = _PinnedNetworkBackend(
+            policy=network_policy,
+            resolver=resolver,
+            backend=httpcore.SyncBackend(),
+        )
+        pool = httpcore.ConnectionPool(
+            ssl_context=ssl_context,
+            max_connections=4,
+            max_keepalive_connections=4,
+            retries=0,
+            network_backend=cast(Any, backend),
+        )
+
+        class ResponseStream(httpx.SyncByteStream):
+            def __init__(self, stream: Any) -> None:
+                self._stream = stream
+
+            def __iter__(self) -> Iterator[bytes]:
+                yield from self._stream
+
+            def close(self) -> None:
+                self._stream.close()
+
+        class PinnedTransport(httpx.BaseTransport):
+            def handle_request(self, request: httpx.Request) -> httpx.Response:
+                core_response = pool.handle_request(
+                    httpcore.Request(
+                        method=request.method,
+                        url=httpcore.URL(
+                            scheme=request.url.raw_scheme,
+                            host=request.url.raw_host,
+                            port=request.url.port,
+                            target=request.url.raw_path,
+                        ),
+                        headers=request.headers.raw,
+                        content=request.stream,
+                        extensions=request.extensions,
+                    )
+                )
+                return httpx.Response(
+                    status_code=core_response.status,
+                    headers=core_response.headers,
+                    stream=ResponseStream(core_response.stream),
+                    extensions=core_response.extensions,
+                )
+
+            def close(self) -> None:
+                pool.close()
+
+        return httpx.Client(
             base_url=base_url,
-            timeout=float(timeout_seconds),
+            timeout=timeout_seconds,
             follow_redirects=False,
             trust_env=False,
+            transport=PinnedTransport(),
         )
 
     def request(
@@ -166,7 +328,11 @@ class HttpxOpenSearchTransport:
             encoded_content = content
         if encoded_content is not None and len(encoded_content) > self._max_request_bytes:
             raise OpenSearchProjectionError("OpenSearch request exceeds the configured limit")
-        headers = {"Content-Type": content_type, "Accept": "application/json"}
+        headers = {
+            **self._auth_headers,
+            "Content-Type": content_type,
+            "Accept": "application/json",
+        }
         try:
             with self._client.stream(
                 method,
@@ -189,10 +355,11 @@ class HttpxOpenSearchTransport:
             raise OpenSearchProjectionError("OpenSearch transport request failed") from exc
         try:
             decoded = json.loads(payload) if payload else {}
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise OpenSearchProjectionError("OpenSearch returned invalid JSON") from exc
         if not isinstance(decoded, dict):
             raise OpenSearchProjectionError("OpenSearch response must be a JSON object")
+        _validate_bounded_json(decoded)
         return OpenSearchTransportResponse(status_code=status_code, body=decoded)
 
     def close(self) -> None:
@@ -244,7 +411,7 @@ def rule_unit_index_mapping(*, dimension: int, analyzer: str = "cjk") -> dict[st
             "rule_unit_revision_id",
             "structured_artifact_build_identity",
             "index_generation_id",
-            "authority_manifest_digest",
+            "authority_manifest_digests",
             "metadata_revision_id",
             "metadata_revision_digest",
             "visibility_revision_id",
@@ -271,7 +438,7 @@ def rule_unit_index_mapping(*, dimension: int, analyzer: str = "cjk") -> dict[st
             "immutable_projection_sha256",
             "projection_sha256",
             "publication_attempt_id",
-            "applicability_tokens",
+            "embedding_sha256",
             "block_ids",
             "table_id",
             "table_continuation_id",
@@ -290,14 +457,17 @@ def rule_unit_index_mapping(*, dimension: int, analyzer: str = "cjk") -> dict[st
             "page_numbers": {"type": "integer"},
             "effective_from": {"type": "date", "format": "strict_date"},
             "effective_to": {"type": "date", "format": "strict_date"},
-            "applicability_numbers": {
+            "applicability_predicates": {
                 "type": "nested",
                 "properties": {
                     "key": dict(keyword),
                     "operator": dict(keyword),
-                    "value": {"type": "double"},
+                    "value_tokens": dict(keyword),
+                    "numeric_values": {"type": "double"},
                 },
             },
+            "approved_metadata": {"type": "object", "enabled": False},
+            "approved_visibility": {"type": "object", "enabled": False},
             "lexical_text": {"type": "text", "analyzer": analyzer},
             "content": {"type": "text", "index": False},
             "title": {"type": "text", "analyzer": analyzer},
@@ -323,6 +493,16 @@ def _rule_unit_index_definition(*, dimension: int, analyzer: str) -> dict[str, o
         "settings": {"index": {"knn": True}},
         "mappings": rule_unit_index_mapping(dimension=dimension, analyzer=analyzer),
     }
+
+
+def rule_unit_analyzer_sha256(*, analyzer: str = "cjk") -> str:
+    return stable_digest(
+        {"schema": "proof-agent-opensearch-analyzer.v1", "lexical_analyzer": analyzer}
+    )
+
+
+def rule_unit_mapping_sha256(*, dimension: int, analyzer: str = "cjk") -> str:
+    return stable_digest(rule_unit_index_mapping(dimension=dimension, analyzer=analyzer))
 
 
 def _bounded_text(value: str, *, field_name: str, maximum: int) -> str:
@@ -385,21 +565,48 @@ def project_rule_unit_document(
         raise ValueError("Rule Unit source must match the exact index generation")
     if len(document.embedding) != generation.embedding_dimension:
         raise ValueError("projection embedding must match the exact generation dimension")
+    if document.projection_revision != generation.search_projection_version:
+        raise ValueError("projection revision must match the exact index generation")
     _bounded_text(manifest_root_sha256, field_name="manifest_root_sha256", maximum=64)
     if re.fullmatch(r"[0-9a-f]{64}", manifest_root_sha256) is None:
         raise ValueError("manifest_root_sha256 must be a lowercase SHA-256 digest")
+    if manifest_root_sha256 not in document.authority_manifest_digests:
+        raise ValueError("projection must cover the current authority manifest")
     _bounded_text(publication_attempt_id, field_name="publication_attempt_id", maximum=512)
     _bounded_text(rule.content, field_name="Rule Unit content", maximum=50_000)
+    expected_content_sha256 = hashlib.sha256(rule.content.encode()).hexdigest()
+    if rule.content_sha256 != expected_content_sha256:
+        raise ValueError("Rule Unit content digest does not match exact content")
+    approved_metadata_payload = metadata.model_dump(mode="json")
+    approved_visibility_payload = rule.visibility_scope.model_dump(mode="json")
+    expected_authority_sha256 = stable_digest(
+        {
+            "approved_metadata": approved_metadata_payload,
+            "approved_visibility": approved_visibility_payload,
+        }
+    )
+    if rule.authority_sha256 != expected_authority_sha256:
+        raise ValueError("Rule Unit authority digest does not match approved facts")
+    _validate_citation_binding(
+        entry.citation_uri,
+        source_id=generation.source_id,
+        document_id=rule.document_id,
+        revision_id=rule.revision_id,
+    )
 
     conditions = tuple(sorted(metadata.applicability.conditions, key=lambda item: item.key))
     if len(conditions) > 256 or sum(len(item.values) for item in conditions) > 1_024:
         raise ValueError("approved applicability exceeds projection limits")
-    applicability_tokens = sorted(_applicability_token(condition) for condition in conditions)
-    numeric_values = [
-        {"key": condition.key, "operator": condition.operator, "value": value}
+    applicability_predicates = [
+        {
+            "key": condition.key,
+            "operator": condition.operator,
+            "value_tokens": sorted(_fact_token(value) for value in condition.values),
+            "numeric_values": [
+                value for value in condition.values if type(value) in {int, float}
+            ],
+        }
         for condition in conditions
-        for value in condition.values
-        if type(value) in {int, float}
     ]
     product_codes = sorted(
         {
@@ -455,7 +662,7 @@ def project_rule_unit_document(
         "rule_unit_revision_id": rule.rule_unit_revision_id,
         "structured_artifact_build_identity": rule.structured_build_id,
         "index_generation_id": generation.generation_id,
-        "authority_manifest_digest": manifest_root_sha256,
+        "authority_manifest_digests": list(document.authority_manifest_digests),
         "metadata_revision_id": metadata.metadata_revision_id,
         "metadata_revision_digest": stable_digest(metadata.model_dump(mode="json")),
         "content_sha256": rule.content_sha256,
@@ -472,8 +679,7 @@ def project_rule_unit_document(
         "table_context": table_context,
         "taxonomy_id": metadata.applicability.taxonomy_id,
         "taxonomy_revision_id": metadata.applicability.taxonomy_revision_id,
-        "applicability_tokens": applicability_tokens,
-        "applicability_numbers": numeric_values,
+        "applicability_predicates": applicability_predicates,
         "product_codes": product_codes,
         "rule_type": rule.unit_kind,
         "authority": metadata.authority,
@@ -485,6 +691,9 @@ def project_rule_unit_document(
         ),
         "lexical_text": lexical_text,
         "dense_vector": list(document.embedding),
+        "embedding_sha256": stable_digest({"embedding": list(document.embedding)}),
+        "approved_metadata": approved_metadata_payload,
+        "approved_visibility": approved_visibility_payload,
         "projection_revision": document.projection_revision,
         "publication_attempt_id": publication_attempt_id,
         **_visibility_fields(document),
@@ -500,12 +709,8 @@ def project_rule_unit_document(
     if lineage.table_continuation_id is not None:
         projected["table_continuation_id"] = lineage.table_continuation_id
 
-    immutable = {key: value for key, value in projected.items() if key != "publication_seq_to"}
-    immutable.pop("publication_attempt_id")
-    projected["immutable_projection_sha256"] = stable_digest(immutable)
-    projected["projection_sha256"] = stable_digest(
-        {key: value for key, value in projected.items() if key != "publication_attempt_id"}
-    )
+    projected["immutable_projection_sha256"] = _immutable_projection_sha256(projected)
+    projected["projection_sha256"] = _mutable_projection_sha256(projected)
     return projected
 
 
@@ -521,14 +726,38 @@ def _taxonomy_value(value: object) -> dict[str, object]:
     raise TypeError("taxonomy values must be exact supported scalar types")
 
 
-def _applicability_token(condition: TaxonomyCondition) -> str:
-    payload = {
-        "key": condition.key,
-        "operator": condition.operator,
-        "values": [_taxonomy_value(value) for value in condition.values],
+def _fact_token(value: object) -> str:
+    return stable_digest({"fact": _taxonomy_value(value)})
+
+
+_IMMUTABLE_EXCLUDED_FIELDS = frozenset(
+    {
+        "authority_manifest_digests",
+        "publication_seq_to",
+        "publication_attempt_id",
+        "immutable_projection_sha256",
+        "projection_sha256",
+        "dense_vector",
+        "lexical_text",
     }
-    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
+)
+
+
+def _immutable_projection_sha256(projected: Mapping[str, object]) -> str:
+    return stable_digest(
+        {key: value for key, value in projected.items() if key not in _IMMUTABLE_EXCLUDED_FIELDS}
+    )
+
+
+def _mutable_projection_sha256(projected: Mapping[str, object]) -> str:
+    return stable_digest(
+        {
+            "immutable_projection_sha256": projected["immutable_projection_sha256"],
+            "authority_manifest_digests": projected["authority_manifest_digests"],
+            "publication_seq_from": projected["publication_seq_from"],
+            "publication_seq_to": projected.get("publication_seq_to"),
+        }
+    )
 
 
 def _optional_bound_filter(field: str, operator: str, value: object) -> dict[str, object]:
@@ -582,6 +811,56 @@ def _visibility_filter(authorization: InstitutionAuthorizationContext) -> dict[s
     }
 
 
+def _applicability_fact_filter(condition: TaxonomyCondition) -> dict[str, object]:
+    fact_token = _fact_token(condition.values[0])
+    path = "applicability_predicates"
+    key_field = f"{path}.key"
+    operator_field = f"{path}.operator"
+    values_field = f"{path}.value_tokens"
+    return {
+        "bool": {
+            "should": [
+                {
+                    "bool": {
+                        "must_not": [
+                            {"nested": {"path": path, "query": {"term": {key_field: condition.key}}}}
+                        ]
+                    }
+                },
+                {
+                    "nested": {
+                        "path": path,
+                        "query": {
+                            "bool": {
+                                "filter": [
+                                    {"term": {key_field: condition.key}},
+                                    {"terms": {operator_field: ["EQ", "IN"]}},
+                                    {"term": {values_field: fact_token}},
+                                ]
+                            }
+                        },
+                    }
+                },
+                {
+                    "nested": {
+                        "path": path,
+                        "query": {
+                            "bool": {
+                                "filter": [
+                                    {"term": {key_field: condition.key}},
+                                    {"terms": {operator_field: ["NOT_EQ", "NOT_IN"]}},
+                                ],
+                                "must_not": [{"term": {values_field: fact_token}}],
+                            }
+                        },
+                    }
+                },
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+
+
 def build_common_filter(request: HybridSearchRequest) -> list[dict[str, object]]:
     """Translate governed authority filters once for both retrieval lanes."""
 
@@ -589,17 +868,14 @@ def build_common_filter(request: HybridSearchRequest) -> list[dict[str, object]]
     filters: list[dict[str, object]] = [
         {"term": {"source_id": request.identity.generation.source_id}},
         {"term": {"index_generation_id": request.identity.generation.generation_id}},
-        {"term": {"authority_manifest_digest": request.manifest_root_sha256}},
+        {"term": {"authority_manifest_digests": request.manifest_root_sha256}},
         {"range": {"publication_seq_from": {"lte": sequence}}},
         _optional_bound_filter("publication_seq_to", "gte", sequence),
         _optional_bound_filter("effective_from", "lte", request.as_of_date.isoformat()),
         _optional_bound_filter("effective_to", "gte", request.as_of_date.isoformat()),
         _visibility_filter(request.authorization),
     ]
-    filters.extend(
-        {"term": {"applicability_tokens": _applicability_token(condition)}}
-        for condition in request.applicability_filters
-    )
+    filters.extend(_applicability_fact_filter(condition) for condition in request.applicability_filters)
     return filters
 
 
@@ -609,13 +885,18 @@ def build_hybrid_query(request: HybridSearchRequest) -> dict[str, object]:
     common_filter = build_common_filter(request)
     return {
         "size": request.rrf_window,
-        "_source": True,
+        "_source": sorted(
+            set(
+                _mapping(
+                    rule_unit_index_mapping(dimension=1)["properties"],
+                    field_name="mapping properties",
+                )
+            )
+            - {"dense_vector", "lexical_text"}
+        ),
         "query": {
             "hybrid": {
-                "pagination_depth": max(
-                    request.lexical_budget,
-                    request.dense_budget,
-                ),
+                "pagination_depth": request.lexical_budget,
                 "queries": [
                     {
                         "bool": {
@@ -650,19 +931,29 @@ def build_hybrid_query(request: HybridSearchRequest) -> dict[str, object]:
 _INTERVAL_UPDATE_SCRIPT = """
 if (ctx.op == 'create') {
   ctx._source = params.doc;
-} else if (ctx._source.projection_sha256 == params.doc.projection_sha256) {
-  ctx.op = 'noop';
-} else if (
-  ctx._source.immutable_projection_sha256 == params.doc.immutable_projection_sha256 &&
-  !ctx._source.containsKey('publication_seq_to') &&
-  params.doc.containsKey('publication_seq_to') &&
-  params.doc.publication_seq_to >= params.doc.publication_seq_from
-) {
-  ctx._source.publication_seq_to = params.doc.publication_seq_to;
-  ctx._source.projection_sha256 = params.doc.projection_sha256;
-  ctx._source.publication_attempt_id = params.doc.publication_attempt_id;
 } else {
-  throw new IllegalArgumentException('projection conflict');
+  if (ctx._source.immutable_projection_sha256 != params.doc.immutable_projection_sha256) {
+    throw new IllegalArgumentException('immutable projection conflict');
+  }
+  if (!params.doc.authority_manifest_digests.containsAll(ctx._source.authority_manifest_digests)) {
+    throw new IllegalArgumentException('manifest coverage cannot shrink');
+  }
+  boolean oldClosed = ctx._source.containsKey('publication_seq_to');
+  boolean newClosed = params.doc.containsKey('publication_seq_to');
+  if (oldClosed && (!newClosed || ctx._source.publication_seq_to != params.doc.publication_seq_to)) {
+    throw new IllegalArgumentException('closed interval cannot reopen or change');
+  }
+  if (!oldClosed && newClosed && params.doc.publication_seq_to < params.doc.publication_seq_from) {
+    throw new IllegalArgumentException('invalid interval close');
+  }
+  if (ctx._source.projection_sha256 == params.doc.projection_sha256) {
+    ctx.op = 'noop';
+  } else {
+    ctx._source.authority_manifest_digests = params.doc.authority_manifest_digests;
+    if (newClosed) { ctx._source.publication_seq_to = params.doc.publication_seq_to; }
+    ctx._source.projection_sha256 = params.doc.projection_sha256;
+    ctx._source.publication_attempt_id = params.doc.publication_attempt_id;
+  }
 }
 """.strip()
 
@@ -728,7 +1019,7 @@ def _validate_citation_binding(
 ) -> None:
     parsed = urlsplit(citation_uri)
     if parsed.scheme != "knowledge":
-        return
+        raise OpenSearchProjectionError("Hybrid citations must use the knowledge scheme")
     expected_path = f"/{source_id}/document/{document_id}/revision/{revision_id}"
     if parsed.netloc != "source" or parsed.path != expected_path:
         raise OpenSearchProjectionError("search hit citation does not bind its exact lineage")
@@ -763,6 +1054,31 @@ def _response_index_identity(
         raise OpenSearchProjectionError("OpenSearch index mapping digest does not match")
     if metadata.get("analyzer_sha256") != generation.analyzer_sha256:
         raise OpenSearchProjectionError("OpenSearch index analyzer digest does not match")
+    actual_mapping = {key: value for key, value in mappings.items() if key != "_meta"}
+    if stable_digest(actual_mapping) != generation.mapping_sha256:
+        raise OpenSearchProjectionError("OpenSearch actual mapping digest does not match")
+    properties = _mapping(actual_mapping.get("properties"), field_name="mapping properties")
+    analyzer_fields = (
+        "lexical_text",
+        "title",
+        "heading_path",
+        "definitions",
+        "table_context",
+    )
+    actual_analyzers = {
+        _exact_string(
+            _mapping(properties.get(field), field_name=f"mapping field {field}").get(
+                "analyzer"
+            ),
+            field_name=f"mapping analyzer {field}",
+        )
+        for field in analyzer_fields
+    }
+    if len(actual_analyzers) != 1:
+        raise OpenSearchProjectionError("OpenSearch actual analyzers are inconsistent")
+    actual_analyzer = next(iter(actual_analyzers))
+    if rule_unit_analyzer_sha256(analyzer=actual_analyzer) != generation.analyzer_sha256:
+        raise OpenSearchProjectionError("OpenSearch actual analyzer digest does not match")
     return expected
 
 
@@ -813,14 +1129,15 @@ def _bulk_payload(request: ProjectionBulkRequest) -> bytes:
 def _validate_bulk_result(
     response: OpenSearchTransportResponse,
     *,
-    expected_count: int,
+    expected_ids: tuple[str, ...],
+    expected_index: str,
 ) -> None:
     if response.status_code != 200 or response.body.get("errors") is not False:
         raise OpenSearchProjectionError("OpenSearch rejected one or more projection writes")
     items = response.body.get("items")
-    if not isinstance(items, list) or len(items) != expected_count:
+    if not isinstance(items, list) or len(items) != len(expected_ids):
         raise OpenSearchProjectionError("OpenSearch bulk result count does not match the request")
-    for item in items:
+    for expected_id, item in zip(expected_ids, items, strict=True):
         update = _mapping(
             _mapping(item, field_name="bulk item").get("update"),
             field_name="bulk update result",
@@ -828,6 +1145,10 @@ def _validate_bulk_result(
         status = _exact_integer(update.get("status"), field_name="bulk item status")
         if status not in {200, 201}:
             raise OpenSearchProjectionError("OpenSearch bulk item did not succeed")
+        if update.get("_id") != expected_id or update.get("_index") != expected_index:
+            raise OpenSearchProjectionError("OpenSearch bulk item identity does not match")
+        if "error" in update:
+            raise OpenSearchProjectionError("OpenSearch bulk item contains an error")
 
 
 def _date_is_effective(source: Mapping[str, object], as_of: date) -> bool:
@@ -877,6 +1198,38 @@ def _is_authorized(
     return True
 
 
+def _applicability_allows(
+    source: Mapping[str, object], facts: tuple[TaxonomyCondition, ...]
+) -> bool:
+    raw = source.get("applicability_predicates")
+    if not isinstance(raw, list):
+        raise OpenSearchProjectionError("applicability_predicates must be an array")
+    predicates: dict[str, tuple[str, tuple[str, ...]]] = {}
+    for item in raw:
+        raw_predicate = _mapping(item, field_name="applicability predicate")
+        key = _exact_string(raw_predicate.get("key"), field_name="applicability key")
+        operator = _exact_string(
+            raw_predicate.get("operator"), field_name="applicability operator"
+        )
+        if operator not in {"EQ", "IN", "NOT_EQ", "NOT_IN"} or key in predicates:
+            raise OpenSearchProjectionError("applicability predicate is invalid")
+        tokens = _string_list(
+            raw_predicate.get("value_tokens"), field_name="applicability value tokens"
+        )
+        predicates[key] = (operator, tokens)
+    for fact in facts:
+        predicate_entry = predicates.get(fact.key)
+        if predicate_entry is None:
+            continue
+        operator, tokens = predicate_entry
+        present = _fact_token(fact.values[0]) in tokens
+        if operator in {"EQ", "IN"} and not present:
+            return False
+        if operator in {"NOT_EQ", "NOT_IN"} and present:
+            return False
+    return True
+
+
 def _normalize_search_hits(
     response: OpenSearchTransportResponse,
     *,
@@ -885,6 +1238,9 @@ def _normalize_search_hits(
 ) -> tuple[HybridSearchHit, ...]:
     if response.status_code != 200:
         raise OpenSearchProjectionError("OpenSearch search failed")
+    shards = _mapping(response.body.get("_shards"), field_name="search shards")
+    if _exact_integer(shards.get("failed"), field_name="search failed shard count") != 0:
+        raise OpenSearchProjectionError("OpenSearch search reported failed shards")
     hits_envelope = _mapping(response.body.get("hits"), field_name="search hits")
     raw_hits = hits_envelope.get("hits")
     if not isinstance(raw_hits, list) or len(raw_hits) > request.rrf_window:
@@ -897,7 +1253,7 @@ def _normalize_search_hits(
     )
     result: list[HybridSearchHit] = []
     seen_rule_units: set[str] = set()
-    for rank, raw_hit in enumerate(raw_hits[: request.limit], start=1):
+    for rank, raw_hit in enumerate(raw_hits, start=1):
         hit = _mapping(raw_hit, field_name="search hit")
         if hit.get("_index") != index_name:
             raise OpenSearchProjectionError("search hit came from an unexpected physical index")
@@ -914,12 +1270,15 @@ def _normalize_search_hits(
         )
         if source_id != generation.source_id or generation_id != generation.generation_id:
             raise OpenSearchProjectionError("search hit is outside the exact Source generation")
-        manifest_digest = _sha256(
-            source.get("authority_manifest_digest"),
-            field_name="authority_manifest_digest",
+        manifest_digests = _string_list(
+            source.get("authority_manifest_digests"),
+            field_name="authority_manifest_digests",
         )
-        if manifest_digest != request.manifest_root_sha256:
+        if any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in manifest_digests):
+            raise OpenSearchProjectionError("authority manifest digests are malformed")
+        if request.manifest_root_sha256 not in manifest_digests:
             raise OpenSearchProjectionError("search hit manifest digest does not match")
+        manifest_digest = request.manifest_root_sha256
         sequence_from = _exact_integer(
             source.get("publication_seq_from"), field_name="publication_seq_from"
         )
@@ -938,19 +1297,15 @@ def _normalize_search_hits(
             raise OpenSearchProjectionError("search hit is outside its effective period")
         if not _is_authorized(source, request.authorization):
             raise OpenSearchProjectionError("search hit is unauthorized")
-        applicability_tokens = _string_list(
-            source.get("applicability_tokens"), field_name="applicability_tokens"
-        )
-        if any(
-            _applicability_token(condition) not in applicability_tokens
-            for condition in request.applicability_filters
-        ):
+        if not _applicability_allows(source, request.applicability_filters):
             raise OpenSearchProjectionError("search hit is outside approved applicability")
-        _sha256(
+        immutable_projection_sha256 = _sha256(
             source.get("immutable_projection_sha256"),
             field_name="immutable_projection_sha256",
         )
-        _sha256(source.get("projection_sha256"), field_name="projection_sha256")
+        projection_sha256 = _sha256(
+            source.get("projection_sha256"), field_name="projection_sha256"
+        )
         _exact_string(
             source.get("publication_attempt_id"), field_name="publication_attempt_id"
         )
@@ -1006,6 +1361,37 @@ def _normalize_search_hits(
         content = _exact_string(
             source.get("content"), field_name="content", maximum=50_000
         )
+        if hashlib.sha256(content.encode()).hexdigest() != content_sha256:
+            raise OpenSearchProjectionError("search hit content digest does not match")
+        approved_metadata = _mapping(
+            source.get("approved_metadata"), field_name="approved_metadata"
+        )
+        approved_visibility = _mapping(
+            source.get("approved_visibility"), field_name="approved_visibility"
+        )
+        metadata_digest = _sha256(
+            source.get("metadata_revision_digest"), field_name="metadata_revision_digest"
+        )
+        visibility_digest = _sha256(
+            source.get("visibility_revision_digest"), field_name="visibility_revision_digest"
+        )
+        if stable_digest(approved_metadata) != metadata_digest:
+            raise OpenSearchProjectionError("search hit metadata digest does not match")
+        if stable_digest(approved_visibility) != visibility_digest:
+            raise OpenSearchProjectionError("search hit visibility digest does not match")
+        if stable_digest(
+            {
+                "approved_metadata": approved_metadata,
+                "approved_visibility": approved_visibility,
+            }
+        ) != authority_sha256:
+            raise OpenSearchProjectionError("search hit authority digest does not match")
+        if _immutable_projection_sha256(source) != immutable_projection_sha256:
+            raise OpenSearchProjectionError("search hit immutable projection digest does not match")
+        if _mutable_projection_sha256(source) != projection_sha256:
+            raise OpenSearchProjectionError("search hit mutable projection digest does not match")
+        if rank > request.limit:
+            continue
         result.append(
             HybridSearchHit(
                 rank=rank,
@@ -1017,14 +1403,8 @@ def _normalize_search_hits(
                 document_id=document_id,
                 revision_id=revision_id,
                 authority_manifest_digest=manifest_digest,
-                metadata_revision_digest=_sha256(
-                    source.get("metadata_revision_digest"),
-                    field_name="metadata_revision_digest",
-                ),
-                visibility_revision_digest=_sha256(
-                    source.get("visibility_revision_digest"),
-                    field_name="visibility_revision_digest",
-                ),
+                metadata_revision_digest=metadata_digest,
+                visibility_revision_digest=visibility_digest,
                 content_sha256=content_sha256,
                 authority_sha256=authority_sha256,
                 citation_uri=citation_uri,
@@ -1035,11 +1415,75 @@ def _normalize_search_hits(
     return tuple(result)
 
 
+def rrf_pipeline_body(*, rank_constant: int) -> dict[str, object]:
+    if type(rank_constant) is not int or not 1 <= rank_constant <= 1_000:
+        raise ValueError("RRF rank constant must be between 1 and 1000")
+    return {
+        "description": "Proof Agent Source-local reciprocal-rank fusion",
+        "phase_results_processors": [
+            {
+                "score-ranker-processor": {
+                    "combination": {
+                        "technique": "rrf",
+                        "rank_constant": rank_constant,
+                    }
+                }
+            }
+        ],
+    }
+
+
+def rrf_pipeline_name(*, rank_constant: int) -> str:
+    digest = stable_digest(rrf_pipeline_body(rank_constant=rank_constant))
+    return f"pa-source-local-rrf-{digest[:24]}"
+
+
 class OpenSearchHybridIndex:
     """Deep adapter implementing the provider-neutral HybridSearchIndex seam."""
 
-    def __init__(self, *, transport: OpenSearchTransport) -> None:
+    def __init__(self, *, transport: OpenSearchTransport, analyzer: str = "cjk") -> None:
         self._transport = transport
+        self._analyzer = analyzer
+
+    def _validate_generation(self, generation: KnowledgeIndexGeneration) -> None:
+        if generation.mapping_sha256 != rule_unit_mapping_sha256(
+            dimension=generation.embedding_dimension,
+            analyzer=self._analyzer,
+        ):
+            raise OpenSearchProjectionError("generation mapping digest does not match actual mapping")
+        if generation.analyzer_sha256 != rule_unit_analyzer_sha256(analyzer=self._analyzer):
+            raise OpenSearchProjectionError(
+                "generation analyzer digest does not match actual analyzer configuration"
+            )
+
+    def _verify_pipeline(self, *, pipeline: str, rank_constant: int) -> None:
+        expected_name = rrf_pipeline_name(rank_constant=rank_constant)
+        if pipeline != expected_name:
+            raise OpenSearchProjectionError("RRF pipeline identity is not content-addressed")
+        response = self._transport.request(method="GET", path=f"/_search/pipeline/{pipeline}")
+        if response.status_code != 200 or set(response.body) != {pipeline}:
+            raise OpenSearchProjectionError("exact RRF pipeline is unavailable")
+        if response.body[pipeline] != rrf_pipeline_body(rank_constant=rank_constant):
+            raise OpenSearchProjectionError("RRF pipeline content does not match its identity")
+
+    def _ensure_pipeline(self, *, pipeline: str, rank_constant: int) -> None:
+        expected_name = rrf_pipeline_name(rank_constant=rank_constant)
+        if pipeline != expected_name:
+            raise OpenSearchProjectionError("RRF pipeline identity is not content-addressed")
+        existing = self._transport.request(method="GET", path=f"/_search/pipeline/{pipeline}")
+        if existing.status_code == 200:
+            self._verify_pipeline(pipeline=pipeline, rank_constant=rank_constant)
+            return
+        if existing.status_code != 404:
+            raise OpenSearchProjectionError("RRF pipeline lookup failed")
+        created = self._transport.request(
+            method="PUT",
+            path=f"/_search/pipeline/{pipeline}",
+            json_body=rrf_pipeline_body(rank_constant=rank_constant),
+        )
+        if created.status_code not in {200, 201} or created.body.get("acknowledged") is not True:
+            raise OpenSearchProjectionError("OpenSearch RRF pipeline creation failed")
+        self._verify_pipeline(pipeline=pipeline, rank_constant=rank_constant)
 
     def create_index(
         self,
@@ -1054,32 +1498,10 @@ class OpenSearchHybridIndex:
         generation = KnowledgeIndexGeneration.model_validate(
             generation.model_dump(mode="python")
         )
-        if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", rrf_pipeline) is None:
-            raise ValueError("rrf_pipeline must be a safe explicit pipeline identity")
-        if type(rrf_rank_constant) is not int or not 1 <= rrf_rank_constant <= 1_000:
-            raise ValueError("rrf_rank_constant must be between 1 and 1000")
-        pipeline_response = self._transport.request(
-            method="PUT",
-            path=f"/_search/pipeline/{rrf_pipeline}",
-            json_body={
-                "description": "Proof Agent Source-local reciprocal-rank fusion",
-                "phase_results_processors": [
-                    {
-                        "score-ranker-processor": {
-                            "combination": {
-                                "technique": "rrf",
-                                "rank_constant": rrf_rank_constant,
-                            }
-                        }
-                    }
-                ],
-            },
-        )
-        if (
-            pipeline_response.status_code not in {200, 201}
-            or pipeline_response.body.get("acknowledged") is not True
-        ):
-            raise OpenSearchProjectionError("OpenSearch RRF pipeline creation failed")
+        if analyzer != self._analyzer:
+            raise OpenSearchProjectionError("index analyzer must match the adapter configuration")
+        self._validate_generation(generation)
+        self._ensure_pipeline(pipeline=rrf_pipeline, rank_constant=rrf_rank_constant)
         definition = _rule_unit_index_definition(
             dimension=generation.embedding_dimension,
             analyzer=analyzer,
@@ -1126,6 +1548,7 @@ class OpenSearchHybridIndex:
     def verify_identity(self, expected: SearchIndexIdentity) -> SearchIndexIdentity:
         expected = SearchIndexIdentity.model_validate(expected.model_dump(mode="python"))
         generation = expected.generation
+        self._validate_generation(generation)
         index_name = physical_index_name(generation.source_id, generation.generation_id)
         response = self._transport.request(method="GET", path=f"/{index_name}")
         return _response_index_identity(
@@ -1147,12 +1570,18 @@ class OpenSearchHybridIndex:
             content=_bulk_payload(request),
             content_type="application/x-ndjson",
         )
-        _validate_bulk_result(response, expected_count=len(request.documents))
+        _validate_bulk_result(
+            response,
+            expected_ids=tuple(item.projection_id for item in request.documents),
+            expected_index=index_name,
+        )
         refresh = self._transport.request(method="POST", path=f"/{index_name}/_refresh")
+        checkpoint = _refresh_checkpoint(refresh)
+        self.verify_identity(request.identity)
         return ProjectionBulkResult(
             request=request,
             accepted_count=len(request.documents),
-            refresh_checkpoint=_refresh_checkpoint(refresh),
+            refresh_checkpoint=checkpoint,
         )
 
     def search(self, request: HybridSearchRequest) -> tuple[HybridSearchHit, ...]:
@@ -1160,6 +1589,10 @@ class OpenSearchHybridIndex:
         if validated != request:
             raise OpenSearchProjectionError("search request is not in canonical contract form")
         self.verify_identity(request.identity)
+        self._verify_pipeline(
+            pipeline=request.rrf_pipeline,
+            rank_constant=request.rrf_rank_constant,
+        )
         generation = request.identity.generation
         index_name = physical_index_name(generation.source_id, generation.generation_id)
         query_body = build_hybrid_query(request)
@@ -1172,6 +1605,7 @@ class OpenSearchHybridIndex:
             json_body=query_body,
             query_params={"search_pipeline": pipeline},
         )
+        self.verify_identity(request.identity)
         return _normalize_search_hits(
             response,
             request=request,
@@ -1183,11 +1617,17 @@ __all__ = [
     "HttpxOpenSearchTransport",
     "OpenSearchHybridIndex",
     "OpenSearchProjectionError",
+    "OpenSearchSecretMaterial",
+    "OpenSearchSecretProvider",
     "OpenSearchTransport",
     "OpenSearchTransportResponse",
     "build_common_filter",
     "build_hybrid_query",
     "physical_index_name",
     "project_rule_unit_document",
+    "rrf_pipeline_body",
+    "rrf_pipeline_name",
+    "rule_unit_analyzer_sha256",
     "rule_unit_index_mapping",
+    "rule_unit_mapping_sha256",
 ]

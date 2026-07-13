@@ -163,6 +163,7 @@ def projection_document(
                 order=1,
             ),
         ),
+        authority_manifest_digests=("7" * 64,),
         projection_revision="projection.v1",
         embedding=embedding,
     )
@@ -374,7 +375,7 @@ def test_job_contract_is_frozen_round_trips_and_rejects_coercion() -> None:
 def test_projection_bulk_rejects_bad_dimensions_and_nonfinite_values(
     values: tuple[float, ...],
 ) -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="documents|embedding"):
         documents = (
             ()
             if not values
@@ -384,6 +385,7 @@ def test_projection_bulk_rejects_bad_dimensions_and_nonfinite_values(
                     rule_unit=rule_unit(),
                     manifest_entry=projection_document().manifest_entry,
                     approved_metadata=projection_document().approved_metadata,
+                    authority_manifest_digests=("7" * 64,),
                     projection_revision="projection.v1",
                     embedding=values,
                 ),
@@ -392,6 +394,7 @@ def test_projection_bulk_rejects_bad_dimensions_and_nonfinite_values(
         ProjectionBulkRequest(
             identity=index_identity(),
             publication_attempt_id="attempt_1",
+            manifest_root_sha256="7" * 64,
             documents=documents,
         )
 

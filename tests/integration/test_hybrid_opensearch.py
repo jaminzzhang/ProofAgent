@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import hashlib
 import os
 from uuid import uuid4
 
@@ -11,7 +12,11 @@ from proof_agent.capabilities.knowledge.hybrid.opensearch import (
     OpenSearchHybridIndex,
     OpenSearchProjectionError,
     physical_index_name,
+    rrf_pipeline_name,
+    rule_unit_analyzer_sha256,
+    rule_unit_mapping_sha256,
 )
+from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridSearchRequest,
     ProjectionBulkRequest,
@@ -51,8 +56,8 @@ def _generation(source_id: str) -> KnowledgeIndexGeneration:
         source_id=source_id,
         canonical_schema_version="structured-knowledge.v1",
         search_projection_version="rule-unit-search.v1",
-        mapping_sha256=SHA_A,
-        analyzer_sha256=SHA_B,
+        mapping_sha256=rule_unit_mapping_sha256(dimension=2),
+        analyzer_sha256=rule_unit_analyzer_sha256(),
         embedding_model_revision="embedding@test",
         embedding_instruction_sha256=SHA_C,
         embedding_dimension=2,
@@ -67,6 +72,7 @@ def _document(
     content: str,
     embedding: tuple[float, float],
     publication_seq_to: int | None = None,
+    manifest_digests: tuple[str, ...] = (SHA_A,),
 ) -> ProjectionDocument:
     visibility = ApprovedInsuranceKnowledgeVisibilityScope(
         visibility="PUBLIC",
@@ -87,8 +93,26 @@ def _document(
         citation_uri=citation,
         metadata_revision_id=f"metadata-{identifier}",
         visibility_scope=visibility,
-        content_sha256=SHA_B,
-        authority_sha256=SHA_C,
+        content_sha256=hashlib.sha256(content.encode()).hexdigest(),
+        authority_sha256=stable_digest(
+            {
+                "approved_metadata": ApprovedInsuranceRuleMetadataRevision(
+                    metadata_revision_id=f"metadata-{identifier}",
+                    applicability=InsuranceRuleApplicability(
+                        taxonomy_id="integration-taxonomy",
+                        taxonomy_revision_id="v1",
+                    ),
+                    effective_from=date(2026, 1, 1),
+                    authority="integration",
+                    precedence=InsuranceRulePrecedence(
+                        policy_revision_id="v1",
+                        authority_tier="product",
+                        order=1,
+                    ),
+                ).model_dump(mode="json"),
+                "approved_visibility": visibility.model_dump(mode="json"),
+            }
+        ),
         lineage=InsuranceRuleUnitLineage(
             source_id=source_id,
             original_sha256="d" * 64,
@@ -133,6 +157,7 @@ def _document(
                 order=1,
             ),
         ),
+        authority_manifest_digests=manifest_digests,
         projection_revision="rule-unit-search.v1",
         embedding=embedding,
     )
@@ -153,7 +178,7 @@ def test_disposable_opensearch_supports_exact_filtered_hybrid_rrf_and_interval_c
     try:
         identity = adapter.create_index(
             generation,
-            rrf_pipeline="pa-source-local-rrf-v1",
+            rrf_pipeline=rrf_pipeline_name(rank_constant=60),
             rrf_rank_constant=60,
         )
         first = _document(
@@ -186,7 +211,8 @@ def test_disposable_opensearch_supports_exact_filtered_hybrid_rrf_and_interval_c
             lexical_budget=10,
             dense_budget=10,
             rrf_window=10,
-            rrf_pipeline="pa-source-local-rrf-v1",
+            rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+            rrf_rank_constant=60,
             limit=2,
         )
         hits = adapter.search(request)
@@ -200,20 +226,31 @@ def test_disposable_opensearch_supports_exact_filtered_hybrid_rrf_and_interval_c
             content="住院保险金符合合同条件时给付。",
             embedding=(1.0, 0.0),
             publication_seq_to=1,
+            manifest_digests=(SHA_A, SHA_B),
+        )
+        second_with_new_manifest = _document(
+            source_id=source_id,
+            identifier="second",
+            content="门诊责任另行约定。",
+            embedding=(0.0, 1.0),
+            manifest_digests=(SHA_A, SHA_B),
         )
         adapter.bulk_upsert(
             ProjectionBulkRequest(
                 identity=identity,
                 publication_attempt_id="attempt-2",
-                manifest_root_sha256=SHA_A,
-                documents=(closed,),
+                manifest_root_sha256=SHA_B,
+                documents=(closed, second_with_new_manifest),
             )
         )
         assert any(hit.rule_unit_revision_id == "rule-first" for hit in adapter.search(request))
         later_hits = adapter.search(
-            request.model_copy(update={"source_publication_seq": 2})
+            request.model_copy(
+                update={"source_publication_seq": 2, "manifest_root_sha256": SHA_B}
+            )
         )
         assert all(hit.rule_unit_revision_id != "rule-first" for hit in later_hits)
+        assert any(hit.rule_unit_revision_id == "rule-second" for hit in later_hits)
         with pytest.raises(OpenSearchProjectionError, match="UUID"):
             adapter.verify_identity(identity.model_copy(update={"index_uuid": "wrong"}))
     finally:

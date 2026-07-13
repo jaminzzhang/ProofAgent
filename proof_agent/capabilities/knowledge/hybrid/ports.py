@@ -84,6 +84,7 @@ class ProjectionDocument(_PortModel):
     rule_unit: InsuranceRuleUnitRevision
     manifest_entry: RuleUnitManifestEntry
     approved_metadata: ApprovedInsuranceRuleMetadataRevision
+    authority_manifest_digests: tuple[Sha256, ...] = Field(min_length=1, max_length=1_000)
     projection_revision: NonBlankStr
     embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
 
@@ -105,6 +106,8 @@ class ProjectionDocument(_PortModel):
         )
         if not expected:
             raise ValueError("projection must bind one exact approved Rule Unit manifest entry")
+        if tuple(sorted(set(self.authority_manifest_digests))) != self.authority_manifest_digests:
+            raise ValueError("authority manifest digests must be sorted and unique")
         return self
 
 
@@ -157,6 +160,7 @@ class HybridSearchRequest(_PortModel):
     dense_budget: BoundedBudget
     rrf_window: BoundedBudget
     rrf_pipeline: NonBlankStr
+    rrf_rank_constant: Annotated[StrictInt, Field(gt=0, le=1_000)]
     limit: Annotated[StrictInt, Field(gt=0, le=200)]
 
     @model_validator(mode="after")
@@ -165,11 +169,18 @@ class HybridSearchRequest(_PortModel):
             raise ValueError("query embedding must match generation dimension")
         if self.rrf_window > self.lexical_budget + self.dense_budget:
             raise ValueError("rrf_window must not exceed total lane candidates")
+        if self.lexical_budget < self.dense_budget:
+            raise ValueError("lexical_budget must be greater than or equal to dense_budget")
         if self.limit > self.rrf_window:
             raise ValueError("limit must not exceed rrf_window")
         keys = [condition.key for condition in self.applicability_filters]
         if len(keys) != len(set(keys)):
             raise ValueError("applicability filter keys must be unique")
+        if any(
+            condition.operator != "EQ" or len(condition.values) != 1
+            for condition in self.applicability_filters
+        ):
+            raise ValueError("runtime applicability filters must be one-value EQ facts")
         return self
 
 
