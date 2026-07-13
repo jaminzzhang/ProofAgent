@@ -7,21 +7,33 @@ from typing import Literal
 
 import pytest
 
-from proof_agent.capabilities.knowledge.hybrid.ports import HybridKnowledgeJobClaim
+from proof_agent.capabilities.knowledge.hybrid.ports import (
+    HybridKnowledgeArtifactLifecycle,
+    HybridKnowledgeJobClaim,
+    HybridKnowledgeJobRequest,
+)
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
     HybridArtifactBuildResult,
     HybridKnowledgeWorker,
+    HybridPrivateParserBuildConfig,
     HybridParserBuildOutput,
     HybridVendorArtifact,
     HybridWorkerOutcome,
+    LocalManagedOriginalStore,
+    LocalStoreHybridQuarantinePromoter,
+    LocalStoreHybridWorkerLifecycle,
     ReviewRequiredError,
     TransientKnowledgeServiceError,
     hybrid_build_request_sha256,
 )
-from proof_agent.capabilities.knowledge.ingestion.contracts import KnowledgeWorkerTaskClaim
+from proof_agent.capabilities.knowledge.ingestion.contracts import (
+    KnowledgeWorkerTaskClaim,
+)
 from proof_agent.capabilities.knowledge.ingestion.worker import (
+    KnowledgeIngestionWorker,
     KnowledgeWorkerTaskOutcome,
+    LocalStoreHybridTaskHandler,
     dispatch_claimed_knowledge_task,
 )
 from proof_agent.contracts.hybrid_documents import (
@@ -36,7 +48,11 @@ from proof_agent.contracts.knowledge_index import ExactArtifactRef
 from proof_agent.configuration.hybrid_knowledge_repository import (
     FileSystemKnowledgeArtifactStore,
     HybridKnowledgeLeaseError,
+    InMemoryHybridKnowledgeRepository,
+    ManualHybridClock,
 )
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from pypdf import PdfWriter
 
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -164,6 +180,14 @@ class ReviewSignalPipeline(FakePipeline):
         return result.model_copy(update={"artifact": artifact})
 
 
+class TimeoutOncePipeline(FakePipeline):
+    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+        if self.calls == 0:
+            self.calls += 1
+            raise TransientKnowledgeServiceError("timeout")
+        return super().build(request)
+
+
 class FakeLifecycle:
     def __init__(self, request: HybridArtifactBuildRequest) -> None:
         self.request = request
@@ -185,6 +209,7 @@ class FakeLifecycle:
         self.committed: HybridArtifactBuildResult | None = None
         self.retry: tuple[int, str] | None = None
         self.review: str | None = None
+        self.integrity_failure: tuple[str, str] | None = None
         self.stale = False
 
     def claim_next(self, *, worker_id: str, lease_seconds: int) -> HybridKnowledgeJobClaim | None:
@@ -213,6 +238,15 @@ class FakeLifecycle:
 
     def require_review(self, claim: HybridKnowledgeJobClaim, *, safe_reason: str) -> None:
         self.review = safe_reason
+
+    def fail_integrity(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        failure_code: str,
+        safe_reason: str,
+    ) -> None:
+        self.integrity_failure = (failure_code, safe_reason)
 
 
 def _worker(
@@ -288,7 +322,10 @@ def test_hybrid_worker_bounds_retries_and_never_exposes_raw_service_error(tmp_pa
     assert outcome is not None and outcome.state == "failed"
     assert outcome.auto_retry_count == 2
     assert lifecycle.retry is None
-    assert lifecycle.review == "Private parser service retry limit reached."
+    assert lifecycle.integrity_failure == (
+        "PA_HYBRID_WORKER_RETRY_EXHAUSTED",
+        "Private parser service retry limit reached.",
+    )
     assert "secret" not in repr(outcome)
 
 
@@ -318,9 +355,11 @@ def test_worker_rejects_job_payload_binding_mismatch_before_parser(tmp_path) -> 
     worker, lifecycle, pipeline = _worker(tmp_path)
     lifecycle.request = lifecycle.request.model_copy(update={"document_id": "other_document"})
 
-    with pytest.raises(ValueError, match="request digest"):
-        worker.run_once()
+    outcome = worker.run_once()
 
+    assert outcome is not None and outcome.state == "failed"
+    assert outcome.error_code == "PA_HYBRID_WORKER_INTEGRITY"
+    assert lifecycle.integrity_failure is not None
     assert pipeline.calls == 0
 
 
@@ -358,3 +397,183 @@ def test_claimed_task_dispatch_never_invokes_hybrid_code_for_local_jobs() -> Non
     )
     assert hybrid.state == "ready"
     assert calls == ["hybrid"]
+
+
+def test_real_repository_persists_retry_and_recovers_with_next_fence(tmp_path) -> None:
+    original = b"%PDF-1.7\n"
+    request = _build_request(original)
+    clock = ManualHybridClock(NOW)
+    repository = InMemoryHybridKnowledgeRepository(clock=clock)
+    repository.enqueue_artifact_build(
+        HybridKnowledgeJobRequest(
+            job_id=request.job_id,
+            idempotency_key="idempotency_1",
+            request_identity=request.request_identity,
+            request_sha256=request.request_sha256,
+            kind="parse",
+        ),
+        request,
+    )
+    worker = HybridKnowledgeWorker(
+        lifecycle=repository,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
+        pipeline=TimeoutOncePipeline(),
+        worker_id="worker_1",
+    )
+
+    first = worker.run_once()
+    assert first is not None and first.state == "retry_scheduled"
+    persisted = repository.get("job_1")
+    assert persisted is not None and persisted.state == "RETRY_SCHEDULED"
+    assert persisted.auto_retry_count == 1
+    assert worker.run_once() is None
+
+    clock.advance(seconds=5)
+    completed = worker.run_once()
+    assert completed is not None and completed.state == "completed"
+    assert repository.get_build_result("job_1") == completed.artifacts
+    terminal = repository.get("job_1")
+    assert terminal is not None and terminal.fencing_token == 2
+
+
+class NoLocalArtifactBuilder:
+    def purge_stale_temporary_artifacts(self) -> None:
+        pass
+
+    def build_or_reuse(self, **_kwargs):
+        raise AssertionError("Local artifact builder must not run for Hybrid jobs")
+
+
+def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_knowledge_source(
+        source_id="source_1",
+        name="Hybrid",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+    pdf_path = tmp_path / "scanned.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    with pdf_path.open("wb") as stream:
+        writer.write(stream)
+    store.stage_quarantined_knowledge_upload(
+        source_id="source_1",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        content=pdf_path.read_bytes(),
+        actor="operator",
+    )
+    original_store = LocalManagedOriginalStore()
+    lifecycle = LocalStoreHybridWorkerLifecycle(store=store, original_store=original_store)
+    assert isinstance(lifecycle, HybridKnowledgeArtifactLifecycle)
+    hybrid_worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=original_store,
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
+        pipeline=FakePipeline(),
+        worker_id="unused-for-preclaimed-local-store",
+    )
+    promoter = LocalStoreHybridQuarantinePromoter(
+        store=store,
+        build_config=HybridPrivateParserBuildConfig(
+            parser_revision="docling@2.112.0",
+            model_digests=("sha256:model",),
+            configuration_sha256="b" * 64,
+        ),
+    )
+    handler = LocalStoreHybridTaskHandler(
+        lifecycle=lifecycle,
+        worker=hybrid_worker,
+        quarantine_promoter=promoter,
+    )
+    unified = KnowledgeIngestionWorker(
+        store=store,
+        artifact_builder=NoLocalArtifactBuilder(),
+        hybrid_task_handler=handler,
+        parser=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Local parser must not run for Hybrid scanned PDFs")
+        ),
+    )
+
+    promoted = unified.run_once()
+    assert promoted is not None and promoted.outcome is not None
+    assert promoted.outcome.state == "accepted"
+    result = unified.run_once()
+
+    assert result is not None and result.outcome is not None
+    assert result.outcome.state == "ready"
+    jobs = store.list_knowledge_ingestion_jobs("source_1")
+    assert len(jobs) == 1 and jobs[0].state == "ready"
+    assert jobs[0].attempt_count == 1
+    result_files = tuple((tmp_path / "config").rglob("hybrid-artifact-result.json"))
+    assert len(result_files) == 1
+
+
+def test_localstore_request_integrity_failure_is_safe_and_releases_claim(tmp_path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_knowledge_source(
+        source_id="source_1",
+        name="Hybrid",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="source_1",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.7\n",
+        actor="operator",
+    )
+    claimed_upload = store.claim_next_quarantined_knowledge_upload(source_id="source_1")
+    assert claimed_upload is not None and claimed_upload.claim_token is not None
+    document, job = store.accept_hybrid_quarantined_knowledge_upload(
+        source_id="source_1",
+        upload_id=upload.upload_id,
+        claim_token=claimed_upload.claim_token,
+        source_sha256=hashlib.sha256(b"%PDF-1.7\n").hexdigest(),
+        source_size_bytes=len(b"%PDF-1.7\n"),
+        page_count=1,
+        parser_revision="docling@2.112.0",
+        model_digests=("sha256:model",),
+        configuration_sha256="b" * 64,
+    )
+    claimed_job = store.claim_next_knowledge_ingestion_job(source_id="source_1")
+    assert claimed_job is not None and claimed_job.job_id == job.job_id
+    frozen = store.knowledge_document_original_path(document).parent / "hybrid-build-request.json"
+    frozen.write_text("{}", encoding="utf-8")
+    original_store = LocalManagedOriginalStore()
+    lifecycle = LocalStoreHybridWorkerLifecycle(store=store, original_store=original_store)
+    worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=original_store,
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
+        pipeline=FakePipeline(),
+        worker_id="unused",
+    )
+    handler = LocalStoreHybridTaskHandler(
+        lifecycle=lifecycle,
+        worker=worker,
+        quarantine_promoter=LocalStoreHybridQuarantinePromoter(
+            store=store,
+            build_config=HybridPrivateParserBuildConfig(
+                parser_revision="docling@2.112.0",
+                model_digests=("sha256:model",),
+                configuration_sha256="b" * 64,
+            ),
+        ),
+    )
+
+    outcome = handler(KnowledgeWorkerTaskClaim(kind="artifact_build", ingestion_job=claimed_job))
+
+    assert outcome.state == "failed"
+    assert outcome.error_code == "PA_HYBRID_WORKER_INTEGRITY"
+    persisted = store.get_knowledge_ingestion_job(source_id="source_1", job_id=job.job_id)
+    assert persisted is not None and persisted.state == "failed"
+    assert persisted.claim_token is None
+    assert persisted.error_message == (
+        "Hybrid artifact build failed deterministic integrity validation."
+    )

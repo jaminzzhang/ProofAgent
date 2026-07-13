@@ -253,9 +253,7 @@ class LocalAgentConfigurationStore:
                     "Published Agent Version requires resolved shared Knowledge Source bindings. "
                     "Revalidate the Draft Agent before publishing."
                 )
-            self._require_mcp_tool_sources_publishable_unlocked(
-                draft.contract_bundle.tools_yaml
-            )
+            self._require_mcp_tool_sources_publishable_unlocked(draft.contract_bundle.tools_yaml)
             version = PublishedAgentVersion(
                 agent_id=agent_id,
                 version_id=f"version_{uuid4().hex[:8]}",
@@ -1998,6 +1996,109 @@ class LocalAgentConfigurationStore:
             self.quarantined_knowledge_upload_bytes_path(upload).unlink(missing_ok=True)
             return document, job
 
+    def accept_hybrid_quarantined_knowledge_upload(
+        self,
+        *,
+        source_id: str,
+        upload_id: str,
+        claim_token: str,
+        source_sha256: str,
+        source_size_bytes: int,
+        page_count: int,
+        parser_revision: str,
+        model_digests: tuple[str, ...],
+        configuration_sha256: str,
+    ) -> tuple[KnowledgeDocument, KnowledgeIngestionJob]:
+        """Promote a preflighted Hybrid PDF without legacy flat-text parsing."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
+            _require_owned_processing_claim(upload, claim_token=claim_token)
+            source = self._require_active_knowledge_source_unlocked(source_id)
+            if source.provider != "hybrid_index":
+                raise _invalid_ingestion_transition(
+                    "Hybrid upload promotion requires a hybrid_index Source."
+                )
+            if self._upload_promotion_marker_path(source_id, upload_id).exists():
+                return self._repair_accepted_upload_projection_unlocked(upload)
+            if page_count <= 0 or not parser_revision.strip() or not model_digests:
+                raise _invalid_ingestion_transition("Hybrid build identity is incomplete.")
+            original_bytes = self.quarantined_knowledge_upload_bytes_path(upload).read_bytes()
+            if (
+                len(original_bytes) != source_size_bytes
+                or hashlib.sha256(original_bytes).hexdigest() != source_sha256
+            ):
+                raise _invalid_ingestion_transition(
+                    "Hybrid quarantine bytes changed after immutable preflight."
+                )
+            suffix = upload.upload_id.removeprefix("upload_")
+            document_id = f"doc_{suffix}"
+            revision_id = f"rev_{suffix}"
+            job_id = f"job_{suffix}"
+            now = _now()
+            content_hash = hashlib.sha256(original_bytes).hexdigest()
+            artifact_build_spec = KnowledgeArtifactBuildSpec(
+                provider="hybrid_index",
+                engine_name="private-structured-parser",
+                engine_version=parser_revision,
+                parser_fingerprint_identity="|".join(model_digests),
+                content_hash=content_hash,
+                parsed_text_sha256=hashlib.sha256(b"").hexdigest(),
+            )
+            storage_path = (
+                Path("knowledge_sources")
+                / source_id
+                / "documents"
+                / document_id
+                / "revisions"
+                / revision_id
+                / "original.bin"
+            )
+            document = KnowledgeDocument(
+                document_id=document_id,
+                source_id=source_id,
+                revision_id=revision_id,
+                filename=upload.filename,
+                content_type=upload.content_type,
+                content_hash=content_hash,
+                size_bytes=upload.size_bytes,
+                state="queued",
+                storage_path=storage_path.as_posix(),
+                ingestion_job_id=job_id,
+                created_at=now,
+                updated_at=now,
+            )
+            job = KnowledgeIngestionJob(
+                job_id=job_id,
+                source_id=source_id,
+                document_id=document_id,
+                revision_id=revision_id,
+                state="queued",
+                ingestion_config_fingerprint=configuration_sha256,
+                artifact_build_spec=artifact_build_spec,
+                created_at=now,
+                updated_at=now,
+            )
+            revision_dir = self.knowledge_document_original_path(document).parent
+            _write_bytes_atomic(self.knowledge_document_original_path(document), original_bytes)
+            _write_json_atomic(
+                revision_dir / "hybrid-build-request.json",
+                {
+                    "page_numbers": list(range(1, page_count + 1)),
+                    "parser_revision": parser_revision,
+                    "model_digests": list(model_digests),
+                    "configuration_sha256": configuration_sha256,
+                },
+            )
+            self._write_knowledge_document(document)
+            self._write_knowledge_ingestion_job(job)
+            self._write_upload_promotion_marker(upload, document, job)
+            self._write_quarantined_knowledge_upload(
+                _accepted_upload_projection(upload, document=document, job=job)
+            )
+            self.quarantined_knowledge_upload_bytes_path(upload).unlink(missing_ok=True)
+            return document, job
+
     def reject_quarantined_knowledge_upload(
         self,
         *,
@@ -2194,6 +2295,98 @@ class LocalAgentConfigurationStore:
             self._write_knowledge_ingestion_job(completed)
             self._advance_source_draft_version_unlocked(source_id, updated_at=now)
             return completed
+
+    def complete_hybrid_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        artifact_path: str,
+        artifact_result: Mapping[str, Any],
+    ) -> KnowledgeIngestionJob:
+        """Atomically persist exact Hybrid artifact refs and complete the owned job."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            self._require_active_knowledge_source_unlocked(source_id)
+            now = _now()
+            result_path = self._knowledge_ingestion_job_path(source_id, job_id).with_name(
+                "hybrid-artifact-result.json"
+            )
+            _write_json(result_path, dict(artifact_result))
+            completed = job.model_copy(
+                update={
+                    "state": "ready",
+                    "artifact_path": artifact_path,
+                    "completed_at": now,
+                    "error_code": None,
+                    "error_message": None,
+                    "next_attempt_at": None,
+                    **_cleared_claim_updates(),
+                    "updated_at": now,
+                }
+            )
+            projected_document = document.model_copy(
+                update={
+                    "state": "ready",
+                    "artifact_path": artifact_path,
+                    "error_code": None,
+                    "error_message": None,
+                    "updated_at": now,
+                }
+            )
+            self._write_knowledge_document(projected_document)
+            self._write_knowledge_ingestion_job(completed)
+            self._advance_source_draft_version_unlocked(source_id, updated_at=now)
+            return completed
+
+    def require_hybrid_knowledge_ingestion_review(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        safe_reason: str,
+    ) -> KnowledgeIngestionJob:
+        """Release one owned Hybrid lease into durable operator review."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            now = _now()
+            message = _operator_error_message(safe_reason)
+            reviewed = job.model_copy(
+                update={
+                    "state": "review_required",
+                    "error_code": "PA_HYBRID_WORKER_REVIEW_REQUIRED",
+                    "error_message": message,
+                    "last_error_code": "PA_HYBRID_WORKER_REVIEW_REQUIRED",
+                    "last_error_message": message,
+                    "last_failure_classification": "content_review",
+                    "next_attempt_at": None,
+                    **_cleared_claim_updates(),
+                    "updated_at": now,
+                }
+            )
+            projected_document = document.model_copy(
+                update={
+                    "state": "review_required",
+                    "error_code": reviewed.error_code,
+                    "error_message": message,
+                    "updated_at": now,
+                }
+            )
+            self._write_knowledge_document(projected_document)
+            self._write_knowledge_ingestion_job(reviewed)
+            return reviewed
 
     def defer_knowledge_ingestion_job(
         self,
@@ -4006,9 +4199,7 @@ def _mcp_tool_contracts(tools_yaml: str) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(tools, list | tuple):
         return ()
     return tuple(
-        tool
-        for tool in tools
-        if isinstance(tool, Mapping) and tool.get("source") == "mcp"
+        tool for tool in tools if isinstance(tool, Mapping) and tool.get("source") == "mcp"
     )
 
 

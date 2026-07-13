@@ -11,7 +11,7 @@ import re
 import stat
 from threading import RLock
 from types import TracebackType
-from typing import Iterator, Self
+from typing import TYPE_CHECKING, Iterator, Self
 from urllib.parse import unquote, urlsplit
 
 try:
@@ -26,6 +26,12 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridClock,
 )
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
+
+if TYPE_CHECKING:
+    from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+        HybridArtifactBuildRequest,
+        HybridArtifactBuildResult,
+    )
 
 
 class HybridKnowledgeRepositoryError(RuntimeError):
@@ -96,6 +102,8 @@ class InMemoryHybridKnowledgeRepository:
         self._claims: dict[str, HybridKnowledgeJobClaim] = {}
         self._idempotency: dict[str, str] = {}
         self._request_identities: dict[str, tuple[str, str]] = {}
+        self._build_requests: dict[str, HybridArtifactBuildRequest] = {}
+        self._build_results: dict[str, HybridArtifactBuildResult] = {}
         self._sequence: dict[str, int] = {}
         self._next_sequence = 0
         self._last_observed_time: datetime | None = None
@@ -135,6 +143,155 @@ class InMemoryHybridKnowledgeRepository:
             self._request_identities[request.request_identity] = request_binding
             return job
 
+    def enqueue_artifact_build(
+        self,
+        request: HybridKnowledgeJobRequest,
+        build_request: HybridArtifactBuildRequest,
+    ) -> HybridKnowledgeJob:
+        """Atomically bind one exact build payload before it can be claimed."""
+
+        from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+            hybrid_build_request_sha256,
+        )
+
+        if request.kind != "parse":
+            raise ValueError("artifact builds require a parse job")
+        if build_request.job_id != request.job_id:
+            raise ValueError("build request job identity must match the scheduler request")
+        if build_request.request_identity != request.request_identity:
+            raise ValueError("build request identity must match the scheduler request")
+        if build_request.request_sha256 != request.request_sha256:
+            raise ValueError("build request digest must match the scheduler request")
+        if hybrid_build_request_sha256(build_request) != request.request_sha256:
+            raise ValueError("build request digest must bind its immutable payload")
+        with self._lock:
+            existing = self._build_requests.get(request.job_id)
+            if existing is not None and existing != build_request:
+                raise HybridKnowledgeIdempotencyConflict(
+                    "job identity is already bound to a different build request"
+                )
+            job = self.enqueue(request)
+            self._build_requests[request.job_id] = build_request
+            return job
+
+    def load_build_request(self, claim: HybridKnowledgeJobClaim) -> HybridArtifactBuildRequest:
+        with self._lock:
+            now = self._observe_now()
+            self._require_active_claim(claim.job_id, claim.worker_id, claim.fencing_token, now=now)
+            request = self._build_requests.get(claim.job_id)
+            if request is None:
+                raise HybridKnowledgeLeaseError("claimed parse job has no exact build request")
+            return request.model_copy(
+                update={"auto_retry_count": self._jobs[claim.job_id].auto_retry_count}
+            )
+
+    def commit_artifact_build(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        result: HybridArtifactBuildResult,
+    ) -> HybridKnowledgeJob:
+        with self._lock:
+            now = self._observe_now()
+            self._require_active_claim(claim.job_id, claim.worker_id, claim.fencing_token, now=now)
+            request = self._build_requests.get(claim.job_id)
+            if request is None or (
+                result.job_id,
+                result.request_identity,
+                result.source_id,
+                result.document_id,
+                result.revision_id,
+            ) != (
+                request.job_id,
+                request.request_identity,
+                request.source_id,
+                request.document_id,
+                request.revision_id,
+            ):
+                raise HybridKnowledgeLeaseError(
+                    "artifact result does not match the current exact build request"
+                )
+            self._build_results[claim.job_id] = result
+            return self._finish_unlocked(
+                claim=claim,
+                state="COMPLETED",
+                failure_code=None,
+                safe_reason=None,
+                now=now,
+            )
+
+    def schedule_retry(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        auto_retry_count: int,
+        safe_error: str,
+        delay_seconds: int = 5,
+    ) -> HybridKnowledgeJob:
+        auto_retry_count = _positive_int(auto_retry_count, field_name="auto_retry_count")
+        delay_seconds = _positive_int(delay_seconds, field_name="delay_seconds")
+        safe_error = _normalized_identifier(safe_error, field_name="safe_error")
+        with self._lock:
+            now = self._observe_now()
+            self._require_active_claim(claim.job_id, claim.worker_id, claim.fencing_token, now=now)
+            current = self._jobs[claim.job_id]
+            if auto_retry_count != current.auto_retry_count + 1:
+                raise HybridKnowledgeLeaseError("retry count must advance exactly once")
+            if auto_retry_count > current.max_auto_retries:
+                raise HybridKnowledgeLeaseError("retry count exceeds the durable limit")
+            job = _validated_job_update(
+                current,
+                state="RETRY_SCHEDULED",
+                auto_retry_count=auto_retry_count,
+                next_attempt_at=now + timedelta(seconds=delay_seconds),
+                safe_reason=safe_error,
+                updated_at=now,
+            )
+            self._jobs[claim.job_id] = job
+            del self._claims[claim.job_id]
+            return job
+
+    def require_review(
+        self, claim: HybridKnowledgeJobClaim, *, safe_reason: str
+    ) -> HybridKnowledgeJob:
+        safe_reason = _normalized_identifier(safe_reason, field_name="safe_reason")
+        with self._lock:
+            now = self._observe_now()
+            self._require_active_claim(claim.job_id, claim.worker_id, claim.fencing_token, now=now)
+            job = _validated_job_update(
+                self._jobs[claim.job_id],
+                state="REVIEW_REQUIRED",
+                safe_reason=safe_reason,
+                updated_at=now,
+            )
+            self._jobs[claim.job_id] = job
+            del self._claims[claim.job_id]
+            return job
+
+    def fail_integrity(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        failure_code: str,
+        safe_reason: str,
+    ) -> HybridKnowledgeJob:
+        failure_code = _normalized_identifier(failure_code, field_name="failure_code")
+        safe_reason = _normalized_identifier(safe_reason, field_name="safe_reason")
+        with self._lock:
+            now = self._observe_now()
+            self._require_active_claim(claim.job_id, claim.worker_id, claim.fencing_token, now=now)
+            return self._finish_unlocked(
+                claim=claim,
+                state="FAILED",
+                failure_code=failure_code,
+                safe_reason=safe_reason,
+                now=now,
+            )
+
+    def get_build_result(self, job_id: str) -> HybridArtifactBuildResult | None:
+        job_id = _normalized_identifier(job_id, field_name="job_id")
+        with self._lock:
+            return self._build_results.get(job_id)
+
     def claim_next(self, *, worker_id: str, lease_seconds: int) -> HybridKnowledgeJobClaim | None:
         worker_id = _normalized_identifier(worker_id, field_name="worker_id")
         lease_seconds = _positive_int(lease_seconds, field_name="lease_seconds")
@@ -165,6 +322,8 @@ class InMemoryHybridKnowledgeRepository:
                 job,
                 state="LEASED",
                 fencing_token=token,
+                next_attempt_at=None,
+                safe_reason=None,
                 updated_at=now,
             )
             return claim
@@ -245,17 +404,35 @@ class InMemoryHybridKnowledgeRepository:
         fencing_token = _positive_int(fencing_token, field_name="fencing_token")
         with self._lock:
             now = self._observe_now()
-            self._require_active_claim(job_id, worker_id, fencing_token, now=now)
-            job = _validated_job_update(
-                self._jobs[job_id],
+            claim = self._require_active_claim(job_id, worker_id, fencing_token, now=now)
+            return self._finish_unlocked(
+                claim=claim,
                 state=state,
-                updated_at=now,
-                completed_at=now,
                 failure_code=failure_code,
+                safe_reason=(failure_code if state == "FAILED" else None),
+                now=now,
             )
-            self._jobs[job_id] = job
-            del self._claims[job_id]
-            return job
+
+    def _finish_unlocked(
+        self,
+        *,
+        claim: HybridKnowledgeJobClaim,
+        state: str,
+        failure_code: str | None,
+        safe_reason: str | None,
+        now: datetime,
+    ) -> HybridKnowledgeJob:
+        job = _validated_job_update(
+            self._jobs[claim.job_id],
+            state=state,
+            updated_at=now,
+            completed_at=now,
+            failure_code=failure_code,
+            safe_reason=safe_reason,
+        )
+        self._jobs[claim.job_id] = job
+        del self._claims[claim.job_id]
+        return job
 
     def _require_active_claim(
         self, job_id: str, worker_id: str, fencing_token: int, *, now: datetime
@@ -281,10 +458,10 @@ class InMemoryHybridKnowledgeRepository:
         return now
 
     def _ready(self, job: HybridKnowledgeJob, now: datetime) -> bool:
-        ready_at = job.request.ready_at or job.created_at
+        ready_at = job.next_attempt_at or job.request.ready_at or job.created_at
         if ready_at > now or job.state in {"COMPLETED", "FAILED"}:
             return False
-        if job.state == "READY":
+        if job.state in {"READY", "RETRY_SCHEDULED"}:
             return True
         claim = self._claims.get(job.request.job_id)
         return job.state == "LEASED" and (claim is None or claim.lease_expires_at <= now)

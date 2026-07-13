@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import (
     AfterValidator,
@@ -23,6 +23,12 @@ from proof_agent.contracts.knowledge_index import (
     HybridKnowledgePublicationRecord,
     KnowledgeIndexGeneration,
 )
+
+if TYPE_CHECKING:
+    from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+        HybridArtifactBuildRequest,
+        HybridArtifactBuildResult,
+    )
 
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -185,7 +191,14 @@ class RerankResult(_PortModel):
 
 
 HybridKnowledgeJobKind = Literal["parse", "embed", "project", "publish", "reconcile", "rebuild"]
-HybridKnowledgeJobState = Literal["READY", "LEASED", "COMPLETED", "FAILED"]
+HybridKnowledgeJobState = Literal[
+    "READY",
+    "LEASED",
+    "RETRY_SCHEDULED",
+    "REVIEW_REQUIRED",
+    "COMPLETED",
+    "FAILED",
+]
 
 
 class HybridKnowledgeJobRequest(_PortModel):
@@ -203,6 +216,10 @@ class HybridKnowledgeJob(_PortModel):
     created_at: AwareTimestamp
     updated_at: AwareTimestamp
     fencing_token: NonNegativeInt = 0
+    auto_retry_count: NonNegativeInt = 0
+    max_auto_retries: NonNegativeInt = 2
+    next_attempt_at: AwareTimestamp | None = None
+    safe_reason: NonBlankStr | None = None
     completed_at: AwareTimestamp | None = None
     failure_code: NonBlankStr | None = None
 
@@ -213,7 +230,18 @@ class HybridKnowledgeJob(_PortModel):
         if self.state == "READY" and self.fencing_token != 0:
             raise ValueError("READY jobs require fencing_token zero")
         if self.state != "READY" and self.fencing_token <= 0:
-            raise ValueError("leased and terminal jobs require a positive fencing_token")
+            raise ValueError("claimed and terminal jobs require a positive fencing_token")
+        if self.auto_retry_count > self.max_auto_retries:
+            raise ValueError("auto_retry_count cannot exceed max_auto_retries")
+        if self.state == "RETRY_SCHEDULED" and self.next_attempt_at is None:
+            raise ValueError("RETRY_SCHEDULED jobs require next_attempt_at")
+        if self.state != "RETRY_SCHEDULED" and self.next_attempt_at is not None:
+            raise ValueError("only RETRY_SCHEDULED jobs accept next_attempt_at")
+        if self.state in {"RETRY_SCHEDULED", "REVIEW_REQUIRED", "FAILED"}:
+            if self.safe_reason is None:
+                raise ValueError(f"{self.state} jobs require safe_reason")
+        elif self.safe_reason is not None:
+            raise ValueError("successful and active jobs cannot contain safe_reason")
         if self.state in {"COMPLETED", "FAILED"} and self.completed_at is None:
             raise ValueError("terminal jobs require completed_at")
         if self.state not in {"COMPLETED", "FAILED"} and self.completed_at is not None:
@@ -314,6 +342,41 @@ class HybridKnowledgeWorkScheduler(Protocol):
         fencing_token: int,
         failure_code: str,
     ) -> HybridKnowledgeJob: ...
+
+
+@runtime_checkable
+class HybridKnowledgeArtifactLifecycle(Protocol):
+    """Exact structured-build state machine under the scheduler's active fence."""
+
+    def claim_next(
+        self, *, worker_id: str, lease_seconds: int
+    ) -> HybridKnowledgeJobClaim | None: ...
+
+    def load_build_request(self, claim: HybridKnowledgeJobClaim) -> HybridArtifactBuildRequest: ...
+
+    def commit_artifact_build(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        result: HybridArtifactBuildResult,
+    ) -> object: ...
+
+    def schedule_retry(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        auto_retry_count: int,
+        safe_error: str,
+    ) -> object: ...
+
+    def require_review(self, claim: HybridKnowledgeJobClaim, *, safe_reason: str) -> object: ...
+
+    def fail_integrity(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        failure_code: str,
+        safe_reason: str,
+    ) -> object: ...
 
 
 @runtime_checkable

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Annotated, Literal, Protocol, Self
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+from threading import RLock
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol, Self
 
 from pydantic import (
     ConfigDict,
@@ -17,12 +21,20 @@ from pydantic import (
 )
 
 from proof_agent.capabilities.knowledge.hybrid.ports import (
+    HybridKnowledgeArtifactLifecycle,
     HybridKnowledgeJobClaim,
+    HybridKnowledgeJobRequest,
     KnowledgeArtifactStore,
 )
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
+from proof_agent.contracts import KnowledgeIngestionJob
+
+if TYPE_CHECKING:
+    from proof_agent.capabilities.knowledge.ingestion.contracts import KnowledgeWorkerTaskClaim
+    from proof_agent.capabilities.knowledge.ingestion.worker import KnowledgeWorkerTaskOutcome
+    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -143,37 +155,13 @@ class HybridParserPipeline(Protocol):
     def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput: ...
 
 
-class HybridWorkerLifecycle(Protocol):
-    """Durable worker authority; every mutation must validate the claim fencing token."""
-
-    def claim_next(
-        self, *, worker_id: str, lease_seconds: int
-    ) -> HybridKnowledgeJobClaim | None: ...
-
-    def load_build_request(self, claim: HybridKnowledgeJobClaim) -> HybridArtifactBuildRequest: ...
-
-    def commit_artifact_build(
-        self, claim: HybridKnowledgeJobClaim, result: HybridArtifactBuildResult
-    ) -> None: ...
-
-    def schedule_retry(
-        self,
-        claim: HybridKnowledgeJobClaim,
-        *,
-        auto_retry_count: int,
-        safe_error: str,
-    ) -> None: ...
-
-    def require_review(self, claim: HybridKnowledgeJobClaim, *, safe_reason: str) -> None: ...
-
-
 class HybridKnowledgeWorker:
     """Process one provider-owned Hybrid parse job under a durable fenced claim."""
 
     def __init__(
         self,
         *,
-        lifecycle: HybridWorkerLifecycle,
+        lifecycle: HybridKnowledgeArtifactLifecycle,
         original_store: KnowledgeArtifactStore,
         artifact_store: KnowledgeArtifactStore,
         pipeline: HybridParserPipeline,
@@ -198,17 +186,27 @@ class HybridKnowledgeWorker:
         )
         if claim is None:
             return None
-        request = self._lifecycle.load_build_request(claim)
-        self._validate_claim_binding(claim, request)
+        return self.process_claim(claim)
+
+    def process_claim(self, claim: HybridKnowledgeJobClaim) -> HybridWorkerOutcome:
+        """Process one claim already owned by the authoritative lifecycle repository."""
+
+        request: HybridArtifactBuildRequest | None = None
         try:
+            request = self._lifecycle.load_build_request(claim)
+            self._validate_claim_binding(claim, request)
             original = self._original_store.get_exact(request.original_ref)
             _verify_exact_bytes(request.original_ref, original)
             parsed = self._pipeline.build(request)
             self._validate_parser_output(request, parsed)
             result = self._persist_artifacts(request, original=original, parsed=parsed)
         except (TransientKnowledgeServiceError, TimeoutError, ConnectionError):
+            if request is None:
+                return self._fail_integrity(claim, request=None)
             return self._handle_transient(claim, request)
         except ReviewRequiredError:
+            if request is None:
+                return self._fail_integrity(claim, request=None)
             self._lifecycle.require_review(
                 claim,
                 safe_reason="Structured document requires operator review.",
@@ -220,6 +218,8 @@ class HybridKnowledgeWorker:
                 auto_retry_count=request.auto_retry_count,
                 error_code=_REVIEW_CODE,
             )
+        except Exception:
+            return self._fail_integrity(claim, request=request)
 
         # This is the only state commit after immutable artifacts are finalized and read back.
         # A stale fencing token may therefore leave reusable orphan bytes, never committed state.
@@ -232,14 +232,34 @@ class HybridKnowledgeWorker:
             artifacts=result,
         )
 
+    def _fail_integrity(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        request: HybridArtifactBuildRequest | None,
+    ) -> HybridWorkerOutcome:
+        self._lifecycle.fail_integrity(
+            claim,
+            failure_code="PA_HYBRID_WORKER_INTEGRITY",
+            safe_reason="Hybrid artifact build failed deterministic integrity validation.",
+        )
+        return HybridWorkerOutcome(
+            job_id=claim.job_id,
+            source_id=request.source_id if request is not None else "unknown_source",
+            state="failed",
+            auto_retry_count=request.auto_retry_count if request is not None else 0,
+            error_code="PA_HYBRID_WORKER_INTEGRITY",
+        )
+
     def _handle_transient(
         self,
         claim: HybridKnowledgeJobClaim,
         request: HybridArtifactBuildRequest,
     ) -> HybridWorkerOutcome:
         if request.auto_retry_count >= request.max_auto_retries:
-            self._lifecycle.require_review(
+            self._lifecycle.fail_integrity(
                 claim,
+                failure_code=_RETRY_EXHAUSTED_CODE,
                 safe_reason="Private parser service retry limit reached.",
             )
             return HybridWorkerOutcome(
@@ -420,3 +440,319 @@ def _preview_markdown(artifact: StructuredKnowledgeDocumentArtifact) -> bytes:
             lines.extend(cell.text for cell in table.cells if cell.text)
         lines.append("")
     return "\n".join(lines).encode("utf-8")
+
+
+class LocalManagedOriginalStore:
+    """Exact-reader for LocalStore originals registered from an owned immutable job."""
+
+    def __init__(self) -> None:
+        self._paths: dict[ExactArtifactRef, Path] = {}
+        self._lock = RLock()
+
+    def register(self, ref: ExactArtifactRef, path: Path) -> None:
+        with self._lock:
+            self._paths[ref] = path
+
+    def get_exact(self, ref: ExactArtifactRef) -> bytes:
+        with self._lock:
+            path = self._paths.get(ref)
+        if path is None:
+            raise ValueError("managed original reference is not bound to the owned job")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            with os.fdopen(descriptor, "rb") as stream:
+                descriptor = -1
+                content = stream.read()
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        _verify_exact_bytes(ref, content)
+        return content
+
+    def put_immutable(self, *, key: str, content: bytes, media_type: str) -> ExactArtifactRef:
+        raise TypeError("managed original store is read-only")
+
+
+class HybridPrivateParserBuildConfig(_HybridWorkerModel):
+    parser_revision: NonBlankStr
+    model_digests: tuple[NonBlankStr, ...] = Field(min_length=1, max_length=64)
+    configuration_sha256: Sha256
+
+
+class LocalStoreHybridQuarantinePromoter:
+    """Revalidate and promote one already-owned Hybrid PDF quarantine claim."""
+
+    def __init__(
+        self,
+        *,
+        store: LocalAgentConfigurationStore,
+        build_config: HybridPrivateParserBuildConfig,
+        lease_seconds: int = 300,
+    ) -> None:
+        self._store = store
+        self._build_config = build_config
+        self._lease_seconds = lease_seconds
+
+    def __call__(self, task: KnowledgeWorkerTaskClaim) -> KnowledgeWorkerTaskOutcome:
+        from proof_agent.capabilities.knowledge.hybrid.intake import preflight_hybrid_pdf
+        from proof_agent.capabilities.knowledge.ingestion.contracts import (
+            HybridIntakeLimits,
+        )
+        from proof_agent.capabilities.knowledge.ingestion.worker import (
+            KnowledgeWorkerTaskOutcome,
+        )
+        from proof_agent.errors import ProofAgentError
+
+        upload = task.upload
+        if task.kind != "quarantine_validation" or upload is None or upload.claim_token is None:
+            raise ValueError("Hybrid quarantine claim is incomplete")
+        source = self._store.get_knowledge_source(upload.source_id)
+        if source is None or source.provider != "hybrid_index":
+            raise ValueError("Hybrid quarantine claim Source is invalid")
+        limits = HybridIntakeLimits.model_validate(dict(source.params), strict=True)
+        self._store.renew_quarantined_knowledge_upload_claim(
+            source_id=upload.source_id,
+            upload_id=upload.upload_id,
+            claim_token=upload.claim_token,
+            lease_seconds=self._lease_seconds,
+        )
+        try:
+            preflight = preflight_hybrid_pdf(
+                self._store.quarantined_knowledge_upload_bytes_path(upload),
+                limits=limits,
+            )
+        except ProofAgentError as exc:
+            rejected = self._store.reject_quarantined_knowledge_upload(
+                source_id=upload.source_id,
+                upload_id=upload.upload_id,
+                claim_token=upload.claim_token,
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+            return KnowledgeWorkerTaskOutcome(
+                kind="quarantine_validation",
+                task_id=upload.upload_id,
+                source_id=upload.source_id,
+                state="rejected",
+                error_code=rejected.error_code,
+                error_message=rejected.error_message,
+            )
+        self._store.renew_quarantined_knowledge_upload_claim(
+            source_id=upload.source_id,
+            upload_id=upload.upload_id,
+            claim_token=upload.claim_token,
+            lease_seconds=self._lease_seconds,
+        )
+        self._store.accept_hybrid_quarantined_knowledge_upload(
+            source_id=upload.source_id,
+            upload_id=upload.upload_id,
+            claim_token=upload.claim_token,
+            source_sha256=preflight.source_sha256,
+            source_size_bytes=preflight.source_size_bytes,
+            page_count=preflight.page_count,
+            parser_revision=self._build_config.parser_revision,
+            model_digests=self._build_config.model_digests,
+            configuration_sha256=self._build_config.configuration_sha256,
+        )
+        return KnowledgeWorkerTaskOutcome(
+            kind="quarantine_validation",
+            task_id=upload.upload_id,
+            source_id=upload.source_id,
+            state="accepted",
+        )
+
+
+class LocalStoreHybridWorkerLifecycle:
+    """Production adapter mapping one LocalStore claim token to the fenced lifecycle."""
+
+    def __init__(
+        self,
+        *,
+        store: LocalAgentConfigurationStore,
+        original_store: LocalManagedOriginalStore,
+    ) -> None:
+        self._store = store
+        self._original_store = original_store
+        self._owned: dict[str, tuple[str, HybridArtifactBuildRequest]] = {}
+        self._lock = RLock()
+
+    def claim_from_job(self, job: KnowledgeIngestionJob) -> HybridKnowledgeJobClaim:
+        if job.claim_token is None or job.claimed_at is None or job.lease_expires_at is None:
+            raise ValueError("Hybrid LocalStore job must already have an active claim")
+        document = self._store.get_knowledge_document(
+            source_id=job.source_id,
+            document_id=job.document_id,
+        )
+        if document is None:
+            raise ValueError("Hybrid LocalStore job document projection is missing")
+        original_path = self._store.knowledge_document_original_path(document)
+        original_content = _read_regular_nofollow(original_path)
+        original_sha256 = hashlib.sha256(original_content).hexdigest()
+        if original_sha256 != job.artifact_build_spec.content_hash:
+            raise ValueError("Hybrid LocalStore original digest does not match its frozen job")
+        original_ref = ExactArtifactRef(
+            artifact_uri=original_path.resolve().as_uri(),
+            version_id=f"sha256:{original_sha256}",
+            sha256=original_sha256,
+            size_bytes=len(original_content),
+            media_type="application/pdf",
+        )
+        self._original_store.register(original_ref, original_path)
+        try:
+            frozen_request = json.loads(
+                _read_regular_nofollow(original_path.parent / "hybrid-build-request.json")
+            )
+            page_numbers = tuple(frozen_request["page_numbers"])
+            parser_revision = frozen_request["parser_revision"]
+            model_digests = tuple(frozen_request["model_digests"])
+            configuration_sha256 = frozen_request["configuration_sha256"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Hybrid LocalStore frozen build request is invalid") from exc
+        build_request = HybridArtifactBuildRequest(
+            job_id=job.job_id,
+            request_identity=f"{job.source_id}:{job.document_id}:{job.revision_id}",
+            source_id=job.source_id,
+            document_id=job.document_id,
+            revision_id=job.revision_id,
+            original_ref=original_ref,
+            page_numbers=page_numbers,
+            parser_revision=parser_revision,
+            model_digests=model_digests,
+            configuration_sha256=configuration_sha256,
+            auto_retry_count=job.auto_retry_count,
+            max_auto_retries=job.max_auto_retries,
+        )
+        build_request = build_request.model_copy(
+            update={"request_sha256": hybrid_build_request_sha256(build_request)}
+        )
+        scheduler_request = HybridKnowledgeJobRequest(
+            job_id=job.job_id,
+            idempotency_key=job.job_id,
+            request_identity=build_request.request_identity,
+            request_sha256=build_request.request_sha256,
+            kind="parse",
+        )
+        token = int.from_bytes(hashlib.sha256(job.claim_token.encode()).digest()[:8], "big") or 1
+        claim = HybridKnowledgeJobClaim(
+            job_id=job.job_id,
+            request=scheduler_request,
+            worker_id="local-store-worker",
+            fencing_token=token,
+            claimed_at=datetime.fromisoformat(job.claimed_at).astimezone(UTC),
+            lease_expires_at=datetime.fromisoformat(job.lease_expires_at).astimezone(UTC),
+        )
+        with self._lock:
+            self._owned[job.job_id] = (job.claim_token, build_request)
+        return claim
+
+    def claim_next(self, *, worker_id: str, lease_seconds: int) -> HybridKnowledgeJobClaim | None:
+        raise TypeError("LocalStore lifecycle consumes an already-claimed unified task")
+
+    def fail_claimed_job_integrity(self, job: KnowledgeIngestionJob) -> object:
+        if job.claim_token is None:
+            raise ValueError("Hybrid LocalStore job has no active claim")
+        return self._store.fail_knowledge_ingestion_job(
+            source_id=job.source_id,
+            job_id=job.job_id,
+            claim_token=job.claim_token,
+            error_code="PA_HYBRID_WORKER_INTEGRITY",
+            error_message="Hybrid artifact build failed deterministic integrity validation.",
+        )
+
+    def load_build_request(self, claim: HybridKnowledgeJobClaim) -> HybridArtifactBuildRequest:
+        _token, request = self._require_owned(claim)
+        return request
+
+    def commit_artifact_build(
+        self, claim: HybridKnowledgeJobClaim, result: HybridArtifactBuildResult
+    ) -> object:
+        token, request = self._require_owned(claim)
+        if result.request_identity != request.request_identity:
+            raise ValueError("Hybrid result does not match the owned LocalStore request")
+        completed = self._store.complete_hybrid_knowledge_ingestion_job(
+            source_id=request.source_id,
+            job_id=request.job_id,
+            claim_token=token,
+            artifact_path=result.canonical_ref.artifact_uri,
+            artifact_result=result.model_dump(mode="json"),
+        )
+        self._release(claim.job_id)
+        return completed
+
+    def schedule_retry(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        auto_retry_count: int,
+        safe_error: str,
+    ) -> object:
+        token, request = self._require_owned(claim)
+        rescheduled = self._store.reschedule_knowledge_ingestion_job(
+            source_id=request.source_id,
+            job_id=request.job_id,
+            claim_token=token,
+            error_code=_TRANSIENT_CODE,
+            error_message=safe_error,
+            retry_delay_seconds=5,
+        )
+        if rescheduled.auto_retry_count != auto_retry_count:
+            raise ValueError("LocalStore retry counter did not advance exactly once")
+        self._release(claim.job_id)
+        return rescheduled
+
+    def require_review(self, claim: HybridKnowledgeJobClaim, *, safe_reason: str) -> object:
+        token, request = self._require_owned(claim)
+        reviewed = self._store.require_hybrid_knowledge_ingestion_review(
+            source_id=request.source_id,
+            job_id=request.job_id,
+            claim_token=token,
+            safe_reason=safe_reason,
+        )
+        self._release(claim.job_id)
+        return reviewed
+
+    def fail_integrity(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        failure_code: str,
+        safe_reason: str,
+    ) -> object:
+        token, request = self._require_owned(claim)
+        failed = self._store.fail_knowledge_ingestion_job(
+            source_id=request.source_id,
+            job_id=request.job_id,
+            claim_token=token,
+            error_code=failure_code,
+            error_message=safe_reason,
+        )
+        self._release(claim.job_id)
+        return failed
+
+    def _require_owned(
+        self, claim: HybridKnowledgeJobClaim
+    ) -> tuple[str, HybridArtifactBuildRequest]:
+        with self._lock:
+            owned = self._owned.get(claim.job_id)
+        if owned is None:
+            raise ValueError("Hybrid LocalStore claim is no longer owned")
+        token, request = owned
+        expected = int.from_bytes(hashlib.sha256(token.encode()).digest()[:8], "big") or 1
+        if expected != claim.fencing_token:
+            raise ValueError("Hybrid LocalStore fencing token is stale")
+        return owned
+
+    def _release(self, job_id: str) -> None:
+        with self._lock:
+            self._owned.pop(job_id, None)
+
+
+def _read_regular_nofollow(path: Path) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            return stream.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)

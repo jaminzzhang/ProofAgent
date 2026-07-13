@@ -35,6 +35,8 @@ from proof_agent.observability.storage.run_store import RunStore
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.ingestion.worker import (
+        HybridClaimedTaskHandler,
+        KnowledgeIngestionWorker,
         KnowledgeWorkerResult,
         KnowledgeWorkerTaskOutcome,
     )
@@ -683,19 +685,8 @@ def knowledge_worker(
     """Process persisted Local Index knowledge ingestion tasks."""
 
     try:
-        from proof_agent.capabilities.knowledge.ingestion.local_index_builder import (
-            LocalIndexRevisionArtifactBuilder,
-        )
-        from proof_agent.capabilities.knowledge.ingestion.worker import (
-            KnowledgeIngestionWorker,
-        )
-        from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-
         config_path = Path(config_dir)
-        worker = KnowledgeIngestionWorker(
-            store=LocalAgentConfigurationStore(config_path),
-            artifact_builder=LocalIndexRevisionArtifactBuilder(config_path),
-        )
+        worker = _create_knowledge_ingestion_worker(config_path)
         if once:
             result = worker.run_once()
         else:
@@ -721,6 +712,37 @@ def knowledge_worker(
         raise typer.Exit(code=1) from exc
 
     _echo_knowledge_worker_result(result)
+
+
+def _create_knowledge_ingestion_worker(
+    config_path: Path,
+    *,
+    hybrid_task_handler: HybridClaimedTaskHandler | None = None,
+) -> KnowledgeIngestionWorker:
+    """Compose provider handlers; fail before claims if Hybrid dependencies are absent."""
+
+    from proof_agent.capabilities.knowledge.ingestion.local_index_builder import (
+        LocalIndexRevisionArtifactBuilder,
+    )
+    from proof_agent.capabilities.knowledge.ingestion.worker import KnowledgeIngestionWorker
+    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+
+    store = LocalAgentConfigurationStore(config_path)
+    has_hybrid_source = any(
+        source.provider == "hybrid_index" and source.lifecycle_state.value == "ACTIVE"
+        for source in store.list_knowledge_sources()
+    )
+    if has_hybrid_source and hybrid_task_handler is None:
+        raise ProofAgentError(
+            "PA_HYBRID_WORKER_001",
+            "Hybrid Index sources require configured private parser and artifact dependencies.",
+            "Configure the guarded Hybrid worker composition before starting this worker.",
+        )
+    return KnowledgeIngestionWorker(
+        store=store,
+        artifact_builder=LocalIndexRevisionArtifactBuilder(config_path),
+        hybrid_task_handler=hybrid_task_handler,
+    )
 
 
 def main() -> None:

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from time import sleep as _sleep
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from proof_agent.capabilities.knowledge.ingestion.configuration import (
     ingestion_model_config_from_build_spec,
@@ -63,6 +63,77 @@ class HybridClaimedTaskHandler(Protocol):
     """Provider-specific handler for a task already claimed by the unified queue."""
 
     def __call__(self, task: KnowledgeWorkerTaskClaim) -> KnowledgeWorkerTaskOutcome: ...
+
+
+class AlreadyClaimedHybridLifecycle(Protocol):
+    def claim_from_job(self, job: KnowledgeIngestionJob) -> Any: ...
+
+    def fail_claimed_job_integrity(self, job: KnowledgeIngestionJob) -> object: ...
+
+
+class AlreadyClaimedHybridWorker(Protocol):
+    def process_claim(self, claim: Any) -> Any: ...
+
+
+class HybridQuarantinePromoter(Protocol):
+    def __call__(self, task: KnowledgeWorkerTaskClaim) -> KnowledgeWorkerTaskOutcome: ...
+
+
+class LocalStoreHybridTaskHandler:
+    """Bridge the unified LocalStore claim into Hybrid processing without re-claiming."""
+
+    def __init__(
+        self,
+        *,
+        lifecycle: AlreadyClaimedHybridLifecycle,
+        worker: AlreadyClaimedHybridWorker,
+        quarantine_promoter: HybridQuarantinePromoter,
+    ) -> None:
+        self._lifecycle = lifecycle
+        self._worker = worker
+        self._quarantine_promoter = quarantine_promoter
+
+    def __call__(self, task: KnowledgeWorkerTaskClaim) -> KnowledgeWorkerTaskOutcome:
+        job = task.ingestion_job
+        if task.kind == "quarantine_validation":
+            return self._quarantine_promoter(task)
+        if task.kind != "artifact_build" or job is None or task.upload is not None:
+            raise ProofAgentError(
+                "PA_HYBRID_WORKER_001",
+                "Hybrid worker received an unsupported claimed task.",
+                "Complete Hybrid PDF preflight and promotion before artifact processing.",
+            )
+        try:
+            claim = self._lifecycle.claim_from_job(job)
+        except Exception:
+            self._lifecycle.fail_claimed_job_integrity(job)
+            return KnowledgeWorkerTaskOutcome(
+                kind="artifact_build",
+                task_id=job.job_id,
+                source_id=job.source_id,
+                state="failed",
+                error_code="PA_HYBRID_WORKER_INTEGRITY",
+                error_message="Hybrid artifact build failed deterministic integrity validation.",
+            )
+        outcome = self._worker.process_claim(claim)
+        state = getattr(outcome, "state", None)
+        mapped_state: Literal["ready", "retry_scheduled", "failed"]
+        if state == "completed":
+            mapped_state = "ready"
+        elif state == "retry_scheduled":
+            mapped_state = "retry_scheduled"
+        else:
+            mapped_state = "failed"
+        artifacts = getattr(outcome, "artifacts", None)
+        canonical_ref = getattr(artifacts, "canonical_ref", None)
+        return KnowledgeWorkerTaskOutcome(
+            kind="artifact_build",
+            task_id=job.job_id,
+            source_id=job.source_id,
+            state=mapped_state,
+            error_code=getattr(outcome, "error_code", None),
+            artifact_path=getattr(canonical_ref, "artifact_uri", None),
+        )
 
 
 @dataclass(frozen=True)

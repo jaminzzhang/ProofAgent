@@ -12,6 +12,7 @@ from proof_agent.capabilities.knowledge.ingestion.worker import (
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.delivery.cli import app
+from proof_agent.delivery.cli import _create_knowledge_ingestion_worker
 from proof_agent.delivery.cli import _seed_default_dev_agent
 from proof_agent.delivery.cli import _verify_remote_process_is_safe_to_stop
 from proof_agent.errors import ProofAgentError
@@ -20,6 +21,62 @@ from proof_agent.evaluation.compare.result import RagResult
 
 runner = CliRunner()
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_knowledge_worker_factory_fails_closed_for_unconfigured_hybrid_source(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="hybrid_1",
+        name="Hybrid",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+
+    with pytest.raises(ProofAgentError, match="Hybrid Index sources require"):
+        _create_knowledge_ingestion_worker(tmp_path)
+
+
+def test_knowledge_worker_factory_dispatches_claimed_hybrid_task_to_injected_handler(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="hybrid_1",
+        name="Hybrid",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="hybrid_1",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.7\n",
+        actor="operator",
+    )
+    calls: list[str] = []
+
+    def hybrid_handler(task) -> KnowledgeWorkerTaskOutcome:
+        calls.append(task.upload.upload_id)
+        return KnowledgeWorkerTaskOutcome(
+            kind="quarantine_validation",
+            task_id=upload.upload_id,
+            source_id="hybrid_1",
+            state="accepted",
+        )
+
+    worker = _create_knowledge_ingestion_worker(
+        tmp_path,
+        hybrid_task_handler=hybrid_handler,
+    )
+    result = worker.run_once()
+
+    assert result is not None and result.outcome is not None
+    assert result.outcome.state == "accepted"
+    assert calls == [upload.upload_id]
 
 
 def test_demo_command_exists() -> None:
