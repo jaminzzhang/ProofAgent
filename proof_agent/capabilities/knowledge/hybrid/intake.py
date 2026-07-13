@@ -34,6 +34,11 @@ _MAX_PAGE_CONTENT_DECODED_BYTES = 2 * 1024 * 1024
 _MAX_STRUCTURAL_STREAM_DECODED_BYTES = 2 * 1024 * 1024
 _MAX_STRUCTURAL_STREAM_DICTIONARY_BYTES = 64 * 1024
 _MAX_STRUCTURAL_STREAM_CANDIDATES = 256
+_MAX_RAW_PDF_TOKENS = 500_000
+_MAX_SIMPLE_INDIRECT_OBJECTS = 10_000
+_MAX_INDIRECT_OBJECTS = 100_000
+_MAX_SIMPLE_INDIRECT_VALUE_TOKENS = 1_024
+_MAX_STRUCTURAL_DICTIONARY_TOKENS = 10_000
 _MAX_FORM_XOBJECT_DEPTH = 16
 _MAX_FORM_XOBJECTS = 256
 _MAX_FORM_DO_INVOCATIONS = 64
@@ -816,12 +821,14 @@ def _reject_polyglot_payload(source: IO[bytes]) -> None:
 def _validate_bounded_structural_streams(source: IO[bytes]) -> None:
     source.seek(0)
     raw = source.read()
-    simple_objects = _simple_indirect_pdf_values(raw)
+    simple_objects = _collect_simple_indirect_pdf_values(raw)
     position = 0
+    token_count = 0
     recent: list[bytes] = []
     in_object = False
     dictionary_depth = 0
     dictionary_tokens: list[tuple[bytes, int]] | None = None
+    dictionary_start: int | None = None
     completed_dictionary: list[tuple[bytes, int]] | None = None
     structural_count = 0
     while True:
@@ -829,6 +836,11 @@ def _validate_bounded_structural_streams(source: IO[bytes]) -> None:
         if token_result is None:
             return
         token, _start, end = token_result
+        token_count += 1
+        if token_count > _MAX_RAW_PDF_TOKENS:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF raw token count exceeds safety limits."
+            )
         position = end
         if token == b"obj" and len(recent) >= 2 and all(value.isdigit() for value in recent[-2:]):
             in_object = True
@@ -836,19 +848,24 @@ def _validate_bounded_structural_streams(source: IO[bytes]) -> None:
         elif in_object and token == b"<<":
             if dictionary_depth == 0:
                 dictionary_tokens = []
+                dictionary_start = _start
             if dictionary_tokens is not None:
+                _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, end)
                 dictionary_tokens.append((token, dictionary_depth))
             dictionary_depth += 1
         elif in_object and token == b">>" and dictionary_depth > 0:
             dictionary_depth -= 1
             if dictionary_tokens is not None:
+                _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, end)
                 dictionary_tokens.append((token, dictionary_depth))
             if dictionary_depth == 0:
                 completed_dictionary = dictionary_tokens
                 dictionary_tokens = None
+                dictionary_start = None
         elif dictionary_depth > 0 and dictionary_tokens is not None:
+            _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, end)
             dictionary_tokens.append((token, dictionary_depth))
-        elif in_object and token == b"stream" and completed_dictionary is not None:
+        if in_object and token == b"stream" and completed_dictionary is not None:
             length = _structural_dictionary_length(completed_dictionary, simple_objects)
             data_start = _raw_stream_data_start(raw, end)
             data_end = data_start + length
@@ -886,11 +903,13 @@ def _validate_bounded_structural_streams(source: IO[bytes]) -> None:
 
 
 def _next_raw_pdf_token(raw: bytes, position: int) -> tuple[bytes, int, int] | None:
-    while position < len(raw) and raw[position] in _PDF_WHITESPACE:
-        position += 1
-    if position >= len(raw):
-        return None
-    if raw[position] == ord("%"):
+    while True:
+        while position < len(raw) and raw[position] in _PDF_WHITESPACE:
+            position += 1
+        if position >= len(raw):
+            return None
+        if raw[position] != ord("%"):
+            break
         newline = min(
             (
                 index
@@ -899,7 +918,7 @@ def _next_raw_pdf_token(raw: bytes, position: int) -> tuple[bytes, int, int] | N
             ),
             default=len(raw) - 1,
         )
-        return _next_raw_pdf_token(raw, newline + 1)
+        position = newline + 1
     start = position
     if raw.startswith(b"<<", position) or raw.startswith(b">>", position):
         return raw[position : position + 2], start, position + 2
@@ -929,24 +948,179 @@ def _next_raw_pdf_token(raw: bytes, position: int) -> tuple[bytes, int, int] | N
     return raw[start:position], start, position
 
 
-def _simple_indirect_pdf_values(raw: bytes) -> dict[tuple[int, int], tuple[bytes, ...]]:
-    values: dict[tuple[int, int], tuple[bytes, ...]] = {}
-    pattern = re.compile(
-        rb"(?m)(?P<id>[0-9]+)[\x00\x09\x0a\x0c\x0d\x20]+(?P<generation>[0-9]+)"
-        rb"[\x00\x09\x0a\x0c\x0d\x20]+obj[\x00\x09\x0a\x0c\x0d\x20]+"
-        rb"(?P<value>[0-9]+|/[A-Za-z0-9]+|\[[\x00\x09\x0a\x0c\x0d\x20/A-Za-z0-9]+\])"
-        rb"[\x00\x09\x0a\x0c\x0d\x20]+endobj\b"
+def _collect_simple_indirect_pdf_values(raw: bytes) -> dict[tuple[int, int], tuple[bytes, ...]]:
+    provisional = _collect_simple_indirect_pdf_values_pass(
+        raw, known_values={}, reject_duplicates=False
     )
-    for match in pattern.finditer(raw):
-        values[(int(match.group("id")), int(match.group("generation")))] = tuple(
-            re.findall(rb"/[A-Za-z0-9]+|[0-9]+|\[|\]", match.group("value"))
-        )
+    return _collect_simple_indirect_pdf_values_pass(
+        raw, known_values=provisional, reject_duplicates=True
+    )
+
+
+def _collect_simple_indirect_pdf_values_pass(
+    raw: bytes,
+    *,
+    known_values: dict[tuple[int, int], tuple[bytes, ...]],
+    reject_duplicates: bool,
+) -> dict[tuple[int, int], tuple[bytes, ...]]:
+    values: dict[tuple[int, int], tuple[bytes, ...]] = {}
+    seen_identities: set[tuple[int, int]] = set()
+    last_identity_offset: dict[tuple[int, int], int] = {}
+    position = 0
+    token_count = 0
+    recent: list[bytes] = []
+    current_identity: tuple[int, int] | None = None
+    current_value: list[bytes] = []
+    simple_candidate = False
+    dictionary_depth = 0
+    dictionary_tokens: list[tuple[bytes, int]] | None = None
+    dictionary_start: int | None = None
+    completed_dictionary: list[tuple[bytes, int]] | None = None
+    while True:
+        result = _next_raw_pdf_token(raw, position)
+        if result is None:
+            break
+        token, _start, end = result
+        position = end
+        token_count += 1
+        if token_count > _MAX_RAW_PDF_TOKENS:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF raw token count exceeds safety limits."
+            )
+        if (
+            current_identity is None
+            and token == b"obj"
+            and len(recent) >= 2
+            and all(value.isdigit() for value in recent[-2:])
+        ):
+            current_identity = (int(recent[-2]), int(recent[-1]))
+            previous_offset = last_identity_offset.get(current_identity)
+            if (
+                previous_offset is not None
+                and reject_duplicates
+                and raw.find(b"%%EOF", previous_offset, _start) < 0
+            ):
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006", "Hybrid PDF contains duplicate indirect objects."
+                )
+            if current_identity not in seen_identities:
+                if len(seen_identities) >= _MAX_INDIRECT_OBJECTS:
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006",
+                        "Hybrid PDF indirect object count exceeds safety limits.",
+                    )
+                seen_identities.add(current_identity)
+            last_identity_offset[current_identity] = _start
+            current_value = []
+            simple_candidate = True
+            completed_dictionary = None
+        elif current_identity is not None and token == b"<<":
+            simple_candidate = False
+            if dictionary_depth == 0:
+                dictionary_tokens = []
+                dictionary_start = _start
+            if dictionary_tokens is not None:
+                _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, end)
+                dictionary_tokens.append((token, dictionary_depth))
+            dictionary_depth += 1
+        elif current_identity is not None and token == b">>" and dictionary_depth > 0:
+            dictionary_depth -= 1
+            if dictionary_tokens is not None:
+                _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, end)
+                dictionary_tokens.append((token, dictionary_depth))
+            if dictionary_depth == 0:
+                completed_dictionary = dictionary_tokens
+                dictionary_tokens = None
+                dictionary_start = None
+        elif dictionary_depth > 0 and dictionary_tokens is not None:
+            _require_dictionary_token_capacity(dictionary_tokens, dictionary_start, end)
+            dictionary_tokens.append((token, dictionary_depth))
+        elif token == b"stream" and current_identity is not None:
+            if completed_dictionary is None:
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006", "Hybrid PDF stream dictionary is invalid."
+                )
+            resolvable_values = dict(known_values)
+            resolvable_values.update(values)
+            try:
+                length = _structural_dictionary_length(completed_dictionary, resolvable_values)
+            except ProofAgentError:
+                if reject_duplicates:
+                    raise
+                endstream = raw.find(b"endstream", position)
+                if endstream < 0:
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006", "Hybrid PDF stream is unterminated."
+                    )
+                position = endstream
+            else:
+                data_start = _raw_stream_data_start(raw, end)
+                position = data_start + length
+                if position > len(raw):
+                    raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF stream is truncated.")
+            current_value = []
+            simple_candidate = False
+            recent.clear()
+        elif token == b"endobj" and current_identity is not None:
+            if simple_candidate and _is_simple_indirect_value(current_value):
+                if current_identity not in values and len(values) >= _MAX_SIMPLE_INDIRECT_OBJECTS:
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006",
+                        "Hybrid PDF simple indirect object count exceeds safety limits.",
+                    )
+                values[current_identity] = tuple(current_value)
+            current_identity = None
+            current_value = []
+            simple_candidate = False
+            dictionary_depth = 0
+            dictionary_tokens = None
+            dictionary_start = None
+            completed_dictionary = None
+        elif current_identity is not None and dictionary_depth == 0 and simple_candidate:
+            if len(current_value) >= _MAX_SIMPLE_INDIRECT_VALUE_TOKENS:
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006",
+                    "Hybrid PDF simple indirect object exceeds safety limits.",
+                )
+            current_value.append(token)
+        recent.append(token)
+        if len(recent) > 3:
+            del recent[0]
     return values
+
+
+def _require_dictionary_token_capacity(
+    tokens: list[tuple[bytes, int]], dictionary_start: int | None, token_end: int
+) -> None:
+    if (
+        len(tokens) >= _MAX_STRUCTURAL_DICTIONARY_TOKENS
+        or dictionary_start is None
+        or token_end - dictionary_start > _MAX_STRUCTURAL_STREAM_DICTIONARY_BYTES
+    ):
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006", "Hybrid PDF stream dictionary exceeds safety limits."
+        )
+
+
+def _is_simple_indirect_value(tokens: list[bytes]) -> bool:
+    if len(tokens) == 1:
+        return tokens[0].isdigit() or tokens[0].startswith(b"/")
+    return (
+        len(tokens) >= 2
+        and tokens[0] == b"["
+        and tokens[-1] == b"]"
+        and all(token.startswith(b"/") for token in tokens[1:-1])
+    )
 
 
 def _top_dictionary_value(tokens: list[tuple[bytes, int]], key: bytes) -> tuple[bytes, ...] | None:
     for index, (token, depth) in enumerate(tokens):
-        if token != key or depth != 1 or index + 1 >= len(tokens):
+        if (
+            not token.startswith(b"/")
+            or _normalize_pdf_name(token) != key
+            or depth != 1
+            or index + 1 >= len(tokens)
+        ):
             continue
         values = [tokens[index + 1][0]]
         if values[0] == b"[":
@@ -963,7 +1137,30 @@ def _top_dictionary_value(tokens: list[tuple[bytes, int]], key: bytes) -> tuple[
 
 def _top_dictionary_name(tokens: list[tuple[bytes, int]], key: bytes) -> bytes | None:
     value = _top_dictionary_value(tokens, key)
-    return value[0] if value and value[0].startswith(b"/") else None
+    return _normalize_pdf_name(value[0]) if value and value[0].startswith(b"/") else None
+
+
+def _normalize_pdf_name(token: bytes) -> bytes:
+    if not token.startswith(b"/"):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF name is invalid.")
+    normalized = bytearray(b"/")
+    index = 1
+    while index < len(token):
+        if token[index] != ord("#"):
+            normalized.append(token[index])
+            index += 1
+            continue
+        if index + 2 >= len(token):
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF name escape is invalid.")
+        escaped = token[index + 1 : index + 3]
+        try:
+            normalized.append(int(escaped, 16))
+        except ValueError as exc:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF name escape is invalid."
+            ) from exc
+        index += 3
+    return bytes(normalized)
 
 
 def _structural_dictionary_length(
@@ -995,10 +1192,17 @@ def _structural_dictionary_filters(
             raise _hybrid_error(
                 "PA_HYBRID_INTAKE_006", "Hybrid PDF structural Filter cannot be resolved safely."
             )
-    names = tuple(token.decode("ascii") for token in value if token.startswith(b"/"))
-    if not names or any(not token.startswith(b"/") for token in value if token not in {b"[", b"]"}):
+    name_tokens = tuple(_normalize_pdf_name(token) for token in value if token.startswith(b"/"))
+    if not name_tokens or any(
+        not token.startswith(b"/") for token in value if token not in {b"[", b"]"}
+    ):
         raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF structural Filter is invalid.")
-    return names
+    try:
+        return tuple(token.decode("ascii") for token in name_tokens)
+    except UnicodeDecodeError as exc:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006", "Hybrid PDF structural Filter is invalid."
+        ) from exc
 
 
 def _raw_stream_data_start(raw: bytes, stream_token_end: int) -> int:
