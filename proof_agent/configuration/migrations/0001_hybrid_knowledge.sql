@@ -165,6 +165,28 @@ CREATE TABLE IF NOT EXISTS hybrid_knowledge_publication_validation_claim (
     REFERENCES hybrid_knowledge_publication_attempt(source_id, generation_id, attempt_id)
 );
 
+CREATE TABLE IF NOT EXISTS hybrid_projection_materialization (
+  source_id text NOT NULL,
+  generation_id text NOT NULL,
+  projection_id text NOT NULL,
+  rule_unit_revision_id text NOT NULL,
+  embedding_sha256 text NOT NULL CHECK (embedding_sha256 ~ '^[0-9a-f]{64}$'),
+  projection_material_sha256 text NOT NULL
+    CHECK (projection_material_sha256 ~ '^[0-9a-f]{64}$'),
+  immutable_projection_sha256 text NOT NULL
+    CHECK (immutable_projection_sha256 ~ '^[0-9a-f]{64}$'),
+  created_attempt_id text NOT NULL,
+  created_at timestamptz NOT NULL,
+  PRIMARY KEY (source_id, generation_id, projection_id),
+  UNIQUE (source_id, generation_id, rule_unit_revision_id),
+  FOREIGN KEY (source_id, generation_id)
+    REFERENCES hybrid_knowledge_generation(source_id, generation_id),
+  FOREIGN KEY (rule_unit_revision_id)
+    REFERENCES hybrid_knowledge_rule_unit_revision(rule_unit_revision_id),
+  FOREIGN KEY (source_id, generation_id, created_attempt_id)
+    REFERENCES hybrid_knowledge_publication_attempt(source_id, generation_id, attempt_id)
+);
+
 ALTER TABLE hybrid_knowledge_source_authority
   DROP CONSTRAINT IF EXISTS hybrid_source_live_attempt_fk;
 ALTER TABLE hybrid_knowledge_source_authority
@@ -326,6 +348,7 @@ BEGIN
     'hybrid_knowledge_rule_unit_revision',
     'hybrid_knowledge_publication_validation',
     'hybrid_knowledge_publication_validation_claim', 'hybrid_rule_unit_manifest',
+    'hybrid_projection_materialization',
     'hybrid_rule_unit_manifest_shard', 'hybrid_rule_unit_manifest_member',
     'hybrid_projection_attestation', 'hybrid_knowledge_publication'
   ] LOOP

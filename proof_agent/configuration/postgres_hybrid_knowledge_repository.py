@@ -21,7 +21,10 @@ from proof_agent.capabilities.knowledge.hybrid.manifest import (
     RuleUnitManifestMaterialization,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
-from proof_agent.capabilities.knowledge.hybrid.ports import SearchIndexIdentity
+from proof_agent.capabilities.knowledge.hybrid.ports import (
+    ProjectionAuthorityDocument,
+    SearchIndexIdentity,
+)
 from proof_agent.capabilities.knowledge.hybrid.recovery import (
     GenerationRebuildAuthority,
     OrphanProjection,
@@ -34,6 +37,7 @@ from proof_agent.contracts.knowledge_index import (
     KnowledgeIndexGeneration,
     KnowledgeProjectionAttestation,
     KnowledgePublicationAttempt,
+    RuleUnitManifestEntry,
     RuleUnitManifestRoot,
     RuleUnitManifestShard,
 )
@@ -160,6 +164,37 @@ class PostgresHybridKnowledgeRepository:
             )
             if stored.model_dump(mode="python") != payload:
                 raise PublicationConflict("VALIDATION_CONFLICT")
+
+    def advance_source_candidate(
+        self,
+        *,
+        source_id: str,
+        expected_source_draft_version_id: str,
+        expected_candidate_digest: str,
+        source_draft_version_id: str,
+        candidate_digest: str,
+    ) -> None:
+        """CAS a trusted Source draft/candidate authority between publications."""
+
+        with self._connection() as connection:
+            updated = connection.execute(
+                """
+                UPDATE hybrid_knowledge_source_authority
+                   SET draft_version_id=%s, candidate_digest=%s, updated_at=%s
+                 WHERE source_id=%s AND draft_version_id=%s AND candidate_digest=%s
+                   AND live_attempt_id IS NULL
+                """,
+                (
+                    source_draft_version_id,
+                    candidate_digest,
+                    datetime.now(UTC),
+                    source_id,
+                    expected_source_draft_version_id,
+                    expected_candidate_digest,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise PublicationConflict("SOURCE_CANDIDATE_CAS_LOST")
 
     def begin_attempt(self, request: HybridPublicationRequest) -> KnowledgePublicationAttempt:
         with self._connection() as connection:
@@ -315,73 +350,56 @@ class PostgresHybridKnowledgeRepository:
         self, attempt: KnowledgePublicationAttempt
     ) -> PublicationAuthorityContext:
         with self._connection() as connection:
-            row = connection.execute(
+            publication_row = connection.execute(
                 """
                 SELECT p.publication_json, m.manifest_json,
                        ar.artifact_uri, ar.version_id, ar.sha256,
                        ar.size_bytes, ar.media_type
-                  FROM hybrid_knowledge_source_authority s
-                  LEFT JOIN hybrid_knowledge_publication p
-                    ON p.publication_id = s.active_publication_id
-                  LEFT JOIN hybrid_rule_unit_manifest m
+                  FROM hybrid_knowledge_publication p
+                  JOIN hybrid_rule_unit_manifest m
                     ON m.root_sha256 = p.manifest_root_sha256
-                  LEFT JOIN hybrid_knowledge_artifact_reference ar
-                    ON ar.artifact_ref_id = m.root_artifact_ref_id
-                 WHERE s.source_id = %s
-                """,
-                (attempt.source_id,),
-            ).fetchone()
-            if row is None:
-                raise PublicationConflict("SOURCE_NOT_FOUND")
-            if row[0] is None:
-                return PublicationAuthorityContext()
-            publication_json = _json_object(row[0])
-            parent = KnowledgeProjectionAttestation.model_validate(
-                publication_json["attestation"]
-            )
-            root = RuleUnitManifestRoot.model_validate(_json_object(row[1]))
-            root_ref = ExactArtifactRef(
-                artifact_uri=row[2],
-                version_id=row[3],
-                sha256=row[4],
-                size_bytes=row[5],
-                media_type=row[6],
-            )
-            shard_rows = connection.execute(
-                """
-                SELECT sh.shard_json, ar.artifact_uri, ar.version_id, ar.sha256,
-                       ar.size_bytes, ar.media_type
-                  FROM hybrid_rule_unit_manifest_member mm
-                  JOIN hybrid_rule_unit_manifest_shard sh
-                    ON sh.shard_sha256 = mm.shard_sha256
                   JOIN hybrid_knowledge_artifact_reference ar
-                    ON ar.artifact_ref_id = sh.artifact_ref_id
-                 WHERE mm.root_sha256 = %s ORDER BY mm.ordinal
+                    ON ar.artifact_ref_id = m.root_artifact_ref_id
+                 WHERE p.source_id = %s AND p.generation_id = %s
+                 ORDER BY p.source_publication_seq DESC
+                 LIMIT 1
                 """,
-                (root.root_sha256,),
-            ).fetchall()
-        shards = tuple(
-            PersistedRuleUnitManifestShard(
-                shard=RuleUnitManifestShard.model_validate(_json_object(item[0])),
-                artifact_ref=ExactArtifactRef(
-                    artifact_uri=item[1],
-                    version_id=item[2],
-                    sha256=item[3],
-                    size_bytes=item[4],
-                    media_type=item[5],
-                ),
+                (attempt.source_id, attempt.generation_id),
+            ).fetchone()
+            projection_row = connection.execute(
+                """
+                SELECT a.attestation_json
+                  FROM hybrid_generation_projection gp
+                  JOIN hybrid_projection_attestation a
+                    ON a.attestation_sha256 = gp.attestation_sha256
+                 WHERE gp.source_id = %s AND gp.generation_id = %s
+                """,
+                (attempt.source_id, attempt.generation_id),
+            ).fetchone()
+            parent = (
+                KnowledgeProjectionAttestation.model_validate(_json_object(projection_row[0]))
+                if projection_row is not None
+                else None
             )
-            for item in shard_rows
-        )
-        if not shards:
-            raise PublicationConflict("AUTHORITY_CHAIN_MISSING")
+            retained = (
+                _load_retained_projection_authority(
+                    connection,
+                    source_id=attempt.source_id,
+                    generation_id=attempt.generation_id,
+                    attestation=parent,
+                )
+                if parent is not None
+                else ()
+            )
+            previous = (
+                _load_manifest_materialization(connection, publication_row)
+                if publication_row is not None
+                else None
+            )
         return PublicationAuthorityContext(
-            previous_manifest=RuleUnitManifestMaterialization(
-                root=root,
-                root_ref=root_ref,
-                shards=shards,
-            ),
+            previous_manifest=previous,
             parent_attestation=parent,
+            retained_projection_documents=retained,
         )
 
     def record_scheduler_metrics(
@@ -403,23 +421,60 @@ class PostgresHybridKnowledgeRepository:
             if result.rowcount != 1:
                 raise PublicationConflict("ATTEMPT_LOST")
 
+    def stage_commit(self, commit: PublicationCommit) -> None:
+        """Persist and verify immutable material before the final Source-row CAS."""
+
+        attestation = commit.attestation
+        with self._connection() as connection:
+            self._insert_projection_authority(connection, commit)
+            self._insert_manifest(connection, commit)
+            connection.execute(
+                """
+                INSERT INTO hybrid_projection_attestation
+                  (attestation_sha256, source_id, generation_id, publication_attempt_id,
+                   index_uuid, mapping_sha256, manifest_root_sha256,
+                   parent_attestation_sha256, attestation_json, created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
+                ON CONFLICT (attestation_sha256) DO NOTHING
+                """,
+                (
+                    attestation.attestation_sha256,
+                    commit.attempt.source_id,
+                    commit.attempt.generation_id,
+                    commit.attempt.attempt_id,
+                    attestation.index_uuid,
+                    attestation.mapping_sha256,
+                    attestation.manifest_root_sha256,
+                    attestation.parent_attestation_sha256,
+                    _canonical_json(attestation.model_dump(mode="json")),
+                    datetime.now(UTC),
+                ),
+            )
+            stored = connection.execute(
+                """SELECT attestation_json FROM hybrid_projection_attestation
+                    WHERE attestation_sha256=%s AND source_id=%s AND generation_id=%s""",
+                (
+                    attestation.attestation_sha256,
+                    commit.attempt.source_id,
+                    commit.attempt.generation_id,
+                ),
+            ).fetchone()
+            if stored is None or _json_object(stored[0]) != attestation.model_dump(mode="json"):
+                raise PublicationConflict("STAGED_COMMIT_MISMATCH")
+
     def commit_if_current(self, commit: PublicationCommit) -> HybridKnowledgePublicationRecord:
-        """Persist immutable authority and advance the pointer in one local CAS transaction."""
+        """Advance publication pointers in one short Source-row CAS transaction."""
 
         attempt = commit.attempt
         root = commit.manifest.root
         attestation = commit.attestation
+        self._validate_staged_commit(commit)
         with self._connection() as connection:
             source = connection.execute(
                 """
-                SELECT s.draft_version_id, s.candidate_digest, s.live_attempt_id,
-                       p.attestation_sha256, a.attestation_json
-                  FROM hybrid_knowledge_source_authority s
-                  LEFT JOIN hybrid_knowledge_publication p
-                    ON p.publication_id = s.active_publication_id
-                  LEFT JOIN hybrid_projection_attestation a
-                    ON a.attestation_sha256 = p.attestation_sha256
-                 WHERE s.source_id = %s FOR UPDATE OF s
+                SELECT draft_version_id, candidate_digest, live_attempt_id
+                  FROM hybrid_knowledge_source_authority
+                 WHERE source_id = %s FOR UPDATE
                 """,
                 (attempt.source_id,),
             ).fetchone()
@@ -439,11 +494,24 @@ class PostgresHybridKnowledgeRepository:
             ).fetchone()
             if live is None or _attempt_from_row(live) != attempt or attempt.state != "VALIDATED":
                 raise PublicationConflict("FENCE_LOST")
+            claim = connection.execute(
+                """SELECT attempt_id FROM hybrid_knowledge_publication_validation_claim
+                    WHERE validation_id=%s AND source_id=%s AND generation_id=%s""",
+                (attempt.validation_id, attempt.source_id, attempt.generation_id),
+            ).fetchone()
+            if claim != (attempt.attempt_id,):
+                raise PublicationConflict("VALIDATION_REUSED")
             if source[0] != attempt.source_draft_version_id:
                 raise PublicationConflict("STALE_DRAFT")
             if source[1] != attempt.candidate_digest:
                 raise PublicationConflict("STALE_CANDIDATE")
-            expected_parent = source[3]
+            projection_pointer = connection.execute(
+                """SELECT index_uuid, attestation_sha256
+                     FROM hybrid_generation_projection
+                    WHERE source_id=%s AND generation_id=%s FOR UPDATE""",
+                (attempt.source_id, attempt.generation_id),
+            ).fetchone()
+            expected_parent = projection_pointer[1] if projection_pointer is not None else None
             generation = connection.execute(
                 """SELECT identity_digest, mapping_sha256 FROM hybrid_knowledge_generation
                     WHERE generation_id = %s AND source_id = %s""",
@@ -474,61 +542,53 @@ class PostgresHybridKnowledgeRepository:
                 or attestation.parent_attestation_sha256 != expected_parent
             ):
                 raise PublicationConflict("ATTESTATION_MISMATCH")
-            if source[4] is not None:
-                parent = KnowledgeProjectionAttestation.model_validate(_json_object(source[4]))
-                if not set(parent.covered_publication_sequences).issubset(
-                    attestation.covered_publication_sequences
-                ):
-                    raise PublicationConflict("ATTESTATION_MISMATCH")
-
-            self._insert_projection_authority(connection, commit)
-            self._insert_manifest(connection, commit)
-            connection.execute(
-                """
-                INSERT INTO hybrid_projection_attestation
-                  (attestation_sha256, source_id, generation_id, publication_attempt_id,
-                   index_uuid, mapping_sha256, manifest_root_sha256,
-                   parent_attestation_sha256, attestation_json, created_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
-                """,
-                (
-                    attestation.attestation_sha256,
-                    attempt.source_id,
-                    attempt.generation_id,
-                    attempt.attempt_id,
-                    attestation.index_uuid,
-                    attestation.mapping_sha256,
-                    root.root_sha256,
-                    attestation.parent_attestation_sha256,
-                    _canonical_json(attestation.model_dump(mode="json")),
-                    datetime.now(UTC),
-                ),
-            )
-            connection.execute(
-                """
-                INSERT INTO hybrid_generation_projection
-                  (source_id, generation_id, index_uuid, projection_locator,
-                   attestation_sha256,
-                   fencing_token, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (source_id, generation_id) DO UPDATE
-                  SET index_uuid=EXCLUDED.index_uuid,
-                      projection_locator=EXCLUDED.projection_locator,
-                      attestation_sha256=EXCLUDED.attestation_sha256,
-                      fencing_token=EXCLUDED.fencing_token,
-                      updated_at=EXCLUDED.updated_at
-                WHERE hybrid_generation_projection.fencing_token < EXCLUDED.fencing_token
-                """,
-                (
-                    attempt.source_id,
-                    attempt.generation_id,
-                    attestation.index_uuid,
-                    commit.identity.projection_locator,
-                    attestation.attestation_sha256,
-                    attempt.fencing_token,
-                    datetime.now(UTC),
-                ),
-            )
+            if (
+                projection_pointer is not None
+                and projection_pointer[0] != commit.identity.index_uuid
+            ):
+                raise PublicationConflict("FENCE_LOST")
+            projection_updated_at = datetime.now(UTC)
+            if projection_pointer is None:
+                projection_update = connection.execute(
+                    """
+                    INSERT INTO hybrid_generation_projection
+                      (source_id, generation_id, index_uuid, projection_locator,
+                       attestation_sha256, fencing_token, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,1,%s)
+                    ON CONFLICT (source_id, generation_id) DO NOTHING
+                    """,
+                    (
+                        attempt.source_id,
+                        attempt.generation_id,
+                        attestation.index_uuid,
+                        commit.identity.projection_locator,
+                        attestation.attestation_sha256,
+                        projection_updated_at,
+                    ),
+                )
+            else:
+                projection_update = connection.execute(
+                    """
+                    UPDATE hybrid_generation_projection
+                       SET projection_locator=%s,
+                           attestation_sha256=%s,
+                           fencing_token=fencing_token+1,
+                           updated_at=%s
+                     WHERE source_id=%s AND generation_id=%s
+                       AND index_uuid=%s AND attestation_sha256=%s
+                    """,
+                    (
+                        commit.identity.projection_locator,
+                        attestation.attestation_sha256,
+                        projection_updated_at,
+                        attempt.source_id,
+                        attempt.generation_id,
+                        projection_pointer[0],
+                        expected_parent,
+                    ),
+                )
+            if projection_update.rowcount != 1:
+                raise PublicationConflict("FENCE_LOST")
             published_at = datetime.now(UTC)
             publication_id = f"publication-{uuid4().hex}"
             publication = HybridKnowledgePublicationRecord(
@@ -594,6 +654,56 @@ class PostgresHybridKnowledgeRepository:
                 raise PublicationConflict("FENCE_LOST")
             return publication
 
+    def load_active_publication(self, source_id: str) -> HybridKnowledgePublicationRecord | None:
+        """Read the authoritative Source publication pointer for verification/operations."""
+
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT p.publication_json
+                  FROM hybrid_knowledge_source_authority s
+                  LEFT JOIN hybrid_knowledge_publication p
+                    ON p.publication_id=s.active_publication_id
+                 WHERE s.source_id=%s
+                """,
+                (source_id,),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return HybridKnowledgePublicationRecord.model_validate(_json_object(row[0]))
+
+    def _validate_staged_commit(self, commit: PublicationCommit) -> None:
+        """Verify immutable staged material outside the final Source lock transaction."""
+
+        attempt = commit.attempt
+        root = commit.manifest.root
+        attestation = commit.attestation
+        with self._connection() as connection:
+            staged = connection.execute(
+                """
+                SELECT m.manifest_json, a.attestation_json
+                  FROM hybrid_rule_unit_manifest m
+                  JOIN hybrid_projection_attestation a
+                    ON a.manifest_root_sha256=m.root_sha256
+                 WHERE m.root_sha256=%s AND m.source_id=%s AND m.generation_id=%s
+                   AND a.attestation_sha256=%s
+                   AND a.publication_attempt_id=%s
+                """,
+                (
+                    root.root_sha256,
+                    attempt.source_id,
+                    attempt.generation_id,
+                    attestation.attestation_sha256,
+                    attempt.attempt_id,
+                ),
+            ).fetchone()
+        if (
+            staged is None
+            or _json_object(staged[0]) != root.model_dump(mode="json")
+            or _json_object(staged[1]) != attestation.model_dump(mode="json")
+        ):
+            raise PublicationConflict("STAGED_COMMIT_MISMATCH")
+
     def fail_attempt(
         self,
         attempt_id: str,
@@ -637,8 +747,12 @@ class PostgresHybridKnowledgeRepository:
                     ON CONFLICT (attempt_id) DO NOTHING
                     """,
                     (
-                        attempt_id, row[0], row[1], projection_identity.index_uuid,
-                        projection_identity.projection_locator, now,
+                        attempt_id,
+                        row[0],
+                        row[1],
+                        projection_identity.index_uuid,
+                        projection_identity.projection_locator,
+                        now,
                     ),
                 )
 
@@ -724,20 +838,24 @@ class PostgresHybridKnowledgeRepository:
                        root_ref.size_bytes, root_ref.media_type,
                        gp.index_uuid, gp.projection_locator,
                        a.attestation_json, g.generation_json
-                  FROM hybrid_knowledge_source_authority s
-                  JOIN hybrid_knowledge_publication p
-                    ON p.publication_id=s.active_publication_id
-                  JOIN hybrid_rule_unit_manifest m
-                    ON m.root_sha256=p.manifest_root_sha256
-                  JOIN hybrid_knowledge_artifact_reference root_ref
-                    ON root_ref.artifact_ref_id=m.root_artifact_ref_id
-                  JOIN hybrid_generation_projection gp
-                    ON gp.source_id=s.source_id AND gp.generation_id=p.generation_id
+                  FROM hybrid_generation_projection gp
                   JOIN hybrid_projection_attestation a
                     ON a.attestation_sha256=gp.attestation_sha256
+                  JOIN hybrid_rule_unit_manifest m
+                    ON m.root_sha256=a.manifest_root_sha256
+                  JOIN hybrid_knowledge_artifact_reference root_ref
+                    ON root_ref.artifact_ref_id=m.root_artifact_ref_id
                   JOIN hybrid_knowledge_generation g
-                    ON g.generation_id=p.generation_id
-                 WHERE s.source_id=%s AND p.generation_id=%s
+                    ON g.source_id=gp.source_id AND g.generation_id=gp.generation_id
+                  JOIN LATERAL (
+                    SELECT publication_json
+                      FROM hybrid_knowledge_publication publication
+                     WHERE publication.source_id=gp.source_id
+                       AND publication.generation_id=gp.generation_id
+                     ORDER BY publication.source_publication_seq DESC
+                     LIMIT 1
+                  ) p ON TRUE
+                 WHERE gp.source_id=%s AND gp.generation_id=%s
                 """,
                 (source_id, generation_id),
             ).fetchone()
@@ -776,9 +894,7 @@ class PostgresHybridKnowledgeRepository:
             rule_ids = tuple(
                 entry.rule_unit_revision_id
                 for item in retained_rows
-                for entry in RuleUnitManifestShard.model_validate(
-                    _json_object(item[11])
-                ).entries
+                for entry in RuleUnitManifestShard.model_validate(_json_object(item[11])).entries
             )
             projection_rows = connection.execute(
                 """
@@ -805,16 +921,22 @@ class PostgresHybridKnowledgeRepository:
                 {
                     "root": retained_root,
                     "root_ref": ExactArtifactRef(
-                        artifact_uri=item[1], version_id=item[2], sha256=item[3],
-                        size_bytes=item[4], media_type=item[5]
+                        artifact_uri=item[1],
+                        version_id=item[2],
+                        sha256=item[3],
+                        size_bytes=item[4],
+                        media_type=item[5],
                     ),
                     "shard_refs": [],
                 },
             )
             cast(list[ExactArtifactRef], bucket["shard_refs"]).append(
                 ExactArtifactRef(
-                    artifact_uri=item[6], version_id=item[7], sha256=item[8],
-                    size_bytes=item[9], media_type=item[10]
+                    artifact_uri=item[6],
+                    version_id=item[7],
+                    sha256=item[8],
+                    size_bytes=item[9],
+                    media_type=item[10],
                 )
             )
         retained_manifests = tuple(
@@ -829,11 +951,7 @@ class PostgresHybridKnowledgeRepository:
             )
         )
         current_retained = next(
-            (
-                item
-                for item in retained_manifests
-                if item.root.root_sha256 == root.root_sha256
-            ),
+            (item for item in retained_manifests if item.root.root_sha256 == root.root_sha256),
             None,
         )
         if current_retained is None:
@@ -847,8 +965,11 @@ class PostgresHybridKnowledgeRepository:
             ),
             manifest_root=root,
             root_ref=ExactArtifactRef(
-                artifact_uri=row[2], version_id=row[3], sha256=row[4],
-                size_bytes=row[5], media_type=row[6]
+                artifact_uri=row[2],
+                version_id=row[3],
+                sha256=row[4],
+                size_bytes=row[5],
+                media_type=row[6],
             ),
             shard_refs=current_retained.shard_refs,
             current_identity=SearchIndexIdentity(
@@ -858,8 +979,7 @@ class PostgresHybridKnowledgeRepository:
             ),
             current_attestation=current_attestation,
             projection_authority=tuple(
-                _rebuild_projection_authority(item)
-                for item in projection_rows
+                _rebuild_projection_authority(item) for item in projection_rows
             ),
             retained_manifests=retained_manifests,
         )
@@ -916,8 +1036,12 @@ class PostgresHybridKnowledgeRepository:
                         VALUES (%s,%s,%s,%s,%s,'PENDING',%s)
                         ON CONFLICT (attempt_id) DO NOTHING""",
                     (
-                        operation_id, row[0], row[1], projection_identity.index_uuid,
-                        projection_identity.projection_locator, datetime.now(UTC),
+                        operation_id,
+                        row[0],
+                        row[1],
+                        projection_identity.index_uuid,
+                        projection_identity.projection_locator,
+                        datetime.now(UTC),
                     ),
                 )
 
@@ -955,12 +1079,16 @@ class PostgresHybridKnowledgeRepository:
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
                 """,
                 (
-                    attestation.attestation_sha256, authority.source_id,
-                    authority.generation_id, attestation.publication_attempt_id,
-                    rebuilt_identity.index_uuid, attestation.mapping_sha256,
+                    attestation.attestation_sha256,
+                    authority.source_id,
+                    authority.generation_id,
+                    attestation.publication_attempt_id,
+                    rebuilt_identity.index_uuid,
+                    attestation.mapping_sha256,
                     attestation.manifest_root_sha256,
                     attestation.parent_attestation_sha256,
-                    _canonical_json(attestation.model_dump(mode="json")), now,
+                    _canonical_json(attestation.model_dump(mode="json")),
+                    now,
                 ),
             )
             updated = connection.execute(
@@ -970,9 +1098,12 @@ class PostgresHybridKnowledgeRepository:
                     WHERE source_id=%s AND generation_id=%s
                       AND index_uuid=%s AND attestation_sha256=%s""",
                 (
-                    rebuilt_identity.index_uuid, rebuilt_identity.projection_locator,
-                    attestation.attestation_sha256, now,
-                    authority.source_id, authority.generation_id,
+                    rebuilt_identity.index_uuid,
+                    rebuilt_identity.projection_locator,
+                    attestation.attestation_sha256,
+                    now,
+                    authority.source_id,
+                    authority.generation_id,
                     authority.current_identity.index_uuid,
                     authority.current_attestation.attestation_sha256,
                 ),
@@ -1019,6 +1150,7 @@ class PostgresHybridKnowledgeRepository:
                generation_id, root_artifact_ref_id, manifest_json,
                document_count, rule_unit_count, created_at)
             VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+            ON CONFLICT (root_sha256) DO NOTHING
             """,
             (
                 root.root_sha256,
@@ -1037,7 +1169,8 @@ class PostgresHybridKnowledgeRepository:
             connection.execute(
                 """INSERT INTO hybrid_rule_unit_manifest_member
                      (root_sha256, shard_sha256, source_id, generation_id, ordinal)
-                     VALUES (%s,%s,%s,%s,%s)""",
+                     VALUES (%s,%s,%s,%s,%s)
+                     ON CONFLICT (root_sha256, shard_sha256) DO NOTHING""",
                 (
                     root.root_sha256,
                     persisted.shard.sha256,
@@ -1046,12 +1179,33 @@ class PostgresHybridKnowledgeRepository:
                     ordinal,
                 ),
             )
+        stored_root = connection.execute(
+            """SELECT manifest_json, root_artifact_ref_id
+                 FROM hybrid_rule_unit_manifest WHERE root_sha256=%s""",
+            (root.root_sha256,),
+        ).fetchone()
+        stored_members = connection.execute(
+            """SELECT shard_sha256, ordinal FROM hybrid_rule_unit_manifest_member
+                WHERE root_sha256=%s ORDER BY ordinal""",
+            (root.root_sha256,),
+        ).fetchall()
+        if (
+            stored_root is None
+            or _json_object(stored_root[0]) != root.model_dump(mode="json")
+            or stored_root[1] != root_ref_id
+            or stored_members
+            != [
+                (persisted.shard.sha256, ordinal)
+                for ordinal, persisted in enumerate(manifest.shards)
+            ]
+        ):
+            raise PublicationConflict("STAGED_COMMIT_MISMATCH")
 
     def _insert_projection_authority(self, connection: Any, commit: PublicationCommit) -> None:
         now = commit.attempt.started_at
-        for document in commit.projection_documents:
-            rule = document.rule_unit
-            metadata = document.approved_metadata
+        for authority in commit.staged_projection_documents:
+            rule = authority.rule_unit
+            metadata = authority.approved_metadata
             visibility = rule.visibility_scope
             metadata_sha = stable_digest(metadata.model_dump(mode="json"))
             visibility_sha = stable_digest(visibility.model_dump(mode="json"))
@@ -1067,8 +1221,11 @@ class PostgresHybridKnowledgeRepository:
                     (source_id, metadata_revision_id, metadata_sha256, metadata_json, approved_at)
                     VALUES (%s,%s,%s,%s::jsonb,%s) ON CONFLICT DO NOTHING""",
                 (
-                    rule.lineage.source_id, metadata.metadata_revision_id, metadata_sha,
-                    _canonical_json(metadata.model_dump(mode="json")), now,
+                    rule.lineage.source_id,
+                    metadata.metadata_revision_id,
+                    metadata_sha,
+                    _canonical_json(metadata.model_dump(mode="json")),
+                    now,
                 ),
             )
             connection.execute(
@@ -1077,8 +1234,11 @@ class PostgresHybridKnowledgeRepository:
                      visibility_json, approved_at)
                     VALUES (%s,%s,%s,%s::jsonb,%s) ON CONFLICT DO NOTHING""",
                 (
-                    rule.lineage.source_id, visibility.revision_id, visibility_sha,
-                    _canonical_json(visibility.model_dump(mode="json")), now,
+                    rule.lineage.source_id,
+                    visibility.revision_id,
+                    visibility_sha,
+                    _canonical_json(visibility.model_dump(mode="json")),
+                    now,
                 ),
             )
             stored_metadata = connection.execute(
@@ -1099,8 +1259,11 @@ class PostgresHybridKnowledgeRepository:
                      review_state, created_at)
                     VALUES (%s,%s,%s,%s,'NOT_REQUIRED',%s) ON CONFLICT DO NOTHING""",
                 (
-                    rule.lineage.source_id, rule.document_id, rule.revision_id,
-                    rule.structured_build_id, now,
+                    rule.lineage.source_id,
+                    rule.document_id,
+                    rule.revision_id,
+                    rule.structured_build_id,
+                    now,
                 ),
             )
             connection.execute(
@@ -1111,14 +1274,20 @@ class PostgresHybridKnowledgeRepository:
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
                     ON CONFLICT DO NOTHING""",
                 (
-                    rule.rule_unit_revision_id, rule.lineage.source_id, rule.document_id,
-                    rule.revision_id, rule.structured_build_id, rule.metadata_revision_id,
-                    visibility.revision_id, rule.content_sha256, rule.authority_sha256,
+                    rule.rule_unit_revision_id,
+                    rule.lineage.source_id,
+                    rule.document_id,
+                    rule.revision_id,
+                    rule.structured_build_id,
+                    rule.metadata_revision_id,
+                    visibility.revision_id,
+                    rule.content_sha256,
+                    rule.authority_sha256,
                     _canonical_json(
                         {
                             "rule_unit": rule.model_dump(mode="json"),
-                            "projection_id": document.projection_id,
-                            "projection_revision": document.projection_revision,
+                            "projection_id": authority.projection_id,
+                            "projection_revision": authority.projection_revision,
                         }
                     ),
                     now,
@@ -1131,6 +1300,47 @@ class PostgresHybridKnowledgeRepository:
                 (rule.rule_unit_revision_id, rule.lineage.source_id),
             ).fetchone()
             if row != (rule.content_sha256, rule.authority_sha256):
+                raise PublicationConflict("PROJECTION_AUTHORITY_MISMATCH")
+            connection.execute(
+                """
+                INSERT INTO hybrid_projection_materialization
+                  (source_id, generation_id, projection_id, rule_unit_revision_id,
+                   embedding_sha256, projection_material_sha256,
+                   immutable_projection_sha256, created_attempt_id, created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    rule.lineage.source_id,
+                    commit.attempt.generation_id,
+                    authority.projection_id,
+                    rule.rule_unit_revision_id,
+                    authority.embedding_sha256,
+                    authority.projection_material_sha256,
+                    authority.immutable_projection_sha256,
+                    authority.last_publication_attempt_id,
+                    now,
+                ),
+            )
+            material = connection.execute(
+                """
+                SELECT rule_unit_revision_id, embedding_sha256,
+                       projection_material_sha256, immutable_projection_sha256
+                  FROM hybrid_projection_materialization
+                 WHERE source_id=%s AND generation_id=%s AND projection_id=%s
+                """,
+                (
+                    rule.lineage.source_id,
+                    commit.attempt.generation_id,
+                    authority.projection_id,
+                ),
+            ).fetchone()
+            if material != (
+                rule.rule_unit_revision_id,
+                authority.embedding_sha256,
+                authority.projection_material_sha256,
+                authority.immutable_projection_sha256,
+            ):
                 raise PublicationConflict("PROJECTION_AUTHORITY_MISMATCH")
 
     @staticmethod
@@ -1153,6 +1363,166 @@ class PostgresHybridKnowledgeRepository:
                 datetime.now(UTC),
             ),
         )
+        stored = connection.execute(
+            """SELECT artifact_uri, version_id, sha256, size_bytes, media_type
+                 FROM hybrid_knowledge_artifact_reference WHERE artifact_ref_id=%s""",
+            (ref_id,),
+        ).fetchone()
+        if stored != (
+            ref.artifact_uri,
+            ref.version_id,
+            ref.sha256,
+            ref.size_bytes,
+            ref.media_type,
+        ):
+            raise PublicationConflict("STAGED_COMMIT_MISMATCH")
+
+
+def _load_manifest_materialization(
+    connection: Any,
+    publication_row: Any,
+) -> RuleUnitManifestMaterialization:
+    root = RuleUnitManifestRoot.model_validate(_json_object(publication_row[1]))
+    root_ref = ExactArtifactRef(
+        artifact_uri=publication_row[2],
+        version_id=publication_row[3],
+        sha256=publication_row[4],
+        size_bytes=publication_row[5],
+        media_type=publication_row[6],
+    )
+    shard_rows = connection.execute(
+        """
+        SELECT sh.shard_json, ar.artifact_uri, ar.version_id, ar.sha256,
+               ar.size_bytes, ar.media_type
+          FROM hybrid_rule_unit_manifest_member mm
+          JOIN hybrid_rule_unit_manifest_shard sh
+            ON sh.shard_sha256 = mm.shard_sha256
+          JOIN hybrid_knowledge_artifact_reference ar
+            ON ar.artifact_ref_id = sh.artifact_ref_id
+         WHERE mm.root_sha256 = %s ORDER BY mm.ordinal
+        """,
+        (root.root_sha256,),
+    ).fetchall()
+    shards = tuple(
+        PersistedRuleUnitManifestShard(
+            shard=RuleUnitManifestShard.model_validate(_json_object(item[0])),
+            artifact_ref=ExactArtifactRef(
+                artifact_uri=item[1],
+                version_id=item[2],
+                sha256=item[3],
+                size_bytes=item[4],
+                media_type=item[5],
+            ),
+        )
+        for item in shard_rows
+    )
+    if not shards:
+        raise PublicationConflict("AUTHORITY_CHAIN_MISSING")
+    return RuleUnitManifestMaterialization(root=root, root_ref=root_ref, shards=shards)
+
+
+def _load_retained_projection_authority(
+    connection: Any,
+    *,
+    source_id: str,
+    generation_id: str,
+    attestation: KnowledgeProjectionAttestation,
+) -> tuple[ProjectionAuthorityDocument, ...]:
+    coverage = tuple(attestation.covered_publication_sequences)
+    rows = connection.execute(
+        """
+        SELECT m.source_publication_seq, sh.shard_json
+          FROM hybrid_rule_unit_manifest m
+          JOIN hybrid_rule_unit_manifest_member mm ON mm.root_sha256=m.root_sha256
+          JOIN hybrid_rule_unit_manifest_shard sh ON sh.shard_sha256=mm.shard_sha256
+         WHERE m.source_id=%s AND m.generation_id=%s
+           AND m.source_publication_seq = ANY(%s)
+         ORDER BY m.source_publication_seq, mm.ordinal
+        """,
+        (source_id, generation_id, list(coverage)),
+    ).fetchall()
+    entries: dict[str, RuleUnitManifestEntry] = {}
+    appearances: dict[str, list[int]] = {}
+    for sequence, shard_json in rows:
+        shard = RuleUnitManifestShard.model_validate(_json_object(shard_json))
+        for entry in shard.entries:
+            previous = entries.setdefault(entry.rule_unit_revision_id, entry)
+            previous_body = previous.model_dump(mode="json")
+            entry_body = entry.model_dump(mode="json")
+            previous_body.pop("publication_seq_to", None)
+            entry_body.pop("publication_seq_to", None)
+            if previous_body != entry_body:
+                raise PublicationConflict("MANIFEST_MISMATCH")
+            appearances.setdefault(entry.rule_unit_revision_id, []).append(sequence)
+    position = {sequence: ordinal for ordinal, sequence in enumerate(coverage)}
+    last_attempt_sequence: dict[str, int] = {}
+    for rule_id, sequences in appearances.items():
+        positions = [position[sequence] for sequence in sequences]
+        if positions != list(range(positions[0], positions[-1] + 1)):
+            raise PublicationConflict("MEMBERSHIP_INTERVAL_AMBIGUOUS")
+        next_position = positions[-1] + 1
+        if next_position < len(coverage):
+            close_publication_sequence = coverage[next_position]
+            entries[rule_id] = entries[rule_id].model_copy(
+                update={"publication_seq_to": close_publication_sequence - 1}
+            )
+            last_attempt_sequence[rule_id] = close_publication_sequence
+        else:
+            entries[rule_id] = entries[rule_id].model_copy(update={"publication_seq_to": None})
+            last_attempt_sequence[rule_id] = entries[rule_id].publication_seq_from
+    attempt_rows = connection.execute(
+        """SELECT reserved_sequence, attempt_id
+             FROM hybrid_knowledge_publication_attempt
+            WHERE source_id=%s AND generation_id=%s AND state='PUBLISHED'
+              AND reserved_sequence = ANY(%s)""",
+        (source_id, generation_id, list(set(last_attempt_sequence.values()))),
+    ).fetchall()
+    attempt_by_sequence = {row[0]: row[1] for row in attempt_rows}
+    projection_rows = connection.execute(
+        """
+        SELECT r.rule_unit_revision_id, r.rule_unit_json, m.metadata_json,
+               p.embedding_sha256, p.projection_material_sha256,
+               p.immutable_projection_sha256
+          FROM hybrid_knowledge_rule_unit_revision r
+          JOIN hybrid_approved_rule_metadata m
+            ON m.source_id=r.source_id AND m.metadata_revision_id=r.metadata_revision_id
+          JOIN hybrid_projection_materialization p
+            ON p.source_id=r.source_id AND p.generation_id=%s
+           AND p.rule_unit_revision_id=r.rule_unit_revision_id
+         WHERE r.source_id=%s AND r.rule_unit_revision_id = ANY(%s)
+         ORDER BY r.rule_unit_revision_id
+        """,
+        (generation_id, source_id, list(entries)),
+    ).fetchall()
+    result: list[ProjectionAuthorityDocument] = []
+    for row in projection_rows:
+        rule_id = row[0]
+        payload = _json_object(row[1])
+        attempt_id = attempt_by_sequence.get(last_attempt_sequence[rule_id])
+        if attempt_id is None:
+            raise PublicationConflict("AUTHORITY_CHAIN_MISSING")
+        result.append(
+            ProjectionAuthorityDocument(
+                projection_id=_json_string(payload["projection_id"], field="projection_id"),
+                rule_unit=InsuranceRuleUnitRevision.model_validate_json(
+                    _canonical_json(_json_object(payload["rule_unit"]))
+                ),
+                manifest_entry=entries[rule_id],
+                approved_metadata=ApprovedInsuranceRuleMetadataRevision.model_validate_json(
+                    _canonical_json(_json_object(row[2]))
+                ),
+                projection_revision=_json_string(
+                    payload["projection_revision"], field="projection_revision"
+                ),
+                embedding_sha256=row[3],
+                projection_material_sha256=row[4],
+                immutable_projection_sha256=row[5],
+                last_publication_attempt_id=attempt_id,
+            )
+        )
+    if len(result) != len(entries):
+        raise PublicationConflict("PROJECTION_AUTHORITY_MISMATCH")
+    return tuple(result)
 
 
 def _attempt_from_row(row: Any) -> KnowledgePublicationAttempt:

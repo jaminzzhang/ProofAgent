@@ -24,7 +24,9 @@ from proof_agent.capabilities.knowledge.hybrid.model_clients import PrivateEmbed
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     KnowledgeArtifactStore,
     ProjectionBulkRequest,
-    ProjectionBulkResult,
+    HybridProjectionPublicationPort,
+    ProjectionAuthorityDocument,
+    ProjectionClosure,
     ProjectionDocument,
     SearchIndexIdentity,
 )
@@ -103,6 +105,7 @@ class PublicationAuthorityContext(FrozenModel):
 
     previous_manifest: RuleUnitManifestMaterialization | None = None
     parent_attestation: KnowledgeProjectionAttestation | None = None
+    retained_projection_documents: tuple[ProjectionAuthorityDocument, ...] = ()
 
 
 class PublicationCommit(FrozenModel):
@@ -112,7 +115,8 @@ class PublicationCommit(FrozenModel):
     generation: KnowledgeIndexGeneration
     generation_identity_digest: Sha256
     identity: SearchIndexIdentity
-    projection_documents: tuple[ProjectionDocument, ...] = Field(min_length=1)
+    projection_documents: tuple[ProjectionAuthorityDocument, ...] = Field(min_length=1)
+    staged_projection_documents: tuple[ProjectionAuthorityDocument, ...] = ()
     manifest: RuleUnitManifestMaterialization
     attestation: KnowledgeProjectionAttestation
     published_by: NonBlankStr
@@ -137,6 +141,8 @@ class HybridPublicationRepository(Protocol):
         service_time_ms: float,
     ) -> None: ...
 
+    def stage_commit(self, commit: PublicationCommit) -> None: ...
+
     def commit_if_current(self, commit: PublicationCommit) -> HybridKnowledgePublicationRecord: ...
 
     def fail_attempt(
@@ -148,8 +154,7 @@ class HybridPublicationRepository(Protocol):
     ) -> None: ...
 
 
-class HybridProjectionWriter(Protocol):
-    def bulk_upsert(self, request: ProjectionBulkRequest) -> ProjectionBulkResult: ...
+HybridProjectionWriter = HybridProjectionPublicationPort
 
 
 class HybridPublicationService:
@@ -192,44 +197,92 @@ class HybridPublicationService:
                 for shard in manifest.shards
                 for entry in shard.shard.entries
             }
-            seed_ids = tuple(seed.rule_unit.rule_unit_revision_id for seed in request.projection_seeds)
+            seed_ids = tuple(
+                seed.rule_unit.rule_unit_revision_id for seed in request.projection_seeds
+            )
             if (
                 len(seed_ids) != len(set(seed_ids))
                 or set(seed_ids) != set(entry_by_id)
-                or any(seed.manifest_entry != entry_by_id.get(seed.rule_unit.rule_unit_revision_id) for seed in request.projection_seeds)
+                or any(
+                    seed.manifest_entry != entry_by_id.get(seed.rule_unit.rule_unit_revision_id)
+                    for seed in request.projection_seeds
+                )
             ):
                 raise PublicationConflict("PROJECTION_MEMBERSHIP_MISMATCH")
-            embedding = self.embedding.embed(
-                texts=tuple(seed.rule_unit.content for seed in request.projection_seeds),
-                model_revision=request.generation.embedding_model_revision,
-                instruction=request.embedding_instruction,
-                dimension=request.generation.embedding_dimension,
-                normalized=request.generation.normalized,
-                priority="offline",
-                timeout_seconds=request.embedding_timeout_seconds,
+            new_seeds, closures, unchanged = _projection_delta(
+                retained=authority.retained_projection_documents,
+                current=request.projection_seeds,
+                publication_sequence=attempt.reserved_publication_seq,
+                publication_attempt_id=attempt.attempt_id,
+            )
+            new_documents, queue_time_ms, service_time_ms = _embed_projection_seeds(
+                embedding=self.embedding,
+                seeds=new_seeds,
+                request=request,
+            )
+            new_authority = tuple(
+                self.index.materialize_authority(
+                    document,
+                    identity=request.identity,
+                    publication_attempt_id=attempt.attempt_id,
+                )
+                for document in new_documents
             )
             self.repository.record_scheduler_metrics(
                 attempt.attempt_id,
-                queue_time_ms=embedding.queue_time_ms,
-                service_time_ms=embedding.service_time_ms,
+                queue_time_ms=queue_time_ms,
+                service_time_ms=service_time_ms,
             )
-            documents = tuple(
-                ProjectionDocument(
-                    **seed.model_dump(mode="python"),
-                    embedding=vector,
+            bulk_checkpoints: list[str] = []
+            for batch in _batches(new_documents, 1_000):
+                projected = True
+                bulk_request = ProjectionBulkRequest(
+                    identity=request.identity,
+                    publication_attempt_id=attempt.attempt_id,
+                    manifest_root_sha256=manifest.root.root_sha256,
+                    documents=batch,
                 )
-                for seed, vector in zip(request.projection_seeds, embedding.vectors, strict=True)
+                bulk_result = self.index.bulk_upsert(bulk_request)
+                if bulk_result.request != bulk_request or bulk_result.accepted_count != len(batch):
+                    raise PublicationConflict("PROJECTION_INCOMPLETE")
+                bulk_checkpoints.append(bulk_result.refresh_checkpoint)
+            closure_documents: list[ProjectionAuthorityDocument] = []
+            for closure_batch in _batches(closures, 1_000):
+                projected = True
+                closure_result = self.index.close_projection_memberships(
+                    identity=request.identity,
+                    publication_attempt_id=attempt.attempt_id,
+                    manifest_root_sha256=manifest.root.root_sha256,
+                    closures=closure_batch,
+                )
+                if closure_result.accepted_count != len(closure_batch):
+                    raise PublicationConflict("PROJECTION_INCOMPLETE")
+                bulk_checkpoints.append(closure_result.refresh_checkpoint)
+                closure_documents.extend(item.closed for item in closure_batch)
+            union_documents = tuple(
+                sorted(
+                    (
+                        *unchanged,
+                        *closure_documents,
+                        *new_authority,
+                    ),
+                    key=lambda item: item.projection_id,
+                )
             )
-            bulk_request = ProjectionBulkRequest(
+            expected_projection_sha256 = _projection_documents_digest(union_documents)
+            readback = self.index.validate_exact_projection(
                 identity=request.identity,
                 publication_attempt_id=attempt.attempt_id,
                 manifest_root_sha256=manifest.root.root_sha256,
-                documents=documents,
+                documents=union_documents,
             )
-            projected = True
-            bulk_result = self.index.bulk_upsert(bulk_request)
-            if bulk_result.request != bulk_request or bulk_result.accepted_count != len(documents):
-                raise PublicationConflict("PROJECTION_INCOMPLETE")
+            expected_document_count = len({item.rule_unit.document_id for item in union_documents})
+            if (
+                readback.projection_sha256 != expected_projection_sha256
+                or readback.validated_document_count != expected_document_count
+                or readback.validated_rule_unit_count != len(union_documents)
+            ):
+                raise PublicationConflict("PROJECTION_READBACK_MISMATCH")
             validated_attempt = self.repository.mark_validated(attempt.attempt_id)
             coverage = {attempt.reserved_publication_seq}
             if authority.parent_attestation is not None:
@@ -238,19 +291,18 @@ class HybridPublicationService:
                 publication_attempt_id=attempt.attempt_id,
                 candidate_digest=attempt.candidate_digest,
                 identity=request.identity,
-                refresh_checkpoint=bulk_result.refresh_checkpoint,
-                manifest_root_sha256=manifest.root.root_sha256,
-                covered_publication_sequences=tuple(sorted(coverage)),
-                projection_sha256=stable_digest(
+                refresh_checkpoint=stable_digest(
                     {
-                        "schema_version": "hybrid-publication-projection.v1",
-                        "documents": [
-                            document.model_dump(mode="json") for document in documents
-                        ],
+                        "schema_version": "hybrid-publication-refresh.v1",
+                        "bulk_checkpoints": bulk_checkpoints,
+                        "readback_checkpoint": readback.refresh_checkpoint,
                     }
                 ),
-                validated_document_count=manifest.root.document_count,
-                validated_rule_unit_count=manifest.root.rule_unit_count,
+                manifest_root_sha256=manifest.root.root_sha256,
+                covered_publication_sequences=tuple(sorted(coverage)),
+                projection_sha256=readback.projection_sha256,
+                validated_document_count=readback.validated_document_count,
+                validated_rule_unit_count=readback.validated_rule_unit_count,
             )
             attestation = append_projection_attestation(
                 attempt=validated_attempt,
@@ -259,20 +311,21 @@ class HybridPublicationService:
                 evidence=evidence,
                 parent=authority.parent_attestation,
             )
-            return self.repository.commit_if_current(
-                PublicationCommit(
-                    attempt=validated_attempt,
-                    generation=request.generation,
-                    generation_identity_digest=stable_digest(
-                        request.generation.model_dump(mode="json")
-                    ),
-                    identity=request.identity,
-                    projection_documents=documents,
-                    manifest=manifest,
-                    attestation=attestation,
-                    published_by=request.published_by,
-                )
+            commit = PublicationCommit(
+                attempt=validated_attempt,
+                generation=request.generation,
+                generation_identity_digest=stable_digest(
+                    request.generation.model_dump(mode="json")
+                ),
+                identity=request.identity,
+                projection_documents=union_documents,
+                staged_projection_documents=new_authority,
+                manifest=manifest,
+                attestation=attestation,
+                published_by=request.published_by,
             )
+            self.repository.stage_commit(commit)
+            return self.repository.commit_if_current(commit)
         except BaseException as exc:
             code = exc.code if isinstance(exc, PublicationConflict) else "PUBLICATION_FAILED"
             try:
@@ -300,18 +353,16 @@ def _validate_publication_request(request: HybridPublicationRequest) -> None:
     ):
         raise PublicationConflict("GENERATION_MISMATCH")
 
-    membership_by_id = {
-        item.rule_unit.rule_unit_revision_id: item for item in request.memberships
-    }
-    seed_by_id = {
-        item.rule_unit.rule_unit_revision_id: item for item in request.projection_seeds
-    }
+    membership_by_id = {item.rule_unit.rule_unit_revision_id: item for item in request.memberships}
+    seed_by_id = {item.rule_unit.rule_unit_revision_id: item for item in request.projection_seeds}
     if (
         len(membership_by_id) != len(request.memberships)
         or len(seed_by_id) != len(request.projection_seeds)
         or set(membership_by_id) != set(seed_by_id)
     ):
         raise PublicationConflict("PROJECTION_MEMBERSHIP_MISMATCH")
+    if hybrid_candidate_material_fingerprint(request) != request.candidate_digest:
+        raise PublicationConflict("CANDIDATE_MATERIAL_MISMATCH")
 
     for rule_id, membership in membership_by_id.items():
         rule = membership.rule_unit
@@ -356,6 +407,138 @@ def _validate_publication_request(request: HybridPublicationRequest) -> None:
             raise PublicationConflict("PROJECTION_CITATION_MISMATCH") from exc
 
 
+def hybrid_candidate_material_fingerprint(request: HybridPublicationRequest) -> str:
+    """Versioned identity of all caller-supplied semantic publication material."""
+
+    return stable_digest(
+        {
+            "schema_version": "hybrid-publication-candidate-material.v1",
+            "source_id": request.source_id,
+            "source_draft_version_id": request.source_draft_version_id,
+            "source_snapshot_id": request.source_snapshot_id,
+            "generation": request.generation.model_dump(mode="json"),
+            "memberships": [
+                item.model_dump(mode="json")
+                for item in sorted(
+                    request.memberships,
+                    key=lambda value: value.rule_unit.rule_unit_revision_id,
+                )
+            ],
+            "projection_seeds": [
+                item.model_dump(mode="json")
+                for item in sorted(
+                    request.projection_seeds,
+                    key=lambda value: value.rule_unit.rule_unit_revision_id,
+                )
+            ],
+            "embedding_instruction": request.embedding_instruction,
+        }
+    )
+
+
+def _projection_delta(
+    *,
+    retained: tuple[ProjectionAuthorityDocument, ...],
+    current: tuple[ProjectionSeed, ...],
+    publication_sequence: int,
+    publication_attempt_id: str,
+) -> tuple[
+    tuple[ProjectionSeed, ...],
+    tuple[ProjectionClosure, ...],
+    tuple[ProjectionAuthorityDocument, ...],
+]:
+    retained_by_id = {item.rule_unit.rule_unit_revision_id: item for item in retained}
+    current_by_id = {item.rule_unit.rule_unit_revision_id: item for item in current}
+    if len(retained_by_id) != len(retained) or len(current_by_id) != len(current):
+        raise PublicationConflict("PROJECTION_MEMBERSHIP_MISMATCH")
+    new: list[ProjectionSeed] = []
+    closures: list[ProjectionClosure] = []
+    unchanged: list[ProjectionAuthorityDocument] = []
+    for rule_id, authority in retained_by_id.items():
+        seed = ProjectionSeed(
+            projection_id=authority.projection_id,
+            rule_unit=authority.rule_unit,
+            manifest_entry=authority.manifest_entry,
+            approved_metadata=authority.approved_metadata,
+            projection_revision=authority.projection_revision,
+        )
+        current_seed = current_by_id.get(rule_id)
+        if current_seed is not None:
+            if authority.manifest_entry.publication_seq_to is not None:
+                raise PublicationConflict("MEMBERSHIP_INTERVAL_AMBIGUOUS")
+            if current_seed != seed:
+                raise PublicationConflict("PROJECTION_AUTHORITY_MISMATCH")
+            unchanged.append(authority)
+            continue
+        entry = authority.manifest_entry
+        if entry.publication_seq_to is None:
+            entry = entry.model_copy(update={"publication_seq_to": publication_sequence - 1})
+            closures.append(
+                ProjectionClosure(
+                    prior=authority,
+                    closed=authority.model_copy(
+                        update={
+                            "manifest_entry": entry,
+                            "last_publication_attempt_id": publication_attempt_id,
+                        }
+                    ),
+                )
+            )
+        else:
+            unchanged.append(authority)
+    new.extend(
+        current_by_id[rule_id] for rule_id in sorted(set(current_by_id) - set(retained_by_id))
+    )
+    return tuple(new), tuple(closures), tuple(unchanged)
+
+
+def _embed_projection_seeds(
+    *,
+    embedding: PrivateEmbeddingClient,
+    seeds: tuple[ProjectionSeed, ...],
+    request: HybridPublicationRequest,
+) -> tuple[tuple[ProjectionDocument, ...], float, float]:
+    vectors: list[tuple[float, ...]] = []
+    queue_time_ms = 0.0
+    service_time_ms = 0.0
+    for batch in _batches(seeds, 128):
+        result = embedding.embed(
+            texts=tuple(seed.rule_unit.content for seed in batch),
+            model_revision=request.generation.embedding_model_revision,
+            instruction=request.embedding_instruction,
+            dimension=request.generation.embedding_dimension,
+            normalized=request.generation.normalized,
+            priority="offline",
+            timeout_seconds=request.embedding_timeout_seconds,
+        )
+        vectors.extend(result.vectors)
+        queue_time_ms += result.queue_time_ms
+        service_time_ms += result.service_time_ms
+    documents = tuple(
+        ProjectionDocument(
+            **seed.model_dump(mode="python"),
+            embedding=vector,
+        )
+        for seed, vector in zip(seeds, vectors, strict=True)
+    )
+    return documents, queue_time_ms, service_time_ms
+
+
+def _projection_documents_digest(
+    documents: tuple[ProjectionAuthorityDocument, ...],
+) -> str:
+    return stable_digest(
+        {
+            "schema_version": "hybrid-publication-projection.v2",
+            "documents": [item.model_dump(mode="json") for item in documents],
+        }
+    )
+
+
+def _batches[T](items: tuple[T, ...], size: int) -> tuple[tuple[T, ...], ...]:
+    return tuple(items[index : index + size] for index in range(0, len(items), size))
+
+
 class InMemoryHybridPublicationRepository:
     """Thread-safe authority model used by unit tests and offline recovery exercises."""
 
@@ -372,6 +555,8 @@ class InMemoryHybridPublicationRepository:
         self.metrics: dict[str, tuple[float, float]] = {}
         self.manifests: dict[str, RuleUnitManifestMaterialization] = {}
         self.attestations: dict[str, KnowledgeProjectionAttestation] = {}
+        self.projection_unions: dict[str, tuple[ProjectionAuthorityDocument, ...]] = {}
+        self.staged_commits: dict[str, PublicationCommit] = {}
 
     def register_source(
         self,
@@ -476,6 +661,7 @@ class InMemoryHybridPublicationRepository:
             return PublicationAuthorityContext(
                 previous_manifest=manifest,
                 parent_attestation=attestation,
+                retained_projection_documents=self.projection_unions[publication.publication_id],
             )
 
     def mark_validated(self, attempt_id: str) -> KnowledgePublicationAttempt:
@@ -483,7 +669,9 @@ class InMemoryHybridPublicationRepository:
             attempt = self.attempts[attempt_id]
             if attempt.state != "BUILDING":
                 raise PublicationConflict("ATTEMPT_STATE")
-            updated = attempt.model_copy(update={"state": "VALIDATED", "updated_at": datetime.now(UTC)})
+            updated = attempt.model_copy(
+                update={"state": "VALIDATED", "updated_at": datetime.now(UTC)}
+            )
             self.attempts[attempt_id] = updated
             return updated
 
@@ -499,9 +687,18 @@ class InMemoryHybridPublicationRepository:
                 raise PublicationConflict("ATTEMPT_LOST")
             self.metrics[attempt_id] = (queue_time_ms, service_time_ms)
 
+    def stage_commit(self, commit: PublicationCommit) -> None:
+        with self._lock:
+            existing = self.staged_commits.get(commit.attempt.attempt_id)
+            if existing is not None and existing != commit:
+                raise PublicationConflict("STAGED_COMMIT_MISMATCH")
+            self.staged_commits[commit.attempt.attempt_id] = commit
+
     def commit_if_current(self, commit: PublicationCommit) -> HybridKnowledgePublicationRecord:
         with self._lock:
             attempt = self.attempts.get(commit.attempt.attempt_id)
+            if self.staged_commits.get(commit.attempt.attempt_id) != commit:
+                raise PublicationConflict("STAGED_COMMIT_MISMATCH")
             if attempt is None or attempt.state != "VALIDATED":
                 raise PublicationConflict("ATTEMPT_STATE")
             source = self._source(attempt.source_id)
@@ -542,11 +739,7 @@ class InMemoryHybridPublicationRepository:
                 or attestation.index_uuid != commit.identity.index_uuid
                 or attempt.reserved_publication_seq not in attestation.covered_publication_sequences
                 or attestation.parent_attestation_sha256
-                != (
-                    expected_parent.attestation_sha256
-                    if expected_parent is not None
-                    else None
-                )
+                != (expected_parent.attestation_sha256 if expected_parent is not None else None)
                 or (
                     expected_parent is not None
                     and not set(expected_parent.covered_publication_sequences).issubset(
@@ -573,6 +766,7 @@ class InMemoryHybridPublicationRepository:
             self.publications[publication.publication_id] = publication
             self.manifests[root.root_sha256] = commit.manifest
             self.attestations[attestation.attestation_sha256] = attestation
+            self.projection_unions[publication.publication_id] = commit.projection_documents
             self.validation_used.add(attempt.validation_id)
             self.attempts[attempt.attempt_id] = attempt.model_copy(
                 update={"state": "PUBLISHED", "updated_at": published_at}

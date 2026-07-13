@@ -241,9 +241,7 @@ class HybridRecoveryService:
                     refused.append(orphan.attempt_id)
                 except Exception:
                     if operation_id is not None:
-                        self.repository.fail_recovery_operation(
-                            operation_id, "CLEANUP_RETRY"
-                        )
+                        self.repository.fail_recovery_operation(operation_id, "CLEANUP_RETRY")
                     self.repository.record_orphan_retry(orphan.attempt_id, "CLEANUP_RETRY")
                     retry.append(orphan.attempt_id)
                 continue
@@ -318,8 +316,7 @@ class HybridRecoveryService:
                     self.repository.fail_recovery_operation(operation_id, code)
             except Exception as failure_exc:
                 exc.add_note(
-                    "rebuild failure transition also failed: "
-                    f"{type(failure_exc).__name__}"
+                    f"rebuild failure transition also failed: {type(failure_exc).__name__}"
                 )
             raise
 
@@ -353,17 +350,17 @@ class HybridRecoveryService:
                 content,
                 created_at=retained.root.created_at,
             )
-            if decoded_root != retained.root or tuple(
-                item.artifact_ref for item in decoded_root.shards
-            ) != retained.shard_refs:
+            if (
+                decoded_root != retained.root
+                or tuple(item.artifact_ref for item in decoded_root.shards) != retained.shard_refs
+            ):
                 raise PublicationConflict("MANIFEST_MISMATCH")
             contents = tuple(self.artifact_store.get_exact(ref) for ref in retained.shard_refs)
             all_contents.extend(contents)
             shards = tuple(decode_manifest_shard_artifact(item) for item in contents)
             if (
                 len(shards) != decoded_root.document_count
-                or sum(len(shard.entries) for shard in shards)
-                != decoded_root.rule_unit_count
+                or sum(len(shard.entries) for shard in shards) != decoded_root.rule_unit_count
                 or tuple(shard.sha256 for shard in shards)
                 != tuple(item.artifact_ref.sha256 for item in decoded_root.shards)
             ):
@@ -387,10 +384,7 @@ class HybridRecoveryService:
                     entry_body.pop("publication_seq_to", None)
                     if template_body != entry_body:
                         raise PublicationConflict("MANIFEST_MISMATCH")
-                    appearances.setdefault(rule_id, []).append(
-                        decoded_root.source_publication_seq
-                    )
-        max_sequence = max(authority.current_attestation.covered_publication_sequences)
+                    appearances.setdefault(rule_id, []).append(decoded_root.source_publication_seq)
         coverage = list(authority.current_attestation.covered_publication_sequences)
         coverage_position = {sequence: index for index, sequence in enumerate(coverage)}
         entry_by_id: dict[str, RuleUnitManifestEntry] = {}
@@ -399,21 +393,20 @@ class HybridRecoveryService:
             positions = [coverage_position[sequence] for sequence in sequences]
             if positions != list(range(positions[0], positions[-1] + 1)):
                 raise PublicationConflict("MEMBERSHIP_INTERVAL_AMBIGUOUS")
+            next_position = positions[-1] + 1
             entry_by_id[rule_id] = template.model_copy(
                 update={
                     "publication_seq_to": (
-                        None if sequences[-1] == max_sequence else sequences[-1]
+                        None if next_position == len(coverage) else coverage[next_position] - 1
                     )
                 }
             )
         projection_by_id = {
-            item.rule_unit.rule_unit_revision_id: item
-            for item in authority.projection_authority
+            item.rule_unit.rule_unit_revision_id: item for item in authority.projection_authority
         }
-        if (
-            len(projection_by_id) != len(authority.projection_authority)
-            or set(projection_by_id) != set(entry_by_id)
-        ):
+        if len(projection_by_id) != len(authority.projection_authority) or set(
+            projection_by_id
+        ) != set(entry_by_id):
             raise PublicationConflict("PROJECTION_AUTHORITY_MISMATCH")
         for item in projection_by_id.values():
             if hashlib.sha256(item.rule_unit.content.encode("utf-8")).hexdigest() != (
@@ -453,10 +446,11 @@ class OpenSearchRecoveryIndex:
         self.rrf_rank_constant = rrf_rank_constant
 
     def delete_attempt_projection(self, orphan: OrphanProjection) -> None:
-        canonical = physical_index_name(
-            orphan.source_id, orphan.identity.generation.generation_id
-        )
-        if orphan.identity.projection_locator is not None and orphan.identity.projection_locator != canonical:
+        canonical = physical_index_name(orphan.source_id, orphan.identity.generation.generation_id)
+        if (
+            orphan.identity.projection_locator is not None
+            and orphan.identity.projection_locator != canonical
+        ):
             self.index.delete_rebuild_index(orphan.identity)
         else:
             self.index.delete_attempt_projection(
@@ -480,7 +474,9 @@ class OpenSearchRecoveryIndex:
         ):
             raise PublicationConflict("GENERATION_MISMATCH")
         suffix = operation_id.rsplit("-", 1)[-1][:24].casefold()
-        name = f"{physical_index_name(authority.source_id, authority.generation_id)}-rebuild-{suffix}"
+        name = (
+            f"{physical_index_name(authority.source_id, authority.generation_id)}-rebuild-{suffix}"
+        )
         identity = self.index.create_index(
             generation,
             rrf_pipeline=rrf_pipeline_name(rank_constant=self.rrf_rank_constant),
@@ -489,15 +485,12 @@ class OpenSearchRecoveryIndex:
         )
         try:
             projected = self._embed_documents(generation, documents)
-            request = ProjectionBulkRequest(
+            refresh_checkpoint = self._bulk_projected(
                 identity=identity,
-                publication_attempt_id=operation_id,
+                operation_id=operation_id,
                 manifest_root_sha256=root.root_sha256,
                 documents=projected,
             )
-            result = self.index.bulk_upsert(request)
-            if result.request != request or result.accepted_count != len(projected):
-                raise PublicationConflict("PROJECTION_INCOMPLETE")
             projection_digest = stable_digest(
                 {
                     "schema_version": "hybrid-rebuild-projection.v1",
@@ -508,24 +501,20 @@ class OpenSearchRecoveryIndex:
                 publication_attempt_id=operation_id,
                 candidate_digest=authority.candidate_digest,
                 identity=identity,
-                refresh_checkpoint=result.refresh_checkpoint,
+                refresh_checkpoint=refresh_checkpoint,
                 manifest_root_sha256=root.root_sha256,
                 covered_publication_sequences=(
                     authority.current_attestation.covered_publication_sequences
                 ),
                 projection_sha256=projection_digest,
-                validated_document_count=len(
-                    {item.rule_unit.document_id for item in projected}
-                ),
+                validated_document_count=len({item.rule_unit.document_id for item in projected}),
                 validated_rule_unit_count=len(projected),
             )
         except BaseException as primary:
             try:
                 self.index.delete_rebuild_index(identity)
             except Exception as cleanup_exc:
-                cleanup_exc.add_note(
-                    "rebuild primary failure: " + type(primary).__name__
-                )
+                cleanup_exc.add_note("rebuild primary failure: " + type(primary).__name__)
                 raise RecoveryProjectionCleanupRequired(identity) from primary
             raise
 
@@ -542,15 +531,12 @@ class OpenSearchRecoveryIndex:
             raise PublicationConflict("FENCE_LOST")
         generation = authority.current_identity.generation
         projected = self._embed_documents(generation, documents)
-        request = ProjectionBulkRequest(
+        bulk_refresh_checkpoint = self._bulk_projected(
             identity=authority.current_identity,
-            publication_attempt_id=operation_id,
+            operation_id=operation_id,
             manifest_root_sha256=root.root_sha256,
             documents=projected,
         )
-        result = self.index.bulk_upsert(request)
-        if result.request != request or result.accepted_count != len(projected):
-            raise PublicationConflict("PROJECTION_INCOMPLETE")
         cleanup_checkpoint = self.index.delete_attempt_projection(
             identity=authority.current_identity,
             publication_attempt_id=orphan.attempt_id,
@@ -562,7 +548,7 @@ class OpenSearchRecoveryIndex:
             refresh_checkpoint=stable_digest(
                 {
                     "schema_version": "hybrid-repair-refresh.v1",
-                    "bulk_refresh": result.refresh_checkpoint,
+                    "bulk_refresh": bulk_refresh_checkpoint,
                     "cleanup_refresh": cleanup_checkpoint,
                 }
             ),
@@ -577,9 +563,7 @@ class OpenSearchRecoveryIndex:
                     "removed_attempt_id": orphan.attempt_id,
                 }
             ),
-            validated_document_count=len(
-                {item.rule_unit.document_id for item in projected}
-            ),
+            validated_document_count=len({item.rule_unit.document_id for item in projected}),
             validated_rule_unit_count=len(projected),
         )
 
@@ -595,18 +579,50 @@ class OpenSearchRecoveryIndex:
             exact_generation.embedding_instruction_sha256
         ):
             raise PublicationConflict("GENERATION_MISMATCH")
-        embedded = self.embedding.embed(
-            texts=tuple(item.rule_unit.content for item in documents),
-            model_revision=exact_generation.embedding_model_revision,
-            instruction=self.embedding_instruction,
-            dimension=exact_generation.embedding_dimension,
-            normalized=exact_generation.normalized,
-            priority="offline",
-            timeout_seconds=self.embedding_timeout_seconds,
-        )
+        vectors: list[tuple[float, ...]] = []
+        for offset in range(0, len(documents), 128):
+            batch = documents[offset : offset + 128]
+            embedded = self.embedding.embed(
+                texts=tuple(item.rule_unit.content for item in batch),
+                model_revision=exact_generation.embedding_model_revision,
+                instruction=self.embedding_instruction,
+                dimension=exact_generation.embedding_dimension,
+                normalized=exact_generation.normalized,
+                priority="offline",
+                timeout_seconds=self.embedding_timeout_seconds,
+            )
+            vectors.extend(embedded.vectors)
         return tuple(
             document.model_copy(update={"embedding": vector})
-            for document, vector in zip(documents, embedded.vectors, strict=True)
+            for document, vector in zip(documents, vectors, strict=True)
+        )
+
+    def _bulk_projected(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        operation_id: str,
+        manifest_root_sha256: str,
+        documents: tuple[ProjectionDocument, ...],
+    ) -> str:
+        checkpoints: list[str] = []
+        for offset in range(0, len(documents), 1_000):
+            batch = documents[offset : offset + 1_000]
+            request = ProjectionBulkRequest(
+                identity=identity,
+                publication_attempt_id=operation_id,
+                manifest_root_sha256=manifest_root_sha256,
+                documents=batch,
+            )
+            result = self.index.bulk_upsert(request)
+            if result.request != request or result.accepted_count != len(batch):
+                raise PublicationConflict("PROJECTION_INCOMPLETE")
+            checkpoints.append(result.refresh_checkpoint)
+        return stable_digest(
+            {
+                "schema_version": "hybrid-recovery-bulk-refresh.v1",
+                "checkpoints": checkpoints,
+            }
         )
 
 
@@ -740,9 +756,7 @@ def recovery_service_from_environment(
             region_name=environ.get("HYBRID_S3_REGION"),
         )
         owned.append(store)
-        repository = PostgresHybridKnowledgeRepository.from_dsn(
-            environ["HYBRID_POSTGRES_DSN"]
-        )
+        repository = PostgresHybridKnowledgeRepository.from_dsn(environ["HYBRID_POSTGRES_DSN"])
         owned.append(repository)
     except BaseException as primary:
         for resource in reversed(owned):
@@ -753,8 +767,7 @@ def recovery_service_from_environment(
                 close()
             except Exception as cleanup_exc:
                 primary.add_note(
-                    "Hybrid recovery staged cleanup failed: "
-                    f"{type(cleanup_exc).__name__}"
+                    f"Hybrid recovery staged cleanup failed: {type(cleanup_exc).__name__}"
                 )
         raise
 

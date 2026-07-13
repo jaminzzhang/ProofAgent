@@ -82,9 +82,7 @@ class SearchIndexIdentity(_PortModel):
     @model_validator(mode="after")
     def validate_locator(self) -> Self:
         locator = self.projection_locator
-        if locator is not None and (
-            len(locator) > 512 or any(ord(char) < 32 for char in locator)
-        ):
+        if locator is not None and (len(locator) > 512 or any(ord(char) < 32 for char in locator)):
             raise ValueError("projection locator is invalid")
         return self
 
@@ -116,6 +114,67 @@ class ProjectionDocument(_PortModel):
         if not expected:
             raise ValueError("projection must bind one exact approved Rule Unit manifest entry")
         return self
+
+
+class ProjectionAuthorityDocument(_PortModel):
+    """Provider-neutral retained authority without storing the embedding vector."""
+
+    projection_id: NonBlankStr
+    rule_unit: InsuranceRuleUnitRevision
+    manifest_entry: RuleUnitManifestEntry
+    approved_metadata: ApprovedInsuranceRuleMetadataRevision
+    projection_revision: NonBlankStr
+    embedding_sha256: Sha256
+    projection_material_sha256: Sha256
+    immutable_projection_sha256: Sha256
+    last_publication_attempt_id: NonBlankStr
+
+
+class ProjectionClosure(_PortModel):
+    prior: ProjectionAuthorityDocument
+    closed: ProjectionAuthorityDocument
+
+
+class ProjectionClosureResult(_PortModel):
+    accepted_count: PositiveInt
+    refresh_checkpoint: NonBlankStr
+
+
+class ProjectionReadbackResult(_PortModel):
+    projection_sha256: Sha256
+    refresh_checkpoint: NonBlankStr
+    validated_document_count: PositiveInt
+    validated_rule_unit_count: PositiveInt
+
+
+class HybridProjectionPublicationPort(Protocol):
+    def materialize_authority(
+        self,
+        document: ProjectionDocument,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+    ) -> ProjectionAuthorityDocument: ...
+
+    def bulk_upsert(self, request: ProjectionBulkRequest) -> ProjectionBulkResult: ...
+
+    def validate_exact_projection(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+        manifest_root_sha256: str,
+        documents: tuple[ProjectionAuthorityDocument, ...],
+    ) -> ProjectionReadbackResult: ...
+
+    def close_projection_memberships(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+        manifest_root_sha256: str,
+        closures: tuple[ProjectionClosure, ...],
+    ) -> ProjectionClosureResult: ...
 
 
 class ProjectionBulkRequest(_PortModel):
@@ -159,9 +218,7 @@ class HybridSearchRequest(_PortModel):
     query_embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
     source_publication_seq: PositiveInt
     authorization: InstitutionAuthorizationContext
-    applicability_filters: tuple[TaxonomyCondition, ...] = Field(
-        default=(), max_length=128
-    )
+    applicability_filters: tuple[TaxonomyCondition, ...] = Field(default=(), max_length=128)
     as_of_date: Annotated[date, Field(strict=True)]
     lexical_budget: BoundedBudget
     dense_budget: BoundedBudget

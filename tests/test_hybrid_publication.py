@@ -9,8 +9,13 @@ import pytest
 from proof_agent.capabilities.knowledge.hybrid.manifest import ManifestRuleUnitMembership
 from proof_agent.capabilities.knowledge.hybrid.model_clients import EmbeddingResult
 from proof_agent.capabilities.knowledge.hybrid.ports import (
+    ProjectionAuthorityDocument,
     ProjectionBulkRequest,
     ProjectionBulkResult,
+    ProjectionClosure,
+    ProjectionClosureResult,
+    ProjectionDocument,
+    ProjectionReadbackResult,
     SearchIndexIdentity,
 )
 from proof_agent.capabilities.knowledge.hybrid.publication import (
@@ -20,6 +25,7 @@ from proof_agent.capabilities.knowledge.hybrid.publication import (
     InMemoryHybridPublicationRepository,
     ProjectionSeed,
     PublicationConflict,
+    hybrid_candidate_material_fingerprint,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
 from proof_agent.configuration.hybrid_knowledge_repository import FileSystemKnowledgeArtifactStore
@@ -48,9 +54,7 @@ def _generation() -> KnowledgeIndexGeneration:
         mapping_sha256="b" * 64,
         analyzer_sha256="c" * 64,
         embedding_model_revision="embedding@sha256:model-1",
-        embedding_instruction_sha256=hashlib.sha256(
-            b"Represent the insurance rule."
-        ).hexdigest(),
+        embedding_instruction_sha256=hashlib.sha256(b"Represent the insurance rule.").hexdigest(),
         embedding_dimension=2,
         normalized=True,
     )
@@ -84,9 +88,7 @@ def _rule_and_entry() -> tuple[InsuranceRuleUnitRevision, RuleUnitManifestEntry]
         revision_id="revision-1",
         structured_build_id="build-1",
         content=content,
-        citation_uri=(
-            "knowledge://source/source-1/document/document-1/revision/revision-1#page=1"
-        ),
+        citation_uri=("knowledge://source/source-1/document/document-1/revision/revision-1#page=1"),
         metadata_revision_id=metadata.metadata_revision_id,
         visibility_scope=visibility,
         content_sha256=hashlib.sha256(content.encode()).hexdigest(),
@@ -141,6 +143,8 @@ class _Index:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.requests: list[ProjectionBulkRequest] = []
+        self.closures: list[ProjectionClosure] = []
+        self.readbacks: list[tuple[ProjectionAuthorityDocument, ...]] = []
 
     def bulk_upsert(self, request: ProjectionBulkRequest) -> ProjectionBulkResult:
         self.requests.append(request)
@@ -152,14 +156,84 @@ class _Index:
             refresh_checkpoint=f"refresh-{request.publication_attempt_id}",
         )
 
+    def materialize_authority(
+        self,
+        document: ProjectionDocument,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+    ) -> ProjectionAuthorityDocument:
+        del identity
+        embedding_sha = stable_digest({"embedding": list(document.embedding)})
+        material_sha = stable_digest(
+            {
+                "schema_version": "hybrid-projection-material.v1",
+                "projection_id": document.projection_id,
+                "rule_unit": document.rule_unit.model_dump(mode="json"),
+                "approved_metadata": document.approved_metadata.model_dump(mode="json"),
+                "projection_revision": document.projection_revision,
+                "embedding_sha256": embedding_sha,
+            }
+        )
+        return ProjectionAuthorityDocument(
+            projection_id=document.projection_id,
+            rule_unit=document.rule_unit,
+            manifest_entry=document.manifest_entry,
+            approved_metadata=document.approved_metadata,
+            projection_revision=document.projection_revision,
+            embedding_sha256=embedding_sha,
+            projection_material_sha256=material_sha,
+            immutable_projection_sha256=stable_digest({"material": material_sha}),
+            last_publication_attempt_id=publication_attempt_id,
+        )
+
+    def close_projection_memberships(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+        manifest_root_sha256: str,
+        closures: tuple[ProjectionClosure, ...],
+    ) -> ProjectionClosureResult:
+        del identity, manifest_root_sha256
+        self.closures.extend(closures)
+        return ProjectionClosureResult(
+            accepted_count=len(closures),
+            refresh_checkpoint=f"closure-{publication_attempt_id}",
+        )
+
+    def validate_exact_projection(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+        manifest_root_sha256: str,
+        documents: tuple[ProjectionAuthorityDocument, ...],
+    ) -> ProjectionReadbackResult:
+        del identity, publication_attempt_id, manifest_root_sha256
+        if self.fail:
+            raise RuntimeError("projection failed")
+        self.readbacks.append(documents)
+        return ProjectionReadbackResult(
+            projection_sha256=stable_digest(
+                {
+                    "schema_version": "hybrid-publication-projection.v2",
+                    "documents": [item.model_dump(mode="json") for item in documents],
+                }
+            ),
+            refresh_checkpoint="readback-1",
+            validated_document_count=len({item.rule_unit.document_id for item in documents}),
+            validated_rule_unit_count=len(documents),
+        )
+
 
 def _request(*, validation_id: str = "validation-1") -> HybridPublicationRequest:
     generation = _generation()
     rule, entry = _rule_and_entry()
-    return HybridPublicationRequest(
+    request = HybridPublicationRequest(
         source_id="source-1",
         source_draft_version_id="draft-1",
-        candidate_digest=SHA,
+        candidate_digest="0" * 64,
         source_snapshot_id="snapshot-1",
         generation=generation,
         validation_id=validation_id,
@@ -178,6 +252,9 @@ def _request(*, validation_id: str = "validation-1") -> HybridPublicationRequest
         embedding_instruction="Represent the insurance rule.",
         embedding_timeout_seconds=30.0,
     )
+    return request.model_copy(
+        update={"candidate_digest": hybrid_candidate_material_fingerprint(request)}
+    )
 
 
 def _request_with_rule(
@@ -189,20 +266,25 @@ def _request_with_rule(
     seed = request.projection_seeds[0].model_copy(
         update={"rule_unit": rule, "manifest_entry": entry}
     )
+    return request.model_copy(update={"memberships": (membership,), "projection_seeds": (seed,)})
+
+
+def _with_candidate(request: HybridPublicationRequest) -> HybridPublicationRequest:
     return request.model_copy(
-        update={"memberships": (membership,), "projection_seeds": (seed,)}
+        update={"candidate_digest": hybrid_candidate_material_fingerprint(request)}
     )
 
 
 def _service(tmp_path: Any, *, fail: bool = False):
     repository = InMemoryHybridPublicationRepository()
+    request = _request()
     repository.register_source(
         source_id="source-1",
         source_draft_version_id="draft-1",
-        candidate_digest=SHA,
+        candidate_digest=request.candidate_digest,
         generation=_generation(),
     )
-    _register_validation(repository, _request())
+    _register_validation(repository, request)
     embedding = _Embedding()
     index = _Index(fail=fail)
     service = HybridPublicationService(
@@ -237,7 +319,7 @@ def test_publication_is_offline_attested_and_metrics_do_not_change_candidate(tmp
     assert publication.source_publication_seq == 1
     assert embedding.priorities == ["offline"]
     assert repository.metrics
-    assert repository.sources["source-1"]["candidate"] == SHA
+    assert repository.sources["source-1"]["candidate"] == _request().candidate_digest
     assert service.close() is None
 
 
@@ -283,30 +365,24 @@ def test_request_preflight_rejects_unattested_material_before_any_write(
     if sabotage == "instruction":
         request = request.model_copy(update={"embedding_instruction": "wrong instruction"})
     elif sabotage == "identity":
-        wrong_generation = request.generation.model_copy(
-            update={"mapping_sha256": "9" * 64}
-        )
+        wrong_generation = request.generation.model_copy(update={"mapping_sha256": "9" * 64})
         request = request.model_copy(
             update={
-                "identity": request.identity.model_copy(
-                    update={"generation": wrong_generation}
-                )
+                "identity": request.identity.model_copy(update={"generation": wrong_generation})
             }
         )
     elif sabotage == "content":
         rule = rule.model_copy(update={"content": "tampered content"})
-        request = _request_with_rule(request, rule, entry)
+        request = _with_candidate(_request_with_rule(request, rule, entry))
     elif sabotage == "authority":
         rule = rule.model_copy(update={"authority_sha256": "9" * 64})
         entry = entry.model_copy(update={"authority_sha256": "9" * 64})
-        request = _request_with_rule(request, rule, entry)
+        request = _with_candidate(_request_with_rule(request, rule, entry))
     elif sabotage == "citation":
-        citation = (
-            "knowledge://source/other/document/document-1/revision/revision-1#page=1"
-        )
+        citation = "knowledge://source/other/document/document-1/revision/revision-1#page=1"
         rule = rule.model_copy(update={"citation_uri": citation})
         entry = entry.model_copy(update={"citation_uri": citation})
-        request = _request_with_rule(request, rule, entry)
+        request = _with_candidate(_request_with_rule(request, rule, entry))
 
     with pytest.raises(PublicationConflict, match=code):
         service.publish(request)
@@ -318,11 +394,13 @@ def test_request_preflight_rejects_unattested_material_before_any_write(
 
 def test_validation_is_bound_to_exact_draft_candidate_and_generation(tmp_path: Any) -> None:
     _, repository, _, _ = _service(tmp_path)
-    stale_request = _request(validation_id="validation-stale").model_copy(
-        update={"source_draft_version_id": "draft-2"}
+    stale_request = _with_candidate(
+        _request(validation_id="validation-stale").model_copy(
+            update={"source_draft_version_id": "draft-2"}
+        )
     )
-    validation_request = stale_request.model_copy(
-        update={"source_draft_version_id": "draft-1"}
+    validation_request = _with_candidate(
+        stale_request.model_copy(update={"source_draft_version_id": "draft-1"})
     )
     _register_validation(repository, validation_request)
     repository.sources["source-1"]["draft"] = "draft-2"
@@ -330,13 +408,18 @@ def test_validation_is_bound_to_exact_draft_candidate_and_generation(tmp_path: A
         repository.begin_attempt(stale_request)
 
 
-def test_failed_projection_preserves_prior_visibility_and_leaves_sequence_gap(tmp_path: Any) -> None:
+def test_failed_projection_preserves_prior_visibility_and_leaves_sequence_gap(
+    tmp_path: Any,
+) -> None:
     service, repository, _, index = _service(tmp_path)
     first = service.publish(_request())
     repository.sources["source-1"]["draft"] = "draft-2"
-    request = _request(validation_id="validation-2").model_copy(
-        update={"source_draft_version_id": "draft-2", "source_snapshot_id": "snapshot-2"}
+    request = _with_candidate(
+        _request(validation_id="validation-2").model_copy(
+            update={"source_draft_version_id": "draft-2", "source_snapshot_id": "snapshot-2"}
+        )
     )
+    repository.sources["source-1"]["candidate"] = request.candidate_digest
     _register_validation(repository, request)
     index.fail = True
     with pytest.raises(RuntimeError, match="projection failed"):
@@ -345,7 +428,9 @@ def test_failed_projection_preserves_prior_visibility_and_leaves_sequence_gap(tm
     assert repository.sources["source-1"]["next_sequence"] == 3
 
 
-def test_failed_first_attempt_allows_sequence_gap_but_validation_id_is_consumed(tmp_path: Any) -> None:
+def test_failed_first_attempt_allows_sequence_gap_but_validation_id_is_consumed(
+    tmp_path: Any,
+) -> None:
     service, repository, _, index = _service(tmp_path)
     index.fail = True
     request = _request()
@@ -374,9 +459,12 @@ def test_descendant_parent_is_repository_authority_not_caller_input(tmp_path: An
     service, repository, _, _ = _service(tmp_path)
     first = service.publish(_request())
     repository.sources["source-1"]["draft"] = "draft-2"
-    second_request = _request(validation_id="validation-2").model_copy(
-        update={"source_draft_version_id": "draft-2", "source_snapshot_id": "snapshot-2"}
+    second_request = _with_candidate(
+        _request(validation_id="validation-2").model_copy(
+            update={"source_draft_version_id": "draft-2", "source_snapshot_id": "snapshot-2"}
+        )
     )
+    repository.sources["source-1"]["candidate"] = second_request.candidate_digest
     _register_validation(repository, second_request)
     second = service.publish(second_request)
     assert second.attestation.parent_attestation_sha256 == first.attestation.attestation_sha256
@@ -391,8 +479,8 @@ def test_descendant_parent_is_repository_authority_not_caller_input(tmp_path: An
         ("fence", "FENCE_LOST"),
         ("validation", "VALIDATION_REUSED"),
         ("generation", "GENERATION_MISMATCH"),
-        ("manifest", "MANIFEST_MISMATCH"),
-        ("attestation", "ATTESTATION_MISMATCH"),
+        ("manifest", "STAGED_COMMIT_MISMATCH"),
+        ("attestation", "STAGED_COMMIT_MISMATCH"),
     ),
 )
 def test_final_cas_rechecks_every_authority_binding(
@@ -439,7 +527,7 @@ def test_final_cas_rechecks_every_authority_binding(
     repository.register_source(
         source_id="source-1",
         source_draft_version_id="draft-1",
-        candidate_digest=SHA,
+        candidate_digest=_request().candidate_digest,
         generation=_generation(),
     )
     _register_validation(repository, _request())

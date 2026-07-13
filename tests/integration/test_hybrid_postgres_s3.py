@@ -24,6 +24,7 @@ from proof_agent.capabilities.knowledge.hybrid.publication import (
     HybridPublicationService,
     HybridPublicationValidationAuthority,
     ProjectionSeed,
+    hybrid_candidate_material_fingerprint,
 )
 from proof_agent.capabilities.knowledge.hybrid.recovery import (
     HybridRecoveryService,
@@ -95,8 +96,7 @@ def _request(
     document_id = f"document-{source_id}-{rule_suffix}"
     revision_id = f"revision-{source_id}-{rule_suffix}"
     citation = (
-        f"knowledge://source/{source_id}/document/{document_id}/"
-        f"revision/{revision_id}#page=1"
+        f"knowledge://source/{source_id}/document/{document_id}/revision/{revision_id}#page=1"
     )
     rule = InsuranceRuleUnitRevision(
         rule_unit_revision_id=f"rule-{source_id}-{rule_suffix}",
@@ -141,10 +141,10 @@ def _request(
         citation_uri=rule.citation_uri,
         publication_seq_from=publication_seq_from,
     )
-    return HybridPublicationRequest(
+    request = HybridPublicationRequest(
         source_id=source_id,
-        source_draft_version_id="draft-1",
-        candidate_digest="a" * 64,
+        source_draft_version_id=f"draft-{publication_seq_from}",
+        candidate_digest="0" * 64,
         source_snapshot_id=f"snapshot-{publication_seq_from}",
         generation=generation,
         validation_id=f"validation-{source_id}-{publication_seq_from}",
@@ -167,6 +167,9 @@ def _request(
         identity=identity,
         embedding_instruction=INSTRUCTION,
         embedding_timeout_seconds=30.0,
+    )
+    return request.model_copy(
+        update={"candidate_digest": hybrid_candidate_material_fingerprint(request)}
     )
 
 
@@ -192,9 +195,9 @@ def _environment():
     opensearch_url = _required("HYBRID_TEST_OPENSEARCH_URL")
     run_id = uuid4().hex
     prefix = f"test-runs/{run_id}/"
-    migration = Path(
-        "proof_agent/configuration/migrations/0001_hybrid_knowledge.sql"
-    ).read_text(encoding="utf-8")
+    migration = Path("proof_agent/configuration/migrations/0001_hybrid_knowledge.sql").read_text(
+        encoding="utf-8"
+    )
     with psycopg.connect(dsn, autocommit=True) as connection:
         connection.execute(migration, prepare=False)
     s3_client = boto3.client(
@@ -231,13 +234,13 @@ def _environment():
         rrf_rank_constant=60,
     )
     repository = PostgresHybridKnowledgeRepository.from_dsn(dsn)
+    request = _request(source_id, generation, identity)
     repository.register_source(
         source_id=source_id,
         source_draft_version_id="draft-1",
-        candidate_digest="a" * 64,
+        candidate_digest=request.candidate_digest,
         generation=generation,
     )
-    request = _request(source_id, generation, identity)
     repository.register_validation(
         HybridPublicationValidationAuthority(
             validation_id=request.validation_id,
@@ -291,16 +294,48 @@ def test_disposable_postgres_s3_fenced_publication_and_shared_orphan_repair() ->
         assert env["store"].get_exact(publication.manifest_ref)
 
         class FailAfterRefresh:
+            def materialize_authority(self, *args: Any, **kwargs: Any) -> Any:
+                return env["index"].materialize_authority(*args, **kwargs)
+
             def bulk_upsert(self, request: Any) -> Any:
                 env["index"].bulk_upsert(request)
                 raise RuntimeError("integration failure after refresh")
 
+            def close_projection_memberships(self, request: Any) -> Any:
+                return env["index"].close_projection_memberships(request)
+
+            def validate_exact_projection(self, request: Any) -> Any:
+                return env["index"].validate_exact_projection(request)
+
         env["service"].index = FailAfterRefresh()
-        second = env["request"].model_copy(
-            update={"validation_id": f"validation-2-{env['source_id']}"}
+        second = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="orphan",
+            publication_seq_from=2,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=env["request"].source_draft_version_id,
+            expected_candidate_digest=env["request"].candidate_digest,
+            source_draft_version_id=second.source_draft_version_id,
+            candidate_digest=second.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=second.validation_id,
+                source_id=second.source_id,
+                source_draft_version_id=second.source_draft_version_id,
+                candidate_digest=second.candidate_digest,
+                generation_id=second.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
         )
         with pytest.raises(RuntimeError, match="after refresh"):
             env["service"].publish(second)
+        assert env["repository"].load_active_publication(env["source_id"]) == publication
         recovery = HybridRecoveryService(
             repository=env["repository"],
             artifact_store=env["store"],

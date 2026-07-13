@@ -519,10 +519,10 @@ def append_projection_attestation(
         raise ValueError("attestation candidate digest binding does not match")
     if validation.manifest_root_sha256 != root.root_sha256:
         raise ValueError("attestation manifest root binding does not match")
-    if validation.validated_document_count != root.document_count:
-        raise ValueError("attestation document count does not match the manifest root")
-    if validation.validated_rule_unit_count != root.rule_unit_count:
-        raise ValueError("attestation Rule Unit count does not match the manifest root")
+    if validation.validated_document_count < root.document_count:
+        raise ValueError("attestation document count does not cover the manifest root")
+    if validation.validated_rule_unit_count < root.rule_unit_count:
+        raise ValueError("attestation Rule Unit count does not cover the manifest root")
     if root.source_publication_seq not in validation.covered_publication_sequences:
         raise ValueError("attestation must cover the current publication sequence")
     if any(
@@ -550,6 +550,16 @@ def append_projection_attestation(
         retained = set(validated_parent.covered_publication_sequences)
         if not retained.issubset(validation.covered_publication_sequences):
             raise ValueError("descendant attestation lost a retained sequence")
+        if (
+            validation.validated_document_count < validated_parent.validated_document_count
+            or validation.validated_rule_unit_count < validated_parent.validated_rule_unit_count
+        ):
+            raise ValueError("descendant attestation lost retained projection authority")
+    elif (
+        validation.validated_document_count != root.document_count
+        or validation.validated_rule_unit_count != root.rule_unit_count
+    ):
+        raise ValueError("initial attestation counts must exactly match the manifest root")
 
     digest = projection_attestation_fingerprint(
         source_id=root.source_id,

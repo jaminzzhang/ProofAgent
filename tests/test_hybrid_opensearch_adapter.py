@@ -215,9 +215,7 @@ def test_unicode_citation_binding_is_shared_by_projection_and_hit_validation() -
             "document_id": document_id,
             "revision_id": revision_id,
             "citation_uri": citation,
-            "lineage": base.rule_unit.lineage.model_copy(
-                update={"source_id": source_id}
-            ),
+            "lineage": base.rule_unit.lineage.model_copy(update={"source_id": source_id}),
         }
     )
     entry = base.manifest_entry.model_copy(
@@ -328,6 +326,7 @@ class RecordingTransport:
                 "embedding_dimension": 2,
                 "mapping_sha256": rule_unit_mapping_sha256(dimension=2),
                 "analyzer_sha256": rule_unit_analyzer_sha256(),
+                "mapping_normalization_policy": ("opensearch-3.1-knn-empty-parameters.v1"),
             }
             return OpenSearchTransportResponse(
                 status_code=200,
@@ -382,11 +381,7 @@ class RecordingTransport:
                     "_shards": {"total": 1, "successful": 1, "failed": 0},
                     "hits": {
                         "hits": [
-                            {
-                                key: value
-                                for key, value in hit.items()
-                                if key != "_content_source"
-                            }
+                            {key: value for key, value in hit.items() if key != "_content_source"}
                             for hit in self.search_hits
                         ]
                     },
@@ -527,7 +522,9 @@ def test_create_index_pins_generation_metadata_and_source_local_rrf_pipeline() -
         }
     ]
     index_call = next(
-        call for call in transport.calls if call["path"] == f"/{physical_index_name('source-1', 'generation-1')}"
+        call
+        for call in transport.calls
+        if call["path"] == f"/{physical_index_name('source-1', 'generation-1')}"
     )
     assert index_call["json_body"]["mappings"]["_meta"] == {
         "source_id": "source-1",
@@ -535,14 +532,14 @@ def test_create_index_pins_generation_metadata_and_source_local_rrf_pipeline() -
         "embedding_dimension": 2,
         "mapping_sha256": rule_unit_mapping_sha256(dimension=2),
         "analyzer_sha256": rule_unit_analyzer_sha256(),
+        "mapping_normalization_policy": "opensearch-3.1-knn-empty-parameters.v1",
     }
-    assert index_call["json_body"]["settings"]["index"][
-        "analysis"
-    ] == rule_unit_analysis_settings()
+    assert index_call["json_body"]["settings"]["index"]["analysis"] == rule_unit_analysis_settings()
     assert index_call["json_body"]["settings"]["index"]["number_of_replicas"] == 1
-    assert index_call["json_body"]["mappings"]["properties"]["lexical_text"][
-        "analyzer"
-    ] == "proof_agent_cjk_v1"
+    assert (
+        index_call["json_body"]["mappings"]["properties"]["lexical_text"]["analyzer"]
+        == "proof_agent_cjk_v1"
+    )
 
 
 def test_mapping_uses_typed_authority_acl_applicability_and_one_vector() -> None:
@@ -673,9 +670,7 @@ def test_keyword_projection_validator_covers_every_mapped_keyword_field() -> Non
     }
 
     assert set(opensearch_module._PROJECTED_KEYWORD_FIELDS) == mapped_top_level_keywords
-    assert set(opensearch_module._APPLICABILITY_KEYWORD_FIELDS) == (
-        mapped_predicate_keywords
-    )
+    assert set(opensearch_module._APPLICABILITY_KEYWORD_FIELDS) == (mapped_predicate_keywords)
 
     projected = project_rule_unit_document(
         projection_document(),
@@ -692,13 +687,9 @@ def test_keyword_projection_validator_covers_every_mapped_keyword_field() -> Non
 
     for field_name in mapped_predicate_keywords:
         mutated = dict(projected)
-        predicates = [
-            dict(item) for item in projected["applicability_predicates"]
-        ]
+        predicates = [dict(item) for item in projected["applicability_predicates"]]
         original = predicates[0].get(field_name)
-        predicates[0][field_name] = (
-            [overlong] if isinstance(original, list) else overlong
-        )
+        predicates[0][field_name] = [overlong] if isinstance(original, list) else overlong
         mutated["applicability_predicates"] = predicates
         with pytest.raises(ValueError, match=field_name):
             opensearch_module._validate_projected_keyword_fields(mutated)
@@ -723,9 +714,9 @@ def test_keyword_projection_enforces_character_and_utf8_byte_boundaries() -> Non
 
 
 def test_projection_rejects_oversized_taxonomy_keyword_before_bulk() -> None:
-    condition = TaxonomyCondition(
-        key="product_code", operator="EQ", values=("P-1",)
-    ).model_copy(update={"key": "保" * 171})
+    condition = TaxonomyCondition(key="product_code", operator="EQ", values=("P-1",)).model_copy(
+        update={"key": "保" * 171}
+    )
     document = projection_document(metadata=metadata_with_condition(condition))
 
     with pytest.raises(ValueError, match="applicability_predicates.key"):
@@ -751,7 +742,10 @@ def test_projection_rejects_oversized_taxonomy_keyword_before_bulk() -> None:
         ("dense_vector", [0.2, 0.1]),
         ("embedding_sha256", SHA_B),
         ("lexical_text", "forged ranking text"),
-        ("citation_uri", "knowledge://source/source-1/document/document-1/revision/revision-1#page=2"),
+        (
+            "citation_uri",
+            "knowledge://source/source-1/document/document-1/revision/revision-1#page=2",
+        ),
     ),
 )
 def test_full_write_fence_digest_binds_every_omitted_projection_class(
@@ -801,10 +795,14 @@ def test_bulk_upsert_is_attempt_scoped_and_allows_only_idempotence_or_interval_c
     assert result.accepted_count == 1
     assert result.request is request
     assert result.refresh_checkpoint.startswith("refresh-sha256:")
-    assert sum(
-        call["method"] == "GET" and call["path"] == f"/{physical_index_name('source-1', 'generation-1')}"
-        for call in transport.calls
-    ) == 2
+    assert (
+        sum(
+            call["method"] == "GET"
+            and call["path"] == f"/{physical_index_name('source-1', 'generation-1')}"
+            for call in transport.calls
+        )
+        == 2
+    )
 
 
 def test_bulk_upsert_rejects_backend_item_identity_mismatch() -> None:
@@ -821,9 +819,7 @@ def test_bulk_upsert_rejects_backend_item_identity_mismatch() -> None:
                                 "update": {
                                     "status": 200,
                                     "_id": "wrong-projection",
-                                    "_index": physical_index_name(
-                                        "source-1", "generation-1"
-                                    ),
+                                    "_index": physical_index_name("source-1", "generation-1"),
                                 }
                             }
                         ],
@@ -1056,13 +1052,15 @@ def test_search_normalizes_only_bounded_authorized_manifest_matching_hits() -> N
     expected_body = build_hybrid_query(search_request())
     expected_body.pop("search_pipeline")
     assert search_call["json_body"] == expected_body
-    assert search_call["query_params"] == {
-        "search_pipeline": rrf_pipeline_name(rank_constant=60)
-    }
-    assert sum(
-        call["method"] == "GET" and call["path"] == f"/{physical_index_name('source-1', 'generation-1')}"
-        for call in transport.calls
-    ) == 3
+    assert search_call["query_params"] == {"search_pipeline": rrf_pipeline_name(rank_constant=60)}
+    assert (
+        sum(
+            call["method"] == "GET"
+            and call["path"] == f"/{physical_index_name('source-1', 'generation-1')}"
+            for call in transport.calls
+        )
+        == 3
+    )
     content_call = next(call for call in transport.calls if call["path"].endswith("/_mget"))
     assert content_call["json_body"] == {
         "docs": [
@@ -1103,8 +1101,7 @@ def test_search_normalizes_only_bounded_authorized_manifest_matching_hits() -> N
         {"citation_uri": "https://example.invalid/raw"},
         {
             "citation_uri": (
-                "knowledge://source/source-2/document/document-1/"
-                "revision/revision-1#page=1"
+                "knowledge://source/source-2/document/document-1/revision/revision-1#page=1"
             )
         },
         {"projection_sha256": None},
@@ -1126,9 +1123,9 @@ def test_search_rejects_hit_from_another_physical_index() -> None:
     hit["_index"] = "pa-knowledge-other-generation"
 
     with pytest.raises(OpenSearchProjectionError, match="physical index"):
-        OpenSearchHybridIndex(
-            transport=RecordingTransport(search_hits=[hit])
-        ).search(search_request())
+        OpenSearchHybridIndex(transport=RecordingTransport(search_hits=[hit])).search(
+            search_request()
+        )
 
 
 def test_unauthorized_candidate_never_triggers_content_fetch() -> None:
@@ -1195,17 +1192,15 @@ def test_search_reverifies_index_uuid_after_content_stage() -> None:
             return response
 
     with pytest.raises(OpenSearchProjectionError, match="index UUID"):
-        OpenSearchHybridIndex(
-            transport=PostContentIdentityDriftTransport()
-        ).search(search_request())
+        OpenSearchHybridIndex(transport=PostContentIdentityDriftTransport()).search(
+            search_request()
+        )
 
 
 def test_publication_upper_bound_equal_to_requested_sequence_remains_visible() -> None:
     adapter = OpenSearchHybridIndex(
         transport=RecordingTransport(
-            search_hits=[
-                projected_search_hit(document=projection_document(publication_seq_to=7))
-            ]
+            search_hits=[projected_search_hit(document=projection_document(publication_seq_to=7))]
         )
     )
 
@@ -1228,19 +1223,17 @@ def test_new_corpus_root_does_not_change_unchanged_rule_unit_projection() -> Non
     first_result = OpenSearchHybridIndex(transport=first_transport).bulk_upsert(first)
     second_result = OpenSearchHybridIndex(transport=second_transport).bulk_upsert(second)
     first_doc = json.loads(
-        next(call for call in first_transport.calls if call["path"].endswith("/_bulk"))[
-            "content"
-        ].decode().splitlines()[1]
+        next(call for call in first_transport.calls if call["path"].endswith("/_bulk"))["content"]
+        .decode()
+        .splitlines()[1]
     )["script"]["params"]["doc"]
     second_doc = json.loads(
-        next(call for call in second_transport.calls if call["path"].endswith("/_bulk"))[
-            "content"
-        ].decode().splitlines()[1]
+        next(call for call in second_transport.calls if call["path"].endswith("/_bulk"))["content"]
+        .decode()
+        .splitlines()[1]
     )["script"]["params"]["doc"]
     assert first_doc["projection_sha256"] == second_doc["projection_sha256"]
-    assert first_doc["manifest_entry_core_sha256"] == second_doc[
-        "manifest_entry_core_sha256"
-    ]
+    assert first_doc["manifest_entry_core_sha256"] == second_doc["manifest_entry_core_sha256"]
     assert "manifest_root_sha256" not in first_doc | second_doc
     assert first_result.refresh_checkpoint != second_result.refresh_checkpoint
 
@@ -1261,13 +1254,15 @@ def test_historical_sequence_candidate_is_root_agnostic_for_later_authority_gate
         identity=index_identity(),
         publication_attempt_id="attempt-close",
     )
-    assert open_projection["immutable_projection_sha256"] == closed_projection[
-        "immutable_projection_sha256"
-    ]
+    assert (
+        open_projection["immutable_projection_sha256"]
+        == closed_projection["immutable_projection_sha256"]
+    )
     assert open_projection["projection_sha256"] != closed_projection["projection_sha256"]
-    assert open_projection["response_integrity_sha256"] != closed_projection[
-        "response_integrity_sha256"
-    ]
+    assert (
+        open_projection["response_integrity_sha256"]
+        != closed_projection["response_integrity_sha256"]
+    )
     hit = projected_search_hit(document=document)
     transport = RecordingTransport(search_hits=[hit])
     adapter = OpenSearchHybridIndex(transport=transport)
@@ -1334,9 +1329,9 @@ def test_search_rejects_per_hit_and_aggregate_source_envelope_overflow(
         opensearch_module.MAX_CANDIDATE_SOURCE_BYTES + 1
     )
     with pytest.raises(OpenSearchProjectionError, match="bounded envelope"):
-        OpenSearchHybridIndex(
-            transport=RecordingTransport(search_hits=[oversized])
-        ).search(search_request())
+        OpenSearchHybridIndex(transport=RecordingTransport(search_hits=[oversized])).search(
+            search_request()
+        )
 
     monkeypatch.setattr(opensearch_module, "MAX_CANDIDATE_SOURCES_BYTES", 1)
     with pytest.raises(OpenSearchProjectionError, match="bounded envelope"):
@@ -1440,9 +1435,7 @@ def test_runtime_applicability_rejects_rule_predicates_as_user_facts() -> None:
             {
                 **search_request().model_dump(mode="python"),
                 "applicability_filters": (
-                    TaxonomyCondition(
-                        key="product_code", operator="IN", values=("P-1", "P-2")
-                    ),
+                    TaxonomyCondition(key="product_code", operator="IN", values=("P-1", "P-2")),
                 ),
             }
         )
@@ -1461,9 +1454,7 @@ def test_projection_revision_must_match_generation() -> None:
 def test_generation_rejects_digest_that_does_not_match_local_mapping() -> None:
     identity = index_identity()
     wrong = identity.model_copy(
-        update={
-            "generation": identity.generation.model_copy(update={"mapping_sha256": SHA_A})
-        }
+        update={"generation": identity.generation.model_copy(update={"mapping_sha256": SHA_A})}
     )
     with pytest.raises(OpenSearchProjectionError, match="actual mapping"):
         OpenSearchHybridIndex(transport=RecordingTransport()).verify_identity(wrong)
@@ -1483,9 +1474,7 @@ def test_index_identity_rejects_self_asserted_meta_over_mutated_actual_mapping()
             return response
 
     with pytest.raises(OpenSearchProjectionError, match="actual mapping digest"):
-        OpenSearchHybridIndex(transport=MutatedMappingTransport()).verify_identity(
-            index_identity()
-        )
+        OpenSearchHybridIndex(transport=MutatedMappingTransport()).verify_identity(index_identity())
 
 
 def test_index_identity_rejects_name_only_analyzer_settings_drift() -> None:
@@ -1520,9 +1509,7 @@ def test_index_identity_rejects_replica_setting_drift() -> None:
             return response
 
     with pytest.raises(OpenSearchProjectionError, match="replica setting"):
-        OpenSearchHybridIndex(transport=MutatedReplicaTransport()).verify_identity(
-            index_identity()
-        )
+        OpenSearchHybridIndex(transport=MutatedReplicaTransport()).verify_identity(index_identity())
 
 
 def test_search_rejects_mutated_content_addressed_rrf_pipeline() -> None:

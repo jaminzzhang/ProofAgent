@@ -29,7 +29,11 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridSearchRequest,
     ProjectionBulkRequest,
     ProjectionBulkResult,
+    ProjectionAuthorityDocument,
+    ProjectionClosure,
+    ProjectionClosureResult,
     ProjectionDocument,
+    ProjectionReadbackResult,
     SearchIndexIdentity,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
@@ -171,10 +175,7 @@ class HttpxOpenSearchTransport:
             or not 0 < float(timeout_seconds) <= 60
         ):
             raise ValueError("OpenSearch timeout must be within 60 seconds")
-        if (
-            type(max_response_bytes) is not int
-            or not 1 <= max_response_bytes <= 32 * 1024 * 1024
-        ):
+        if type(max_response_bytes) is not int or not 1 <= max_response_bytes <= 32 * 1024 * 1024:
             raise ValueError("OpenSearch response limit is invalid")
         base_url = endpoint.rstrip("/")
         self._max_response_bytes = max_response_bytes
@@ -420,6 +421,7 @@ def _identity_index_name(identity: SearchIndexIdentity) -> str:
 
 
 RULE_UNIT_ANALYZER = "proof_agent_cjk_v1"
+_MAPPING_NORMALIZATION_POLICY = "opensearch-3.1-knn-empty-parameters.v1"
 MAX_CANDIDATE_SOURCE_BYTES = 24_000
 MAX_CANDIDATE_SOURCES_BYTES = 24_000_000
 MAX_CONTENT_SOURCE_BYTES = 320_000
@@ -464,6 +466,7 @@ _PROJECTED_KEYWORD_FIELDS = (
     "projection_revision",
     "immutable_projection_sha256",
     "projection_sha256",
+    "projection_material_sha256",
     "response_integrity_sha256",
     "publication_attempt_id",
     "embedding_sha256",
@@ -565,10 +568,7 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
             "applicability_predicates": {
                 "type": "nested",
                 "properties": {
-                    **{
-                        field_name: dict(keyword)
-                        for field_name in _APPLICABILITY_KEYWORD_FIELDS
-                    },
+                    **{field_name: dict(keyword) for field_name in _APPLICABILITY_KEYWORD_FIELDS},
                     "integer_values": {"type": "long"},
                     "numeric_values": {"type": "double"},
                     "boolean_values": {"type": "boolean"},
@@ -587,6 +587,9 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
                     "name": "hnsw",
                     "engine": "lucene",
                     "space_type": "cosinesimil",
+                    # OpenSearch 3.1 materializes this exact empty object on readback.
+                    # Declaring it keeps the content-addressed mapping byte-for-byte exact.
+                    "parameters": {},
                 },
             },
         }
@@ -594,9 +597,7 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
     return {"dynamic": "strict", "properties": properties}
 
 
-def _rule_unit_index_definition(
-    *, dimension: int, number_of_replicas: int
-) -> dict[str, object]:
+def _rule_unit_index_definition(*, dimension: int, number_of_replicas: int) -> dict[str, object]:
     return {
         "settings": {
             "index": {
@@ -650,9 +651,7 @@ def _validate_keyword_projection_value(value: object, *, field_name: str) -> Non
 def _validate_projected_keyword_fields(projected: Mapping[str, object]) -> None:
     for field_name in _PROJECTED_KEYWORD_FIELDS:
         if field_name in projected:
-            _validate_keyword_projection_value(
-                projected[field_name], field_name=field_name
-            )
+            _validate_keyword_projection_value(projected[field_name], field_name=field_name)
 
     predicates = projected.get("applicability_predicates")
     if not isinstance(predicates, list):
@@ -662,9 +661,7 @@ def _validate_projected_keyword_fields(projected: Mapping[str, object]) -> None:
             raise ValueError("applicability_predicates must contain objects")
         for field_name in _APPLICABILITY_KEYWORD_FIELDS:
             if field_name not in predicate:
-                raise ValueError(
-                    f"applicability_predicates.{field_name} must be present"
-                )
+                raise ValueError(f"applicability_predicates.{field_name} must be present")
             _validate_keyword_projection_value(
                 predicate[field_name],
                 field_name=f"applicability_predicates.{field_name}",
@@ -726,9 +723,7 @@ def _authority_projection_fields(
             "value_tokens": sorted(_fact_token(value) for value in condition.values),
             "string_values": [value for value in condition.values if type(value) is str],
             "integer_values": [value for value in condition.values if type(value) is int],
-            "numeric_values": [
-                value for value in condition.values if type(value) is float
-            ],
+            "numeric_values": [value for value in condition.values if type(value) is float],
             "boolean_values": [value for value in condition.values if type(value) is bool],
         }
         for condition in conditions
@@ -754,9 +749,7 @@ def _authority_projection_fields(
         "authority_tier": metadata.precedence.authority_tier,
         "precedence_policy_revision": metadata.precedence.policy_revision_id,
         "precedence_order": metadata.precedence.order,
-        "supersedes_rule_unit_revision_ids": list(
-            metadata.supersedes_rule_unit_revision_ids
-        ),
+        "supersedes_rule_unit_revision_ids": list(metadata.supersedes_rule_unit_revision_ids),
         **_visibility_fields(visibility),
     }
     if metadata.effective_from is not None:
@@ -879,6 +872,16 @@ def project_rule_unit_document(
         "publication_attempt_id": publication_attempt_id,
         **authority_fields,
     }
+    projected["projection_material_sha256"] = stable_digest(
+        {
+            "schema_version": "hybrid-projection-material.v1",
+            "projection_id": document.projection_id,
+            "rule_unit": document.rule_unit.model_dump(mode="json"),
+            "approved_metadata": document.approved_metadata.model_dump(mode="json"),
+            "projection_revision": document.projection_revision,
+            "embedding_sha256": projected["embedding_sha256"],
+        }
+    )
     if entry.publication_seq_to is not None:
         projected["publication_seq_to"] = entry.publication_seq_to
     if lineage.table_id is not None:
@@ -960,11 +963,7 @@ _CONTENT_SOURCE_FIELDS = frozenset(
 
 def _immutable_projection_sha256(projected: Mapping[str, object]) -> str:
     return stable_digest(
-        {
-            key: value
-            for key, value in projected.items()
-            if key not in _IMMUTABLE_EXCLUDED_FIELDS
-        }
+        {key: value for key, value in projected.items() if key not in _IMMUTABLE_EXCLUDED_FIELDS}
     )
 
 
@@ -1026,9 +1025,7 @@ def _visibility_filter(authorization: InstitutionAuthorizationContext) -> dict[s
                     }
                 }
             )
-        restricted_filters.append(
-            {"bool": {"should": should, "minimum_should_match": 1}}
-        )
+        restricted_filters.append({"bool": {"should": should, "minimum_should_match": 1}})
     return {
         "bool": {
             "should": [
@@ -1052,7 +1049,12 @@ def _applicability_fact_filter(condition: TaxonomyCondition) -> dict[str, object
                 {
                     "bool": {
                         "must_not": [
-                            {"nested": {"path": path, "query": {"term": {key_field: condition.key}}}}
+                            {
+                                "nested": {
+                                    "path": path,
+                                    "query": {"term": {key_field: condition.key}},
+                                }
+                            }
                         ]
                     }
                 },
@@ -1103,7 +1105,9 @@ def build_common_filter(request: HybridSearchRequest) -> list[dict[str, object]]
         _optional_bound_filter("effective_to", "gte", request.as_of_date.isoformat()),
         _visibility_filter(request.authorization),
     ]
-    filters.extend(_applicability_fact_filter(condition) for condition in request.applicability_filters)
+    filters.extend(
+        _applicability_fact_filter(condition) for condition in request.applicability_filters
+    )
     return filters
 
 
@@ -1179,6 +1183,96 @@ if (ctx.op == 'create') {
 }
 """.strip()
 
+_CLOSURE_SCRIPT = """
+boolean authorityMatches =
+    ctx._source.projection_material_sha256 == params.expected_material_sha256 &&
+    ctx._source.immutable_projection_sha256 == params.expected_immutable_sha256 &&
+    ctx._source.manifest_entry_core_sha256 == params.expected_entry_core_sha256 &&
+    ctx._source.publication_seq_from == params.expected_seq_from;
+boolean exactRetry = authorityMatches &&
+    ctx._source.containsKey('publication_seq_to') &&
+    ctx._source.publication_seq_to == params.publication_seq_to &&
+    ctx._source.projection_sha256 == params.projection_sha256 &&
+    ctx._source.response_integrity_sha256 == params.response_integrity_sha256 &&
+    ctx._source.publication_attempt_id == params.publication_attempt_id;
+if (exactRetry) {
+  ctx.op = 'noop';
+  return;
+}
+if (!authorityMatches ||
+    ctx._source.containsKey('publication_seq_to') ||
+    ctx._source.publication_attempt_id != params.expected_attempt_id) {
+  throw new IllegalArgumentException('projection closure authority conflict');
+}
+ctx._source.publication_seq_to = params.publication_seq_to;
+ctx._source.projection_sha256 = params.projection_sha256;
+ctx._source.response_integrity_sha256 = params.response_integrity_sha256;
+ctx._source.publication_attempt_id = params.publication_attempt_id;
+""".strip()
+
+
+def _authority_projected_source(
+    authority: ProjectionAuthorityDocument,
+    identity: SearchIndexIdentity,
+) -> dict[str, object]:
+    dummy = ProjectionDocument(
+        projection_id=authority.projection_id,
+        rule_unit=authority.rule_unit,
+        manifest_entry=authority.manifest_entry,
+        approved_metadata=authority.approved_metadata,
+        projection_revision=authority.projection_revision,
+        embedding=(0.0,) * identity.generation.embedding_dimension,
+    )
+    projected = project_rule_unit_document(
+        dummy,
+        identity=identity,
+        publication_attempt_id=authority.last_publication_attempt_id,
+    )
+    projected["embedding_sha256"] = authority.embedding_sha256
+    projected["projection_material_sha256"] = authority.projection_material_sha256
+    projected["immutable_projection_sha256"] = authority.immutable_projection_sha256
+    projected["projection_sha256"] = _mutable_projection_sha256(projected)
+    projected["response_integrity_sha256"] = _response_integrity_sha256(projected)
+    return projected
+
+
+def _authority_expected_source(
+    authority: ProjectionAuthorityDocument,
+    identity: SearchIndexIdentity,
+) -> dict[str, object]:
+    projected = _authority_projected_source(authority, identity)
+    return {
+        key: value
+        for key, value in projected.items()
+        if key
+        not in {
+            "dense_vector",
+            "embedding_sha256",
+            "immutable_projection_sha256",
+            "projection_sha256",
+            "response_integrity_sha256",
+        }
+    }
+
+
+def _closure_script_params(
+    closure: ProjectionClosure,
+    identity: SearchIndexIdentity,
+) -> dict[str, object]:
+    prior = _authority_projected_source(closure.prior, identity)
+    closed = _authority_projected_source(closure.closed, identity)
+    return {
+        "expected_material_sha256": closure.prior.projection_material_sha256,
+        "expected_immutable_sha256": closure.prior.immutable_projection_sha256,
+        "expected_entry_core_sha256": prior["manifest_entry_core_sha256"],
+        "expected_seq_from": prior["publication_seq_from"],
+        "expected_attempt_id": closure.prior.last_publication_attempt_id,
+        "publication_seq_to": closed["publication_seq_to"],
+        "projection_sha256": closed["projection_sha256"],
+        "response_integrity_sha256": closed["response_integrity_sha256"],
+        "publication_attempt_id": closure.closed.last_publication_attempt_id,
+    }
+
 
 def _mapping(value: object, *, field_name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
@@ -1202,9 +1296,7 @@ def _exact_string(
     if maximum_utf8_bytes is None and maximum == KEYWORD_IGNORE_ABOVE:
         maximum_utf8_bytes = KEYWORD_MAX_UTF8_BYTES
     if maximum_utf8_bytes is not None and len(encoded) > maximum_utf8_bytes:
-        raise OpenSearchProjectionError(
-            f"{field_name} must fit the bounded UTF-8 byte envelope"
-        )
+        raise OpenSearchProjectionError(f"{field_name} must fit the bounded UTF-8 byte envelope")
     return value
 
 
@@ -1233,9 +1325,7 @@ def _finite_score(value: object, *, field_name: str) -> float:
 def _string_list(value: object, *, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise OpenSearchProjectionError(f"{field_name} must be an array")
-    result = tuple(
-        _exact_string(item, field_name=f"{field_name} item") for item in value
-    )
+    result = tuple(_exact_string(item, field_name=f"{field_name} item") for item in value)
     if len(result) != len(set(result)):
         raise OpenSearchProjectionError(f"{field_name} must contain unique values")
     if result != tuple(sorted(result)):
@@ -1300,12 +1390,12 @@ def _response_index_identity(
         raise OpenSearchProjectionError("OpenSearch index mapping digest does not match")
     if metadata.get("analyzer_sha256") != generation.analyzer_sha256:
         raise OpenSearchProjectionError("OpenSearch index analyzer digest does not match")
+    if metadata.get("mapping_normalization_policy") != _MAPPING_NORMALIZATION_POLICY:
+        raise OpenSearchProjectionError("OpenSearch mapping normalization policy does not match")
     actual_mapping = {key: value for key, value in mappings.items() if key != "_meta"}
     if stable_digest(actual_mapping) != generation.mapping_sha256:
         raise OpenSearchProjectionError("OpenSearch actual mapping digest does not match")
-    actual_analysis = _mapping(
-        index_settings.get("analysis"), field_name="index analysis settings"
-    )
+    actual_analysis = _mapping(index_settings.get("analysis"), field_name="index analysis settings")
     if stable_digest(actual_analysis) != generation.analyzer_sha256:
         raise OpenSearchProjectionError("OpenSearch actual analyzer settings do not match")
     properties = _mapping(actual_mapping.get("properties"), field_name="mapping properties")
@@ -1318,9 +1408,7 @@ def _response_index_identity(
     )
     actual_analyzers = {
         _exact_string(
-            _mapping(properties.get(field), field_name=f"mapping field {field}").get(
-                "analyzer"
-            ),
+            _mapping(properties.get(field), field_name=f"mapping field {field}").get("analyzer"),
             field_name=f"mapping analyzer {field}",
         )
         for field in analyzer_fields
@@ -1338,9 +1426,7 @@ def _validated_shard_state(
 ) -> dict[str, int]:
     shards = _mapping(value, field_name=field_name)
     total = _exact_integer(shards.get("total"), field_name=f"{field_name} total")
-    successful = _exact_integer(
-        shards.get("successful"), field_name=f"{field_name} successful"
-    )
+    successful = _exact_integer(shards.get("successful"), field_name=f"{field_name} successful")
     failed = _exact_integer(shards.get("failed"), field_name=f"{field_name} failed")
     minimum = 0 if allow_zero else 1
     if total < minimum or successful < 0 or failed != 0 or successful != total:
@@ -1386,9 +1472,7 @@ def _bulk_payload(request: ProjectionBulkRequest) -> tuple[bytes, str]:
         projection_states.append(
             {
                 "projection_id": projected["projection_id"],
-                "immutable_projection_sha256": projected[
-                    "immutable_projection_sha256"
-                ],
+                "immutable_projection_sha256": projected["immutable_projection_sha256"],
                 "projection_sha256": projected["projection_sha256"],
                 "manifest_entry_core_sha256": projected["manifest_entry_core_sha256"],
                 "publication_seq_from": projected["publication_seq_from"],
@@ -1510,9 +1594,7 @@ def _is_authorized(
     )
     for field, admitted in dimensions:
         mode = _exact_string(source.get(f"{field}_mode"), field_name=f"{field}_mode")
-        values = _string_list(
-            source.get(f"allowed_{field}s"), field_name=f"allowed_{field}s"
-        )
+        values = _string_list(source.get(f"allowed_{field}s"), field_name=f"allowed_{field}s")
         if mode == "ALL":
             if values:
                 return False
@@ -1534,9 +1616,7 @@ def _applicability_allows(
     for item in raw:
         raw_predicate = _mapping(item, field_name="applicability predicate")
         key = _exact_string(raw_predicate.get("key"), field_name="applicability key")
-        operator = _exact_string(
-            raw_predicate.get("operator"), field_name="applicability operator"
-        )
+        operator = _exact_string(raw_predicate.get("operator"), field_name="applicability operator")
         if operator not in {"EQ", "IN", "NOT_EQ", "NOT_IN"} or key in predicates:
             raise OpenSearchProjectionError("applicability predicate is invalid")
         tokens = _string_list(
@@ -1621,9 +1701,7 @@ def _strict_authority_from_flattened(
                 operator=cast(
                     Any,
                     _exact_string(
-                        _mapping(item, field_name="applicability predicate").get(
-                            "operator"
-                        ),
+                        _mapping(item, field_name="applicability predicate").get("operator"),
                         field_name="applicability operator",
                     ),
                 ),
@@ -1655,9 +1733,7 @@ def _strict_authority_from_flattened(
                 authority_tier=_exact_string(
                     source.get("authority_tier"), field_name="authority_tier"
                 ),
-                order=_exact_integer(
-                    source.get("precedence_order"), field_name="precedence_order"
-                ),
+                order=_exact_integer(source.get("precedence_order"), field_name="precedence_order"),
             ),
             supersedes_rule_unit_revision_ids=_string_list(
                 source.get("supersedes_rule_unit_revision_ids"),
@@ -1709,9 +1785,7 @@ def _strict_authority_from_flattened(
     for field in _FLATTENED_AUTHORITY_FIELDS:
         if field in expected:
             if field not in source or source[field] != expected[field]:
-                raise OpenSearchProjectionError(
-                    "search hit flattened authority is not canonical"
-                )
+                raise OpenSearchProjectionError("search hit flattened authority is not canonical")
         elif field in source:
             raise OpenSearchProjectionError(
                 "search hit contains an inapplicable flattened authority field"
@@ -1769,9 +1843,7 @@ def _normalize_search_hits(
         source = _mapping(hit.get("_source"), field_name="search hit source")
         if not set(source).issubset(allowed_fields):
             raise OpenSearchProjectionError("search hit contains an unknown projection field")
-        source_bytes = len(
-            json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode()
-        )
+        source_bytes = len(json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode())
         aggregate_source_bytes += source_bytes
         if source_bytes > MAX_CANDIDATE_SOURCE_BYTES or (
             aggregate_source_bytes > MAX_CANDIDATE_SOURCES_BYTES
@@ -1809,9 +1881,7 @@ def _normalize_search_hits(
             source.get("immutable_projection_sha256"),
             field_name="immutable_projection_sha256",
         )
-        projection_sha256 = _sha256(
-            source.get("projection_sha256"), field_name="projection_sha256"
-        )
+        projection_sha256 = _sha256(source.get("projection_sha256"), field_name="projection_sha256")
         response_integrity_sha256 = _sha256(
             source.get("response_integrity_sha256"),
             field_name="response_integrity_sha256",
@@ -1841,9 +1911,7 @@ def _normalize_search_hits(
             source.get("visibility_revision_id"), field_name="visibility_revision_id"
         )
         content_sha256 = _sha256(source.get("content_sha256"), field_name="content_sha256")
-        authority_sha256 = _sha256(
-            source.get("authority_sha256"), field_name="authority_sha256"
-        )
+        authority_sha256 = _sha256(source.get("authority_sha256"), field_name="authority_sha256")
         citation_uri = _exact_string(
             source.get("citation_uri"), field_name="citation_uri", maximum=512
         )
@@ -1871,9 +1939,7 @@ def _normalize_search_hits(
             document_id=document_id,
             revision_id=revision_id,
         )
-        metadata, visibility, _expected_authority = _strict_authority_from_flattened(
-            source
-        )
+        metadata, visibility, _expected_authority = _strict_authority_from_flattened(source)
         if metadata.metadata_revision_id != metadata_revision_id:
             raise OpenSearchProjectionError("search hit metadata revision does not match")
         if visibility.revision_id != visibility_revision_id:
@@ -1884,12 +1950,15 @@ def _normalize_search_hits(
         visibility_digest = _sha256(
             source.get("visibility_revision_digest"), field_name="visibility_revision_digest"
         )
-        if stable_digest(
-            {
-                "approved_metadata": metadata.model_dump(mode="json"),
-                "approved_visibility": visibility.model_dump(mode="json"),
-            }
-        ) != authority_sha256:
+        if (
+            stable_digest(
+                {
+                    "approved_metadata": metadata.model_dump(mode="json"),
+                    "approved_visibility": visibility.model_dump(mode="json"),
+                }
+            )
+            != authority_sha256
+        ):
             raise OpenSearchProjectionError("search hit authority digest does not match")
         if not _date_is_effective(source, request.as_of_date):
             raise OpenSearchProjectionError("search hit is outside its effective period")
@@ -1951,9 +2020,7 @@ def _normalize_mget_content(
         source = _mapping(document.get("_source"), field_name="content fetch source")
         if set(source) != set(_CONTENT_SOURCE_FIELDS):
             raise OpenSearchProjectionError("OpenSearch content fetch source is incomplete")
-        source_bytes = len(
-            json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode()
-        )
+        source_bytes = len(json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode())
         aggregate_bytes += source_bytes
         if source_bytes > MAX_CONTENT_SOURCE_BYTES or aggregate_bytes > MAX_CONTENT_BATCH_BYTES:
             raise OpenSearchProjectionError("OpenSearch content fetch exceeds bounded envelope")
@@ -1962,10 +2029,8 @@ def _normalize_mget_content(
         if source.get("content_sha256") != candidate.content_sha256:
             raise OpenSearchProjectionError("content digest binding does not match candidate")
         if (
-            source.get("immutable_projection_sha256")
-            != candidate.immutable_projection_sha256
-            or source.get("response_integrity_sha256")
-            != candidate.response_integrity_sha256
+            source.get("immutable_projection_sha256") != candidate.immutable_projection_sha256
+            or source.get("response_integrity_sha256") != candidate.response_integrity_sha256
         ):
             raise OpenSearchProjectionError("content projection state does not match candidate")
         content = _exact_string(source.get("content"), field_name="content", maximum=50_000)
@@ -2035,7 +2100,9 @@ class OpenSearchHybridIndex:
         if generation.mapping_sha256 != rule_unit_mapping_sha256(
             dimension=generation.embedding_dimension,
         ):
-            raise OpenSearchProjectionError("generation mapping digest does not match actual mapping")
+            raise OpenSearchProjectionError(
+                "generation mapping digest does not match actual mapping"
+            )
         if generation.analyzer_sha256 != rule_unit_analyzer_sha256():
             raise OpenSearchProjectionError(
                 "generation analyzer digest does not match actual analyzer configuration"
@@ -2080,9 +2147,7 @@ class OpenSearchHybridIndex:
     ) -> SearchIndexIdentity:
         """Create one exact physical generation and its Source-local RRF pipeline."""
 
-        generation = KnowledgeIndexGeneration.model_validate(
-            generation.model_dump(mode="python")
-        )
+        generation = KnowledgeIndexGeneration.model_validate(generation.model_dump(mode="python"))
         self._validate_generation(generation)
         self._ensure_pipeline(pipeline=rrf_pipeline, rank_constant=rrf_rank_constant)
         definition = _rule_unit_index_definition(
@@ -2096,6 +2161,7 @@ class OpenSearchHybridIndex:
             "embedding_dimension": generation.embedding_dimension,
             "mapping_sha256": generation.mapping_sha256,
             "analyzer_sha256": generation.analyzer_sha256,
+            "mapping_normalization_policy": _MAPPING_NORMALIZATION_POLICY,
         }
         canonical_name = physical_index_name(generation.source_id, generation.generation_id)
         index_name = physical_name_override or canonical_name
@@ -2121,9 +2187,7 @@ class OpenSearchHybridIndex:
             identity_response.body.get(index_name), field_name="created index identity"
         )
         settings = _mapping(details.get("settings"), field_name="created index settings")
-        index_settings = _mapping(
-            settings.get("index"), field_name="created index settings.index"
-        )
+        index_settings = _mapping(settings.get("index"), field_name="created index settings.index")
         identity = SearchIndexIdentity(
             generation=generation,
             index_uuid=_exact_string(index_settings.get("uuid"), field_name="index UUID"),
@@ -2147,6 +2211,38 @@ class OpenSearchHybridIndex:
             index_name=index_name,
             expected=expected,
             expected_number_of_replicas=self._number_of_replicas,
+        )
+
+    def materialize_authority(
+        self,
+        document: ProjectionDocument,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+    ) -> ProjectionAuthorityDocument:
+        projected = project_rule_unit_document(
+            document,
+            identity=identity,
+            publication_attempt_id=publication_attempt_id,
+        )
+        return ProjectionAuthorityDocument(
+            projection_id=document.projection_id,
+            rule_unit=document.rule_unit,
+            manifest_entry=document.manifest_entry,
+            approved_metadata=document.approved_metadata,
+            projection_revision=document.projection_revision,
+            embedding_sha256=_exact_string(
+                projected["embedding_sha256"], field_name="embedding digest"
+            ),
+            projection_material_sha256=_exact_string(
+                projected["projection_material_sha256"],
+                field_name="projection material digest",
+            ),
+            immutable_projection_sha256=_exact_string(
+                projected["immutable_projection_sha256"],
+                field_name="immutable projection digest",
+            ),
+            last_publication_attempt_id=publication_attempt_id,
         )
 
     def bulk_upsert(self, request: ProjectionBulkRequest) -> ProjectionBulkResult:
@@ -2179,6 +2275,185 @@ class OpenSearchHybridIndex:
         return ProjectionBulkResult(
             request=request,
             accepted_count=len(request.documents),
+            refresh_checkpoint=checkpoint,
+        )
+
+    def validate_exact_projection(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+        manifest_root_sha256: str,
+        documents: tuple[ProjectionAuthorityDocument, ...],
+    ) -> ProjectionReadbackResult:
+        """Read back the entire generation projection and compare exact authority fields."""
+
+        self.verify_identity(identity)
+        index_name = _identity_index_name(identity)
+        authority_by_id = {document.projection_id: document for document in documents}
+        expected = {
+            document.projection_id: _authority_expected_source(document, identity)
+            for document in documents
+        }
+        if len(expected) != len(documents):
+            raise OpenSearchProjectionError("projection readback identities are not unique")
+        actual: dict[str, object] = {}
+        ids = tuple(sorted(expected))
+        for offset in range(0, len(ids), 1_000):
+            batch_ids = ids[offset : offset + 1_000]
+            response = self._transport.request(
+                method="POST",
+                path=f"/{index_name}/_mget",
+                json_body={"ids": list(batch_ids)},
+            )
+            raw_docs = response.body.get("docs")
+            if response.status_code != 200 or not isinstance(raw_docs, list):
+                raise OpenSearchProjectionError("projection exact readback failed")
+            for raw in raw_docs:
+                item = _mapping(raw, field_name="projection readback document")
+                projection_id = _exact_string(
+                    item.get("_id"), field_name="projection readback document id"
+                )
+                if (
+                    projection_id not in expected
+                    or projection_id in actual
+                    or item.get("_index") != index_name
+                    or item.get("found") is not True
+                ):
+                    raise OpenSearchProjectionError("projection readback identity mismatch")
+                source = _mapping(item.get("_source"), field_name="projection readback source")
+                semantic_source = {
+                    key: value
+                    for key, value in source.items()
+                    if key
+                    not in {
+                        "dense_vector",
+                        "embedding_sha256",
+                        "immutable_projection_sha256",
+                        "projection_sha256",
+                        "response_integrity_sha256",
+                    }
+                }
+                authority = authority_by_id[projection_id]
+                vector = source.get("dense_vector")
+                if (
+                    semantic_source != expected[projection_id]
+                    or stable_digest({"embedding": vector}) != authority.embedding_sha256
+                    or source.get("embedding_sha256") != authority.embedding_sha256
+                    or source.get("projection_material_sha256")
+                    != authority.projection_material_sha256
+                    or source.get("immutable_projection_sha256")
+                    != authority.immutable_projection_sha256
+                    or _immutable_projection_sha256(source) != authority.immutable_projection_sha256
+                    or source.get("projection_sha256") != _mutable_projection_sha256(source)
+                    or source.get("response_integrity_sha256") != _response_integrity_sha256(source)
+                ):
+                    raise OpenSearchProjectionError("projection readback authority mismatch")
+                actual[projection_id] = source
+        if set(actual) != set(expected):
+            raise OpenSearchProjectionError("projection readback is incomplete")
+        count = self._transport.request(
+            method="POST",
+            path=f"/{index_name}/_count",
+            json_body={"query": {"match_all": {}}},
+        )
+        actual_count = count.body.get("count")
+        if (
+            count.status_code != 200
+            or type(actual_count) is not int
+            or actual_count != len(documents)
+        ):
+            raise OpenSearchProjectionError("projection readback count mismatch")
+        logical_digest = stable_digest(
+            {
+                "schema_version": "hybrid-publication-projection.v2",
+                "documents": [item.model_dump(mode="json") for item in documents],
+            }
+        )
+        checkpoint = stable_digest(
+            {
+                "schema_version": "opensearch-exact-projection-readback.v1",
+                "index_uuid": identity.index_uuid,
+                "manifest_root_sha256": manifest_root_sha256,
+                "publication_attempt_id": publication_attempt_id,
+                "sources": [actual[key] for key in sorted(actual)],
+                "count": actual_count,
+            }
+        )
+        return ProjectionReadbackResult(
+            projection_sha256=logical_digest,
+            refresh_checkpoint=checkpoint,
+            validated_document_count=len(
+                {document.rule_unit.document_id for document in documents}
+            ),
+            validated_rule_unit_count=len(documents),
+        )
+
+    def close_projection_memberships(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+        manifest_root_sha256: str,
+        closures: tuple[ProjectionClosure, ...],
+    ) -> ProjectionClosureResult:
+        self.verify_identity(identity)
+        index_name = _identity_index_name(identity)
+        lines: list[str] = []
+        for closure in closures:
+            if (
+                closure.prior.projection_id != closure.closed.projection_id
+                or closure.prior.manifest_entry.publication_seq_to is not None
+                or closure.closed.manifest_entry.publication_seq_to is None
+                or closure.prior.projection_material_sha256
+                != closure.closed.projection_material_sha256
+                or closure.prior.immutable_projection_sha256
+                != closure.closed.immutable_projection_sha256
+                or closure.closed.last_publication_attempt_id != publication_attempt_id
+            ):
+                raise OpenSearchProjectionError("projection closure authority is invalid")
+            params = _closure_script_params(closure, identity)
+            lines.append(
+                json.dumps(
+                    {"update": {"_id": closure.prior.projection_id}},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+            lines.append(
+                json.dumps(
+                    {"script": {"lang": "painless", "source": _CLOSURE_SCRIPT, "params": params}},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        response = self._transport.request(
+            method="POST",
+            path=f"/{index_name}/_bulk",
+            content=("\n".join(lines) + "\n").encode(),
+            content_type="application/x-ndjson",
+        )
+        markers = _validate_bulk_result(
+            response,
+            expected_ids=tuple(item.prior.projection_id for item in closures),
+            expected_index=index_name,
+        )
+        refresh = self._transport.request(method="POST", path=f"/{index_name}/_refresh")
+        self.verify_identity(identity)
+        checkpoint = _refresh_checkpoint(
+            refresh,
+            identity=identity,
+            manifest_root_sha256=manifest_root_sha256,
+            projection_set_sha256=stable_digest(
+                {
+                    "schema_version": "projection-closure-set.v1",
+                    "closures": [item.model_dump(mode="json") for item in closures],
+                }
+            ),
+            bulk_markers=markers,
+        )
+        return ProjectionClosureResult(
+            accepted_count=len(closures),
             refresh_checkpoint=checkpoint,
         )
 

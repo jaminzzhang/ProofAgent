@@ -125,9 +125,7 @@ class _RecoveryIndex:
                 authority.current_attestation.covered_publication_sequences
             ),
             projection_sha256="f" * 64,
-            validated_document_count=len(
-                {item.rule_unit.document_id for item in documents}
-            ),
+            validated_document_count=len({item.rule_unit.document_id for item in documents}),
             validated_rule_unit_count=len(documents),
         )
 
@@ -231,7 +229,9 @@ def test_interrupted_cleanup_is_recorded_for_retry(tmp_path: Any) -> None:
     assert repository.retries == ["failed-1"]
 
 
-def test_generation_rebuild_uses_exact_artifacts_fresh_uuid_and_same_coverage(tmp_path: Any) -> None:
+def test_generation_rebuild_uses_exact_artifacts_fresh_uuid_and_same_coverage(
+    tmp_path: Any,
+) -> None:
     service, repository, _ = _fixture(tmp_path)
     rebuilt = service.rebuild_generation(source_id="source-1", generation_id="generation-1")
     assert rebuilt.index_uuid == "fresh-index-uuid"
@@ -267,12 +267,9 @@ def test_rebuild_unions_historical_rule_across_failed_sequence_gap(tmp_path: Any
             "content": new_content,
             "content_sha256": hashlib.sha256(new_content.encode()).hexdigest(),
             "citation_uri": (
-                "knowledge://source/source-1/document/document-2/"
-                "revision/revision-2#page=1"
+                "knowledge://source/source-1/document/document-2/revision/revision-2#page=1"
             ),
-            "lineage": old_seed.rule_unit.lineage.model_copy(
-                update={"block_ids": ("block-2",)}
-            ),
+            "lineage": old_seed.rule_unit.lineage.model_copy(update={"block_ids": ("block-2",)}),
         }
     )
     new_manifest = build_rule_unit_manifest(
@@ -280,9 +277,7 @@ def test_rebuild_unions_historical_rule_across_failed_sequence_gap(tmp_path: Any
         source_snapshot_id="snapshot-2",
         source_publication_seq=3,
         generation_id="generation-1",
-        memberships=(
-            ManifestRuleUnitMembership(rule_unit=new_rule, publication_seq_from=3),
-        ),
+        memberships=(ManifestRuleUnitMembership(rule_unit=new_rule, publication_seq_from=3),),
         created_at=datetime(2026, 7, 14, 1, tzinfo=UTC),
         artifact_store=store,
         previous=old_manifest,
@@ -328,7 +323,7 @@ def test_rebuild_unions_historical_rule_across_failed_sequence_gap(tmp_path: Any
     service.rebuild_generation(source_id="source-1", generation_id="generation-1")
     documents = index.rebuilt_documents
     entries = {item.rule_unit.rule_unit_revision_id: item.manifest_entry for item in documents}
-    assert entries["rule-1"].publication_seq_to == 1
+    assert entries["rule-1"].publication_seq_to == 2
     assert entries["rule-2"].publication_seq_from == 3
     assert entries["rule-2"].publication_seq_to is None
 
@@ -363,9 +358,7 @@ def test_rebuild_failure_after_durable_begin_transitions_operation_for_retry(tmp
     index.rebuild_generation = fail  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="transport failed"):
         service.rebuild_generation(source_id="source-1", generation_id="generation-1")
-    assert repository.failed_operations == [
-        (repository.operation_id, "REBUILD_FAILED", None)
-    ]
+    assert repository.failed_operations == [(repository.operation_id, "REBUILD_FAILED", None)]
     assert repository.swapped is None
 
 
@@ -422,6 +415,35 @@ def test_s3_artifacts_require_content_address_and_verify_exact_version() -> None
     client.objects[key]["Body"] = b"corrupt"
     with pytest.raises(S3ArtifactError, match="length|corrupt"):
         store.get_exact(ref)
+
+
+def test_s3_environment_custom_endpoint_does_not_inherit_ambient_proxy(
+    monkeypatch: Any,
+) -> None:
+    import boto3
+
+    calls: list[dict[str, Any]] = []
+
+    def client(_service: str, **kwargs: Any) -> _S3:
+        calls.append(kwargs)
+        return _S3()
+
+    monkeypatch.setattr(boto3, "client", client)
+    S3ExactArtifactStore.from_environment(
+        bucket="test-bucket",
+        endpoint_url="http://127.0.0.1:9000",
+    )
+    assert calls[-1]["config"].proxies == {}
+
+    S3ExactArtifactStore.from_environment(bucket="test-bucket")
+    assert "config" not in calls[-1]
+
+    S3ExactArtifactStore.from_environment(
+        bucket="test-bucket",
+        endpoint_url="https://s3-gateway.example.test",
+        allow_endpoint_proxy=True,
+    )
+    assert "config" not in calls[-1]
 
 
 def test_configured_environment_composes_functional_recovery_service(monkeypatch: Any) -> None:
@@ -561,6 +583,7 @@ def test_recovery_cli_defaults_cleanup_to_dry_run_and_rebuild_is_idempotent(
         def model_dump(self, *, mode: str) -> dict[str, str]:
             assert mode == "json"
             return {"attestation_id": "attestation-1"}
+
     monkeypatch.setattr(cli, "_hybrid_recovery_service_from_environment", lambda: Service())
     runner = CliRunner()
     dry = runner.invoke(cli.app, ["knowledge", "reconcile-orphans", "--source-id", "source-1"])

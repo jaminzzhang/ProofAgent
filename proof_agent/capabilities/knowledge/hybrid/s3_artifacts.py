@@ -10,9 +10,7 @@ from urllib.parse import quote, unquote, urlsplit
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
 
 
-_KEY = re.compile(
-    r"^hybrid-manifests/(?:roots|shards)/(?P<digest>[0-9a-f]{64})\.json$"
-)
+_KEY = re.compile(r"^hybrid-manifests/(?:roots|shards)/(?P<digest>[0-9a-f]{64})\.json$")
 
 
 class S3ArtifactError(RuntimeError):
@@ -29,9 +27,7 @@ class S3ExactArtifactStore:
         self._bucket = bucket
         if key_prefix and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}/", key_prefix) is None:
             raise ValueError("S3 artifact key prefix is invalid")
-        if ".." in key_prefix or "//" in key_prefix or any(
-            ord(char) < 32 for char in key_prefix
-        ):
+        if ".." in key_prefix or "//" in key_prefix or any(ord(char) < 32 for char in key_prefix):
             raise ValueError("S3 artifact key prefix is invalid")
         self._key_prefix = key_prefix
         try:
@@ -49,8 +45,9 @@ class S3ExactArtifactStore:
         key_prefix: str = "",
         endpoint_url: str | None = None,
         region_name: str | None = None,
+        allow_endpoint_proxy: bool = False,
     ) -> S3ExactArtifactStore:
-        """Construct lazily so deterministic installations do not import boto3."""
+        """Construct lazily with custom endpoints direct unless proxying is explicit."""
 
         try:
             import boto3  # type: ignore[import-untyped]
@@ -58,7 +55,17 @@ class S3ExactArtifactStore:
             raise RuntimeError(
                 "Hybrid production artifact storage requires the 'production' extra"
             ) from exc
-        client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name)
+        client_kwargs: dict[str, Any] = {
+            "endpoint_url": endpoint_url,
+            "region_name": region_name,
+        }
+        if endpoint_url is not None and not allow_endpoint_proxy:
+            try:
+                from botocore.config import Config  # type: ignore[import-untyped]
+            except ImportError as exc:  # pragma: no cover - boto3 depends on botocore
+                raise RuntimeError("Hybrid S3 client configuration is unavailable") from exc
+            client_kwargs["config"] = Config(proxies={})
+        client = boto3.client("s3", **client_kwargs)
         try:
             return cls(client=client, bucket=bucket, key_prefix=key_prefix)
         except BaseException:
@@ -109,7 +116,11 @@ class S3ExactArtifactStore:
             if existing is None:
                 raise S3ArtifactError("immutable artifact write failed") from exc
             ref = self._ref_from_head(physical_key, existing, expected_media_type=media_type)
-            if ref.sha256 != digest or ref.size_bytes != len(content) or self.get_exact(ref) != content:
+            if (
+                ref.sha256 != digest
+                or ref.size_bytes != len(content)
+                or self.get_exact(ref) != content
+            ):
                 raise S3ArtifactError("immutable artifact create conflict") from exc
             return ref
         version_id = response.get("VersionId")
