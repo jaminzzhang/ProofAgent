@@ -40,6 +40,8 @@ python_version = "3.12"
 strict = true
 
 [tool.pytest.ini_options]
+addopts = "-m 'not hybrid_integration'"
 markers = [
+  "hybrid_integration: opt-in tests against disposable local Hybrid Knowledge services",
   "llm_regression: opt-in tests that call a real LLM provider and are skipped unless explicitly enabled",
 ]

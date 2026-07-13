@@ -41,12 +41,19 @@ from proof_agent.configuration.hybrid_knowledge_repository import (
 )
 from proof_agent.contracts.insurance_rules import (
     ApprovedInsuranceKnowledgeVisibilityScope,
+    ApprovedInsuranceRuleMetadataRevision,
+    InsuranceRuleApplicability,
     InsuranceRulePageBoundingBox,
+    InsuranceRulePrecedence,
     InsuranceRuleUnitLineage,
     InsuranceRuleUnitRevision,
 )
 from proof_agent.contracts.hybrid_documents import BoundingBox
-from proof_agent.contracts.knowledge_index import ExactArtifactRef, KnowledgeIndexGeneration
+from proof_agent.contracts.knowledge_index import (
+    ExactArtifactRef,
+    KnowledgeIndexGeneration,
+    RuleUnitManifestEntry,
+)
 
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -118,6 +125,46 @@ def rule_unit(rule_unit_revision_id: str = "rule_1") -> InsuranceRuleUnitRevisio
             ),
             block_ids=("clause_1",),
         ),
+    )
+
+
+def projection_document(
+    projection_id: str = "projection_1",
+    *,
+    projected_rule_unit: InsuranceRuleUnitRevision | None = None,
+    embedding: tuple[float, ...] = (0.1, 0.2),
+) -> ProjectionDocument:
+    rule = projected_rule_unit or rule_unit()
+    return ProjectionDocument(
+        projection_id=projection_id,
+        rule_unit=rule,
+        manifest_entry=RuleUnitManifestEntry(
+            rule_unit_revision_id=rule.rule_unit_revision_id,
+            document_id=rule.document_id,
+            revision_id=rule.revision_id,
+            structured_build_id=rule.structured_build_id,
+            metadata_revision_id=rule.metadata_revision_id,
+            visibility_revision_id=rule.visibility_scope.revision_id,
+            content_sha256=rule.content_sha256,
+            authority_sha256=rule.authority_sha256,
+            citation_uri=rule.citation_uri,
+            publication_seq_from=1,
+        ),
+        approved_metadata=ApprovedInsuranceRuleMetadataRevision(
+            metadata_revision_id=rule.metadata_revision_id,
+            applicability=InsuranceRuleApplicability(
+                taxonomy_id="taxonomy_1",
+                taxonomy_revision_id="taxonomy_revision_1",
+            ),
+            authority="insurance",
+            precedence=InsuranceRulePrecedence(
+                policy_revision_id="precedence_1",
+                authority_tier="product",
+                order=1,
+            ),
+        ),
+        projection_revision="projection.v1",
+        embedding=embedding,
     )
 
 
@@ -335,6 +382,9 @@ def test_projection_bulk_rejects_bad_dimensions_and_nonfinite_values(
                 ProjectionDocument(
                     projection_id="projection_1",
                     rule_unit=rule_unit(),
+                    manifest_entry=projection_document().manifest_entry,
+                    approved_metadata=projection_document().approved_metadata,
+                    projection_revision="projection.v1",
                     embedding=values,
                 ),
             )
@@ -347,12 +397,11 @@ def test_projection_bulk_rejects_bad_dimensions_and_nonfinite_values(
 
 
 def test_projection_bulk_requires_unique_projection_and_rule_unit_identities() -> None:
-    first = ProjectionDocument(
-        projection_id="projection_1", rule_unit=rule_unit(), embedding=(0.1, 0.2)
-    )
+    first = projection_document()
     valid = ProjectionBulkRequest(
         identity=index_identity(),
         publication_attempt_id="attempt_1",
+        manifest_root_sha256="7" * 64,
         documents=(first,),
     )
     assert ProjectionBulkRequest.model_validate_json(valid.model_dump_json()) == valid
@@ -360,12 +409,14 @@ def test_projection_bulk_requires_unique_projection_and_rule_unit_identities() -
         ProjectionBulkRequest(
             identity=index_identity(),
             publication_attempt_id="attempt_1",
+            manifest_root_sha256="7" * 64,
             documents=(first, first),
         )
     with pytest.raises(ValidationError):
         ProjectionBulkRequest(
             identity=index_identity(),
             publication_attempt_id="attempt_1",
+            manifest_root_sha256="7" * 64,
             documents=(
                 first,
                 first.model_copy(update={"projection_id": "projection_2"}),
@@ -377,12 +428,9 @@ def test_projection_bulk_result_binds_request_and_bounds_partial_acceptance() ->
     request = ProjectionBulkRequest(
         identity=index_identity(),
         publication_attempt_id="attempt_1",
+        manifest_root_sha256="7" * 64,
         documents=(
-            ProjectionDocument(
-                projection_id="projection_1",
-                rule_unit=rule_unit(),
-                embedding=(0.1, 0.2),
-            ),
+            projection_document(),
         ),
     )
     partial = ProjectionBulkResult(

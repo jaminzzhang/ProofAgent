@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import (
@@ -17,11 +17,17 @@ from pydantic import (
 
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
-from proof_agent.contracts.insurance_rules import InsuranceRuleUnitRevision
+from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
+from proof_agent.contracts.insurance_rules import (
+    ApprovedInsuranceRuleMetadataRevision,
+    InsuranceRuleUnitRevision,
+    TaxonomyCondition,
+)
 from proof_agent.contracts.knowledge_index import (
     ExactArtifactRef,
     HybridKnowledgePublicationRecord,
     KnowledgeIndexGeneration,
+    RuleUnitManifestEntry,
 )
 
 if TYPE_CHECKING:
@@ -36,6 +42,19 @@ Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
 FiniteStrictFloat = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+BoundedStr = Annotated[
+    StrictStr,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
+]
+BoundedContent = Annotated[
+    StrictStr,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=50_000),
+]
+BoundedQuery = Annotated[
+    StrictStr,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000),
+]
+BoundedBudget = Annotated[StrictInt, Field(gt=0, le=1_000)]
 
 
 def _require_aware_timestamp(value: datetime) -> datetime:
@@ -63,13 +82,37 @@ class SearchIndexIdentity(_PortModel):
 class ProjectionDocument(_PortModel):
     projection_id: NonBlankStr
     rule_unit: InsuranceRuleUnitRevision
+    manifest_entry: RuleUnitManifestEntry
+    approved_metadata: ApprovedInsuranceRuleMetadataRevision
+    projection_revision: NonBlankStr
     embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_approved_projection(self) -> Self:
+        rule = self.rule_unit
+        entry = self.manifest_entry
+        expected = (
+            entry.rule_unit_revision_id == rule.rule_unit_revision_id
+            and entry.document_id == rule.document_id
+            and entry.revision_id == rule.revision_id
+            and entry.structured_build_id == rule.structured_build_id
+            and entry.metadata_revision_id == rule.metadata_revision_id
+            and entry.visibility_revision_id == rule.visibility_scope.revision_id
+            and entry.content_sha256 == rule.content_sha256
+            and entry.authority_sha256 == rule.authority_sha256
+            and entry.citation_uri == rule.citation_uri
+            and self.approved_metadata.metadata_revision_id == rule.metadata_revision_id
+        )
+        if not expected:
+            raise ValueError("projection must bind one exact approved Rule Unit manifest entry")
+        return self
 
 
 class ProjectionBulkRequest(_PortModel):
     identity: SearchIndexIdentity
     publication_attempt_id: NonBlankStr
-    documents: tuple[ProjectionDocument, ...] = Field(min_length=1)
+    manifest_root_sha256: Sha256
+    documents: tuple[ProjectionDocument, ...] = Field(min_length=1, max_length=1_000)
 
     @model_validator(mode="after")
     def validate_documents(self) -> Self:
@@ -101,20 +144,51 @@ class ProjectionBulkResult(_PortModel):
 
 class HybridSearchRequest(_PortModel):
     identity: SearchIndexIdentity
-    query_text: NonBlankStr
+    manifest_root_sha256: Sha256
+    query_text: BoundedQuery
     query_embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
     source_publication_seq: PositiveInt
-    limit: PositiveInt
+    authorization: InstitutionAuthorizationContext
+    applicability_filters: tuple[TaxonomyCondition, ...] = Field(
+        default=(), max_length=128
+    )
+    as_of_date: Annotated[date, Field(strict=True)]
+    lexical_budget: BoundedBudget
+    dense_budget: BoundedBudget
+    rrf_window: BoundedBudget
+    rrf_pipeline: NonBlankStr
+    limit: Annotated[StrictInt, Field(gt=0, le=200)]
 
     @model_validator(mode="after")
     def validate_query_dimension(self) -> Self:
         if len(self.query_embedding) != self.identity.generation.embedding_dimension:
             raise ValueError("query embedding must match generation dimension")
+        if self.rrf_window > self.lexical_budget + self.dense_budget:
+            raise ValueError("rrf_window must not exceed total lane candidates")
+        if self.limit > self.rrf_window:
+            raise ValueError("limit must not exceed rrf_window")
+        keys = [condition.key for condition in self.applicability_filters]
+        if len(keys) != len(set(keys)):
+            raise ValueError("applicability filter keys must be unique")
         return self
 
 
 class HybridSearchHit(_PortModel):
-    rule_unit_revision_id: NonBlankStr
+    rank: PositiveInt
+    source_id: BoundedStr
+    index_generation_id: BoundedStr
+    index_uuid: BoundedStr
+    projection_id: BoundedStr
+    rule_unit_revision_id: BoundedStr
+    document_id: BoundedStr
+    revision_id: BoundedStr
+    authority_manifest_digest: Sha256
+    metadata_revision_digest: Sha256
+    visibility_revision_digest: Sha256
+    content_sha256: Sha256
+    authority_sha256: Sha256
+    citation_uri: BoundedStr
+    content: BoundedContent
     lexical_score: FiniteStrictFloat | None = None
     vector_score: FiniteStrictFloat | None = None
     fused_score: FiniteStrictFloat
