@@ -45,6 +45,7 @@ from proof_agent.contracts import (
     DraftAgent,
     FoundationKnowledgeSourceValidation,
     EnvironmentModelCredentialReference,
+    ExactArtifactRef,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
@@ -2041,7 +2042,11 @@ class LocalAgentConfigurationStore:
                 provider="hybrid_index",
                 engine_name="private-structured-parser",
                 engine_version=parser_revision,
-                parser_fingerprint_identity="|".join(model_digests),
+                parser_fingerprint_identity=hashlib.sha256(
+                    json.dumps(
+                        list(model_digests), separators=(",", ":"), ensure_ascii=False
+                    ).encode("utf-8")
+                ).hexdigest(),
                 content_hash=content_hash,
                 parsed_text_sha256=hashlib.sha256(b"").hexdigest(),
             )
@@ -2081,14 +2086,37 @@ class LocalAgentConfigurationStore:
             )
             revision_dir = self.knowledge_document_original_path(document).parent
             _write_bytes_atomic(self.knowledge_document_original_path(document), original_bytes)
+            from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+                HybridArtifactBuildRequest,
+                hybrid_build_request_sha256,
+            )
+
+            original_ref = ExactArtifactRef(
+                artifact_uri=self.knowledge_document_original_path(document).resolve().as_uri(),
+                version_id=f"sha256:{content_hash}",
+                sha256=content_hash,
+                size_bytes=len(original_bytes),
+                media_type="application/pdf",
+            )
+            frozen_request = HybridArtifactBuildRequest(
+                job_id=job_id,
+                request_identity=f"{source_id}:{document_id}:{revision_id}",
+                source_id=source_id,
+                document_id=document_id,
+                revision_id=revision_id,
+                original_ref=original_ref,
+                page_numbers=tuple(range(1, page_count + 1)),
+                parser_revision=parser_revision,
+                model_digests=model_digests,
+                configuration_sha256=configuration_sha256,
+                max_auto_retries=job.max_auto_retries,
+            )
+            frozen_request = frozen_request.model_copy(
+                update={"request_sha256": hybrid_build_request_sha256(frozen_request)}
+            )
             _write_json_atomic(
                 revision_dir / "hybrid-build-request.json",
-                {
-                    "page_numbers": list(range(1, page_count + 1)),
-                    "parser_revision": parser_revision,
-                    "model_digests": list(model_digests),
-                    "configuration_sha256": configuration_sha256,
-                },
+                frozen_request.model_dump(mode="json"),
             )
             self._write_knowledge_document(document)
             self._write_knowledge_ingestion_job(job)
@@ -2562,6 +2590,7 @@ class LocalAgentConfigurationStore:
         self,
         *,
         lease_seconds: int = 300,
+        providers: set[str] | None = None,
     ) -> KnowledgeWorkerClaimSelection:
         """Atomically claim the oldest eligible task across both ingestion queues."""
 
@@ -2569,6 +2598,7 @@ class LocalAgentConfigurationStore:
             task_kinds={"quarantine_validation", "artifact_build"},
             source_id=None,
             lease_seconds=lease_seconds,
+            providers=providers,
         )
 
     def add_knowledge_document(
@@ -2798,12 +2828,14 @@ class LocalAgentConfigurationStore:
         task_kinds: set[str],
         source_id: str | None,
         lease_seconds: int,
+        providers: set[str] | None = None,
     ) -> KnowledgeWorkerClaimSelection:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             return self._claim_next_knowledge_worker_task_unlocked(
                 task_kinds=task_kinds,
                 source_id=source_id,
                 lease_seconds=lease_seconds,
+                providers=providers,
             )
 
     def _owned_job_and_document_unlocked(
@@ -2869,11 +2901,14 @@ class LocalAgentConfigurationStore:
         task_kinds: set[str],
         source_id: str | None,
         lease_seconds: int,
+        providers: set[str] | None = None,
     ) -> KnowledgeWorkerClaimSelection:
         now = datetime.now(UTC)
         diagnostics: list[KnowledgeWorkerDiagnostic] = []
         source_limits: dict[str, int] = {}
         for source in self.list_knowledge_sources():
+            if providers is not None and source.provider not in providers:
+                continue
             if source_id is not None and source.source_id != source_id:
                 continue
             if source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE:
@@ -4781,6 +4816,14 @@ def _require_owned_processing_claim(
         raise _invalid_ingestion_transition(
             "Knowledge ingestion task is not owned by the current worker claim."
         )
+    if task.lease_expires_at is None:
+        raise _invalid_ingestion_transition("Knowledge ingestion task claim has no lease expiry.")
+    lease_expires_at = _parse_timestamp(task.lease_expires_at)
+    now = datetime.now(UTC)
+    if lease_expires_at.tzinfo is None or lease_expires_at.utcoffset() is None:
+        raise _invalid_ingestion_transition("Knowledge ingestion task lease is not timezone-aware.")
+    if lease_expires_at <= now:
+        raise _invalid_ingestion_transition("Knowledge ingestion task worker lease has expired.")
 
 
 def _is_ready_for_claim(

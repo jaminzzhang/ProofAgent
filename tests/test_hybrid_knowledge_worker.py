@@ -31,7 +31,6 @@ from proof_agent.capabilities.knowledge.ingestion.contracts import (
     KnowledgeWorkerTaskClaim,
 )
 from proof_agent.capabilities.knowledge.ingestion.worker import (
-    KnowledgeIngestionWorker,
     KnowledgeWorkerTaskOutcome,
     LocalStoreHybridTaskHandler,
     dispatch_claimed_knowledge_task,
@@ -52,6 +51,8 @@ from proof_agent.configuration.hybrid_knowledge_repository import (
     ManualHybridClock,
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.delivery.cli import create_knowledge_ingestion_worker
+from proof_agent.errors import ProofAgentError
 from pypdf import PdfWriter
 
 
@@ -188,6 +189,17 @@ class TimeoutOncePipeline(FakePipeline):
         return super().build(request)
 
 
+class LeaseExpiringPipeline(FakePipeline):
+    def __init__(self, clock: ManualHybridClock) -> None:
+        super().__init__()
+        self.clock = clock
+
+    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+        result = super().build(request)
+        self.clock.advance(seconds=61)
+        return result
+
+
 class FakeLifecycle:
     def __init__(self, request: HybridArtifactBuildRequest) -> None:
         self.request = request
@@ -223,6 +235,13 @@ class FakeLifecycle:
     def load_build_request(self, claim: HybridKnowledgeJobClaim) -> HybridArtifactBuildRequest:
         assert claim == self.claim
         return self.request
+
+    def renew_claim(
+        self, claim: HybridKnowledgeJobClaim, *, lease_seconds: int
+    ) -> HybridKnowledgeJobClaim:
+        return claim.model_copy(
+            update={"lease_expires_at": claim.lease_expires_at + timedelta(seconds=lease_seconds)}
+        )
 
     def commit_artifact_build(
         self, claim: HybridKnowledgeJobClaim, result: HybridArtifactBuildResult
@@ -437,12 +456,36 @@ def test_real_repository_persists_retry_and_recovers_with_next_fence(tmp_path) -
     assert terminal is not None and terminal.fencing_token == 2
 
 
-class NoLocalArtifactBuilder:
-    def purge_stale_temporary_artifacts(self) -> None:
-        pass
+def test_parser_cannot_commit_after_lease_expires_during_call(tmp_path) -> None:
+    original = b"%PDF-1.7\n"
+    request = _build_request(original)
+    clock = ManualHybridClock(NOW)
+    repository = InMemoryHybridKnowledgeRepository(clock=clock)
+    repository.enqueue_artifact_build(
+        HybridKnowledgeJobRequest(
+            job_id=request.job_id,
+            idempotency_key="idempotency_1",
+            request_identity=request.request_identity,
+            request_sha256=request.request_sha256,
+            kind="parse",
+        ),
+        request,
+    )
+    worker = HybridKnowledgeWorker(
+        lifecycle=repository,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
+        pipeline=LeaseExpiringPipeline(clock),
+        worker_id="worker_1",
+        lease_seconds=60,
+    )
 
-    def build_or_reuse(self, **_kwargs):
-        raise AssertionError("Local artifact builder must not run for Hybrid jobs")
+    with pytest.raises(HybridKnowledgeLeaseError):
+        worker.run_once()
+
+    persisted = repository.get("job_1")
+    assert persisted is not None and persisted.state == "LEASED"
+    assert repository.get_build_result("job_1") is None
 
 
 def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -> None:
@@ -466,35 +509,17 @@ def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -
         content=pdf_path.read_bytes(),
         actor="operator",
     )
-    original_store = LocalManagedOriginalStore()
-    lifecycle = LocalStoreHybridWorkerLifecycle(store=store, original_store=original_store)
-    assert isinstance(lifecycle, HybridKnowledgeArtifactLifecycle)
-    hybrid_worker = HybridKnowledgeWorker(
-        lifecycle=lifecycle,
-        original_store=original_store,
-        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
-        pipeline=FakePipeline(),
-        worker_id="unused-for-preclaimed-local-store",
+    lifecycle = LocalStoreHybridWorkerLifecycle(
+        store=store, original_store=LocalManagedOriginalStore()
     )
-    promoter = LocalStoreHybridQuarantinePromoter(
-        store=store,
-        build_config=HybridPrivateParserBuildConfig(
+    assert isinstance(lifecycle, HybridKnowledgeArtifactLifecycle)
+    unified = create_knowledge_ingestion_worker(
+        tmp_path / "config",
+        hybrid_pipeline=FakePipeline(),
+        hybrid_build_config=HybridPrivateParserBuildConfig(
             parser_revision="docling@2.112.0",
             model_digests=("sha256:model",),
             configuration_sha256="b" * 64,
-        ),
-    )
-    handler = LocalStoreHybridTaskHandler(
-        lifecycle=lifecycle,
-        worker=hybrid_worker,
-        quarantine_promoter=promoter,
-    )
-    unified = KnowledgeIngestionWorker(
-        store=store,
-        artifact_builder=NoLocalArtifactBuilder(),
-        hybrid_task_handler=handler,
-        parser=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Local parser must not run for Hybrid scanned PDFs")
         ),
     )
 
@@ -544,7 +569,11 @@ def test_localstore_request_integrity_failure_is_safe_and_releases_claim(tmp_pat
     claimed_job = store.claim_next_knowledge_ingestion_job(source_id="source_1")
     assert claimed_job is not None and claimed_job.job_id == job.job_id
     frozen = store.knowledge_document_original_path(document).parent / "hybrid-build-request.json"
-    frozen.write_text("{}", encoding="utf-8")
+    tampered = HybridArtifactBuildRequest.model_validate_json(frozen.read_bytes()).model_copy(
+        update={"parser_revision": "attacker@latest"}
+    )
+    tampered = tampered.model_copy(update={"request_sha256": hybrid_build_request_sha256(tampered)})
+    frozen.write_text(tampered.model_dump_json(), encoding="utf-8")
     original_store = LocalManagedOriginalStore()
     lifecycle = LocalStoreHybridWorkerLifecycle(store=store, original_store=original_store)
     worker = HybridKnowledgeWorker(
@@ -577,3 +606,39 @@ def test_localstore_request_integrity_failure_is_safe_and_releases_claim(tmp_pat
     assert persisted.error_message == (
         "Hybrid artifact build failed deterministic integrity validation."
     )
+
+
+def test_expired_localstore_lease_cannot_reject_or_promote(tmp_path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="source_1",
+        name="Hybrid",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="source_1",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.7\n",
+        actor="operator",
+    )
+    claimed = store.claim_next_quarantined_knowledge_upload(source_id="source_1")
+    assert claimed is not None and claimed.claim_token is not None
+    expired = claimed.model_copy(update={"lease_expires_at": "2000-01-01T00:00:00Z"})
+    store._write_quarantined_knowledge_upload(expired)
+
+    with pytest.raises(ProofAgentError, match="lease has expired"):
+        store.reject_quarantined_knowledge_upload(
+            source_id="source_1",
+            upload_id=upload.upload_id,
+            claim_token=claimed.claim_token,
+            error_code="PA_HYBRID_INTAKE_006",
+            error_message="safe",
+        )
+
+    persisted = store.get_quarantined_knowledge_upload(
+        source_id="source_1", upload_id=upload.upload_id
+    )
+    assert persisted is not None and persisted.state == "processing"

@@ -117,11 +117,13 @@ class LocalStoreHybridTaskHandler:
             )
         outcome = self._worker.process_claim(claim)
         state = getattr(outcome, "state", None)
-        mapped_state: Literal["ready", "retry_scheduled", "failed"]
+        mapped_state: Literal["ready", "retry_scheduled", "review_required", "failed"]
         if state == "completed":
             mapped_state = "ready"
         elif state == "retry_scheduled":
             mapped_state = "retry_scheduled"
+        elif state == "review_required":
+            mapped_state = "review_required"
         else:
             mapped_state = "failed"
         artifacts = getattr(outcome, "artifacts", None)
@@ -143,7 +145,15 @@ class KnowledgeWorkerTaskOutcome:
     kind: Literal["quarantine_validation", "artifact_build"]
     task_id: str
     source_id: str
-    state: Literal["accepted", "rejected", "ready", "deferred", "retry_scheduled", "failed"]
+    state: Literal[
+        "accepted",
+        "rejected",
+        "ready",
+        "deferred",
+        "retry_scheduled",
+        "review_required",
+        "failed",
+    ]
     error_code: str | None = None
     error_message: str | None = None
     artifact_path: str | None = None
@@ -182,6 +192,11 @@ class KnowledgeIngestionWorker:
         self._artifact_builder.purge_stale_temporary_artifacts()
         selection = self._store.claim_next_knowledge_worker_task(
             lease_seconds=self._lease_seconds,
+            providers=(
+                {"local_index", "hybrid_index"}
+                if self._hybrid_task_handler is not None
+                else {"local_index"}
+            ),
         )
         if selection.task is None:
             if not selection.diagnostics:

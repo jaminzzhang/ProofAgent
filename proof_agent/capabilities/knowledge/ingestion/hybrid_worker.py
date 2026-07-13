@@ -195,9 +195,11 @@ class HybridKnowledgeWorker:
         try:
             request = self._lifecycle.load_build_request(claim)
             self._validate_claim_binding(claim, request)
+            claim = self._lifecycle.renew_claim(claim, lease_seconds=self._lease_seconds)
             original = self._original_store.get_exact(request.original_ref)
             _verify_exact_bytes(request.original_ref, original)
             parsed = self._pipeline.build(request)
+            claim = self._lifecycle.renew_claim(claim, lease_seconds=self._lease_seconds)
             self._validate_parser_output(request, parsed)
             result = self._persist_artifacts(request, original=original, parsed=parsed)
         except (TransientKnowledgeServiceError, TimeoutError, ConnectionError):
@@ -599,32 +601,28 @@ class LocalStoreHybridWorkerLifecycle:
         )
         self._original_store.register(original_ref, original_path)
         try:
-            frozen_request = json.loads(
+            frozen_request = HybridArtifactBuildRequest.model_validate_json(
                 _read_regular_nofollow(original_path.parent / "hybrid-build-request.json")
             )
-            page_numbers = tuple(frozen_request["page_numbers"])
-            parser_revision = frozen_request["parser_revision"]
-            model_digests = tuple(frozen_request["model_digests"])
-            configuration_sha256 = frozen_request["configuration_sha256"]
-        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("Hybrid LocalStore frozen build request is invalid") from exc
-        build_request = HybridArtifactBuildRequest(
-            job_id=job.job_id,
-            request_identity=f"{job.source_id}:{job.document_id}:{job.revision_id}",
-            source_id=job.source_id,
-            document_id=job.document_id,
-            revision_id=job.revision_id,
-            original_ref=original_ref,
-            page_numbers=page_numbers,
-            parser_revision=parser_revision,
-            model_digests=model_digests,
-            configuration_sha256=configuration_sha256,
-            auto_retry_count=job.auto_retry_count,
-            max_auto_retries=job.max_auto_retries,
-        )
-        build_request = build_request.model_copy(
-            update={"request_sha256": hybrid_build_request_sha256(build_request)}
-        )
+        expected_identity = f"{job.source_id}:{job.document_id}:{job.revision_id}"
+        if (
+            frozen_request.job_id != job.job_id
+            or frozen_request.request_identity != expected_identity
+            or frozen_request.source_id != job.source_id
+            or frozen_request.document_id != job.document_id
+            or frozen_request.revision_id != job.revision_id
+            or frozen_request.original_ref != original_ref
+            or frozen_request.parser_revision != job.artifact_build_spec.engine_version
+            or _model_digests_identity(frozen_request.model_digests)
+            != job.artifact_build_spec.parser_fingerprint_identity
+            or frozen_request.configuration_sha256 != job.ingestion_config_fingerprint
+            or frozen_request.max_auto_retries != job.max_auto_retries
+            or hybrid_build_request_sha256(frozen_request) != frozen_request.request_sha256
+        ):
+            raise ValueError("Hybrid LocalStore frozen build request does not match its job")
+        build_request = frozen_request.model_copy(update={"auto_retry_count": job.auto_retry_count})
         scheduler_request = HybridKnowledgeJobRequest(
             job_id=job.job_id,
             idempotency_key=job.job_id,
@@ -663,12 +661,50 @@ class LocalStoreHybridWorkerLifecycle:
         _token, request = self._require_owned(claim)
         return request
 
+    def renew_claim(
+        self, claim: HybridKnowledgeJobClaim, *, lease_seconds: int
+    ) -> HybridKnowledgeJobClaim:
+        token, request = self._require_owned(claim)
+        renewed = self._store.renew_knowledge_ingestion_job_claim(
+            source_id=request.source_id,
+            job_id=request.job_id,
+            claim_token=token,
+            lease_seconds=lease_seconds,
+        )
+        if renewed.lease_expires_at is None:
+            raise ValueError("renewed Hybrid LocalStore claim has no lease expiry")
+        return claim.model_copy(
+            update={"lease_expires_at": datetime.fromisoformat(renewed.lease_expires_at)}
+        )
+
     def commit_artifact_build(
         self, claim: HybridKnowledgeJobClaim, result: HybridArtifactBuildResult
     ) -> object:
         token, request = self._require_owned(claim)
-        if result.request_identity != request.request_identity:
-            raise ValueError("Hybrid result does not match the owned LocalStore request")
+        if (
+            result.job_id != request.job_id
+            or result.request_identity != request.request_identity
+            or result.source_id != request.source_id
+            or result.document_id != request.document_id
+            or result.revision_id != request.revision_id
+            or result.original_ref.sha256 != request.original_ref.sha256
+            or result.original_ref.size_bytes != request.original_ref.size_bytes
+            or result.original_ref.media_type != "application/pdf"
+            or not result.vendor_refs
+            or result.canonical_ref.media_type != "application/json"
+            or result.preview_ref.media_type != "text/markdown"
+            or result.build_identity_ref.media_type != "application/json"
+        ):
+            raise ValueError("Hybrid result does not match the full owned LocalStore request")
+        for ref in (
+            result.original_ref,
+            *(vendor.ref for vendor in result.vendor_refs),
+            result.canonical_ref,
+            result.preview_ref,
+            result.build_identity_ref,
+        ):
+            if ref.version_id != f"sha256:{ref.sha256}" or ref.size_bytes <= 0:
+                raise ValueError("Hybrid result contains an invalid exact artifact reference")
         completed = self._store.complete_hybrid_knowledge_ingestion_job(
             source_id=request.source_id,
             job_id=request.job_id,
@@ -756,3 +792,9 @@ def _read_regular_nofollow(path: Path) -> bytes:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+
+
+def _model_digests_identity(model_digests: tuple[str, ...]) -> str:
+    return hashlib.sha256(
+        json.dumps(list(model_digests), separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()

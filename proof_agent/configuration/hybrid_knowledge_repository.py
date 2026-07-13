@@ -185,6 +185,16 @@ class InMemoryHybridKnowledgeRepository:
                 update={"auto_retry_count": self._jobs[claim.job_id].auto_retry_count}
             )
 
+    def renew_claim(
+        self, claim: HybridKnowledgeJobClaim, *, lease_seconds: int
+    ) -> HybridKnowledgeJobClaim:
+        return self.renew(
+            job_id=claim.job_id,
+            worker_id=claim.worker_id,
+            fencing_token=claim.fencing_token,
+            lease_seconds=lease_seconds,
+        )
+
     def commit_artifact_build(
         self,
         claim: HybridKnowledgeJobClaim,

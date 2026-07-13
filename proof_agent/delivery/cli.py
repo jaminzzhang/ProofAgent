@@ -40,6 +40,10 @@ if TYPE_CHECKING:
         KnowledgeWorkerResult,
         KnowledgeWorkerTaskOutcome,
     )
+    from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+        HybridParserPipeline,
+        HybridPrivateParserBuildConfig,
+    )
 
 app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
@@ -686,7 +690,7 @@ def knowledge_worker(
 
     try:
         config_path = Path(config_dir)
-        worker = _create_knowledge_ingestion_worker(config_path)
+        worker = create_knowledge_ingestion_worker(config_path)
         if once:
             result = worker.run_once()
         else:
@@ -714,10 +718,12 @@ def knowledge_worker(
     _echo_knowledge_worker_result(result)
 
 
-def _create_knowledge_ingestion_worker(
+def create_knowledge_ingestion_worker(
     config_path: Path,
     *,
     hybrid_task_handler: HybridClaimedTaskHandler | None = None,
+    hybrid_pipeline: HybridParserPipeline | None = None,
+    hybrid_build_config: HybridPrivateParserBuildConfig | None = None,
 ) -> KnowledgeIngestionWorker:
     """Compose provider handlers; fail before claims if Hybrid dependencies are absent."""
 
@@ -728,15 +734,50 @@ def _create_knowledge_ingestion_worker(
     from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
     store = LocalAgentConfigurationStore(config_path)
-    has_hybrid_source = any(
-        source.provider == "hybrid_index" and source.lifecycle_state.value == "ACTIVE"
-        for source in store.list_knowledge_sources()
-    )
-    if has_hybrid_source and hybrid_task_handler is None:
+    if (hybrid_pipeline is None) != (hybrid_build_config is None):
         raise ProofAgentError(
             "PA_HYBRID_WORKER_001",
-            "Hybrid Index sources require configured private parser and artifact dependencies.",
-            "Configure the guarded Hybrid worker composition before starting this worker.",
+            "Hybrid worker parser pipeline and approved build identity must be configured together.",
+            "Provide both guarded private parser dependencies and exact approved revisions.",
+        )
+    if hybrid_pipeline is not None and hybrid_build_config is not None:
+        if hybrid_task_handler is not None:
+            raise ProofAgentError(
+                "PA_HYBRID_WORKER_001",
+                "Hybrid worker composition is ambiguous.",
+                "Provide either a complete handler or guarded parser composition inputs.",
+            )
+        from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+            HybridKnowledgeWorker,
+            LocalManagedOriginalStore,
+            LocalStoreHybridQuarantinePromoter,
+            LocalStoreHybridWorkerLifecycle,
+        )
+        from proof_agent.capabilities.knowledge.ingestion.worker import (
+            LocalStoreHybridTaskHandler,
+        )
+        from proof_agent.configuration.hybrid_knowledge_repository import (
+            FileSystemKnowledgeArtifactStore,
+        )
+
+        original_store = LocalManagedOriginalStore()
+        lifecycle = LocalStoreHybridWorkerLifecycle(
+            store=store,
+            original_store=original_store,
+        )
+        hybrid_task_handler = LocalStoreHybridTaskHandler(
+            lifecycle=lifecycle,
+            worker=HybridKnowledgeWorker(
+                lifecycle=lifecycle,
+                original_store=original_store,
+                artifact_store=FileSystemKnowledgeArtifactStore(config_path / "hybrid_artifacts"),
+                pipeline=hybrid_pipeline,
+                worker_id="local-store-hybrid-worker",
+            ),
+            quarantine_promoter=LocalStoreHybridQuarantinePromoter(
+                store=store,
+                build_config=hybrid_build_config,
+            ),
         )
     return KnowledgeIngestionWorker(
         store=store,
@@ -1185,6 +1226,7 @@ def _knowledge_worker_outcome_message(outcome: KnowledgeWorkerTaskOutcome) -> st
         ("quarantine_validation", "rejected"): "knowledge upload rejected",
         ("artifact_build", "ready"): "knowledge ingestion job ready",
         ("artifact_build", "retry_scheduled"): "knowledge ingestion job retry scheduled",
+        ("artifact_build", "review_required"): "knowledge ingestion job review required",
         ("artifact_build", "deferred"): "knowledge ingestion job deferred",
         ("artifact_build", "failed"): "knowledge ingestion job failed",
     }

@@ -354,6 +354,10 @@ class HybridKnowledgeArtifactLifecycle(Protocol):
 
     def load_build_request(self, claim: HybridKnowledgeJobClaim) -> HybridArtifactBuildRequest: ...
 
+    def renew_claim(
+        self, claim: HybridKnowledgeJobClaim, *, lease_seconds: int
+    ) -> HybridKnowledgeJobClaim: ...
+
     def commit_artifact_build(
         self,
         claim: HybridKnowledgeJobClaim,
