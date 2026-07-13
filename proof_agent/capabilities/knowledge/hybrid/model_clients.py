@@ -768,15 +768,16 @@ class PrivateKnowledgeModelWorkSchedulerClient:
             )
         ):
             raise ValueError("private Knowledge scheduler bounds must be positive")
-        if close_timeout_seconds <= 0:
-            raise ValueError("private Knowledge scheduler close timeout must be positive")
+        _validate_scheduler_close_timeout(close_timeout_seconds)
         if not 0 < online_reserved_leases < active_lease_limit:
             raise ValueError("online lease reserve must be positive and below active lease limit")
         self._active_lease_limit = active_lease_limit
         self._offline_lease_limit = active_lease_limit - online_reserved_leases
         self._active_admissions = 0
         self._offline_admissions = 0
-        self._pending_lease_cleanups: dict[tuple[str, str], SchedulerLease] = {}
+        self._pending_lease_cleanups: dict[
+            tuple[str, str], tuple[SchedulerLease, _LeaseAdmission]
+        ] = {}
         self._cleanup_in_flight: set[tuple[str, str]] = set()
         self._close_timeout_seconds = close_timeout_seconds
         self._accepting = True
@@ -1083,11 +1084,12 @@ class PrivateKnowledgeModelWorkSchedulerClient:
     ) -> None:
         cleanup_key = (lease.work_id, lease.lease_token)
         with self._state:
-            self._pending_lease_cleanups.setdefault(cleanup_key, lease)
+            if cleanup_key not in self._pending_lease_cleanups:
+                admission.retain()
+                self._pending_lease_cleanups[cleanup_key] = (lease, admission)
             if cleanup_key in self._cleanup_in_flight:
                 return
             self._cleanup_in_flight.add(cleanup_key)
-        admission.retain()
         try:
             future = self._cancel_executor.submit(
                 self._transport.cancel,
@@ -1101,14 +1103,12 @@ class PrivateKnowledgeModelWorkSchedulerClient:
             with self._state:
                 self._cleanup_in_flight.discard(cleanup_key)
                 self._state.notify_all()
-            admission.release()
             primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
             return
         future.add_done_callback(
             partial(
                 self._finish_cancel,
                 primary=primary,
-                admission=admission,
                 cleanup_key=cleanup_key,
             )
         )
@@ -1119,7 +1119,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         except FutureTimeoutError:
             primary.add_note("scheduler lease cleanup did not stop within 250 ms")
         except Exception:
-            # The completion callback records the cleanup failure and releases admission.
+            # The completion callback records failure; pending cleanup retains admission.
             return
 
     def _finish_cancel(
@@ -1127,7 +1127,6 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         completed: Future[None],
         *,
         primary: BaseException,
-        admission: _LeaseAdmission,
         cleanup_key: tuple[str, str],
     ) -> None:
         succeeded = False
@@ -1138,18 +1137,22 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         except Exception as cleanup_error:
             primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
         finally:
+            released_admission: _LeaseAdmission | None = None
             with self._state:
                 self._cleanup_in_flight.discard(cleanup_key)
                 if succeeded:
-                    self._pending_lease_cleanups.pop(cleanup_key, None)
+                    removed = self._pending_lease_cleanups.pop(cleanup_key, None)
+                    if removed is not None:
+                        released_admission = removed[1]
                 self._state.notify_all()
-            admission.release()
+            if released_admission is not None:
+                released_admission.release()
 
     def _retry_pending_lease_cleanups(self, *, deadline: float) -> None:
         with self._state:
             candidates = tuple(
-                (key, lease)
-                for key, lease in self._pending_lease_cleanups.items()
+                (key, record[0])
+                for key, record in self._pending_lease_cleanups.items()
                 if key not in self._cleanup_in_flight
             )
         for cleanup_key, lease in candidates:
@@ -1189,11 +1192,16 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         except Exception:
             pass
         finally:
+            released_admission: _LeaseAdmission | None = None
             with self._state:
                 self._cleanup_in_flight.discard(cleanup_key)
                 if succeeded:
-                    self._pending_lease_cleanups.pop(cleanup_key, None)
+                    removed = self._pending_lease_cleanups.pop(cleanup_key, None)
+                    if removed is not None:
+                        released_admission = removed[1]
                 self._state.notify_all()
+            if released_admission is not None:
+                released_admission.release()
 
     def close(self) -> None:
         with self._state:
@@ -1299,6 +1307,18 @@ def _validate_timeout(timeout_seconds: float) -> None:
         or not 0 < timeout_seconds <= MAX_MODEL_TIMEOUT_SECONDS
     ):
         raise ValueError(f"timeout_seconds must be between 0 and {MAX_MODEL_TIMEOUT_SECONDS:g}")
+
+
+def _validate_scheduler_close_timeout(close_timeout_seconds: float) -> None:
+    if (
+        isinstance(close_timeout_seconds, bool)
+        or not isinstance(close_timeout_seconds, (int, float))
+        or not math.isfinite(close_timeout_seconds)
+        or not 0 < close_timeout_seconds <= MAX_MODEL_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            f"close_timeout_seconds must be between 0 and {MAX_MODEL_TIMEOUT_SECONDS:g}"
+        )
 
 
 def _raise_mapped_httpx_failure(exc: Exception) -> None:

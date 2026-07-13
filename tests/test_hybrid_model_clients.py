@@ -335,6 +335,18 @@ def test_remote_scheduler_timeout_does_not_start_service_transport() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "value",
+    (True, False, "1", None, float("nan"), float("inf"), float("-inf"), 0, -1, 601),
+)
+def test_scheduler_close_timeout_requires_bounded_finite_number(value) -> None:
+    with pytest.raises(ValueError, match="close_timeout_seconds"):
+        remote_scheduler(
+            RecordingSchedulerTransport(),
+            close_timeout_seconds=value,
+        )
+
+
 def test_scheduler_cancel_cleanup_failure_preserves_primary_timeout() -> None:
     class CleanupFailureTransport:
         def acquire(self, **kwargs) -> SchedulerLease:
@@ -451,6 +463,7 @@ def test_close_keeps_transport_and_cancel_lane_open_for_late_acquired_lease() ->
             super().__init__()
             self.closed = False
             self.active_leases: set[str] = set()
+            self.cancel_attempts = 0
 
         def acquire(self, **kwargs):
             del kwargs
@@ -466,8 +479,11 @@ def test_close_keeps_transport_and_cancel_lane_open_for_late_acquired_lease() ->
         def cancel(self, _endpoint, _namespace, lease, **kwargs):
             del kwargs
             assert self.closed is False
+            self.cancel_attempts += 1
             cancel_started.set()
-            assert release_cancel.wait(timeout=2)
+            if self.cancel_attempts == 1:
+                assert release_cancel.wait(timeout=2)
+                raise ConnectionError("first late cancel failed")
             self.active_leases.remove(lease.work_id)
 
         def close(self):
@@ -503,6 +519,8 @@ def test_close_keeps_transport_and_cancel_lane_open_for_late_acquired_lease() ->
 
     assert transport.active_leases == set()
     assert transport.closed is True
+    assert transport.cancel_attempts == 2
+    assert scheduler._active_admissions == 0
 
 
 def test_close_timeout_preserves_failed_lease_cleanup_for_retry() -> None:
@@ -567,6 +585,92 @@ def test_close_timeout_preserves_failed_lease_cleanup_for_retry() -> None:
     assert transport.active_leases == set()
     assert transport.closed is True
     assert transport.cancel_attempts >= 2
+
+
+def test_failed_cleanup_retains_online_and_offline_admission_until_retry_succeeds() -> None:
+    allow_cancel = Event()
+
+    class CapacityTransport(RecordingSchedulerTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sequence = 0
+            self.active_leases: set[str] = set()
+            self.cancel_attempts = 0
+
+        def acquire(self, **kwargs):
+            del kwargs
+            self.sequence += 1
+            work_id = f"work-capacity-{self.sequence}"
+            self.active_leases.add(work_id)
+            return SchedulerLease(
+                work_id=work_id,
+                lease_token=f"lease-capacity-{self.sequence}",
+                queue_time_ms=0.0,
+            )
+
+        def cancel(self, _endpoint, _namespace, lease, **kwargs):
+            del kwargs
+            self.cancel_attempts += 1
+            if not allow_cancel.is_set():
+                raise ConnectionError("cancel unavailable")
+            self.active_leases.remove(lease.work_id)
+
+        def close(self):
+            assert self.active_leases == set()
+
+    transport = CapacityTransport()
+    scheduler = remote_scheduler(
+        transport,
+        active_lease_limit=2,
+        online_reserved_leases=1,
+        close_timeout_seconds=1.0,
+    )
+
+    def fail(_remaining, _cancellation):
+        raise ValueError("invalid result")
+
+    with pytest.raises(ValueError, match="invalid result"):
+        scheduler.submit_and_wait(
+            kind="ocr",
+            priority="offline",
+            timeout_seconds=2.0,
+            operation=fail,
+        )
+    assert scheduler._active_admissions == 1
+    assert scheduler._offline_admissions == 1
+    with pytest.raises(RuntimeError, match="offline lease admission is saturated"):
+        scheduler.submit_and_wait(
+            kind="ocr",
+            priority="offline",
+            timeout_seconds=1.0,
+            operation=fail,
+        )
+
+    with pytest.raises(ValueError, match="invalid result"):
+        scheduler.submit_and_wait(
+            kind="rerank",
+            priority="online",
+            timeout_seconds=2.0,
+            operation=fail,
+        )
+    assert scheduler._active_admissions == 2
+    assert scheduler._offline_admissions == 1
+    with pytest.raises(RuntimeError, match="active lease admission is saturated"):
+        scheduler.submit_and_wait(
+            kind="rerank",
+            priority="online",
+            timeout_seconds=1.0,
+            operation=fail,
+        )
+
+    allow_cancel.set()
+    scheduler.close()
+    scheduler.close()
+
+    assert transport.active_leases == set()
+    assert transport.cancel_attempts == 4
+    assert scheduler._active_admissions == 0
+    assert scheduler._offline_admissions == 0
 
 
 def test_test_only_in_memory_scheduler_claims_online_before_offline() -> None:
