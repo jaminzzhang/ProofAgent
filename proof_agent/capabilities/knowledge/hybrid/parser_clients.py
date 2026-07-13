@@ -82,6 +82,10 @@ class ParserServiceResponse(_ParserServiceModel):
             raise ValueError("parser response model_digests must match the exact request")
         if self.attestation.configuration_sha256 != self.request.configuration_sha256:
             raise ValueError("parser response configuration_sha256 must match the exact request")
+        if self.vendor_json.get("source_sha256") != self.attestation.original_ref.sha256:
+            raise ValueError("vendor JSON source_sha256 must match the service attestation")
+        if _vendor_page_numbers(self.adapter, self.vendor_json) != self.attestation.page_numbers:
+            raise ValueError("vendor JSON pages must exactly match the service attestation")
         return self
 
     @property
@@ -112,34 +116,28 @@ class _PrivateParserClient:
 
     def parse(self, request: ParserServiceRequest) -> ParserServiceResponse:
         attestation = self._transport.parse(request, follow_redirects=False)
-        response = ParserServiceResponse(
+        return ParserServiceResponse(
             adapter=self.adapter,
             request=request,
             attestation=attestation,
         )
-        self._validate_payload_pages(response)
-        return response
 
-    def _validate_payload_pages(self, response: ParserServiceResponse) -> None:
-        payload = response.vendor_json
-        if payload.get("source_sha256") != response.attestation.original_ref.sha256:
-            raise ValueError("vendor JSON source_sha256 must match the service attestation")
-        if self.adapter == "docling":
-            pages = payload.get("pages")
-            if not isinstance(pages, list):
-                raise ValueError("Docling response must contain a pages array")
-            returned_pages = tuple(_page_number(page) for page in pages)
-        else:
-            page = payload.get("page")
-            pages = payload.get("pages")
-            if isinstance(page, dict):
-                returned_pages = (_page_number(page),)
-            elif isinstance(pages, list):
-                returned_pages = tuple(_page_number(item) for item in pages)
-            else:
-                raise ValueError("Paddle response must contain a page object or pages array")
-        if returned_pages != response.attestation.page_numbers:
-            raise ValueError("vendor JSON pages must exactly match the service attestation")
+
+def _vendor_page_numbers(
+    adapter: Literal["docling", "paddle"], payload: dict[str, JsonValue]
+) -> tuple[int, ...]:
+    if adapter == "docling":
+        pages = payload.get("pages")
+        if not isinstance(pages, list):
+            raise ValueError("Docling response must contain a pages array")
+        return tuple(_page_number(page) for page in pages)
+    page = payload.get("page")
+    pages = payload.get("pages")
+    if isinstance(page, dict):
+        return (_page_number(page),)
+    if isinstance(pages, list):
+        return tuple(_page_number(item) for item in pages)
+    raise ValueError("Paddle response must contain a page object or pages array")
 
 
 def _page_number(value: JsonValue) -> int:

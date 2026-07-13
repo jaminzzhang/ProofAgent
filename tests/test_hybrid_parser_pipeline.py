@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from proof_agent.capabilities.knowledge.hybrid.canonicalizer import (
+    CanonicalParserPage,
     canonicalize_docling,
     canonicalize_paddle_page,
 )
@@ -195,6 +196,34 @@ def test_merge_build_identity_covers_decisions_and_canonical_result_not_config_l
     assert first.artifact.build_identity.configuration_sha256 != first.artifact_sha256
 
 
+def test_paddle_page_and_merge_reject_inconsistent_source_build_provenance() -> None:
+    docling = canonicalize_docling(parser_response("docling-simple.json"), build=build_id())
+    paddle_page = canonicalize_paddle_page(
+        parser_response("paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64),
+        build=build_id(adapter="paddle", configuration_sha256="c" * 64),
+    )
+    invalid_payload = paddle_page.model_dump()
+    invalid_payload["original_sha256"] = "d" * 64
+    with pytest.raises(ValidationError, match="build identity source_sha256"):
+        CanonicalParserPage.model_validate(invalid_payload)
+
+    bypassed = paddle_page.model_copy(update={"original_sha256": "d" * 64})
+    with pytest.raises(ValueError, match="Paddle page original SHA"):
+        merge_selected_results(
+            docling,
+            (bypassed,),
+            decisions=(
+                MergeSelection(
+                    page_number=1,
+                    boundary_kind="block",
+                    docling_id="paragraph-1",
+                    paddle_id="ocr-paragraph-1",
+                    reason="native text missing",
+                ),
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("fixture", "outcome"),
     [
@@ -326,6 +355,18 @@ def test_canonicalizer_rejects_build_not_bound_to_service_attestation() -> None:
     mislabeled = build_id().model_copy(update={"parser_revision": "invented-revision"})
     with pytest.raises(ValueError, match="service attestation"):
         canonicalize_docling(response, build=mislabeled)
+
+
+def test_canonicalizer_direct_call_rejects_vendor_page_outside_attestation() -> None:
+    response = parser_response("docling-simple.json")
+    payload = load_fixture("docling-simple.json")
+    payload["pages"][0]["page_number"] = 2
+    bypassed = response.model_copy(
+        update={"attestation": response.attestation.model_copy(update={"vendor_json": payload})}
+    )
+
+    with pytest.raises(ValidationError, match="vendor JSON pages"):
+        canonicalize_docling(bypassed, build=build_id())
 
 
 def test_document_quality_reviews_unresolved_cross_page_table_continuation() -> None:

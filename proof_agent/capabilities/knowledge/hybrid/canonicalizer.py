@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import ConfigDict, StrictStr, StringConstraints
+from pydantic import ConfigDict, StrictStr, StringConstraints, model_validator
 
 from proof_agent.capabilities.knowledge.hybrid.parser_clients import ParserServiceResponse
 from proof_agent.contracts._base import FrozenModel
@@ -39,6 +39,12 @@ class CanonicalParserPage(FrozenModel):
     build_identity: StructuredArtifactBuildIdentity
     page: StructuredPage
     warnings: tuple[ParserWarning, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_source_provenance(self) -> Self:
+        if self.original_sha256 != self.build_identity.source_sha256:
+            raise ValueError("original_sha256 must match build identity source_sha256")
+        return self
 
 
 def canonicalize_docling(

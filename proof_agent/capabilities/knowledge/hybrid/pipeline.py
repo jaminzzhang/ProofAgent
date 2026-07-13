@@ -230,6 +230,8 @@ def _validate_paddle_identity(
     paddle_pages: tuple[CanonicalParserPage, ...],
 ) -> None:
     for candidate in paddle_pages:
+        if candidate.original_sha256 != candidate.build_identity.source_sha256:
+            raise ValueError("Paddle page original SHA must match its build identity")
         if (
             candidate.document_id != docling.document_id
             or candidate.revision_id != docling.revision_id
