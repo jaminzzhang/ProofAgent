@@ -317,9 +317,39 @@ def _structural_revisions_before(source: IO[bytes], before: int) -> list[tuple[i
             revision_end = source.read(eof_end - previous_startxref)
             match = _PDF_TERMINAL_REGION.fullmatch(revision_end)
             if match is not None:
-                revisions.append((eof_end, int(match.group("offset"))))
+                xref_offset = int(match.group("offset"))
+                if not _is_structural_xref_candidate(
+                    source,
+                    xref_offset=xref_offset,
+                    startxref_offset=previous_startxref,
+                ):
+                    continue
+                revisions.append((eof_end, xref_offset))
                 break
     return revisions
+
+
+def _is_structural_xref_candidate(
+    source: IO[bytes],
+    *,
+    xref_offset: int,
+    startxref_offset: int,
+) -> bool:
+    structure_size = startxref_offset - xref_offset
+    if xref_offset <= 0 or structure_size <= 0 or structure_size > _PDF_REVISION_STRUCTURE_BYTES:
+        return False
+    source.seek(xref_offset)
+    structure = source.read(structure_size)
+    if structure.startswith(b"xref"):
+        return re.search(rb"\btrailer\b", structure) is not None
+    return (
+        re.match(
+            rb"[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+obj\b",
+            structure,
+        )
+        is not None
+        and re.search(rb"/Type[\x00\x09\x0a\x0c\x0d\x20]+/XRef\b", structure) is not None
+    )
 
 
 def _marker_offsets(source: IO[bytes], marker: bytes, *, before: int) -> list[int]:

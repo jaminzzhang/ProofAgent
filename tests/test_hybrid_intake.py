@@ -99,6 +99,18 @@ def _write_image_only_pdf(path: Path) -> Path:
     return path
 
 
+def _write_pdf_with_revision_markers_in_content(path: Path) -> Path:
+    pypdf, generic = _modules()
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    content = generic.DecodedStreamObject()
+    content.set_data(b"% benign content marker\nstartxref\n0\n%%EOF\n")
+    page[generic.NameObject("/Contents")] = writer._add_object(content)
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
 def _write_unsafe_pdf(path: Path, *, embedded: bool) -> Path:
     pypdf, generic = _modules()
     writer = pypdf.PdfWriter()
@@ -313,6 +325,16 @@ def test_preflight_rejects_payload_with_replayed_original_startxref(tmp_path: Pa
 def test_preflight_accepts_structurally_valid_incremental_revision(tmp_path: Path) -> None:
     result = preflight_hybrid_pdf(
         _write_incremental_pdf(tmp_path / "incremental.pdf"),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+
+
+def test_preflight_ignores_revision_markers_inside_benign_content_stream(
+    tmp_path: Path,
+) -> None:
+    result = preflight_hybrid_pdf(
+        _write_pdf_with_revision_markers_in_content(tmp_path / "content-markers.pdf"),
         limits=HybridIntakeLimits(),
     )
     assert result.page_count == 1
