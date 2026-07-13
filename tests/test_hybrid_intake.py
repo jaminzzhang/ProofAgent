@@ -124,6 +124,72 @@ def _write_compressed_content_pdf(path: Path, content_bytes: bytes) -> Path:
     return path
 
 
+def _write_nested_form_pdf(path: Path, form_content: bytes) -> Path:
+    pypdf, generic = _modules()
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+
+    inner_decoded = generic.DecodedStreamObject()
+    inner_decoded.set_data(form_content)
+    inner = inner_decoded.flate_encode()
+    inner.update(
+        {
+            generic.NameObject("/Type"): generic.NameObject("/XObject"),
+            generic.NameObject("/Subtype"): generic.NameObject("/Form"),
+            generic.NameObject("/BBox"): generic.ArrayObject(
+                [
+                    generic.NumberObject(0),
+                    generic.NumberObject(0),
+                    generic.NumberObject(100),
+                    generic.NumberObject(100),
+                ]
+            ),
+            generic.NameObject("/Resources"): generic.DictionaryObject(),
+        }
+    )
+    inner_ref = writer._add_object(inner)
+
+    outer_decoded = generic.DecodedStreamObject()
+    outer_decoded.set_data(b"/Inner Do")
+    outer = outer_decoded.flate_encode()
+    outer.update(
+        {
+            generic.NameObject("/Type"): generic.NameObject("/XObject"),
+            generic.NameObject("/Subtype"): generic.NameObject("/Form"),
+            generic.NameObject("/BBox"): generic.ArrayObject(
+                [
+                    generic.NumberObject(0),
+                    generic.NumberObject(0),
+                    generic.NumberObject(100),
+                    generic.NumberObject(100),
+                ]
+            ),
+            generic.NameObject("/Resources"): generic.DictionaryObject(
+                {
+                    generic.NameObject("/XObject"): generic.DictionaryObject(
+                        {generic.NameObject("/Inner"): inner_ref}
+                    )
+                }
+            ),
+        }
+    )
+    outer_ref = writer._add_object(outer)
+
+    page_content = generic.DecodedStreamObject()
+    page_content.set_data(b"/Outer Do")
+    page[generic.NameObject("/Contents")] = writer._add_object(page_content)
+    page[generic.NameObject("/Resources")] = generic.DictionaryObject(
+        {
+            generic.NameObject("/XObject"): generic.DictionaryObject(
+                {generic.NameObject("/Outer"): outer_ref}
+            )
+        }
+    )
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
 def _write_unsafe_pdf(path: Path, *, embedded: bool) -> Path:
     pypdf, generic = _modules()
     writer = pypdf.PdfWriter()
@@ -453,6 +519,42 @@ def test_preflight_rejects_flate_bomb_before_real_pypdf_text_extraction(
     monkeypatch.setattr(page_module.PageObject, "extract_text", track_extract_text)
     path = _write_compressed_content_pdf(
         tmp_path / "compressed-bomb.pdf",
+        b"%" + b"A" * (2 * 1024 * 1024 + 1),
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert extraction_called is False
+
+
+def test_preflight_accepts_benign_nested_flate_form_xobjects(tmp_path: Path) -> None:
+    result = preflight_hybrid_pdf(
+        _write_nested_form_pdf(
+            tmp_path / "benign-forms.pdf",
+            b"% bounded benign Form XObject content\n",
+        ),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+
+
+def test_preflight_rejects_nested_form_bomb_before_real_pypdf_text_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_module = import_module("pypdf._page")
+    original_extract_text = page_module.PageObject.extract_text
+    extraction_called = False
+
+    def track_extract_text(self: object, *args: object, **kwargs: object) -> str:
+        nonlocal extraction_called
+        extraction_called = True
+        return original_extract_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(page_module.PageObject, "extract_text", track_extract_text)
+    path = _write_nested_form_pdf(
+        tmp_path / "form-bomb.pdf",
         b"%" + b"A" * (2 * 1024 * 1024 + 1),
     )
 
