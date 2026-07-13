@@ -147,6 +147,9 @@ class RecoveryProjectionCleanupRequired(RuntimeError):
         super().__init__("failed rebuild projection requires authority cleanup")
 
 
+_REBUILD_ORPHAN_IDENTITY_ATTRIBUTE = "_proofagent_rebuild_orphan_identity"
+
+
 class RecoveryIndex(Protocol):
     def delete_attempt_projection(self, orphan: OrphanProjection) -> None: ...
 
@@ -169,6 +172,8 @@ class RecoveryIndex(Protocol):
         root: RuleUnitManifestRoot,
         documents: tuple[ProjectionDocument, ...],
     ) -> ProjectionValidationEvidence: ...
+
+    def discard_rebuild_projection(self, identity: SearchIndexIdentity) -> bool: ...
 
 
 class RecoveryProjectionValidationIndex(HybridProjectionPublicationPort, Protocol):
@@ -305,6 +310,7 @@ class HybridRecoveryService:
         authority = self.repository.load_generation_rebuild(source_id, generation_id)
         root, shard_contents, documents = self._verified_inputs(authority)
         operation_id = self.repository.begin_generation_rebuild(authority)
+        fresh_identity: SearchIndexIdentity | None = None
         try:
             rebuilt_identity, evidence = self.index.rebuild_generation(
                 authority,
@@ -315,6 +321,7 @@ class HybridRecoveryService:
             )
             if rebuilt_identity.index_uuid == authority.current_identity.index_uuid:
                 raise PublicationConflict("REBUILD_INDEX_NOT_FRESH")
+            fresh_identity = rebuilt_identity
             if (
                 rebuilt_identity.generation != authority.current_identity.generation
                 or evidence.publication_attempt_id != operation_id
@@ -337,15 +344,27 @@ class HybridRecoveryService:
             return attestation
         except BaseException as exc:
             code = exc.code if isinstance(exc, PublicationConflict) else "REBUILD_FAILED"
-            try:
-                if isinstance(exc, RecoveryProjectionCleanupRequired):
-                    self.repository.fail_recovery_operation(
-                        operation_id,
-                        code,
-                        exc.identity,
-                    )
+            orphan_identity: SearchIndexIdentity | None = None
+            marked_identity = getattr(exc, _REBUILD_ORPHAN_IDENTITY_ATTRIBUTE, None)
+            if isinstance(marked_identity, SearchIndexIdentity):
+                orphan_identity = marked_identity
+            elif isinstance(exc, RecoveryProjectionCleanupRequired):
+                orphan_identity = exc.identity
+            elif fresh_identity is not None:
+                try:
+                    deleted = self.index.discard_rebuild_projection(fresh_identity)
+                except Exception as cleanup_exc:
+                    orphan_identity = fresh_identity
+                    exc.add_note(f"fresh rebuild cleanup failed: {type(cleanup_exc).__name__}")
                 else:
-                    self.repository.fail_recovery_operation(operation_id, code)
+                    if not deleted:
+                        orphan_identity = fresh_identity
+            try:
+                self.repository.fail_recovery_operation(
+                    operation_id,
+                    code,
+                    orphan_identity,
+                )
             except Exception as failure_exc:
                 exc.add_note(
                     f"rebuild failure transition also failed: {type(failure_exc).__name__}"
@@ -490,6 +509,12 @@ class OpenSearchRecoveryIndex:
                 publication_attempt_id=orphan.attempt_id,
             )
 
+    def discard_rebuild_projection(self, identity: SearchIndexIdentity) -> bool:
+        """Delete only a noncanonical rebuild index; old active indexes fail closed."""
+
+        self.index.delete_rebuild_index(identity)
+        return True
+
     def rebuild_generation(
         self,
         authority: GenerationRebuildAuthority,
@@ -561,8 +586,8 @@ class OpenSearchRecoveryIndex:
             try:
                 self.index.delete_rebuild_index(identity)
             except Exception as cleanup_exc:
-                cleanup_exc.add_note("rebuild primary failure: " + type(primary).__name__)
-                raise RecoveryProjectionCleanupRequired(identity) from primary
+                primary.add_note("fresh rebuild cleanup failed: " + type(cleanup_exc).__name__)
+                setattr(primary, _REBUILD_ORPHAN_IDENTITY_ATTRIBUTE, identity)
             raise
 
     def repair_attempt_projection(

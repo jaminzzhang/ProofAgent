@@ -43,6 +43,7 @@ class _RecoveryRepository:
         self.swapped: tuple[SearchIndexIdentity, KnowledgeProjectionAttestation] | None = None
         self.operation_id = "rebuild-operation-1"
         self.failed_operations: list[tuple[str, str, SearchIndexIdentity | None]] = []
+        self.recovery_orphans: dict[str, SearchIndexIdentity] = {}
 
     def list_orphan_projections(self, source_id: str) -> tuple[OrphanProjection, ...]:
         return tuple(item for item in self.orphans if item.source_id == source_id)
@@ -76,7 +77,12 @@ class _RecoveryRepository:
         failure_code: str,
         projection_identity: SearchIndexIdentity | None = None,
     ) -> None:
-        self.failed_operations.append((operation_id, failure_code, projection_identity))
+        failure = (operation_id, failure_code, projection_identity)
+        if failure not in self.failed_operations:
+            self.failed_operations.append(failure)
+        if projection_identity is not None:
+            existing = self.recovery_orphans.setdefault(operation_id, projection_identity)
+            assert existing == projection_identity
 
     def swap_generation_projection(
         self,
@@ -94,6 +100,9 @@ class _RecoveryIndex:
         self.deleted: list[str] = []
         self.repaired: list[str] = []
         self.rebuilt_documents: tuple[Any, ...] = ()
+        self.discarded_rebuilds: list[SearchIndexIdentity] = []
+        self.retain_rebuild = False
+        self.fail_discard = False
 
     def delete_attempt_projection(self, orphan: OrphanProjection) -> None:
         if orphan.attempt_id in self.fail_delete:
@@ -152,6 +161,15 @@ class _RecoveryIndex:
             validated_document_count=root.document_count,
             validated_rule_unit_count=root.rule_unit_count,
         )
+
+    def discard_rebuild_projection(self, identity: SearchIndexIdentity) -> bool:
+        if self.fail_discard:
+            raise RuntimeError("fresh cleanup failed")
+        if self.retain_rebuild:
+            return False
+        if identity not in self.discarded_rebuilds:
+            self.discarded_rebuilds.append(identity)
+        return True
 
 
 def _fixture(tmp_path: Any):
@@ -242,6 +260,103 @@ def test_generation_rebuild_uses_exact_artifacts_fresh_uuid_and_same_coverage(
         repository.authority.current_attestation.attestation_sha256
     )
     assert repository.swapped is not None
+
+
+def test_post_validation_failure_discards_only_fresh_rebuild(tmp_path: Any) -> None:
+    class InvalidEvidenceIndex(_RecoveryIndex):
+        def rebuild_generation(self, *args: Any, **kwargs: Any) -> Any:
+            identity, evidence = super().rebuild_generation(*args, **kwargs)
+            return identity, evidence.model_copy(update={"candidate_digest": "0" * 64})
+
+    service, repository, _ = _fixture(tmp_path)
+    index = InvalidEvidenceIndex()
+    service.index = index
+    old_identity = repository.authority.current_identity
+
+    with pytest.raises(PublicationConflict, match="ATTESTATION_MISMATCH"):
+        service.rebuild_generation(source_id="source-1", generation_id="generation-1")
+
+    assert repository.swapped is None
+    assert len(index.discarded_rebuilds) == 1
+    assert index.discarded_rebuilds[0].index_uuid == "fresh-index-uuid"
+    assert old_identity not in index.discarded_rebuilds
+    assert repository.failed_operations == [(repository.operation_id, "ATTESTATION_MISMATCH", None)]
+
+
+def test_rebuild_adapter_returning_active_identity_is_never_deleted(tmp_path: Any) -> None:
+    class ActiveIdentityIndex(_RecoveryIndex):
+        def rebuild_generation(self, authority: Any, *args: Any, **kwargs: Any) -> Any:
+            _, evidence = super().rebuild_generation(authority, *args, **kwargs)
+            identity = authority.current_identity
+            return identity, evidence.model_copy(update={"identity": identity})
+
+    service, repository, _ = _fixture(tmp_path)
+    index = ActiveIdentityIndex()
+    service.index = index
+
+    with pytest.raises(PublicationConflict, match="REBUILD_INDEX_NOT_FRESH"):
+        service.rebuild_generation(source_id="source-1", generation_id="generation-1")
+
+    assert index.discarded_rebuilds == []
+    assert repository.swapped is None
+    assert repository.failed_operations == [
+        (repository.operation_id, "REBUILD_INDEX_NOT_FRESH", None)
+    ]
+
+
+def test_rebuild_cas_failure_discards_fresh_and_preserves_primary_failure(
+    tmp_path: Any,
+) -> None:
+    class CasFailingRepository(_RecoveryRepository):
+        def swap_generation_projection(self, **_: Any) -> None:
+            raise PublicationConflict("FENCE_LOST")
+
+    base_service, base_repository, _ = _fixture(tmp_path)
+    repository = CasFailingRepository(base_repository.authority)
+    index = _RecoveryIndex()
+    service = HybridRecoveryService(
+        repository=repository,
+        artifact_store=base_service.artifact_store,
+        index=index,
+    )
+
+    with pytest.raises(PublicationConflict, match="FENCE_LOST"):
+        service.rebuild_generation(source_id="source-1", generation_id="generation-1")
+
+    assert repository.swapped is None
+    assert len(index.discarded_rebuilds) == 1
+    assert repository.authority.current_identity not in index.discarded_rebuilds
+    assert repository.failed_operations == [(repository.operation_id, "FENCE_LOST", None)]
+
+
+def test_fresh_cleanup_failure_tracks_orphan_without_overwriting_primary_and_retries_idempotently(
+    tmp_path: Any,
+) -> None:
+    class InvalidEvidenceIndex(_RecoveryIndex):
+        def rebuild_generation(self, *args: Any, **kwargs: Any) -> Any:
+            identity, evidence = super().rebuild_generation(*args, **kwargs)
+            return identity, evidence.model_copy(update={"candidate_digest": "0" * 64})
+
+    service, repository, _ = _fixture(tmp_path)
+    index = InvalidEvidenceIndex()
+    index.fail_discard = True
+    service.index = index
+
+    for _ in range(2):
+        with pytest.raises(PublicationConflict, match="ATTESTATION_MISMATCH") as captured:
+            service.rebuild_generation(source_id="source-1", generation_id="generation-1")
+        assert any(
+            "fresh rebuild cleanup failed: RuntimeError" in note
+            for note in getattr(captured.value, "__notes__", ())
+        )
+
+    tracked = repository.recovery_orphans[repository.operation_id]
+    assert tracked.index_uuid == "fresh-index-uuid"
+    assert tracked != repository.authority.current_identity
+    assert repository.swapped is None
+    assert repository.failed_operations == [
+        (repository.operation_id, "ATTESTATION_MISMATCH", tracked)
+    ]
 
 
 class _LowLevelRecoveryIndex(_Index):
@@ -354,6 +469,39 @@ def test_rebuild_readback_failure_deletes_candidate_and_never_smokes(tmp_path: A
 
     assert index.events == ["create", "bulk", "readback"]
     assert len(index.deleted_rebuilds) == 1
+
+
+def test_adapter_cleanup_failure_keeps_readback_failure_primary_and_tracks_fresh_identity(
+    tmp_path: Any,
+) -> None:
+    class ReadbackAndCleanupFailingIndex(_LowLevelRecoveryIndex):
+        def validate_exact_projection(self, **kwargs: Any) -> Any:
+            self.events.append("readback")
+            raise RuntimeError("exact readback failed")
+
+        def delete_rebuild_index(self, identity: SearchIndexIdentity) -> None:
+            del identity
+            raise RuntimeError("delete failed")
+
+    service, repository, _ = _fixture(tmp_path)
+    index = ReadbackAndCleanupFailingIndex()
+    service.index = OpenSearchRecoveryIndex(
+        index=index,  # type: ignore[arg-type]
+        embedding=_Embedding(),  # type: ignore[arg-type]
+        embedding_instruction="Represent the insurance rule.",
+    )
+
+    with pytest.raises(RuntimeError, match="exact readback failed") as captured:
+        service.rebuild_generation(source_id="source-1", generation_id="generation-1")
+
+    assert any(
+        "fresh rebuild cleanup failed: RuntimeError" in note
+        for note in getattr(captured.value, "__notes__", ())
+    )
+    tracked = repository.recovery_orphans[repository.operation_id]
+    assert tracked.index_uuid == "fresh-index-uuid"
+    assert tracked != repository.authority.current_identity
+    assert repository.swapped is None
 
 
 def test_rebuild_unions_historical_rule_across_failed_sequence_gap(tmp_path: Any) -> None:
