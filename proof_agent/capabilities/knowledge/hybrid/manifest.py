@@ -14,7 +14,6 @@ import json
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal, Self, TypeVar
-from urllib.parse import quote, urlsplit
 
 from pydantic import (
     ConfigDict,
@@ -29,6 +28,9 @@ from pydantic import (
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     KnowledgeArtifactStore,
     SearchIndexIdentity,
+)
+from proof_agent.capabilities.knowledge.hybrid.citations import (
+    validate_hybrid_citation_binding,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import (
     manifest_root_fingerprint,
@@ -75,6 +77,20 @@ class _ManifestModel(FrozenModel):
 _ManifestModelT = TypeVar("_ManifestModelT", bound=_ManifestModel)
 
 
+def _persisted_shard_document_key(value: object) -> str:
+    shard = getattr(value, "shard", None)
+    document_id = getattr(shard, "document_id", None)
+    if isinstance(document_id, str):
+        return document_id
+    if isinstance(value, Mapping):
+        raw_shard = value.get("shard")
+        if isinstance(raw_shard, Mapping):
+            raw_document_id = raw_shard.get("document_id")
+            if isinstance(raw_document_id, str):
+                return raw_document_id
+    return ""
+
+
 class ManifestRuleUnitMembership(_ManifestModel):
     """One exact Rule Unit revision and its inclusive publication interval."""
 
@@ -112,6 +128,13 @@ class RuleUnitManifestMaterialization(_ManifestModel):
         min_length=1,
         max_length=_MAX_DOCUMENTS,
     )
+
+    @field_validator("shards", mode="before")
+    @classmethod
+    def canonicalize_shards(cls, value: object) -> object:
+        if not isinstance(value, list | tuple):
+            return value
+        return tuple(sorted(value, key=_persisted_shard_document_key))
 
     @model_validator(mode="after")
     def validate_root_and_shards(self) -> Self:
@@ -586,16 +609,12 @@ def _validate_rule_unit_semantics(
     content_digest = hashlib.sha256(rule_unit.content.encode("utf-8")).hexdigest()
     if content_digest != rule_unit.content_sha256:
         raise ValueError("Rule Unit content digest does not match its exact UTF-8 content")
-    parsed = urlsplit(rule_unit.citation_uri)
-    if parsed.scheme != "knowledge":
-        raise ValueError("Hybrid manifest citations must use the knowledge scheme")
-    expected_path = (
-        f"/{quote(source_id, safe='')}/document/"
-        f"{quote(rule_unit.document_id, safe='')}/revision/"
-        f"{quote(rule_unit.revision_id, safe='')}"
+    validate_hybrid_citation_binding(
+        rule_unit.citation_uri,
+        source_id=source_id,
+        document_id=rule_unit.document_id,
+        revision_id=rule_unit.revision_id,
     )
-    if parsed.netloc != "source" or parsed.path != expected_path:
-        raise ValueError("Rule Unit citation does not bind its exact source lineage")
 
 
 def _shard_artifact_bytes(shard: RuleUnitManifestShard) -> bytes:

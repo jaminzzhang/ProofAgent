@@ -15,6 +15,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from proof_agent.capabilities.knowledge.hybrid.citations import (
+    validate_hybrid_citation_binding,
+)
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     PrivateAddressResolver,
     PrivateNetworkPolicy,
@@ -1233,12 +1236,15 @@ def _validate_citation_binding(
     document_id: str,
     revision_id: str,
 ) -> None:
-    parsed = urlsplit(citation_uri)
-    if parsed.scheme != "knowledge":
-        raise OpenSearchProjectionError("Hybrid citations must use the knowledge scheme")
-    expected_path = f"/{source_id}/document/{document_id}/revision/{revision_id}"
-    if parsed.netloc != "source" or parsed.path != expected_path:
-        raise OpenSearchProjectionError("search hit citation does not bind its exact lineage")
+    try:
+        validate_hybrid_citation_binding(
+            citation_uri,
+            source_id=source_id,
+            document_id=document_id,
+            revision_id=revision_id,
+        )
+    except ValueError as exc:
+        raise OpenSearchProjectionError("Hybrid citation binding is invalid") from exc
 
 
 def _response_index_identity(

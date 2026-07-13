@@ -468,6 +468,29 @@ def test_equal_sequence_is_zero_write_exact_replay_only() -> None:
         assert tuple(store.put_keys) == puts_after_first
 
 
+def test_equal_sequence_replay_canonicalizes_reconstructed_shard_order() -> None:
+    store = RecordingArtifactStore()
+    memberships = (membership("rule-a", "a"), membership("rule-b", "b"))
+    first = build_manifest(store, sequence=1, memberships=memberships)
+    reconstructed = RuleUnitManifestMaterialization(
+        root=first.root,
+        root_ref=first.root_ref,
+        shards=tuple(reversed(first.shards)),
+    )
+    writes_before_replay = tuple(store.put_keys)
+
+    replay = build_manifest(
+        store,
+        sequence=1,
+        memberships=tuple(reversed(memberships)),
+        previous=reconstructed,
+    )
+
+    assert replay == first
+    assert tuple(item.shard.document_id for item in replay.shards) == ("a", "b")
+    assert tuple(store.put_keys) == writes_before_replay
+
+
 def _cross_bound_materialization_parts(
     store: RecordingArtifactStore,
     *,

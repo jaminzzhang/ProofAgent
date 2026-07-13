@@ -4,6 +4,7 @@ from datetime import date
 import hashlib
 import json
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -197,6 +198,68 @@ def projection_document(
         projection_revision="rule-unit-search.v1",
         embedding=(0.1, 0.2),
     )
+
+
+def test_unicode_citation_binding_is_shared_by_projection_and_hit_validation() -> None:
+    base = projection_document()
+    source_id = "来源一"
+    document_id = "文档一"
+    revision_id = "修订一"
+    citation = (
+        f"knowledge://source/{quote(source_id, safe='')}/document/"
+        f"{quote(document_id, safe='')}/revision/"
+        f"{quote(revision_id, safe='')}#page=1"
+    )
+    rule = base.rule_unit.model_copy(
+        update={
+            "document_id": document_id,
+            "revision_id": revision_id,
+            "citation_uri": citation,
+            "lineage": base.rule_unit.lineage.model_copy(
+                update={"source_id": source_id}
+            ),
+        }
+    )
+    entry = base.manifest_entry.model_copy(
+        update={
+            "document_id": document_id,
+            "revision_id": revision_id,
+            "citation_uri": citation,
+        }
+    )
+    document = ProjectionDocument(
+        projection_id=base.projection_id,
+        rule_unit=rule,
+        manifest_entry=entry,
+        approved_metadata=base.approved_metadata,
+        projection_revision=base.projection_revision,
+        embedding=base.embedding,
+    )
+    base_identity = index_identity()
+    identity = SearchIndexIdentity(
+        generation=base_identity.generation.model_copy(update={"source_id": source_id}),
+        index_uuid=base_identity.index_uuid,
+    )
+
+    projected = project_rule_unit_document(
+        document,
+        identity=identity,
+        publication_attempt_id="attempt-1",
+    )
+    opensearch_module._validate_citation_binding(
+        projected["citation_uri"],
+        source_id=source_id,
+        document_id=document_id,
+        revision_id=revision_id,
+    )
+
+    with pytest.raises(OpenSearchProjectionError, match="citation"):
+        opensearch_module._validate_citation_binding(
+            citation,
+            source_id=source_id,
+            document_id="其他文档",
+            revision_id=revision_id,
+        )
 
 
 class RecordingTransport:
