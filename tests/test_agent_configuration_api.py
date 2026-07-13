@@ -66,6 +66,7 @@ from proof_agent.observability.api.operator_identity import (
     OperatorIdentityContext,
     OperatorPermission,
 )
+from pydantic import BaseModel
 from pypdf import PdfWriter
 
 
@@ -1906,6 +1907,135 @@ def test_http_json_source_publication_validation_and_publish_api(
     assert source.json()["publication_count"] == 1
     assert validations.json() == {"data": [validation.json()], "meta": {"total": 1}}
     assert publications.json() == {"data": [published.json()], "meta": {"total": 1}}
+
+
+def test_hybrid_publication_routes_dispatch_to_typed_authority_facade(tmp_path: Path) -> None:
+    calls: list[tuple[str, dict[str, str] | str]] = []
+
+    class Payload(BaseModel):
+        record_id: str
+
+    validation = Payload(record_id="validation-hybrid-1")
+    publication = Payload(record_id="publication-hybrid-1")
+
+    class Facade:
+        def validate(self, **kwargs: str) -> BaseModel:
+            calls.append(("validate", kwargs))
+            return validation
+
+        def publish(self, **kwargs: str) -> BaseModel:
+            calls.append(("publish", kwargs))
+            return publication
+
+        def list_validations(self, source_id: str) -> list[BaseModel]:
+            calls.append(("list-validations", source_id))
+            return [validation]
+
+        def list_publications(self, source_id: str) -> list[BaseModel]:
+            calls.append(("list-publications", source_id))
+            return [publication]
+
+    client = _client(tmp_path)
+    _create_hybrid_index_source(client)
+    client.app.state.hybrid_knowledge_publication_api = Facade()
+
+    validated = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/validate",
+        json={"smoke_query": "exact rule"},
+    )
+    published = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/publish",
+        json={"validation_id": "validation-hybrid-1", "change_note": "publish"},
+    )
+    validations = client.get(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication-validations"
+    )
+    publications = client.get(
+        "/api/config/knowledge-sources/ks_hybrid_index/publications"
+    )
+
+    assert validated.json() == validation.model_dump(mode="json")
+    assert published.json() == publication.model_dump(mode="json")
+    assert validations.json() == {
+        "data": [validation.model_dump(mode="json")],
+        "meta": {"total": 1},
+    }
+    assert publications.json() == {
+        "data": [publication.model_dump(mode="json")],
+        "meta": {"total": 1},
+    }
+    assert calls == [
+        (
+            "validate",
+            {
+                "source_id": "ks_hybrid_index",
+                "smoke_query": "exact rule",
+                "actor": "local-user",
+            },
+        ),
+        (
+            "publish",
+            {
+                "source_id": "ks_hybrid_index",
+                "validation_id": "validation-hybrid-1",
+                "change_note": "publish",
+                "actor": "local-user",
+            },
+        ),
+        ("list-validations", "ks_hybrid_index"),
+        ("list-publications", "ks_hybrid_index"),
+    ]
+
+
+def test_hybrid_publication_routes_return_stable_unavailable_and_conflict_errors(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    _create_hybrid_index_source(client)
+    unavailable = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/validate",
+        json={"smoke_query": "exact rule"},
+    )
+
+    class ConflictFacade:
+        def publish(self, **_: str) -> BaseModel:
+            raise configuration_api_module.PublicationConflict("STALE_VALIDATION")
+
+    client.app.state.hybrid_knowledge_publication_api = ConflictFacade()
+    conflict = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/publish",
+        json={"validation_id": "validation-1", "change_note": "publish"},
+    )
+
+    assert unavailable.status_code == 503
+    assert unavailable.json()["detail"] == (
+        "Hybrid Knowledge publication authority is not configured."
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == {"code": "STALE_VALIDATION"}
+
+
+def test_hybrid_publication_routes_reuse_existing_operator_permissions(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Facade:
+        def validate(self, **_: str) -> BaseModel:
+            calls.append("called")
+            return BaseModel()
+
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.KNOWLEDGE_SOURCE_EDIT},
+    )
+    _create_hybrid_index_source(client)
+    client.app.state.hybrid_knowledge_publication_api = Facade()
+    denied = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/validate",
+        json={"smoke_query": "exact rule"},
+    )
+
+    assert denied.status_code == 403
+    assert calls == []
 
 
 @pytest.mark.parametrize(

@@ -26,7 +26,8 @@ openai = ["openai>=1.30.0"]
 tree = ["llama-index-core>=0.12.0"]
 ingestion = ["pypdf>=6.12.2,<7"]
 hybrid = ["httpx>=0.27.0,<1", "openpyxl>=3.1.5,<4"]
-all = ["proof-agent[hybrid,ingestion,openai,tree]"]
+production = ["psycopg[binary,pool]>=3.2,<4", "boto3>=1.40,<2"]
+all = ["proof-agent[hybrid,ingestion,openai,production,tree]"]
 
 [project.scripts]
 proof-agent = "proof_agent.delivery.cli:main"

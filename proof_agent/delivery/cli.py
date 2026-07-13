@@ -50,8 +50,10 @@ if TYPE_CHECKING:
 app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
 campaign_app = typer.Typer(no_args_is_help=True)
+knowledge_app = typer.Typer(no_args_is_help=True)
 app.add_typer(evaluate_app, name="evaluate")
 evaluate_app.add_typer(campaign_app, name="campaign")
+app.add_typer(knowledge_app, name="knowledge")
 
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
 REACT_DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/agent.yaml")
@@ -112,6 +114,90 @@ def load_environment() -> None:
     """Load local environment variables before running any CLI command."""
 
     _load_local_dotenv()
+
+
+def _hybrid_recovery_service_from_environment() -> Any:
+    """Lazy production seam; tests and deployments bind the concrete recovery graph."""
+
+    from proof_agent.capabilities.knowledge.hybrid.recovery import (
+        recovery_service_from_environment,
+    )
+
+    return recovery_service_from_environment(os.environ)
+
+
+@knowledge_app.command("reconcile-orphans")
+def reconcile_hybrid_orphans(
+    source_id: str = typer.Option(..., "--source-id"),
+    apply: bool = typer.Option(
+        False,
+        "--apply/--dry-run",
+        help="Apply proven-safe cleanup; defaults to dry-run.",
+    ),
+) -> None:
+    """Classify or remove failed Hybrid publication projections."""
+
+    service: Any | None = None
+    primary: Exception | None = None
+    try:
+        service = _hybrid_recovery_service_from_environment()
+        report = service.reconcile_orphans(
+            source_id=source_id,
+            apply=apply,
+        )
+    except Exception as exc:
+        primary = exc
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if service is not None:
+            try:
+                service.close()
+            except Exception as close_exc:
+                if primary is not None:
+                    primary.add_note(
+                        "Hybrid recovery close also failed: "
+                        f"{type(close_exc).__name__}"
+                    )
+                else:
+                    typer.echo("Hybrid recovery close failed.", err=True)
+                    raise typer.Exit(code=1) from close_exc
+    typer.echo(json.dumps(report.model_dump(mode="json"), sort_keys=True))
+
+
+@knowledge_app.command("rebuild-generation")
+def rebuild_hybrid_generation(
+    source_id: str = typer.Option(..., "--source-id"),
+    generation_id: str = typer.Option(..., "--generation-id"),
+) -> None:
+    """Rebuild one generation from exact PostgreSQL/S3 authority."""
+
+    service: Any | None = None
+    primary: Exception | None = None
+    try:
+        service = _hybrid_recovery_service_from_environment()
+        attestation = service.rebuild_generation(
+            source_id=source_id,
+            generation_id=generation_id,
+        )
+    except Exception as exc:
+        primary = exc
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if service is not None:
+            try:
+                service.close()
+            except Exception as close_exc:
+                if primary is not None:
+                    primary.add_note(
+                        "Hybrid recovery close also failed: "
+                        f"{type(close_exc).__name__}"
+                    )
+                else:
+                    typer.echo("Hybrid recovery close failed.", err=True)
+                    raise typer.Exit(code=1) from close_exc
+    typer.echo(json.dumps(attestation.model_dump(mode="json"), sort_keys=True))
 
 
 @app.command()

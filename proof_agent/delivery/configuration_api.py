@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -52,6 +52,7 @@ from proof_agent.capabilities.knowledge.hybrid.workbook import (
     import_metadata_workbook,
     reconcile_metadata_drafts,
 )
+from proof_agent.capabilities.knowledge.hybrid.publication import PublicationConflict
 from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
 from proof_agent.configuration.hybrid_knowledge_repository import (
     FileSystemKnowledgeArtifactStore,
@@ -495,6 +496,35 @@ class KnowledgeSourcePublicationRequest(BaseModel):
 
     validation_id: str = Field(min_length=1)
     change_note: str = Field(min_length=1)
+
+
+class HybridKnowledgePublicationApi(Protocol):
+    """Typed delivery seam for the separately composed Hybrid authority facade."""
+
+    def validate(self, *, source_id: str, smoke_query: str, actor: str) -> BaseModel: ...
+
+    def publish(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+        change_note: str,
+        actor: str,
+    ) -> BaseModel: ...
+
+    def list_validations(self, source_id: str) -> Sequence[BaseModel]: ...
+
+    def list_publications(self, source_id: str) -> Sequence[BaseModel]: ...
+
+
+def _hybrid_publication_api(app_request: Request) -> HybridKnowledgePublicationApi:
+    facade = getattr(app_request.app.state, "hybrid_knowledge_publication_api", None)
+    if facade is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Hybrid Knowledge publication authority is not configured.",
+        )
+    return cast(HybridKnowledgePublicationApi, facade)
 
 
 class KnowledgeMetadataReviewResolutionRequest(BaseModel):
@@ -1816,6 +1846,7 @@ def validate_knowledge_source_publication(
     actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
+    validation: BaseModel
     try:
         if source.provider == "local_index":
             validation = store.validate_local_index_source_publication(
@@ -1829,6 +1860,12 @@ def validate_knowledge_source_publication(
                 smoke_query=request.smoke_query,
                 actor=actor,
             )
+        elif source.provider == "hybrid_index":
+            validation = _hybrid_publication_api(app_request).validate(
+                source_id=source_id,
+                smoke_query=request.smoke_query,
+                actor=actor,
+            )
         else:
             raise ProofAgentError(
                 "PA_CONFIG_001",
@@ -1837,6 +1874,8 @@ def validate_knowledge_source_publication(
             )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
+    except PublicationConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code}) from exc
     return validation.model_dump(mode="json")
 
 
@@ -1853,12 +1892,21 @@ def publish_knowledge_source(
     store = _get_configuration_store(app_request)
     _require_active_knowledge_source(store, source_id)
     try:
-        publication = store.publish_knowledge_source(
-            source_id=source_id,
-            validation_id=request.validation_id,
-            change_note=request.change_note,
-            actor=actor,
-        )
+        source = _require_knowledge_source(store, source_id)
+        if source.provider == "hybrid_index":
+            publication = _hybrid_publication_api(app_request).publish(
+                source_id=source_id,
+                validation_id=request.validation_id,
+                change_note=request.change_note,
+                actor=actor,
+            )
+        else:
+            publication = store.publish_knowledge_source(
+                source_id=source_id,
+                validation_id=request.validation_id,
+                change_note=request.change_note,
+                actor=actor,
+            )
     except KeyError as exc:
         raise HTTPException(
             status_code=404,
@@ -1869,6 +1917,8 @@ def publish_knowledge_source(
         ) from exc
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
+    except PublicationConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code}) from exc
     return publication.model_dump(mode="json")
 
 
@@ -1884,7 +1934,11 @@ def list_knowledge_source_publication_validations(
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
-        validations = store.list_knowledge_source_publication_validations(source_id)
+        source = _require_knowledge_source(store, source_id)
+        if source.provider == "hybrid_index":
+            validations = _hybrid_publication_api(app_request).list_validations(source_id)
+        else:
+            validations = store.list_knowledge_source_publication_validations(source_id)
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return {
@@ -1905,7 +1959,11 @@ def list_knowledge_source_publications(
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
-        publications = store.list_knowledge_source_publications(source_id)
+        source = _require_knowledge_source(store, source_id)
+        if source.provider == "hybrid_index":
+            publications = _hybrid_publication_api(app_request).list_publications(source_id)
+        else:
+            publications = store.list_knowledge_source_publications(source_id)
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return {

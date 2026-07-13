@@ -405,6 +405,20 @@ def physical_index_name(source_id: str, generation_id: str) -> str:
     return f"pa-knowledge-{source_slug}-{generation_slug}-{suffix}"
 
 
+def _identity_index_name(identity: SearchIndexIdentity) -> str:
+    canonical = physical_index_name(
+        identity.generation.source_id,
+        identity.generation.generation_id,
+    )
+    locator = identity.projection_locator or canonical
+    if (
+        not locator.startswith(canonical)
+        or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,254}", locator) is None
+    ):
+        raise OpenSearchProjectionError("projection locator is invalid")
+    return locator
+
+
 RULE_UNIT_ANALYZER = "proof_agent_cjk_v1"
 MAX_CANDIDATE_SOURCE_BYTES = 24_000
 MAX_CANDIDATE_SOURCES_BYTES = 24_000_000
@@ -2062,6 +2076,7 @@ class OpenSearchHybridIndex:
         *,
         rrf_pipeline: str,
         rrf_rank_constant: int,
+        physical_name_override: str | None = None,
     ) -> SearchIndexIdentity:
         """Create one exact physical generation and its Source-local RRF pipeline."""
 
@@ -2082,7 +2097,13 @@ class OpenSearchHybridIndex:
             "mapping_sha256": generation.mapping_sha256,
             "analyzer_sha256": generation.analyzer_sha256,
         }
-        index_name = physical_index_name(generation.source_id, generation.generation_id)
+        canonical_name = physical_index_name(generation.source_id, generation.generation_id)
+        index_name = physical_name_override or canonical_name
+        if (
+            not index_name.startswith(canonical_name)
+            or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,254}", index_name) is None
+        ):
+            raise OpenSearchProjectionError("physical index override is invalid")
         create_response = self._transport.request(
             method="PUT",
             path=f"/{index_name}",
@@ -2106,6 +2127,7 @@ class OpenSearchHybridIndex:
         identity = SearchIndexIdentity(
             generation=generation,
             index_uuid=_exact_string(index_settings.get("uuid"), field_name="index UUID"),
+            projection_locator=index_name if physical_name_override is not None else None,
         )
         return _response_index_identity(
             identity_response,
@@ -2118,7 +2140,7 @@ class OpenSearchHybridIndex:
         expected = SearchIndexIdentity.model_validate(expected.model_dump(mode="python"))
         generation = expected.generation
         self._validate_generation(generation)
-        index_name = physical_index_name(generation.source_id, generation.generation_id)
+        index_name = _identity_index_name(expected)
         response = self._transport.request(method="GET", path=f"/{index_name}")
         return _response_index_identity(
             response,
@@ -2132,8 +2154,7 @@ class OpenSearchHybridIndex:
         if validated != request:
             raise OpenSearchProjectionError("bulk request is not in canonical contract form")
         self.verify_identity(request.identity)
-        generation = request.identity.generation
-        index_name = physical_index_name(generation.source_id, generation.generation_id)
+        index_name = _identity_index_name(request.identity)
         payload, projection_set_sha256 = _bulk_payload(request)
         response = self._transport.request(
             method="POST",
@@ -2161,6 +2182,70 @@ class OpenSearchHybridIndex:
             refresh_checkpoint=checkpoint,
         )
 
+    def delete_attempt_projection(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        publication_attempt_id: str,
+    ) -> str:
+        """Delete only documents last written by one proven-unreferenced attempt."""
+
+        self.verify_identity(identity)
+        index_name = _identity_index_name(identity)
+        response = self._transport.request(
+            method="POST",
+            path=f"/{index_name}/_delete_by_query",
+            json_body={
+                "query": {"term": {"publication_attempt_id": publication_attempt_id}},
+                "conflicts": "abort",
+            },
+        )
+        failures = response.body.get("failures")
+        total = response.body.get("total")
+        deleted = response.body.get("deleted")
+        version_conflicts = response.body.get("version_conflicts")
+        if (
+            response.status_code != 200
+            or response.body.get("timed_out") is not False
+            or failures != []
+            or type(total) is not int
+            or type(deleted) is not int
+            or type(version_conflicts) is not int
+            or total < 0
+            or deleted < 0
+            or deleted > total
+            or version_conflicts != 0
+        ):
+            raise OpenSearchProjectionError("attempt-scoped projection cleanup failed")
+        refresh = self._transport.request(method="POST", path=f"/{index_name}/_refresh")
+        if refresh.status_code != 200:
+            raise OpenSearchProjectionError("attempt-scoped projection cleanup refresh failed")
+        self.verify_identity(identity)
+        return stable_digest(
+            {
+                "schema_version": "attempt-projection-cleanup.v1",
+                "index_uuid": identity.index_uuid,
+                "projection_locator": index_name,
+                "publication_attempt_id": publication_attempt_id,
+                "total": total,
+                "deleted": deleted,
+            }
+        )
+
+    def delete_rebuild_index(self, identity: SearchIndexIdentity) -> None:
+        """Delete one UUID-verified noncanonical rebuild index."""
+
+        canonical = physical_index_name(
+            identity.generation.source_id, identity.generation.generation_id
+        )
+        locator = _identity_index_name(identity)
+        if identity.projection_locator is None or not locator.startswith(f"{canonical}-rebuild-"):
+            raise OpenSearchProjectionError("shared generation index cannot be deleted whole")
+        self.verify_identity(identity)
+        response = self._transport.request(method="DELETE", path=f"/{locator}")
+        if response.status_code != 200 or response.body.get("acknowledged") is not True:
+            raise OpenSearchProjectionError("rebuild projection deletion failed")
+
     def search(self, request: HybridSearchRequest) -> tuple[HybridSearchHit, ...]:
         validated = HybridSearchRequest.model_validate(request.model_dump(mode="python"))
         if validated != request:
@@ -2170,8 +2255,7 @@ class OpenSearchHybridIndex:
             pipeline=request.rrf_pipeline,
             rank_constant=request.rrf_rank_constant,
         )
-        generation = request.identity.generation
-        index_name = physical_index_name(generation.source_id, generation.generation_id)
+        index_name = _identity_index_name(request.identity)
         query_body = build_hybrid_query(request)
         pipeline = _exact_string(
             query_body.pop("search_pipeline"), field_name="search_pipeline", maximum=128

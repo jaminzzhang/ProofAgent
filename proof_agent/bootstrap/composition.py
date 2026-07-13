@@ -60,6 +60,12 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     PrivatePaddleClient,
 )
 from proof_agent.capabilities.knowledge.hybrid.pipeline import PrivateHybridParserPipeline
+from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
+from proof_agent.capabilities.knowledge.hybrid.publication import (
+    HybridProjectionWriter,
+    HybridPublicationRepository,
+    HybridPublicationService,
+)
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridKnowledgeWorkerFactory,
     HybridPrivateParserBuildConfig,
@@ -184,6 +190,22 @@ class HybridKnowledgeComposition:
             if failures:
                 raise ExceptionGroup("Hybrid Knowledge composition close failed", failures)
             self._closed = True
+
+    def compose_publication_service(
+        self,
+        *,
+        repository: HybridPublicationRepository,
+        artifact_store: KnowledgeArtifactStore,
+        index: HybridProjectionWriter,
+    ) -> HybridPublicationService:
+        """Attach publication to this graph without adding a second scheduler owner."""
+
+        return HybridPublicationService(
+            repository=repository,
+            artifact_store=artifact_store,
+            index=index,
+            embedding=self.embedding,
+        )
 
 
 def compose_hybrid_knowledge(

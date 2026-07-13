@@ -262,6 +262,17 @@ def test_unicode_citation_binding_is_shared_by_projection_and_hit_validation() -
         )
 
 
+def test_projection_locator_defaults_compatibly_and_rejects_forged_redirect() -> None:
+    identity = index_identity()
+    assert opensearch_module._identity_index_name(identity) == physical_index_name(
+        identity.generation.source_id,
+        identity.generation.generation_id,
+    )
+    forged = identity.model_copy(update={"projection_locator": "foreign-index"})
+    with pytest.raises(OpenSearchProjectionError, match="locator"):
+        opensearch_module._identity_index_name(forged)
+
+
 class RecordingTransport:
     def __init__(
         self,

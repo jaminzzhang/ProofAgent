@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from typing import Any, cast
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -106,6 +107,25 @@ def test_composition_injects_one_remote_scheduler_client_everywhere() -> None:
     assert graph.ingestion_worker.scheduler is graph.scheduler
 
     graph.close()
+    graph.close()
+    assert scheduler_transport.close_count == 1
+
+
+def test_publication_service_borrows_graph_embedding_and_never_closes_scheduler() -> None:
+    scheduler_transport = SchedulerTransport()
+    graph = compose_hybrid_knowledge(
+        settings=_settings(),
+        transports=_transports(scheduler_transport),
+    )
+    service = graph.compose_publication_service(
+        repository=cast(Any, object()),
+        artifact_store=cast(Any, object()),
+        index=cast(Any, object()),
+    )
+    assert service.embedding is graph.embedding
+    assert service.embedding.scheduler is graph.scheduler
+    service.close()
+    assert scheduler_transport.close_count == 0
     graph.close()
     assert scheduler_transport.close_count == 1
 

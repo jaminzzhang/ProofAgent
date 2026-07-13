@@ -77,6 +77,16 @@ class _PortModel(FrozenModel):
 class SearchIndexIdentity(_PortModel):
     generation: KnowledgeIndexGeneration
     index_uuid: NonBlankStr
+    projection_locator: NonBlankStr | None = None
+
+    @model_validator(mode="after")
+    def validate_locator(self) -> Self:
+        locator = self.projection_locator
+        if locator is not None and (
+            len(locator) > 512 or any(ord(char) < 32 for char in locator)
+        ):
+            raise ValueError("projection locator is invalid")
+        return self
 
 
 class ProjectionDocument(_PortModel):
