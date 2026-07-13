@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from importlib import import_module
 from importlib.util import find_spec
@@ -11,6 +12,7 @@ import re
 from types import ModuleType
 from types import SimpleNamespace
 import zipfile
+import zlib
 
 import pytest
 from pydantic import ValidationError
@@ -122,6 +124,127 @@ def _write_compressed_content_pdf(path: Path, content_bytes: bytes) -> Path:
     page[generic.NameObject("/Resources")] = generic.DictionaryObject()
     with path.open("wb") as handle:
         writer.write(handle)
+    return path
+
+
+def _run_length_encode(data: bytes) -> bytes:
+    encoded = bytearray()
+    for offset in range(0, len(data), 128):
+        chunk = data[offset : offset + 128]
+        encoded.append(len(chunk) - 1)
+        encoded.extend(chunk)
+    encoded.append(128)
+    return bytes(encoded)
+
+
+def _write_standard_filtered_content_pdf(
+    path: Path,
+    filters: tuple[str, ...],
+    content_bytes: bytes = b"% benign standard-filter content\n",
+) -> Path:
+    pypdf, generic = _modules()
+    encoded = content_bytes
+    for filter_name in reversed(filters):
+        if filter_name == "/FlateDecode":
+            encoded = zlib.compress(encoded)
+        elif filter_name == "/ASCII85Decode":
+            encoded = base64.a85encode(encoded, adobe=True)
+        elif filter_name == "/RunLengthDecode":
+            encoded = _run_length_encode(encoded)
+        elif filter_name == "/LZWDecode":
+            filters_module = import_module("pypdf.filters")
+            encoded = filters_module._LzwCodec().encode(encoded)
+        else:
+            raise AssertionError(filter_name)
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    stream = generic.EncodedStreamObject()
+    stream._data = encoded
+    stream[generic.NameObject("/Filter")] = (
+        generic.ArrayObject([generic.NameObject(value) for value in filters])
+        if len(filters) > 1
+        else generic.NameObject(filters[0])
+    )
+    page[generic.NameObject("/Contents")] = writer._add_object(stream)
+    page[generic.NameObject("/Resources")] = generic.DictionaryObject()
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def _write_png_predictor_content_pdf(path: Path) -> Path:
+    pypdf, generic = _modules()
+    content = b"% predictor-decoded content\n"
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    stream = generic.EncodedStreamObject()
+    stream._data = zlib.compress(b"\x00" + content)
+    stream[generic.NameObject("/Filter")] = generic.NameObject("/FlateDecode")
+    stream[generic.NameObject("/DecodeParms")] = generic.DictionaryObject(
+        {
+            generic.NameObject("/Predictor"): generic.NumberObject(12),
+            generic.NameObject("/Columns"): generic.NumberObject(len(content)),
+            generic.NameObject("/Colors"): generic.NumberObject(1),
+            generic.NameObject("/BitsPerComponent"): generic.NumberObject(8),
+        }
+    )
+    page[generic.NameObject("/Contents")] = writer._add_object(stream)
+    page[generic.NameObject("/Resources")] = generic.DictionaryObject()
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def _write_object_stream_bomb_pdf(path: Path) -> Path:
+    object_stream_decoded = b"2 0 << /Dummy true >>\n%" + b"A" * (2 * 1024 * 1024 + 1)
+    object_stream_encoded = zlib.compress(object_stream_decoded)
+    parts = [b"%PDF-1.5\n"]
+    offsets: dict[int, int] = {}
+
+    def add_object(object_id: int, body: bytes) -> None:
+        offsets[object_id] = sum(len(part) for part in parts)
+        parts.append(f"{object_id} 0 obj\n".encode("ascii") + body + b"\nendobj\n")
+
+    add_object(
+        1,
+        b"<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /Length "
+        + str(len(object_stream_encoded)).encode("ascii")
+        + b" >>\nstream\n"
+        + object_stream_encoded
+        + b"\nendstream",
+    )
+    add_object(3, b"<< /Type /Catalog /Pages 4 0 R >>")
+    add_object(4, b"<< /Type /Pages /Kids [5 0 R] /Count 1 >>")
+    add_object(
+        5,
+        b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << >> >>",
+    )
+    offsets[6] = sum(len(part) for part in parts)
+
+    def xref_entry(entry_type: int, field2: int, field3: int) -> bytes:
+        return bytes((entry_type,)) + field2.to_bytes(4, "big") + field3.to_bytes(2, "big")
+
+    xref_data = b"".join(
+        [
+            xref_entry(0, 0, 65535),
+            xref_entry(1, offsets[1], 0),
+            xref_entry(2, 1, 0),
+            xref_entry(1, offsets[3], 0),
+            xref_entry(1, offsets[4], 0),
+            xref_entry(1, offsets[5], 0),
+            xref_entry(1, offsets[6], 0),
+        ]
+    )
+    add_object(
+        6,
+        b"<< /Type /XRef /Size 7 /Root 3 0 R /W [1 4 2] /Index [0 7] /Length "
+        + str(len(xref_data)).encode("ascii")
+        + b" >>\nstream\n"
+        + xref_data
+        + b"\nendstream",
+    )
+    parts.append(b"startxref\n" + str(offsets[6]).encode("ascii") + b"\n%%EOF\n")
+    path.write_bytes(b"".join(parts))
     return path
 
 
@@ -841,6 +964,82 @@ def test_preflight_rejects_excessive_descendant_font_entries(tmp_path: Path) -> 
             limits=HybridIntakeLimits(),
         )
     assert exc.value.code == "PA_HYBRID_INTAKE_006"
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        ("/ASCII85Decode",),
+        ("/LZWDecode",),
+        ("/RunLengthDecode",),
+        ("/ASCII85Decode", "/FlateDecode"),
+    ],
+)
+def test_preflight_accepts_common_standard_content_filters(
+    tmp_path: Path,
+    filters: tuple[str, ...],
+) -> None:
+    result = preflight_hybrid_pdf(
+        _write_standard_filtered_content_pdf(tmp_path / "filtered.pdf", filters),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+
+
+def test_preflight_accepts_bounded_png_predictor_content(tmp_path: Path) -> None:
+    result = preflight_hybrid_pdf(
+        _write_png_predictor_content_pdf(tmp_path / "predictor.pdf"),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+
+
+def test_preflight_rejects_runlength_output_over_limit_before_text_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_module = import_module("pypdf._page")
+    original_extract_text = page_module.PageObject.extract_text
+    extraction_called = False
+
+    def track_extract_text(self: object, *args: object, **kwargs: object) -> str:
+        nonlocal extraction_called
+        extraction_called = True
+        return original_extract_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(page_module.PageObject, "extract_text", track_extract_text)
+    path = _write_standard_filtered_content_pdf(
+        tmp_path / "runlength-bomb.pdf",
+        ("/RunLengthDecode",),
+        b"A" * (2 * 1024 * 1024 + 1),
+    )
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert extraction_called is False
+
+
+def test_preflight_rejects_object_stream_bomb_before_pdfreader_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pypdf = import_module("pypdf")
+    original_reader = pypdf.PdfReader
+    reader_entered = False
+
+    def track_reader(*args: object, **kwargs: object) -> object:
+        nonlocal reader_entered
+        reader_entered = True
+        return original_reader(*args, **kwargs)
+
+    monkeypatch.setattr(pypdf, "PdfReader", track_reader)
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(
+            _write_object_stream_bomb_pdf(tmp_path / "object-stream-bomb.pdf"),
+            limits=HybridIntakeLimits(),
+        )
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert reader_entered is False
 
 
 def test_preflight_rejects_unreferenced_embedded_stream_in_incremental_xref(

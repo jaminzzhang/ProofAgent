@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+from importlib import import_module
 import math
 import os
 from pathlib import Path
@@ -28,6 +31,9 @@ _MIN_NATIVE_TEXT_QUALITY_RATIO = 0.5
 _MAX_NATIVE_TEXT_SAMPLE_CHARS = 4096
 _MAX_NATIVE_TEXT_CALLBACKS = 4096
 _MAX_PAGE_CONTENT_DECODED_BYTES = 2 * 1024 * 1024
+_MAX_STRUCTURAL_STREAM_DECODED_BYTES = 2 * 1024 * 1024
+_MAX_STRUCTURAL_STREAM_DICTIONARY_BYTES = 64 * 1024
+_MAX_STRUCTURAL_STREAM_CANDIDATES = 256
 _MAX_FORM_XOBJECT_DEPTH = 16
 _MAX_FORM_XOBJECTS = 256
 _MAX_FORM_DO_INVOCATIONS = 64
@@ -95,6 +101,7 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
 
     try:
         _reject_polyglot_payload(snapshot)
+        _validate_bounded_structural_streams(snapshot)
         snapshot.seek(0)
         reader = PdfReader(snapshot, strict=True)
         _validate_terminal_pdf_region(snapshot)
@@ -299,7 +306,7 @@ def _validate_bounded_page_content(page: Any) -> bool:
 
 
 def _charge_bounded_content_stream(stream: Any, remaining: int) -> tuple[int, bytes]:
-    from pypdf.generic import ArrayObject, NameObject, StreamObject
+    from pypdf.generic import ArrayObject, IndirectObject, NameObject, StreamObject
 
     if not isinstance(stream, StreamObject):
         raise _hybrid_error(
@@ -311,17 +318,26 @@ def _charge_bounded_content_stream(stream: Any, remaining: int) -> tuple[int, by
     if filters is None:
         decoded = raw_data
     else:
-        filter_names = (
-            tuple(str(value) for value in filters)
-            if isinstance(filters, ArrayObject)
-            else (str(filters),)
+        filter_values = tuple(filters) if isinstance(filters, ArrayObject) else (filters,)
+        decode_parms = stream.get(NameObject("/DecodeParms"))
+        if isinstance(decode_parms, IndirectObject):
+            decode_parms = decode_parms.get_object()
+        parm_values = (
+            tuple(decode_parms)
+            if isinstance(decode_parms, ArrayObject)
+            else tuple(decode_parms for _ in filter_values)
         )
-        if filter_names not in {("/FlateDecode",), ("/Fl",)}:
-            raise _hybrid_error(
-                "PA_HYBRID_INTAKE_006",
-                "Hybrid PDF page content filter cannot be sampled safely.",
+        decoded = raw_data
+        for index, filter_value in enumerate(filter_values):
+            parms = parm_values[index] if index < len(parm_values) else None
+            if isinstance(parms, IndirectObject):
+                parms = parms.get_object()
+            decoded = _decode_bounded_standard_filter(
+                decoded,
+                str(filter_value),
+                parms,
+                remaining,
             )
-        decoded = _bounded_flate_decoded_data(raw_data, remaining)
     remaining -= len(decoded)
     if remaining < 0:
         raise _hybrid_error(
@@ -329,6 +345,120 @@ def _charge_bounded_content_stream(stream: Any, remaining: int) -> tuple[int, by
             "Hybrid PDF decoded page content exceeds safety limits.",
         )
     return remaining, decoded
+
+
+def _decode_bounded_standard_filter(
+    data: bytes,
+    filter_name: str,
+    decode_parms: Any,
+    remaining: int,
+) -> bytes:
+    if filter_name in {"/FlateDecode", "/Fl"}:
+        return _apply_bounded_predictor(
+            _bounded_flate_decoded_data(data, remaining), decode_parms, remaining
+        )
+    if filter_name in {"/ASCII85Decode", "/A85"}:
+        clean = b"".join(data.split())
+        body = clean[2:-2] if clean.startswith(b"<~") and clean.endswith(b"~>") else clean
+        z_count = body.count(b"z")
+        ordinary_count = len(body) - z_count
+        maximum_decoded = z_count * 4 + (ordinary_count // 5) * 4 + max(0, ordinary_count % 5 - 1)
+        if maximum_decoded > remaining:
+            raise _decoded_content_limit()
+        try:
+            decoded = base64.a85decode(clean, adobe=clean.startswith(b"<~"))
+        except ValueError as exc:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF ASCII85 content is invalid."
+            ) from exc
+        return _require_decoded_limit(decoded, remaining)
+    if filter_name in {"/ASCIIHexDecode", "/AHx"}:
+        clean = b"".join(data.partition(b">")[0].split())
+        if len(clean) % 2:
+            clean += b"0"
+        if len(clean) // 2 > remaining:
+            raise _decoded_content_limit()
+        try:
+            return _require_decoded_limit(binascii.unhexlify(clean), remaining)
+        except (binascii.Error, ValueError) as exc:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF ASCIIHex content is invalid."
+            ) from exc
+    if filter_name in {"/RunLengthDecode", "/RL"}:
+        return _bounded_run_length_decode(data, remaining)
+    if filter_name in {"/LZWDecode", "/LZW"}:
+        try:
+            codec_type = getattr(import_module("pypdf.filters"), "_LzwCodec")
+            decoded = codec_type(max_output_length=remaining + 1).decode(data)
+        except Exception as exc:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF LZW content is invalid or exceeds limits."
+            ) from exc
+        return _apply_bounded_predictor(
+            _require_decoded_limit(decoded, remaining), decode_parms, remaining
+        )
+    raise _hybrid_error(
+        "PA_HYBRID_INTAKE_006",
+        "Hybrid PDF page content filter cannot be sampled safely.",
+    )
+
+
+def _bounded_run_length_decode(data: bytes, remaining: int) -> bytes:
+    output = bytearray()
+    position = 0
+    while position < len(data):
+        length = data[position]
+        position += 1
+        if length == 128:
+            return bytes(output)
+        if length < 128:
+            count = length + 1
+            if position + count > len(data):
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006", "Hybrid PDF RunLength content is invalid."
+                )
+            if len(output) + count > remaining:
+                raise _decoded_content_limit()
+            output.extend(data[position : position + count])
+            position += count
+        else:
+            count = 257 - length
+            if position >= len(data):
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006", "Hybrid PDF RunLength content is invalid."
+                )
+            if len(output) + count > remaining:
+                raise _decoded_content_limit()
+            output.extend(bytes((data[position],)) * count)
+            position += 1
+    raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF RunLength content has no EOD.")
+
+
+def _apply_bounded_predictor(data: bytes, decode_parms: Any, remaining: int) -> bytes:
+    if not decode_parms or int(decode_parms.get("/Predictor", 1)) == 1:
+        return data
+    try:
+        from pypdf.filters import FlateDecode
+
+        predicted = FlateDecode.decode(zlib.compress(data), decode_parms)
+    except Exception as exc:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006", "Hybrid PDF predictor parameters are invalid."
+        ) from exc
+    return _require_decoded_limit(predicted, remaining)
+
+
+def _require_decoded_limit(data: bytes, remaining: int) -> bytes:
+    if len(data) > remaining:
+        raise _decoded_content_limit()
+    return data
+
+
+def _decoded_content_limit() -> ProofAgentError:
+    return _hybrid_error(
+        "PA_HYBRID_INTAKE_006",
+        "Hybrid PDF decoded page content exceeds safety limits.",
+    )
 
 
 def _validate_bounded_resources(
@@ -681,6 +811,89 @@ def _reject_polyglot_payload(source: IO[bytes]) -> None:
         raise
     except OSError as exc:
         raise _hybrid_error("PA_HYBRID_INTAKE_001", "Hybrid PDF upload could not be read.") from exc
+
+
+def _validate_bounded_structural_streams(source: IO[bytes]) -> None:
+    source.seek(0)
+    raw = source.read()
+    for candidate_count, marker in enumerate(
+        re.finditer(rb"/Type[\x00\x09\x0a\x0c\x0d\x20]+/(?:ObjStm|XRef)\b", raw),
+        1,
+    ):
+        if candidate_count > _MAX_STRUCTURAL_STREAM_CANDIDATES:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF structural stream candidate count exceeds safety limits.",
+            )
+        dictionary_start = raw.rfind(
+            b"<<",
+            max(0, marker.start() - _MAX_STRUCTURAL_STREAM_DICTIONARY_BYTES),
+            marker.start(),
+        )
+        if (
+            dictionary_start < 0
+            or re.search(
+                rb"[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+[0-9]+"
+                rb"[\x00\x09\x0a\x0c\x0d\x20]+obj[\x00\x09\x0a\x0c\x0d\x20]*\Z",
+                raw[max(0, dictionary_start - 96) : dictionary_start],
+            )
+            is None
+        ):
+            continue
+        stream_keyword = raw.find(
+            b"stream",
+            marker.end(),
+            min(len(raw), marker.end() + _MAX_STRUCTURAL_STREAM_DICTIONARY_BYTES),
+        )
+        if stream_keyword < 0:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF structural stream is invalid.")
+        dictionary = raw[dictionary_start:stream_keyword]
+        length_match = re.search(
+            rb"/Length[\x00\x09\x0a\x0c\x0d\x20]+(?P<length>[0-9]+)"
+            rb"(?![0-9])"
+            rb"(?![\x00\x09\x0a\x0c\x0d\x20]+[0-9]+[\x00\x09\x0a\x0c\x0d\x20]+R)",
+            dictionary,
+        )
+        if length_match is None:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF structural stream requires a direct bounded length.",
+            )
+        data_start = stream_keyword + len(b"stream")
+        if raw[data_start : data_start + 2] == b"\r\n":
+            data_start += 2
+        elif raw[data_start : data_start + 1] in {b"\r", b"\n"}:
+            data_start += 1
+        else:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF structural stream is invalid.")
+        length = int(length_match.group("length"))
+        data = raw[data_start : data_start + length]
+        if len(data) != length:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF structural stream is truncated."
+            )
+        decoded = data
+        for filter_name in _raw_pdf_filter_names(dictionary):
+            decoded = _decode_bounded_standard_filter(
+                decoded,
+                filter_name,
+                None,
+                _MAX_STRUCTURAL_STREAM_DECODED_BYTES,
+            )
+        _require_decoded_limit(decoded, _MAX_STRUCTURAL_STREAM_DECODED_BYTES)
+
+
+def _raw_pdf_filter_names(dictionary: bytes) -> tuple[str, ...]:
+    match = re.search(
+        rb"/Filter[\x00\x09\x0a\x0c\x0d\x20]+"
+        rb"(?P<filters>/[A-Za-z0-9]+|\[[^\]]{0,1024}\])",
+        dictionary,
+    )
+    if match is None:
+        return ()
+    return tuple(
+        value.decode("ascii") for value in re.findall(rb"/[A-Za-z0-9]+", match.group("filters"))
+    )
 
 
 def _validate_terminal_pdf_region(source: IO[bytes]) -> None:
