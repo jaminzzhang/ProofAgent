@@ -36,10 +36,21 @@ from proof_agent.capabilities.tools.source_descriptors import (
 )
 from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
 from proof_agent.capabilities.knowledge.hybrid.workbook import (
+    DEFAULT_WORKBOOK_IMPORT_LIMITS,
     FilesystemInsuranceMetadataReviewRepository,
+    InsuranceMetadataDraftInput,
     InsuranceMetadataReview,
+    WorkbookKnownAnchor,
+    WorkbookMetadataRow,
     WorkbookReviewConflictError,
     WorkbookValidationError,
+    WORKBOOK_MEDIA_TYPE,
+    import_metadata_workbook,
+    reconcile_metadata_drafts,
+)
+from proof_agent.configuration.hybrid_knowledge_repository import (
+    FileSystemKnowledgeArtifactStore,
+    ImmutableArtifactError,
 )
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
@@ -488,6 +499,20 @@ class KnowledgeMetadataReviewResolutionRequest(BaseModel):
     expected_review_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
     reason: str = Field(min_length=1, max_length=2_000)
     corrections: dict[str, str | int | None] = Field(default_factory=dict)
+
+
+class KnowledgeMetadataWorkbookImportRequest(BaseModel):
+    """Bounded exact-revision workbook import with parallel PDF proposals."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1)
+    document_id: str = Field(min_length=1, max_length=255)
+    revision_id: str = Field(min_length=1, max_length=255)
+    canonical_anchors: list[str | None] = Field(min_length=1, max_length=10_000)
+    pdf_drafts: list[InsuranceMetadataDraftInput] = Field(min_length=1, max_length=10_000)
 
 
 class KnowledgeBindingAttachRequest(BaseModel):
@@ -1323,6 +1348,109 @@ def retry_knowledge_ingestion_job(
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return _knowledge_ingestion_job_payload(job)
+
+
+@router.post("/config/knowledge-sources/{source_id}/metadata-workbooks/import")
+def import_knowledge_metadata_workbook(
+    source_id: str,
+    request: KnowledgeMetadataWorkbookImportRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Persist one bounded workbook import and its exact-anchor review batch."""
+
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
+    store = _get_configuration_store(app_request)
+    source = _require_active_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(status_code=400, detail="Metadata workbooks require hybrid_index.")
+    if not request.filename.casefold().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Metadata workbook filename must end in .xlsx.")
+    if request.content_type != WORKBOOK_MEDIA_TYPE:
+        raise HTTPException(status_code=400, detail="Metadata workbook content type is invalid.")
+    content = _decode_upload_content(
+        request.content_base64,
+        max_upload_bytes=DEFAULT_WORKBOOK_IMPORT_LIMITS.max_file_bytes,
+    )
+    expected_identities = {
+        (source_id, request.document_id, request.revision_id, anchor)
+        for anchor in request.canonical_anchors
+    }
+    if len(expected_identities) != len(request.canonical_anchors):
+        raise HTTPException(status_code=400, detail="Canonical anchors must be unique.")
+    pdf_by_identity: dict[tuple[str, str, str, str | None], InsuranceMetadataDraftInput] = {}
+    for draft in request.pdf_drafts:
+        draft_identity = (
+            draft.source_id,
+            draft.document_id,
+            draft.revision_id,
+            draft.canonical_anchor,
+        )
+        if draft.origin != "pdf" or draft_identity not in expected_identities:
+            raise HTTPException(
+                status_code=400,
+                detail="Every PDF draft must match the exact Source, document revision, and anchor.",
+            )
+        if draft_identity in pdf_by_identity:
+            raise HTTPException(status_code=400, detail="PDF draft identities must be unique.")
+        pdf_by_identity[draft_identity] = draft
+    if set(pdf_by_identity) != expected_identities:
+        raise HTTPException(
+            status_code=400,
+            detail="PDF drafts must cover every exact canonical anchor once.",
+        )
+    known_anchors = tuple(
+        WorkbookKnownAnchor(
+            source_id=source_id,
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+            canonical_anchor=anchor,
+        )
+        for anchor in request.canonical_anchors
+    )
+    try:
+        with FileSystemKnowledgeArtifactStore(store.root_dir / "hybrid_artifacts") as artifacts:
+            imported = import_metadata_workbook(
+                content,
+                known_anchors=known_anchors,
+                artifact_store=artifacts,
+            )
+        workbook_drafts = tuple(_workbook_row_draft(row) for row in imported.rows)
+        workbook_identities = {
+            (draft.source_id, draft.document_id, draft.revision_id, draft.canonical_anchor)
+            for draft in workbook_drafts
+        }
+        if workbook_identities != expected_identities:
+            raise WorkbookValidationError(
+                "workbook rows must cover every exact canonical anchor once"
+            )
+        reviews = tuple(
+            reconcile_metadata_drafts(
+                pdf_by_identity[
+                    (
+                        draft.source_id,
+                        draft.document_id,
+                        draft.revision_id,
+                        draft.canonical_anchor,
+                    )
+                ],
+                draft,
+            )
+            for draft in workbook_drafts
+        )
+        persisted = _metadata_review_repository(store).put_many(reviews)
+    except (ImmutableArtifactError, WorkbookValidationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except WorkbookReviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "import_id": imported.import_id,
+        "template_revision": imported.template_revision,
+        "row_count": len(imported.rows),
+        "original_ref": imported.original_ref.model_dump(mode="json"),
+        "normalized_ref": imported.normalized_ref.model_dump(mode="json"),
+        "reviews": [_metadata_review_payload(review) for review in persisted],
+    }
 
 
 @router.get("/config/knowledge-sources/{source_id}/metadata-reviews")
@@ -3211,6 +3339,28 @@ def _metadata_review_payload(review: InsuranceMetadataReview) -> dict[str, Any]:
     """Serialize only governed drafts, conflicts, anchors, and decision identity."""
 
     return review.model_dump(mode="json")
+
+
+def _workbook_row_draft(row: WorkbookMetadataRow) -> InsuranceMetadataDraftInput:
+    applicability = row.metadata.applicability
+    precedence = row.metadata.precedence
+    if applicability is None or precedence is None or row.metadata.authority is None:
+        raise WorkbookValidationError("workbook row is missing governed metadata")
+    return InsuranceMetadataDraftInput(
+        origin="workbook",
+        source_id=row.source_id,
+        document_id=row.document_id,
+        revision_id=row.revision_id,
+        canonical_anchor=row.canonical_anchor,
+        authority=row.metadata.authority,
+        effective_from=row.metadata.effective_from,
+        effective_to=row.metadata.effective_to,
+        taxonomy_id=applicability.taxonomy_id,
+        taxonomy_revision_id=applicability.taxonomy_revision_id,
+        precedence_policy_revision_id=precedence.policy_revision_id,
+        precedence_authority_tier=precedence.authority_tier,
+        precedence_order=precedence.order,
+    )
 
 
 def _metadata_review_repository(

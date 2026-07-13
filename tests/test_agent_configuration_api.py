@@ -3596,6 +3596,83 @@ def _seed_metadata_review(client: TestClient) -> dict[str, Any]:
     return repository.put(review).model_dump(mode="json")
 
 
+def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
+    tmp_path: Path,
+) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+        },
+    )
+    _create_hybrid_index_source(client)
+    workbook_bytes = Path(
+        "tests/fixtures/knowledge/hybrid/metadata-workbook.xlsx"
+    ).read_bytes()
+
+    request_payload = {
+        "filename": "metadata-workbook.xlsx",
+        "content_type": (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        "content_base64": base64.b64encode(workbook_bytes).decode("ascii"),
+        "document_id": "doc_policy_terms",
+        "revision_id": "rev_2026_01",
+        "canonical_anchors": ["section:eligibility"],
+        "pdf_drafts": [
+            {
+                "origin": "pdf",
+                "source_id": "ks_hybrid_index",
+                "document_id": "doc_policy_terms",
+                "revision_id": "rev_2026_01",
+                "canonical_anchor": "section:eligibility",
+                "authority": "regional",
+                "effective_from": "2026-01-01",
+                "effective_to": "2026-12-31",
+                "taxonomy_id": "insurance-product-applicability",
+                "taxonomy_revision_id": "taxonomy-2026-01",
+                "precedence_policy_revision_id": "precedence-2026-01",
+                "precedence_authority_tier": "policy_terms",
+                "precedence_order": 10,
+            }
+        ],
+    }
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+
+    assert response.status_code == 200
+    assert (
+        "/api/config/knowledge-sources/{source_id}/metadata-workbooks/import"
+        in client.get("/api/openapi.json").json()["paths"]
+    )
+    payload = response.json()
+    assert payload["template_revision"] == "insurance-rule-metadata.v1"
+    assert payload["row_count"] == 1
+    assert payload["original_ref"]["artifact_uri"].startswith("file://")
+    assert payload["normalized_ref"]["artifact_uri"].startswith("file://")
+    assert payload["reviews"][0]["state"] == "review_required"
+    assert payload["reviews"][0]["conflicts"][0]["field"] == "authority"
+    assert "content_base64" not in json.dumps(payload)
+    assert "formula" not in json.dumps(payload).lower()
+    listed = client.get(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews"
+    )
+    assert listed.status_code == 200
+    assert listed.json()["data"] == payload["reviews"]
+    view_only_client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.KNOWLEDGE_SOURCE_VIEW},
+    )
+    denied = view_only_client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    assert denied.status_code == 403
+
+
 def test_metadata_review_routes_enforce_exact_identity_and_conflict_resolution(
     tmp_path: Path,
 ) -> None:

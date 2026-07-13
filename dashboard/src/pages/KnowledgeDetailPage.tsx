@@ -628,7 +628,14 @@ export function KnowledgeDetailPage() {
       </section>
       )}
 
-      {isHybridIndexSource && <KnowledgeReviewPanel sourceId={source.source_id} />}
+      {isHybridIndexSource && (
+        <KnowledgeReviewPanel
+          sourceId={source.source_id}
+          onReady={() => setStatus(
+            'All insurance metadata reviews are approved. This Hybrid Source is ready for governed publication.',
+          )}
+        />
+      )}
 
       {supportsPublication && (
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-5">

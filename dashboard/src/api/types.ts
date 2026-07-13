@@ -1156,6 +1156,23 @@ export interface InsuranceMetadataReviewsResponse {
   meta: { total: number; unresolved: number }
 }
 
+export interface InsuranceMetadataWorkbookArtifactRef {
+  artifact_uri: string
+  version_id: string
+  sha256: string
+  media_type: string
+  size_bytes: number
+}
+
+export interface InsuranceMetadataWorkbookImportResponse {
+  import_id: string
+  template_revision: 'insurance-rule-metadata.v1'
+  row_count: number
+  original_ref: InsuranceMetadataWorkbookArtifactRef
+  normalized_ref: InsuranceMetadataWorkbookArtifactRef
+  reviews: InsuranceMetadataReview[]
+}
+
 export interface DraftValidationResponse {
   validation_id: string
   run_id: string

@@ -11,6 +11,7 @@ import {
   fetchKnowledgeSource,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSourcePublications,
+  fetchInsuranceMetadataReviews,
   fetchQuarantinedKnowledgeUploads,
   freezeCandidateKnowledgeSourceSnapshot,
   permanentlyDeleteKnowledgeSource,
@@ -33,6 +34,8 @@ vi.mock('../../api/client', () => ({
   fetchKnowledgeSource: vi.fn(),
   fetchKnowledgeSourceDeletionEligibility: vi.fn(),
   fetchKnowledgeSourcePublications: vi.fn(),
+  fetchInsuranceMetadataReviews: vi.fn(),
+  resolveInsuranceMetadataReview: vi.fn(),
   fetchQuarantinedKnowledgeUploads: vi.fn(),
   freezeCandidateKnowledgeSourceSnapshot: vi.fn(),
   permanentlyDeleteKnowledgeSource: vi.fn(),
@@ -138,6 +141,9 @@ describe('KnowledgeDetailPage', () => {
       required_reingestion_count: 0,
     })
     vi.mocked(fetchKnowledgeSourcePublications).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
+      data: [], meta: { total: 0, unresolved: 0 },
+    })
     vi.mocked(fetchKnowledgeSourceDeletionEligibility).mockResolvedValue({
       source_id: 'ks_local_index',
       eligible: false,
@@ -351,6 +357,67 @@ describe('KnowledgeDetailPage', () => {
     expect(await screen.findByText('Published kspub_1.')).toBeInTheDocument()
     expect(fetchKnowledgeSourcePublications).toHaveBeenCalledWith('ks_local_index')
     expect(uploadKnowledgeDocument).not.toHaveBeenCalled()
+  })
+
+  it('wires approved Hybrid metadata reviews to a real readiness confirmation', async () => {
+    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_hybrid_index',
+      name: 'Insurance Rules Hybrid',
+      provider: 'hybrid_index',
+      lifecycle_state: 'ACTIVE',
+      params: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_hybrid',
+      latest_snapshot_id: null,
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 1,
+      ready_document_count: 1,
+    })
+    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
+      data: [{
+        schema_version: 'insurance-metadata-review.v1',
+        review_id: 'metadata_review_approved',
+        review_identity: 'a'.repeat(64),
+        review_version: 2,
+        source_id: 'ks_hybrid_index',
+        document_id: 'doc_1',
+        revision_id: 'rev_1',
+        canonical_anchor: 'section:eligibility',
+        citation_uri: 'proofagent://knowledge/ks_hybrid_index/doc_1/rev_1#section:eligibility',
+        state: 'approved',
+        publication_blocked: false,
+        pdf_draft: {
+          origin: 'pdf', source_id: 'ks_hybrid_index', document_id: 'doc_1', revision_id: 'rev_1',
+          canonical_anchor: 'section:eligibility', authority: 'national', effective_from: '2026-01-01',
+          effective_to: null, taxonomy_id: 'insurance', taxonomy_revision_id: 'tax_1',
+          precedence_policy_revision_id: 'policy_1', precedence_authority_tier: 'terms', precedence_order: 10,
+        },
+        workbook_draft: {
+          origin: 'workbook', source_id: 'ks_hybrid_index', document_id: 'doc_1', revision_id: 'rev_1',
+          canonical_anchor: 'section:eligibility', authority: 'national', effective_from: '2026-01-01',
+          effective_to: null, taxonomy_id: 'insurance', taxonomy_revision_id: 'tax_1',
+          precedence_policy_revision_id: 'policy_1', precedence_authority_tier: 'terms', precedence_order: 10,
+        },
+        conflicts: [],
+        resolved_values: {},
+        resolution_reason: 'Approved against the signed source.',
+        resolved_by: 'reviewer',
+      }],
+      meta: { total: 1, unresolved: 0 },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('Insurance Rules Hybrid')).toBeInTheDocument()
+    const readiness = await screen.findByRole('button', { name: 'Confirm publication readiness' })
+    expect(readiness).toBeEnabled()
+    fireEvent.click(readiness)
+    expect(await screen.findByText(
+      'All insurance metadata reviews are approved. This Hybrid Source is ready for governed publication.',
+    )).toBeInTheDocument()
   })
 
   it('summarizes source-owned model connection configuration', async () => {

@@ -75,7 +75,7 @@ it('blocks publication while metadata conflicts remain', async () => {
   expect(screen.getByText('section:eligibility')).toBeVisible()
   expect(screen.getByText('national')).toBeVisible()
   expect(screen.getByText('regional')).toBeVisible()
-  expect(screen.getByRole('button', { name: 'Publish source' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Confirm publication readiness' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Approve review' })).toBeDisabled()
 })
 
@@ -100,4 +100,39 @@ it('submits an exact correction and updates the review state', async () => {
     )
   })
   expect(await screen.findByText('corrected')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Confirm publication readiness' })).toBeDisabled()
+})
+
+it('enables the readiness action only after a conflict-free review is approved', async () => {
+  const readyReview: InsuranceMetadataReview = {
+    ...review,
+    state: 'ready_for_review',
+    conflicts: [],
+    workbook_draft: { ...review.workbook_draft, authority: 'national' },
+  }
+  const onReady = vi.fn()
+  vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
+    data: [readyReview], meta: { total: 1, unresolved: 1 },
+  })
+  vi.mocked(resolveInsuranceMetadataReview).mockResolvedValue({
+    ...readyReview,
+    review_version: 2,
+    review_identity: 'c'.repeat(64),
+    state: 'approved',
+    publication_blocked: false,
+    resolution_reason: 'Approved against the signed source.',
+    resolved_by: 'reviewer',
+  })
+
+  render(<KnowledgeReviewPanel sourceId="ks_1" onReady={onReady} />)
+  const readiness = await screen.findByRole('button', { name: 'Confirm publication readiness' })
+  expect(readiness).toBeDisabled()
+  fireEvent.change(screen.getByLabelText('Review reason'), {
+    target: { value: 'Approved against the signed source.' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Approve review' }))
+
+  await waitFor(() => expect(readiness).toBeEnabled())
+  fireEvent.click(readiness)
+  expect(onReady).toHaveBeenCalledOnce()
 })

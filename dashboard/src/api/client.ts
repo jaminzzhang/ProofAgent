@@ -28,6 +28,8 @@ import type {
   KnowledgeIngestionJobsResponse,
   InsuranceMetadataReview,
   InsuranceMetadataReviewsResponse,
+  InsuranceMetadataDraftInput,
+  InsuranceMetadataWorkbookImportResponse,
   KnowledgeSource,
   KnowledgeSourceDeletionEligibility,
   KnowledgeSourceSnapshotManifest,
@@ -538,6 +540,28 @@ export function fetchInsuranceMetadataReviews(
 ): Promise<InsuranceMetadataReviewsResponse> {
   return fetchJson<InsuranceMetadataReviewsResponse>(
     `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews`,
+  )
+}
+
+export function importInsuranceMetadataWorkbook(
+  sourceId: string,
+  payload: {
+    filename: string
+    content_type: string
+    content_base64: string
+    document_id: string
+    revision_id: string
+    canonical_anchors: Array<string | null>
+    pdf_drafts: InsuranceMetadataDraftInput[]
+  },
+): Promise<InsuranceMetadataWorkbookImportResponse> {
+  return fetchJson<InsuranceMetadataWorkbookImportResponse>(
+    `${BASE}/config/knowledge-sources/${sourceId}/metadata-workbooks/import`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
   )
 }
 

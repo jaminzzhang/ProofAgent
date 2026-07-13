@@ -6,7 +6,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
+import proof_agent.capabilities.knowledge.hybrid.workbook as workbook_module
 from proof_agent.capabilities.knowledge.hybrid.workbook import (
+    FilesystemInsuranceMetadataReviewRepository,
     InsuranceMetadataDraftInput,
     WorkbookKnownAnchor,
     WorkbookValidationError,
@@ -40,6 +42,34 @@ def _formula_authority_fixture() -> bytes:
                     b'<x:c r="F6" s="29" t="str"><x:v>national</x:v></x:c>',
                     b'<x:c r="F6" s="29"><x:f>1+1</x:f><x:v>2</x:v></x:c>',
                 )
+            target.writestr(member, payload)
+    return output.getvalue()
+
+
+def _fixture_with_external_relationship() -> bytes:
+    output = BytesIO()
+    relationship = (
+        b'<Relationship Id="rExternal" Type="urn:test" '
+        b'Target = " https://external.example/workbook.xlsx " '
+        b'TargetMode = " External " />'
+    )
+    with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            payload = source.read(member.filename)
+            if member.filename == "xl/_rels/workbook.xml.rels":
+                payload = payload.replace(b"</Relationships>", relationship + b"</Relationships>")
+            target.writestr(member, payload)
+    return output.getvalue()
+
+
+def _fixture_with_far_cell() -> bytes:
+    output = BytesIO()
+    far_row = b'<x:row r="1048576"><x:c r="XFD1048576" t="str"><x:v>hidden</x:v></x:c></x:row>'
+    with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            payload = source.read(member.filename)
+            if member.filename == "xl/worksheets/sheet1.xml":
+                payload = payload.replace(b"</x:sheetData>", far_row + b"</x:sheetData>")
             target.writestr(member, payload)
     return output.getvalue()
 
@@ -91,6 +121,41 @@ def test_workbook_rejects_unknown_exact_anchor() -> None:
         )
 
 
+def test_workbook_dependency_is_loaded_only_when_import_is_invoked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def blocked_import(name: str) -> object:
+        if name == "openpyxl":
+            raise ModuleNotFoundError("simulated optional dependency absence")
+        raise AssertionError(name)
+
+    monkeypatch.setattr(workbook_module, "import_module", blocked_import)
+    with FileSystemKnowledgeArtifactStore(tmp_path / "artifacts") as artifact_store:
+        with pytest.raises(WorkbookValidationError, match="hybrid extra"):
+            import_metadata_workbook(
+                FIXTURE,
+                known_anchors=(_known_anchor(),),
+                artifact_store=artifact_store,
+            )
+
+
+def test_workbook_rejects_structural_external_relationships_with_spaced_attributes() -> None:
+    with pytest.raises(WorkbookValidationError, match="external links"):
+        import_metadata_workbook(
+            _fixture_with_external_relationship(),
+            known_anchors=(_known_anchor(),),
+        )
+
+
+def test_workbook_rejects_nonempty_cells_beyond_template_bounds() -> None:
+    with pytest.raises(WorkbookValidationError, match="template bounds"):
+        import_metadata_workbook(
+            _fixture_with_far_cell(),
+            known_anchors=(_known_anchor(),),
+        )
+
+
 def _draft(*, origin: str, authority: str) -> InsuranceMetadataDraftInput:
     return InsuranceMetadataDraftInput(
         origin=origin,
@@ -131,3 +196,38 @@ def test_matching_drafts_are_ready_but_not_approved_or_publishable() -> None:
     assert result.state == "ready_for_review"
     assert result.publication_blocked is True
     assert result.conflicts == ()
+
+
+@pytest.mark.parametrize(
+    "corrections",
+    [
+        {"authority": "x" * 5_000_000},
+        {"effective_from": "not-a-date"},
+        {"effective_from": "2027-01-01", "effective_to": "2026-01-01"},
+    ],
+)
+def test_review_corrections_reject_unsafe_or_invalid_metadata(
+    tmp_path: Path,
+    corrections: dict[str, str],
+) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    review = repository.put(
+        reconcile_metadata_drafts(
+            _draft(origin="pdf", authority="national"),
+            _draft(origin="workbook", authority="regional"),
+        )
+    )
+
+    with pytest.raises(WorkbookValidationError):
+        repository.resolve(
+            source_id=review.source_id,
+            review_id=review.review_id,
+            expected_review_version=review.review_version,
+            expected_review_identity=review.review_identity,
+            action="correct",
+            actor="reviewer",
+            reason="Invalid proposal must fail closed.",
+            corrections=corrections,
+        )
+
+    assert repository.get(review.source_id, review.review_id) == review

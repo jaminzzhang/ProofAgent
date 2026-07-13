@@ -10,11 +10,11 @@ import { LoadingSpinner } from '../ui/LoadingSpinner'
 export function KnowledgeReviewPanel({
   sourceId,
   onPublicationBlockedChange,
-  onPublish,
+  onReady,
 }: {
   sourceId: string
   onPublicationBlockedChange?: (blocked: boolean) => void
-  onPublish?: () => void
+  onReady?: () => void
 }) {
   const [reviews, setReviews] = useState<readonly InsuranceMetadataReview[]>([])
   const [reason, setReason] = useState('')
@@ -65,6 +65,9 @@ export function KnowledgeReviewPanel({
   }
 
   const publicationBlocked = reviews.some((review) => review.publication_blocked)
+  const publicationReady = reviews.length > 0 && reviews.every(
+    (review) => review.state === 'approved' && !review.publication_blocked,
+  )
 
   return (
     <section
@@ -82,11 +85,11 @@ export function KnowledgeReviewPanel({
         </div>
         <Button
           type="button"
-          onClick={onPublish}
-          disabled={publicationBlocked || reviews.length === 0 || !onPublish}
+          onClick={onReady}
+          disabled={!publicationReady || !onReady}
           aria-describedby={publicationBlocked ? 'metadata-publication-blocker' : undefined}
         >
-          Publish source
+          Confirm publication readiness
         </Button>
       </div>
 
