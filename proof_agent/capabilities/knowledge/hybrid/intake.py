@@ -1437,9 +1437,14 @@ def _xref_stream_object_offsets(raw: bytes, xref_offset: int) -> tuple[int, ...]
     if data_end > len(raw):
         raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref stream is truncated.")
     decoded = raw[data_start:data_end]
-    for filter_name in _structural_dictionary_filters(dictionary_tokens, {}):
+    filters = _structural_dictionary_filters(dictionary_tokens, {})
+    decode_parms = _structural_dictionary_decode_parms(dictionary_tokens, len(filters))
+    for filter_index, filter_name in enumerate(filters):
         decoded = _decode_bounded_standard_filter(
-            decoded, filter_name, None, _MAX_STRUCTURAL_STREAM_DECODED_BYTES
+            decoded,
+            filter_name,
+            decode_parms[filter_index],
+            _MAX_STRUCTURAL_STREAM_DECODED_BYTES,
         )
     widths = _top_dictionary_integer_array(dictionary_tokens, b"/W")
     if len(widths) != 3 or sum(widths) <= 0:
@@ -1488,6 +1493,80 @@ def _top_dictionary_integer_array(tokens: list[tuple[bytes, int]], key: bytes) -
     if not integers or any(not token.isdigit() for token in integers):
         raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF xref array is invalid.")
     return tuple(int(token) for token in integers)
+
+
+def _structural_dictionary_decode_parms(
+    tokens: list[tuple[bytes, int]], filter_count: int
+) -> tuple[dict[str, int] | None, ...]:
+    value_index: int | None = None
+    for index, (token, depth) in enumerate(tokens):
+        if depth == 1 and token.startswith(b"/") and _normalize_pdf_name(token) == b"/DecodeParms":
+            value_index = index + 1
+            break
+    if value_index is None:
+        return tuple(None for _ in range(filter_count))
+    if value_index >= len(tokens):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms is invalid.")
+    token = tokens[value_index][0]
+    if token == b"null":
+        return tuple(None for _ in range(filter_count))
+    if token == b"<<":
+        parms, _next_index = _direct_decode_parms_dictionary(tokens, value_index)
+        return tuple(parms for _ in range(filter_count))
+    if token != b"[":
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms cannot be resolved safely."
+        )
+    values: list[dict[str, int] | None] = []
+    cursor = value_index + 1
+    while cursor < len(tokens) and tokens[cursor][0] != b"]":
+        item = tokens[cursor][0]
+        if item == b"null":
+            values.append(None)
+            cursor += 1
+        elif item == b"<<":
+            parms, cursor = _direct_decode_parms_dictionary(tokens, cursor)
+            values.append(parms)
+        else:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms cannot be resolved safely."
+            )
+        if len(values) > filter_count:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms is invalid.")
+    if cursor >= len(tokens) or tokens[cursor][0] != b"]":
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms is invalid.")
+    values.extend(None for _ in range(filter_count - len(values)))
+    return tuple(values)
+
+
+def _direct_decode_parms_dictionary(
+    tokens: list[tuple[bytes, int]], start_index: int
+) -> tuple[dict[str, int], int]:
+    opening_depth = tokens[start_index][1]
+    values: dict[str, int] = {}
+    cursor = start_index + 1
+    while cursor < len(tokens):
+        token, depth = tokens[cursor]
+        if token == b">>" and depth == opening_depth:
+            return values, cursor + 1
+        if depth != opening_depth + 1 or not token.startswith(b"/"):
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms is invalid.")
+        if cursor + 1 >= len(tokens):
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms is invalid.")
+        value, value_depth = tokens[cursor + 1]
+        if value_depth != opening_depth + 1 or not value.isdigit():
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms cannot be resolved safely."
+            )
+        try:
+            key = _normalize_pdf_name(token).decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms is invalid."
+            ) from exc
+        values[key] = int(value)
+        cursor += 2
+    raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF DecodeParms is invalid.")
 
 
 def _last_marker_offset(
